@@ -44,7 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   their maven lookups there (fixing the `ktlint-gradle: no-result` lookup failure). Renovate has no
   CRAN datasource, so the `rextendr` pin is now manually tracked (marker removed) rather than
   emitting a "Missing datasource" warning, and the custom manager carries an explicit
-  `rangeStrategy: replace` so it never resolves to null ("Unsupported range strategy").
+  `rangeStrategy: replace`. The Ruby gem pins used pessimistic (`~>`) constraints that
+  Renovate's regex custom manager cannot bump — the `ruby` versioning then logged an
+  "Unsupported range strategy" warning and produced no update — so those markers are removed
+  and the gems are tracked manually (their `~>` floors already admit newer releases at
+  `bundle install`).
 
 ## [0.42.1] - 2026-07-22
 

@@ -44,12 +44,6 @@
       "groupName": "npm tooling pins"
     },
     {
-      "description": "Group RubyGems tooling pins",
-      "matchManagers": ["custom.regex"],
-      "matchDatasources": ["rubygems"],
-      "groupName": "rubygems tooling pins"
-    },
-    {
       "description": "Group Packagist (PHP) tooling pins",
       "matchManagers": ["custom.regex"],
       "matchDatasources": ["packagist"],

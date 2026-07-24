@@ -156,39 +156,35 @@ pub mod pypi {
 }
 
 pub mod gem {
+    // Ruby gems are pinned as pessimistic (`~>`) constraints. Renovate's regex
+    // custom manager cannot bump these: it derives no range strategy for a
+    // custom-manager range, and the `ruby` versioning then emits an
+    // "Unsupported range strategy" warning and computes no update. They are
+    // tracked manually here — the `~>` floors already admit newer releases at
+    // `bundle install`. (Other ecosystems whose versioning tolerates a missing
+    // strategy, e.g. hex, keep their markers.)
     pub const RB_SYS: &str = "\">= 0.9\", \"< 0.9.128\"";
 
-    // renovate: datasource=rubygems depName=sorbet-runtime
     pub const SORBET_RUNTIME: &str = "~> 0.5";
 
-    // renovate: datasource=rubygems depName=rake-compiler
     pub const RAKE_COMPILER: &str = "~> 1.2";
 
-    // renovate: datasource=rubygems depName=rspec
     pub const RSPEC_SCAFFOLD: &str = "~> 3.0";
 
-    // renovate: datasource=rubygems depName=rspec
     pub const RSPEC_E2E: &str = "~> 3.13";
 
-    // renovate: datasource=rubygems depName=rubocop
     pub const RUBOCOP_SCAFFOLD: &str = "~> 1.0";
 
-    // renovate: datasource=rubygems depName=rubocop
     pub const RUBOCOP_E2E: &str = "~> 1.86";
 
-    // renovate: datasource=rubygems depName=rubocop-performance
     pub const RUBOCOP_PERFORMANCE: &str = "~> 1.0";
 
-    // renovate: datasource=rubygems depName=rubocop-rspec
     pub const RUBOCOP_RSPEC_SCAFFOLD: &str = "~> 3.0";
 
-    // renovate: datasource=rubygems depName=rubocop-rspec
     pub const RUBOCOP_RSPEC_E2E: &str = "~> 3.9";
 
-    // renovate: datasource=rubygems depName=steep
     pub const STEEP: &str = "~> 1.0";
 
-    // renovate: datasource=rubygems depName=faraday
     pub const FARADAY: &str = "~> 2.0";
 }
 
