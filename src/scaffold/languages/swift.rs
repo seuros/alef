@@ -142,6 +142,14 @@ let package = Package(
         // symbols like `_lzma_stream_decoder` surface at the swift link step. Link
         // the system library here. `liblzma` ships in the macOS SDK and on Linux.
         .linkedLibrary("lzma"),
+        // The Rust staticlib pulls in C++ dependencies (onnxruntime, tesseract,
+        // ClipperLib) that reference the C++ runtime/ABI (`__cxa_throw`,
+        // `__gxx_personality_v0`, `__cxa_guard_acquire`, ...). A `staticlib` `.a`
+        // does not carry the transitive `-lc++`/`-lstdc++` system-lib dependency,
+        // so SwiftPM must link the C++ standard library explicitly or the final
+        // link fails with undefined symbols from those crates.
+        .linkedLibrary("c++", .when(platforms: [.macOS, .iOS])),
+        .linkedLibrary("stdc++", .when(platforms: [.linux])),
         .linkedFramework("Security", .when(platforms: [.macOS, .iOS])),
         .linkedFramework("CoreFoundation", .when(platforms: [.macOS, .iOS])),
         .linkedFramework("SystemConfiguration", .when(platforms: [.macOS])),
@@ -312,6 +320,15 @@ let package = Package(
       // Linux.
       linkerSettings: [
         .linkedLibrary("lzma"),
+        // The pre-built static library pulls in C++ dependencies (onnxruntime,
+        // tesseract, ClipperLib) that reference the C++ runtime/ABI
+        // (`__cxa_throw`, `__gxx_personality_v0`, `__cxa_guard_acquire`, ...). A
+        // `.a` archive does not carry the transitive `-lc++`/`-lstdc++`
+        // system-lib dependency, so the consumer must link the C++ standard
+        // library explicitly or the final link fails with undefined symbols
+        // from those crates.
+        .linkedLibrary("c++", .when(platforms: [.macOS, .iOS])),
+        .linkedLibrary("stdc++", .when(platforms: [.linux])),
         .linkedFramework("Security", .when(platforms: [.macOS, .iOS])),
         .linkedFramework("CoreFoundation", .when(platforms: [.macOS, .iOS])),
         .linkedFramework("SystemConfiguration", .when(platforms: [.macOS])),
@@ -724,6 +741,61 @@ sources = []
         assert!(
             !pkg.content.contains(".binaryTarget("),
             "in-tree packages/swift/Package.swift must not use .binaryTarget"
+        );
+    }
+
+    /// Both the in-tree and root Package.swift manifests must link the C++
+    /// standard library, platform-conditionally. The Rust staticlib/binary
+    /// target pulls in C++ dependencies (onnxruntime, tesseract, ClipperLib)
+    /// that reference the C++ runtime/ABI (`__cxa_throw`,
+    /// `__gxx_personality_v0`, ...); a `.a` archive does not carry that
+    /// transitive system-lib dependency, so SwiftPM must link it explicitly
+    /// or `swift test` fails at link time with undefined symbols. Regression
+    /// test for the rc.32 published-Swift-package link failure.
+    #[test]
+    fn package_swift_links_cxx_standard_library_per_platform() {
+        let config = resolve_config(
+            r#"
+[workspace]
+languages = ["swift"]
+[[crates]]
+name = "my-lib"
+sources = []
+[crates.package_metadata]
+repository = "https://github.com/example/my-lib"
+"#,
+        );
+        let api = ApiSurface::default();
+        let files = scaffold_swift(&api, &config).expect("scaffold");
+
+        let in_tree = find_file(&files, "packages/swift/Package.swift");
+        assert!(
+            in_tree
+                .content
+                .contains(r#".linkedLibrary("c++", .when(platforms: [.macOS, .iOS]))"#),
+            "in-tree Package.swift must link libc++ on Apple platforms, got:\n{}",
+            in_tree.content
+        );
+        assert!(
+            in_tree
+                .content
+                .contains(r#".linkedLibrary("stdc++", .when(platforms: [.linux]))"#),
+            "in-tree Package.swift must link libstdc++ on Linux, got:\n{}",
+            in_tree.content
+        );
+
+        let root = find_file(&files, "Package.swift");
+        assert!(
+            root.content
+                .contains(r#".linkedLibrary("c++", .when(platforms: [.macOS, .iOS]))"#),
+            "root Package.swift must link libc++ on Apple platforms, got:\n{}",
+            root.content
+        );
+        assert!(
+            root.content
+                .contains(r#".linkedLibrary("stdc++", .when(platforms: [.linux]))"#),
+            "root Package.swift must link libstdc++ on Linux, got:\n{}",
+            root.content
         );
     }
 

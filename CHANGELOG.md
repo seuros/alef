@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-07-24
+
 ### Fixed
+
+- **Swift: link the C++ standard library in the generated `Package.swift`**: the Rust staticlib pulls in
+  C++ dependencies (onnxruntime, tesseract, ClipperLib) whose C++ ABI symbols (`__cxa_throw`,
+  `__gxx_personality_v0`, `__cxa_guard_acquire`, …) were left undefined at the SwiftPM link step, so
+  consuming a published Swift package failed to link. Both the in-tree and the published
+  `.binaryTarget` root manifests now link `c++` on Apple platforms and `stdc++` on Linux,
+  platform-conditionally.
 
 - **Renovate now actually maintains the generated dependency version pins**: the `renovate.json`
   regex customManager targeted a stale path (`crates/alef-core/src/template_versions.rs`, gone
