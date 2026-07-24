@@ -71,8 +71,19 @@
     {
       "description": "Group pub.dev (Dart) tooling pins",
       "matchManagers": ["custom.regex"],
-      "matchDatasources": ["pub"],
+      "matchDatasources": ["dart"],
       "groupName": "dart tooling pins"
+    },
+    {
+      "description": "Gradle plugins resolve from the Gradle Plugin Portal, not Maven Central",
+      "matchManagers": ["custom.regex"],
+      "matchDatasources": ["maven"],
+      "matchPackageNames": [
+        "org.jlleitschuh.gradle:ktlint-gradle",
+        "com.github.ben-manes:gradle-versions-plugin",
+        "com.vanniktech:gradle-maven-publish-plugin"
+      ],
+      "registryUrls": ["https://plugins.gradle.org/m2", "https://repo.maven.apache.org/maven2"]
     },
     {
       "description": "Group CRAN (R) tooling pins",

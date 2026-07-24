@@ -27,6 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   e2e (`gleam_http` range), Dart scaffold (`http`, `crypto`), and Rust e2e (`serde`/`serde_json`/
   `tokio`) now all draw from the central consts.
 
+- **Renovate marker datasources corrected so no pins error out**: the Dart pins used
+  `datasource=pub`, but Renovate's Dart datasource id is `dart` — the invalid id produced
+  "Missing datasource" / "Unsupported range strategy" warnings and blocked those bumps. The Gradle
+  plugin pins (`ktlint-gradle`, `gradle-versions-plugin`, `gradle-maven-publish-plugin`) resolve
+  from the Gradle Plugin Portal rather than Maven Central, so a `registryUrls` package rule points
+  their maven lookups there (fixing the `ktlint-gradle: no-result` lookup failure).
+
 ## [0.42.1] - 2026-07-22
 
 ### Added

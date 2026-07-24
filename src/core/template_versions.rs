@@ -372,37 +372,37 @@ pub mod hex {
 
 /// pub.dev (Dart) ecosystem.
 pub mod pub_dev {
-    // renovate: datasource=pub depName=test
+    // renovate: datasource=dart depName=test
     pub const TEST_PACKAGE: &str = "^1.25.0";
 
-    // renovate: datasource=pub depName=lints
+    // renovate: datasource=dart depName=lints
     pub const LINTS: &str = "^6.1.0";
 
-    // renovate: datasource=pub depName=ffi
+    // renovate: datasource=dart depName=ffi
     pub const FFI_PACKAGE: &str = "^2.2.0";
 
-    // renovate: datasource=pub depName=http
+    // renovate: datasource=dart depName=http
     pub const HTTP_PACKAGE: &str = "^1.2.0";
 
-    // renovate: datasource=pub depName=crypto
+    // renovate: datasource=dart depName=crypto
     pub const CRYPTO: &str = "^3.0.0";
 
-    // renovate: datasource=pub depName=freezed_annotation
+    // renovate: datasource=dart depName=freezed_annotation
     pub const FREEZED_ANNOTATION: &str = "^3.1.0";
 
-    // renovate: datasource=pub depName=json_annotation
+    // renovate: datasource=dart depName=json_annotation
     pub const JSON_ANNOTATION: &str = "^4.11.0";
 
-    // renovate: datasource=pub depName=freezed
+    // renovate: datasource=dart depName=freezed
     pub const FREEZED: &str = "^3.2.5";
 
-    // renovate: datasource=pub depName=build_runner
+    // renovate: datasource=dart depName=build_runner
     pub const BUILD_RUNNER: &str = "^2.15.0";
 
-    // renovate: datasource=pub depName=json_serializable
+    // renovate: datasource=dart depName=json_serializable
     pub const JSON_SERIALIZABLE: &str = "^6.13.2";
 
-    // renovate: datasource=pub depName=native_assets_cli
+    // renovate: datasource=dart depName=native_assets_cli
     pub const NATIVE_ASSETS_CLI: &str = "^0.13.0";
 }
 
