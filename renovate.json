@@ -21,6 +21,11 @@
   ],
   "packageRules": [
     {
+      "description": "Custom-manager pins carry an explicit range strategy so it never resolves to null",
+      "matchManagers": ["custom.regex"],
+      "rangeStrategy": "replace"
+    },
+    {
       "description": "Group Rust crate version pins emitted into generated bindings",
       "matchManagers": ["custom.regex"],
       "matchDatasources": ["crate"],
@@ -84,12 +89,6 @@
         "com.vanniktech:gradle-maven-publish-plugin"
       ],
       "registryUrls": ["https://plugins.gradle.org/m2", "https://repo.maven.apache.org/maven2"]
-    },
-    {
-      "description": "Group CRAN (R) tooling pins",
-      "matchManagers": ["custom.regex"],
-      "matchDatasources": ["cran"],
-      "groupName": "r tooling pins"
     },
     {
       "description": "Group pre-commit hook revisions tracked via github-tags",

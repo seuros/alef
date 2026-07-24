@@ -433,7 +433,7 @@ pub mod toolchain {
 }
 
 pub mod cran {
-    // renovate: datasource=cran depName=rextendr
+    // Manually tracked: Renovate has no CRAN datasource.
     pub const REXTENDR: &str = "0.4.2";
 }
 

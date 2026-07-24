@@ -32,7 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Missing datasource" / "Unsupported range strategy" warnings and blocked those bumps. The Gradle
   plugin pins (`ktlint-gradle`, `gradle-versions-plugin`, `gradle-maven-publish-plugin`) resolve
   from the Gradle Plugin Portal rather than Maven Central, so a `registryUrls` package rule points
-  their maven lookups there (fixing the `ktlint-gradle: no-result` lookup failure).
+  their maven lookups there (fixing the `ktlint-gradle: no-result` lookup failure). Renovate has no
+  CRAN datasource, so the `rextendr` pin is now manually tracked (marker removed) rather than
+  emitting a "Missing datasource" warning, and the custom manager carries an explicit
+  `rangeStrategy: replace` so it never resolves to null ("Unsupported range strategy").
 
 ## [0.42.1] - 2026-07-22
 
