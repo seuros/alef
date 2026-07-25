@@ -134,6 +134,58 @@ fn poly_toml_python_ruff_pyrefly_and_per_file_ignores() {
     assert!(c.contains("pylint_max_args = 10"));
     assert!(c.contains("[per-file-ignores]") && c.contains("\"**/api.py\""));
     assert!(c.contains("[hooks.pre-commit.commands.pyrefly]") && c.contains("pyrefly check packages/python"));
+    assert!(
+        c.contains("workspace = true"),
+        "pyrefly must be a workspace hook so `poly lint .` runs it once over the whole project"
+    );
+}
+
+#[test]
+fn poly_toml_emits_workspace_lint_hooks_for_non_bundled_linters() {
+    let config = test_config();
+    let files = scaffold_poly_config(
+        &config,
+        &[
+            Language::Python,
+            Language::Ruby,
+            Language::Go,
+            Language::Java,
+            Language::Dart,
+            Language::Elixir,
+            Language::KotlinAndroid,
+        ],
+    );
+    let c = &files
+        .iter()
+        .find(|f| f.path.to_str() == Some("poly.toml"))
+        .expect("poly.toml emitted")
+        .content;
+
+    // Each linter poly does not bundle is delegated as a workspace hook so a
+    // single `poly lint .` invokes it once over its package, respecting the
+    // tool's native config.
+    for (table, cmd) in [
+        ("[hooks.pre-commit.commands.rubocop]", "bundle exec rubocop"),
+        ("[hooks.pre-commit.commands.steep]", "bundle exec steep check"),
+        ("[hooks.pre-commit.commands.golangci-lint]", "golangci-lint run ./..."),
+        ("[hooks.pre-commit.commands.checkstyle]", "mvn -q checkstyle:check"),
+        ("[hooks.pre-commit.commands.pmd]", "mvn -q pmd:check"),
+        ("[hooks.pre-commit.commands.ktlint]", "gradle ktlintCheck"),
+        ("[hooks.pre-commit.commands.dart-analyze]", "dart analyze"),
+        ("[hooks.pre-commit.commands.credo]", "mix credo"),
+    ] {
+        assert!(c.contains(table), "missing workspace hook {table}");
+        assert!(c.contains(cmd), "missing command `{cmd}` for {table}");
+    }
+    // Ruby tools must run from the ruby package so they discover .rubocop.yml.
+    assert!(c.contains("root = \"packages/ruby\""));
+    // The flag that makes `poly lint .` run these once (not per file).
+    assert!(
+        c.matches("workspace = true").count() >= 8,
+        "every delegated linter must be workspace-scoped"
+    );
+    // The whole document, with every hook table, must be valid TOML.
+    toml::from_str::<toml::Value>(c).expect("generated poly.toml must parse");
 }
 
 #[test]

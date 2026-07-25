@@ -290,10 +290,12 @@ pub(crate) fn scaffold_python(api: &ApiSurface, config: &ResolvedCrateConfig) ->
         .map(|license| format!("license = \"{license}\"\nlicense-files = [ \"LICENSE\" ]\n"))
         .unwrap_or_default();
 
-    let dev_group_entries = [
-        format!("\"pyrefly{}\"", canonicalize_pep440_specifier(tv::pypi::PYREFLY)),
-        format!("\"ruff{}\"", canonicalize_pep440_specifier(tv::pypi::RUFF)),
-    ];
+    // Only pyrefly (type-checker) is a real dev dependency: poly bundles ruff for
+    // lint+format, so the generated package must not pull in a standalone ruff.
+    let dev_group_entries = [format!(
+        "\"pyrefly{}\"",
+        canonicalize_pep440_specifier(tv::pypi::PYREFLY)
+    )];
     let dev_group_array = format_toml_array_with_prefix(&dev_group_entries, "dev = ".len());
 
     let pyrefly_extra = config

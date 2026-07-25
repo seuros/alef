@@ -7,8 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **poly is now the single lint orchestrator: `poly lint .` invokes the external linters poly does not
+  bundle.** The generated `poly.toml` emits a `workspace = true` hook per configured language for the
+  tools poly has no built-in engine for — pyrefly (Python type-check), rubocop + steep (Ruby),
+  golangci-lint (Go), checkstyle + pmd (Java), ktlint (Kotlin/Android), `dart analyze` (Dart), and
+  credo (Elixir). Each runs once over its package directory, discovers its own native config
+  (`.rubocop.yml`, `.golangci.yml`, `checkstyle.xml`, `.credo.exs`, `analysis_options.yaml`, …), and is
+  skipped gracefully when its toolchain is absent. The existing `pyrefly` hook gains `workspace = true`
+  so it actually runs during `poly lint .` (previously it only fired on git pre-commit). Downstream
+  repos can drop their per-language lint tasks in favour of `poly lint .`.
+
 ### Changed
 
+- **Python generated `pyproject.toml` no longer declares a `ruff` dev-dependency.** poly bundles ruff
+  for lint+format, so a standalone `ruff` in the dev group is redundant; only the `pyrefly`
+  type-checker (which poly does not provide) remains.
 - **Python `poly.toml`: `[lint.python.ruff]` now uses an explicit `select` allowlist** instead of
   `select = ["ALL"]` minus an ignore list. Enabling every rule then suppressing the noise meant each
   ruff release could silently start firing a new deny-by-default rule (e.g. the `CPY` copyright-header

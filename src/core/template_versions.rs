@@ -135,9 +135,6 @@ pub mod cargo {
 pub mod pypi {
     pub const MATURIN_BUILD_REQUIRES: &str = "maturin>=1.0,<2.0";
 
-    // renovate: datasource=pypi depName=ruff
-    pub const RUFF: &str = ">=0.14.8";
-
     // Replaces mypy: pyrefly is a fast single-binary Rust type-checker, run as a
     // renovate: datasource=pypi depName=pyrefly
     pub const PYREFLY: &str = ">=1.1.1";

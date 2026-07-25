@@ -176,6 +176,24 @@ fn toml_array(entries: &[&str]) -> String {
     format!("[\n{inner}\n]")
 }
 
+/// Emit a `[hooks.pre-commit.commands.<name>]` job that `poly lint` runs ONCE
+/// over the whole project (`workspace = true`), from `dir`, delegating to an
+/// external linter poly does not bundle (rubocop, golangci-lint, ktlint, credo,
+/// checkstyle/pmd, …). The tool discovers its own native config file relative to
+/// `dir`; poly skips the job gracefully when the binary is not installed. This is
+/// the only poly mechanism that runs a whole-project tool once on `poly lint .`
+/// (the per-file `[tools.*]` catalog tier cannot) — see the poly workspace-hook
+/// runner. Type-checkers and project-graph linters belong here, not in `[tools]`.
+fn workspace_hook(name: &str, dir: &str, run: &str, files_glob: &str) -> String {
+    format!(
+        "\n[hooks.pre-commit.commands.{name}]\n\
+         run = \"{run}\"\n\
+         root = \"{dir}\"\n\
+         workspace = true\n\
+         files = \"{dir}/{files_glob}\"\n"
+    )
+}
+
 /// Generate the repo-root `poly.toml` from the configured language set.
 pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[Language]) -> Vec<GeneratedFile> {
     let has = |lang: Language| languages.contains(&lang);
@@ -282,11 +300,58 @@ pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[La
     out.push_str("cargo = true\n");
     out.push_str("commit = { stages = [ \"commit-msg\" ] }\n");
 
+    // Whole-project linters / type-checkers that poly does not bundle. Each runs
+    // once on `poly lint .` via a `workspace = true` hook (the per-file `[tools.*]`
+    // tier cannot host project-graph tools), delegating to the language toolchain
+    // and its native config. Absent toolchains are skipped by poly, so a consumer
+    // that lacks e.g. maven simply doesn't run checkstyle.
     if has(Language::Python) {
         let py_dir = config.package_dir(Language::Python);
+        // pyrefly takes the dir as an argument rather than via `root`.
         out.push_str(&format!(
-            "\n[hooks.pre-commit.commands.pyrefly]\nrun = \"pyrefly check {py_dir}\"\nfiles = \"{py_dir}/**/*.py\"\n"
+            "\n[hooks.pre-commit.commands.pyrefly]\nrun = \"pyrefly check {py_dir}\"\nworkspace = true\nfiles = \"{py_dir}/**/*.py\"\n"
         ));
+    }
+    if has(Language::Ruby) {
+        let dir = config.package_dir(Language::Ruby);
+        out.push_str(&workspace_hook("rubocop", &dir, "bundle exec rubocop", "**/*.rb"));
+        out.push_str(&workspace_hook("steep", &dir, "bundle exec steep check", "**/*.rb"));
+    }
+    if has(Language::Go) {
+        let dir = config.package_dir(Language::Go);
+        out.push_str(&workspace_hook(
+            "golangci-lint",
+            &dir,
+            "golangci-lint run ./...",
+            "**/*.go",
+        ));
+    }
+    if has(Language::Java) {
+        let dir = config.package_dir(Language::Java);
+        out.push_str(&workspace_hook(
+            "checkstyle",
+            &dir,
+            "mvn -q checkstyle:check",
+            "**/*.java",
+        ));
+        out.push_str(&workspace_hook("pmd", &dir, "mvn -q pmd:check", "**/*.java"));
+    }
+    if has(Language::KotlinAndroid) {
+        let dir = config.package_dir(Language::KotlinAndroid);
+        out.push_str(&workspace_hook(
+            "ktlint",
+            &dir,
+            "gradle ktlintCheck --no-daemon",
+            "**/*.{kt,kts}",
+        ));
+    }
+    if has(Language::Dart) {
+        let dir = config.package_dir(Language::Dart);
+        out.push_str(&workspace_hook("dart-analyze", &dir, "dart analyze", "**/*.dart"));
+    }
+    if has(Language::Elixir) {
+        let dir = config.package_dir(Language::Elixir);
+        out.push_str(&workspace_hook("credo", &dir, "mix credo --strict", "**/*.{ex,exs}"));
     }
 
     for source in &config.poly.hooks_sources {
