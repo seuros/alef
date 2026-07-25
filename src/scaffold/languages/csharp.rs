@@ -28,14 +28,18 @@ pub(crate) const PUBLISHED_RUNTIME_IDENTIFIERS: &[(&str, &str)] = &[
 /// Render just the `.csproj` XML content for the given config and version string.
 ///
 /// The produced csproj is designed to live at
-/// `packages/csharp/<Namespace>/<Namespace>.csproj`, where:
+/// `packages/csharp/<Namespace>/<Namespace>.csproj` and is a THIN meta-package:
 /// - `../../../LICENSE` reaches the workspace root (3 path components deep)
-/// - `runtimes/**` matches `packages/csharp/<Namespace>/runtimes/` — the exact
-///   directory where `alef-publish` stages the FFI shared libraries
+/// - it carries only the managed assembly plus `runtime.json` (rendered from
+///   `runtime.json.template` by CI before pack), which drives NuGet's RID-fallback
+///   graph. Native closures ship separately in the per-RID
+///   `<PackageId>.runtime.<rid>` packages (see the sibling `*.Runtime` project) —
+///   packing `runtimes/**` directly into the meta blows past the NuGet package
+///   size limit and returns HTTP 413 (xberg #1280 / rc.35, re-broken in rc.37).
 ///
 /// This is exposed as a `pub` function so `alef-publish` can regenerate the
-/// csproj before invoking `dotnet pack`, guaranteeing the glob paths are always
-/// in sync with the staging layout regardless of what is committed on disk.
+/// csproj before invoking `dotnet pack`, guaranteeing the metadata stays in
+/// sync regardless of what is committed on disk.
 pub fn render_csharp_csproj(config: &ResolvedCrateConfig, version: &str) -> String {
     let meta = scaffold_meta(config);
     let namespace = config.csharp_namespace();
@@ -95,8 +99,20 @@ pub fn render_csharp_csproj(config: &ResolvedCrateConfig, version: &str) -> Stri
 
   <ItemGroup>
     <None Include="../../../LICENSE" Pack="true" PackagePath="/" />
-    <None Include="runtimes/**" Pack="true" PackagePath="runtimes/" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Thin meta-package: no runtimes/** payload here. Native closures ship in the
+         per-RID {package_id}.runtime.<rid> packages (see ../{namespace}.Runtime); this
+         package only carries the managed assembly plus runtime.json, which tells
+         NuGet's RID-fallback graph which runtime package to pull in for the
+         consumer's RID (xberg #1280 / rc.35 413 fix). runtime.json is rendered
+         from runtime.json.template by CI before pack; RequireRuntimeJson guards
+         against packing without it. -->
+    <None Include="runtime.json" Pack="true" PackagePath="/" Condition="Exists('runtime.json')" />
   </ItemGroup>
+
+  <Target Name="RequireRuntimeJson" BeforeTargets="Pack">
+    <Error Condition="!Exists('runtime.json')"
+           Text="packages/csharp/{namespace}/runtime.json is missing. Render it from runtime.json.template (substituting {{{{VERSION}}}}) before packing {namespace}.csproj." />
+  </Target>
 
   <ItemGroup>
     <Compile Include="../src/**/*.cs" />

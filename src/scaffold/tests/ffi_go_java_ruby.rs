@@ -564,16 +564,20 @@ fn test_scaffold_csharp_csproj_at_package_root() {
 }
 
 #[test]
-fn test_render_csharp_csproj_runtimes_glob_is_relative() {
+fn test_render_csharp_csproj_is_thin_meta_package() {
     let config = test_config();
     let content = render_csharp_csproj(&config, "1.2.3");
     assert!(
-        content.contains(r#"Include="runtimes/**""#),
-        "runtimes glob must be relative (no ../ prefix): {content}"
+        !content.contains(r#"Include="runtimes/**""#),
+        "meta csproj must NOT pack the fat runtimes/** payload (413 regression): {content}"
     );
     assert!(
-        !content.contains(r#"Include="../runtimes"#),
-        "runtimes glob must NOT have ../: {content}"
+        content.contains(r#"Include="runtime.json" Pack="true" PackagePath="/" Condition="Exists('runtime.json')""#),
+        "meta csproj must pack the thin runtime.json RID-fallback graph: {content}"
+    );
+    assert!(
+        content.contains(r#"<Target Name="RequireRuntimeJson" BeforeTargets="Pack">"#),
+        "meta csproj must hard-error if runtime.json is missing before pack: {content}"
     );
     // so ../../../LICENSE correctly reaches the workspace root.
     assert!(

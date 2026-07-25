@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.47.1] - 2026-07-25
+
+### Fixed
+
+- **C# meta-package is thin again (fixes NuGet HTTP 413 on publish).** The generated
+  `packages/csharp/<Namespace>/<Namespace>.csproj` packed the entire native closure via
+  `<None Include="runtimes/**">`, pushing the `XbergIo.Xberg` meta package past NuGet's size limit
+  (HTTP 413; regressed since rc.37 — the per-RID split from #1280/rc.35 had slimmed it). The template
+  now packs only `runtime.json` — the RID-fallback graph rendered from `runtime.json.template` by CI —
+  plus the managed assembly, and adds a `RequireRuntimeJson` pre-pack target that hard-errors if
+  `runtime.json` is missing. Native closures continue to ship in the per-RID
+  `<PackageId>.runtime.<rid>` packages.
+
 ## [0.47.0] - 2026-07-25
 
 ### Fixed
