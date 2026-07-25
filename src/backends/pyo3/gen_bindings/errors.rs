@@ -419,7 +419,11 @@ pub(super) fn gen_init_py(
     }
 
     let mut all_items = Vec::new();
-    for f in &api.functions {
+    // Mirror the exclude filter applied to the `.api` import list above: without
+    // it, an excluded function (notably an excluded `*_async` variant whose sync
+    // sibling was already dropped) leaks into `__all__` without a definition,
+    // which pyrefly flags as `bad-dunder-all` and `from pkg import *` breaks on.
+    for f in api.functions.iter().filter(|f| !exclude_functions.contains(&f.name)) {
         all_items.push(f.name.clone());
     }
     all_items.extend(crate::backends::pyo3::trait_bridge::collect_bridge_register_fns(
@@ -685,6 +689,54 @@ mod tests {
         assert!(
             result.contains("\"SupportedLanguage\""),
             "SupportedLanguage missing from __all__ in:\n{result}",
+        );
+    }
+
+    /// A function in `exclude_functions` must be dropped from `__all__`, not just
+    /// from the `.api` import list. Regression: an excluded `*_async` variant (whose
+    /// sync sibling was already excluded) leaked into `__all__` without a definition,
+    /// which pyrefly flags as `bad-dunder-all` and breaks `from pkg import *`.
+    #[test]
+    fn gen_init_py_omits_excluded_functions_from_all() {
+        use crate::core::ir::FunctionDef;
+        let mut api = empty_api();
+        api.functions = vec![
+            FunctionDef {
+                name: "keep_fn".to_string(),
+                ..Default::default()
+            },
+            FunctionDef {
+                name: "drop_async".to_string(),
+                is_async: true,
+                ..Default::default()
+            },
+        ];
+        let dto = DtoConfig::default();
+        let caps = std::collections::HashMap::new();
+        let opaque = std::collections::HashMap::new();
+        let adapters = vec![];
+        let mut exclude = ahash::AHashSet::new();
+        exclude.insert("drop_async".to_string());
+        let result = gen_init_py(
+            &api,
+            "_mod",
+            "1.2.3",
+            &dto,
+            &[],
+            &[],
+            &std::collections::BTreeMap::new(),
+            &caps,
+            &adapters,
+            &opaque,
+            &exclude,
+        );
+        assert!(
+            result.contains("\"keep_fn\""),
+            "kept fn missing from __all__:\n{result}"
+        );
+        assert!(
+            !result.contains("drop_async"),
+            "excluded async fn leaked into __all__:\n{result}"
         );
     }
 }
