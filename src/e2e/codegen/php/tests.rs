@@ -481,6 +481,48 @@ mod composer_json_tests {
     }
 
     #[test]
+    fn registry_composer_json_declares_userland_autoload() {
+        let content = render_composer_json(
+            "sample_crate/e2e-php",
+            "SampleLlm\\\\E2e\\\\",
+            "demo_client",
+            "sample_crate/demo-client",
+            "../../packages/php",
+            "1.4.0-rc.32",
+            DependencyMode::Registry,
+        );
+        // The userland PHP classes are layered over the native ext-php-rs
+        // extension and are NOT registered by it, so PHPUnit needs a PSR-4
+        // autoload mapping to the local package source. Without it every test
+        // fails with `Class not found` even after PIE installs the extension.
+        assert!(
+            content.contains(r#""autoload""#),
+            "registry composer.json must declare an autoload section, got:\n{content}"
+        );
+        assert!(
+            content.contains(r#""Demo\\Client\\": "../../packages/php/src/""#),
+            "registry composer.json must map the userland namespace to the package src, got:\n{content}"
+        );
+    }
+
+    #[test]
+    fn local_composer_json_declares_userland_autoload() {
+        let content = render_composer_json(
+            "sample_crate/e2e-php",
+            "SampleLlm\\\\E2e\\\\",
+            "demo_client",
+            "sample_crate/demo-client",
+            "../../packages/php",
+            "1.4.0-rc.32",
+            DependencyMode::Local,
+        );
+        assert!(
+            content.contains(r#""Demo\\Client\\": "../../packages/php/src/""#),
+            "local composer.json must map the userland namespace to the package src, got:\n{content}"
+        );
+    }
+
+    #[test]
     fn registry_install_sh_contains_pie_install() {
         let content = render_install_sh("sample_crate/demo-client", "demo_client", "1.4.0-rc.32");
         // The script uses $PIE as the resolved pie binary path.

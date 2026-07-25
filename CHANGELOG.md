@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runs `cmd/setup -lib-dir .lib`; test-app run defaults use `go run <module>/cmd/setup` instead of
   the copy-module-out-of-cache workaround.
 
+### Fixed
+
+- **PHP: registry-mode e2e `composer.json` now declares the userland PSR-4 autoload.** Only the
+  `Local` dependency mode emitted the `"autoload"` section mapping the binding's PHP namespace to
+  the local `packages/php/src/`, so registry-mode test apps could not resolve the userland classes
+  layered over the native ext-php-rs extension — every test failed with `Class not found` even after
+  PIE installed the extension. Both modes now emit the mapping via a shared helper.
+
 ## [0.44.0] - 2026-07-24
 
 ### Fixed
