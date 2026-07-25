@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Python `poly.toml`: `[lint.python.ruff]` now uses an explicit `select` allowlist** instead of
+  `select = ["ALL"]` minus an ignore list. Enabling every rule then suppressing the noise meant each
+  ruff release could silently start firing a new deny-by-default rule (e.g. the `CPY` copyright-header
+  family) on generated bindings. The scaffold now selects the rule families we want; families that were
+  only ever carried to be fully ignored (`COM`, `FBT`, `FIX`, `TD`, `PD`, `EM`, `TRY`, `BLE`) are no
+  longer selected, and `ignore` is trimmed to the in-family sub-rules that remain relevant.
+
 ## [0.45.0] - 2026-07-25
 
 ### Added

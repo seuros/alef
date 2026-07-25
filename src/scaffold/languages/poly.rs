@@ -67,11 +67,26 @@ const EXCLUDES: &[&str] = &[
 ///   owns Elixir source.
 const POLY_FORMAT_EXCLUDES: &[&str] = &["**/Cargo.toml"];
 
-/// Ruff rules ignored repo-wide for generated Python (ported verbatim from the
-/// former pyproject `[tool.ruff] lint.ignore`).
+/// Ruff rule families selected for generated + hand-written Python. This is an
+/// explicit allowlist rather than `select = ["ALL"]`: enabling every rule then
+/// suppressing the noise meant each ruff release could silently start firing a new
+/// deny-by-default rule on the generated binding surface (the `CPY` copyright-header
+/// family is the canonical example). We instead enable the families we actually
+/// want. Families that used to be carried only to be fully suppressed via `ignore`
+/// (`COM`, `FBT`, `FIX`, `TD`, `PD`, `EM`, `TRY`, `BLE`) are simply not selected.
+const RUFF_SELECT: &[&str] = &[
+    "F", "E", "W", "I", "N", "D", "UP", "ANN", "ASYNC", "S", "B", "A", "C4", "DTZ", "T10", "T20", "ISC", "ICN", "PIE",
+    "PT", "Q", "RSE", "RET", "SIM", "TID", "TC", "ARG", "PTH", "PGH", "PL", "PERF", "FURB", "RUF",
+];
+
+/// Ruff sub-rules suppressed within the selected families (see `RUFF_SELECT`):
+/// specific checks that would otherwise fire on the generated binding surface
+/// without indicating a defect — missing module/package docstrings, line length
+/// (owned by the formatter), and the security lints for bind-all-interfaces /
+/// try-except-pass / subprocess use in generated glue.
 const RUFF_IGNORE: &[&str] = &[
-    "ANN401", "ASYNC109", "ASYNC110", "BLE001", "COM812", "D100", "D104", "D107", "D205", "E501", "EM", "FBT", "FIX",
-    "ISC001", "PD011", "PGH003", "PLR2004", "PLW0603", "S104", "S110", "S603", "TD", "TRY",
+    "ANN401", "ASYNC109", "ASYNC110", "D100", "D104", "D107", "D205", "E501", "ISC001", "PGH003", "PLR2004", "PLW0603",
+    "S104", "S110", "S603",
 ];
 
 /// rumdl rules disabled repo-wide for Markdown — the Zensical docs convention
@@ -195,7 +210,8 @@ pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[La
 
     if has(Language::Python) {
         out.push_str(&format!(
-            "[lint.python.ruff]\nselect = [ \"ALL\" ]\nignore = {ignore}\n",
+            "[lint.python.ruff]\nselect = {select}\nignore = {ignore}\n",
+            select = toml_array(RUFF_SELECT),
             ignore = toml_array(RUFF_IGNORE)
         ));
         out.push_str(

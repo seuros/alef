@@ -120,8 +120,16 @@ fn poly_toml_python_ruff_pyrefly_and_per_file_ignores() {
     let files = scaffold(&api, &config, &[Language::Python]).unwrap();
     let c = &poly_toml(&files).content;
 
-    assert!(c.contains("[lint.python.ruff]") && c.contains("select = [ \"ALL\" ]"));
-    assert!(c.contains("\"ANN401\","), "ruff ignore list must be ported");
+    assert!(c.contains("[lint.python.ruff]"));
+    assert!(
+        c.contains("select = [\n") && c.contains("\"ANN\",") && !c.contains("\"ALL\""),
+        "ruff select must be an explicit allowlist, not the ALL catch-all"
+    );
+    assert!(
+        !c.contains("\"CPY\",") && !c.contains("\"CPY001\","),
+        "the copyright-header family must not be selected or ignored"
+    );
+    assert!(c.contains("\"ANN401\","), "in-family ruff ignores must be preserved");
     assert!(c.contains("pydocstyle_convention = \"google\""));
     assert!(c.contains("pylint_max_args = 10"));
     assert!(c.contains("[per-file-ignores]") && c.contains("\"**/api.py\""));
