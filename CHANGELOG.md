@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.47.2] - 2026-07-25
+
+### Fixed
+
+- **Generated Go binding is cgo-safe again.** The `// If linking fails … cannot find -lxberg_ffi …` note
+  was emitted directly above the `/* #cgo … */` preamble, so cgo fed it to the C compiler
+  (`error: unknown type name 'If'`, stray backtick) and every cgo build failed. The note is now
+  separated from the cgo preamble by a blank line.
+
 ## [0.47.1] - 2026-07-25
 
 ### Fixed
