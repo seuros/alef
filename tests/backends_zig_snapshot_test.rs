@@ -540,7 +540,7 @@ fn trait_bridge_register_fn_passes_vtable_pointer_not_value() {
     assert!(
         content.contains("c.demo_register_ocr_backend(name, &_c_vtable,"),
         "BUG: register_ocr_backend should pass `&_c_vtable` (pointer), not `_c_vtable` (value). Content:\n{}",
-        &content
+        content
     );
 
     assert!(
@@ -599,12 +599,12 @@ fn fallible_function_returning_primitive_no_null_check() {
     assert!(
         content.contains("if (c.demo_last_error_code() != 0)"),
         "BUG: fallible function should check last_error_code. Content:\n{}",
-        &content
+        content
     );
 
     assert!(
         content.contains("return _result;") || content.contains("return"),
         "BUG: function should have a return statement. Content:\n{}",
-        &content
+        content
     );
 }

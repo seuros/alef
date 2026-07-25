@@ -473,7 +473,7 @@ impl Backend for SwiftBackend {
         let rust_crate_files = gen_rust_crate::emit(original_api, config)?;
         files.extend(rust_crate_files);
 
-        let binding_crate_name = format!("{}-swift", &api.crate_name);
+        let binding_crate_name = format!("{}-swift", api.crate_name);
         let base_dir = resolve_output_dir(config.output_paths.get("swift"), &config.name, "packages/swift");
         let package_root = PathBuf::from(&base_dir)
             .ancestors()

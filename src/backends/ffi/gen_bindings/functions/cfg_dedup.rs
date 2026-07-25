@@ -104,12 +104,10 @@ fn should_merge_cfg_group(indices: &[usize], functions: &[FunctionDef]) -> bool 
 fn merge_cfgs<'a>(cfgs: impl Iterator<Item = Option<&'a str>>) -> Option<String> {
     let mut distinct: Vec<&str> = Vec::new();
     for cfg in cfgs {
-        match cfg {
-            None => return None,
-            Some(s) => {
-                if !distinct.contains(&s) {
-                    distinct.push(s);
-                }
+        {
+            let s = cfg?;
+            if !distinct.contains(&s) {
+                distinct.push(s);
             }
         }
     }

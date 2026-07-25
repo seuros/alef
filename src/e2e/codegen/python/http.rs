@@ -45,7 +45,7 @@ pub(super) fn render_http_test_function(out: &mut String, fixture: &Fixture) {
     };
 
     let method = http.request.method.to_uppercase();
-    let path = format!("/fixtures/{}{}", &fixture.id, &http.request.path);
+    let path = format!("/fixtures/{}{}", fixture.id, http.request.path);
 
     // Detect content-type so the renderer can decide between JSON-encoded and
     // raw (form-urlencoded / multipart / plain text) body emission.

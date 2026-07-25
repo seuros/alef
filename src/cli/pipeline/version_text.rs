@@ -585,10 +585,9 @@ pub(super) fn replace_citation_version(content: &str, new_version: &str) -> Opti
         (value.as_str(), format!("{}\"{new_version}\"", &captures[1]))
     } else if let Some(value) = captures.get(3) {
         (value.as_str(), format!("{}'{new_version}'", &captures[1]))
-    } else if let Some(value) = captures.get(4) {
-        (value.as_str(), format!("{}{new_version}", &captures[1]))
     } else {
-        return None;
+        let value = captures.get(4)?;
+        (value.as_str(), format!("{}{new_version}", &captures[1]))
     };
     if current == new_version {
         return None;

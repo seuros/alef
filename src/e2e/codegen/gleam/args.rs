@@ -160,7 +160,7 @@ pub(super) fn build_args_and_setup(
                             let snake_opts = opts_type.to_snake_case();
                             let json_str = serde_json::to_string(config_val).unwrap_or_default();
                             let escaped = escape_gleam(&json_str);
-                            let var_name = format!("{}_json__", &arg.name);
+                            let var_name = format!("{}_json__", arg.name);
                             setup_lines.push(format!(
                                 "let assert Ok({var_name}) = {module_path}.{snake_opts}_from_json(\"{escaped}\")"
                             ));

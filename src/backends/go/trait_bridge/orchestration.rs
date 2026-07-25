@@ -79,7 +79,7 @@ pub fn gen_trait_bridges_file(
                 .iter()
                 .filter(|m| !bridge_cfg.ffi_skip_methods.contains(&m.name))
             {
-                let export_name = format!("go{}{}", &pascal, method.name.to_pascal_case());
+                let export_name = format!("go{}{}", pascal, method.name.to_pascal_case());
                 let method_substituted = method_with_excluded_substituted(method, &excluded_named_types);
                 let c_sig = c_trampoline_signature(&export_name, &method_substituted);
                 let c_return_type = c_callback_return_type(&method_substituted);
@@ -358,7 +358,7 @@ pub(super) fn gen_trait_bridge(
         .iter()
         .filter(|m| !bridge_cfg.ffi_skip_methods.contains(&m.name))
     {
-        let export_name = format!("go{}{}", &trait_pascal, method.name.to_pascal_case());
+        let export_name = format!("go{}{}", trait_pascal, method.name.to_pascal_case());
         out.push_str(&crate::backends::go::template_env::render(
             "export_marker.jinja",
             minijinja::context! {
@@ -382,7 +382,7 @@ pub(super) fn gen_trait_bridge(
         .methods
         .iter()
         .filter(|m| !bridge_cfg.ffi_skip_methods.contains(&m.name))
-        .map(|m| format!("go{}{}", &trait_pascal, m.name.to_pascal_case()))
+        .map(|m| format!("go{}{}", trait_pascal, m.name.to_pascal_case()))
         .collect();
 
     let vtable_constructor = format!("{}_{}_vtable_new", ffi_prefix, trait_snake);

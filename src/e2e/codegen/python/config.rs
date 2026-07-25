@@ -261,7 +261,7 @@ pub(super) fn render_app_harness(
 
     let route_builder_import = if !imports.is_empty() {
         let module_leaf = imports[0].rsplit('.').next().unwrap_or(&imports[0]).replace('-', "_");
-        format!("{}._{}", &imports[0], module_leaf)
+        format!("{}._{}", imports[0], module_leaf)
     } else {
         "app._app".to_string()
     };
@@ -307,7 +307,7 @@ fn render_env_setup_block(e2e_config: &E2eConfig) -> String {
     keys.sort();
     let entries = keys
         .iter()
-        .map(|k| format!("    {:?}: {:?},", k, &e2e_config.env[*k]))
+        .map(|k| format!("    {:?}: {:?},", k, e2e_config.env[*k]))
         .collect::<Vec<_>>()
         .join("\n");
     format!(

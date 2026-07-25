@@ -54,7 +54,7 @@ pub(super) fn ffi_ty_to_go(rust_ty: &str) -> &'static str {
 /// the call (CString allocation + deferred free, numeric cast, etc.).
 pub(super) fn go_ctor_param_setup(go_name: &str, rust_ty: &str, ffi_prefix: &str) -> (String, String) {
     let normalized = rust_ty.trim();
-    let c_name = format!("c{}{}", &go_name[..1].to_uppercase(), &go_name[1..]);
+    let c_name = format!("c{}{}", go_name[..1].to_uppercase(), &go_name[1..]);
 
     if normalized.contains("c_char") || normalized.contains("CStr") {
         let setup = format!("\t{c_name} := C.CString({go_name})\n\tdefer C.free(unsafe.Pointer({c_name}))\n");

@@ -37,7 +37,7 @@ fn emit_client_shims(
     emit_destructor_shim(out, &free_symbol, &ty.name);
 
     if let Some(ctor) = config.client_constructors.get(&ty.name) {
-        let ctor_method_name = format!("nativeNew{}", &ty.name);
+        let ctor_method_name = format!("nativeNew{}", ty.name);
         let ctor_symbol = jni_symbol(package, bridge, &ctor_method_name);
         emit_constructor_shim(out, &ctor_symbol, ty, config, ctor);
     }

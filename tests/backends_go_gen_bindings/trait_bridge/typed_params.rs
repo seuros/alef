@@ -350,7 +350,7 @@ fn test_trait_bridge_unmarshals_config_into_concrete_type() {
 
     let code = gen_trait_bridges_file(&api, &config, "testlib", "krz", "test.h", "../ffi", "..", "testlib");
 
-    eprintln!("Full generated code:\n{}", &code);
+    eprintln!("Full generated code:\n{}", code);
     eprintln!("---");
     if let Some(pos) = code.find("go") {
         eprintln!("Code starting at 'go': {}", &code[pos..pos.min(pos + 500)]);

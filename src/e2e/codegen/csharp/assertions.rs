@@ -350,7 +350,7 @@ pub(super) fn render_assertion(
             let _ = writeln!(
                 out,
                 "        if ({container} is FormatMetadata.{} {})",
-                variant_name, &variant_var
+                variant_name, variant_var
             );
             let _ = writeln!(out, "        {{");
             render_discriminated_union_assertion(

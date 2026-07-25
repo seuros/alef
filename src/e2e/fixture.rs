@@ -662,7 +662,7 @@ fn load_fixtures_recursive(base: &Path, dir: &Path, fixtures: &mut Vec<Fixture>)
                 // in all JSON string values so generators emit the expanded values.
                 expand_json_templates(&mut fixture.input);
                 if let Some(ref mut http) = fixture.http {
-                    for (_, v) in http.request.headers.iter_mut() {
+                    for v in http.request.headers.values_mut() {
                         *v = crate::e2e::escape::expand_fixture_templates(v);
                     }
                     if let Some(ref mut body) = http.request.body {

@@ -116,7 +116,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_http_test_case(out:
 
     let init_str = fetch_init;
     // Server-pattern: construct path as /fixtures/{fixture_id}{request_path}
-    let path = format!("/fixtures/{}{}", &fixture.id, &http.request.path);
+    let path = format!("/fixtures/{}{}", fixture.id, http.request.path);
 
     let status = http.expected_response.status_code;
 

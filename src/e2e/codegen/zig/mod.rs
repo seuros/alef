@@ -94,13 +94,7 @@ impl E2eCodegen for ZigE2eCodegen {
         let crate_name = &config.name;
 
         // Strip placeholder hashes so we can fetch the real ones.
-        let explicit_hash_clean = explicit_hash.and_then(|h| {
-            if h.contains("STALE_HASH_REGENERATE") {
-                None
-            } else {
-                Some(h)
-            }
-        });
+        let explicit_hash_clean = explicit_hash.filter(|h| !h.contains("STALE_HASH_REGENERATE"));
 
         // Detect if the explicit hash is stale: if it contains an embedded version
         // string (format: `<pkg_name>-X.Y.Z-<hash>`) and that version doesn't match

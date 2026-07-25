@@ -61,7 +61,7 @@ pub(super) fn gen_tagged_enum_ruby_classes(enum_def: &crate::core::ir::EnumDef, 
             variant.serde_rename.as_deref(),
             enum_def.serde_rename_all.as_deref().or(Some("snake_case")),
         );
-        let variant_const = format!("{}{}", class_name, &variant.name);
+        let variant_const = format!("{}{}", class_name, variant.name);
         dispatch_arms.push_str(&crate::backends::magnus::template_env::render(
             "tagged_enum_dispatch_arm.rb.jinja",
             minijinja::context! {
@@ -82,7 +82,7 @@ pub(super) fn gen_tagged_enum_ruby_classes(enum_def: &crate::core::ir::EnumDef, 
     ));
 
     for variant in &enum_def.variants {
-        let variant_class = format!("{}{}", class_name, &variant.name);
+        let variant_class = format!("{}{}", class_name, variant.name);
         let field_names: Vec<&str> = variant.fields.iter().map(|f| f.name.as_str()).collect();
 
         let mut doc_comment = String::new();

@@ -378,7 +378,7 @@ impl Backend for ExtendrBackend {
                         let final_impl = if from_json_method.is_empty() {
                             impl_block
                         } else if let Some(pos) = impl_block.rfind('}') {
-                            format!("{}{}{}", &impl_block[..pos], &from_json_method, &impl_block[pos..])
+                            format!("{}{}{}", &impl_block[..pos], from_json_method, &impl_block[pos..])
                         } else {
                             impl_block
                         };
