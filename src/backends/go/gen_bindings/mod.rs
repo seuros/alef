@@ -10,6 +10,7 @@ use binding_file::{find_options_bridge_function, format_go_code, gen_go_file, st
 use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile};
 use crate::core::config::{AdapterPattern, BridgeBinding, Language, ResolvedCrateConfig, resolve_output_dir};
 use crate::core::ir::ApiSurface;
+use heck::ToShoutySnakeCase;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -25,6 +26,21 @@ impl GoBackend {
             .unwrap_or("binding")
             .replace('-', "")
             .to_lowercase()
+    }
+}
+
+/// Sanitize a crate name into a valid Go identifier fragment: non-alphanumeric bytes
+/// become `_`, and a leading digit is prefixed with `_` (Go identifiers can't start with
+/// a digit). Used to build the `cmd/setup`-generated shim's import alias for the binding
+/// package (`<go_identifier>nativesetup`).
+fn go_identifier(name: &str) -> String {
+    let sanitized: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    match sanitized.chars().next() {
+        Some(c) if c.is_ascii_digit() => format!("_{sanitized}"),
+        _ => sanitized,
     }
 }
 
@@ -242,7 +258,8 @@ impl Backend for GoBackend {
             }
         }
 
-        // Generate generate.go with //go:generate directive for FFI library download
+        // Generate generate.go with the //go:generate directive that vendors natives
+        // into .lib/ for writable checkouts (see cmd/setup -lib-dir).
         let generate_go_content =
             crate::backends::go::template_env::render("generate_cgo_flags.go.jinja", minijinja::context! {});
         files.push(GeneratedFile {
@@ -254,22 +271,55 @@ impl Backend for GoBackend {
         let crate_version = api.version.to_string();
         let repo_url = config.github_repo();
         let asset_prefix = config.name.clone();
-        let download_tool_content = crate::backends::go::template_env::render(
-            "cmd_download_ffi_main.go.jinja",
+        let module_path = config.go_module();
+        let version_ident = crate::core::version::to_go_version_ident(&crate_version);
+        let shim_filename = format!("{}_cgo_link.go", config.name);
+        let env_override_var = format!("{}_GO_NATIVE_BASE_URL", config.name.to_shouty_snake_case());
+        let go_ident_crate_name = go_identifier(&config.name);
+
+        // Generate cmd/setup/main.go: downloads the platform native library from GitHub
+        // releases into a versioned user-cache dir at runtime and writes a machine-local
+        // cgo link shim into a consumer package (see cmd_setup_main.go.jinja doc comment).
+        let setup_tool_content = crate::backends::go::template_env::render(
+            "cmd_setup_main.go.jinja",
             minijinja::context! {
                 ffi_lib_name => &ffi_lib_name,
                 crate_version => &crate_version,
                 repo_url => &repo_url,
                 asset_prefix => &asset_prefix,
+                crate_name => &config.name,
+                module_path => &module_path,
+                version_ident => &version_ident,
+                shim_filename => &shim_filename,
+                env_override_var => &env_override_var,
+                go_ident_crate_name => &go_ident_crate_name,
             },
         );
         files.push(GeneratedFile {
-            path: PathBuf::from(format!("{output_dir}cmd/download_ffi/main.go")),
-            content: download_tool_content,
+            path: PathBuf::from(format!("{output_dir}cmd/setup/main.go")),
+            content: setup_tool_content,
             generated_header: false,
         });
 
-        // Generate embed_ffi.go with //go:embed directive to ensure header files
+        // Generate native_setup.go with the RequireNativeSetup_<version> sentinel that the
+        // cmd/setup-written shim references, turning shim/module version skew into a
+        // compile-time error.
+        let native_setup_content = crate::backends::go::template_env::render(
+            "native_setup.go.jinja",
+            minijinja::context! {
+                pkg_name => &pkg_name,
+                crate_version => &crate_version,
+                version_ident => &version_ident,
+            },
+        );
+        files.push(GeneratedFile {
+            path: PathBuf::from(format!("{output_dir}native_setup.go")),
+            content: native_setup_content,
+            generated_header: false,
+        });
+
+        // Generate embed_ffi.go with //go:embed directive to ensure C headers are included
+        // when this module is vendored (`go mod vendor`).
         let embed_ffi_content = crate::backends::go::template_env::render(
             "embed_ffi.go.jinja",
             minijinja::context! {

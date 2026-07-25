@@ -1,3 +1,4 @@
+// If linking fails with `cannot find -l{{ ffi_lib_name }}`, run `go run <module>/cmd/setup`.
 /*
 #cgo CFLAGS: -I${SRCDIR}/include
 #cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/.lib/macos-arm64 -Wl,-rpath,${SRCDIR}/.lib/macos-arm64 -l{{ ffi_lib_name }}

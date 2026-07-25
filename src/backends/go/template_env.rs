@@ -839,10 +839,11 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/generate_cgo_flags.go.jinja"),
     ),
     (
-        "cmd_download_ffi_main.go.jinja",
-        include_str!("templates/cmd_download_ffi_main.go.jinja"),
+        "cmd_setup_main.go.jinja",
+        include_str!("templates/cmd_setup_main.go.jinja"),
     ),
     ("embed_ffi.go.jinja", include_str!("templates/embed_ffi.go.jinja")),
+    ("native_setup.go.jinja", include_str!("templates/native_setup.go.jinja")),
 ];
 
 pub(crate) fn make_env() -> Environment<'static> {

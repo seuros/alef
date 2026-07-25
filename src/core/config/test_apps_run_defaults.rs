@@ -107,21 +107,16 @@ pub fn default_test_apps_run_config(
             ))),
         },
         Language::Go => {
-            // download logic. The tool ships behind a `//go:build ignore` guard so it
+            // `cmd/setup` downloads the platform native library from the GitHub release
+            // into a per-user cache and writes a machine-local cgo link shim into the test
+            // app's own package — `go run <module>/cmd/setup` works directly against the
+            // module fetched from the proxy (or replaced locally), no copy-out-of-the
+            // read-only-module-cache workaround needed.
             let run_cmd = if let Some(mod_path) = go_module_path {
                 format!(
-                    r#"cd {test_apps_dir}/go && GOWORK=off go mod tidy && \
-{{ \
-  SRC="$(GOWORK=off go list -m -f '{{{{.Dir}}}}' {mod_path})" && \
-  DST="$(mktemp -d)/gomod" && \
-  cp -R "$SRC" "$DST" && \
-  chmod -R u+w "$DST" && \
-  perl -ni -e 'print unless m{{^//go:build ignore$}} || m{{^//\s*\+build ignore$}}' "$DST/cmd/download_ffi/main.go" && \
-  ( cd "$DST" && GOWORK=off GOFLAGS=-mod=mod go run ./cmd/download_ffi ) && \
-  GOWORK=off go mod edit -replace {mod_path}="$DST" && \
-  GOWORK=off go mod tidy && \
-  GOWORK=off go test ./...; rc=$?; git checkout go.mod go.sum; exit $rc; \
-}}"#
+                    "cd {test_apps_dir}/go && GOWORK=off go mod tidy && \
+GOWORK=off go run {mod_path}/cmd/setup && \
+GOWORK=off go test ./..."
                 )
             } else {
                 format!("cd {test_apps_dir}/go && GOWORK=off go mod tidy && GOWORK=off go test ./...")
@@ -484,7 +479,7 @@ mod tests {
     }
 
     #[test]
-    fn go_with_module_path_provisions_ffi_via_binding_downloader() {
+    fn go_with_module_path_provisions_ffi_via_cmd_setup() {
         let c = default_test_apps_run_config(
             Language::Go,
             "test_apps",
@@ -498,26 +493,18 @@ mod tests {
             "must not use vendor mode, got: {run}"
         );
         assert!(
-            run.contains(r#"go list -m -f '{{.Dir}}'"#),
-            "expected the module dir to be resolved via `go list -m`, got: {run}"
+            run.contains("go run github.com/example/mylib/packages/go/cmd/setup"),
+            "expected cmd/setup to be invoked directly against the module path, got: {run}"
         );
         assert!(
-            run.contains("go run ./cmd/download_ffi"),
-            "expected the binding's own download_ffi tool to be invoked, got: {run}"
+            !run.contains("go list -m") && !run.contains("mktemp") && !run.contains("go mod edit -replace"),
+            "the copy-out-of-the-module-cache workaround must be gone, got: {run}"
         );
         assert!(
             !run.contains("curl")
                 && !run.contains("releases/download")
                 && !run.contains("github.com/example/mylib/releases/download"),
             "runner must be generic — no project-specific download logic, got: {run}"
-        );
-        assert!(
-            run.contains(r#"go mod edit -replace github.com/example/mylib/packages/go="$DST""#),
-            "expected replace to the writable copy, got: {run}"
-        );
-        assert!(
-            run.contains("git checkout go.mod go.sum"),
-            "expected go.mod/go.sum to be restored unconditionally, got: {run}"
         );
         assert!(
             run.contains("GOWORK=off go test ./..."),

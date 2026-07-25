@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Go backend: download-at-consume native distribution.** Published Go modules no longer require
+  native libraries inside the module (module zips only contain the git tag's files; `.lib/` stays
+  gitignored). The generated `cmd/setup` tool replaces `cmd/download_ffi`: it downloads the platform
+  FFI library from the GitHub release into a versioned user cache
+  (`os.UserCacheDir()/<name>/go/<version>/<platform>`), verifies its SHA-256 sidecar, and writes a
+  machine-local, gitignored cgo link shim (`<name>_cgo_link.go`) with absolute `-L`/`-rpath` flags
+  into the consumer's package. The binding exports a per-version `RequireNativeSetup_<version>`
+  sentinel referenced by the shim, turning shim/module version skew into a compile error.
+  `embed_ffi.go` now embeds only `include/*` so `go mod vendor` carries the C header; `go generate`
+  runs `cmd/setup -lib-dir .lib`; test-app run defaults use `go run <module>/cmd/setup` instead of
+  the copy-module-out-of-cache workaround.
+
 ## [0.44.0] - 2026-07-24
 
 ### Fixed

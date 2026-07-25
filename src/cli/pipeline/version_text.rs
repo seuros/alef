@@ -1,6 +1,29 @@
 use crate::core::config::{CitationAuthor, CitationConfig};
+use crate::core::version::to_go_version_ident;
 use std::sync::LazyLock;
 use tracing::debug;
+
+/// Update the `RequireNativeSetup_<version_ident>` version-skew sentinel in
+/// `packages/go/native_setup.go` after a version bump.
+///
+/// Both the identifier suffix and the string value are derived from the version, so a
+/// plain value-only substitution (like the `moduleVersion` constant in
+/// `cmd/setup/main.go`) isn't enough — the whole `const RequireNativeSetup_<ident> =
+/// "<version>"` line must be rewritten so the identifier the generated `cmd/setup`-written
+/// shim references (`RequireNativeSetup_<new_ident>`) actually exists in the freshly
+/// bumped binding package.
+///
+/// Returns `Some(new_content)` when the sentinel changed, `None` when it already matches
+/// `new_version` (idempotent).
+pub(super) fn sync_go_native_setup_sentinel(content: &str, new_version: &str) -> Option<String> {
+    static SENTINEL_RE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r#"RequireNativeSetup_\w+\s*=\s*"[^"]*""#).expect("valid regex"));
+
+    let new_ident = to_go_version_ident(new_version);
+    let replacement = format!(r#"RequireNativeSetup_{new_ident} = "{new_version}""#);
+    let new_content = SENTINEL_RE.replace(content, replacement.as_str()).into_owned();
+    (new_content != content).then_some(new_content)
+}
 
 /// Update all `<gem-name> (<old-version>)` entries in a Gemfile.lock to `new_ruby_version`.
 ///

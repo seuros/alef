@@ -15,7 +15,7 @@ use super::version_text::{
     read_workspace_license, remove_stale_kotlin_android_plugin, render_citation_cff, replace_citation_version,
     replace_gradle_project_version, replace_version_pattern, restore_gleam_dep_ranges, sync_cargo_lock_path_versions,
     sync_docs_version_badges, sync_e2e_dart_pubspec_lock, sync_e2e_go_mod, sync_e2e_java_pom, sync_gemfile_lock,
-    sync_swift_binary_release_url,
+    sync_go_native_setup_sentinel, sync_swift_binary_release_url,
 };
 use super::version_workspace::sync_workspace_cargo_toml_versions;
 use crate::core::version::{to_r_version, to_rubygems_prerelease};
@@ -333,7 +333,7 @@ pub fn sync_versions(
         }
     }
 
-    for entry in glob::glob("packages/go/cmd/download_ffi/main.go")
+    for entry in glob::glob("packages/go/cmd/setup/main.go")
         .into_iter()
         .flatten()
         .flatten()
@@ -343,6 +343,14 @@ pub fn sync_versions(
                 std::fs::write(&entry, &new_content).with_context(|| format!("failed to write {}", entry.display()))?;
                 updated.push(entry.to_string_lossy().to_string());
             }
+        }
+    }
+
+    if let Ok(content) = std::fs::read_to_string("packages/go/native_setup.go") {
+        if let Some(new_content) = sync_go_native_setup_sentinel(&content, &version) {
+            std::fs::write("packages/go/native_setup.go", &new_content)
+                .context("failed to write packages/go/native_setup.go")?;
+            updated.push("packages/go/native_setup.go".to_string());
         }
     }
 

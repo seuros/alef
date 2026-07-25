@@ -6,6 +6,12 @@
 //! - Go: `packages/go/.lib/{platform}/` (e.g., `macos-arm64/`, `linux-x86_64/`)
 //! - Java: `packages/java/src/main/resources/natives/{rid}/`
 //! - C#: `packages/csharp/{Project}/runtimes/{rid}/native/`
+//!
+//! For Go, the staged `.lib/{platform}/` directory only serves in-tree/dev flows —
+//! e.g. `go generate` (which shells out to `cmd/setup -lib-dir .lib`) and local builds
+//! against this checkout. The published Go module does not ship `.lib/` (it stays
+//! gitignored); consumers instead run `cmd/setup`, which downloads the native library
+//! from the GitHub release into a per-user cache at consume-time.
 
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::config::extras::Language;

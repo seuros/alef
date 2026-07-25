@@ -161,6 +161,14 @@ impl E2eCodegen for GoCodegen {
             generated_header: false,
         });
 
+        // `cmd/setup` writes a machine-local cgo link shim into this test app when run
+        // against the published module; it must never be committed.
+        files.push(GeneratedFile {
+            path: output_base.join(".gitignore"),
+            content: render_gitignore(&config.name),
+            generated_header: false,
+        });
+
         // Determine if any fixture needs jsonString helper across all groups.
         let emits_executable_test =
             |fixture: &Fixture| fixture.is_http_test() || fixture_has_go_callable(fixture, e2e_config);
@@ -336,6 +344,14 @@ fn fix_go_major_version(module_path: &str, version: &str) -> String {
     }
 
     format!("v{n}.0.0")
+}
+
+/// Render `.gitignore` for the generated Go test app directory. `cmd/setup` writes the
+/// machine-local cgo link shim (`<crate_name>_cgo_link.go`) into whatever `-dir` it's
+/// pointed at, including the test app's own package — it must never be committed since
+/// it embeds an absolute, machine-specific cache path.
+fn render_gitignore(crate_name: &str) -> String {
+    format!("{crate_name}_cgo_link.go\n")
 }
 
 fn render_go_mod(

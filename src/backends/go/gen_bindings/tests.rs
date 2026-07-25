@@ -91,6 +91,66 @@ fn test_generate_bindings_produces_binding_go_file() {
 }
 
 #[test]
+fn test_generate_bindings_emits_cmd_setup_and_native_setup_sentinel() {
+    use crate::core::ir::ApiSurface;
+    let config = make_config();
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "1.0.0-rc.38".to_string(),
+        types: vec![],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+    let backend = GoBackend;
+    let files = backend.generate_bindings(&api, &config).unwrap();
+
+    assert!(
+        !files
+            .iter()
+            .any(|f| f.path.to_string_lossy().ends_with("cmd/download_ffi/main.go")),
+        "the old cmd/download_ffi tool must no longer be emitted"
+    );
+
+    let setup = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().ends_with("cmd/setup/main.go"))
+        .expect("cmd/setup/main.go must be generated");
+    assert!(
+        setup.content.contains(r#"moduleVersion     = "1.0.0-rc.38""#),
+        "cmd/setup/main.go must embed the crate version:\n{}",
+        setup.content
+    );
+    assert!(
+        setup.content.contains(r#"versionIdent      = "1_0_0_rc_38""#),
+        "cmd/setup must embed the version-matched sentinel identifier:\n{}",
+        setup.content
+    );
+    assert!(
+        setup.content.contains("RequireNativeSetup_%s"),
+        "cmd/setup's shim writer must build the RequireNativeSetup_<versionIdent> reference:\n{}",
+        setup.content
+    );
+
+    let native_setup = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().ends_with("native_setup.go"))
+        .expect("native_setup.go must be generated");
+    assert!(
+        native_setup
+            .content
+            .contains(r#"const RequireNativeSetup_1_0_0_rc_38 = "1.0.0-rc.38""#),
+        "native_setup.go must declare the version-skew sentinel:\n{}",
+        native_setup.content
+    );
+}
+
+#[test]
 fn test_gen_go_opaque_constructor_emits_new_function() {
     use crate::core::config::workspace::{ClientConstructorConfig, ConstructorParam};
     use crate::core::ir::TypeDef;

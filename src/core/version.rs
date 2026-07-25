@@ -121,6 +121,27 @@ pub fn to_dotnet_assembly_version(version: &str) -> String {
     format!("{}.0", parts.join("."))
 }
 
+/// Convert a semver version string to a Go identifier suffix, for use in
+/// version-skew sentinel constants such as `RequireNativeSetup_<ident>`.
+///
+/// Every byte that isn't an ASCII letter or digit becomes `_`. The result is
+/// not itself a valid Go identifier (it may start with a digit), but it is
+/// valid when appended to a letter-leading prefix.
+///
+/// # Examples
+///
+/// ```
+/// use alef::core::version::to_go_version_ident;
+/// assert_eq!(to_go_version_ident("1.0.0"), "1_0_0");
+/// assert_eq!(to_go_version_ident("1.0.0-rc.38"), "1_0_0_rc_38");
+/// ```
+pub fn to_go_version_ident(version: &str) -> String {
+    version
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,5 +228,17 @@ mod tests {
     fn dotnet_short_versions_pad_zero_components() {
         assert_eq!(to_dotnet_assembly_version("1"), "1.0.0.0");
         assert_eq!(to_dotnet_assembly_version("1.2"), "1.2.0.0");
+    }
+
+    #[test]
+    fn go_version_ident_replaces_dots_and_dashes() {
+        assert_eq!(to_go_version_ident("1.0.0"), "1_0_0");
+        assert_eq!(to_go_version_ident("1.0.0-rc.38"), "1_0_0_rc_38");
+    }
+
+    #[test]
+    fn go_version_ident_keeps_alphanumerics_untouched() {
+        assert_eq!(to_go_version_ident("0"), "0");
+        assert_eq!(to_go_version_ident("v1"), "v1");
     }
 }

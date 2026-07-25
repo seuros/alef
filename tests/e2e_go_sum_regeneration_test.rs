@@ -129,3 +129,27 @@ fn test_go_e2e_generation_with_local_replace_directive() {
         "go.mod must have a replace directive for local testing"
     );
 }
+
+/// `cmd/setup` writes a machine-local cgo link shim (`<crate_name>_cgo_link.go`) into
+/// whatever `-dir` it's pointed at, including this generated test app's own package —
+/// it embeds an absolute, machine-specific cache path and must never be committed.
+#[test]
+fn test_go_e2e_generation_gitignores_the_cgo_link_shim() {
+    let (e2e_config, crate_config) = build_config();
+    let groups = vec![make_simple_fixture()];
+
+    let codegen = GoCodegen;
+    let files = codegen
+        .generate(&groups, &e2e_config, &crate_config, &[], &[])
+        .expect("generation succeeds");
+
+    let gitignore_file = files
+        .iter()
+        .find(|f| f.path.ends_with(".gitignore"))
+        .expect(".gitignore must be generated");
+
+    assert_eq!(
+        gitignore_file.content, "testlib_cgo_link.go\n",
+        ".gitignore must list the cmd/setup-written shim filename"
+    );
+}
