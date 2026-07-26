@@ -282,3 +282,208 @@ fn install_poly_hooks_is_noop_outside_git_repo() {
     let dir = tempfile::tempdir().expect("tempdir");
     install_poly_hooks(dir.path());
 }
+
+#[test]
+fn max_poly_fmt_passes_is_bounded() {
+    assert_eq!(
+        MAX_POLY_FMT_PASSES, 3,
+        "the convergence loop must be capped at 3 passes per the full-regen contract"
+    );
+}
+
+/// Writes a two-crate cargo workspace at `base` with deliberately unsorted
+/// `[dependencies]` in both members. `second_crate_suffix` lets callers simulate a
+/// crate that historically had no per-language cargo-sort residual (e.g. a `-py`
+/// or `-node` crate) to prove the workspace-wide sort covers it too.
+fn write_unsorted_workspace(base: &Path, second_crate_suffix: &str) {
+    std::fs::write(
+        base.join("Cargo.toml"),
+        format!("[workspace]\nmembers = [\"crates/pkg-ffi\", \"crates/pkg{second_crate_suffix}\"]\nresolver = \"2\"\n"),
+    )
+    .unwrap();
+    for member in ["pkg-ffi", &format!("pkg{second_crate_suffix}")] {
+        let crate_dir = base.join("crates").join(member);
+        std::fs::create_dir_all(crate_dir.join("src")).unwrap();
+        std::fs::write(
+            crate_dir.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"{member}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+                 [dependencies]\nserde = \"1\"\nanyhow = \"1\"\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(crate_dir.join("src/lib.rs"), "pub fn noop() {}\n").unwrap();
+    }
+}
+
+#[test]
+fn run_workspace_cargo_sort_sorts_every_member_regardless_of_language() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dir.path();
+    // "-py" simulates a crate suffix (python/pyo3) that has no entry at all in
+    // `language_residuals` — the coverage gap this workspace-wide pass replaces.
+    write_unsorted_workspace(base, "-py");
+
+    run_workspace_cargo_sort(base);
+
+    let py_toml = std::fs::read_to_string(base.join("crates/pkg-py/Cargo.toml")).unwrap();
+    if is_tool_available("cargo-sort") {
+        let anyhow_pos = py_toml.find("anyhow").expect("anyhow present");
+        let serde_pos = py_toml.find("serde").expect("serde present");
+        assert!(
+            anyhow_pos < serde_pos,
+            "cargo sort -n -w must sort deps alphabetically even for a crate with no \
+             per-language residual, got: {py_toml}"
+        );
+        let check = std::process::Command::new("cargo")
+            .args(["sort", "--check", "-w"])
+            .current_dir(base)
+            .output()
+            .expect("cargo sort --check");
+        assert!(
+            check.status.success(),
+            "workspace must be reported sorted after run_workspace_cargo_sort: {}",
+            String::from_utf8_lossy(&check.stderr)
+        );
+    } else {
+        assert!(
+            py_toml.contains("serde = \"1\"\nanyhow = \"1\""),
+            "without cargo-sort, untouched"
+        );
+    }
+}
+
+#[test]
+fn run_workspace_cargo_sort_is_noop_without_root_cargo_toml() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dir.path();
+    std::fs::write(base.join("marker.txt"), "untouched").unwrap();
+
+    run_workspace_cargo_sort(base);
+
+    assert!(
+        !base.join("Cargo.toml").exists(),
+        "must not create a Cargo.toml when there was none"
+    );
+}
+
+#[test]
+fn run_cargo_fmt_formats_workspace_rust_files_when_available() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dir.path();
+    write_unsorted_workspace(base, "-node");
+    let lib_path = base.join("crates/pkg-ffi/src/lib.rs");
+    std::fs::write(&lib_path, "pub fn noop( ) {\nlet x=1;\nx;\n}\n").unwrap();
+
+    run_cargo_fmt(base);
+
+    let formatted = std::fs::read_to_string(&lib_path).unwrap();
+    if is_tool_available("cargo") && is_tool_available("rustfmt") {
+        assert_eq!(
+            formatted, "pub fn noop() {\n    let x = 1;\n    x;\n}\n",
+            "cargo fmt --all must reformat every workspace member's Rust source"
+        );
+    } else {
+        assert_eq!(
+            formatted, "pub fn noop( ) {\nlet x=1;\nx;\n}\n",
+            "without cargo/rustfmt, untouched"
+        );
+    }
+}
+
+#[test]
+fn run_cargo_fmt_is_noop_without_root_cargo_toml() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dir.path();
+    let file_path = base.join("orphan.rs");
+    std::fs::write(&file_path, "fn noop( ) {}\n").unwrap();
+
+    run_cargo_fmt(base);
+
+    assert_eq!(
+        std::fs::read_to_string(&file_path).unwrap(),
+        "fn noop( ) {}\n",
+        "a directory with no root Cargo.toml is not a cargo workspace; must be left untouched"
+    );
+}
+
+#[test]
+fn poly_fmt_is_clean_reflects_check_state() {
+    if !is_tool_available("poly") {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dir.path();
+    let py_path = base.join("dirty.py");
+    std::fs::write(&py_path, "x=1").unwrap();
+
+    assert!(!poly_fmt_is_clean(base), "an unformatted file must report not-clean");
+
+    poly_format(&[base.to_path_buf()], base);
+
+    assert!(
+        poly_fmt_is_clean(base),
+        "after `poly fmt --fix`, the tree must report clean"
+    );
+}
+
+#[test]
+fn converge_full_regen_formatting_leaves_workspace_sorted_and_poly_fmt_check_clean() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dir.path();
+    // "-swift" simulates another crate suffix with no per-language residual today.
+    write_unsorted_workspace(base, "-swift");
+    std::fs::write(
+        base.join("crates/pkg-swift/src/lib.rs"),
+        "pub fn noop( ) {\nlet x=1;\nx;\n}\n",
+    )
+    .unwrap();
+
+    converge_full_regen_formatting(base);
+
+    if is_tool_available("cargo-sort") {
+        let swift_toml = std::fs::read_to_string(base.join("crates/pkg-swift/Cargo.toml")).unwrap();
+        let anyhow_pos = swift_toml.find("anyhow").expect("anyhow present");
+        let serde_pos = swift_toml.find("serde").expect("serde present");
+        assert!(
+            anyhow_pos < serde_pos,
+            "workspace-wide sort must cover every crate on a full regen"
+        );
+    }
+    if is_tool_available("cargo") && is_tool_available("rustfmt") {
+        let formatted = std::fs::read_to_string(base.join("crates/pkg-swift/src/lib.rs")).unwrap();
+        assert_eq!(formatted, "pub fn noop() {\n    let x = 1;\n    x;\n}\n");
+    }
+    if is_tool_available("poly") {
+        assert!(
+            poly_fmt_is_clean(base),
+            "the convergence loop must leave `poly fmt --check` clean, satisfying the \
+             zero-drift full-regen contract"
+        );
+    }
+}
+
+#[test]
+fn format_generated_full_regen_routes_through_convergence_loop() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dir.path();
+    write_unsorted_workspace(base, "-py");
+
+    let config = make_config("sample-model");
+    let files: Vec<(Language, Vec<GeneratedFile>)> = vec![(Language::Ffi, vec![])];
+
+    // A full regen (`only_languages = None`) must go through
+    // `converge_full_regen_formatting`, not the single-pass + per-language-residual
+    // branch, so it also sorts the "-py" crate that has no residual entry.
+    format_generated(&files, &config, base, None);
+
+    if is_tool_available("cargo-sort") {
+        let py_toml = std::fs::read_to_string(base.join("crates/pkg-py/Cargo.toml")).unwrap();
+        let anyhow_pos = py_toml.find("anyhow").expect("anyhow present");
+        let serde_pos = py_toml.find("serde").expect("serde present");
+        assert!(
+            anyhow_pos < serde_pos,
+            "format_generated(..., None) must workspace-sort crates with no per-language residual"
+        );
+    }
+}

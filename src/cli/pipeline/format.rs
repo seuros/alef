@@ -83,10 +83,12 @@ pub fn warn_missing_formatters(languages: &[Language]) {
 
 /// Run language-native formatters on emitted packages after generation.
 ///
-/// Formatting is always delegated to the `poly` (polylint) CLI — a single
-/// `poly fmt --fix` pass formats every language poly supports. A fixed set of
-/// residual native passes runs afterwards for the project-wide tools poly cannot
-/// wrap (`cargo sort -n`, wasm crate sort, ruby/elixir/R native crate sort).
+/// Formatting is always delegated to the `poly` (polylint) CLI. On a full regen
+/// (`only_languages = None`, the `alef all` path) this converges to a fixed point:
+/// see [`converge_full_regen_formatting`]. On a partial regen (a single language's
+/// files changed) a single `poly fmt --fix` pass runs over the changed language's
+/// package directory, followed by that language's residual native pass for the
+/// project-wide tools poly cannot wrap (wasm/ruby/elixir/R native crate sort).
 ///
 /// Best-effort: a missing `poly` binary, a poly error, or a missing residual tool
 /// is logged as a warning and never aborts the generate command.
@@ -107,14 +109,131 @@ pub fn format_generated(
         return;
     }
 
-    let paths = poly_paths(config, base_dir, only_languages, &poly_langs);
-    poly_format(&paths, base_dir);
-
-    for &lang in &poly_langs {
-        let lang_str = lang.to_string().to_lowercase();
-        for step in language_residuals(config, lang, base_dir) {
-            run_residual(&step, &lang_str);
+    match only_languages {
+        None => converge_full_regen_formatting(base_dir),
+        Some(_) => {
+            let paths = poly_paths(config, base_dir, only_languages, &poly_langs);
+            poly_format(&paths, base_dir);
+            for &lang in &poly_langs {
+                let lang_str = lang.to_string().to_lowercase();
+                for step in language_residuals(config, lang, base_dir) {
+                    run_residual(&step, &lang_str);
+                }
+            }
         }
+    }
+}
+
+/// Maximum `poly fmt --fix` passes attempted while converging a full regen.
+///
+/// Some poly-bundled engines (`.cs`, `.java`, `.json` today) are not single-pass
+/// idempotent on freshly generated output: a first `poly fmt --fix` pass can still
+/// leave `poly fmt --check` reporting drift. Looping converges them so a full
+/// regen is committable without a manual cleanup pass downstream (see #184-style
+/// freshness-check failures).
+const MAX_POLY_FMT_PASSES: u32 = 3;
+
+/// Self-cleaning full-regen formatting pass, used on the `alef all` path
+/// (`only_languages = None`).
+///
+/// Loops `poly fmt --fix <base_dir>` to a fixed point (detected via `poly fmt
+/// --check`, bounded by [`MAX_POLY_FMT_PASSES`]), folding a workspace-wide
+/// `cargo fmt --all` and a workspace-wide `cargo sort -n -w` into *every* pass of
+/// the same loop. Running them inside the loop — rather than once, after —
+/// means that if either tool disagrees with poly's own formatting, the next
+/// pass's `poly fmt --fix`/`--check` observes and reconciles the drift instead of
+/// leaving the tree dirty.
+///
+/// This replaces the old per-language cargo-sort residuals on a full regen: those
+/// only covered the language whose crate directory they targeted (and the
+/// workspace-wide `-w` variant ran only when the ffi target was generated),
+/// leaving other generated crates (python, node, php, swift, dart, …) unsorted —
+/// exactly the gap that trips poly's own workspace-wide cargo-sort check
+/// downstream. A single `cargo sort -n -w` at the repo root covers every crate in
+/// the workspace regardless of which languages this run generated.
+///
+/// Best-effort throughout: a missing `poly`, `cargo`, `rustfmt`, or `cargo-sort`
+/// is a warning, never a failure, and generation is never aborted.
+fn converge_full_regen_formatting(base_dir: &Path) {
+    let poly_present = is_tool_available("poly");
+    if !poly_present {
+        warn!("poly not found on PATH (skipping post-generation formatting)");
+    }
+    let root = vec![base_dir.to_path_buf()];
+
+    for _pass in 1..=MAX_POLY_FMT_PASSES {
+        if poly_present {
+            poly_format(&root, base_dir);
+        }
+        run_cargo_fmt(base_dir);
+        run_workspace_cargo_sort(base_dir);
+
+        if !poly_present || poly_fmt_is_clean(base_dir) {
+            return;
+        }
+    }
+    warn!(
+        "poly fmt did not converge after {MAX_POLY_FMT_PASSES} passes (non-fatal); generated \
+         output may have residual formatting drift"
+    );
+}
+
+/// Check `poly fmt --check <base_dir>` for a clean (already-formatted) tree. Used
+/// only to detect convergence inside [`converge_full_regen_formatting`]'s loop.
+fn poly_fmt_is_clean(base_dir: &Path) -> bool {
+    let path_str = base_dir.to_string_lossy().into_owned();
+    run_formatter("poly", &["fmt", "--check", &path_str], base_dir).is_ok()
+}
+
+/// Run `cargo fmt --all` at the workspace root, when `cargo`, `rustfmt`, and a
+/// root `Cargo.toml` are all present. Folded into
+/// [`converge_full_regen_formatting`]'s loop rather than run once afterward, so a
+/// later `poly fmt` pass reconciles anything cargo fmt changes that poly's own
+/// per-file rustfmt invocation did not already produce. Best-effort: a missing
+/// root `Cargo.toml` is a debug/skip (not every generated tree is a cargo
+/// workspace); a missing tool is a warning/skip; a non-zero exit is a warning.
+fn run_cargo_fmt(base_dir: &Path) {
+    if !base_dir.join("Cargo.toml").exists() {
+        debug!(
+            "no root Cargo.toml at {}, skipping workspace cargo fmt",
+            base_dir.display()
+        );
+        return;
+    }
+    if !is_tool_available("cargo") || !is_tool_available("rustfmt") {
+        warn!("cargo/rustfmt not found on PATH (skipping workspace cargo fmt)");
+        return;
+    }
+    match run_formatter("cargo", &["fmt", "--all"], base_dir) {
+        Ok(()) => debug!("cargo fmt --all ok"),
+        Err(e) => warn!("cargo fmt --all failed (non-fatal): {e}"),
+    }
+}
+
+/// Run `cargo sort -n -w` once at the workspace root, covering every crate in the
+/// workspace regardless of which languages this run generated. See
+/// [`converge_full_regen_formatting`] for why this replaces the per-language
+/// residuals on a full regen. The `-n` flag skips cargo-sort's own post-sort
+/// formatting pass (which would otherwise fight poly's TOML formatter over
+/// whitespace/quote style); it does not affect table or dependency ordering, so
+/// it does not change what poly's bundled cargo-sort check accepts as sorted.
+/// Best-effort: a missing root `Cargo.toml` is a debug/skip; a missing
+/// `cargo-sort` binary is a warning/skip; a non-zero exit is a warning.
+fn run_workspace_cargo_sort(base_dir: &Path) {
+    if !base_dir.join("Cargo.toml").exists() {
+        debug!(
+            "no root Cargo.toml at {}, skipping workspace cargo sort",
+            base_dir.display()
+        );
+        return;
+    }
+    if !is_tool_available("cargo-sort") {
+        warn!("cargo-sort not found on PATH (skipping workspace cargo sort)");
+        return;
+    }
+    match run_formatter("cargo", &["sort", "-n", "-w"], base_dir) {
+        Ok(()) => debug!("cargo sort -n -w ok"),
+        Err(e) => warn!("cargo sort -n -w failed (non-fatal): {e}"),
     }
 }
 

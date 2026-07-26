@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A full regen (`alef all`) now converges to a zero-drift tree** instead of needing 2-3 manual
+  `poly fmt --fix` passes downstream. `poly fmt --fix <root>` now loops to a fixed point (bounded
+  at 3 passes, detected via `poly fmt --check`) — some poly-bundled engines (`.cs`, `.java`,
+  `.json`) were not single-pass idempotent on freshly generated output.
+- **Rust crates are no longer left rustfmt-dirty after a full regen.** A workspace-wide `cargo fmt
+  --all` now runs (best-effort, skipped with a warning when `cargo`/`rustfmt` are unavailable),
+  folded into the same convergence loop as `poly fmt` so any drift it introduces is reconciled by
+  the next pass.
+- **Cargo-sort now covers every crate in the workspace on a full regen, not just the languages
+  that happened to be generated.** The old per-language cargo-sort residuals only ran for
+  wasm/ffi/ruby/elixir/R, and the workspace-wide (`-w`) variant only ran when the ffi target was
+  present — leaving python, node, php, swift, and dart binding crates unsorted and tripping poly's
+  own bundled cargo-sort check. A full regen now runs a single `cargo sort -n -w` at the repo root
+  covering the whole workspace regardless of target languages (partial/single-language regens keep
+  the existing per-language residuals unchanged).
+
+### Changed
+
+- `format_generated`'s full-regen path (`only_languages = None`, used by `alef all`) now converges
+  `poly fmt`, `cargo fmt`, and workspace-wide `cargo sort` together in one bounded loop instead of a
+  single `poly fmt` pass plus fixed per-language residuals.
+
 ## [0.48.1] - 2026-07-26
 
 ### Fixed
