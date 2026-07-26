@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-07-26
+
+### Added
+
+- **cbindgen C headers are formatted by poly.** When an FFI target is present, the generated
+  `poly.toml` enables poly's `clang-format` catalog tool (`[tools.clang-format] enabled = true`) and a
+  canonical `.clang-format` is scaffolded, so `poly fmt` and the pre-commit hook format the
+  build-time-generated `crates/*-ffi/include/*.h` headers consistently across repos.
+- **Per-language lint defaults extended so consumer repos can drop identical `[crates.lint.*]`
+  overrides:** ruby runs `bundle install` before rubocop, and elixir runs `mix deps.get` before credo.
+
+### Changed (BREAKING)
+
+- **Removed the hidden `--format` flag** from `alef generate` / `all` / `init` / `e2e generate` /
+  `test-apps generate`. Formatting always runs, delegating to `poly fmt` whenever poly is on PATH; when
+  poly is absent, generation now warns and continues (emitting unformatted output) instead of aborting.
+- **Kotlin-Android lint default now uses `ktfmt --kotlinlang-style`** (was `gradle ktlintCheck`), and
+  the **Swift default formats only `Sources`** (not `Tests`). Both match what every consumer repo
+  already overrode to; regenerating changes the Kotlin-Android and Swift lint commands.
+
+### Fixed
+
+- **Swift: generated `Package.swift` links `libbz2`** at both the dev and artifactbundle sites, fixing
+  undefined `_BZ2_bzDecompress*` symbols in the RustBridge target.
+
 ### Removed
 
 - **PMD/CPD dropped from the generated Java package.** PMD ran the built-in `quickstart` ruleset
