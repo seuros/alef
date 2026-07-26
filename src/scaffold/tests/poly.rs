@@ -169,7 +169,6 @@ fn poly_toml_emits_workspace_lint_hooks_for_non_bundled_linters() {
         ("[hooks.pre-commit.commands.steep]", "bundle exec steep check"),
         ("[hooks.pre-commit.commands.golangci-lint]", "golangci-lint run ./..."),
         ("[hooks.pre-commit.commands.checkstyle]", "mvn -q checkstyle:check"),
-        ("[hooks.pre-commit.commands.pmd]", "mvn -q pmd:check"),
         ("[hooks.pre-commit.commands.ktlint]", "gradle ktlintCheck"),
         ("[hooks.pre-commit.commands.dart-analyze]", "dart analyze"),
         ("[hooks.pre-commit.commands.credo]", "mix credo"),
@@ -181,7 +180,7 @@ fn poly_toml_emits_workspace_lint_hooks_for_non_bundled_linters() {
     assert!(c.contains("root = \"packages/ruby\""));
     // The flag that makes `poly lint .` run these once (not per file).
     assert!(
-        c.matches("workspace = true").count() >= 8,
+        c.matches("workspace = true").count() >= 7,
         "every delegated linter must be workspace-scoped"
     );
     // The whole document, with every hook table, must be valid TOML.

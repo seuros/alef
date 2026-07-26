@@ -116,7 +116,6 @@ pub(crate) fn scaffold_java(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
             maven_compiler_plugin_version => maven::MAVEN_COMPILER_PLUGIN,
             maven_surefire_plugin_version => maven::MAVEN_SUREFIRE_PLUGIN,
             maven_checkstyle_plugin_version => maven::MAVEN_CHECKSTYLE_PLUGIN,
-            maven_pmd_plugin_version => maven::MAVEN_PMD_PLUGIN,
             maven_source_plugin_version => maven::MAVEN_SOURCE_PLUGIN,
             maven_javadoc_plugin_version => maven::MAVEN_JAVADOC_PLUGIN,
             maven_gpg_plugin_version => maven::MAVEN_GPG_PLUGIN,
@@ -131,7 +130,6 @@ pub(crate) fn scaffold_java(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
             maven_enforcer_plugin_version => maven::MAVEN_ENFORCER_PLUGIN,
             jacoco_maven_plugin_version => maven::JACOCO_MAVEN_PLUGIN,
             checkstyle_version => maven::CHECKSTYLE,
-            pmd_version => maven::PMD,
             jspecify_version => maven::JSPECIFY,
             jackson_version => maven::JACKSON,
             assertj_version => maven::ASSERTJ,
@@ -255,97 +253,6 @@ pub(crate) fn scaffold_java(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
             .to_string(),
             generated_header: false,
         },
-        GeneratedFile {
-            path: PathBuf::from("packages/java/pmd-ruleset.xml"),
-            content: r#"<?xml version="1.0"?>
-<ruleset name="Custom PMD Ruleset"
-         xmlns="http://pmd.sourceforge.net/ruleset/2.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://pmd.sourceforge.net/ruleset/2.0.0
-                             https://pmd.sourceforge.io/ruleset_2_0_0.xsd">
-    <description>PMD ruleset for Java bindings</description>
-
-    <rule ref="category/java/bestpractices.xml">
-        <exclude name="LooseCoupling"/>
-        <!-- Codegen emits defensive @SuppressWarnings; some are situationally redundant. -->
-        <exclude name="UnnecessaryWarningSuppression"/>
-        <!--
-            Generated config DTOs carry loopback defaults copied verbatim from the
-            Rust source (e.g. `host = "127.0.0.1"`). The literal is the source of
-            truth, not a deployment address, so AvoidUsingHardCodedIP does not apply.
-        -->
-        <exclude name="AvoidUsingHardCodedIP"/>
-        <!--
-            Generated DTOs mirror Rust array/byte fields and expose them verbatim;
-            defensive copies are the consumer's concern, not codegen's. Suppress the
-            array-aliasing pair project-wide.
-        -->
-        <exclude name="ArrayIsStoredDirectly"/>
-        <exclude name="MethodReturnsInternalArray"/>
-    </rule>
-    <rule ref="category/java/codestyle.xml">
-        <exclude name="AtLeastOneConstructor"/>
-        <exclude name="CommentDefaultAccessModifier"/>
-        <exclude name="OnlyOneReturn"/>
-        <!--
-            These records mirror the Rust source field-for-field; field, parameter and
-            accessor names are inherited verbatim and cannot be renamed by codegen.
-            ShortVariable (`id`, `n`) and LongVariable (`selfHarmInstructions`) flag those
-            inherited names; UseUnderscoresInNumericLiterals flags default literals copied
-            from Rust (`300000L`); the *CouldBeFinal rules are uniform codegen style.
-            Codegen is the source of truth, so these are suppressed project-wide.
-        -->
-        <exclude name="ShortVariable"/>
-        <exclude name="LongVariable"/>
-        <exclude name="UseUnderscoresInNumericLiterals"/>
-        <exclude name="LocalVariableCouldBeFinal"/>
-        <exclude name="MethodArgumentCouldBeFinal"/>
-    </rule>
-    <rule ref="category/java/design.xml">
-        <exclude name="LawOfDemeter"/>
-        <exclude name="DataClass"/>
-        <!--
-            DTOs mirror their Rust struct: a wide struct (e.g. ModerationCategoryScores)
-            yields many fields and many accessor methods. TooManyFields/TooManyMethods are
-            inherent to the source shape, not a design smell codegen can refactor away.
-        -->
-        <exclude name="TooManyFields"/>
-        <exclude name="TooManyMethods"/>
-        <!--
-            Generated Builder-pattern classes carry per-instance final fields
-            with their type-default initializer (e.g. `private final boolean
-            introspectionEnabled = true;`). PMD interprets these as constants
-            and suggests static promotion, but each Builder instance is a
-            mutable assembly point — promoting to static would shadow the
-            field across all builders and break the pattern. Suppress the
-            rule project-wide; codegen is the source of truth.
-        -->
-        <exclude name="FinalFieldCouldBeStatic"/>
-    </rule>
-    <rule ref="category/java/documentation.xml">
-        <exclude name="CommentSize"/>
-        <!--
-            CommentRequired demands hand-written Javadoc on every field/constructor.
-            These records are generated DTOs that mirror the Rust source field-for-field;
-            codegen is the source of truth, so per-field comments are neither written nor
-            meaningful here. Type-level Javadoc is still emitted and still required.
-        -->
-        <exclude name="CommentRequired"/>
-    </rule>
-    <rule ref="category/java/errorprone.xml">
-        <exclude name="EmptyCatchBlock"/>
-    </rule>
-    <rule ref="category/java/multithreading.xml">
-        <!-- Immutable DTOs use plain HashMap for their map fields; concurrency is the caller's concern. -->
-        <exclude name="UseConcurrentHashMap"/>
-    </rule>
-    <rule ref="category/java/performance.xml"/>
-    <rule ref="category/java/security.xml"/>
-</ruleset>
-"#
-            .to_string(),
-            generated_header: false,
-        },
     ])
 }
 
@@ -370,52 +277,5 @@ fn scm_urls(repository: &str) -> ScmUrls {
     ScmUrls {
         connection: format!("scm:git:git://{host}{suffix}"),
         developer_connection: format!("scm:git:ssh://git@{host}{suffix}"),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::config::NewAlefConfig;
-    use crate::core::ir::ApiSurface;
-    use std::path::Path;
-
-    fn resolve_config(toml_text: &str) -> ResolvedCrateConfig {
-        let cfg: NewAlefConfig = toml::from_str(toml_text).expect("valid config");
-        cfg.resolve().expect("resolve").remove(0)
-    }
-
-    #[test]
-    fn pom_publish_profile_contains_cpd_and_pmd_skip() {
-        let config = resolve_config(
-            r#"
-[workspace]
-languages = ["java"]
-
-[[crates]]
-name = "testlib"
-sources = []
-
-[crates.package_metadata]
-repository = "https://github.com/example/testlib"
-authors = ["Test Author <test@example.com>"]
-license = "MIT"
-description = "A test library"
-"#,
-        );
-        let api = ApiSurface::default();
-        let files = scaffold_java(&api, &config).expect("scaffold_java succeeds");
-        let pom = files
-            .iter()
-            .find(|f| f.path == Path::new("packages/java/pom.xml"))
-            .expect("pom.xml present");
-        assert!(
-            pom.content.contains("<cpd.skip>true</cpd.skip>"),
-            "pom.xml publish profile must contain <cpd.skip>true</cpd.skip>"
-        );
-        assert!(
-            pom.content.contains("<pmd.skip>true</pmd.skip>"),
-            "pom.xml publish profile must contain <pmd.skip>true</pmd.skip>"
-        );
     }
 }

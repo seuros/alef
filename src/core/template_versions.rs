@@ -210,9 +210,6 @@ pub mod maven {
     // renovate: datasource=maven depName=org.apache.maven.plugins:maven-checkstyle-plugin
     pub const MAVEN_CHECKSTYLE_PLUGIN: &str = "3.6.0";
 
-    // renovate: datasource=maven depName=org.apache.maven.plugins:maven-pmd-plugin
-    pub const MAVEN_PMD_PLUGIN: &str = "3.28.0";
-
     // renovate: datasource=maven depName=org.apache.maven.plugins:maven-source-plugin
     pub const MAVEN_SOURCE_PLUGIN: &str = "3.4.0";
 
@@ -254,9 +251,6 @@ pub mod maven {
 
     // renovate: datasource=maven depName=com.puppycrawl.tools:checkstyle
     pub const CHECKSTYLE: &str = "13.8.0";
-
-    // renovate: datasource=maven depName=net.sourceforge.pmd:pmd-java
-    pub const PMD: &str = "7.26.0";
 
     // renovate: datasource=maven depName=org.jspecify:jspecify
     pub const JSPECIFY: &str = "1.0.0";

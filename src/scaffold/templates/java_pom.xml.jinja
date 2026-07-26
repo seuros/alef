@@ -33,7 +33,6 @@
         <maven-compiler-plugin.version>{{ maven_compiler_plugin_version }}</maven-compiler-plugin.version>
         <maven-surefire-plugin.version>{{ maven_surefire_plugin_version }}</maven-surefire-plugin.version>
         <maven-checkstyle-plugin.version>{{ maven_checkstyle_plugin_version }}</maven-checkstyle-plugin.version>
-        <maven-pmd-plugin.version>{{ maven_pmd_plugin_version }}</maven-pmd-plugin.version>
         <maven-source-plugin.version>{{ maven_source_plugin_version }}</maven-source-plugin.version>
         <maven-javadoc-plugin.version>{{ maven_javadoc_plugin_version }}</maven-javadoc-plugin.version>
         <maven-gpg-plugin.version>{{ maven_gpg_plugin_version }}</maven-gpg-plugin.version>
@@ -48,7 +47,6 @@
         <maven-enforcer-plugin.version>{{ maven_enforcer_plugin_version }}</maven-enforcer-plugin.version>
         <jacoco-maven-plugin.version>{{ jacoco_maven_plugin_version }}</jacoco-maven-plugin.version>
         <checkstyle.version>{{ checkstyle_version }}</checkstyle.version>
-        <pmd.version>{{ pmd_version }}</pmd.version>
         <gpg.skip>true</gpg.skip>
     </properties>
 
@@ -266,43 +264,6 @@
                 </executions>
             </plugin>
             <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-pmd-plugin</artifactId>
-                <version>${maven-pmd-plugin.version}</version>
-                <dependencies>
-                    <dependency>
-                        <groupId>net.sourceforge.pmd</groupId>
-                        <artifactId>pmd-java</artifactId>
-                        <version>${pmd.version}</version>
-                    </dependency>
-                </dependencies>
-                <configuration>
-                    <targetJdk>${maven.compiler.release}</targetJdk>
-                    <typeResolution>false</typeResolution>
-                    <rulesets>
-                        <ruleset>/rulesets/java/quickstart.xml</ruleset>
-                    </rulesets>
-                    <!--
-                        CPD threshold raised above the default 100 tokens because alef-generated
-                        streaming method bodies (`streamItems`, `batchStreamItems`, etc.) share
-                        an identical iterator-driving loop by design (per-stream-handle JNI
-                        externs differ, the surrounding plumbing is the same). The shared block
-                        is ~106 tokens — well within the default. 200 is the smallest threshold
-                        that lets two streaming methods coexist in the same handle class without
-                        a false-positive while still catching genuine large-scale duplication.
-                    -->
-                    <minimumTokens>200</minimumTokens>
-                </configuration>
-                <executions>
-                    <execution>
-                        <goals>
-                            <goal>pmd</goal>
-                            <goal>cpd-check</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
-            <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>versions-maven-plugin</artifactId>
                 <version>${versions-maven-plugin.version}</version>
@@ -359,11 +320,6 @@
             <id>publish</id>
             <properties>
                 <gpg.skip>false</gpg.skip>
-                <!-- alef-emitted stream methods can exceed 200 tokens and trigger CPD/PMD
-                     duplicate-code violations; skip those checks in the publish profile so
-                     they do not block Maven Central deployment. -->
-                <cpd.skip>true</cpd.skip>
-                <pmd.skip>true</pmd.skip>
             </properties>
             <build>
                 <plugins>

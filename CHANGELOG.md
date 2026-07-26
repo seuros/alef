@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+
+- **PMD/CPD dropped from the generated Java package.** PMD ran the built-in `quickstart` ruleset
+  (the emitted `pmd-ruleset.xml` was never referenced by the `pom.xml`), and PMD/CPD mostly fought
+  alef-generated code. The `pmd` workspace hook, the `maven-pmd-plugin` build plugin and its
+  `pmd.skip`/`cpd.skip` publish-profile properties, and the scaffolded `pmd-ruleset.xml` are all
+  removed. `checkstyle` continues to run as before.
+
 ## [0.47.2] - 2026-07-25
 
 ### Fixed

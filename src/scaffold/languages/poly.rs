@@ -194,7 +194,7 @@ fn toml_array(entries: &[&str]) -> String {
 /// Emit a `[hooks.pre-commit.commands.<name>]` job that `poly lint` runs ONCE
 /// over the whole project (`workspace = true`), from `dir`, delegating to an
 /// external linter poly does not bundle (rubocop, golangci-lint, ktlint, credo,
-/// checkstyle/pmd, …). The tool discovers its own native config file relative to
+/// checkstyle, …). The tool discovers its own native config file relative to
 /// `dir`; poly skips the job gracefully when the binary is not installed. This is
 /// the only poly mechanism that runs a whole-project tool once on `poly lint .`
 /// (the per-file `[tools.*]` catalog tier cannot) — see the poly workspace-hook
@@ -359,7 +359,6 @@ pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[La
             "mvn -q checkstyle:check",
             "**/*.java",
         ));
-        out.push_str(&workspace_hook("pmd", &dir, "mvn -q pmd:check", "**/*.java"));
     }
     if has(Language::KotlinAndroid) {
         let dir = config.package_dir(Language::KotlinAndroid);
