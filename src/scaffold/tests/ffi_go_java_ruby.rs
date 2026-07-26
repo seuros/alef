@@ -355,7 +355,7 @@ fn test_scaffold_java_production_features() {
     let api = test_api();
     let all_files = scaffold(&api, &config, &[Language::Java]).unwrap();
     let files = language_files(&all_files);
-    assert_eq!(files.len(), 6);
+    assert_eq!(files.len(), 5);
     let content = &files[0].content;
     assert!(content.contains("<properties>"));
     assert!(content.contains("<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>"));

@@ -104,8 +104,8 @@ fn gen_data_enum_typeddicts(lines: &mut Vec<String>, enum_def: &EnumDef, coercib
             "    def __init__(self, value: dict[str, Any] | str | None = None, **kwargs: Any) -> None: ...".to_string(),
         );
     }
-    lines.push("    def __str__(self) -> str: ...  # noqa: PYI029".to_string());
-    lines.push("    def __repr__(self) -> str: ...  # noqa: PYI029".to_string());
+    lines.push("    def __str__(self) -> str: ...".to_string());
+    lines.push("    def __repr__(self) -> str: ...".to_string());
 }
 
 /// Emit a `@staticmethod` stub for each per-variant constructor the PyO3 binding exposes.

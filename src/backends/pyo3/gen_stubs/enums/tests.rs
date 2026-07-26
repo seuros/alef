@@ -111,6 +111,19 @@ fn emits_staticmethod_constructor_per_struct_variant() {
 }
 
 #[test]
+fn dunder_stubs_carry_no_unused_noqa() {
+    let stub = gen_enum_stub(&shape_enum(), false, &no_dtos());
+
+    assert!(stub.contains("    def __str__(self) -> str: ..."), "{stub}");
+    assert!(stub.contains("    def __repr__(self) -> str: ..."), "{stub}");
+    // A `# noqa: PYI029` here is flagged by ruff RUF100 (unused, PYI029 not enabled).
+    assert!(
+        !stub.contains("noqa"),
+        "dunder stubs must not carry a suppression comment: {stub}"
+    );
+}
+
+#[test]
 fn maps_named_dto_field_to_its_type() {
     let def = enum_def(
         "Source",

@@ -14,7 +14,7 @@ use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, 
 use crate::core::config::{Language, ResolvedCrateConfig, resolve_output_dir};
 use crate::core::hash::{self, CommentStyle};
 use crate::core::ir::ApiSurface;
-use ahash::AHashSet;
+use ahash::{AHashMap, AHashSet};
 use std::path::PathBuf;
 
 use crate::backends::magnus::type_map::MagnusMapper;
@@ -580,13 +580,16 @@ impl Backend for MagnusBackend {
             .filter(|a| !a.skip_languages.iter().any(|l| l == "ruby"))
             .filter_map(|a| streaming::StreamingAdapter::from_config(a, &get_module_name(&gem_name), &core_import))
             .collect();
-        let streaming_method_names: AHashSet<String> = streaming_adapters.iter().map(|a| a.name.to_string()).collect();
+        let streaming_return_types: AHashMap<String, String> = streaming_adapters
+            .iter()
+            .map(|a| (a.name.to_string(), a.item_type.to_string()))
+            .collect();
 
         let content = crate::backends::magnus::gen_stubs::gen_stubs(
             api,
             &gem_name,
             emit_docstrings,
-            &streaming_method_names,
+            &streaming_return_types,
             &config.trait_bridges,
         );
 

@@ -215,3 +215,51 @@ fn yields_to_hand_written_method_of_same_name() {
         "{stub}"
     );
 }
+
+#[test]
+fn streaming_method_returns_enumerator_of_adapter_item_type() {
+    let method = MethodDef {
+        name: "chat_stream".to_string(),
+        ..Default::default()
+    };
+    let mut streaming: ahash::AHashMap<String, String> = ahash::AHashMap::new();
+    streaming.insert("chat_stream".to_string(), "ChatCompletionChunk".to_string());
+    let excluded = std::collections::HashSet::new();
+
+    let stub = super::gen_method_stub(&method, false, false, &streaming, &excluded);
+
+    assert!(
+        stub.contains("Enumerator[ChatCompletionChunk]"),
+        "streaming method must yield the adapter's declared item type: {stub}"
+    );
+    assert!(
+        !stub.contains("Iterator]"),
+        "must not emit an undeclared `<Method>Iterator` element type (steep RBS::UnknownTypeName): {stub}"
+    );
+}
+
+#[test]
+fn method_param_of_excluded_type_is_substituted_to_json_value() {
+    let method = MethodDef {
+        name: "register_document_extractor".to_string(),
+        params: vec![crate::core::ir::ParamDef {
+            name: "extractor".to_string(),
+            ty: TypeRef::Named("DocumentExtractor".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let streaming: ahash::AHashMap<String, String> = ahash::AHashMap::new();
+    let excluded: std::collections::HashSet<&str> = ["DocumentExtractor"].into_iter().collect();
+
+    let stub = super::gen_method_stub(&method, false, false, &streaming, &excluded);
+
+    assert!(
+        !stub.contains("DocumentExtractor"),
+        "an excluded type must not leak into the RBS stub (steep RBS::UnknownTypeName): {stub}"
+    );
+    assert!(
+        stub.contains("json_value extractor"),
+        "excluded param type must be substituted to the declared json_value alias: {stub}"
+    );
+}

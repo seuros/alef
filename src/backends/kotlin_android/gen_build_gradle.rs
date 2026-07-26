@@ -229,7 +229,7 @@ tasks.register("copyHostJni", Copy::class) {{
         val libName = when (hostPlatform) {{
             "darwin" -> "lib{jni_lib_name}.dylib"
             "windows" -> "{jni_lib_name}.dll"
-            else -> "lib{jni_lib_name}.so"  // linux
+            else -> "lib{jni_lib_name}.so" // linux
         }}
 
         from(buildDir) {{
@@ -309,11 +309,13 @@ tasks.named("preBuild") {{
 }}
 
 mavenPublishing {{
-    configure(AndroidSingleVariantLibrary(
-        variant = "release",
-        sourcesJar = com.vanniktech.maven.publish.SourcesJar.Sources(),
-        javadocJar = com.vanniktech.maven.publish.JavadocJar.Empty(),
-    ))
+    configure(
+        AndroidSingleVariantLibrary(
+            variant = "release",
+            sourcesJar = com.vanniktech.maven.publish.SourcesJar.Sources(),
+            javadocJar = com.vanniktech.maven.publish.JavadocJar.Empty(),
+        ),
+    )
 
     publishToMavenCentral()
     signAllPublications()
@@ -401,6 +403,55 @@ description = "Test library"
         assert!(
             gradle.contains("alef.skipHostJni"),
             "Gradle should mention alef.skipHostJni opt-out"
+        );
+    }
+
+    #[test]
+    fn build_gradle_is_ktlint_clean_for_known_violations() {
+        use crate::core::config::new_config::NewAlefConfig;
+
+        let toml_str = r#"
+[workspace]
+languages = ["kotlin_android"]
+
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.example"
+
+[crates.jni]
+
+[crates.scaffold]
+repository = "https://github.com/example/test-lib"
+license = "MIT"
+description = "Test library"
+"#;
+
+        let cfg: NewAlefConfig = toml::from_str(toml_str).unwrap();
+        let resolved = cfg.resolve().unwrap();
+        let gradle = emit(&resolved[0]);
+
+        // ktlint "Unnecessary long whitespace": exactly one space before a trailing comment.
+        assert!(
+            !gradle.contains(".so\"  // linux"),
+            "ktlint rejects the double space before the trailing `// linux` comment"
+        );
+        assert!(
+            gradle.contains(".so\" // linux"),
+            "the else branch must keep a single-spaced trailing `// linux` comment"
+        );
+
+        // ktlint "Missing newline after (" / "before )": the outer configure(...) call wrapping
+        // the multi-line AndroidSingleVariantLibrary(...) argument must break after `configure(`.
+        assert!(
+            gradle.contains("configure(\n        AndroidSingleVariantLibrary("),
+            "configure(...) must wrap its multiline argument onto its own line for ktlint"
+        );
+        assert!(
+            !gradle.contains("configure(AndroidSingleVariantLibrary("),
+            "configure(AndroidSingleVariantLibrary( on one line trips ktlint's wrapping rule"
         );
     }
 

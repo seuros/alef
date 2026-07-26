@@ -8,7 +8,7 @@ pub fn gen_stubs(
     api: &ApiSurface,
     gem_name: &str,
     emit_docstrings: bool,
-    streaming_method_names: &ahash::AHashSet<String>,
+    streaming_return_types: &ahash::AHashMap<String, String>,
     trait_bridges: &[TraitBridgeConfig],
 ) -> String {
     let header = hash::header(CommentStyle::Hash);
@@ -26,12 +26,27 @@ pub fn gen_stubs(
     );
     lines.push("".to_string());
 
+    // Types excluded from the binding surface (opaque `alef(skip)` traits, binding-excluded
+    // structs) have no RBS declaration, so any signature referencing them is substituted to the
+    // declared `json_value` alias — otherwise steep fails with `RBS::UnknownTypeName`.
+    let excluded: std::collections::HashSet<&str> = api
+        .excluded_type_paths
+        .keys()
+        .map(String::as_str)
+        .chain(api.types.iter().filter(|t| t.binding_excluded).map(|t| t.name.as_str()))
+        .collect();
+
     for typ in api.types.iter().filter(|typ| !typ.is_trait) {
         if typ.is_opaque {
-            lines.push(gen_opaque_type_stub(typ, emit_docstrings, streaming_method_names));
+            lines.push(gen_opaque_type_stub(
+                typ,
+                emit_docstrings,
+                streaming_return_types,
+                &excluded,
+            ));
             lines.push("".to_string());
         } else {
-            lines.push(gen_type_stub(typ, emit_docstrings, streaming_method_names));
+            lines.push(gen_type_stub(typ, emit_docstrings, streaming_return_types, &excluded));
             lines.push("".to_string());
         }
     }
@@ -42,7 +57,7 @@ pub fn gen_stubs(
     }
 
     for func in &api.functions {
-        lines.push(gen_function_stub(func, streaming_method_names));
+        lines.push(gen_function_stub(func, streaming_return_types, &excluded));
         lines.push("".to_string());
     }
     let mut interface_trait_names: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -195,7 +210,8 @@ fn get_module_name(crate_name: &str) -> String {
 fn gen_opaque_type_stub(
     typ: &TypeDef,
     emit_docstrings: bool,
-    streaming_method_names: &ahash::AHashSet<String>,
+    streaming_return_types: &ahash::AHashMap<String, String>,
+    excluded: &std::collections::HashSet<&str>,
 ) -> String {
     let mut lines = vec![];
 
@@ -212,13 +228,25 @@ fn gen_opaque_type_stub(
 
     for method in &typ.methods {
         if !method.is_static {
-            lines.push(gen_method_stub(method, false, emit_docstrings, streaming_method_names));
+            lines.push(gen_method_stub(
+                method,
+                false,
+                emit_docstrings,
+                streaming_return_types,
+                excluded,
+            ));
         }
     }
 
     for method in &typ.methods {
         if method.is_static {
-            lines.push(gen_method_stub(method, true, emit_docstrings, streaming_method_names));
+            lines.push(gen_method_stub(
+                method,
+                true,
+                emit_docstrings,
+                streaming_return_types,
+                excluded,
+            ));
         }
     }
 
@@ -228,7 +256,12 @@ fn gen_opaque_type_stub(
 }
 
 /// Generate a Ruby type stub for a struct.
-fn gen_type_stub(typ: &TypeDef, emit_docstrings: bool, streaming_method_names: &ahash::AHashSet<String>) -> String {
+fn gen_type_stub(
+    typ: &TypeDef,
+    emit_docstrings: bool,
+    streaming_return_types: &ahash::AHashMap<String, String>,
+    excluded: &std::collections::HashSet<&str>,
+) -> String {
     let mut lines = vec![];
 
     lines.push(format!("  class {}", typ.name));
@@ -289,13 +322,25 @@ fn gen_type_stub(typ: &TypeDef, emit_docstrings: bool, streaming_method_names: &
 
     for method in &typ.methods {
         if !method.is_static {
-            lines.push(gen_method_stub(method, false, emit_docstrings, streaming_method_names));
+            lines.push(gen_method_stub(
+                method,
+                false,
+                emit_docstrings,
+                streaming_return_types,
+                excluded,
+            ));
         }
     }
 
     for method in &typ.methods {
         if method.is_static {
-            lines.push(gen_method_stub(method, true, emit_docstrings, streaming_method_names));
+            lines.push(gen_method_stub(
+                method,
+                true,
+                emit_docstrings,
+                streaming_return_types,
+                excluded,
+            ));
         }
     }
 
@@ -310,13 +355,14 @@ fn gen_method_stub(
     method: &MethodDef,
     is_static: bool,
     emit_docstrings: bool,
-    streaming_method_names: &ahash::AHashSet<String>,
+    streaming_return_types: &ahash::AHashMap<String, String>,
+    excluded: &std::collections::HashSet<&str>,
 ) -> String {
     let params: Vec<String> = method
         .params
         .iter()
         .map(|p| {
-            let param_type = rbs_type(&p.ty);
+            let param_type = rbs_type(&substitute_excluded_types(&p.ty, excluded));
             if p.optional {
                 format!("?{} {}", param_type, p.name)
             } else {
@@ -325,21 +371,10 @@ fn gen_method_stub(
         })
         .collect();
 
-    let return_type = if streaming_method_names.contains(&method.name) {
-        let pascal_name = method
-            .name
-            .split('_')
-            .map(|part| {
-                let mut chars = part.chars();
-                match chars.next() {
-                    None => String::new(),
-                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                }
-            })
-            .collect::<String>();
-        format!("Enumerator[{}Iterator]", pascal_name)
+    let return_type = if let Some(item_type) = streaming_return_types.get(&method.name) {
+        format!("Enumerator[{item_type}]")
     } else {
-        rbs_type(&method.return_type)
+        rbs_type(&substitute_excluded_types(&method.return_type, excluded))
     };
 
     let param_list = format!("({})", params.join(", "));
@@ -441,12 +476,16 @@ fn gen_data_enum_variant_constructor_stubs(lines: &mut Vec<String>, enum_def: &E
 }
 
 /// Generate a function stub (module method) using RBS declaration syntax.
-fn gen_function_stub(func: &FunctionDef, streaming_method_names: &ahash::AHashSet<String>) -> String {
+fn gen_function_stub(
+    func: &FunctionDef,
+    streaming_return_types: &ahash::AHashMap<String, String>,
+    excluded: &std::collections::HashSet<&str>,
+) -> String {
     let params: Vec<String> = func
         .params
         .iter()
         .map(|p| {
-            let param_type = rbs_type(&p.ty);
+            let param_type = rbs_type(&substitute_excluded_types(&p.ty, excluded));
             if p.optional {
                 format!("?{} {}", param_type, p.name)
             } else {
@@ -455,21 +494,10 @@ fn gen_function_stub(func: &FunctionDef, streaming_method_names: &ahash::AHashSe
         })
         .collect();
 
-    let return_type = if streaming_method_names.contains(&func.name) {
-        let pascal_name = func
-            .name
-            .split('_')
-            .map(|part| {
-                let mut chars = part.chars();
-                match chars.next() {
-                    None => String::new(),
-                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                }
-            })
-            .collect::<String>();
-        format!("Enumerator[{}Iterator]", pascal_name)
+    let return_type = if let Some(item_type) = streaming_return_types.get(&func.name) {
+        format!("Enumerator[{item_type}]")
     } else {
-        rbs_type(&func.return_type)
+        rbs_type(&substitute_excluded_types(&func.return_type, excluded))
     };
 
     let param_list = format!("({})", params.join(", "));

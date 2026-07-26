@@ -75,6 +75,7 @@ fn language_files(files: &[GeneratedFile]) -> Vec<&GeneratedFile> {
                 && !p.ends_with("rust-toolchain.toml")
                 && !p.ends_with(".cargo/config.toml")
                 && p != ".gitattributes"
+                && p != ".clang-format"
                 // LICENSE files are synced from the workspace root; the consolidated
                 // single-crate layout runs tests from the repo root which has a LICENSE
                 // file, causing scaffold_license_files() to emit per-package LICENSE

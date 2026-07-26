@@ -31,6 +31,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Swift: generated `Package.swift` links `libbz2`** at both the dev and artifactbundle sites, fixing
   undefined `_BZ2_bzDecompress*` symbols in the RustBridge target.
+- **Python `.pyi` enum stubs no longer emit `# noqa: PYI029`** on the generated `__str__`/`__repr__`
+  stubs. PYI029 is not enabled in the generated ruff config, so ruff flagged the suppression itself as
+  an unused directive (`RUF100`).
+- **Kotlin-Android `build.gradle.kts` is ktlint-clean.** The host-JNI `else` branch keeps a
+  single-spaced trailing `// linux` comment (was double-spaced → "Unnecessary long whitespace"), and
+  the `mavenPublishing { configure(...) }` call wraps its multi-line `AndroidSingleVariantLibrary(...)`
+  argument onto its own line (fixes ktlint "Missing newline after/before `(`/`)`").
+- **Ruby `.rbs` stubs no longer reference undeclared types (`steep RBS::UnknownTypeName`).** Streaming
+  methods now declare `Enumerator[<ItemType>]` from the adapter's real item type instead of an
+  undeclared `<Method>Iterator`, and any signature referencing a binding-excluded or opaque
+  (`alef(skip)`) type substitutes the declared `json_value` alias.
 
 ### Removed
 
