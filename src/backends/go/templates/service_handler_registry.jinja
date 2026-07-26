@@ -51,7 +51,10 @@ func service_handler_callback(ctx unsafe.Pointer, reqCStr *C.char) *C.char {
 
 	respJSON, err := invokeHandler(ctxID, reqJSON)
 	if err != nil {
-		errJSON, _ := json.Marshal(map[string]string{"error": err.Error()})
+		errJSON, marshalErr := json.Marshal(map[string]string{"error": err.Error()})
+		if marshalErr != nil {
+			errJSON = []byte(`{"error":"failed to marshal error response"}`)
+		}
 		respJSON = errJSON
 	}
 

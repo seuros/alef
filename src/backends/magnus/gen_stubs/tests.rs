@@ -227,7 +227,7 @@ fn streaming_method_returns_enumerator_of_adapter_item_type() {
     let excluded = std::collections::HashSet::new();
     let trait_interfaces = std::collections::HashSet::new();
 
-    let stub = super::gen_method_stub(&method, false, false, &streaming, &excluded, &trait_interfaces);
+    let stub = super::gen_method_stub(&method, false, false, &streaming, &excluded, &trait_interfaces, "Owner");
 
     assert!(
         stub.contains("Enumerator[ChatCompletionChunk]"),
@@ -254,7 +254,7 @@ fn method_param_of_excluded_type_is_substituted_to_json_value() {
     let excluded: std::collections::HashSet<&str> = ["DocumentExtractor"].into_iter().collect();
     let trait_interfaces = std::collections::HashSet::new();
 
-    let stub = super::gen_method_stub(&method, false, false, &streaming, &excluded, &trait_interfaces);
+    let stub = super::gen_method_stub(&method, false, false, &streaming, &excluded, &trait_interfaces, "Owner");
 
     assert!(
         !stub.contains("DocumentExtractor"),
@@ -281,7 +281,7 @@ fn method_param_of_trait_interface_type_is_substituted_to_underscore_prefixed_na
     let excluded = std::collections::HashSet::new();
     let trait_interfaces: std::collections::HashSet<&str> = ["DocumentExtractor"].into_iter().collect();
 
-    let stub = super::gen_method_stub(&method, false, false, &streaming, &excluded, &trait_interfaces);
+    let stub = super::gen_method_stub(&method, false, false, &streaming, &excluded, &trait_interfaces, "Owner");
 
     assert!(
         stub.contains("_DocumentExtractor extractor"),
@@ -291,6 +291,51 @@ fn method_param_of_trait_interface_type_is_substituted_to_underscore_prefixed_na
         !stub.contains("(DocumentExtractor extractor)"),
         "the bare trait name is never declared as an RBS type (steep RBS::UnknownTypeName): {stub}"
     );
+}
+
+#[test]
+fn builder_method_returning_owning_type_emits_owning_class_not_json_value() {
+    // Regression test: the owner type (e.g. a service owner managed by the services
+    // extraction pass) is `binding_excluded` at the IR level, so it lands in `excluded` —
+    // but `gen_method_stub` is called here *while emitting that very class's stub*, so a
+    // `Self`-returning method (already resolved to `Named("App")` during extraction) must
+    // reference the real "App" class, not fall back to the `json_value` alias.
+    let method = MethodDef {
+        name: "on_request".to_string(),
+        is_static: false,
+        return_type: TypeRef::Named("App".to_string()),
+        params: vec![crate::core::ir::ParamDef {
+            name: "hook".to_string(),
+            ty: TypeRef::String,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let streaming: ahash::AHashMap<String, String> = ahash::AHashMap::new();
+    let excluded: std::collections::HashSet<&str> = ["App"].into_iter().collect();
+    let trait_interfaces = std::collections::HashSet::new();
+
+    let stub = super::gen_method_stub(&method, false, false, &streaming, &excluded, &trait_interfaces, "App");
+
+    assert!(stub.contains("-> App"), "{stub}");
+    assert!(!stub.contains("json_value"), "{stub}");
+}
+
+#[test]
+fn static_constructor_returning_owning_type_emits_owning_class_not_json_value() {
+    let method = MethodDef {
+        name: "new".to_string(),
+        is_static: true,
+        return_type: TypeRef::Named("App".to_string()),
+        ..Default::default()
+    };
+    let streaming: ahash::AHashMap<String, String> = ahash::AHashMap::new();
+    let excluded: std::collections::HashSet<&str> = ["App"].into_iter().collect();
+    let trait_interfaces = std::collections::HashSet::new();
+
+    let stub = super::gen_method_stub(&method, true, false, &streaming, &excluded, &trait_interfaces, "App");
+
+    assert!(stub.contains("def self.new: () -> App"), "{stub}");
 }
 
 #[test]

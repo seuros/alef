@@ -32,9 +32,12 @@ func (s *{{ service_name }}) StartBackground(host string, port uint16) (*ServerH
 	}
 	s.mu.Unlock()
 
-	// Spawn Run in a goroutine.
+	// Spawn Run in a goroutine. Errors cannot propagate to the caller of
+	// StartBackground, so we deliberately drop them after checking.
 	go func() {
-		_ = s.Run()
+		if err := s.Run(); err != nil {
+			_ = err
+		}
 	}()
 
 	// Poll TCP socket until it's bound or timeout (5 seconds).
@@ -42,7 +45,9 @@ func (s *{{ service_name }}) StartBackground(host string, port uint16) (*ServerH
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", host, port), 100*time.Millisecond)
 		if err == nil {
-			conn.Close()
+			if cerr := conn.Close(); cerr != nil {
+				_ = cerr
+			}
 			break
 		}
 		time.Sleep(50 * time.Millisecond)

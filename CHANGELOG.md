@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.48.3] - 2026-07-26
+
+### Fixed
+
+- **Magnus RBS stubs now emit the real owning class for `Self`-returning methods instead of the
+  `json_value` fallback.** When a type is managed by another codegen pass (e.g. a service owner
+  type that is `binding_excluded`) it is still emitted as a `class` stub here, so builder-style
+  methods and constructors returning `Self` (resolved to the owning type during extraction) must
+  reference that class. A new `substitute_excluded_types_except_owner` never substitutes the owner
+  type, restoring `-> App`-style return types (regression from 0.42→0.48).
+- **Generated Go service templates no longer leave errors assigned to the blank identifier**, so
+  they pass `golangci-lint` with `errcheck.check-blank = true`. The background `Run()` goroutine and
+  the TCP readiness probe's `conn.Close()` in `service_start_background.jinja`, and the error-branch
+  `json.Marshal` in `service_handler_registry.jinja`, now check their errors explicitly.
+
 ## [0.48.2] - 2026-07-26
 
 ### Fixed

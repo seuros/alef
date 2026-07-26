@@ -2,7 +2,7 @@ use crate::backends::magnus::type_map::rbs_type;
 use crate::codegen::shared::{binding_fields, substitute_excluded_types, substitute_trait_interfaces};
 use crate::core::config::TraitBridgeConfig;
 use crate::core::hash::{self, CommentStyle};
-use crate::core::ir::{ApiSurface, EnumDef, FunctionDef, MethodDef, TypeDef};
+use crate::core::ir::{ApiSurface, EnumDef, FunctionDef, MethodDef, TypeDef, TypeRef};
 
 pub fn gen_stubs(
     api: &ApiSurface,
@@ -260,6 +260,7 @@ fn gen_opaque_type_stub(
                 streaming_return_types,
                 excluded,
                 trait_interfaces,
+                &typ.name,
             ));
         }
     }
@@ -273,6 +274,7 @@ fn gen_opaque_type_stub(
                 streaming_return_types,
                 excluded,
                 trait_interfaces,
+                &typ.name,
             ));
         }
     }
@@ -357,6 +359,7 @@ fn gen_type_stub(
                 streaming_return_types,
                 excluded,
                 trait_interfaces,
+                &typ.name,
             ));
         }
     }
@@ -370,6 +373,7 @@ fn gen_type_stub(
                 streaming_return_types,
                 excluded,
                 trait_interfaces,
+                &typ.name,
             ));
         }
     }
@@ -379,8 +383,49 @@ fn gen_type_stub(
     lines.join("\n")
 }
 
+/// Like [`substitute_excluded_types`], but never substitutes `Named(owner_type_name)`.
+///
+/// A type is only added to `excluded` (in [`gen_stubs`]) when it has no RBS class
+/// declaration of its own — e.g. an `alef(skip)` trait, or a struct managed entirely by
+/// another codegen pass (services). But a service owner type still gets a `class Owner`
+/// stub emitted by [`gen_opaque_type_stub`]/[`gen_type_stub`] right here, so a method
+/// declared *on* that class returning `Self` (already resolved to `Named(owner_type_name)`
+/// during extraction — see `resolve_self_refs`) must reference the real, just-declared
+/// class rather than fall back to `json_value`.
+fn substitute_excluded_types_except_owner(
+    ty: &TypeRef,
+    excluded: &std::collections::HashSet<&str>,
+    owner_type_name: &str,
+) -> TypeRef {
+    match ty {
+        TypeRef::Named(name) if name == owner_type_name => ty.clone(),
+        TypeRef::Optional(inner) => TypeRef::Optional(Box::new(substitute_excluded_types_except_owner(
+            inner,
+            excluded,
+            owner_type_name,
+        ))),
+        TypeRef::Vec(inner) => TypeRef::Vec(Box::new(substitute_excluded_types_except_owner(
+            inner,
+            excluded,
+            owner_type_name,
+        ))),
+        TypeRef::Map(k, v) => TypeRef::Map(
+            Box::new(substitute_excluded_types_except_owner(k, excluded, owner_type_name)),
+            Box::new(substitute_excluded_types_except_owner(v, excluded, owner_type_name)),
+        ),
+        other => substitute_excluded_types(other, excluded),
+    }
+}
+
 /// Generate a method stub using RBS declaration syntax.
 /// Streaming methods return Enumerator[ItemType] instead of String.
+///
+/// `owner_type_name` is the name of the class this method is declared on. It is never
+/// substituted via `excluded`, even when the owning type is `binding_excluded` (e.g. a
+/// service owner type managed by the services extraction pass): a class stub for it is
+/// being emitted right here, so `Self`-returning methods (already resolved to the owning
+/// type's name during extraction) must reference that real, declared class rather than
+/// falling back to `json_value`.
 fn gen_method_stub(
     method: &MethodDef,
     is_static: bool,
@@ -388,13 +433,14 @@ fn gen_method_stub(
     streaming_return_types: &ahash::AHashMap<String, String>,
     excluded: &std::collections::HashSet<&str>,
     trait_interfaces: &std::collections::HashSet<&str>,
+    owner_type_name: &str,
 ) -> String {
     let params: Vec<String> = method
         .params
         .iter()
         .map(|p| {
             let param_type = rbs_type(&substitute_trait_interfaces(
-                &substitute_excluded_types(&p.ty, excluded),
+                &substitute_excluded_types_except_owner(&p.ty, excluded, owner_type_name),
                 trait_interfaces,
             ));
             if p.optional {
@@ -409,7 +455,7 @@ fn gen_method_stub(
         format!("Enumerator[{item_type}]")
     } else {
         rbs_type(&substitute_trait_interfaces(
-            &substitute_excluded_types(&method.return_type, excluded),
+            &substitute_excluded_types_except_owner(&method.return_type, excluded, owner_type_name),
             trait_interfaces,
         ))
     };
