@@ -67,6 +67,21 @@ const EXCLUDES: &[&str] = &[
 ///   owns Elixir source.
 const POLY_FORMAT_EXCLUDES: &[&str] = &["**/Cargo.toml"];
 
+/// Canonical clang-format style for cbindgen-generated C FFI headers, shipped so
+/// every repo with an FFI target formats its headers identically (paired with the
+/// `[tools.clang-format]` catalog opt-in emitted into `poly.toml`). Matches the
+/// LLVM/4-space style the polyglot repos already commit.
+const CLANG_FORMAT: &str = "\
+---
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 100
+BreakBeforeBraces: Attach
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: false
+SortIncludes: true
+";
+
 /// Ruff rule families selected for generated + hand-written Python. This is an
 /// explicit allowlist rather than `select = ["ALL"]`: enabling every rule then
 /// suppressing the noise meant each ruff release could silently start firing a new
@@ -274,6 +289,16 @@ pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[La
         out.push_str(&format!("preserve_patterns = {}\n\n", toml_array(&patterns)));
     }
 
+    // cbindgen writes the C FFI header (crates/*-ffi/include/*.h) at BUILD time,
+    // so alef's post-generate `poly fmt` pass never sees it. poly ships no native
+    // C formatter, so enable its clang-format catalog tool: `poly fmt` and the
+    // pre-commit hook then format those headers (using the scaffolded
+    // `.clang-format`) whenever they exist. The headers are deliberately NOT in
+    // EXCLUDES so poly can reach them.
+    if has(Language::Ffi) {
+        out.push_str("[tools.clang-format]\nenabled = true\n\n");
+    }
+
     out.push_str("[per-file-ignores]\n");
     if has(Language::Python) {
         out.push_str(
@@ -365,7 +390,7 @@ pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[La
         ));
     }
 
-    vec![
+    let mut files = vec![
         GeneratedFile {
             path: PathBuf::from("poly.toml"),
             content: out,
@@ -376,5 +401,18 @@ pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[La
             content: "max_width = 120\n".to_string(),
             generated_header: true,
         },
-    ]
+    ];
+
+    // Ship the canonical `.clang-format` for repos with a C FFI header so cbindgen
+    // output formats identically everywhere. alef-owned (overwritten every run) to
+    // keep the C style uniform across all consumer repos.
+    if has(Language::Ffi) {
+        files.push(GeneratedFile {
+            path: PathBuf::from(".clang-format"),
+            content: CLANG_FORMAT.to_string(),
+            generated_header: true,
+        });
+    }
+
+    files
 }

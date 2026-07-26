@@ -624,3 +624,53 @@ flate = "flate"
         "flate must come before zensical (alphabetical)"
     );
 }
+
+#[test]
+fn poly_toml_enables_clang_format_and_ships_config_for_ffi() {
+    let config = test_config();
+    let files = scaffold_poly_config(&config, &[Language::Ffi]);
+    let poly = files
+        .iter()
+        .find(|f| f.path.to_str() == Some("poly.toml"))
+        .expect("poly.toml emitted");
+    assert!(
+        poly.content.contains("[tools.clang-format]") && poly.content.contains("enabled = true"),
+        "an FFI target must enable poly's clang-format catalog tool so cbindgen headers format; got:\n{}",
+        poly.content
+    );
+    // The whole document, with the tools table, must still be valid TOML.
+    toml::from_str::<toml::Value>(&poly.content).expect("poly.toml with [tools.clang-format] must parse");
+
+    let clang = files
+        .iter()
+        .find(|f| f.path.to_str() == Some(".clang-format"))
+        .expect("an FFI target must ship a canonical .clang-format");
+    assert!(
+        clang.generated_header,
+        ".clang-format must be alef-managed (overwritten every run to keep the C style uniform)"
+    );
+    assert!(
+        clang.content.contains("BasedOnStyle: LLVM") && clang.content.contains("IndentWidth: 4"),
+        "shipped .clang-format must carry the canonical LLVM/4-space style; got:\n{}",
+        clang.content
+    );
+}
+
+#[test]
+fn poly_toml_omits_clang_format_without_ffi() {
+    let config = test_config();
+    let files = scaffold_poly_config(&config, &[Language::Python, Language::Node]);
+    let poly = files
+        .iter()
+        .find(|f| f.path.to_str() == Some("poly.toml"))
+        .expect("poly.toml emitted");
+    assert!(
+        !poly.content.contains("[tools.clang-format]"),
+        "no clang-format tool table without an FFI/C-header target; got:\n{}",
+        poly.content
+    );
+    assert!(
+        !files.iter().any(|f| f.path.to_str() == Some(".clang-format")),
+        "no .clang-format must be shipped without an FFI target"
+    );
+}
