@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Generated C# `.csproj` no longer embeds a downstream project name.** The thin meta-package
+  `.csproj` template carried a comment referencing a specific consumer project's issue tracker
+  (`xberg #1280`), leaking a downstream project name into every generated csproj and tripping alef's
+  project-agnosticism enforcement. The internal issue references are removed from both the source
+  doc comment and the emitted csproj comment.
+
 ## [0.48.0] - 2026-07-26
 
 ### Added

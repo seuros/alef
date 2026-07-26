@@ -35,7 +35,7 @@ pub(crate) const PUBLISHED_RUNTIME_IDENTIFIERS: &[(&str, &str)] = &[
 ///   graph. Native closures ship separately in the per-RID
 ///   `<PackageId>.runtime.<rid>` packages (see the sibling `*.Runtime` project) —
 ///   packing `runtimes/**` directly into the meta blows past the NuGet package
-///   size limit and returns HTTP 413 (xberg #1280 / rc.35, re-broken in rc.37).
+///   size limit and returns HTTP 413.
 ///
 /// This is exposed as a `pub` function so `alef-publish` can regenerate the
 /// csproj before invoking `dotnet pack`, guaranteeing the metadata stays in
@@ -103,7 +103,7 @@ pub fn render_csharp_csproj(config: &ResolvedCrateConfig, version: &str) -> Stri
          per-RID {package_id}.runtime.<rid> packages (see ../{namespace}.Runtime); this
          package only carries the managed assembly plus runtime.json, which tells
          NuGet's RID-fallback graph which runtime package to pull in for the
-         consumer's RID (xberg #1280 / rc.35 413 fix). runtime.json is rendered
+         consumer's RID. runtime.json is rendered
          from runtime.json.template by CI before pack; RequireRuntimeJson guards
          against packing without it. -->
     <None Include="runtime.json" Pack="true" PackagePath="/" Condition="Exists('runtime.json')" />
