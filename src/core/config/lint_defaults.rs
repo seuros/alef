@@ -232,11 +232,18 @@ pub fn default_lint_config(lang: Language, output_dir: &str, ctx: &LangContext) 
             )),
             typecheck: None,
         },
+        // Kotlin formats with ktfmt — the single Kotlin formatter across all
+        // backends. ktlint is not wired anywhere; `build`/`.gradle` dirs are
+        // pruned so generated/build artifacts aren't touched.
         Language::Kotlin => {
-            let format_cmd = wrap(format!("cd {output_dir} && gradle ktlintFormat"), ctx.run_wrapper);
-            let check_cmd = wrap(format!("cd {output_dir} && gradle ktlintCheck"), ctx.run_wrapper);
+            let find_kt = format!(
+                "find {output_dir} \\( -name build -o -name .gradle \\) -prune -o \
+                 \\( -name '*.kt' -o -name '*.kts' \\) -type f -print0 | xargs -0 ktfmt --kotlinlang-style"
+            );
+            let format_cmd = wrap(find_kt.clone(), ctx.run_wrapper);
+            let check_cmd = wrap(format!("{find_kt} --dry-run --set-exit-if-changed"), ctx.run_wrapper);
             LintConfig {
-                precondition: Some(require_tool("gradle")),
+                precondition: Some(require_tool("ktfmt")),
                 before: None,
                 format: Some(StringOrVec::Single(format_cmd)),
                 check: Some(StringOrVec::Single(check_cmd)),
@@ -619,19 +626,23 @@ mod tests {
     }
 
     #[test]
-    fn kotlin_uses_gradle_ktlint() {
+    fn kotlin_uses_ktfmt() {
         let c = cfg(Language::Kotlin, "packages/kotlin");
         let fmt = c.format.unwrap().commands().join(" ");
         let check = c.check.unwrap().commands().join(" ");
         assert!(
-            fmt.contains("gradle ktlintFormat"),
-            "Kotlin format should use gradle ktlintFormat, got: {fmt}"
+            fmt.contains("ktfmt --kotlinlang-style"),
+            "Kotlin format should use ktfmt, got: {fmt}"
         );
         assert!(
-            check.contains("gradle ktlintCheck"),
-            "Kotlin check should use gradle ktlintCheck, got: {check}"
+            !fmt.contains("gradle ktlint"),
+            "Kotlin should not shell out to gradle ktlint, got: {fmt}"
         );
-        assert_eq!(c.precondition.as_deref(), Some("command -v gradle >/dev/null 2>&1"));
+        assert!(
+            check.contains("--dry-run --set-exit-if-changed"),
+            "Kotlin check should be a non-mutating ktfmt run, got: {check}"
+        );
+        assert_eq!(c.precondition.as_deref(), Some("command -v ktfmt >/dev/null 2>&1"));
     }
 
     #[test]

@@ -1,19 +1,8 @@
-//! `.editorconfig` emitter — provides per-project style + ktlint rule overrides.
+//! `.editorconfig` emitter — provides per-project editor style settings.
 //!
-//! Generated Kotlin/Android projects co-locate the alef-emitted Java facade
-//! inside the AAR's `src/main/java/<java_pkg>/` tree. The Java package is
-//! derived from the umbrella crate's `repository` URL, which (for hyphenated
-//! GitHub orgs such as `sample_core-dev`) introduces underscores in the
-//! resulting reverse-DNS package name (e.g. `com.github.sample_core_dev`).
-//! That trips ktlint's `standard:package-name` rule, which forbids
-//! underscores. Since the package is determined upstream and constrained by
-//! Java conventions, we disable that one rule for the generated tree rather
-//! than rewrite every repository name.
-//!
-//! The emitted Kotlin sources are canonically ktfmt-formatted. ktfmt and
-//! ktlint disagree on class/function/parameter splitting heuristics and
-//! continuation indent, so the ktlint rules that conflict with ktfmt are
-//! disabled here. All other ktlint rules remain on.
+//! Kotlin sources are canonically formatted with ktfmt (`--kotlinlang-style`),
+//! the single formatter for the emitted tree; these settings only guide editors
+//! and non-Kotlin files.
 
 /// Emit `.editorconfig` for the AAR project root.
 pub fn emit() -> String {
@@ -30,60 +19,10 @@ trim_trailing_whitespace = true
 [*.kt]
 indent_style = space
 indent_size = 4
-# Java packages derived from hyphenated GitHub orgs (e.g. `sample-org` →
-# `com.github.sample_org`) carry underscores; allow them for the
-# co-located Java facade and its Kotlin wrappers.
-ktlint_standard_package-name = disabled
-# ktfmt and ktlint disagree on class/function/parameter splitting heuristics
-# and continuation indent. ktfmt is the canonical formatter for the emitted
-# code, so we disable the ktlint rules that conflict.
-ktlint_standard_class-signature = disabled
-ktlint_standard_function-signature = disabled
-ktlint_standard_function-expression-body = disabled
-ktlint_standard_no-empty-class-body = disabled
-ktlint_standard_no-empty-first-line-in-method-block = disabled
-ktlint_standard_indent = disabled
-# `string-template-indent` depends on `indent`; must be disabled together.
-ktlint_standard_string-template-indent = disabled
-ktlint_standard_filename = disabled
-# ktfmt collapses `fun foo(): T = callbackFlow { ... }` to one line for
-# expression-bodied functions; ktlint's multiline-expression-wrapping then
-# rejects it. Defer to ktfmt — disable the ktlint rule for the generated tree.
-ktlint_standard_multiline-expression-wrapping = disabled
-# ktlint --format and ktfmt fight on chained-call layout (`.foo()\n.bar()`
-# vs `.foo().bar()`) and on multi-line `if/else` bodies. ktfmt is the
-# canonical formatter for emitted code, so disable the ktlint counter-rules.
-ktlint_standard_chain-method-continuation = disabled
-ktlint_standard_multiline-if-else = disabled
-# ktfmt strips trailing commas before `)` on multiline call sites; ktlint
-# `trailing-comma-on-call-site` demands them. The two fight in a loop.
-# Defer to ktfmt — disable the ktlint rule.
-ktlint_standard_trailing-comma-on-call-site = disabled
-ktlint_standard_trailing-comma-on-declaration-site = disabled
 
 [*.gradle.kts]
 indent_style = space
 indent_size = 4
-# ktfmt and ktlint disagree on class/function/parameter splitting heuristics
-# and continuation indent. ktfmt is the canonical formatter for the emitted
-# code, so we disable the ktlint rules that conflict.
-ktlint_standard_class-signature = disabled
-ktlint_standard_function-signature = disabled
-ktlint_standard_function-expression-body = disabled
-ktlint_standard_no-empty-class-body = disabled
-ktlint_standard_no-empty-first-line-in-method-block = disabled
-ktlint_standard_indent = disabled
-# `string-template-indent` depends on `indent`; must be disabled together.
-ktlint_standard_string-template-indent = disabled
-ktlint_standard_filename = disabled
-ktlint_standard_multiline-expression-wrapping = disabled
-ktlint_standard_chain-method-continuation = disabled
-ktlint_standard_multiline-if-else = disabled
-# ktfmt strips trailing commas before `)` on multiline call sites; ktlint
-# `trailing-comma-on-call-site` demands them. The two fight in a loop.
-# Defer to ktfmt — disable the ktlint rule.
-ktlint_standard_trailing-comma-on-call-site = disabled
-ktlint_standard_trailing-comma-on-declaration-site = disabled
 
 [*.{xml,pro,gitignore}]
 indent_style = space

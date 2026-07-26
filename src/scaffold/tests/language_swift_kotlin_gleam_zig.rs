@@ -203,23 +203,14 @@ fn test_scaffold_kotlin() {
     assert_eq!(files.len(), 7, "Expected 7 files for Kotlin scaffold");
     assert_eq!(files[0].path, PathBuf::from("packages/kotlin/build.gradle.kts"));
     assert!(files[0].content.contains("kotlin(\"jvm\")"));
-    assert!(files[0].content.contains("org.jlleitschuh.gradle.ktlint"));
     assert!(
         files[0].content.contains("org.jspecify:jspecify:"),
         "build.gradle.kts must declare jspecify; got:\n{}",
         files[0].content
     );
     assert!(
-        files[0].content.contains("filter {")
-            && files[0].content.contains("/packages/java/")
-            && files[0].content.contains("**/build/**")
-            && files[0].content.contains("**/generated/**"),
-        "ktlint filter block missing or incomplete; got:\n{}",
-        files[0].content
-    );
-    assert!(
-        files[0].content.contains(r#"endsWith("/MyLib.kt")"#),
-        "ktlint filter must exclude alef-emitted binding-class file; got:\n{}",
+        !files[0].content.contains("ktlint"),
+        "ktlint must not be wired into the plain-kotlin build (single formatter is ktfmt); got:\n{}",
         files[0].content
     );
     assert!(

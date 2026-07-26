@@ -23,9 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Removed the hidden `--format` flag** from `alef generate` / `all` / `init` / `e2e generate` /
   `test-apps generate`. Formatting always runs, delegating to `poly fmt` whenever poly is on PATH; when
   poly is absent, generation now warns and continues (emitting unformatted output) instead of aborting.
-- **Kotlin-Android lint default now uses `ktfmt --kotlinlang-style`** (was `gradle ktlintCheck`), and
-  the **Swift default formats only `Sources`** (not `Tests`). Both match what every consumer repo
-  already overrode to; regenerating changes the Kotlin-Android and Swift lint commands.
+- **ktfmt (`--kotlinlang-style`) is now the single Kotlin formatter** for both the `kotlin` and
+  `kotlin_android` backends (was `gradle ktlintCheck`), and the **Swift default formats only `Sources`**
+  (not `Tests`). Both match what every consumer repo already overrode to; regenerating changes the
+  Kotlin, Kotlin-Android, and Swift lint commands.
 
 ### Fixed
 
@@ -34,10 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Python `.pyi` enum stubs no longer emit `# noqa: PYI029`** on the generated `__str__`/`__repr__`
   stubs. PYI029 is not enabled in the generated ruff config, so ruff flagged the suppression itself as
   an unused directive (`RUF100`).
-- **Kotlin-Android `build.gradle.kts` is ktlint-clean.** The host-JNI `else` branch keeps a
-  single-spaced trailing `// linux` comment (was double-spaced → "Unnecessary long whitespace"), and
-  the `mavenPublishing { configure(...) }` call wraps its multi-line `AndroidSingleVariantLibrary(...)`
-  argument onto its own line (fixes ktlint "Missing newline after/before `(`/`)`").
+- **Kotlin-Android `build.gradle.kts` formatting cleaned up.** The host-JNI `else` branch keeps a
+  single-spaced trailing `// linux` comment (was double-spaced), and the
+  `mavenPublishing { configure(...) }` call wraps its multi-line `AndroidSingleVariantLibrary(...)`
+  argument onto its own line.
 - **Ruby `.rbs` stubs no longer reference undeclared types (`steep RBS::UnknownTypeName`).** Streaming
   methods now declare `Enumerator[<ItemType>]` from the adapter's real item type instead of an
   undeclared `<Method>Iterator`, and any signature referencing a binding-excluded or opaque
@@ -50,6 +51,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alef-generated code. The `pmd` workspace hook, the `maven-pmd-plugin` build plugin and its
   `pmd.skip`/`cpd.skip` publish-profile properties, and the scaffolded `pmd-ruleset.xml` are all
   removed. `checkstyle` continues to run as before.
+- **ktlint removed entirely from generated Kotlin and Kotlin-Android projects.** ktfmt is the single
+  Kotlin formatter, and ktlint's rule set fought ktfmt's output on generated code. The
+  `org.jlleitschuh.gradle.ktlint` gradle plugin (and its `ktlint {}` config block), the `ktlint`
+  `poly.toml` workspace hook (`gradle ktlintCheck`), and the `ktlint_standard_*` `.editorconfig`
+  overrides are all removed from both backends.
 
 ## [0.47.2] - 2026-07-25
 

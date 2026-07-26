@@ -360,15 +360,6 @@ pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[La
             "**/*.java",
         ));
     }
-    if has(Language::KotlinAndroid) {
-        let dir = config.package_dir(Language::KotlinAndroid);
-        out.push_str(&workspace_hook(
-            "ktlint",
-            &dir,
-            "gradle ktlintCheck --no-daemon",
-            "**/*.{kt,kts}",
-        ));
-    }
     if has(Language::Dart) {
         let dir = config.package_dir(Language::Dart);
         out.push_str(&workspace_hook("dart-analyze", &dir, "dart analyze", "**/*.dart"));

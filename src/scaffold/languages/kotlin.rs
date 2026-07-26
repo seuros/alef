@@ -3,7 +3,6 @@ use crate::core::config::{KotlinTarget, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
 use crate::core::template_versions::{maven, toolchain};
 use crate::scaffold::{parse_author, scaffold_meta};
-use heck::ToPascalCase;
 
 use std::path::PathBuf;
 
@@ -47,11 +46,8 @@ fn scaffold_kotlin_jvm(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow
     let jackson = maven::JACKSON;
     let jackson_annotations = maven::JACKSON_ANNOTATIONS;
     let jspecify = maven::JSPECIFY;
-    let ktlint_gradle_plugin = maven::KTLINT_GRADLE_PLUGIN;
-    let ktlint = maven::KTLINT;
     let jvm_target = toolchain::KOTLIN_JVM_TARGET;
     let kotlin_artifact_id = format!("{}-kotlin", config.name);
-    let binding_class = config.name.to_pascal_case();
 
     let vanniktech = maven::VANNIKTECH_MAVEN_PUBLISH;
     let repo_url = meta.configured_repository.clone().ok_or_else(|| {
@@ -126,7 +122,6 @@ plugins {{
   `java-library`
   kotlin("jvm") version "{kotlin_plugin}"
   id("com.vanniktech.maven.publish") version "{vanniktech}"
-  id("org.jlleitschuh.gradle.ktlint") version "{ktlint_gradle_plugin}"
 }}
 
 group = "{package}"
@@ -179,30 +174,6 @@ kotlin {{
   }}
 }}
 
-// ktlint configuration — see .editorconfig for details. We deliberately exclude
-// the Java facade (which lives under `packages/java/`) and any build/generated
-// directories: ktlint cannot lint pure-Java files, and the FFM/Panama bindings
-// are kept in their own module.
-ktlint {{
-  version.set("{ktlint}")
-  outputToConsole.set(true)
-  ignoreFailures.set(false)
-  filter {{
-    exclude {{ entry -> entry.file.toString().contains("/packages/java/") }}
-    exclude {{ entry -> entry.file.toString().endsWith("/{binding_class}.kt") }}
-    exclude("**/build/**")
-    exclude("**/generated/**")
-  }}
-}}
-
-// Gradle 9.x flags an output-overlap validation error between
-// :ktlintKotlinScriptCheck / :ktlintMainSourceSetCheck and :compileKotlin.
-// Declare the explicit dependency so Gradle accepts the task graph.
-tasks.matching {{ it.name == "compileKotlin" }}.configureEach {{
-  mustRunAfter("ktlintKotlinScriptCheck")
-  mustRunAfter("ktlintMainSourceSetCheck")
-}}
-
 // JNA needs the native lib on java.library.path; default to the workspace
 // `target/release` cargo output. Override with `-Pnative.lib.path=<dir>`.
 tasks.withType<Test>().configureEach {{
@@ -251,10 +222,7 @@ mavenPublishing {{
         version = version,
         jackson = jackson,
         jspecify = jspecify,
-        ktlint_gradle_plugin = ktlint_gradle_plugin,
-        ktlint = ktlint,
         kotlin_artifact_id = kotlin_artifact_id,
-        binding_class = binding_class,
         scm_connection = scm_connection,
         scm_developer_connection = scm_developer_connection,
     );
@@ -264,44 +232,8 @@ mavenPublishing {{
     let gitignore = "build/\n.gradle/\n.idea/\n*.iml\n";
 
     let editorconfig = "[*]\ncharset = utf-8\nend_of_line = lf\ninsert_final_newline = true\ntrim_trailing_whitespace = true\n\n\
-[*.kt]\nindent_style = space\nindent_size = 4\n\
-ktlint_standard_class-signature = disabled\n\
-ktlint_standard_function-signature = disabled\n\
-ktlint_standard_function-expression-body = disabled\n\
-ktlint_standard_no-empty-class-body = disabled\n\
-ktlint_standard_no-empty-first-line-in-method-block = disabled\n\
-ktlint_standard_indent = disabled\n\
-ktlint_standard_string-template-indent = disabled\n\
-ktlint_standard_filename = disabled\n\
-ktlint_standard_multiline-expression-wrapping = disabled\n\
-ktlint_standard_chain-method-continuation = disabled\n\
-ktlint_standard_multiline-if-else = disabled\n\
-ktlint_standard_parameter-list-wrapping = disabled\n\
-ktlint_standard_argument-list-wrapping = disabled\n\
-ktlint_standard_max-line-length = disabled\n\
-ktlint_standard_function-literal = disabled\n\
-ktlint_standard_trailing-comma-on-call-site = disabled\n\
-ktlint_standard_trailing-comma-on-declaration-site = disabled\n\
-ktlint_standard_statement-wrapping = disabled\n\n\
-[*.gradle.kts]\nindent_style = space\nindent_size = 2\n\
-ktlint_standard_class-signature = disabled\n\
-ktlint_standard_function-signature = disabled\n\
-ktlint_standard_function-expression-body = disabled\n\
-ktlint_standard_no-empty-class-body = disabled\n\
-ktlint_standard_no-empty-first-line-in-method-block = disabled\n\
-ktlint_standard_indent = disabled\n\
-ktlint_standard_string-template-indent = disabled\n\
-ktlint_standard_filename = disabled\n\
-ktlint_standard_multiline-expression-wrapping = disabled\n\
-ktlint_standard_chain-method-continuation = disabled\n\
-ktlint_standard_multiline-if-else = disabled\n\
-ktlint_standard_parameter-list-wrapping = disabled\n\
-ktlint_standard_argument-list-wrapping = disabled\n\
-ktlint_standard_max-line-length = disabled\n\
-ktlint_standard_function-literal = disabled\n\
-ktlint_standard_trailing-comma-on-call-site = disabled\n\
-ktlint_standard_trailing-comma-on-declaration-site = disabled\n\
-ktlint_standard_statement-wrapping = disabled\n";
+[*.kt]\nindent_style = space\nindent_size = 4\n\n\
+[*.gradle.kts]\nindent_style = space\nindent_size = 2\n";
 
     let gradle_properties = "org.gradle.parallel=true\nkotlin.code.style=official\n";
 

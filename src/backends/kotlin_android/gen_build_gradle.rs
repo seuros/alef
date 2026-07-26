@@ -36,8 +36,6 @@ pub fn emit(config: &ResolvedCrateConfig) -> String {
     let junit_legacy = maven::JUNIT_LEGACY;
     let androidx_junit = maven::ANDROIDX_TEST_EXT_JUNIT;
     let espresso_core = maven::ANDROIDX_TEST_ESPRESSO_CORE;
-    let ktlint_gradle_plugin = maven::KTLINT_GRADLE_PLUGIN;
-    let ktlint_version = maven::KTLINT;
     let gradle_versions_plugin = maven::GRADLE_VERSIONS_PLUGIN;
     let kotlinx_coroutines = maven::KOTLINX_COROUTINES_CORE;
     let jackson = maven::JACKSON;
@@ -140,7 +138,6 @@ buildscript {{
 plugins {{
     id("com.android.library") version "{android_gradle_plugin}"{kotlin_android_plugin_line}
     id("com.vanniktech.maven.publish") version "{vanniktech_plugin}"
-    id("org.jlleitschuh.gradle.ktlint") version "{ktlint_gradle_plugin}"
     id("com.github.ben-manes.versions") version "{gradle_versions_plugin}"
 }}
 
@@ -169,12 +166,6 @@ kotlin {{
     compilerOptions {{
         jvmTarget.set(JvmTarget.JVM_{android_jvm_target})
     }}
-}}
-
-ktlint {{
-    version.set("{ktlint_version}")
-    android.set(true)
-    ignoreFailures.set(false)
 }}
 
 dependencies {{
