@@ -1,5 +1,5 @@
 use crate::backends::magnus::type_map::rbs_type;
-use crate::codegen::shared::{binding_fields, substitute_excluded_types};
+use crate::codegen::shared::{binding_fields, substitute_excluded_types, substitute_trait_interfaces};
 use crate::core::config::TraitBridgeConfig;
 use crate::core::hash::{self, CommentStyle};
 use crate::core::ir::{ApiSurface, EnumDef, FunctionDef, MethodDef, TypeDef};
@@ -36,6 +36,20 @@ pub fn gen_stubs(
         .chain(api.types.iter().filter(|t| t.binding_excluded).map(|t| t.name.as_str()))
         .collect();
 
+    // Trait names exposed as a host-implementable RBS `interface _Name` (trait-bridge traits with a
+    // `register_fn` whose methods are non-empty and whose trait type exists in the API surface — the
+    // same condition `gen_plugin_interface_stub` uses to decide whether it emits the interface). Any
+    // function/method param or return referencing one of these bare trait names must be substituted
+    // to `_Name` via `substitute_trait_interfaces`, otherwise steep fails with `RBS::UnknownTypeName`
+    // (the bare trait name is never declared — only the `_Name` interface is).
+    let trait_interfaces: std::collections::HashSet<&str> = trait_bridges
+        .iter()
+        .filter(|bridge| bridge.register_fn.is_some())
+        .filter(|bridge| !bridge.resolve_methods(api).is_empty())
+        .filter(|bridge| api.types.iter().any(|t| t.name == bridge.trait_name))
+        .map(|bridge| bridge.trait_name.as_str())
+        .collect();
+
     for typ in api.types.iter().filter(|typ| !typ.is_trait) {
         if typ.is_opaque {
             lines.push(gen_opaque_type_stub(
@@ -43,10 +57,17 @@ pub fn gen_stubs(
                 emit_docstrings,
                 streaming_return_types,
                 &excluded,
+                &trait_interfaces,
             ));
             lines.push("".to_string());
         } else {
-            lines.push(gen_type_stub(typ, emit_docstrings, streaming_return_types, &excluded));
+            lines.push(gen_type_stub(
+                typ,
+                emit_docstrings,
+                streaming_return_types,
+                &excluded,
+                &trait_interfaces,
+            ));
             lines.push("".to_string());
         }
     }
@@ -57,10 +78,14 @@ pub fn gen_stubs(
     }
 
     for func in &api.functions {
-        lines.push(gen_function_stub(func, streaming_return_types, &excluded));
+        lines.push(gen_function_stub(
+            func,
+            streaming_return_types,
+            &excluded,
+            &trait_interfaces,
+        ));
         lines.push("".to_string());
     }
-    let mut interface_trait_names: std::collections::HashSet<String> = std::collections::HashSet::new();
     for bridge in trait_bridges {
         if bridge.register_fn.is_none() {
             continue;
@@ -68,7 +93,6 @@ pub fn gen_stubs(
         if let Some(stub) = gen_plugin_interface_stub(bridge, api) {
             lines.push(stub);
             lines.push("".to_string());
-            interface_trait_names.insert(bridge.trait_name.clone());
         }
     }
     let declared_function_names: std::collections::HashSet<&str> =
@@ -76,7 +100,7 @@ pub fn gen_stubs(
     for bridge in trait_bridges {
         if let Some(register_fn) = bridge.register_fn.as_deref() {
             if !declared_function_names.contains(register_fn) {
-                let backend_type = if interface_trait_names.contains(&bridge.trait_name) {
+                let backend_type = if trait_interfaces.contains(bridge.trait_name.as_str()) {
                     plugin_interface_name(&bridge.trait_name)
                 } else {
                     "untyped".to_string()
@@ -212,6 +236,7 @@ fn gen_opaque_type_stub(
     emit_docstrings: bool,
     streaming_return_types: &ahash::AHashMap<String, String>,
     excluded: &std::collections::HashSet<&str>,
+    trait_interfaces: &std::collections::HashSet<&str>,
 ) -> String {
     let mut lines = vec![];
 
@@ -234,6 +259,7 @@ fn gen_opaque_type_stub(
                 emit_docstrings,
                 streaming_return_types,
                 excluded,
+                trait_interfaces,
             ));
         }
     }
@@ -246,6 +272,7 @@ fn gen_opaque_type_stub(
                 emit_docstrings,
                 streaming_return_types,
                 excluded,
+                trait_interfaces,
             ));
         }
     }
@@ -261,6 +288,7 @@ fn gen_type_stub(
     emit_docstrings: bool,
     streaming_return_types: &ahash::AHashMap<String, String>,
     excluded: &std::collections::HashSet<&str>,
+    trait_interfaces: &std::collections::HashSet<&str>,
 ) -> String {
     let mut lines = vec![];
 
@@ -328,6 +356,7 @@ fn gen_type_stub(
                 emit_docstrings,
                 streaming_return_types,
                 excluded,
+                trait_interfaces,
             ));
         }
     }
@@ -340,6 +369,7 @@ fn gen_type_stub(
                 emit_docstrings,
                 streaming_return_types,
                 excluded,
+                trait_interfaces,
             ));
         }
     }
@@ -357,12 +387,16 @@ fn gen_method_stub(
     emit_docstrings: bool,
     streaming_return_types: &ahash::AHashMap<String, String>,
     excluded: &std::collections::HashSet<&str>,
+    trait_interfaces: &std::collections::HashSet<&str>,
 ) -> String {
     let params: Vec<String> = method
         .params
         .iter()
         .map(|p| {
-            let param_type = rbs_type(&substitute_excluded_types(&p.ty, excluded));
+            let param_type = rbs_type(&substitute_trait_interfaces(
+                &substitute_excluded_types(&p.ty, excluded),
+                trait_interfaces,
+            ));
             if p.optional {
                 format!("?{} {}", param_type, p.name)
             } else {
@@ -374,7 +408,10 @@ fn gen_method_stub(
     let return_type = if let Some(item_type) = streaming_return_types.get(&method.name) {
         format!("Enumerator[{item_type}]")
     } else {
-        rbs_type(&substitute_excluded_types(&method.return_type, excluded))
+        rbs_type(&substitute_trait_interfaces(
+            &substitute_excluded_types(&method.return_type, excluded),
+            trait_interfaces,
+        ))
     };
 
     let param_list = format!("({})", params.join(", "));
@@ -480,12 +517,16 @@ fn gen_function_stub(
     func: &FunctionDef,
     streaming_return_types: &ahash::AHashMap<String, String>,
     excluded: &std::collections::HashSet<&str>,
+    trait_interfaces: &std::collections::HashSet<&str>,
 ) -> String {
     let params: Vec<String> = func
         .params
         .iter()
         .map(|p| {
-            let param_type = rbs_type(&substitute_excluded_types(&p.ty, excluded));
+            let param_type = rbs_type(&substitute_trait_interfaces(
+                &substitute_excluded_types(&p.ty, excluded),
+                trait_interfaces,
+            ));
             if p.optional {
                 format!("?{} {}", param_type, p.name)
             } else {
@@ -497,7 +538,10 @@ fn gen_function_stub(
     let return_type = if let Some(item_type) = streaming_return_types.get(&func.name) {
         format!("Enumerator[{item_type}]")
     } else {
-        rbs_type(&substitute_excluded_types(&func.return_type, excluded))
+        rbs_type(&substitute_trait_interfaces(
+            &substitute_excluded_types(&func.return_type, excluded),
+            trait_interfaces,
+        ))
     };
 
     let param_list = format!("({})", params.join(", "));

@@ -225,8 +225,9 @@ fn streaming_method_returns_enumerator_of_adapter_item_type() {
     let mut streaming: ahash::AHashMap<String, String> = ahash::AHashMap::new();
     streaming.insert("chat_stream".to_string(), "ChatCompletionChunk".to_string());
     let excluded = std::collections::HashSet::new();
+    let trait_interfaces = std::collections::HashSet::new();
 
-    let stub = super::gen_method_stub(&method, false, false, &streaming, &excluded);
+    let stub = super::gen_method_stub(&method, false, false, &streaming, &excluded, &trait_interfaces);
 
     assert!(
         stub.contains("Enumerator[ChatCompletionChunk]"),
@@ -251,8 +252,9 @@ fn method_param_of_excluded_type_is_substituted_to_json_value() {
     };
     let streaming: ahash::AHashMap<String, String> = ahash::AHashMap::new();
     let excluded: std::collections::HashSet<&str> = ["DocumentExtractor"].into_iter().collect();
+    let trait_interfaces = std::collections::HashSet::new();
 
-    let stub = super::gen_method_stub(&method, false, false, &streaming, &excluded);
+    let stub = super::gen_method_stub(&method, false, false, &streaming, &excluded, &trait_interfaces);
 
     assert!(
         !stub.contains("DocumentExtractor"),
@@ -261,5 +263,59 @@ fn method_param_of_excluded_type_is_substituted_to_json_value() {
     assert!(
         stub.contains("json_value extractor"),
         "excluded param type must be substituted to the declared json_value alias: {stub}"
+    );
+}
+
+#[test]
+fn method_param_of_trait_interface_type_is_substituted_to_underscore_prefixed_name() {
+    let method = MethodDef {
+        name: "register_document_extractor".to_string(),
+        params: vec![crate::core::ir::ParamDef {
+            name: "extractor".to_string(),
+            ty: TypeRef::Named("DocumentExtractor".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let streaming: ahash::AHashMap<String, String> = ahash::AHashMap::new();
+    let excluded = std::collections::HashSet::new();
+    let trait_interfaces: std::collections::HashSet<&str> = ["DocumentExtractor"].into_iter().collect();
+
+    let stub = super::gen_method_stub(&method, false, false, &streaming, &excluded, &trait_interfaces);
+
+    assert!(
+        stub.contains("_DocumentExtractor extractor"),
+        "a trait-typed param must reference the host-implementable `_TraitName` interface: {stub}"
+    );
+    assert!(
+        !stub.contains("(DocumentExtractor extractor)"),
+        "the bare trait name is never declared as an RBS type (steep RBS::UnknownTypeName): {stub}"
+    );
+}
+
+#[test]
+fn function_param_of_trait_interface_type_is_substituted_to_underscore_prefixed_name() {
+    let func = crate::core::ir::FunctionDef {
+        name: "register_document_extractor".to_string(),
+        params: vec![crate::core::ir::ParamDef {
+            name: "extractor".to_string(),
+            ty: TypeRef::Named("DocumentExtractor".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let streaming: ahash::AHashMap<String, String> = ahash::AHashMap::new();
+    let excluded = std::collections::HashSet::new();
+    let trait_interfaces: std::collections::HashSet<&str> = ["DocumentExtractor"].into_iter().collect();
+
+    let stub = super::gen_function_stub(&func, &streaming, &excluded, &trait_interfaces);
+
+    assert!(
+        stub.contains("_DocumentExtractor extractor"),
+        "a trait-typed param must reference the host-implementable `_TraitName` interface: {stub}"
+    );
+    assert!(
+        !stub.contains("(DocumentExtractor extractor)"),
+        "the bare trait name is never declared as an RBS type (steep RBS::UnknownTypeName): {stub}"
     );
 }

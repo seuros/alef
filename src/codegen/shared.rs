@@ -20,6 +20,25 @@ pub fn substitute_excluded_types(ty: &TypeRef, excluded: &HashSet<&str>) -> Type
     }
 }
 
+/// Recursively replace `Named(n)` references where `n` is a trait exposed via a host-implementable
+/// RBS/language interface (e.g. `DocumentExtractor`) with `TypeRef::Named("_{n}")`. Traits are never
+/// emitted as a class/struct declaration themselves — the trait-bridge backend surfaces them as an
+/// `interface _TraitName` (or the target language's equivalent) that host code implements, so a
+/// signature referencing the bare trait name would be an undeclared type. Shared so the substitution
+/// stays identical across generators that need it (currently Ruby/Magnus RBS stubs).
+pub fn substitute_trait_interfaces(ty: &TypeRef, trait_interfaces: &HashSet<&str>) -> TypeRef {
+    match ty {
+        TypeRef::Named(name) if trait_interfaces.contains(name.as_str()) => TypeRef::Named(format!("_{name}")),
+        TypeRef::Optional(inner) => TypeRef::Optional(Box::new(substitute_trait_interfaces(inner, trait_interfaces))),
+        TypeRef::Vec(inner) => TypeRef::Vec(Box::new(substitute_trait_interfaces(inner, trait_interfaces))),
+        TypeRef::Map(k, v) => TypeRef::Map(
+            Box::new(substitute_trait_interfaces(k, trait_interfaces)),
+            Box::new(substitute_trait_interfaces(v, trait_interfaces)),
+        ),
+        other => other.clone(),
+    }
+}
+
 /// Fields that should be emitted in generated binding structs.
 ///
 /// Source-level binding exclusions (`#[doc(hidden)]` / `#[cfg_attr(alef, alef(skip))]`)
