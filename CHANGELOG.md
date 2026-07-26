@@ -43,6 +43,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   methods now declare `Enumerator[<ItemType>]` from the adapter's real item type instead of an
   undeclared `<Method>Iterator`, and any signature referencing a binding-excluded or opaque
   (`alef(skip)`) type substitutes the declared `json_value` alias.
+- **Ruby `.rbs` trait-typed parameters/returns now reference the interface name.** A parameter or
+  return whose type is a trait was emitted with the bare trait name (e.g. `DocumentExtractor`), but
+  traits are surfaced only as host-implementable `interface _TraitName` declarations, so `steep`
+  failed with `RBS::UnknownTypeName`. Such references are now substituted to their `_`-prefixed
+  interface name.
+- **Python PyO3 trait-bridge Protocol methods with numeric returns are typed `Iterable` (#203).**
+  A Protocol method is implemented by the host and its return extracted by the bridge, so typing it
+  with the parameter rule (e.g. `Vec<Vec<f32>>` → `list[list[float]]`) rejected NumPy values the
+  bridge already accepts, forcing a `.tolist()` at every call. Numeric `Vec` returns now render as
+  `Iterable`; only numeric leaves widen, and parameters and ordinary function stubs are unchanged.
 
 ### Removed
 
