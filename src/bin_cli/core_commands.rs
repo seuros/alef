@@ -37,12 +37,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             }
             Ok(None)
         }
-        Commands::Generate {
-            lang,
-            clean,
-            format: _format,
-            skip_frb,
-        } => {
+        Commands::Generate { lang, clean, skip_frb } => {
             if skip_frb {
                 let existing = std::env::var("ALEF_SKIP_COMMANDS").unwrap_or_default();
                 let updated = if existing.is_empty() {
@@ -67,7 +62,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             let mut grand_total_written: usize = 0;
             for resolved_cfg in &crates_to_process {
                 let languages = resolve_languages(resolved_cfg, lang.as_deref())?;
-                pipeline::ensure_required_formatters(&languages)?;
+                pipeline::warn_missing_formatters(&languages);
                 if multi {
                     eprintln!(
                         "[{}] Generating bindings for: {}",

@@ -52,32 +52,32 @@ fn required_formatters(languages: &[Language]) -> Vec<RequiredFormatter> {
     required
 }
 
-/// Fail generation up front when a formatter that shapes generated output is
-/// missing from PATH.
+/// Warn (never fail) when a formatter that shapes generated output is missing
+/// from PATH.
 ///
-/// Generation is deterministic only when the tools that reformat its output are
-/// present: with `rustfmt` absent the raw un-reflowed codegen is written, with
-/// `poly` absent per-language formatting is skipped, and with `cargo-sort`
-/// absent generated `Cargo.toml` dependency ordering drifts — each producing
-/// host-dependent output that breaks the freshness check (#184). Rather than
-/// silently emit differently-formatted files, abort with an actionable message
-/// naming every missing tool and how to install it.
-pub fn ensure_required_formatters(languages: &[Language]) -> anyhow::Result<()> {
+/// alef always applies formatting when the tools are present — poly in
+/// particular formats through `poly fmt` whenever it is on PATH and the pass is
+/// skipped otherwise. A missing formatter (`rustfmt`, `poly`, or `cargo-sort`)
+/// can leave output un(der)-formatted and host-dependent, which may trip the
+/// freshness check (#184); rather than abort generation, warn and name each
+/// missing tool and how to install it so the operator can restore deterministic
+/// output.
+pub fn warn_missing_formatters(languages: &[Language]) {
     let missing: Vec<RequiredFormatter> = required_formatters(languages)
         .into_iter()
         .filter(|formatter| !is_tool_available(formatter.tool))
         .collect();
     if missing.is_empty() {
-        return Ok(());
+        return;
     }
     let details = missing
         .iter()
         .map(|formatter| format!("  - {}: {}", formatter.tool, formatter.install_hint))
         .collect::<Vec<_>>()
         .join("\n");
-    anyhow::bail!(
-        "required code formatter(s) not found on PATH; aborting generation to avoid emitting \
-         differently-formatted, host-dependent output (#184). Install the missing tool(s):\n{details}"
+    warn!(
+        "code formatter(s) not found on PATH; generated output may be un(der)-formatted and \
+         host-dependent (#184). Install to restore deterministic formatting:\n{details}"
     );
 }
 

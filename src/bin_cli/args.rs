@@ -57,17 +57,6 @@ pub(crate) enum Commands {
         /// Ignore cache, regenerate everything.
         #[arg(long)]
         clean: bool,
-        /// Run post-generation formatters on emitted files. Default: false for
-        /// fast regeneration; pass `--format` to opt into formatter-stable output.
-        #[arg(
-            long,
-            default_value_t = false,
-            default_missing_value = "true",
-            num_args = 0..=1,
-            action = clap::ArgAction::Set,
-            hide = true,
-        )]
-        format: bool,
         /// Skip the flutter_rust_bridge_codegen post-build step.
         ///
         /// Useful when `flutter_rust_bridge` is not installed on the host (e.g.
@@ -222,17 +211,6 @@ pub(crate) enum Commands {
         /// Ignore cache.
         #[arg(long)]
         clean: bool,
-        /// Run post-generation formatters on emitted files. Default: false for
-        /// fast regeneration; pass `--format` to opt into formatter-stable output.
-        #[arg(
-            long,
-            default_value_t = false,
-            default_missing_value = "true",
-            num_args = 0..=1,
-            action = clap::ArgAction::Set,
-            hide = true,
-        )]
-        format: bool,
         /// Skip the flutter_rust_bridge_codegen post-build step.
         ///
         /// Useful when `flutter_rust_bridge` is not installed on the host (e.g.
@@ -247,16 +225,6 @@ pub(crate) enum Commands {
         /// Comma-separated list of languages.
         #[arg(long, value_delimiter = ',')]
         lang: Option<Vec<String>>,
-        /// Run post-generation formatters on emitted files. Default: false.
-        #[arg(
-            long,
-            default_value_t = false,
-            default_missing_value = "true",
-            num_args = 0..=1,
-            action = clap::ArgAction::Set,
-            hide = true,
-        )]
-        format: bool,
     },
     /// Generate or check the versioned alef.toml JSON Schema.
     Schema {
@@ -458,17 +426,6 @@ pub(crate) enum E2eAction {
         /// versions instead of local path dependencies.
         #[arg(long)]
         registry: bool,
-        /// Run e2e formatters on emitted files. Default: false for fast
-        /// regeneration; pass `--format` to opt in.
-        #[arg(
-            long,
-            default_value_t = false,
-            default_missing_value = "true",
-            num_args = 0..=1,
-            action = clap::ArgAction::Set,
-            hide = true,
-        )]
-        format: bool,
     },
     /// Initialize fixture directory with schema and example.
     Init,
@@ -500,17 +457,6 @@ pub(crate) enum TestAppsAction {
         /// Delete the test_apps/<lang>/ directory before regenerating.
         #[arg(long)]
         clean: bool,
-        /// Run e2e formatters on emitted files. Default: false for fast
-        /// regeneration; pass `--format` to opt in.
-        #[arg(
-            long,
-            default_value_t = false,
-            default_missing_value = "true",
-            num_args = 0..=1,
-            action = clap::ArgAction::Set,
-            hide = true,
-        )]
-        format: bool,
         /// Maximum parallel jobs (0 = all cores, 1 = sequential).
         #[arg(short, long, default_value = "0")]
         jobs: usize,

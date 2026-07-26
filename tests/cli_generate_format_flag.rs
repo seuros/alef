@@ -1,13 +1,9 @@
-/// Integration tests for the `--format` flag plumbing on `alef generate` and `alef all`.
+/// Integration tests guarding that the `--format` flag stays removed.
 ///
-/// Formatting now always runs — the `--format` flag is accepted for backward
-/// compatibility (so that `alef all --clean --format=false` still parses without
-/// error) but is hidden from the `--help` output.
-///
-/// These tests exercise only CLI flag plumbing: they confirm that the flag is
-/// hidden from help yet still accepted by clap, and that `--no-format` is not
-/// introduced.  Full formatting behaviour is covered by e2e tests that run
-/// against a real alef project.
+/// Formatting always runs: `alef generate` / `alef all` delegate to `poly fmt`
+/// whenever poly is on PATH and skip it otherwise. The old opt-in `--format`
+/// flag was removed, so it must no longer appear in `--help` and must be
+/// rejected by clap as an unknown argument. `--no-format` was never introduced.
 use std::process::Command;
 
 fn alef_binary() -> std::path::PathBuf {
@@ -25,10 +21,9 @@ fn alef_binary() -> std::path::PathBuf {
     dir.join("alef")
 }
 
-/// `alef generate --help` must NOT list `--format` (it is hidden) and must NOT
-/// list `--no-format`.
+/// `alef generate --help` must NOT list `--format` or `--no-format`.
 #[test]
-fn generate_help_hides_format_flag() {
+fn generate_help_omits_format_flag() {
     let output = Command::new(alef_binary())
         .args(["generate", "--help"])
         .output()
@@ -39,8 +34,8 @@ fn generate_help_hides_format_flag() {
     let combined = format!("{stdout}{stderr}");
 
     assert!(
-        !combined.contains("  --format"),
-        "`alef generate --help` must not list --format (it is hidden); got:\n{combined}"
+        !combined.contains("--format"),
+        "`alef generate --help` must not mention --format (it was removed); got:\n{combined}"
     );
     assert!(
         !combined.contains("--no-format"),
@@ -48,10 +43,9 @@ fn generate_help_hides_format_flag() {
     );
 }
 
-/// `alef all --help` must NOT list `--format` (it is hidden) and must NOT list
-/// `--no-format`.
+/// `alef all --help` must NOT list `--format` or `--no-format`.
 #[test]
-fn all_help_hides_format_flag() {
+fn all_help_omits_format_flag() {
     let output = Command::new(alef_binary())
         .args(["all", "--help"])
         .output()
@@ -62,8 +56,8 @@ fn all_help_hides_format_flag() {
     let combined = format!("{stdout}{stderr}");
 
     assert!(
-        !combined.contains("  --format"),
-        "`alef all --help` must not list --format (it is hidden); got:\n{combined}"
+        !combined.contains("--format"),
+        "`alef all --help` must not mention --format (it was removed); got:\n{combined}"
     );
     assert!(
         !combined.contains("--no-format"),
@@ -71,32 +65,32 @@ fn all_help_hides_format_flag() {
     );
 }
 
-/// `alef generate --format` must be accepted by clap (backward-compat hidden flag).
+/// `alef generate --format` must be rejected by clap as an unknown argument.
 #[test]
-fn generate_accepts_format_flag() {
+fn generate_rejects_removed_format_flag() {
     let output = Command::new(alef_binary())
         .args(["generate", "--format"])
         .output()
         .expect("failed to spawn alef");
 
-    assert_ne!(
+    assert_eq!(
         output.status.code(),
         Some(2),
-        "alef generate --format must be accepted by clap (not an unknown argument); got exit code 2"
+        "alef generate --format must be rejected as an unknown argument (exit code 2)"
     );
 }
 
-/// `alef all --format` must be accepted by clap (backward-compat hidden flag).
+/// `alef all --format` must be rejected by clap as an unknown argument.
 #[test]
-fn all_accepts_format_flag() {
+fn all_rejects_removed_format_flag() {
     let output = Command::new(alef_binary())
         .args(["all", "--format"])
         .output()
         .expect("failed to spawn alef");
 
-    assert_ne!(
+    assert_eq!(
         output.status.code(),
         Some(2),
-        "alef all --format must be accepted by clap (not an unknown argument); got exit code 2"
+        "alef all --format must be rejected as an unknown argument (exit code 2)"
     );
 }

@@ -10,11 +10,7 @@ use super::helpers::*;
 pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Option<Commands>> {
     let config_path = &context.config_path;
     match command {
-        Commands::All {
-            clean,
-            format: _format,
-            skip_frb,
-        } => {
+        Commands::All { clean, skip_frb } => {
             if skip_frb {
                 let existing = std::env::var("ALEF_SKIP_COMMANDS").unwrap_or_default();
                 let updated = if existing.is_empty() {
@@ -48,7 +44,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
             for resolved_cfg in &crates_to_process {
                 let languages = resolve_languages(resolved_cfg, None)?;
-                pipeline::ensure_required_formatters(&languages)?;
+                pipeline::warn_missing_formatters(&languages);
                 if multi {
                     eprintln!(
                         "[{}] Running all for: {}",

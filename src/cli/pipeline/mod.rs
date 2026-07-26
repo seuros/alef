@@ -17,7 +17,7 @@ mod workspace_lints;
 pub use cleanup::cleanup_orphaned_files;
 pub use commands::{build, clean, fmt, fmt_post_generate, lint, run_post_build, setup, test, test_apps_run, update};
 pub use extract::extract;
-pub use format::{ensure_required_formatters, format_generated};
+pub use format::{format_generated, warn_missing_formatters};
 pub(crate) use format::{install_poly_hooks, poly_format};
 pub(crate) use generate::apply_shebang_chmod;
 pub use generate::{

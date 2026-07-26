@@ -12,7 +12,7 @@ use super::helpers::*;
 pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Option<Commands>> {
     let config_path = &context.config_path;
     match command {
-        Commands::Init { lang, format } => {
+        Commands::Init { lang } => {
             eprintln!("Initializing alef project");
             if let Some(langs) = &lang {
                 eprintln!("  Languages: {}", langs.join(", "));
@@ -47,10 +47,8 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 all_paths.insert(base_dir.join(&file.path));
             }
 
-            if format {
-                eprintln!("  Formatting...");
-                pipeline::format_generated(&bindings, resolved_cfg, &base_dir, None);
-            }
+            eprintln!("  Formatting...");
+            pipeline::format_generated(&bindings, resolved_cfg, &base_dir, None);
 
             let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
             pipeline::finalize_hashes(&all_paths, &sources_hash, &alef_toml_bytes)?;
@@ -94,7 +92,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 .unwrap_or_else(|| crates_to_process[0]);
             let e2e_config = resolved_cfg.e2e.as_ref().context("no [e2e] section in alef.toml")?;
             match action {
-                E2eAction::Generate { lang, registry, format } => {
+                E2eAction::Generate { lang, registry } => {
                     if registry {
                         eprintln!(
                             "warning: `alef e2e generate --registry` is deprecated. \
@@ -136,9 +134,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
                         let count = pipeline::write_scaffold_files_with_overwrite(&files, &base_dir, true)?;
 
-                        if format {
-                            crate::e2e::format::run_formatters(&files, e2e_ref);
-                        }
+                        crate::e2e::format::run_formatters(&files, e2e_ref);
 
                         let output_paths: Vec<PathBuf> = files.iter().map(|f| base_dir.join(&f.path)).collect();
                         let path_set: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
@@ -240,12 +236,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 .unwrap_or_else(|| crates_to_process[0]);
             let _ = _resolved_cfg.e2e.as_ref().context("no [e2e] section in alef.toml")?;
             match action {
-                TestAppsAction::Generate {
-                    lang,
-                    clean,
-                    format,
-                    jobs: _,
-                } => {
+                TestAppsAction::Generate { lang, clean, jobs: _ } => {
                     let config_toml = std::fs::read_to_string(config_path)?;
                     let base_dir = std::env::current_dir()?;
                     let mut grand_count: usize = 0;
@@ -353,9 +344,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             }
                         }
 
-                        if format {
-                            crate::e2e::format::run_formatters(&files, e2e_ref);
-                        }
+                        crate::e2e::format::run_formatters(&files, e2e_ref);
 
                         let output_paths: Vec<PathBuf> = files.iter().map(|f| base_dir.join(&f.path)).collect();
                         let path_set: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
