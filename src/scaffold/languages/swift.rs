@@ -142,6 +142,11 @@ let package = Package(
         // symbols like `_lzma_stream_decoder` surface at the swift link step. Link
         // the system library here. `liblzma` ships in the macOS SDK and on Linux.
         .linkedLibrary("lzma"),
+        // Same staticlib-doesn't-embed-native-deps reasoning as lzma above: the
+        // bzip2 crates (archive/zip/unhwp paths) emit `-lbz2`, surfacing undefined
+        // `_BZ2_bzDecompress*` at the swift link step. `libbz2` ships in the macOS
+        // SDK and on Linux.
+        .linkedLibrary("bz2"),
         // The Rust staticlib pulls in C++ dependencies (onnxruntime, tesseract,
         // ClipperLib) that reference the C++ runtime/ABI (`__cxa_throw`,
         // `__gxx_personality_v0`, `__cxa_guard_acquire`, ...). A `staticlib` `.a`
@@ -320,6 +325,10 @@ let package = Package(
       // Linux.
       linkerSettings: [
         .linkedLibrary("lzma"),
+        // Same reasoning as lzma: the bzip2 crates (archive/zip/unhwp) emit
+        // `-lbz2`, surfacing undefined `_BZ2_bzDecompress*`. `libbz2` ships in
+        // the macOS SDK and on Linux.
+        .linkedLibrary("bz2"),
         // The pre-built static library pulls in C++ dependencies (onnxruntime,
         // tesseract, ClipperLib) that reference the C++ runtime/ABI
         // (`__cxa_throw`, `__gxx_personality_v0`, `__cxa_guard_acquire`, ...). A
