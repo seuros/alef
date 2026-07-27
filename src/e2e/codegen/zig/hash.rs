@@ -1,5 +1,36 @@
 use super::*;
 
+/// Minimum length of a repeated-character multihash body before it is treated
+/// as a placeholder fill. A genuine base64 content multihash never repeats a
+/// single character this many times (probability ≈ (1/64)^15), so this cannot
+/// misfire on a real hash.
+const PLACEHOLDER_FILL_MIN_LEN: usize = 16;
+
+/// True when `hash` is a placeholder rather than a real content multihash.
+///
+/// Two forms are recognised:
+/// 1. The explicit `STALE_HASH_REGENERATE` marker.
+/// 2. A trailing multihash segment made of a single character repeated (the
+///    `AAAA…` fill used to keep `build.zig.zon` syntactically valid before a
+///    release exists to hash).
+///
+/// A placeholder must be treated as "no hash" so resolution falls through to
+/// the cache / network / omit-hash path instead of shipping the fake value as
+/// a real dependency hash (which fails `zig build` with a hash mismatch).
+pub(super) fn is_placeholder_zig_hash(hash: &str) -> bool {
+    if hash.contains("STALE_HASH_REGENERATE") {
+        return true;
+    }
+    // The multihash body is the segment after the final `-` (the version and
+    // package-name prefix carry earlier dashes).
+    let body = hash.rsplit('-').next().unwrap_or(hash);
+    let mut chars = body.chars();
+    match chars.next() {
+        Some(first) => body.len() >= PLACEHOLDER_FILL_MIN_LEN && chars.all(|c| c == first),
+        None => false,
+    }
+}
+
 pub(super) fn detect_stale_zig_hash(hash: &str, current_version: &str, pkg_name: &str) -> bool {
     // Hash format: `{pkg_name}-{version}-{multihash}`
     // Example: `demo_client-1.4.0-rc.50-Jfgk_NcsAQBpkv3XrckgE9vZmwDERDOandv0Ud6LXpHH`
@@ -204,6 +235,43 @@ pub(super) fn supported_zig_platforms() -> &'static [&'static str] {
 
 pub(super) fn uses_platform_registry_deps(platform_hashes: &BTreeMap<String, (String, Option<String>)>) -> bool {
     platform_hashes.keys().any(|platform| platform != "generic")
+}
+
+#[cfg(test)]
+mod placeholder_hash_tests {
+    use super::is_placeholder_zig_hash;
+
+    #[test]
+    fn detects_stale_hash_regenerate_marker() {
+        assert!(is_placeholder_zig_hash("xberg-1.0.0-STALE_HASH_REGENERATE"));
+    }
+
+    #[test]
+    fn detects_all_a_fill_placeholder() {
+        assert!(is_placeholder_zig_hash(
+            "xberg-v1.0.0-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        ));
+    }
+
+    #[test]
+    fn detects_any_repeated_char_fill() {
+        assert!(is_placeholder_zig_hash("mylib-2.3.4-zzzzzzzzzzzzzzzzzzzz"));
+    }
+
+    #[test]
+    fn accepts_real_multihash() {
+        // A genuine rc.42 zig content multihash — mixed base64 body.
+        assert!(!is_placeholder_zig_hash(
+            "xberg-1.0.0-rc.42-iV1GrlMRTxU-14KOthTMp53rtFLNh_T0O6-y6W1HSqmc"
+        ));
+    }
+
+    #[test]
+    fn short_repeated_body_is_not_placeholder() {
+        // Below the fill threshold — treated as a (malformed) real hash, not a
+        // placeholder, so it is not silently swapped for a network fetch.
+        assert!(!is_placeholder_zig_hash("lib-1.0.0-AAAA"));
+    }
 }
 
 #[cfg(test)]

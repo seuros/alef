@@ -34,7 +34,10 @@ mod visitor;
 pub use stubs::emit_test_backend;
 
 use build::{ZigBuildFlags, render_build_zig, render_build_zig_zon};
-use hash::{detect_stale_zig_hash, resolve_zig_hash, supported_zig_platforms, uses_platform_registry_deps};
+use hash::{
+    detect_stale_zig_hash, is_placeholder_zig_hash, resolve_zig_hash, supported_zig_platforms,
+    uses_platform_registry_deps,
+};
 use test_file::render_test_file;
 
 pub struct ZigE2eCodegen;
@@ -85,8 +88,9 @@ impl E2eCodegen for ZigE2eCodegen {
             .or_else(|| config.resolved_version())
             .unwrap_or_else(|| "0.1.0".to_string());
         // Explicit hash override from alef.toml takes precedence over auto-fetch.
-        // However, if the hash is a placeholder (contains STALE_HASH_REGENERATE), treat it as missing
-        // and fetch the real hash from the network instead.
+        // However, if the hash is a placeholder (STALE_HASH_REGENERATE marker or an
+        // `AAAA…` fill), treat it as missing and fetch the real hash from the
+        // network instead — never emit the fake value as a dependency hash.
         let explicit_hash = zig_pkg.as_ref().and_then(|p| p.hash.clone());
         let platform_hash_overrides = zig_pkg.as_ref().map(|p| p.platform_hashes.clone()).unwrap_or_default();
 
@@ -94,7 +98,7 @@ impl E2eCodegen for ZigE2eCodegen {
         let crate_name = &config.name;
 
         // Strip placeholder hashes so we can fetch the real ones.
-        let explicit_hash_clean = explicit_hash.filter(|h| !h.contains("STALE_HASH_REGENERATE"));
+        let explicit_hash_clean = explicit_hash.filter(|h| !is_placeholder_zig_hash(h));
 
         // Detect if the explicit hash is stale: if it contains an embedded version
         // string (format: `<pkg_name>-X.Y.Z-<hash>`) and that version doesn't match
@@ -142,7 +146,7 @@ impl E2eCodegen for ZigE2eCodegen {
                     // Strip placeholder hashes (parity with explicit_hash_clean above) so
                     // resolve_zig_hash falls through to cache lookup / network fetch instead
                     // of emitting the literal placeholder string as the dependency hash.
-                    let platform_hash_clean = if platform_hash.contains("STALE_HASH_REGENERATE") {
+                    let platform_hash_clean = if is_placeholder_zig_hash(platform_hash) {
                         None
                     } else {
                         Some(platform_hash.as_str())
