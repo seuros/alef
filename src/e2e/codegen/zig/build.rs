@@ -242,6 +242,17 @@ pub fn build(b: *std.Build) void {
     content.push_str("    const target = b.standardTargetOptions(.{});\n");
     content.push_str("    const optimize = b.standardOptimizeOption(.{});\n");
     content.push_str("    const test_step = b.step(\"test\", \"Run tests\");\n");
+    // A dedicated `smoke` step runs only `smoke_test.zig`, unchained from the
+    // serial suite, so `zig build smoke` is a fast published-package sanity
+    // check. Zig 0.16's `zig build` has no `--test-filter`, so the isolation
+    // must be wired as its own build step. Declared only when a smoke fixture
+    // exists to avoid emitting a dead step.
+    let has_smoke_test = test_filenames
+        .iter()
+        .any(|f| f.trim_end_matches("_test.zig") == "smoke");
+    if has_smoke_test {
+        content.push_str("    const smoke_step = b.step(\"smoke\", \"Run smoke tests only\");\n");
+    }
     match dep_mode {
         crate::e2e::config::DependencyMode::Registry => {
             if !use_platform_registry_deps {
@@ -465,45 +476,18 @@ pub fn build(b: *std.Build) void {
         // the directory does not exist, `chdir(2)` returns ENOENT and the
         // spawn fails with `FileNotFound` — even though the binary itself
         // was compiled successfully and exists in the zig cache.
+        let run_name = format!("{test_name}_run");
         content.push_str(&format!(
-            "    const {test_name}_run = b.addRunArtifact({test_name}_tests);\n"
+            "    const {run_name} = b.addRunArtifact({test_name}_tests);\n"
         ));
-        if has_file_fixtures {
-            content.push_str(&format!(
-                "    {test_name}_run.setCwd(b.path(\"{test_documents_path}\"));\n"
-            ));
-        }
-        // Inject configured environment variables in alphabetical order.
-        let mut sorted_env: Vec<_> = env.iter().collect();
-        sorted_env.sort_by_key(|(k, _)| k.as_str());
-        for (key, value) in sorted_env {
-            content.push_str(&format!(
-                "    {test_name}_run.setEnvironmentVariable(\"{key}\", \"{value}\");\n"
-            ));
-        }
-        if needs_mock_server {
-            // Forward the captured mock-server URL into the test binary's
-            // environment so `std.c.getenv(\"MOCK_SERVER_URL\")` resolves to the
-            // live ephemeral address.
-            content.push_str("    if (mock_server_url) |_url| {\n");
-            content.push_str(&format!(
-                "        {test_name}_run.setEnvironmentVariable(\"MOCK_SERVER_URL\", _url);\n"
-            ));
-            content.push_str("    }\n");
-            content.push_str("    if (mock_servers_json) |_json| {\n");
-            content.push_str(&format!(
-                "        {test_name}_run.setEnvironmentVariable(\"MOCK_SERVERS\", _json);\n"
-            ));
-            content.push_str("    }\n");
-            content.push_str("    {\n");
-            content.push_str("        var _it = mock_servers_map.iterator();\n");
-            content.push_str("        while (_it.next()) |_entry| {\n");
-            content.push_str(&format!(
-                "            {test_name}_run.setEnvironmentVariable(_entry.key_ptr.*, _entry.value_ptr.*);\n"
-            ));
-            content.push_str("        }\n");
-            content.push_str("    }\n");
-        }
+        push_run_step_config(
+            &mut content,
+            &run_name,
+            has_file_fixtures,
+            test_documents_path,
+            &sorted_env(env),
+            needs_mock_server,
+        );
 
         // Sequence test runs to prevent cache races. All tests (including download_test)
         // depend on the previous test, ensuring serial execution rather than parallel.
@@ -511,14 +495,92 @@ pub fn build(b: *std.Build) void {
         // cache lookups.
         if let Some(prev_name) = &prev_run {
             // Depend on the previous test to enforce serial execution
-            content.push_str(&format!("    {test_name}_run.step.dependOn(&{prev_name}.step);\n"));
+            content.push_str(&format!("    {run_name}.step.dependOn(&{prev_name}.step);\n"));
         }
-        content.push_str(&format!("    test_step.dependOn(&{test_name}_run.step);\n\n"));
-        prev_run = Some(format!("{test_name}_run"));
+        content.push_str(&format!("    test_step.dependOn(&{run_name}.step);\n\n"));
+        prev_run = Some(run_name);
+
+        // The `smoke` step gets its OWN run artifact of the same compiled binary,
+        // deliberately outside the serial chain, so `zig build smoke` executes
+        // `smoke_test.zig` in isolation (no other test's cache mutation runs
+        // alongside it). The binary compiles once; only the extra RunStep is new.
+        if test_name == "smoke" {
+            let smoke_run = format!("{test_name}_smoke_run");
+            content.push_str(&format!(
+                "    const {smoke_run} = b.addRunArtifact({test_name}_tests);\n"
+            ));
+            push_run_step_config(
+                &mut content,
+                &smoke_run,
+                has_file_fixtures,
+                test_documents_path,
+                &sorted_env(env),
+                needs_mock_server,
+            );
+            content.push_str(&format!("    smoke_step.dependOn(&{smoke_run}.step);\n\n"));
+        }
     }
 
     content.push_str("}\n");
     content
+}
+
+/// Environment variables in a stable alphabetical order so the emitted
+/// `build.zig` is deterministic across runs (a `HashMap`'s own iteration order
+/// is not).
+fn sorted_env(env: &std::collections::HashMap<String, String>) -> Vec<(&String, &String)> {
+    let mut pairs: Vec<_> = env.iter().collect();
+    pairs.sort_by_key(|(k, _)| k.as_str());
+    pairs
+}
+
+/// Emit the working-directory, env-var, and mock-server wiring shared by every
+/// `addRunArtifact` step. `run_var` is the Zig identifier of the run step to
+/// configure. Kept identical across the chained-suite run and the standalone
+/// `smoke` run so both see the same fixtures and mock-server URLs.
+fn push_run_step_config(
+    content: &mut String,
+    run_var: &str,
+    has_file_fixtures: bool,
+    test_documents_path: &str,
+    sorted_env: &[(&String, &String)],
+    needs_mock_server: bool,
+) {
+    // Point the working directory at the repo-root `test_documents/` so fixtures
+    // that read files (arg type `file_path`/`bytes`) resolve. Only emitted when
+    // file fixtures exist — Zig's RunStep chdirs before exec, and a missing dir
+    // fails the spawn with `FileNotFound`.
+    if has_file_fixtures {
+        content.push_str(&format!("    {run_var}.setCwd(b.path(\"{test_documents_path}\"));\n"));
+    }
+    for (key, value) in sorted_env {
+        content.push_str(&format!(
+            "    {run_var}.setEnvironmentVariable(\"{key}\", \"{value}\");\n"
+        ));
+    }
+    if needs_mock_server {
+        // Forward the captured mock-server URL into the test binary's
+        // environment so `std.c.getenv("MOCK_SERVER_URL")` resolves to the
+        // live ephemeral address.
+        content.push_str("    if (mock_server_url) |_url| {\n");
+        content.push_str(&format!(
+            "        {run_var}.setEnvironmentVariable(\"MOCK_SERVER_URL\", _url);\n"
+        ));
+        content.push_str("    }\n");
+        content.push_str("    if (mock_servers_json) |_json| {\n");
+        content.push_str(&format!(
+            "        {run_var}.setEnvironmentVariable(\"MOCK_SERVERS\", _json);\n"
+        ));
+        content.push_str("    }\n");
+        content.push_str("    {\n");
+        content.push_str("        var _it = mock_servers_map.iterator();\n");
+        content.push_str("        while (_it.next()) |_entry| {\n");
+        content.push_str(&format!(
+            "            {run_var}.setEnvironmentVariable(_entry.key_ptr.*, _entry.value_ptr.*);\n"
+        ));
+        content.push_str("        }\n");
+        content.push_str("    }\n");
+    }
 }
 
 /// Emit the `build.zig` block that spawns the standalone mock-server binary at
