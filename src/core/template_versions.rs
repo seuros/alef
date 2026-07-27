@@ -303,9 +303,13 @@ pub mod maven {
     // renovate: datasource=maven depName=com.vanniktech:gradle-maven-publish-plugin
     pub const VANNIKTECH_MAVEN_PUBLISH: &str = "0.37.0";
 
-    // Maven core runtime required by the enforcer plugin (requireMavenVersion).
-    // renovate: datasource=maven depName=org.apache.maven:maven-core
-    pub const MAVEN_CORE: &str = "3.9.16";
+    // Minimum Maven runtime enforced by the generated pom's requireMavenVersion rule.
+    // This is a compatibility FLOOR, not a tracked dependency: keep it at or below the
+    // Maven version GitHub-hosted runners ship so `enforce-maven` never fails in CI.
+    // Do NOT add a `renovate:` annotation here — auto-bumping the floor to the newest
+    // maven-core release is what broke publishing in 0.48.2 (runners had 3.9.11 while
+    // the floor had been bumped to 3.9.16).
+    pub const MAVEN_CORE: &str = "3.6.3";
 
     // renovate: datasource=maven depName=org.jetbrains:annotations
     pub const JETBRAINS_ANNOTATIONS: &str = "26.1.0";

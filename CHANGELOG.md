@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The generated Maven pom's enforcer floor no longer exceeds the CI runner's Maven version.**
+  `MAVEN_CORE` (which feeds `<requireMavenVersion>`) had been renovate-bumped to `3.9.16`, above the
+  `3.9.11` GitHub-hosted runners ship, so `enforce-maven` failed during publish. It is now a fixed
+  compatibility floor (`3.6.3`) with the `renovate:` annotation removed so it is not auto-bumped again.
+
 ## [0.48.3] - 2026-07-26
 
 ### Fixed
