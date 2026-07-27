@@ -434,8 +434,8 @@ description = "Test library"
             "the else branch must keep a single-spaced trailing `// linux` comment"
         );
 
-        // ktlint "Missing newline after (" / "before )": the outer configure(...) call wrapping
-        // the multi-line AndroidSingleVariantLibrary(...) argument must break after `configure(`.
+        // ktlint "Missing newline after (" / "before )": the outer configure(...) call wrapping ~keep
+        // the multi-line AndroidSingleVariantLibrary(...) argument must break after `configure(`. ~keep
         assert!(
             gradle.contains("configure(\n        AndroidSingleVariantLibrary("),
             "configure(...) must wrap its multiline argument onto its own line for ktlint"

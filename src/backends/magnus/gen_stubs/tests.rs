@@ -295,11 +295,11 @@ fn method_param_of_trait_interface_type_is_substituted_to_underscore_prefixed_na
 
 #[test]
 fn builder_method_returning_owning_type_emits_owning_class_not_json_value() {
-    // Regression test: the owner type (e.g. a service owner managed by the services
-    // extraction pass) is `binding_excluded` at the IR level, so it lands in `excluded` —
-    // but `gen_method_stub` is called here *while emitting that very class's stub*, so a
-    // `Self`-returning method (already resolved to `Named("App")` during extraction) must
-    // reference the real "App" class, not fall back to the `json_value` alias.
+    // Regression test: the owner type (e.g. a service owner managed by the services ~keep
+    // extraction pass) is `binding_excluded` at the IR level, so it lands in `excluded` — ~keep
+    // but `gen_method_stub` is called here *while emitting that very class's stub*, so a ~keep
+    // `Self`-returning method (already resolved to `Named("App")` during extraction) must ~keep
+    // reference the real "App" class, not fall back to the `json_value` alias. ~keep
     let method = MethodDef {
         name: "on_request".to_string(),
         is_static: false,

@@ -26,9 +26,9 @@ pub fn gen_stubs(
     );
     lines.push("".to_string());
 
-    // Types excluded from the binding surface (opaque `alef(skip)` traits, binding-excluded
-    // structs) have no RBS declaration, so any signature referencing them is substituted to the
-    // declared `json_value` alias — otherwise steep fails with `RBS::UnknownTypeName`.
+    // Types excluded from the binding surface (opaque `alef(skip)` traits, binding-excluded ~keep
+    // structs) have no RBS declaration, so any signature referencing them is substituted to the ~keep
+    // declared `json_value` alias — otherwise steep fails with `RBS::UnknownTypeName`. ~keep
     let excluded: std::collections::HashSet<&str> = api
         .excluded_type_paths
         .keys()
@@ -36,12 +36,12 @@ pub fn gen_stubs(
         .chain(api.types.iter().filter(|t| t.binding_excluded).map(|t| t.name.as_str()))
         .collect();
 
-    // Trait names exposed as a host-implementable RBS `interface _Name` (trait-bridge traits with a
-    // `register_fn` whose methods are non-empty and whose trait type exists in the API surface — the
-    // same condition `gen_plugin_interface_stub` uses to decide whether it emits the interface). Any
-    // function/method param or return referencing one of these bare trait names must be substituted
-    // to `_Name` via `substitute_trait_interfaces`, otherwise steep fails with `RBS::UnknownTypeName`
-    // (the bare trait name is never declared — only the `_Name` interface is).
+    // Trait names exposed as a host-implementable RBS `interface _Name` (trait-bridge traits with a ~keep
+    // `register_fn` whose methods are non-empty and whose trait type exists in the API surface — the ~keep
+    // same condition `gen_plugin_interface_stub` uses to decide whether it emits the interface). Any ~keep
+    // function/method param or return referencing one of these bare trait names must be substituted ~keep
+    // to `_Name` via `substitute_trait_interfaces`, otherwise steep fails with `RBS::UnknownTypeName` ~keep
+    // (the bare trait name is never declared — only the `_Name` interface is). ~keep
     let trait_interfaces: std::collections::HashSet<&str> = trait_bridges
         .iter()
         .filter(|bridge| bridge.register_fn.is_some())

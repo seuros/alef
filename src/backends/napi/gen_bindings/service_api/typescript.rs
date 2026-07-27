@@ -116,11 +116,11 @@ pub(in crate::backends::napi::gen_bindings) fn gen_service_ts(
 
     let service_names: Vec<&str> = api.services.iter().map(|s| s.name.as_str()).collect();
     if !service_names.is_empty() {
-        // Re-export the service class(es) plus the native value types the service
-        // API references (enums, builder types) so consumers importing from the
-        // service module can construct arguments (e.g. `Method.Get`, `new
-        // RouteBuilder(...)`) without a second import from the native index. The
-        // service's own aliased self-import (`X as NativeX`) is internal and skipped.
+        // Re-export the service class(es) plus the native value types the service ~keep
+        // API references (enums, builder types) so consumers importing from the ~keep
+        // service module can construct arguments (e.g. `Method.Get`, `new ~keep
+        // RouteBuilder(...)`) without a second import from the native index. The ~keep
+        // service's own aliased self-import (`X as NativeX`) is internal and skipped. ~keep
         let mut exports: Vec<String> = service_names.iter().map(|s| (*s).to_string()).collect();
         for value in &imports.value_imports {
             if !value.contains(" as ") && !exports.iter().any(|e| e == value) {

@@ -107,11 +107,11 @@ pub fn default_test_apps_run_config(
             ))),
         },
         Language::Go => {
-            // `cmd/setup` downloads the platform native library from the GitHub release
-            // into a per-user cache and writes a machine-local cgo link shim into the test
-            // app's own package — `go run <module>/cmd/setup` works directly against the
-            // module fetched from the proxy (or replaced locally), no copy-out-of-the
-            // read-only-module-cache workaround needed.
+            // `cmd/setup` downloads the platform native library from the GitHub release ~keep
+            // into a per-user cache and writes a machine-local cgo link shim into the test ~keep
+            // app's own package — `go run <module>/cmd/setup` works directly against the ~keep
+            // module fetched from the proxy (or replaced locally), no copy-out-of-the ~keep
+            // read-only-module-cache workaround needed. ~keep
             let run_cmd = if let Some(mod_path) = go_module_path {
                 format!(
                     "cd {test_apps_dir}/go && GOWORK=off go mod tidy && \

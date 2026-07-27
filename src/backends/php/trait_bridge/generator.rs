@@ -187,9 +187,9 @@ impl TraitBridgeGenerator for PhpBridgeGenerator {
 
         let deserialize_error_expr = spec.make_error("format!(\"Deserialize error: {}\", e)");
         let call_error_expr = spec.make_error("e.to_string()");
-        // Native decode only applies to the generic (non-primitive, non-native-struct) branch:
-        // `is_primitive_return` already decodes primitives directly via `val.long()`/`val.bool()`,
-        // and `native_return_binding` already covers known serde structs.
+        // Native decode only applies to the generic (non-primitive, non-native-struct) branch: ~keep
+        // `is_primitive_return` already decodes primitives directly via `val.long()`/`val.bool()`, ~keep
+        // and `native_return_binding` already covers known serde structs. ~keep
         let native_decodable = !is_primitive_return && is_php_decodable(&method.return_type);
         let native_decode_error_expr = spec.make_error(&format!(
             "\"Failed to decode native PHP return value for method '{name}'\".to_string()"
