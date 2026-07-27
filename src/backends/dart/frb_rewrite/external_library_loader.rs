@@ -5,8 +5,18 @@ use super::imports_helpers::ensure_loader_imports;
 
 /// Idempotency marker injected into `RustLib.init` by
 /// [`rewrite_frb_external_library_loader`]. Presence of this token means the
-/// loader override has already been applied, so the rewrite is a no-op.
+/// loader override has already been applied.
 const ALEF_LOADER_MARKER: &str = "_alefResolveExternalLibrary";
+
+/// Sentinel present ONLY in the current loader template (the versioned-cache
+/// resolution step calls `nativeCachedLibPath()`). A file that carries
+/// [`ALEF_LOADER_MARKER`] but NOT this sentinel was injected by an older alef
+/// and must be upgraded in place — otherwise the marker-based idempotency check
+/// would freeze a stale loader forever, even across regenerations. (This is the
+/// exact failure that shipped a broken cache-unaware loader in a released
+/// binding: the download script populated the versioned cache, but the frozen
+/// loader never looked there.)
+const ALEF_LOADER_CURRENT_SENTINEL: &str = "nativeCachedLibPath()";
 
 /// Inject a published-package-aware native-library loader into the
 /// flutter_rust_bridge-generated `frb_generated.dart`.
@@ -45,7 +55,20 @@ const ALEF_LOADER_MARKER: &str = "_alefResolveExternalLibrary";
 /// (`kDefaultExternalLibraryLoaderConfig.stem`, e.g. `sample_project_dart`).
 pub fn rewrite_frb_external_library_loader(source: &str, package_name: &str, module_name: &str, stem: &str) -> String {
     let with_loader = if source.contains(ALEF_LOADER_MARKER) {
-        source.to_string()
+        if source.contains(ALEF_LOADER_CURRENT_SENTINEL) {
+            // Already injected with the current template — genuine no-op.
+            source.to_string()
+        } else {
+            // Stale loader injected by an older alef: replace the whole injected
+            // region (helper method + any obsolete sibling helpers + the patched
+            // `init` prologue up to the `externalLibrary ??=` line) with the
+            // current template, preserving the original `init` body that follows.
+            let replacement = frb_init_prologue_replacement(package_name, module_name, stem);
+            match injected_loader_region_regex().find(source) {
+                Some(m) => format!("{}{}{}", &source[..m.start()], replacement, &source[m.end()..]),
+                None => source.to_string(),
+            }
+        }
     } else {
         let Some(prologue) = frb_init_prologue(source) else {
             return source.to_string();
@@ -55,6 +78,22 @@ pub fn rewrite_frb_external_library_loader(source: &str, package_name: &str, mod
     };
 
     ensure_loader_imports(&with_loader, package_name)
+}
+
+/// Match the entire previously-injected loader region: from the helper's leading
+/// doc comment (`/// Resolve the prebuilt native library`, stable across every
+/// template version) through the injected `externalLibrary ??= await
+/// _alefResolveExternalLibrary();` line inside `init`. Non-greedy so it stops at
+/// the first such assignment. The original `init` body follows the match and is
+/// left untouched.
+fn injected_loader_region_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?s)  /// Resolve the prebuilt native library.*?    externalLibrary \?\?= await _alefResolveExternalLibrary\(\);\n",
+        )
+        .expect("injected loader region regex must compile")
+    })
 }
 
 /// Return the exact FRB-generated `RustLib.init` prologue present in `source`,
