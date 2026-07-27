@@ -158,6 +158,57 @@ fn capsule_package_refs(config: &ResolvedCrateConfig) -> String {
     format!("\n  <ItemGroup>\n{refs}  </ItemGroup>\n")
 }
 
+/// Render the `runtime.json.template` for the C# thin meta-package.
+///
+/// This is a CI build input, not a shipped artifact: the publish pipeline substitutes
+/// the release version for the literal `{{VERSION}}` token and writes `runtime.json`
+/// beside the csproj before `dotnet pack`. The csproj's `RequireRuntimeJson` target
+/// hard-errors when `runtime.json` is absent, so this template must exist for packing
+/// to succeed. It drives NuGet's RID-fallback graph: each enabled published RID pulls
+/// in its per-RID `<PackageId>.runtime.<rid>` native package, and musl RIDs fall back
+/// to their glibc counterparts via `#import`.
+pub fn render_csharp_runtime_json_template(config: &ResolvedCrateConfig) -> String {
+    use serde_json::{Map, Value};
+
+    let package_id = csharp_package_id(config);
+    let enabled: Vec<&str> = PUBLISHED_RUNTIME_IDENTIFIERS
+        .iter()
+        .filter(|(_, triple)| config.target_enabled(triple))
+        .map(|(rid, _)| *rid)
+        .collect();
+
+    let mut runtimes = Map::new();
+    for rid in &enabled {
+        let mut dependency = Map::new();
+        dependency.insert(
+            format!("{package_id}.runtime.{rid}"),
+            Value::String("{{VERSION}}".to_string()),
+        );
+        let mut package = Map::new();
+        package.insert(package_id.clone(), Value::Object(dependency));
+        runtimes.insert((*rid).to_string(), Value::Object(package));
+    }
+
+    // musl RIDs ship no native package of their own; fall back to the glibc RID's
+    // native asset via NuGet's `#import` chain. Only emit a fallback when its glibc
+    // target is enabled so the import target always resolves.
+    for (musl_rid, glibc_rid) in [("linux-musl-x64", "linux-x64"), ("linux-musl-arm64", "linux-arm64")] {
+        if enabled.contains(&glibc_rid) {
+            let mut import = Map::new();
+            import.insert(
+                "#import".to_string(),
+                Value::Array(vec![Value::String(glibc_rid.to_string())]),
+            );
+            runtimes.insert(musl_rid.to_string(), Value::Object(import));
+        }
+    }
+
+    let mut document = Map::new();
+    document.insert("runtimes".to_string(), Value::Object(runtimes));
+    let json = serde_json::to_string_pretty(&Value::Object(document)).expect("runtime.json template is serializable");
+    format!("{json}\n")
+}
+
 pub(crate) fn scaffold_csharp(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
     let namespace = config.csharp_namespace();
     let content = render_csharp_csproj(config, &api.version);
@@ -167,6 +218,11 @@ pub(crate) fn scaffold_csharp(api: &ApiSurface, config: &ResolvedCrateConfig) ->
             // alef-publish stages the FFI shared libraries.  `../../../LICENSE` from that
             path: PathBuf::from(format!("packages/csharp/{0}/{0}.csproj", namespace)),
             content,
+            generated_header: false,
+        },
+        GeneratedFile {
+            path: PathBuf::from(format!("packages/csharp/{0}/runtime.json.template", namespace)),
+            content: render_csharp_runtime_json_template(config),
             generated_header: false,
         },
         GeneratedFile {

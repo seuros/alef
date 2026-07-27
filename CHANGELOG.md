@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **C# NuGet packing no longer fails on a missing `runtime.json`.** `scaffold_csharp` now emits
+  `packages/csharp/<Namespace>/runtime.json.template` alongside the csproj — the file the csproj's
+  `RequireRuntimeJson` target has always required but that nothing ever generated, so every consumer
+  `dotnet pack` errored. The template carries NuGet's RID-fallback graph (one `<PackageId>.runtime.<rid>`
+  dependency per enabled published RID, plus `linux-musl-*` `#import` fallbacks) with a literal
+  `{{VERSION}}` placeholder that CI substitutes before pack.
 - **The generated Maven pom's enforcer floor no longer exceeds the CI runner's Maven version.**
   `MAVEN_CORE` (which feeds `<requireMavenVersion>`) had been renovate-bumped to `3.9.16`, above the
   `3.9.11` GitHub-hosted runners ship, so `enforce-maven` failed during publish. It is now a fixed

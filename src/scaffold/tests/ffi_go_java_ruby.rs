@@ -652,6 +652,82 @@ fn test_render_csharp_csproj_advertises_all_published_runtime_identifiers() {
 }
 
 #[test]
+fn test_scaffold_csharp_emits_runtime_json_template() {
+    let config = test_config();
+    let api = test_api();
+    let all_files = scaffold(&api, &config, &[Language::Csharp]).unwrap();
+    let files = language_files(&all_files);
+    let template = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().ends_with("runtime.json.template"))
+        .expect("C# scaffold must emit runtime.json.template so CI can render runtime.json before pack");
+
+    assert_eq!(
+        template.path,
+        PathBuf::from("packages/csharp/MyLib/runtime.json.template"),
+        "runtime.json.template must sit beside the csproj so the RequireRuntimeJson target finds it"
+    );
+    assert!(
+        !template.generated_header,
+        "runtime.json.template must be scaffold-once (no DO NOT EDIT header — it is JSON)"
+    );
+    assert!(
+        template.content.contains("{{VERSION}}"),
+        "template must keep the literal version placeholder for CI substitution: {}",
+        template.content
+    );
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&template.content).expect("runtime.json.template must be valid JSON");
+    let runtimes = parsed["runtimes"]
+        .as_object()
+        .expect("runtime.json must have a runtimes object");
+
+    // Each enabled glibc/windows/macos RID pulls in its per-RID native package pinned
+    // to the placeholder. Assert against the actual package id so the test tracks config.
+    for rid in [
+        "win-x64",
+        "win-arm64",
+        "linux-x64",
+        "linux-arm64",
+        "osx-x64",
+        "osx-arm64",
+    ] {
+        let rid_entry = runtimes[rid]
+            .as_object()
+            .unwrap_or_else(|| panic!("RID {rid} entry must be an object"));
+        assert_eq!(
+            rid_entry.len(),
+            1,
+            "RID {rid} must map exactly one package id: {}",
+            template.content
+        );
+        let (package_id, dependencies) = rid_entry.iter().next().unwrap();
+        let expected_dependency = format!("{package_id}.runtime.{rid}");
+        assert_eq!(
+            dependencies.get(&expected_dependency).and_then(|value| value.as_str()),
+            Some("{{VERSION}}"),
+            "RID {rid} must depend on {expected_dependency} pinned to the version placeholder: {}",
+            template.content
+        );
+    }
+
+    // musl RIDs ship no native package of their own; they fall back to the glibc asset.
+    assert_eq!(
+        runtimes["linux-musl-x64"]["#import"][0].as_str(),
+        Some("linux-x64"),
+        "linux-musl-x64 must #import linux-x64: {}",
+        template.content
+    );
+    assert_eq!(
+        runtimes["linux-musl-arm64"]["#import"][0].as_str(),
+        Some("linux-arm64"),
+        "linux-musl-arm64 must #import linux-arm64: {}",
+        template.content
+    );
+}
+
+#[test]
 fn test_scaffold_java_checkstyle_suppressions_use_config_location() {
     let config = test_config();
     let api = test_api();
