@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.48.5] - 2026-07-27
+
+### Added
+
+- **Generated Zig e2e projects now expose a dedicated `smoke` build step** (`zig build smoke`) that
+  runs `smoke_test.zig` in isolation, outside the serial test chain, as a fast published-package
+  sanity check. Zig 0.16's `zig build` has no `--test-filter`, so the isolation is wired as its own
+  build step with its own `RunStep` over the same compiled binary; it is emitted only when a
+  `smoke_test.zig` fixture exists, so no dead step is generated.
+
+### Fixed
+
+- **The Dart flutter_rust_bridge loader is now upgraded in place when a stale one was injected by an
+  older alef.** The marker-based idempotency check previously froze any already-injected loader
+  forever, so a binding shipped with a cache-unaware loader never picked up the fix on regeneration:
+  the download script populated the versioned cache, but the frozen loader never looked there. A file
+  carrying the loader marker but not the current-template sentinel (`nativeCachedLibPath()`) now has
+  its injected region replaced with the current template while preserving the original `init` body.
+- **Zig e2e dependency resolution now treats repeated-character fill hashes (`AAAA…`) as placeholders,
+  not just the explicit `STALE_HASH_REGENERATE` marker.** Such fills — used to keep `build.zig.zon`
+  syntactically valid before a release exists to hash — were being emitted as real dependency hashes,
+  failing `zig build` with a hash mismatch. They now fall through to the cache/network/omit-hash path.
+  The heuristic requires a run of at least 16 identical characters, so it cannot misfire on a genuine
+  base64 content multihash.
+
 ## [0.48.4] - 2026-07-27
 
 ### Fixed
