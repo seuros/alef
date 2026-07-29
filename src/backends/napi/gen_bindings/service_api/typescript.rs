@@ -5,7 +5,7 @@ use crate::backends::napi::template_env::render;
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::{ApiSurface, EntrypointKind, RegistrationDef, ServiceDef, TypeRef};
 
-use super::helpers::typescript_type_annotation;
+use super::helpers::{is_config_forward_configurator, typescript_type_annotation};
 
 /// Classified import lists for the generated TypeScript service preamble.
 ///
@@ -233,7 +233,7 @@ fn gen_service_class_ts(
         let method_name = &method.name;
         let doc = method.doc.trim().replace('\n', "\n   * ");
 
-        let store_block = if method_name == "config" && method.params.len() == 1 {
+        let store_block = if is_config_forward_configurator(method) {
             render(
                 "service_ts_configurator_config_forward.jinja",
                 context! {

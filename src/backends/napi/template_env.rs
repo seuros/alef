@@ -247,6 +247,22 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/service_rs_entrypoint_call.jinja"),
     ),
     (
+        "service_rs_configurator_method_header.jinja",
+        include_str!("templates/service_rs_configurator_method_header.jinja"),
+    ),
+    (
+        "service_rs_configurator_parse.jinja",
+        include_str!("templates/service_rs_configurator_parse.jinja"),
+    ),
+    (
+        "service_rs_configurator_apply.jinja",
+        include_str!("templates/service_rs_configurator_apply.jinja"),
+    ),
+    (
+        "service_rs_configurator_replace.jinja",
+        include_str!("templates/service_rs_configurator_replace.jinja"),
+    ),
+    (
         "capsule_type_tag_constant.jinja",
         include_str!("templates/capsule_type_tag_constant.jinja"),
     ),

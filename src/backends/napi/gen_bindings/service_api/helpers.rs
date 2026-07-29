@@ -1,4 +1,4 @@
-use crate::core::ir::{ApiSurface, HandlerContractDef, TypeRef};
+use crate::core::ir::{ApiSurface, HandlerContractDef, MethodDef, TypeRef};
 
 pub(super) fn typescript_type_annotation(ty: &TypeRef) -> String {
     match ty {
@@ -30,6 +30,19 @@ pub(super) fn typescript_type_annotation(ty: &TypeRef) -> String {
 /// Find the `HandlerContractDef` by trait name in the surface.
 pub(super) fn find_contract<'a>(api: &'a ApiSurface, trait_name: &str) -> Option<&'a HandlerContractDef> {
     api.handler_contracts.iter().find(|c| c.trait_name == trait_name)
+}
+
+/// Whether a configurator's TypeScript wrapper forwards its argument straight
+/// through to the native app instance (`this._app.config(JSON.stringify(...))`,
+/// see `service_ts_configurator_config_forward.jinja`) rather than only storing
+/// it as a private field on the JS-side wrapper.
+///
+/// Shared between the TypeScript emitter and the native `#[napi]` glue emitter
+/// so the two sides can never drift out of sync: whichever configurators the TS
+/// side calls into native for are exactly the ones that must get a matching
+/// native method.
+pub(super) fn is_config_forward_configurator(method: &MethodDef) -> bool {
+    method.name == "config" && method.params.len() == 1
 }
 
 /// Map a `TypeRef` to a Rust type string for use in generated function signatures.

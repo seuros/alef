@@ -3,9 +3,12 @@ use minijinja::context;
 
 use crate::backends::napi::template_env::render;
 use crate::core::config::ResolvedCrateConfig;
-use crate::core::ir::{ApiSurface, EntrypointKind, HandlerContractDef, RegistrationDef, ServiceDef, TypeRef};
+use crate::core::hash::{self, CommentStyle};
+use crate::core::ir::{
+    ApiSurface, EntrypointKind, HandlerContractDef, MethodDef, RegistrationDef, ServiceDef, TypeRef,
+};
 
-use super::helpers::{find_contract, typeref_to_rust_type};
+use super::helpers::{find_contract, is_config_forward_configurator, typeref_to_rust_type};
 
 pub(in crate::backends::napi::gen_bindings) fn gen_service_rs(
     api: &ApiSurface,
@@ -14,6 +17,7 @@ pub(in crate::backends::napi::gen_bindings) fn gen_service_rs(
     let core_import = config.core_import_name();
     let mut out = String::new();
 
+    out.push_str(&hash::header(CommentStyle::DoubleSlash));
     out.push_str(&render("service_rs_preamble.jinja", context! {}));
 
     let referenced_contracts: Vec<&HandlerContractDef> = {
@@ -44,8 +48,14 @@ pub(in crate::backends::napi::gen_bindings) fn gen_service_rs(
     for service in &api.services {
         let has_variants = service.registrations.iter().any(|r| !r.variants.is_empty());
         let has_entrypoints = !service.entrypoints.is_empty();
+        let native_configurators: Vec<&MethodDef> = service
+            .configurators
+            .iter()
+            .filter(|m| is_config_forward_configurator(m))
+            .collect();
+        let has_native_configurators = !native_configurators.is_empty();
 
-        if !has_variants && !has_entrypoints {
+        if !has_variants && !has_entrypoints && !has_native_configurators {
             continue;
         }
 
@@ -72,15 +82,23 @@ pub(in crate::backends::napi::gen_bindings) fn gen_service_rs(
             }
         }
 
-        if has_entrypoints {
-            let has_accessor = config
-                .services
-                .iter()
-                .find(|sc| sc.owner_type == service.name)
-                .and_then(|sc| sc.host_app_inner_accessor.as_deref())
-                .is_some();
+        // Configurators and consuming entrypoints both need to mutate the App
+        // instance already stored on `self` in place — `#[napi]` methods only
+        // accept `&self`, so both rely on the take/replace pattern threaded
+        // through the configured `host_app_inner_accessor`.
+        let has_accessor = config
+            .services
+            .iter()
+            .find(|sc| sc.owner_type == service.name)
+            .and_then(|sc| sc.host_app_inner_accessor.as_deref())
+            .is_some();
 
-            if has_accessor {
+        if has_accessor {
+            for method in &native_configurators {
+                gen_configurator_napi_method(&mut impl_methods, service, method, &core_import, config);
+            }
+
+            if has_entrypoints {
                 for ep in &service.entrypoints {
                     gen_entrypoint_napi_method(&mut impl_methods, service, ep, api, &core_import, config);
                 }
@@ -583,6 +601,98 @@ fn gen_variant_napi_method(
     } else {
         out.push_str("        ;\n");
     }
+
+    out.push_str(&render("service_rs_unit_ok_footer.jinja", context! {}));
+}
+
+/// Emit one `#[napi]` method for a configurator whose TypeScript wrapper forwards
+/// straight through to the native app (see [`is_config_forward_configurator`]).
+///
+/// The wrapped core method is a consuming builder (`self -> Self`, e.g.
+/// `App::config(self, ServerConfig) -> Self`), but `#[napi]` methods only accept
+/// `&self`. This mirrors the take/replace pattern used by
+/// [`gen_entrypoint_napi_method`] for consuming entrypoints (see
+/// `service_rs_take_owner.jinja`): take the owner out of the configured
+/// `host_app_inner_accessor`, apply the configurator, then put the updated owner
+/// back in place so later calls (further configuration, registrations, `run`)
+/// observe the change. Unlike entrypoints this is not terminal, so the owner is
+/// always replaced rather than left taken.
+///
+/// The argument arrives from JS as a JSON string (`JSON.stringify(...)` on the TS
+/// side, see `service_ts_configurator_config_forward.jinja`) and is deserialized
+/// into the core parameter type here.
+fn gen_configurator_napi_method(
+    out: &mut String,
+    service: &ServiceDef,
+    method: &MethodDef,
+    core_import: &str,
+    config: &ResolvedCrateConfig,
+) {
+    let method_name = &method.name;
+    let param = &method.params[0];
+    let param_name = &param.name;
+    let param_type = typeref_to_rust_type(&param.ty, core_import);
+
+    let inner_accessor: String = config
+        .services
+        .iter()
+        .find(|sc| sc.owner_type == service.name)
+        .and_then(|sc| sc.host_app_inner_accessor.as_deref())
+        .map(|s| s.to_owned())
+        .unwrap_or_else(|| "self".to_owned());
+
+    let doc = method
+        .doc
+        .trim()
+        .lines()
+        .map(|line| {
+            if line.is_empty() {
+                "///".to_owned()
+            } else {
+                format!("/// {line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    out.push_str(&render(
+        "service_rs_configurator_method_header.jinja",
+        context! {
+            method_name,
+            doc,
+            param_name,
+        },
+    ));
+
+    out.push_str(&render(
+        "service_rs_configurator_parse.jinja",
+        context! {
+            param_name,
+            param_type,
+        },
+    ));
+
+    out.push_str(&render(
+        "service_rs_take_owner.jinja",
+        context! {
+            inner_accessor,
+        },
+    ));
+
+    out.push_str(&render(
+        "service_rs_configurator_apply.jinja",
+        context! {
+            method_name,
+            param_name,
+        },
+    ));
+
+    out.push_str(&render(
+        "service_rs_configurator_replace.jinja",
+        context! {
+            inner_accessor,
+        },
+    ));
 
     out.push_str(&render("service_rs_unit_ok_footer.jinja", context! {}));
 }

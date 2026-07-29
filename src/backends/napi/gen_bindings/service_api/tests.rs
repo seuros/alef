@@ -168,6 +168,55 @@ fn make_fixture_surface() -> ApiSurface {
     }
 }
 
+/// A `config`-named, single-param configurator — the shape whose TypeScript
+/// wrapper forwards straight through to the native app
+/// (`this._app.config(JSON.stringify(config))`, see
+/// `service_ts_configurator_config_forward.jinja`), and which therefore needs a
+/// matching native `#[napi]` method.
+fn make_config_configurator() -> MethodDef {
+    MethodDef {
+        name: "config".to_owned(),
+        params: vec![ParamDef {
+            name: "config".to_owned(),
+            ty: TypeRef::Named("ServerConfig".to_owned()),
+            optional: false,
+            default: None,
+            ..ParamDef::default()
+        }],
+        return_type: TypeRef::Named("TestService".to_owned()),
+        is_async: false,
+        is_static: false,
+        error_type: None,
+        doc: "Apply server configuration.".to_owned(),
+        receiver: Some(ReceiverKind::RefMut),
+        sanitized: false,
+        trait_source: None,
+        returns_ref: false,
+        returns_cow: false,
+        return_newtype_wrapper: None,
+        has_default_impl: false,
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        version: Default::default(),
+    }
+}
+
+/// A crate config with `host_app_inner_accessor` configured for `TestService`,
+/// matching the shape entrypoint methods already require to be emitted.
+fn make_accessor_config() -> ResolvedCrateConfig {
+    let mut cfg = make_test_config();
+    cfg.services = vec![crate::core::config::ServiceConfig {
+        owner_type: "TestService".to_string(),
+        constructor: None,
+        configurators: vec![],
+        registrations: vec![],
+        entrypoints: vec![],
+        skip_languages: vec![],
+        host_app_inner_accessor: Some("self.inner.lock().expect(\"mutex poisoned\")".to_string()),
+    }];
+    cfg
+}
+
 #[test]
 fn typescript_output_contains_service_class() {
     let surface = make_fixture_surface();
@@ -646,5 +695,84 @@ fn rust_output_skips_entrypoint_methods_without_inner_accessor() {
     assert!(
         output.contains("pub async fn test_service_run("),
         "free function entrypoint should still be emitted; output:\n{output}"
+    );
+}
+
+#[test]
+fn rust_output_emits_native_config_configurator_with_inner_accessor() {
+    let mut api = make_fixture_surface();
+    api.services[0].configurators.push(make_config_configurator());
+    let config = make_accessor_config();
+
+    let output = gen_service_rs(&api, &config);
+
+    assert!(
+        output.contains("pub fn config(&self, config: String) -> napi::Result<()>"),
+        "expected a native `config` method taking the JSON-string forwarded by the \
+         TypeScript wrapper; output:\n{output}"
+    );
+    assert!(
+        output.contains("let config: my_crate::ServerConfig = serde_json::from_str(&config)"),
+        "expected the JSON string to be deserialized into the core config type; output:\n{output}"
+    );
+    assert!(
+        output.contains("let mut guard = self.inner.lock().expect(\"mutex poisoned\");")
+            && output.contains("std::mem::take(&mut *guard)"),
+        "expected the take/replace pattern (mirroring consuming entrypoints) to pull the \
+         owner out of the mutex; output:\n{output}"
+    );
+    assert!(
+        output.contains("let owner = owner.config(config);"),
+        "expected the consuming builder to be applied to the taken-out owner; output:\n{output}"
+    );
+    assert!(
+        output.contains("*guard = owner;"),
+        "expected the updated owner to be written back so later calls (further \
+         configuration, registrations, `run`) observe the change; output:\n{output}"
+    );
+}
+
+#[test]
+fn rust_output_skips_native_config_configurator_without_inner_accessor() {
+    let mut api = make_fixture_surface();
+    api.services[0].configurators.push(make_config_configurator());
+    let config = make_test_config();
+
+    let output = gen_service_rs(&api, &config);
+
+    assert!(
+        !output.contains("pub fn config(&self, config: String)"),
+        "native config method should not be emitted without host_app_inner_accessor \
+         (matching entrypoint gating); output:\n{output}"
+    );
+}
+
+#[test]
+fn rust_output_skips_non_config_configurators() {
+    let mut api = make_fixture_surface();
+    // `with_timeout` (already present via make_fixture_surface) is not the
+    // single-param `config` shape and its TypeScript wrapper never calls into
+    // native — no matching native method should be emitted for it.
+    api.services[0].configurators.push(make_config_configurator());
+    let config = make_accessor_config();
+
+    let output = gen_service_rs(&api, &config);
+
+    assert!(
+        !output.contains("pub fn with_timeout(&self,"),
+        "non-forwarding configurators should not get native glue; output:\n{output}"
+    );
+}
+
+#[test]
+fn rust_output_has_generated_header() {
+    let api = make_fixture_surface();
+    let config = make_test_config();
+
+    let output = gen_service_rs(&api, &config);
+
+    assert!(
+        output.contains("auto-generated by alef"),
+        "expected the standard alef generated-file header to be present; output:\n{output}"
     );
 }

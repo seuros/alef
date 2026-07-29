@@ -1,0 +1,7 @@
+/// Apply configuration via the `{{ method_name }}` configurator on the native app.
+{% if doc %}
+///
+{{ doc }}
+{% endif %}
+#[napi]
+pub fn {{ method_name }}(&self, {{ param_name }}: String) -> napi::Result<()> {
