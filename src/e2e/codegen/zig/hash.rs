@@ -243,13 +243,13 @@ mod placeholder_hash_tests {
 
     #[test]
     fn detects_stale_hash_regenerate_marker() {
-        assert!(is_placeholder_zig_hash("xberg-1.0.0-STALE_HASH_REGENERATE"));
+        assert!(is_placeholder_zig_hash("mylib-1.0.0-STALE_HASH_REGENERATE"));
     }
 
     #[test]
     fn detects_all_a_fill_placeholder() {
         assert!(is_placeholder_zig_hash(
-            "xberg-v1.0.0-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            "mylib-v1.0.0-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         ));
     }
 
@@ -262,7 +262,7 @@ mod placeholder_hash_tests {
     fn accepts_real_multihash() {
         // A genuine rc.42 zig content multihash — mixed base64 body.
         assert!(!is_placeholder_zig_hash(
-            "xberg-1.0.0-rc.42-iV1GrlMRTxU-14KOthTMp53rtFLNh_T0O6-y6W1HSqmc"
+            "mylib-1.0.0-rc.42-iV1GrlMRTxU-14KOthTMp53rtFLNh_T0O6-y6W1HSqmc"
         ));
     }
 
