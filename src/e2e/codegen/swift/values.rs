@@ -331,19 +331,19 @@ pub(super) fn build_swift_first_class_map(
             // countable would make the e2e emit `.count` on a `RustString`
             // and fail to compile.
             //
-            // `needs_json_bridge_for_swift` is the exact predicate the Swift
-            // binding generator (`gen_bindings::dto`) uses to decide a
-            // getter's return type, so classification here matches the real
-            // getter shape. In particular `Option<Vec<T>>` (e.g.
-            // `elements: Option<Vec<Element>>`) is NOT JSON-bridged —
-            // swift-bridge natively exposes it as `Optional<RustVec<T>>`,
-            // which is countable via `?.count`. Optionality is handled
-            // separately by the field-resolver's chain-optional tracking
-            // (see `swift_array_count_expr` in `accessors.rs`, which already
-            // emits `(expr?.count ?? 0)` for optional Vec leaves), so it must
-            // NOT also disqualify the field from being counted here.
+            // `RustVec` (which has `.count`). A field the swift-bridge layer
+            // JSON-bridges — an optional vec (`Option<Vec<T>>`), `Vec<Vec<..>>`,
+            // `Map<..>`, etc. — returns a plain `RustString` instead, which has
+            // no `.count`. e.g. `headings: Option<Vec<HeadingInfo>>` becomes a
+            // `headings() -> RustString` getter; recording it as countable makes
+            // the e2e emit `headings()?.count` and fail to compile. Non-optional
+            // `Vec<Named>`/`Vec<primitive>` (e.g. `urls`, `nodes`, `tables`) stay
+            // `RustVec<T>` and remain countable. Optionality is tracked on
+            // `f.optional` separately from `f.ty`, so check both — dropping the
+            // `f.optional` disjunct is what regressed `headings`/`favicons`/
+            // `hreflangs` into non-compiling `.count` assertions.
             if is_vec_ty(&f.ty) {
-                if needs_json_bridge_for_swift(&f.ty) {
+                if f.optional || needs_json_bridge_for_swift(&f.ty) {
                     json_bridged_vec_names.insert(f.name.clone());
                 } else {
                     vec_field_names.insert(f.name.clone());
