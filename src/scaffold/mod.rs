@@ -8,7 +8,7 @@ mod languages;
 pub(crate) mod naming;
 mod template_env;
 
-pub use languages::{render_csharp_csproj, render_csharp_runtime_json_template};
+pub use languages::{render_csharp_csproj, render_csharp_runtime_csproj, render_csharp_runtime_json_template};
 
 /// Fields available via `[workspace.package]` inheritance detected from the root `Cargo.toml`.
 #[derive(Debug, Default)]

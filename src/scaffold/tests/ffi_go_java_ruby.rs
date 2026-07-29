@@ -728,6 +728,73 @@ fn test_scaffold_csharp_emits_runtime_json_template() {
 }
 
 #[test]
+fn test_scaffold_csharp_emits_runtime_project_for_meta_split() {
+    let config = test_config();
+    let api = test_api();
+    let all_files = scaffold(&api, &config, &[Language::Csharp]).unwrap();
+    let files = language_files(&all_files);
+    let runtime = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().ends_with(".Runtime.csproj"))
+        .expect("C# scaffold must emit the native-only .Runtime project (native half of the meta+runtime split)");
+
+    assert_eq!(
+        runtime.path,
+        PathBuf::from("packages/csharp/MyLib.Runtime/MyLib.Runtime.csproj"),
+        "runtime project must be the sibling ../<Namespace>.Runtime the meta csproj references"
+    );
+    assert!(
+        !runtime.generated_header,
+        "runtime csproj must be scaffold-once (generated_header = false)"
+    );
+}
+
+#[test]
+fn test_render_csharp_runtime_csproj_is_native_only_per_rid_package() {
+    let config = test_config();
+    let content = render_csharp_runtime_csproj(&config, "1.9.0-rc.48");
+
+    // PackageId is parameterized per RID so one project packs every enabled RID.
+    assert!(
+        content.contains("<PackageId>MyLib.runtime.$(PublishedRID)</PackageId>"),
+        "runtime package id must be <PackageId>.runtime.$(PublishedRID): {content}"
+    );
+    assert!(
+        content.contains("<PublishedRID Condition=\"'$(PublishedRID)' == ''\">"),
+        "runtime csproj must default PublishedRID so a bare pack still evaluates: {content}"
+    );
+    // Native payload comes from the meta package's staged runtimes/ dir.
+    assert!(
+        content.contains(
+            r#"Include="../MyLib/runtimes/$(PublishedRID)/native/**" Pack="true" PackagePath="runtimes/$(PublishedRID)/native/""#
+        ),
+        "runtime csproj must pack the meta package's staged native payload under runtimes/<rid>/native/: {content}"
+    );
+    // Native-only: no managed assembly, deps suppressed, NU5128 tolerated.
+    assert!(
+        content.contains("<IncludeBuildOutput>false</IncludeBuildOutput>"),
+        "runtime package must not ship a managed assembly: {content}"
+    );
+    assert!(
+        content.contains("NU5128"),
+        "runtime csproj must suppress the native-only NU5128 warning: {content}"
+    );
+    // Hard-error guard so an empty native payload fails the pack loudly.
+    assert!(
+        content.contains(r#"<Target Name="RequireRuntimeAssets" BeforeTargets="Pack">"#),
+        "runtime csproj must guard against packing without staged natives: {content}"
+    );
+    assert!(
+        content.contains("<Version>1.9.0-rc.48</Version>"),
+        "runtime version must be substituted: {content}"
+    );
+    assert!(
+        content.contains(r#"Include="../../../LICENSE""#),
+        "runtime project sits at the same depth as the meta package, so LICENSE is ../../../LICENSE: {content}"
+    );
+}
+
+#[test]
 fn test_scaffold_java_checkstyle_suppressions_use_config_location() {
     let config = test_config();
     let api = test_api();
