@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.48.8] - 2026-07-29
+
+### Fixed
+
+- **Swift e2e `.count` assertions no longer emit uncompilable `RustString` accesses.** The Vec-field
+  classifier in `build_swift_first_class_map` had dropped the `f.optional` disjunct, so optional
+  `Vec<Named>` metadata fields (`headings`/`favicons`/`hreflangs`) — which the swift-bridge layer
+  JSON-bridges to a `-> RustString` getter with no `.count` — were recorded as countable and emitted
+  `headings()?.count`, failing to compile. Restore the disjunct: optional vecs are skipped while
+  non-optional vecs (`urls`, `nodes`, `tables`) stay countable.
+
 ## [0.48.5] - 2026-07-27
 
 ### Added
