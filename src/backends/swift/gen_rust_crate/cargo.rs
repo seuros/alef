@@ -45,6 +45,8 @@ pub(crate) fn emit_cargo_toml(
     target_overrides: &[crate::core::config::languages::SwiftTargetDepOverride],
     api: &ApiSurface,
     excluded_default_features: &[String],
+    ffi_dep_key: &str,
+    ffi_dep_path: &str,
 ) -> String {
     let source_crate_name = core_dep_key;
     let features_block = if features.is_empty() {
@@ -132,6 +134,8 @@ pub(crate) fn emit_cargo_toml(
     if !core_dep_for_block.is_empty() && target_overrides.is_empty() {
         dep_entries.push(core_dep_for_block.clone());
     }
+    // NOTE: see `ffi_keep_alive_shim.rs.jinja` and `ResolvedCrateConfig::ffi_crate_path_from_swift_rust`.
+    dep_entries.push(crate::scaffold::render_core_dep(ffi_dep_key, ffi_dep_path, "", version));
     if has_streaming_adapters {
         dep_entries.push("futures-util = \"0.3\"".to_string());
     }
@@ -282,6 +286,8 @@ mod tests {
             &[],
             &api,
             &[],
+            "sample-lib-ffi",
+            "../../../crates/sample-lib-ffi",
         );
 
         assert!(
@@ -341,6 +347,8 @@ mod tests {
             &[],
             &api,
             &[],
+            "sample-lib-ffi",
+            "../../../crates/sample-lib-ffi",
         );
 
         assert!(
@@ -391,6 +399,8 @@ mod tests {
             &[],
             &api,
             &[],
+            "sample-lib-ffi",
+            "../../../crates/sample-lib-ffi",
         );
 
         assert!(
@@ -438,6 +448,8 @@ mod tests {
             &[],
             &api,
             &["heic".to_string()],
+            "sample-lib-ffi",
+            "../../../crates/sample-lib-ffi",
         );
 
         assert!(
@@ -461,6 +473,43 @@ mod tests {
         assert!(
             default_line.contains("\"svg\""),
             "default = [...] must still contain non-excluded `svg`; got: {default_line}"
+        );
+        toml::from_str::<toml::Value>(&content).expect("generated Cargo.toml must be valid TOML");
+    }
+
+    /// The generated swift crate must depend on the FFI crate directly (in
+    /// addition to the core crate). Regression test: without this dependency,
+    /// nothing in the swift crate's Rust dependency graph reaches the FFI
+    /// crate's `#[no_mangle] extern "C"` exports, so a Rust `staticlib` build
+    /// drops them entirely, leaving the shipped `.a` without the FFI symbols
+    /// the generated Swift service API code calls via `@_silgen_name`.
+    #[test]
+    fn cargo_toml_depends_on_ffi_crate() {
+        let api = ApiSurface::default();
+
+        let content = emit_cargo_toml(
+            "sample-lib",
+            "sample_lib",
+            "sample-lib",
+            "0.1.0",
+            "0.1.0",
+            "0.1.0",
+            "../..",
+            &[],
+            "",
+            "MIT",
+            false,
+            &[],
+            &api,
+            &[],
+            "sample-lib-ffi",
+            "../../../crates/sample-lib-ffi",
+        );
+
+        assert!(
+            content.contains(r#"sample-lib-ffi = { version = "0.1.0", path = "../../../crates/sample-lib-ffi" }"#),
+            "Cargo.toml must depend on the FFI crate by path; got:\n{}",
+            content
         );
         toml::from_str::<toml::Value>(&content).expect("generated Cargo.toml must be valid TOML");
     }

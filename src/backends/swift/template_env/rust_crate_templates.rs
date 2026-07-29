@@ -225,4 +225,8 @@ pub(super) static TEMPLATES: &[(&str, &str)] = &[
         "rust_stream_handle_next.rs.jinja",
         include_str!("../templates/rust_stream_handle_next.rs.jinja"),
     ),
+    (
+        "ffi_keep_alive_shim.rs.jinja",
+        include_str!("../templates/ffi_keep_alive_shim.rs.jinja"),
+    ),
 ];

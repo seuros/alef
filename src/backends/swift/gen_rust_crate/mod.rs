@@ -106,6 +106,8 @@ pub fn emit(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Ve
         .as_ref()
         .map(|c| c.excluded_default_features.as_slice())
         .unwrap_or(&[]);
+    let ffi_dep_key = config.ffi_crate_package_name();
+    let ffi_dep_path = config.ffi_crate_path_from_swift_rust();
     let cargo_toml = cargo::emit_cargo_toml(
         crate_name,
         &core_dep_key,
@@ -121,6 +123,8 @@ pub fn emit(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Ve
         target_overrides,
         api,
         excluded_default_features,
+        &ffi_dep_key,
+        &ffi_dep_path,
     );
     let effective_features = feature_gate::effective_swift_codegen_features(api, config, &core_crate_dir);
     let configured_features: HashSet<&str> = effective_features.iter().map(String::as_str).collect();
@@ -195,6 +199,15 @@ fn emit_lib_rs(
     out.push('\n');
 
     out.push_str(shims::ALEF_TOKIO_RUNTIME_DEFINITION);
+    out.push('\n');
+
+    out.push_str(&crate::backends::swift::template_env::render(
+        "ffi_keep_alive_shim.rs.jinja",
+        minijinja::context! {
+            ffi_import => config.ffi_crate_package_name().replace('-', "_"),
+            ffi_version_fn => format!("{}_version", config.ffi_prefix()),
+        },
+    ));
     out.push('\n');
 
     let visible_types: Vec<&TypeDef> = api

@@ -119,18 +119,17 @@ impl ResolvedCrateConfig {
             .cloned()
     }
 
-    /// Get the relative path to the FFI crate from the e2e test directory.
-    ///
-    /// Used by C e2e tests to locate the compiled FFI library when building
-    /// against a local checkout rather than a downloaded release.
+    /// Get the workspace-relative directory of the FFI crate (e.g. `"crates/my-lib-ffi"`),
+    /// without any `../` prefix. Shared by [`Self::ffi_crate_path`] and
+    /// [`Self::ffi_crate_path_from_swift_rust`], which prefix it with the number of
+    /// `../` segments needed from their respective consumer directories.
     ///
     /// Resolution order:
     /// 1. Directory name of the user-supplied `[crates.output] ffi` path,
-    ///    skipping trailing `src`/`lib`/`include` components, prefixed with
-    ///    `../../` so the path resolves from `e2e/c/` back to the repo root.
-    ///    E.g. `crates/my-lib-ffi/src/` → `../../crates/my-lib-ffi`.
-    /// 2. `../../crates/{name}-ffi` fallback derived from the crate name.
-    pub fn ffi_crate_path(&self) -> String {
+    ///    skipping trailing `src`/`lib`/`include` components.
+    ///    E.g. `crates/my-lib-ffi/src/` → `crates/my-lib-ffi`.
+    /// 2. `crates/{name}-ffi` fallback derived from the crate name.
+    fn ffi_crate_relative_dir(&self) -> String {
         if let Some(ffi_path) = self.explicit_output.ffi.as_ref() {
             let components: Vec<&str> = ffi_path
                 .components()
@@ -147,10 +146,53 @@ impl ResolvedCrateConfig {
                 .rposition(|&s| s != "src" && s != "lib" && s != "include")
             {
                 let meaningful = &components[..=idx];
-                return format!("../../{}", meaningful.join("/"));
+                return meaningful.join("/");
             }
         }
-        format!("../../crates/{}-ffi", self.name)
+        format!("crates/{}-ffi", self.name)
+    }
+
+    /// Get the relative path to the FFI crate from the e2e test directory.
+    ///
+    /// Used by C e2e tests to locate the compiled FFI library when building
+    /// against a local checkout rather than a downloaded release.
+    ///
+    /// Resolution order: see [`Self::ffi_crate_relative_dir`], prefixed with
+    /// `../../` so the path resolves from `e2e/c/` back to the repo root.
+    /// E.g. `crates/my-lib-ffi/src/` → `../../crates/my-lib-ffi`.
+    pub fn ffi_crate_path(&self) -> String {
+        format!("../../{}", self.ffi_crate_relative_dir())
+    }
+
+    /// Get the relative path to the FFI crate from the generated swift-bridge
+    /// Rust crate (`packages/swift/rust/`).
+    ///
+    /// Used so the generated swift crate's `Cargo.toml` can depend on the FFI
+    /// crate directly. A Rust `staticlib` bundles the full compiled object code
+    /// of every statically-linked upstream Rust dependency — once anything in
+    /// the swift crate references the FFI crate, cargo folds its complete
+    /// output (every `#[no_mangle] extern "C"` export, regardless of which
+    /// codegen unit it lands in) into the swift crate's `.a`, making the
+    /// shipped static library self-contained instead of requiring consumers
+    /// to separately link the FFI archive.
+    ///
+    /// Resolution order: see [`Self::ffi_crate_relative_dir`], prefixed with
+    /// `../../../` so the path resolves from `packages/swift/rust/` back to
+    /// the repo root.
+    pub fn ffi_crate_path_from_swift_rust(&self) -> String {
+        format!("../../../{}", self.ffi_crate_relative_dir())
+    }
+
+    /// Get the FFI crate's Cargo package name (e.g. `"my-lib-ffi"`), derived
+    /// from the last path component of [`Self::ffi_crate_relative_dir`]. Used
+    /// as the swift-bridge crate's `[dependencies]` key and (with `-` replaced
+    /// by `_`) its Rust import path.
+    pub fn ffi_crate_package_name(&self) -> String {
+        self.ffi_crate_relative_dir()
+            .rsplit('/')
+            .next()
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("{}-ffi", self.name))
     }
 
     /// Get the relative path to the WASM crate's `pkg/` directory from the
@@ -335,5 +377,59 @@ header_name = "custom.h"
 "#,
         );
         assert_eq!(r.ffi_header_name(), "custom.h");
+    }
+
+    #[test]
+    fn ffi_crate_path_falls_back_to_name_derived_dir() {
+        let r = minimal_ffi();
+        assert_eq!(r.ffi_crate_path(), "../../crates/my-lib-ffi");
+    }
+
+    #[test]
+    fn ffi_crate_path_derives_from_explicit_output_path() {
+        let r = resolved_one(
+            r#"
+[workspace]
+languages = ["ffi"]
+
+[[crates]]
+name = "my-lib"
+sources = ["src/lib.rs"]
+
+[crates.output]
+ffi = "crates/sample-markdown-ffi/src/"
+"#,
+        );
+        assert_eq!(r.ffi_crate_path(), "../../crates/sample-markdown-ffi");
+    }
+
+    #[test]
+    fn ffi_crate_path_from_swift_rust_has_one_more_ascent_than_ffi_crate_path() {
+        let r = minimal_ffi();
+        assert_eq!(r.ffi_crate_path_from_swift_rust(), "../../../crates/my-lib-ffi");
+    }
+
+    #[test]
+    fn ffi_crate_package_name_falls_back_to_name_derived_dir() {
+        let r = minimal_ffi();
+        assert_eq!(r.ffi_crate_package_name(), "my-lib-ffi");
+    }
+
+    #[test]
+    fn ffi_crate_package_name_derives_from_explicit_output_path() {
+        let r = resolved_one(
+            r#"
+[workspace]
+languages = ["ffi"]
+
+[[crates]]
+name = "my-lib"
+sources = ["src/lib.rs"]
+
+[crates.output]
+ffi = "crates/sample-markdown-ffi/src/"
+"#,
+        );
+        assert_eq!(r.ffi_crate_package_name(), "sample-markdown-ffi");
     }
 }
