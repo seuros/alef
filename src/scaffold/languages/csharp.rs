@@ -16,7 +16,7 @@ use std::path::PathBuf;
 /// `FileNotFoundException` at runtime — the exact failure mode observed on tslp
 /// v1.9.0-rc.48. A RID whose triple is disabled via the workspace `[targets]`
 /// opt-out table is dropped from the list.
-pub(crate) const PUBLISHED_RUNTIME_IDENTIFIERS: &[(&str, &str)] = &[
+pub const PUBLISHED_RUNTIME_IDENTIFIERS: &[(&str, &str)] = &[
     ("win-x64", "x86_64-pc-windows-msvc"),
     ("win-arm64", "aarch64-pc-windows-msvc"),
     ("linux-x64", "x86_64-unknown-linux-gnu"),

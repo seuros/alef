@@ -445,8 +445,8 @@ pub fn package(
             }
             Language::Csharp => {
                 let t = target.context("--target required for C# packaging")?;
-                let artifact = package::csharp::package_csharp(config, t, ws_root, output_dir, version)?;
-                Some(vec![artifact])
+                let artifacts = package::csharp::package_csharp(config, t, ws_root, output_dir, version)?;
+                Some(artifacts)
             }
             Language::Kotlin => {
                 let artifact = package::kotlin::package_kotlin(config, ws_root, output_dir, version)?;

@@ -18,7 +18,10 @@ mod wasm;
 mod zig;
 
 pub(crate) use csharp::scaffold_csharp;
-pub use csharp::{render_csharp_csproj, render_csharp_runtime_csproj, render_csharp_runtime_json_template};
+pub use csharp::{
+    PUBLISHED_RUNTIME_IDENTIFIERS, render_csharp_csproj, render_csharp_runtime_csproj,
+    render_csharp_runtime_json_template,
+};
 pub(crate) use dart::scaffold_dart;
 pub(crate) use elixir::{scaffold_elixir, scaffold_elixir_cargo};
 pub(crate) use ffi::scaffold_ffi;
