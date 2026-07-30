@@ -1,6 +1,7 @@
 use crate::core::backend::GeneratedFile;
 use crate::core::config::{FfiTargetDepOverride, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
+use crate::core::template_versions as tv;
 use std::path::PathBuf;
 
 /// Render the `[target.'cfg(...)'.dependencies]` blocks for the JNI crate's
@@ -110,6 +111,7 @@ pub(crate) fn scaffold_jni(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
         "jni = \"0.22\"".to_owned(),
         "serde_json = \"1\"".to_owned(),
         "tokio = { version = \"1\", features = [\"rt-multi-thread\", \"macros\", \"sync\"] }".to_owned(),
+        format!("tracing = \"{}\"", tv::cargo::TRACING),
     ];
     if target_overrides.is_empty() {
         dep_lines.push(crate::scaffold::render_core_dep(
@@ -146,7 +148,7 @@ license.workspace = true
 # List them here so `cargo machete` doesn't flag the no-async-no-streaming
 # case as a real finding.
 [package.metadata.cargo-machete]
-ignored = ["async-trait", "base64", "futures-util", "serde_json", "tokio"]
+ignored = ["async-trait", "base64", "futures-util", "serde_json", "tokio", "tracing"]
 
 [lib]
 name = "{jni_lib_name}"
@@ -179,6 +181,44 @@ mod tests {
     fn resolved_one(toml: &str) -> ResolvedCrateConfig {
         let cfg: NewAlefConfig = toml::from_str(toml).unwrap();
         cfg.resolve().unwrap().remove(0)
+    }
+
+    /// The JNI trait-bridge glue (`trait_bridge_method_body.rs.jinja`) logs swallowed
+    /// host-callback failures via `tracing::warn!`. Since this Cargo.toml is scaffolded
+    /// once (`generated_header: false`) and not regenerated once trait bridges are
+    /// configured later, `tracing` must be declared unconditionally up front.
+    #[test]
+    fn scaffold_jni_cargo_toml_declares_tracing_dependency() {
+        let config = resolved_one(
+            r#"
+[workspace]
+languages = ["kotlin_android", "jni"]
+
+[[crates]]
+name = "demo-llm"
+sources = ["src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.sample_crate.demo"
+namespace = "dev.sample_crate.demo"
+"#,
+        );
+
+        let api = ApiSurface::default();
+        let files = scaffold_jni(&api, &config).unwrap();
+        let cargo_toml = &files[0].content;
+
+        assert!(
+            cargo_toml.contains(&format!(
+                "tracing = \"{}\"",
+                crate::core::template_versions::cargo::TRACING
+            )),
+            "JNI Cargo.toml must declare the tracing dependency; got:\n{cargo_toml}"
+        );
+        assert!(
+            cargo_toml.contains("\"tracing\""),
+            "JNI Cargo.toml must ignore tracing in cargo-machete since it may be unused until trait bridges are configured; got:\n{cargo_toml}"
+        );
     }
 
     /// The scaffolded `[lib] name` must match what the Kotlin Bridge emits in

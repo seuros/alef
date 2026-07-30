@@ -186,6 +186,12 @@ pub(crate) fn scaffold_node_cargo(
         }
         all_deps.push_str("futures-util = \"0.3\"");
     }
+    if has_trait_bridges && !all_deps.contains("tracing") {
+        if !all_deps.is_empty() {
+            all_deps.push('\n');
+        }
+        all_deps.push_str(&format!("tracing = \"{}\"", tv::cargo::TRACING));
+    }
 
     let extra_deps_section = if all_deps.is_empty() {
         String::new()
@@ -207,6 +213,7 @@ pub(crate) fn scaffold_node_cargo(
     if has_trait_bridges {
         machete_ignored.push("async-trait");
         machete_ignored.push("tokio-util");
+        machete_ignored.push("tracing");
     }
     if has_streaming {
         machete_ignored.push("futures-util");

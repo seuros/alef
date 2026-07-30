@@ -129,6 +129,7 @@ pub(crate) fn scaffold_r_cargo(api: &ApiSurface, config: &ResolvedCrateConfig) -
     }
     if has_trait_bridges {
         dep_lines.push("async-trait = \"0.1\"".to_owned());
+        dep_lines.push(format!("tracing = \"{}\"", tv::cargo::TRACING));
     }
     dep_lines.extend(render_extra_deps(config, Language::R).lines().map(ToOwned::to_owned));
     dep_lines.sort();
@@ -155,7 +156,7 @@ pub(crate) fn scaffold_r_cargo(api: &ApiSurface, config: &ResolvedCrateConfig) -
     };
 
     let machete_block = if has_trait_bridges {
-        "[package.metadata.cargo-machete]\nignored = [\"async-trait\"]\n\n".to_string()
+        "[package.metadata.cargo-machete]\nignored = [\"async-trait\", \"tracing\"]\n\n".to_string()
     } else {
         String::new()
     };

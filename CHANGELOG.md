@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Configurable logging across alef and its generated bindings.** All of alef's own diagnostics now
+  flow through `tracing` (with `error!`/`warn!`/`info!`/`debug!`/`trace!` levels) instead of raw
+  `eprintln!`/`println!`, filterable via `-v`/`-vv`/`-q`/`RUST_LOG`. Generated Rust binding glue logs
+  host-callback failures through `tracing::warn!` and generated Java bindings through
+  `java.lang.System.Logger`, so consuming libraries configure verbosity through their own logging
+  setup. Genuine machine-readable command output (JSON reports, schema, diffs, listings) stays on
+  stdout through a single sanctioned output helper.
+
+### Changed
+
+- **Verbosity is reconciled to a single channel.** `-v` now raises the log level to `debug` and `-vv`
+  to `trace` (previously `-v` did not change the level); the separate `DispatchContext.verbose` flag
+  was removed and its per-file detail folded into `debug!`.
+- **Generated Rust crates gain a `tracing` dependency** when trait bridges are present, sourced from
+  the centralized version registry (Renovate-managed). The WASM `__log_host_failure` JS-console helper
+  was removed in favor of a Rust-side `tracing::warn!`; consumers wanting browser output wire a wasm
+  tracing subscriber.
+
 ## [0.48.8] - 2026-07-29
 
 ### Fixed

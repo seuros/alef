@@ -74,23 +74,23 @@ pub fn run(config: &ResolvedCrateConfig, workspace_root: &Path, output_json: boo
             "ok": checks.iter().all(|c| c.matches),
             "checks": entries,
         });
-        println!("{}", serde_json::to_string_pretty(&out)?);
+        crate::bin_cli::output::payload(serde_json::to_string_pretty(&out)?);
     } else {
-        println!("Canonical version: {canonical}");
-        println!("{}", "-".repeat(40));
+        crate::bin_cli::output::line(format!("Canonical version: {canonical}"));
+        crate::bin_cli::output::line("-".repeat(40));
         for check in &checks {
             let status = if check.matches { "ok" } else { "MISMATCH" };
             let found = check.found.as_deref().unwrap_or("<not found>");
-            println!("  [{status}] {} = {found}", check.label);
+            crate::bin_cli::output::line(format!("  [{status}] {} = {found}", check.label));
         }
-        println!("{}", "-".repeat(40));
+        crate::bin_cli::output::line("-".repeat(40));
         let mismatches: Vec<_> = checks.iter().filter(|c| !c.matches).collect();
         if mismatches.is_empty() {
-            println!("All {} manifests consistent: {canonical}", checks.len());
+            crate::bin_cli::output::line(format!("All {} manifests consistent: {canonical}", checks.len()));
         } else {
-            println!("{} mismatch(es) found:", mismatches.len());
+            crate::bin_cli::output::line(format!("{} mismatch(es) found:", mismatches.len()));
             for m in &mismatches {
-                println!("  FAIL  {} (found: {:?})", m.label, m.found);
+                crate::bin_cli::output::line(format!("  FAIL  {} (found: {:?})", m.label, m.found));
             }
         }
     }

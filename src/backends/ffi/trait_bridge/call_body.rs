@@ -437,7 +437,7 @@ impl FfiBridgeGenerator {
 ",
                     );
                     out.push_str(&format!(
-                        "    eprintln!(\"[{wrapper}] host '{name}' wrote no result; returning default\");
+                        "    tracing::warn!(wrapper = \"{wrapper}\", method = \"{name}\", \"host wrote no result; returning default\");
 ",
                         wrapper = spec.wrapper_name(),
                     ));

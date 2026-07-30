@@ -46,13 +46,13 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let languages = resolve_languages(resolved_cfg, None)?;
                 pipeline::warn_missing_formatters(&languages);
                 if multi {
-                    eprintln!(
+                    tracing::info!(
                         "[{}] Running all for: {}",
                         resolved_cfg.name,
                         format_languages(&languages)
                     );
                 } else {
-                    eprintln!("Running all for: {}", format_languages(&languages));
+                    tracing::info!("Running all for: {}", format_languages(&languages));
                 }
 
                 let api = pipeline::extract(resolved_cfg, config_path, clean)?;
@@ -62,7 +62,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let mut changed_languages: std::collections::HashSet<crate::core::config::Language> =
                     std::collections::HashSet::new();
 
-                eprintln!("Generating bindings...");
+                tracing::info!("Generating bindings...");
                 let bindings = pipeline::generate(&api, resolved_cfg, &languages, clean, config_path)?;
 
                 let mut binding_count: usize = 0;
@@ -88,7 +88,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     let cache_match = !hashes.is_empty() && hashes.iter().all(|(p, h)| stored.get(p) == Some(h));
 
                     if cache_match && !clean && generated_files_match_disk(lang_files, &base_dir) {
-                        eprintln!("  [{lang_str}] up to date (skipping)");
+                        tracing::info!("  [{lang_str}] up to date (skipping)");
                         continue;
                     }
 
@@ -107,21 +107,21 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             }
                         }
                         let svc_count = pipeline::write_files(&svc_files, &base_dir)?;
-                        eprintln!("Generated {svc_count} service API files");
+                        tracing::info!("Generated {svc_count} service API files");
                         for (lang, _) in &svc_files {
                             changed_languages.insert(*lang);
                         }
                     }
                 }
 
-                eprintln!("Generating scaffolding...");
+                tracing::info!("Generating scaffolding...");
                 let scaffold_files = pipeline::scaffold(&api, resolved_cfg, &languages, config_path)?;
                 let scaffold_count = pipeline::write_scaffold_files_with_overwrite(&scaffold_files, &base_dir, clean)?;
                 for file in &scaffold_files {
                     current_gen_paths.insert(base_dir.join(&file.path));
                 }
 
-                eprintln!("Running post-build processing...");
+                tracing::info!("Running post-build processing...");
                 for &lang in &languages {
                     let Some(backend) = registry::try_get_backend(lang) else {
                         continue;
@@ -132,19 +132,19 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     if bc.post_build.is_empty() {
                         continue;
                     }
-                    eprintln!("  [{lang}] running post-build...");
+                    tracing::info!("  [{lang}] running post-build...");
                     match pipeline::run_post_build(lang, &bc, resolved_cfg, &base_dir) {
                         Ok(()) => {
-                            eprintln!("  [{lang}] post-build processing complete");
+                            tracing::info!("  [{lang}] post-build processing complete");
                         }
                         Err(e) => {
-                            eprintln!("  [{lang}] post-build processing failed: {e}");
+                            tracing::error!("  [{lang}] post-build processing failed: {e}");
                             return Err(e);
                         }
                     }
                 }
 
-                eprintln!("Generating type stubs...");
+                tracing::info!("Generating type stubs...");
                 let stubs = pipeline::generate_stubs(&api, resolved_cfg, &languages)?;
 
                 let stub_hashes: Vec<(String, String)> = stubs
@@ -171,7 +171,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     }
                     count
                 } else {
-                    eprintln!("  [stubs] up to date (skipping)");
+                    tracing::info!("  [stubs] up to date (skipping)");
                     0
                 };
 
@@ -210,10 +210,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                         if !api_match || clean {
                             api_count = pipeline::write_files(&public_api_files, &base_dir)?;
-                            eprintln!("Generated {api_count} public API files");
+                            tracing::info!("Generated {api_count} public API files");
                             let _ = cache::write_generation_hashes(&api_cache_key, &api_hashes);
                         } else {
-                            eprintln!("  [public_api] up to date (skipping)");
+                            tracing::info!("  [public_api] up to date (skipping)");
                         }
                     }
                 }
@@ -228,7 +228,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     }
                 }
 
-                eprintln!("Generating READMEs...");
+                tracing::info!("Generating READMEs...");
                 let readme_languages = crate::readme::expand_configured_readme_languages(resolved_cfg, &languages);
                 let readme_files = pipeline::readme(&api, resolved_cfg, &readme_languages)?;
                 let readme_count = pipeline::write_scaffold_files_with_overwrite(&readme_files, &base_dir, true)?;
@@ -277,12 +277,12 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     let ir_json = serde_json::to_string(&api)?;
                     let e2e_stage_hash = cache::compute_stage_hash(&ir_json, "e2e", &config_toml, &fixture_hash);
                     if !clean && cache::is_stage_cached(&resolved_cfg.name, "e2e", &e2e_stage_hash) {
-                        eprintln!("  [e2e] up to date (skipping)");
+                        tracing::info!("  [e2e] up to date (skipping)");
                         for path in cache::read_stage_paths(&resolved_cfg.name, "e2e") {
                             current_gen_paths.insert(path);
                         }
                     } else {
-                        eprintln!("Generating e2e test suites...");
+                        tracing::info!("Generating e2e test suites...");
                         let files = crate::e2e::generate_e2e(resolved_cfg, e2e_config, None, &api.types, &api.enums)?;
                         e2e_count = pipeline::write_scaffold_files_with_overwrite(&files, &base_dir, true)?;
                         crate::e2e::format::run_formatters(&files, e2e_config);
@@ -303,12 +303,12 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     let test_apps_stage_hash =
                         cache::compute_stage_hash(&ir_json, "test-apps", &config_toml, &fixture_hash);
                     if !clean && cache::is_stage_cached(&resolved_cfg.name, "test-apps", &test_apps_stage_hash) {
-                        eprintln!("  [test-apps] up to date (skipping)");
+                        tracing::info!("  [test-apps] up to date (skipping)");
                         for path in cache::read_stage_paths(&resolved_cfg.name, "test-apps") {
                             current_gen_paths.insert(path);
                         }
                     } else {
-                        eprintln!("Generating registry-mode test apps...");
+                        tracing::info!("Generating registry-mode test apps...");
                         let mut registry_e2e_config = e2e_config.clone();
                         registry_e2e_config.dep_mode = crate::core::config::e2e::DependencyMode::Registry;
                         let registry_e2e_ref = &registry_e2e_config;
@@ -333,7 +333,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     }
                 }
 
-                eprintln!("Generating docs...");
+                tracing::info!("Generating docs...");
                 let docs_api = pipeline::extract(resolved_cfg, config_path, false)?;
                 let doc_languages = resolve_doc_languages(resolved_cfg, None)?;
                 let doc_files =
@@ -354,7 +354,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                 if let Ok(removed) = pipeline::cleanup_orphaned_files(&current_gen_paths) {
                     if removed > 0 {
-                        eprintln!("Removed {removed} stale alef-generated file(s)");
+                        tracing::info!("Removed {removed} stale alef-generated file(s)");
                     }
                 }
 
@@ -369,20 +369,20 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             .collect();
                     if let Ok(removed) = pipeline::sweep_orphans(&roots, &current_gen_paths) {
                         if removed > 0 {
-                            eprintln!("Removed {removed} stale alef-generated file(s)");
+                            tracing::info!("Removed {removed} stale alef-generated file(s)");
                         }
                     }
                 }
 
                 if !changed_languages.is_empty() {
-                    eprintln!("Formatting generated files...");
+                    tracing::info!("Formatting generated files...");
                     let mut files_to_format = bindings.clone();
                     files_to_format.extend(stubs.clone());
                     let only_languages = if clean { None } else { Some(&changed_languages) };
                     pipeline::format_generated(&files_to_format, resolved_cfg, &base_dir, only_languages);
                 }
 
-                eprintln!("Finalising hashes...");
+                tracing::info!("Finalising hashes...");
                 let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
@@ -397,7 +397,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
             pipeline::install_poly_hooks(&base_dir);
 
-            println!(
+            tracing::info!(
                 "Done: {grand_binding_count} binding files, {grand_stub_count} stub files, {grand_api_count} API files, {grand_scaffold_count} scaffold files, {grand_readme_count} readme files, {grand_e2e_count} e2e files, {grand_doc_count} doc files"
             );
             Ok(None)

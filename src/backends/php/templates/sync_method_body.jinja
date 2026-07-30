@@ -50,7 +50,7 @@ match result {
         Some(v) => v as {{ return_type }},
 {% endif %}
         None => {
-            eprintln!("[{{ wrapper }}] host '{{ method_name }}' returned a non-integer value; returning default");
+            tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", "host returned a non-integer value; returning default");
             Default::default()
         }
     },
@@ -64,12 +64,12 @@ match result {
                 Some(json_str) => match serde_json::from_str(&json_str) {
                     Ok(v) => v,
                     Err(e) => {
-                        eprintln!("[{{ wrapper }}] host '{{ method_name }}' returned an unparseable value; returning default: {e}");
+                        tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", error = %e, "host returned an unparseable value; returning default");
                         Default::default()
                     }
                 },
                 None => {
-                    eprintln!("[{{ wrapper }}] host '{{ method_name }}' returned a non-string value; returning default");
+                    tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", "host returned a non-string value; returning default");
                     Default::default()
                 }
             }
@@ -80,7 +80,7 @@ match result {
         match <{{ return_type }} as ext_php_rs::convert::FromZval>::from_zval(&val) {
             Some(v) => v,
             None => {
-                eprintln!("[{{ wrapper }}] host '{{ method_name }}' returned an undecodable value; returning default");
+                tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", "host returned an undecodable value; returning default");
                 Default::default()
             }
         }
@@ -89,12 +89,12 @@ match result {
             Some(json_str) => match serde_json::from_str(&json_str) {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("[{{ wrapper }}] host '{{ method_name }}' returned an unparseable value; returning default: {e}");
+                    tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", error = %e, "host returned an unparseable value; returning default");
                     Default::default()
                 }
             },
             None => {
-                eprintln!("[{{ wrapper }}] host '{{ method_name }}' returned a non-string value; returning default");
+                tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", "host returned a non-string value; returning default");
                 Default::default()
             }
         }
@@ -105,7 +105,7 @@ match result {
     // propagate. Log before substituting the default — a silent default is
     // indistinguishable from a real result to the caller.
     Err(e) => {
-        eprintln!("[{{ wrapper }}] host '{{ method_name }}' threw; {% if is_unit_return %}ignoring{% else %}returning default{% endif %}: {e}");
+        tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", error = %e, "host callback threw; {% if is_unit_return %}ignoring{% else %}returning default{% endif %}");
         Default::default()
     }
 }

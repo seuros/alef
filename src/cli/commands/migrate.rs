@@ -183,11 +183,11 @@ pub fn run(options: MigrateOptions) -> Result<()> {
 
     if options.write {
         atomic_write(&options.path, &migrated_content)?;
-        eprintln!("Migrated {} ✓", options.path.display());
+        tracing::info!("Migrated {} ✓", options.path.display());
     } else {
         print_diff(&content, &migrated_content)?;
     }
-    eprintln!("Moved {workspace_count} key(s) to [workspace], {crate_count} key(s) to [[crates]]");
+    tracing::info!("Moved {workspace_count} key(s) to [workspace], {crate_count} key(s) to [[crates]]");
 
     Ok(())
 }
@@ -291,12 +291,14 @@ fn atomic_write(dest: &std::path::Path, content: &str) -> Result<()> {
 fn print_diff(original: &str, migrated: &str) -> Result<()> {
     let diff = similar::TextDiff::from_lines(original, migrated);
 
-    println!("--- alef.toml (original)");
-    println!("+++ alef.toml (migrated)");
+    crate::bin_cli::output::line("--- alef.toml (original)");
+    crate::bin_cli::output::line("+++ alef.toml (migrated)");
 
     for (idx, change) in diff.iter_all_changes().enumerate() {
         if idx >= MAX_DIFF_LINES {
-            println!("... (diff truncated after {MAX_DIFF_LINES} lines; rerun with --write to apply) ...");
+            crate::bin_cli::output::line(format!(
+                "... (diff truncated after {MAX_DIFF_LINES} lines; rerun with --write to apply) ..."
+            ));
             break;
         }
         let prefix = match change.tag() {
@@ -304,11 +306,11 @@ fn print_diff(original: &str, migrated: &str) -> Result<()> {
             similar::ChangeTag::Insert => '+',
             similar::ChangeTag::Equal => ' ',
         };
-        print!("{prefix}{change}", change = change.value());
+        crate::bin_cli::output::fragment(format!("{prefix}{change}", change = change.value()));
     }
 
-    println!();
-    println!("Run with --write to apply this migration.");
+    crate::bin_cli::output::blank();
+    crate::bin_cli::output::line("Run with --write to apply this migration.");
 
     Ok(())
 }

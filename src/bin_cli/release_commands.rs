@@ -13,7 +13,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
         Commands::Cache { action } => match action {
             CacheAction::Clear => {
                 cache::clear_cache()?;
-                println!("Cache cleared.");
+                tracing::info!("Cache cleared.");
                 Ok(None)
             }
             CacheAction::Status => {
@@ -69,7 +69,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 force_republish,
                 resolved_cfg_opt,
             )?;
-            println!("{}", meta.to_json()?);
+            crate::bin_cli::output::payload(meta.to_json()?);
             Ok(None)
         }
         Commands::CheckRegistry {

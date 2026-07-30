@@ -106,6 +106,12 @@ pub(crate) fn scaffold_python_cargo(
         }
         all_deps.push_str("async-trait = \"0.1\"");
     }
+    if has_trait_bridges && !all_deps.contains("tracing") {
+        if !all_deps.is_empty() {
+            all_deps.push('\n');
+        }
+        all_deps.push_str(&format!("tracing = \"{}\"", tv::cargo::TRACING));
+    }
     if (has_trait_bridges || has_streaming) && !all_deps.contains("tokio = ") {
         if !all_deps.is_empty() {
             all_deps.push('\n');
@@ -132,6 +138,7 @@ pub(crate) fn scaffold_python_cargo(
     let mut machete_ignored: Vec<&str> = vec!["pyo3-async-runtimes", "serde_json"];
     if has_trait_bridges {
         machete_ignored.push("async-trait");
+        machete_ignored.push("tracing");
     }
     if has_trait_bridges || has_streaming {
         machete_ignored.push("tokio");

@@ -143,15 +143,15 @@ fn run_list(snippets: &[PathBuf], languages: Option<&Vec<String>>) -> ExitCode {
     match discovery::discover_snippets(snippets, filter.as_deref()) {
         Ok(found) => {
             output::print_snippet_list(&found);
-            println!();
+            crate::bin_cli::output::blank();
             for (language, count) in &discovery::count_by_language(&found) {
-                println!("  {language:<12} {count}");
+                crate::bin_cli::output::line(format!("  {language:<12} {count}"));
             }
-            println!();
+            crate::bin_cli::output::blank();
             ExitCode::SUCCESS
         }
         Err(err) => {
-            eprintln!("Error discovering snippets: {err}");
+            tracing::error!("discovering snippets: {err}");
             ExitCode::FAILURE
         }
     }
@@ -173,7 +173,7 @@ fn run_validate(
     let mut found = match discovery::discover_snippets(snippets, filter.as_deref()) {
         Ok(found) => found,
         Err(err) => {
-            eprintln!("Error discovering snippets: {err}");
+            tracing::error!("discovering snippets: {err}");
             return ExitCode::FAILURE;
         }
     };
@@ -183,11 +183,11 @@ fn run_validate(
     }
 
     if found.is_empty() {
-        println!("No snippets found.");
+        crate::bin_cli::output::line("No snippets found.");
         return ExitCode::SUCCESS;
     }
 
-    println!("Validating {} snippets at level '{level}'...", found.len());
+    tracing::info!("Validating {} snippets at level '{level}'...", found.len());
     let registry = ValidatorRegistry::new();
     let config = RunnerConfig {
         level,
@@ -202,9 +202,9 @@ fn run_validate(
 
             if let Some(path) = output_path {
                 if let Err(err) = output::write_json(&summary.results, &path) {
-                    eprintln!("Error writing JSON output: {err}");
+                    tracing::error!("writing JSON output: {err}");
                 } else {
-                    println!("Results written to {}", path.display());
+                    tracing::info!("Results written to {}", path.display());
                 }
             }
 
@@ -215,7 +215,7 @@ fn run_validate(
             }
         }
         Err(err) => {
-            eprintln!("Error running validation: {err}");
+            tracing::error!("running validation: {err}");
             ExitCode::FAILURE
         }
     }
@@ -225,26 +225,26 @@ fn run_parse(file: &Path) -> ExitCode {
     match crate::snippets::parser::parse_code_blocks(file) {
         Ok(blocks) => {
             if blocks.is_empty() {
-                println!("No code blocks found in {}", file.display());
+                crate::bin_cli::output::line(format!("No code blocks found in {}", file.display()));
             } else {
                 for (index, block) in blocks.iter().enumerate() {
-                    println!("--- Block {} (line {}) ---", index + 1, block.start_line);
-                    println!("Language: {}", block.lang);
+                    crate::bin_cli::output::line(format!("--- Block {} (line {}) ---", index + 1, block.start_line));
+                    crate::bin_cli::output::line(format!("Language: {}", block.lang));
                     if let Some(title) = &block.title {
-                        println!("Title: {title}");
+                        crate::bin_cli::output::line(format!("Title: {title}"));
                     }
                     if let Some(comment) = &block.preceding_comment {
-                        println!("Annotation: {comment}");
+                        crate::bin_cli::output::line(format!("Annotation: {comment}"));
                     }
-                    println!("Code ({} lines):", block.code.lines().count());
-                    println!("{}", block.code);
-                    println!();
+                    crate::bin_cli::output::line(format!("Code ({} lines):", block.code.lines().count()));
+                    crate::bin_cli::output::line(&block.code);
+                    crate::bin_cli::output::blank();
                 }
             }
             ExitCode::SUCCESS
         }
         Err(err) => {
-            eprintln!("Error parsing {}: {err}", file.display());
+            tracing::error!("parsing {}: {err}", file.display());
             ExitCode::FAILURE
         }
     }
@@ -258,22 +258,22 @@ fn run_audit(snippet_dirs: &[PathBuf], docs_dirs: &[PathBuf], require_frontmatte
     };
     let report = audit(&config);
     if report.issues.is_empty() {
-        println!("Audit clean: no issues found.");
+        crate::bin_cli::output::line("Audit clean: no issues found.");
         return ExitCode::SUCCESS;
     }
-    println!("Audit found {} issue(s):", report.issues.len());
+    crate::bin_cli::output::line(format!("Audit found {} issue(s):", report.issues.len()));
     for issue in &report.issues {
         let severity = match issue.severity {
             AuditSeverity::Error => "ERROR",
             AuditSeverity::Warning => "WARN",
         };
-        println!(
+        crate::bin_cli::output::line(format!(
             "  [{severity}] {}:{} ({:?}) {}",
             issue.path.display(),
             issue.line,
             issue.kind,
             issue.message
-        );
+        ));
     }
     if report.has_errors() {
         ExitCode::FAILURE
@@ -311,55 +311,66 @@ fn run_gaps(
     let report = match detect_gaps(&config) {
         Ok(report) => report,
         Err(err) => {
-            eprintln!("Error detecting gaps: {err}");
+            tracing::error!("detecting gaps: {err}");
             return ExitCode::FAILURE;
         }
     };
     if !report.has_gaps() {
-        println!("No gaps found.");
+        crate::bin_cli::output::line("No gaps found.");
         return ExitCode::SUCCESS;
     }
     if !report.missing_references.is_empty() {
-        println!("Missing include targets ({}):", report.missing_references.len());
+        crate::bin_cli::output::line(format!(
+            "Missing include targets ({}):",
+            report.missing_references.len()
+        ));
         for reference in &report.missing_references {
-            println!(
+            crate::bin_cli::output::line(format!(
                 "  {}:{} → {}",
                 reference.source.display(),
                 reference.line,
                 reference.target.display()
-            );
+            ));
         }
     }
     if !report.unreferenced_snippets.is_empty() {
-        println!("Unreferenced snippets ({}):", report.unreferenced_snippets.len());
+        crate::bin_cli::output::line(format!(
+            "Unreferenced snippets ({}):",
+            report.unreferenced_snippets.len()
+        ));
         for path in &report.unreferenced_snippets {
-            println!("  {}", path.display());
+            crate::bin_cli::output::line(format!("  {}", path.display()));
         }
     }
     if !report.missing_language_variants.is_empty() {
-        println!(
+        crate::bin_cli::output::line(format!(
             "Missing language variants ({}):",
             report.missing_language_variants.len()
-        );
+        ));
         for variant in &report.missing_language_variants {
-            println!("  {} — {}", variant.group.display(), variant.language);
+            crate::bin_cli::output::line(format!("  {} — {}", variant.group.display(), variant.language));
         }
     }
     if !report.skips_without_reason.is_empty() {
-        println!("Skips without reason ({}):", report.skips_without_reason.len());
+        crate::bin_cli::output::line(format!("Skips without reason ({}):", report.skips_without_reason.len()));
         for location in &report.skips_without_reason {
-            println!(
+            crate::bin_cli::output::line(format!(
                 "  {}:{} (block {})",
                 location.path.display(),
                 location.line,
                 location.block_index
-            );
+            ));
         }
     }
     if !report.unknown_languages.is_empty() {
-        println!("Unknown languages ({}):", report.unknown_languages.len());
+        crate::bin_cli::output::line(format!("Unknown languages ({}):", report.unknown_languages.len()));
         for unknown in &report.unknown_languages {
-            println!("  {}:{} tag={}", unknown.path.display(), unknown.line, unknown.tag);
+            crate::bin_cli::output::line(format!(
+                "  {}:{} tag={}",
+                unknown.path.display(),
+                unknown.line,
+                unknown.tag
+            ));
         }
     }
     ExitCode::FAILURE

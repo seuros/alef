@@ -90,9 +90,9 @@ pub fn check(registry: Registry, package: &str, version: &str, extra: &ExtraPara
             "version": version,
             "exists": exists,
         });
-        println!("{}", serde_json::to_string_pretty(&out)?);
+        crate::bin_cli::output::payload(serde_json::to_string_pretty(&out)?);
     } else {
-        println!("exists={}", if exists { "true" } else { "false" });
+        crate::bin_cli::output::line(format!("exists={}", if exists { "true" } else { "false" }));
     }
 
     Ok(exists)

@@ -64,6 +64,9 @@ pub(crate) fn scaffold_ruby_cargo(
     if has_trait_bridges && !dep_lines.iter().any(|l| l.starts_with("async-trait")) {
         dep_lines.push("async-trait = \"0.1\"".to_owned());
     }
+    if has_trait_bridges && !dep_lines.iter().any(|l| l.starts_with("tracing")) {
+        dep_lines.push(format!("tracing = \"{}\"", tv::cargo::TRACING));
+    }
     if has_streaming_adapter && !dep_lines.iter().any(|l| l.starts_with("futures")) {
         dep_lines.push("futures = \"0.3\"".to_owned());
     }
@@ -86,6 +89,7 @@ pub(crate) fn scaffold_ruby_cargo(
     let mut machete_ignored: Vec<&str> = vec!["rb-sys"];
     if has_trait_bridges {
         machete_ignored.push("async-trait");
+        machete_ignored.push("tracing");
         if !has_async {
             machete_ignored.push("tokio");
         }

@@ -9,7 +9,7 @@ fn {{ method_name }}({{ sig }}) -> {{ ret_ty }} {
             // Visitor callbacks are infallible on the Rust side — log the host
             // exception before substituting the default action.
             Err(e) => {
-                eprintln!("[{{ wrapper }}] host '{{ method_name }}' raised; using default action: {e}");
+                tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", error = %e, "host callback raised; using default action");
                 {{ default_result_expr }}
             }
             Ok(result) => {
@@ -28,7 +28,7 @@ fn {{ method_name }}({{ sig }}) -> {{ ret_ty }} {
 {%- for variant in payload_result_variants %}
                         if let Some(v) = d.get_item("{{ variant.wire_name }}").ok().flatten() {
                             return {{ ret_ty }}::{{ variant.name }}(v.extract::<String>().unwrap_or_else(|e| {
-                                eprintln!("[{{ wrapper }}] host '{{ method_name }}' returned a non-string '{{ variant.wire_name }}' payload; using empty string: {e}");
+                                tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", variant = "{{ variant.wire_name }}", error = %e, "host returned non-string payload; using empty string");
                                 String::new()
                             }));
                         }

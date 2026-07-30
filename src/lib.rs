@@ -79,7 +79,7 @@ pub fn run_with_extensions(mut extensions: Vec<Box<dyn Extension>>) -> std::proc
     match extensions::dylib::load_dylib_extensions_from_config(&cli.config) {
         Ok(mut dylib_extensions) => extensions.append(&mut dylib_extensions),
         Err(e) => {
-            eprintln!("error: {e:#}");
+            tracing::error!("{e:#}");
             return std::process::ExitCode::FAILURE;
         }
     }
@@ -89,7 +89,7 @@ pub fn run_with_extensions(mut extensions: Vec<Box<dyn Extension>>) -> std::proc
     match bin_cli::dispatch::run(cli) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("error: {e:#}");
+            tracing::error!("{e:#}");
             std::process::ExitCode::FAILURE
         }
     }

@@ -32,7 +32,9 @@ fn test_gen_sync_method_body_unit_return_no_error() {
         "unit return without error should log and discard via unwrap_or_else"
     );
     assert!(
-        body.contains("eprintln!") && body.contains("host 'tick' raised; ignoring"),
+        body.contains("tracing::warn!")
+            && body.contains("method = \"tick\"")
+            && body.contains("host callback raised; ignoring"),
         "swallowed host exception should be logged with the method name"
     );
 }
@@ -70,7 +72,9 @@ fn test_gen_sync_method_body_string_return_no_error() {
         "infallible string return should log and substitute the default via unwrap_or_else"
     );
     assert!(
-        body.contains("eprintln!") && body.contains("host 'name' raised; returning default"),
+        body.contains("tracing::warn!")
+            && body.contains("method = \"name\"")
+            && body.contains("host callback raised; returning default"),
         "swallowed host exception should be logged with the method name"
     );
 }

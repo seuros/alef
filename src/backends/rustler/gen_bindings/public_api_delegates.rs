@@ -221,8 +221,8 @@ pub(in crate::backends::rustler::gen_bindings) fn append_visitor_receive_loop(
             match crate::codegen::visitor_result::required_visitor_result_metadata(api, bridge_cfg) {
                 Ok(metadata) => Some(metadata),
                 Err(err) => {
-                    eprintln!(
-                        "[alef] gen_bindings(rustler): skip visitor helper metadata for trait bridge `{}`: {err}",
+                    tracing::warn!(
+                        "gen_bindings(rustler): skip visitor helper metadata for trait bridge `{}`: {err}",
                         bridge_cfg.trait_name
                     );
                     None
@@ -254,8 +254,8 @@ pub(in crate::backends::rustler::gen_bindings) fn append_visitor_receive_loop(
                 },
             ));
         } else {
-            eprintln!(
-                "[alef] gen_bindings(rustler): skip visitor helper functions because no configured result enum metadata is available"
+            tracing::warn!(
+                "gen_bindings(rustler): skip visitor helper functions because no configured result enum metadata is available"
             );
         }
     }

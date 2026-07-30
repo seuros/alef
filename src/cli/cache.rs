@@ -383,19 +383,19 @@ pub fn clear_cache() -> anyhow::Result<()> {
 pub fn show_status() {
     let cache_dir = Path::new(CACHE_DIR);
     if !cache_dir.exists() {
-        println!("No cache directory.");
+        crate::bin_cli::output::line("No cache directory.");
         return;
     }
 
-    println!("Cache directory: .alef/");
+    crate::bin_cli::output::line("Cache directory: .alef/");
 
     let ir_path = cache_dir.join("ir.json");
     if ir_path.exists() {
         if let Ok(meta) = fs::metadata(&ir_path) {
-            println!("  ir.json: {} bytes", meta.len());
+            crate::bin_cli::output::line(format!("  ir.json: {} bytes", meta.len()));
         }
     } else {
-        println!("  ir.json: not cached");
+        crate::bin_cli::output::line("  ir.json: not cached");
     }
 
     let hashes_dir = cache_dir.join("hashes");
@@ -406,13 +406,13 @@ pub fn show_status() {
                 .filter_map(|e| e.path().file_stem().and_then(|s| s.to_str().map(String::from)))
                 .collect();
             if langs.is_empty() {
-                println!("  language hashes: none");
+                crate::bin_cli::output::line("  language hashes: none");
             } else {
-                println!("  language hashes: {}", langs.join(", "));
+                crate::bin_cli::output::line(format!("  language hashes: {}", langs.join(", ")));
             }
         }
     } else {
-        println!("  language hashes: none");
+        crate::bin_cli::output::line("  language hashes: none");
     }
 }
 

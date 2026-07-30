@@ -549,8 +549,8 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
                     false,
                 ));
             } else {
-                eprintln!(
-                    "[alef] gen_visitor_bindings(ffi): visitor_callbacks=true but no OptionsField trait found in IR, skipping visitor callbacks"
+                tracing::warn!(
+                    "gen_visitor_bindings(ffi): visitor_callbacks=true but no OptionsField trait found in IR, skipping visitor callbacks"
                 );
             }
         }
@@ -576,14 +576,14 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
                     true,
                 ));
             } else {
-                eprintln!(
-                    "[alef] gen_visitor_bindings(ffi): visitor_callbacks=true but configured trait `{}` is not present in IR, skipping visitor callbacks",
+                tracing::warn!(
+                    "gen_visitor_bindings(ffi): visitor_callbacks=true but configured trait `{}` is not present in IR, skipping visitor callbacks",
                     bridge_cfg.trait_name
                 );
             }
         } else {
-            eprintln!(
-                "[alef] gen_visitor_bindings(ffi): visitor_callbacks=true but no FunctionParam trait bridge matched a public function, skipping visitor callbacks"
+            tracing::warn!(
+                "gen_visitor_bindings(ffi): visitor_callbacks=true but no FunctionParam trait bridge matched a public function, skipping visitor callbacks"
             );
         }
     }

@@ -57,7 +57,7 @@ match result {
     // propagate. Log before substituting the default — a silent default is
     // indistinguishable from a real result to the caller.
     Err(e) => {
-        eprintln!("[{{ wrapper }}] host '{{ method_name }}' threw; returning default: {e}");
+        tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", error = %e, "host callback threw; returning default");
         Default::default()
     }
     Ok(val) => {
@@ -67,7 +67,7 @@ match result {
             .and_then(|s| s.into_owned()) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("[{{ wrapper }}] host '{{ method_name }}' returned a value that could not be coerced to a string; returning default: {e}");
+                tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", error = %e, "host returned a value that could not be coerced to a string; returning default");
                 return Default::default();
             }
         };
@@ -78,7 +78,7 @@ match result {
             _ => match serde_json::from_str::<_>(&s) {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("[{{ wrapper }}] host '{{ method_name }}' returned an unparseable value; returning default: {e}");
+                    tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", error = %e, "host returned an unparseable value; returning default");
                     Default::default()
                 }
             }

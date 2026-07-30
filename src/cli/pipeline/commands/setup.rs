@@ -3,7 +3,7 @@ use crate::core::config::output::StringOrVec;
 use crate::core::config::{Language, ResolvedCrateConfig};
 use anyhow::Context as _;
 use rayon::prelude::*;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 /// Install dependencies for each language.
 ///
@@ -59,7 +59,7 @@ pub fn setup(
     let mut first_error: Option<anyhow::Error> = None;
     for (lang, result) in results {
         if let Err(e) = result {
-            eprintln!("✗ setup failed: {lang} — {e}");
+            error!("setup failed: {lang} — {e}");
             warn!("Setup failed for {lang}: {e}");
             if first_error.is_none() {
                 first_error = Some(e);

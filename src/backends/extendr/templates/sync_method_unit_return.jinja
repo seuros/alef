@@ -27,7 +27,7 @@ match result {
     // Infallible unit method: an R error cannot propagate — log it before
     // discarding so a failed callback is not invisible to the caller.
     Err(e) => {
-        eprintln!("[{{ wrapper }}] host '{{ method_name }}' raised; ignoring: {e}");
+        tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", error = %e, "host callback raised; ignoring");
     }
     _ => (),
 }

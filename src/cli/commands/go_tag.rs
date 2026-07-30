@@ -58,8 +58,8 @@ pub fn run(params: &GoTagParams<'_>) -> Result<Vec<String>> {
 
     for ref_tag in &tags {
         if params.dry_run {
-            println!("[dry-run] Would create git tag: {ref_tag}");
-            println!("[dry-run] Would push to {}: {ref_tag}", params.remote);
+            tracing::info!("[dry-run] Would create git tag: {ref_tag}");
+            tracing::info!("[dry-run] Would push to {}: {ref_tag}", params.remote);
             created.push(ref_tag.clone());
         } else {
             create_and_push_tag(ref_tag, &tag, params.remote, params.workspace_root)?;
@@ -75,10 +75,10 @@ pub fn run(params: &GoTagParams<'_>) -> Result<Vec<String>> {
             "remote": params.remote,
             "dry_run": params.dry_run,
         });
-        println!("{}", serde_json::to_string_pretty(&out)?);
+        crate::bin_cli::output::payload(serde_json::to_string_pretty(&out)?);
     } else if !params.dry_run {
         for t in &created {
-            println!("Created and pushed tag: {t}");
+            crate::bin_cli::output::line(format!("Created and pushed tag: {t}"));
         }
     }
 
@@ -92,7 +92,7 @@ fn create_and_push_tag(new_tag: &str, source_ref: &str, remote: &str, workspace_
         .output();
 
     if local_check.is_ok_and(|o| o.status.success()) {
-        eprintln!("  Tag {new_tag} already exists locally; skipping.");
+        tracing::warn!("  Tag {new_tag} already exists locally; skipping.");
         return Ok(());
     }
 
@@ -105,7 +105,7 @@ fn create_and_push_tag(new_tag: &str, source_ref: &str, remote: &str, workspace_
         .lines()
         .any(|l| l.contains(&format!("refs/tags/{new_tag}")))
     {
-        eprintln!("  Tag {new_tag} already exists on remote; skipping.");
+        tracing::warn!("  Tag {new_tag} already exists on remote; skipping.");
         return Ok(());
     }
 
@@ -136,7 +136,7 @@ fn create_and_push_tag(new_tag: &str, source_ref: &str, remote: &str, workspace_
         anyhow::bail!("git push for tag {new_tag} failed");
     }
 
-    eprintln!("  Tag {new_tag} created and pushed.");
+    tracing::info!("  Tag {new_tag} created and pushed.");
     Ok(())
 }
 

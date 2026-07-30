@@ -1,2 +1,2 @@
-    eprintln!("[{{ wrapper }}] vtable slot for host '{{ method_name }}' is not initialised; returning default");
+    tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", "vtable slot for host callback is not initialised; returning default");
     return {{ default_expr }};

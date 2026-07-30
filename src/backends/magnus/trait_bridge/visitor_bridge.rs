@@ -43,11 +43,12 @@ pub(super) fn gen_visitor_bridge(
     );
     let debug_count = rendered.matches("impl std::fmt::Debug").count();
     if debug_count != 1 {
-        eprintln!(
+        tracing::warn!(
             "[ALEF BUG] visitor_bridge.rs.jinja rendered {} Debug impls (expected 1) for struct {}",
-            debug_count, struct_name
+            debug_count,
+            struct_name
         );
-        eprintln!(
+        tracing::warn!(
             "[ALEF BUG] Rendered output (first 2000 chars):\n{}",
             &rendered[..rendered.len().min(2000)]
         );

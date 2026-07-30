@@ -1,3 +1,10 @@
+// This module is a sanctioned stdout reporting surface. Every function here formats and prints a
+// report table (validation summary, snippet listing) that is the primary deliverable of its
+// `alef snippets` subcommand, not a diagnostic. Routing each of the many `println!` calls below
+// through `crate::bin_cli::output::line` would be pure churn for no behavioral difference, so the
+// whole module carries the allow instead of one per call site. ~keep
+#![allow(clippy::print_stdout)]
+
 use crate::snippets::error::Result;
 use crate::snippets::types::{RunSummary, Snippet, SnippetStatus, ValidationResult};
 use std::path::Path;

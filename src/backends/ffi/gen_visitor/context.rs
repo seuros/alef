@@ -96,9 +96,11 @@ pub(super) fn context_field_specs(context_def: &TypeDef, api: &ApiSurface) -> Ve
         .iter()
         .filter_map(|field| {
             let Some(c_type) = context_c_type(field, api) else {
-                eprintln!(
-                    "[alef] gen_visitor(ffi): skip context field `{}.{}` with unsupported type {:?}",
-                    context_def.name, field.name, field.ty
+                tracing::warn!(
+                    "gen_visitor(ffi): skip context field `{}.{}` with unsupported type {:?}",
+                    context_def.name,
+                    field.name,
+                    field.ty
                 );
                 return None;
             };

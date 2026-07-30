@@ -4,5 +4,6 @@ pub(crate) mod aux_commands;
 pub(crate) mod core_commands;
 pub(crate) mod dispatch;
 pub(crate) mod helpers;
+pub(crate) mod output;
 pub(crate) mod publish_commands;
 pub(crate) mod release_commands;

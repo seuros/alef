@@ -32,16 +32,16 @@ match rx.blocking_recv() {
     // propagate. Log each failure before substituting the default — a silent
     // default is indistinguishable from a real result to the caller.
     Ok(Ok(json)) => serde_json::from_str(&json).unwrap_or_else(|e| {
-        eprintln!("[{{ wrapper }}] host '{{ method_name }}' returned an unparseable value; returning default: {e}");
+        tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", error = %e, "host returned an unparseable value; returning default");
         Default::default()
     }),
     // The host side already logs its own raises in detail, so keep this brief.
     Ok(Err(_msg)) => {
-        eprintln!("[{{ wrapper }}] host '{{ method_name }}' raised (details in host log); returning default");
+        tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", "host callback raised (details in host log); returning default");
         Default::default()
     }
     Err(_) => {
-        eprintln!("[{{ wrapper }}] reply channel for host '{{ method_name }}' closed before a reply arrived (host process exited or dropped the call); returning default");
+        tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", "reply channel closed before a reply arrived (host process exited or dropped the call); returning default");
         Default::default()
     }
 {%- endif %}

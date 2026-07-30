@@ -5,7 +5,7 @@ use crate::publish::ffi_stage;
 use crate::publish::platform::RustTarget;
 use anyhow::Context as _;
 use rayon::prelude::*;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 pub fn test(config: &ResolvedCrateConfig, languages: &[Language], e2e: bool, coverage: bool) -> anyhow::Result<()> {
     let pdfium_dir = compute_pdfium_dir();
@@ -60,7 +60,7 @@ pub fn test(config: &ResolvedCrateConfig, languages: &[Language], e2e: bool, cov
                 continue;
             }
             if let Err(e) = super::run_post_build(lang, &bc, config, &base_dir) {
-                eprintln!("  [{lang}] post-build processing failed before e2e tests: {e}");
+                warn!("[{lang}] post-build processing failed before e2e tests: {e}");
                 return Err(e).with_context(|| format!("post-build failed for {lang}"));
             }
         }
@@ -134,7 +134,7 @@ pub fn test(config: &ResolvedCrateConfig, languages: &[Language], e2e: bool, cov
     let mut first_error: Option<anyhow::Error> = None;
     for (lang, result) in results {
         if let Err(e) = result {
-            eprintln!("✗ test failed: {lang} — {e}");
+            error!("test failed: {lang} — {e}");
             if first_error.is_none() {
                 first_error = Some(e);
             }

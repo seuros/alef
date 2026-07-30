@@ -217,6 +217,12 @@ pub(crate) fn emit_cargo_toml(
             dep_lines.push(trimmed.to_string());
         }
     }
+    if has_trait_bridges {
+        dep_lines.push(format!(
+            "tracing = \"{}\"",
+            crate::core::template_versions::cargo::TRACING
+        ));
+    }
     dep_lines.extend(workspace_dep_lines);
     dep_lines.sort_by(|a, b| {
         let key = |line: &str| line.split('=').next().unwrap_or("").trim().to_string();
@@ -242,6 +248,7 @@ pub(crate) fn emit_cargo_toml(
     }
     if has_trait_bridges {
         machete_ignored.push("async-trait".to_string());
+        machete_ignored.push("tracing".to_string());
     }
     machete_ignored.sort();
     machete_ignored.dedup();

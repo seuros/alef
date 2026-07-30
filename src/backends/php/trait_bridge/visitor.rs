@@ -24,8 +24,8 @@ pub(super) fn gen_visitor_bridge(
         .unwrap_or_else(|| panic!("trait_path '{trait_path}' must be a qualified path of the form 'crate_name::...'; configure extension_name in alef.toml"))
         .to_string();
     let Some(result_type) = bridge_cfg.result_type.as_deref() else {
-        eprintln!(
-            "[alef] gen_visitor(php): skip visitor bridge `{}` because result_type is not configured",
+        tracing::warn!(
+            "gen_visitor(php): skip visitor bridge `{}` because result_type is not configured",
             bridge_cfg.trait_name
         );
         return String::new();
@@ -35,8 +35,8 @@ pub(super) fn gen_visitor_bridge(
         .cloned()
         .unwrap_or_else(|| format!("{core_crate}::{result_type}"));
     let Some(context_type) = bridge_cfg.context_type.as_deref() else {
-        eprintln!(
-            "[alef] gen_visitor(php): skip visitor bridge `{}` because context_type is not configured",
+        tracing::warn!(
+            "gen_visitor(php): skip visitor bridge `{}` because context_type is not configured",
             bridge_cfg.trait_name
         );
         return String::new();
@@ -46,8 +46,8 @@ pub(super) fn gen_visitor_bridge(
         .cloned()
         .unwrap_or_else(|| format!("{core_crate}::{context_type}"));
     let Some(result_metadata) = crate::codegen::visitor_result::visitor_result_metadata(api, bridge_cfg) else {
-        eprintln!(
-            "[alef] gen_visitor(php): skip visitor bridge `{}` because result_type `{result_type}` is not in IR",
+        tracing::warn!(
+            "gen_visitor(php): skip visitor bridge `{}` because result_type `{result_type}` is not in IR",
             bridge_cfg.trait_name
         );
         return String::new();

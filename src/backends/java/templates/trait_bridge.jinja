@@ -28,6 +28,7 @@ public final class {{ bridge_class }} implements AutoCloseable {
     private static final Linker LINKER = Linker.nativeLinker();
     private static final MethodHandles.Lookup LOOKUP = MethodHandles.lookup();
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final System.Logger LOGGER = System.getLogger({{ bridge_class }}.class.getName());
 
     /** Live registry — keeps Arenas and upcall stubs alive past the register call. */
     private static final ConcurrentHashMap<String, {{ bridge_class }}>
@@ -106,7 +107,8 @@ public final class {{ bridge_class }} implements AutoCloseable {
 {% endfor %}
             {{ method.direct_return_stmt }}
         } catch (Throwable e) {
-            System.err.println("[{{ bridge_class }}] host '{{ method.name }}' threw{% if method.direct_default_stmt %}; returning default{% endif %}: " + e);
+            LOGGER.log(System.Logger.Level.WARNING,
+                "host '{{ method.name }}' threw{% if method.direct_default_stmt %}; returning default{% endif %}", e);
 {% if method.direct_default_stmt %}
             {{ method.direct_default_stmt }}
 {% endif %}
@@ -140,7 +142,7 @@ public final class {{ bridge_class }} implements AutoCloseable {
 {% if method.has_out_error %}
             writeError(outError, e);
 {% else %}
-            System.err.println("[{{ bridge_class }}] host '{{ method.name }}' threw: " + e);
+            LOGGER.log(System.Logger.Level.WARNING, "host '{{ method.name }}' threw", e);
 {% endif %}
             return 1;
         }

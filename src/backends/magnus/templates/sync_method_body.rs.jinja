@@ -10,7 +10,7 @@ let val: magnus::Value = match {{ call }} {
         // This method's Rust signature is infallible, so a Ruby exception cannot
         // propagate. Log before substituting the default — a silent default is
         // indistinguishable from a real result to the caller.
-        eprintln!("[{{ wrapper }}] host '{{ method_name }}' raised; returning default: {e}");
+        tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", error = %e, "host callback raised; returning default");
         return Default::default();
         {%- endif %}
     }

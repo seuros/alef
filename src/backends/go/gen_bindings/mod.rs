@@ -226,8 +226,8 @@ impl Backend for GoBackend {
                     visitor_func,
                 ))
             } else {
-                eprintln!(
-                    "[alef] gen_visitor_file(go): visitor bridge `{vtable_trait_name}` missing trait or options function in IR, skipping visitor.go"
+                tracing::warn!(
+                    "gen_visitor_file(go): visitor bridge `{vtable_trait_name}` missing trait or options function in IR, skipping visitor.go"
                 );
                 String::new()
             };

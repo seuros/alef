@@ -37,6 +37,12 @@ pub(crate) fn scaffold_php_cargo(api: &ApiSurface, config: &ResolvedCrateConfig)
         }
         all_deps.push_str("async-trait = \"0.1\"");
     }
+    if has_trait_bridges && !all_deps.contains("tracing") {
+        if !all_deps.is_empty() {
+            all_deps.push('\n');
+        }
+        all_deps.push_str(&format!("tracing = \"{}\"", tv::cargo::TRACING));
+    }
     if has_streaming && !all_deps.contains("futures-util = ") && !all_deps.contains("futures-util =\"") {
         if !all_deps.is_empty() {
             all_deps.push('\n');
@@ -53,6 +59,7 @@ pub(crate) fn scaffold_php_cargo(api: &ApiSurface, config: &ResolvedCrateConfig)
     let mut machete_ignored: Vec<&str> = vec!["tokio", "ahash"];
     if has_trait_bridges {
         machete_ignored.push("async-trait");
+        machete_ignored.push("tracing");
     }
     if has_streaming {
         machete_ignored.push("futures-util");

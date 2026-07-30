@@ -1,4 +1,4 @@
 serde_json::from_str::<{{ ret_ty }}>(&json).unwrap_or_else(|e| {
-    eprintln!("[{{ wrapper }}] host '{{ method_name }}' returned an unparseable value; returning default: {e}");
+    tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", error = %e, "host returned an unparseable value; returning default");
     Default::default()
 })

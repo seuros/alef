@@ -2058,6 +2058,10 @@ fn test_generate_bindings_cargo_toml_js_sys_with_trait_bridge() {
         cargo_file.content.contains("js-sys"),
         "Cargo.toml must include js-sys when trait bridge code is generated that uses js_sys::Reflect"
     );
+    assert!(
+        cargo_file.content.contains("tracing"),
+        "Cargo.toml must include tracing when trait bridge code is generated that logs via tracing::warn!"
+    );
 }
 
 #[test]

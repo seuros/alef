@@ -322,8 +322,8 @@ impl Backend for CsharpBackend {
                     });
                 }
             } else {
-                eprintln!(
-                    "[alef] gen_visitor(csharp): skip visitor support files — configured trait `{}` is absent from IR",
+                tracing::warn!(
+                    "gen_visitor(csharp): skip visitor support files — configured trait `{}` is absent from IR",
                     visitor_bridge_cfg.map_or("<unknown>", |bridge| bridge.trait_name.as_str())
                 );
             }

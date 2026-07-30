@@ -40,7 +40,7 @@ match result {
     // Infallible unit method: a JS exception cannot propagate — log it before
     // discarding so a failed callback is not invisible to the caller.
     Err(e) => {
-        eprintln!("[{{ wrapper }}] host '{{ method_name }}' threw; ignoring: {e}");
+        tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", error = %e, "host callback threw; ignoring");
     }
     Ok(_) => ()
 }

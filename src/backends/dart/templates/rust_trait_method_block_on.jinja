@@ -25,14 +25,14 @@
                 // substituted value is not an option here — log the failure,
                 // then re-raise the original panic (previous behavior, now
                 // observable).
-                eprintln!("[{{ wrapper }}] host '{{ method_name }}' panicked: {msg}");
+                tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", error = %msg, "host callback panicked");
                 std::panic::resume_unwind(e);
 {% else %}
                 // This method's Rust signature is infallible, so a panic on the
                 // callback thread cannot propagate. Log before substituting the
                 // default — a silent default is indistinguishable from a real
                 // result to the caller.
-                eprintln!("[{{ wrapper }}] host '{{ method_name }}' panicked; returning default: {msg}");
+                tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", error = %msg, "host callback panicked; returning default");
                 return Default::default();
 {% endif %}
             }

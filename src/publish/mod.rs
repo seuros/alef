@@ -24,6 +24,7 @@ use crate::core::config::publish::{PublishLanguageConfig, VendorMode};
 use anyhow::{Context, Result};
 use platform::RustTarget;
 use std::path::{Path, PathBuf};
+use tracing::{debug, info, warn};
 
 /// Prepare a language package for publishing: vendor dependencies, stage FFI artifacts.
 ///
@@ -63,9 +64,9 @@ pub fn prepare(
                 let workspace_root = resolve_workspace_root(config);
                 let dest_dir = resolve_vendor_dest(config, lang);
                 if dry_run {
-                    eprintln!("[dry-run] Would vendor core crate from {core_crate_dir} for {lang}");
+                    info!("[dry-run] Would vendor core crate from {core_crate_dir} for {lang}");
                 } else {
-                    eprintln!("Vendoring core crate from {core_crate_dir} for {lang}...");
+                    info!("Vendoring core crate from {core_crate_dir} for {lang}...");
                     let generate_ws = matches!(lang, Language::Ruby);
                     let result = vendor::vendor_core_only(
                         Path::new(&workspace_root),
@@ -73,7 +74,7 @@ pub fn prepare(
                         Path::new(&dest_dir),
                         generate_ws,
                     )?;
-                    eprintln!("  vendored to {}", result.vendor_dir.display());
+                    info!("  vendored to {}", result.vendor_dir.display());
                 }
                 rewrite_binding_path_deps(config, lang, require_registry, dry_run)?;
             }
@@ -82,15 +83,15 @@ pub fn prepare(
                 let workspace_root = resolve_workspace_root(config);
                 let dest_dir = resolve_vendor_dest(config, lang);
                 if dry_run {
-                    eprintln!("[dry-run] Would vendor all dependencies from {core_crate_dir} for {lang}");
+                    info!("[dry-run] Would vendor all dependencies from {core_crate_dir} for {lang}");
                 } else {
-                    eprintln!("Vendoring all dependencies from {core_crate_dir} for {lang}...");
+                    info!("Vendoring all dependencies from {core_crate_dir} for {lang}...");
                     let result = vendor::vendor_full(
                         Path::new(&workspace_root),
                         Path::new(&core_crate_dir),
                         Path::new(&dest_dir),
                     )?;
-                    eprintln!("  vendored to {}", result.vendor_dir.display());
+                    info!("  vendored to {}", result.vendor_dir.display());
                 }
             }
             VendorMode::Registry => {
@@ -104,17 +105,17 @@ pub fn prepare(
                 let workspace_root = resolve_workspace_root(config);
                 if dry_run {
                     let platform = target.platform_for(lang);
-                    eprintln!("[dry-run] Would stage FFI artifacts for {lang} (platform: {platform})");
+                    info!("[dry-run] Would stage FFI artifacts for {lang} (platform: {platform})");
                 } else {
-                    eprintln!("Staging FFI artifacts for {lang}...");
+                    info!("Staging FFI artifacts for {lang}...");
                     let dest = ffi_stage::stage_ffi(config, lang, target, Path::new(&workspace_root))?;
-                    eprintln!("  staged to {}", dest.display());
+                    info!("  staged to {}", dest.display());
                     if let Some(header) = ffi_stage::stage_header(config, lang, target, Path::new(&workspace_root))? {
-                        eprintln!("  header staged to {}", header.display());
+                        info!("  header staged to {}", header.display());
                     }
                 }
             } else {
-                eprintln!("Skipping FFI staging for {lang}: no --target specified");
+                warn!("Skipping FFI staging for {lang}: no --target specified");
             }
         }
 
@@ -155,7 +156,7 @@ pub fn build(
     let ffi_in_list = languages.contains(&Language::Ffi);
     if needs_ffi && !ffi_in_list {
         let cmd = build_command_for_lang(Language::Ffi, config, target, use_cross);
-        eprintln!("Building FFI crate (dependency)...");
+        info!("Building FFI crate (dependency)...");
         run_shell_command(&cmd)?;
     }
 
@@ -166,7 +167,7 @@ pub fn build(
         }
 
         if matches!(lang, Language::Go | Language::Java | Language::Csharp) && needs_ffi && !ffi_in_list {
-            eprintln!("Skipping {lang}: FFI already built as dependency");
+            warn!("Skipping {lang}: FFI already built as dependency");
             continue;
         }
 
@@ -183,9 +184,9 @@ pub fn build(
         };
 
         let target_str = target.map(|t| t.triple.as_str()).unwrap_or("host");
-        eprintln!("Building {lang} for target {target_str}...");
+        info!("Building {lang} for target {target_str}...");
         run_shell_command(&cmd)?;
-        eprintln!("  build complete for {lang}");
+        info!("  build complete for {lang}");
 
         run_publish_after_hooks(lang, &lang_config)?;
     }
@@ -297,7 +298,7 @@ fn build_command_for_lang(
         | Language::Zig
         | Language::C
         | Language::Jni => {
-            eprintln!("Warning: Phase 1: {lang} backend build command not yet implemented");
+            warn!("Phase 1: {lang} backend build command not yet implemented");
             String::new()
         }
     }
@@ -305,7 +306,7 @@ fn build_command_for_lang(
 
 /// Run a shell command and return an error if it fails.
 pub(crate) fn run_shell_command(cmd: &str) -> Result<()> {
-    eprintln!("  $ {cmd}");
+    debug!("  $ {cmd}");
     let status = std::process::Command::new("sh")
         .arg("-c")
         .arg(cmd)
@@ -320,7 +321,7 @@ pub(crate) fn run_shell_command(cmd: &str) -> Result<()> {
 
 /// Run a shell command in a specific working directory.
 pub(crate) fn run_shell_command_in(cmd: &str, dir: &std::path::Path) -> Result<()> {
-    eprintln!("  $ {cmd}  (in {})", dir.display());
+    debug!("  $ {cmd}  (in {})", dir.display());
     let status = std::process::Command::new("sh")
         .arg("-c")
         .arg(cmd)
@@ -364,7 +365,7 @@ pub fn package(
             .map(|t| t.platform_for(lang))
             .unwrap_or_else(|| "host".to_string());
         if dry_run {
-            eprintln!(
+            info!(
                 "[dry-run] Would package {lang} for platform {platform} into {}",
                 output_dir.display()
             );
@@ -375,7 +376,7 @@ pub fn package(
             continue;
         }
 
-        eprintln!("Packaging {lang} for platform {platform}...");
+        info!("Packaging {lang} for platform {platform}...");
 
         let pkg_vendor_mode = lang_config
             .vendor_mode
@@ -470,18 +471,18 @@ pub fn package(
                 Some(vec![artifact])
             }
             Language::Rust => {
-                eprintln!("  CLI (Rust) packaging handled separately");
+                info!("  CLI (Rust) packaging handled separately");
                 None
             }
             _ => {
-                eprintln!("  packaging not yet implemented for {lang}");
+                warn!("  packaging not yet implemented for {lang}");
                 None
             }
         };
 
         if let Some(artifacts) = result {
             for artifact in &artifacts {
-                eprintln!("  produced {}", artifact.name);
+                info!("  produced {}", artifact.name);
             }
         }
 
@@ -540,7 +541,7 @@ fn rewrite_binding_path_deps(
     dry_run: bool,
 ) -> Result<()> {
     let Some(manifest) = resolve_binding_manifest(config, lang) else {
-        eprintln!("Skipping path-dep rewrite for {lang}: no shipped binding manifest");
+        warn!("Skipping path-dep rewrite for {lang}: no shipped binding manifest");
         return Ok(());
     };
 
@@ -553,7 +554,7 @@ fn rewrite_binding_path_deps(
     };
 
     if !manifest_abs.exists() {
-        eprintln!(
+        warn!(
             "Skipping path-dep rewrite for {lang}: binding manifest not found at {}",
             manifest_abs.display()
         );
@@ -575,7 +576,7 @@ fn rewrite_binding_path_deps(
         .resolved_version()
         .context("cannot resolve crate version for path-dep rewrite")?;
     if dry_run {
-        eprintln!(
+        info!(
             "[dry-run] Would rewrite workspace-member path deps to registry \
              version-deps (v{version}) in {} for {lang}",
             manifest_abs.display()
@@ -583,7 +584,7 @@ fn rewrite_binding_path_deps(
         return Ok(());
     }
 
-    eprintln!(
+    info!(
         "Rewriting workspace-member path deps to registry version-deps \
          (v{version}) in {} for {lang}...",
         manifest_abs.display()
@@ -599,7 +600,7 @@ fn rewrite_binding_path_deps(
             &members,
         )?;
     }
-    eprintln!("  rewrote {}", manifest_abs.display());
+    info!("  rewrote {}", manifest_abs.display());
     Ok(())
 }
 
@@ -739,7 +740,7 @@ fn run_publish_hooks(lang: Language, lang_config: &PublishLanguageConfig) -> Res
             .status()
             .with_context(|| format!("running precondition for {lang}: {precondition}"))?;
         if !status.success() {
-            eprintln!("Skipping {lang}: precondition failed ({precondition})");
+            warn!("Skipping {lang}: precondition failed ({precondition})");
             return Ok(false);
         }
     }

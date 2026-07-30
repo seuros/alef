@@ -21,8 +21,8 @@ pub fn gen_convert_no_visitor(
     function: Option<&FunctionDef>,
 ) -> String {
     let Some(function) = function else {
-        eprintln!(
-            "[alef] gen_convert_no_visitor(ffi): visitor callbacks require a matching public function, skipping no-visitor wrapper"
+        tracing::warn!(
+            "gen_convert_no_visitor(ffi): visitor callbacks require a matching public function, skipping no-visitor wrapper"
         );
         return String::new();
     };
@@ -86,8 +86,8 @@ pub(super) fn visitor_function_spec(
                 .and_then(|param| named_type_ref(&param.ty))
                 .map(|name| rust_named_path(core_import, name))
             else {
-                eprintln!(
-                    "[alef] gen_visitor_bindings(ffi): options-field visitor wrapper requires an options parameter, skipping with-visitor wrapper"
+                tracing::warn!(
+                    "gen_visitor_bindings(ffi): options-field visitor wrapper requires an options parameter, skipping with-visitor wrapper"
                 );
                 return None;
             };

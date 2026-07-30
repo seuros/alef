@@ -44,6 +44,9 @@ pub mod npm {
 }
 
 pub mod cargo {
+    // renovate: datasource=crate depName=tracing
+    pub const TRACING: &str = "0.1";
+
     // renovate: datasource=crate depName=napi
     pub const NAPI: &str = "3";
 
@@ -429,7 +432,7 @@ pub mod cran {
 }
 
 pub mod precommit {
-    pub const ALEF_REV: &str = "v0.48.10";
+    pub const ALEF_REV: &str = "v0.48.11";
 
     /// Codegen format version — bumped only when output-affecting codegen
     /// changes require all generated files to be re-stamped. Unlike

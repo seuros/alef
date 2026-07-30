@@ -133,15 +133,15 @@ fn visitor_associated_types(
     bridge_cfg: &TraitBridgeConfig,
 ) -> Option<VisitorAssociatedTypes> {
     let Some(context_type) = bridge_cfg.context_type.as_deref() else {
-        eprintln!(
-            "[alef] gen_visitor(go): trait bridge `{}` must configure context_type",
+        tracing::warn!(
+            "gen_visitor(go): trait bridge `{}` must configure context_type",
             bridge_cfg.trait_name
         );
         return None;
     };
     let Some(result_type) = bridge_cfg.result_type.as_deref() else {
-        eprintln!(
-            "[alef] gen_visitor(go): trait bridge `{}` must configure result_type",
+        tracing::warn!(
+            "gen_visitor(go): trait bridge `{}` must configure result_type",
             bridge_cfg.trait_name
         );
         return None;
@@ -273,17 +273,20 @@ fn callback_specs_from_trait(
                         break;
                     }
                     _ => {
-                        eprintln!(
-                            "[alef] gen_visitor(go): skip method `{}` — unsupported Vec param `{}`",
-                            m.name, p.name
+                        tracing::warn!(
+                            "gen_visitor(go): skip method `{}` — unsupported Vec param `{}`",
+                            m.name,
+                            p.name
                         );
                         continue 'methods;
                     }
                 },
                 _ => {
-                    eprintln!(
-                        "[alef] gen_visitor(go): skip method `{}` — unsupported param `{}: {:?}`",
-                        m.name, p.name, p.ty
+                    tracing::warn!(
+                        "gen_visitor(go): skip method `{}` — unsupported param `{}: {:?}`",
+                        m.name,
+                        p.name,
+                        p.ty
                     );
                     continue 'methods;
                 }
@@ -331,24 +334,26 @@ pub fn gen_visitor_file(
     bridge_func: &FunctionDef,
 ) -> String {
     let Some(associated_types) = visitor_associated_types(trait_def, bridge_cfg) else {
-        eprintln!(
-            "[alef] gen_visitor(go): bridge `{}` has no compatible visitor callback methods, skipping visitor.go",
+        tracing::warn!(
+            "gen_visitor(go): bridge `{}` has no compatible visitor callback methods, skipping visitor.go",
             bridge_cfg.trait_name
         );
         return String::new();
     };
     let specs = callback_specs_from_trait(trait_def, &associated_types);
     if specs.is_empty() {
-        eprintln!(
-            "[alef] gen_visitor(go): bridge `{}` has no supported visitor callback methods, skipping visitor.go",
+        tracing::warn!(
+            "gen_visitor(go): bridge `{}` has no supported visitor callback methods, skipping visitor.go",
             bridge_cfg.trait_name
         );
         return String::new();
     }
     let Some(codec_metadata) = visitor_codec_metadata(api, &associated_types) else {
-        eprintln!(
-            "[alef] gen_visitor(go): bridge `{}` requires IR metadata for context_type `{}` and result_type `{}`",
-            bridge_cfg.trait_name, associated_types.context_type, associated_types.result_type
+        tracing::warn!(
+            "gen_visitor(go): bridge `{}` requires IR metadata for context_type `{}` and result_type `{}`",
+            bridge_cfg.trait_name,
+            associated_types.context_type,
+            associated_types.result_type
         );
         return String::new();
     };

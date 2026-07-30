@@ -23,18 +23,26 @@ pub(crate) fn generated_files_match_disk(
     })
 }
 
+/// Map the CLI verbosity flags to a default `tracing` level filter.
+///
+/// A single verbosity channel drives the whole binary: `--quiet` pins the level to
+/// `error`; otherwise the `-v` count raises it — no flag is `info` (progress visible),
+/// `-v` is `debug` (per-file/per-item detail), `-vv`+ is `trace`. `RUST_LOG` overrides
+/// this default when set (see [`init_tracing`]).
+pub(crate) fn default_log_level(verbose: u8, quiet: bool) -> &'static str {
+    if quiet {
+        return "error";
+    }
+    match verbose {
+        0 => "info",
+        1 => "debug",
+        _ => "trace",
+    }
+}
+
 pub(crate) fn init_tracing(verbose: u8, quiet: bool, no_color: bool) {
     use tracing_subscriber::EnvFilter;
-    let default_level = if quiet {
-        "error"
-    } else {
-        match verbose {
-            0 => "info",
-            1 => "info",
-            2 => "debug",
-            _ => "trace",
-        }
-    };
+    let default_level = default_log_level(verbose, quiet);
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -422,6 +430,17 @@ e2e = "cargo test"
         )
         .unwrap();
         cfg.resolve().unwrap().remove(0)
+    }
+
+    #[test]
+    fn default_log_level_maps_verbosity_to_levels() {
+        assert_eq!(default_log_level(0, false), "info");
+        assert_eq!(default_log_level(1, false), "debug");
+        assert_eq!(default_log_level(2, false), "trace");
+        assert_eq!(default_log_level(9, false), "trace");
+        // --quiet wins over any -v count.
+        assert_eq!(default_log_level(0, true), "error");
+        assert_eq!(default_log_level(3, true), "error");
     }
 
     #[test]

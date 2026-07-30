@@ -102,6 +102,8 @@ pub(super) fn gen_cargo_toml(api: &ApiSurface, config: &ResolvedCrateConfig) -> 
 
     let header = hash::header(CommentStyle::Hash);
 
+    let has_trait_bridges = !config.trait_bridges.is_empty();
+
     let mut deps: Vec<(String, String)> = vec![
         (
             core_dep_key.clone(),
@@ -125,6 +127,9 @@ pub(super) fn gen_cargo_toml(api: &ApiSurface, config: &ResolvedCrateConfig) -> 
             format!(r#""{}""#, tv::cargo::WASM_BINDGEN_FUTURES),
         ),
     ];
+    if has_trait_bridges {
+        deps.push(("tracing".to_string(), format!(r#""{}""#, tv::cargo::TRACING)));
+    }
     let mut extra_parsed: Vec<(String, String)> = Vec::new();
     for line in extra_deps_section.lines() {
         let trimmed = line.trim();
@@ -164,6 +169,7 @@ pub(super) fn gen_cargo_toml(api: &ApiSurface, config: &ResolvedCrateConfig) -> 
     } else {
         format!("\n[dev-dependencies]\n{}\n", dev_dep_lines.join("\n"))
     };
+    let tracing_ignored_line = if has_trait_bridges { "    \"tracing\",\n" } else { "" };
 
     format!(
         r#"{header}
@@ -183,7 +189,7 @@ ignored = [
     "wasm-bindgen-futures",
     "serde",
     "serde_json",
-]
+{tracing_ignored_line}]
 
 [package.metadata.wasm-pack.profile.release]
 {wasm_opt_line}
@@ -210,5 +216,6 @@ getrandom_03 = {{ package = "getrandom", version = "0.3", features = ["wasm_js"]
         deps_block = deps_block,
         dev_deps_section = dev_deps_section,
         features_table = features_table,
+        tracing_ignored_line = tracing_ignored_line,
     )
 }

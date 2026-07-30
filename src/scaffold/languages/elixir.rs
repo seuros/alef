@@ -82,6 +82,7 @@ pub(crate) fn scaffold_elixir_cargo(
     }
     if has_trait_bridges {
         dep_lines.push(format!("async-trait = \"{}\"", tv::cargo::ASYNC_TRAIT));
+        dep_lines.push(format!("tracing = \"{}\"", tv::cargo::TRACING));
     }
     if has_async || has_trait_bridges || has_streaming {
         dep_lines.push("tokio = { version = \"1\", features = [\"rt-multi-thread\", \"sync\"] }".to_owned());
@@ -114,6 +115,7 @@ pub(crate) fn scaffold_elixir_cargo(
     }
     if has_trait_bridges {
         machete_ignored.push("async-trait");
+        machete_ignored.push("tracing");
     }
     if has_streaming {
         machete_ignored.push("futures-util");

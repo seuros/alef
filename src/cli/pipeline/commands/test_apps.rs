@@ -2,7 +2,7 @@ use crate::cli::pipeline::helpers::{check_precondition_named, run_command_stream
 use crate::core::config::ResolvedCrateConfig;
 use anyhow::Context as _;
 use rayon::prelude::*;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 /// Outcome of running a single language's registry-mode test app.
 ///
@@ -253,10 +253,10 @@ pub fn test_apps_run(config: &ResolvedCrateConfig, names: &[String]) -> anyhow::
     let mut first_error: Option<anyhow::Error> = None;
     for (name, outcome) in results {
         match outcome {
-            TestAppOutcome::Passed => eprintln!("✓ test-app passed: {name}"),
-            TestAppOutcome::Skipped => eprintln!("⊘ test-app skipped: {name}"),
+            TestAppOutcome::Passed => info!("test-app passed: {name}"),
+            TestAppOutcome::Skipped => warn!("test-app skipped: {name}"),
             TestAppOutcome::Failed(e) => {
-                eprintln!("✗ test-app failed: {name} — {e}");
+                error!("test-app failed: {name} — {e}");
                 if first_error.is_none() {
                     first_error = Some(e);
                 }

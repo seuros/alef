@@ -167,17 +167,20 @@ pub(crate) fn callback_specs_from_trait(trait_def: &crate::core::ir::TypeDef, co
                         break;
                     }
                     _ => {
-                        eprintln!(
-                            "[alef] gen_visitor(csharp): skip method `{}` — unsupported Vec param `{}`",
-                            m.name, p.name
+                        tracing::warn!(
+                            "gen_visitor(csharp): skip method `{}` — unsupported Vec param `{}`",
+                            m.name,
+                            p.name
                         );
                         continue 'methods;
                     }
                 },
                 _ => {
-                    eprintln!(
-                        "[alef] gen_visitor(csharp): skip method `{}` — unsupported param `{}: {:?}`",
-                        m.name, p.name, p.ty
+                    tracing::warn!(
+                        "gen_visitor(csharp): skip method `{}` — unsupported param `{}: {:?}`",
+                        m.name,
+                        p.name,
+                        p.ty
                     );
                     continue 'methods;
                 }
@@ -216,14 +219,14 @@ pub fn gen_visitor_files(
                     gen_node_context(namespace, context_def),
                 ));
             } else {
-                eprintln!(
-                    "[alef] gen_visitor(csharp): skip context file — configured context_type `{context_type}` is absent from IR"
+                tracing::warn!(
+                    "gen_visitor(csharp): skip context file — configured context_type `{context_type}` is absent from IR"
                 );
             }
         }
     } else if trait_def.methods.iter().any(|method| method.trait_source.is_none()) {
-        eprintln!(
-            "[alef] gen_visitor(csharp): skip context file — trait bridge `{}` has no context_type metadata",
+        tracing::warn!(
+            "gen_visitor(csharp): skip context file — trait bridge `{}` has no context_type metadata",
             bridge_cfg.trait_name
         );
     }
@@ -236,19 +239,19 @@ pub fn gen_visitor_files(
                         format!("{}.cs", crate::codegen::naming::csharp_type_name(result_type)),
                         content,
                     )),
-                    Err(err) => eprintln!(
-                        "[alef] gen_visitor(csharp): skip result file — configured result_type `{result_type}` is invalid: {err}"
+                    Err(err) => tracing::warn!(
+                        "gen_visitor(csharp): skip result file — configured result_type `{result_type}` is invalid: {err}"
                     ),
                 }
             } else {
-                eprintln!(
-                    "[alef] gen_visitor(csharp): skip result file — configured result_type `{result_type}` is absent from IR"
+                tracing::warn!(
+                    "gen_visitor(csharp): skip result file — configured result_type `{result_type}` is absent from IR"
                 );
             }
         }
     } else if trait_def.methods.iter().any(|method| method.trait_source.is_none()) {
-        eprintln!(
-            "[alef] gen_visitor(csharp): skip result file — trait bridge `{}` has no result_type metadata",
+        tracing::warn!(
+            "gen_visitor(csharp): skip result file — trait bridge `{}` has no result_type metadata",
             bridge_cfg.trait_name
         );
     }

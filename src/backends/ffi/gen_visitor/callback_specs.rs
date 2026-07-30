@@ -44,9 +44,7 @@ pub(crate) fn callback_specs_from_trait(
     bridge_cfg: Option<&TraitBridgeConfig>,
 ) -> Vec<CallbackSpec> {
     let Some(protocol) = VisitorProtocol::from_bridge_config("", bridge_cfg) else {
-        eprintln!(
-            "[alef] gen_visitor(ffi): visitor callbacks require configured context_type and result_type metadata"
-        );
+        tracing::warn!("gen_visitor(ffi): visitor callbacks require configured context_type and result_type metadata");
         return Vec::new();
     };
     let mut specs = Vec::with_capacity(trait_def.methods.len());
@@ -55,9 +53,10 @@ pub(crate) fn callback_specs_from_trait(
             continue;
         }
         if !matches!(&m.return_type, TypeRef::Named(name) if name == &protocol.result_type) {
-            eprintln!(
-                "[alef] gen_visitor(ffi): skip method `{}` — visitor callbacks require `{}` return type",
-                m.name, protocol.result_type
+            tracing::warn!(
+                "gen_visitor(ffi): skip method `{}` — visitor callbacks require `{}` return type",
+                m.name,
+                protocol.result_type
             );
             continue;
         }
@@ -66,9 +65,10 @@ pub(crate) fn callback_specs_from_trait(
             .iter()
             .any(|p| matches!(&p.ty, TypeRef::Named(name) if name == &protocol.context_type))
         {
-            eprintln!(
-                "[alef] gen_visitor(ffi): skip method `{}` — visitor callbacks require `{}` parameter",
-                m.name, protocol.context_type
+            tracing::warn!(
+                "gen_visitor(ffi): skip method `{}` — visitor callbacks require `{}` parameter",
+                m.name,
+                protocol.context_type
             );
             continue;
         }
@@ -109,17 +109,20 @@ pub(crate) fn callback_specs_from_trait(
                         params.push(ParamKind::CellSlice(param_name));
                     }
                     _ => {
-                        eprintln!(
-                            "[alef] gen_visitor(ffi): skip method `{}` — unsupported Vec param `{}`",
-                            m.name, p.name
+                        tracing::warn!(
+                            "gen_visitor(ffi): skip method `{}` — unsupported Vec param `{}`",
+                            m.name,
+                            p.name
                         );
                         continue 'methods;
                     }
                 },
                 _ => {
-                    eprintln!(
-                        "[alef] gen_visitor(ffi): skip method `{}` — unsupported param `{}: {:?}`",
-                        m.name, p.name, p.ty
+                    tracing::warn!(
+                        "gen_visitor(ffi): skip method `{}` — unsupported param `{}: {:?}`",
+                        m.name,
+                        p.name,
+                        p.ty
                     );
                     continue 'methods;
                 }

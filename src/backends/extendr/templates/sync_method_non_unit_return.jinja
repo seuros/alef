@@ -35,7 +35,7 @@ match result {
     // propagate. Log before substituting the default — a silent default is
     // indistinguishable from a real result to the caller.
     Err(e) => {
-        eprintln!("[{{ wrapper }}] host '{{ method_name }}' raised; returning default: {e}");
+        tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", error = %e, "host callback raised; returning default");
         Default::default()
     }
     Ok(val) => {
@@ -46,7 +46,7 @@ match result {
         match s.as_str() {
             "" | "null" => Default::default(),
             _ => serde_json::from_str::<_>(&s).unwrap_or_else(|e| {
-                eprintln!("[{{ wrapper }}] host '{{ method_name }}' returned an unparseable value; returning default: {e}");
+                tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", error = %e, "host returned an unparseable value; returning default");
                 Default::default()
             })
         }

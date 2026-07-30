@@ -48,11 +48,11 @@ pub fn gen_visitor_bindings_with_api(
 ) -> String {
     let pascal_prefix = prefix.to_pascal_case();
     let Some(api) = api else {
-        eprintln!("[alef] gen_visitor_bindings(ffi): visitor callbacks require API metadata");
+        tracing::warn!("gen_visitor_bindings(ffi): visitor callbacks require API metadata");
         return String::new();
     };
     let Some(bridge_cfg) = bridge_cfg else {
-        eprintln!("[alef] gen_visitor_bindings(ffi): visitor callbacks require trait_bridge metadata");
+        tracing::warn!("gen_visitor_bindings(ffi): visitor callbacks require trait_bridge metadata");
         return String::new();
     };
     let Some(protocol) = VisitorProtocol::from_api(api, bridge_cfg) else {
@@ -62,8 +62,8 @@ pub fn gen_visitor_bindings_with_api(
         return String::new();
     };
     let Some(result_metadata) = crate::codegen::visitor_result::visitor_result_metadata(api, bridge_cfg) else {
-        eprintln!(
-            "[alef] gen_visitor_bindings(ffi): trait bridge `{}` result_type metadata is required",
+        tracing::warn!(
+            "gen_visitor_bindings(ffi): trait bridge `{}` result_type metadata is required",
             bridge_cfg.trait_name
         );
         return String::new();
@@ -72,9 +72,11 @@ pub fn gen_visitor_bindings_with_api(
     let result_decode_arms = gen_result_decode_arms(&result_metadata, &default_result);
     let specs = callback_specs_from_trait(trait_def, Some(bridge_cfg));
     if specs.is_empty() {
-        eprintln!(
-            "[alef] gen_visitor_bindings(ffi): trait `{}` has no `{}`/`{}` visitor callback methods, skipping visitor callbacks",
-            trait_def.name, protocol.context_type, protocol.result_type
+        tracing::warn!(
+            "gen_visitor_bindings(ffi): trait `{}` has no `{}`/`{}` visitor callback methods, skipping visitor callbacks",
+            trait_def.name,
+            protocol.context_type,
+            protocol.result_type
         );
         return String::new();
     }
@@ -86,8 +88,8 @@ pub fn gen_visitor_bindings_with_api(
         .and_then(|param| named_type_ref(&param.ty))
         .or(bridge_cfg.options_type.as_deref());
     let Some(options_type) = options_type else {
-        eprintln!(
-            "[alef] gen_visitor_bindings(ffi): visitor callbacks require a configured or IR-derived options type, skipping visitor callbacks"
+        tracing::warn!(
+            "gen_visitor_bindings(ffi): visitor callbacks require a configured or IR-derived options type, skipping visitor callbacks"
         );
         return String::new();
     };
@@ -96,8 +98,8 @@ pub fn gen_visitor_bindings_with_api(
 
     let context_fields = context_field_specs(context_def, api);
     if context_fields.is_empty() {
-        eprintln!(
-            "[alef] gen_visitor_bindings(ffi): context_type `{}` has no FFI-compatible fields",
+        tracing::warn!(
+            "gen_visitor_bindings(ffi): context_type `{}` has no FFI-compatible fields",
             protocol.context_type
         );
         return String::new();

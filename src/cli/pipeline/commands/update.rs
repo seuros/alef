@@ -1,6 +1,7 @@
 use crate::cli::pipeline::helpers::{check_precondition, run_before, run_command_streamed};
 use crate::core::config::{Language, ResolvedCrateConfig};
 use rayon::prelude::*;
+use tracing::error;
 
 fn dedupe_plans(plans: Vec<(Language, Vec<String>)>) -> Vec<(Language, Vec<String>)> {
     let mut seen = std::collections::HashSet::<String>::new();
@@ -58,7 +59,7 @@ pub fn update(config: &ResolvedCrateConfig, languages: &[Language], latest: bool
     let mut first_error: Option<anyhow::Error> = None;
     for (lang, result) in results {
         if let Err(e) = result {
-            eprintln!("✗ update failed: {lang} — {e}");
+            error!("update failed: {lang} — {e}");
             if first_error.is_none() {
                 first_error = Some(e);
             }

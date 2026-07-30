@@ -31,8 +31,11 @@ Python::attach(|py| {
             // cannot propagate. Log it before substituting the default value —
             // a silent default is indistinguishable from a real result to the
             // caller (e.g. a zero token count reads as "fits any budget").
-            eprintln!(
-                "[{{ wrapper }}] host '{{ method_name }}' raised; returning default: {e}"
+            tracing::warn!(
+                wrapper = "{{ wrapper }}",
+                method = "{{ method_name }}",
+                error = %e,
+                "host callback raised; returning default"
             );
             Default::default()
         })

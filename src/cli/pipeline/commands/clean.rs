@@ -1,6 +1,7 @@
 use crate::cli::pipeline::helpers::{check_precondition, run_before, run_command_streamed};
 use crate::core::config::{Language, ResolvedCrateConfig};
 use rayon::prelude::*;
+use tracing::error;
 
 /// Clean build artifacts for each language.
 pub fn clean(config: &ResolvedCrateConfig, languages: &[Language]) -> anyhow::Result<()> {
@@ -29,7 +30,7 @@ pub fn clean(config: &ResolvedCrateConfig, languages: &[Language]) -> anyhow::Re
     let mut first_error: Option<anyhow::Error> = None;
     for (lang, result) in results {
         if let Err(e) = result {
-            eprintln!("✗ clean failed: {lang} — {e}");
+            error!("clean failed: {lang} — {e}");
             if first_error.is_none() {
                 first_error = Some(e);
             }

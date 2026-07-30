@@ -47,21 +47,21 @@ pub(super) fn resolve_visitor_generation(
     })?;
 
     let Some(context_type) = bridge.context_type.as_deref() else {
-        eprintln!(
+        tracing::warn!(
             "Skipping Java visitor generation for trait bridge `{}`: missing context_type metadata",
             bridge.trait_name
         );
         return None;
     };
     let Some(result_type) = bridge.result_type.as_deref() else {
-        eprintln!(
+        tracing::warn!(
             "Skipping Java visitor generation for trait bridge `{}`: missing result_type metadata",
             bridge.trait_name
         );
         return None;
     };
     let Some(context_type_def) = api.types.iter().find(|typ| typ.name == context_type && !typ.is_trait) else {
-        eprintln!(
+        tracing::warn!(
             "Skipping Java visitor generation for trait bridge `{}`: context_type `{context_type}` is absent",
             bridge.trait_name
         );
@@ -72,7 +72,7 @@ pub(super) fn resolve_visitor_generation(
         _ => None,
     });
     let Some(result_enum) = api.enums.iter().find(|enum_def| enum_def.name == result_type) else {
-        eprintln!(
+        tracing::warn!(
             "Skipping Java visitor generation for trait bridge `{}`: result_type `{result_type}` is absent",
             bridge.trait_name
         );
@@ -83,7 +83,7 @@ pub(super) fn resolve_visitor_generation(
         .iter()
         .find(|typ| typ.name == bridge.trait_name && typ.is_trait)
     else {
-        eprintln!(
+        tracing::warn!(
             "Skipping Java visitor generation for trait bridge `{}`: trait definition is absent",
             bridge.trait_name
         );
@@ -93,7 +93,7 @@ pub(super) fn resolve_visitor_generation(
     let metadata = crate::codegen::visitor_result::visitor_result_metadata(api, bridge)?;
     let callbacks = callbacks_from_trait(trait_def, context_type, result_type);
     if callbacks.is_empty() {
-        eprintln!(
+        tracing::warn!(
             "Skipping Java visitor generation for trait bridge `{}`: no methods use `{context_type}` -> `{result_type}`",
             bridge.trait_name
         );
@@ -342,8 +342,8 @@ fn callback_from_method(method: &MethodDef, context_type: &str) -> Option<Callba
         .map(extra_param_from_param)
         .collect();
     let Some(extra) = extra else {
-        eprintln!(
-            "[alef] gen_visitor(java): skip method `{}` — unsupported callback parameter",
+        tracing::warn!(
+            "gen_visitor(java): skip method `{}` — unsupported callback parameter",
             method.name
         );
         return None;

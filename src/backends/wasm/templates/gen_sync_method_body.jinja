@@ -1,18 +1,8 @@
 {% if not has_error %}
 // This method's Rust signature is infallible, so a host failure cannot
-// propagate. eprintln! is invisible in browsers, so log to the JS console
-// before substituting the default — a silent default is indistinguishable
-// from a real result to the caller.
-fn __log_host_failure(msg: &str) {
-    let global = js_sys::global();
-    if let Ok(console) = js_sys::Reflect::get(&global, &wasm_bindgen::JsValue::from_str("console")) {
-        if let Ok(error_fn) = js_sys::Reflect::get(&console, &wasm_bindgen::JsValue::from_str("error")) {
-            if let Ok(error_fn) = error_fn.dyn_into::<js_sys::Function>() {
-                let _ = error_fn.call1(&console, &wasm_bindgen::JsValue::from_str(msg));
-            }
-        }
-    }
-}
+// propagate. Log it via `tracing::warn!` instead of eprintln! (invisible in
+// browsers) — consumers that want browser console output can wire up a wasm
+// tracing subscriber (e.g. tracing-wasm) on top of this crate's tracing events.
 {% endif %}
 let key = wasm_bindgen::JsValue::from_str("{{ js_name }}");
 let has_method = js_sys::Reflect::has(&self.inner, &key).unwrap_or(false);
@@ -20,7 +10,7 @@ if !has_method {
 {% if has_error %}
     return Err({{ error_expr }});
 {% else %}
-    __log_host_failure("[{{ wrapper }}] host method '{{ js_name }}' is missing; returning default");
+    tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ js_name }}", "host method is missing; returning default");
     return Default::default();
 {% endif %}
 }
@@ -32,7 +22,7 @@ let func_val = js_sys::Reflect::get(&self.inner, &key)
 let func_val = match js_sys::Reflect::get(&self.inner, &key) {
     Ok(f) => f,
     Err(e) => {
-        __log_host_failure(&format!("[{{ wrapper }}] failed to get host method '{{ js_name }}'; returning default: {e:?}"));
+        tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ js_name }}", error = ?e, "failed to get host method; returning default");
         return Default::default();
     }
 };
@@ -45,7 +35,7 @@ let func: js_sys::Function = func_val.dyn_into()
 let func: js_sys::Function = match func_val.dyn_into() {
     Ok(f) => f,
     Err(_) => {
-        __log_host_failure("[{{ wrapper }}] host '{{ js_name }}' is not a function; returning default");
+        tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ js_name }}", "host method is not a function; returning default");
         return Default::default();
     }
 };
@@ -65,7 +55,7 @@ let result = func.apply(&self.inner, &args)
 let result = match func.apply(&self.inner, &args) {
     Ok(r) => r,
     Err(e) => {
-        __log_host_failure(&format!("[{{ wrapper }}] host '{{ js_name }}' threw; returning default: {e:?}"));
+        tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ js_name }}", error = ?e, "host callback threw; returning default");
         return Default::default();
     }
 };
@@ -86,7 +76,7 @@ result.as_string()
 match result.as_string() {
     Some(s) => s,
     None => {
-        __log_host_failure("[{{ wrapper }}] host '{{ js_name }}' returned a non-string value; returning default");
+        tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ js_name }}", "host returned a non-string value; returning default");
         Default::default()
     }
 }
@@ -100,7 +90,7 @@ result.as_bool()
 match result.as_bool() {
     Some(b) => b,
     None => {
-        __log_host_failure("[{{ wrapper }}] host '{{ js_name }}' returned a non-boolean value; returning default");
+        tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ js_name }}", "host returned a non-boolean value; returning default");
         Default::default()
     }
 }
@@ -116,12 +106,12 @@ match result.as_string() {
     Some(s) => match serde_json::from_str::<{{ ret_ty }}>(&format!("\"{}\"", s)) {
         Ok(v) => v,
         Err(e) => {
-            __log_host_failure(&format!("[{{ wrapper }}] host '{{ js_name }}' returned an unparseable value; returning default: {e}"));
+            tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ js_name }}", error = %e, "host returned an unparseable value; returning default");
             Default::default()
         }
     },
     None => {
-        __log_host_failure("[{{ wrapper }}] host '{{ js_name }}' returned a non-string value; returning default");
+        tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ js_name }}", "host returned a non-string value; returning default");
         Default::default()
     }
 }
@@ -137,12 +127,12 @@ match result.as_string() {
     Some(s) => match serde_json::from_str::<{{ ret_ty }}>(&s) {
         Ok(v) => v,
         Err(e) => {
-            __log_host_failure(&format!("[{{ wrapper }}] host '{{ js_name }}' returned an unparseable value; returning default: {e}"));
+            tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ js_name }}", error = %e, "host returned an unparseable value; returning default");
             Default::default()
         }
     },
     None => {
-        __log_host_failure("[{{ wrapper }}] host '{{ js_name }}' returned a non-string value; returning default");
+        tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ js_name }}", "host returned a non-string value; returning default");
         Default::default()
     }
 }

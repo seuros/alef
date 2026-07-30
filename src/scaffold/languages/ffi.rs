@@ -79,6 +79,9 @@ pub(crate) fn scaffold_ffi(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
     if has_trait_bridges && !extra_dep_lines.iter().any(|l| l.starts_with("async-trait")) {
         extra_dep_lines.push(format!("async-trait = \"{}\"", tv::cargo::ASYNC_TRAIT));
     }
+    if has_trait_bridges && !extra_dep_lines.iter().any(|l| l.starts_with("tracing")) {
+        extra_dep_lines.push(format!("tracing = \"{}\"", tv::cargo::TRACING));
+    }
     let has_streaming = config
         .adapters
         .iter()
@@ -102,6 +105,7 @@ pub(crate) fn scaffold_ffi(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
     let mut machete_ignored: Vec<&str> = vec!["ahash", "serde_json", "tokio"];
     if has_trait_bridges {
         machete_ignored.push("async-trait");
+        machete_ignored.push("tracing");
     }
     if has_streaming {
         machete_ignored.push("futures-util");

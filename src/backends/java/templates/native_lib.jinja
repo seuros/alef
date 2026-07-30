@@ -1,5 +1,6 @@
 @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD"})
 final class {{ class_name }} {
+    private static final System.Logger LOGGER = System.getLogger({{ class_name }}.class.getName());
     private static final Linker LINKER = Linker.nativeLinker();
     private static SymbolLookup LIB;
     private static final String NATIVES_RESOURCE_ROOT = "/natives";
@@ -94,7 +95,7 @@ final class {{ class_name }} {
             System.load(absPath.toString());
             return absPath;
         } catch (Exception | Error e) {
-            System.err.println("[NativeLib] Failed to extract and load native library from resources: " + e.getMessage());
+            LOGGER.log(System.Logger.Level.WARNING, "Failed to extract and load native library from resources", e);
             return null;
         }
     }

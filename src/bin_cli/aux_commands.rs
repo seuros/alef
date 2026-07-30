@@ -13,12 +13,12 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
     let config_path = &context.config_path;
     match command {
         Commands::Init { lang } => {
-            eprintln!("Initializing alef project");
+            tracing::info!("Initializing alef project");
             if let Some(langs) = &lang {
-                eprintln!("  Languages: {}", langs.join(", "));
+                tracing::info!("  Languages: {}", langs.join(", "));
             }
             pipeline::init(config_path, lang.clone())?;
-            eprintln!("  Created alef.toml");
+            tracing::info!("  Created alef.toml");
 
             let (_workspace, resolved) = load_config(config_path)?;
             let resolved_cfg = &resolved[0];
@@ -28,7 +28,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             let api = pipeline::extract(resolved_cfg, config_path, false)?;
             let sources_hash = cache::sources_hash(&resolved_cfg.sources)?;
 
-            eprintln!("  Generating bindings...");
+            tracing::info!("  Generating bindings...");
             let bindings = pipeline::generate(&api, resolved_cfg, &languages, false, config_path)?;
             let mut binding_count: usize = 0;
             let mut all_paths = std::collections::HashSet::new();
@@ -40,14 +40,14 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 binding_count += pipeline::write_files(&single, &base_dir)?;
             }
 
-            eprintln!("  Generating scaffolding...");
+            tracing::info!("  Generating scaffolding...");
             let scaffold_files = pipeline::scaffold(&api, resolved_cfg, &languages, config_path)?;
             let scaffold_count = pipeline::write_scaffold_files(&scaffold_files, &base_dir)?;
             for file in &scaffold_files {
                 all_paths.insert(base_dir.join(&file.path));
             }
 
-            eprintln!("  Formatting...");
+            tracing::info!("  Formatting...");
             pipeline::format_generated(&bindings, resolved_cfg, &base_dir, None);
 
             let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
@@ -55,7 +55,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
             pipeline::install_poly_hooks(&base_dir);
 
-            println!("Initialized: {binding_count} binding files, {scaffold_count} scaffold files");
+            tracing::info!("Initialized: {binding_count} binding files, {scaffold_count} scaffold files");
             Ok(None)
         }
         Commands::Schema {
@@ -66,10 +66,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             let version = schema_version.as_deref().unwrap_or(env!("CARGO_PKG_VERSION"));
             if check {
                 crate::core::config::check_alef_config_schema(&output, version)?;
-                println!("Schema is up to date: {}", output.display());
+                tracing::info!("Schema is up to date: {}", output.display());
             } else {
                 crate::core::config::write_alef_config_schema(&output, version)?;
-                println!("Wrote schema to {}", output.display());
+                tracing::info!("Wrote schema to {}", output.display());
             }
             Ok(None)
         }
@@ -94,8 +94,8 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             match action {
                 E2eAction::Generate { lang, registry } => {
                     if registry {
-                        eprintln!(
-                            "warning: `alef e2e generate --registry` is deprecated. \
+                        tracing::warn!(
+                            "`alef e2e generate --registry` is deprecated. \
                              Use `alef test-apps generate` instead. \
                              `alef e2e generate` is local-mode only."
                         );
@@ -114,7 +114,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let cache_key = if registry { "e2e-registry" } else { "e2e" };
                         let stage_hash = cache::compute_stage_hash(&ir_json, cache_key, &config_toml, &fixture_hash);
                         if cache::is_stage_cached(&e2e_crate.name, cache_key, &stage_hash) {
-                            println!("E2E tests up to date (cached)");
+                            tracing::info!("E2E tests up to date (cached)");
                             continue;
                         }
                         let effective_e2e_config;
@@ -122,10 +122,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             let mut cloned = this_e2e_config.clone();
                             cloned.dep_mode = crate::core::config::e2e::DependencyMode::Registry;
                             effective_e2e_config = cloned;
-                            eprintln!("Generating e2e test apps (registry mode)...");
+                            tracing::info!("Generating e2e test apps (registry mode)...");
                             &effective_e2e_config
                         } else {
-                            eprintln!("Generating e2e test suites...");
+                            tracing::info!("Generating e2e test suites...");
                             this_e2e_config
                         };
                         let languages = lang.as_deref();
@@ -160,16 +160,16 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         cache::write_stage_hash(&e2e_crate.name, cache_key, &stage_hash, &output_paths)?;
                         grand_count += count;
                     }
-                    println!("Generated {grand_count} e2e files");
+                    tracing::info!("Generated {grand_count} e2e files");
                     Ok(None)
                 }
                 E2eAction::Init => {
-                    eprintln!("Initializing e2e fixtures directory...");
+                    tracing::info!("Initializing e2e fixtures directory...");
                     let created = crate::e2e::scaffold::init_fixtures(e2e_config, resolved_cfg)?;
                     for path in &created {
-                        println!("  created {path}");
+                        tracing::info!("  created {path}");
                     }
-                    println!("Initialized {} file(s)", created.len());
+                    tracing::info!("Initialized {} file(s)", created.len());
                     Ok(None)
                 }
                 E2eAction::Scaffold {
@@ -179,7 +179,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 } => {
                     let path =
                         crate::e2e::scaffold::scaffold_fixture(e2e_config, resolved_cfg, &id, &category, &description)?;
-                    println!("Created {path}");
+                    tracing::info!("Created {path}");
                     Ok(None)
                 }
                 E2eAction::List => {
@@ -188,15 +188,19 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         .with_context(|| format!("failed to load fixtures from {}", fixtures_dir.display()))?;
                     let groups = crate::e2e::fixture::group_fixtures(&fixtures);
 
-                    println!("Fixtures: {} total", fixtures.len());
+                    crate::bin_cli::output::line(format_args!("Fixtures: {} total", fixtures.len()));
                     for group in &groups {
-                        println!("  {}: {} fixture(s)", group.category, group.fixtures.len());
+                        crate::bin_cli::output::line(format_args!(
+                            "  {}: {} fixture(s)",
+                            group.category,
+                            group.fixtures.len()
+                        ));
                     }
                     Ok(None)
                 }
                 E2eAction::Validate => {
                     let fixtures_dir = std::path::Path::new(&e2e_config.fixtures);
-                    eprintln!("Validating fixtures in {}...", fixtures_dir.display());
+                    tracing::info!("Validating fixtures in {}...", fixtures_dir.display());
 
                     let mut all_errors = crate::e2e::validate::validate_fixtures(fixtures_dir)
                         .with_context(|| format!("failed to validate fixtures from {}", fixtures_dir.display()))?;
@@ -208,15 +212,18 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     all_errors.extend(semantic_errors);
 
                     if all_errors.is_empty() {
-                        println!("All fixtures are valid.");
+                        crate::bin_cli::output::line("All fixtures are valid.");
                         Ok(None)
                     } else {
                         use crate::e2e::validate::Severity;
                         let error_count = all_errors.iter().filter(|e| e.severity == Severity::Error).count();
                         let warning_count = all_errors.iter().filter(|e| e.severity == Severity::Warning).count();
-                        println!("Found {} error(s) and {} warning(s):", error_count, warning_count);
+                        crate::bin_cli::output::line(format_args!(
+                            "Found {} error(s) and {} warning(s):",
+                            error_count, warning_count
+                        ));
                         for err in &all_errors {
-                            println!("  {err}");
+                            crate::bin_cli::output::line(format_args!("  {err}"));
                         }
                         if error_count > 0 {
                             process::exit(1);
@@ -311,11 +318,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let cache_key = "test-apps";
                         let stage_hash = cache::compute_stage_hash(&ir_json, cache_key, &config_toml, &fixture_hash);
                         if !clean && cache::is_stage_cached(&e2e_crate.name, cache_key, &stage_hash) {
-                            println!("Test apps up to date (cached)");
+                            tracing::info!("Test apps up to date (cached)");
                             continue;
                         }
 
-                        eprintln!("Generating registry-mode test apps...");
+                        tracing::info!("Generating registry-mode test apps...");
                         let languages = lang.as_deref();
                         let files = crate::e2e::generate_e2e(e2e_crate, e2e_ref, languages, &api.types, &api.enums)?;
                         let sources_hash = cache::sources_hash(&e2e_crate.sources)?;
@@ -330,7 +337,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                                 let test_app_dir = output_root.join(lang_name);
                                 let package_json = test_app_dir.join("package.json");
                                 if package_json.exists() {
-                                    eprintln!("Regenerating {}/pnpm-lock.yaml...", lang_name);
+                                    tracing::info!("Regenerating {}/pnpm-lock.yaml...", lang_name);
                                     run_optional(
                                         "pnpm",
                                         &[
@@ -345,7 +352,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                                 let test_app_dir = output_root.join(lang_name);
                                 let composer_json = test_app_dir.join("composer.json");
                                 if composer_json.exists() {
-                                    eprintln!("Regenerating {}/composer.lock...", lang_name);
+                                    tracing::info!("Regenerating {}/composer.lock...", lang_name);
                                     run_optional(
                                         "composer",
                                         &[
@@ -384,7 +391,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         cache::write_stage_hash(&e2e_crate.name, cache_key, &stage_hash, &output_paths)?;
                         grand_count += count;
                     }
-                    println!("Generated {grand_count} test-app files");
+                    tracing::info!("Generated {grand_count} test-app files");
                     Ok(None)
                 }
                 TestAppsAction::Run { lang } => {
@@ -407,7 +414,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         if names.is_empty() {
                             continue;
                         }
-                        eprintln!("Running test apps for: {}", names.join(", "));
+                        tracing::info!("Running test apps for: {}", names.join(", "));
                         pipeline::test_apps_run(e2e_crate, &names)?;
                     }
                     Ok(None)

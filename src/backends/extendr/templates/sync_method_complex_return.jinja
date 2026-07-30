@@ -27,7 +27,7 @@ match result {
     // propagate. Log before substituting the default — a silent default is
     // indistinguishable from a real result to the caller.
     Err(e) => {
-        eprintln!("[{{ wrapper }}] host '{{ method_name }}' raised; returning default: {e}");
+        tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", error = %e, "host callback raised; returning default");
         Default::default()
     }
 {% endif %}
@@ -48,7 +48,7 @@ match result {
         match extracted {
             Some(v) => v,
             None => {
-                eprintln!("[{{ wrapper }}] host '{{ method_name }}' returned a non-numeric value; returning default");
+                tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", "host returned a non-numeric value; returning default");
                 Default::default()
             }
         }
@@ -70,7 +70,7 @@ match result {
     // propagate. Log before substituting the default — a silent default is
     // indistinguishable from a real result to the caller.
     Err(e) => {
-        eprintln!("[{{ wrapper }}] host '{{ method_name }}' raised; returning default: {e}");
+        tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", error = %e, "host callback raised; returning default");
         Default::default()
     }
 {% endif %}
@@ -95,7 +95,7 @@ match result {
 {% else %}
             Ok(parsed) => parsed,
             Err(e) => {
-                eprintln!("[{{ wrapper }}] host '{{ method_name }}' returned an unparseable value; returning default: {e}");
+                tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", error = %e, "host returned an unparseable value; returning default");
                 Default::default()
             }
 {% endif %}
