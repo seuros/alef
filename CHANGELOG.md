@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `java.lang.System.Logger`, so consuming libraries configure verbosity through their own logging
   setup. Genuine machine-readable command output (JSON reports, schema, diffs, listings) stays on
   stdout through a single sanctioned output helper.
+- **A clippy print-guard forbids raw print macros on production code paths.** `print_stdout` and
+  `print_stderr` are denied crate-wide (enforced by `poly lint` and the pre-commit hook); the few
+  legitimate stdout sites (the output helper, report modules, e2e harness, and test code) carry a
+  narrow `#[allow]`.
 
 ### Changed
 

@@ -44,7 +44,7 @@ pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) {
         // User override takes precedence and replaces the poly pass entirely.
         if let Some(custom) = e2e_config.format.get(lang.as_str()) {
             let cmd = custom.replace("{dir}", &dir);
-            eprintln!("  Formatting {lang}: {cmd}");
+            tracing::debug!("Formatting {lang}: {cmd}");
             run_shell(&cmd, lang);
             continue;
         }
@@ -52,7 +52,7 @@ pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) {
         // Default: shell out to `poly fmt --fix` over the directory. poly walks up
         // from `dir_path` for a `poly.toml` (falling back to poly's zero-config
         // defaults when none is found).
-        eprintln!("  Formatting {lang} with poly: {dir}");
+        tracing::debug!("Formatting {lang} with poly: {dir}");
         crate::cli::pipeline::poly_format(std::slice::from_ref(&dir_path), &dir_path);
 
         // Residual: `go mod tidy` populates `go.sum` from `go.mod` (poly cannot —

@@ -1,3 +1,6 @@
+// Test module: diagnostic output to stdout/stderr is expected here. ~keep
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 /// Test that generates and displays sample Java code output.
 use alef::backends::java::JavaBackend;
 use alef::core::backend::Backend;

@@ -1,3 +1,6 @@
+// Test module: diagnostic output to stdout/stderr is expected here. ~keep
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use alef::backends::magnus::MagnusBackend;
 use alef::core::backend::Backend;
 use alef::core::config::ResolvedCrateConfig;

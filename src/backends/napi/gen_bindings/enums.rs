@@ -395,6 +395,7 @@ pub(super) fn tagged_enum_binding_struct_fields<'a>(
 }
 
 #[cfg(test)]
+#[allow(clippy::print_stderr)] // test-only debug output ~keep
 mod tests {
     use super::gen_enum;
     use crate::core::ir::{EnumDef, EnumVariant};

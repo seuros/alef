@@ -1,3 +1,6 @@
+// Test module: diagnostic output to stdout/stderr is expected here. ~keep
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 //! Regression test: Swift opaque types must have Vec accessors registered
 //!
 //! When an opaque Rust type is declared via `type T;` in a swift-bridge extern block,

@@ -1,3 +1,6 @@
+// Test module: diagnostic output to stdout/stderr is expected here. ~keep
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 //! Regression test for Swift C6: String / Vec<String> returns must wrap with .toString()
 
 use alef::backends::swift::SwiftBackend;

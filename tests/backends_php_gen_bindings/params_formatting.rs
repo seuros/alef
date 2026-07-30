@@ -1,3 +1,6 @@
+// Test module: diagnostic output to stdout/stderr is expected here. ~keep
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use super::*;
 
 /// Regression test: when a Rust function has `Option<T>` parameters (e.g., `mime_type: Option<&str>`),

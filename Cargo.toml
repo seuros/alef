@@ -33,6 +33,14 @@ path = "src/main.rs"
 [features]
 dylib-loader = ["dep:libloading"]
 
+# Diagnostics must flow through `tracing`; genuine command results through the sanctioned
+# `bin_cli::output` helper. Raw print macros are forbidden on production code paths; the few
+# legitimate stdout sites (the output helper, report modules, e2e harness, build.rs, tests)
+# carry a narrow `#[allow]`. ~keep
+[lints.clippy]
+print_stdout = "deny"
+print_stderr = "deny"
+
 [dependencies]
 ahash = "0.8"
 anyhow = "1"

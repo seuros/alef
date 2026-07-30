@@ -1,3 +1,6 @@
+// Test module: debug output to stderr is expected here. ~keep
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use super::*;
 
 #[test]

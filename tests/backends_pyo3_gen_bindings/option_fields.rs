@@ -1,3 +1,6 @@
+// Test module: diagnostic output to stdout/stderr is expected here. ~keep
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use super::*;
 
 /// Regression test: struct fields with `Option<T>` must be emitted as `Option<T>` in constructor

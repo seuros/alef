@@ -1,3 +1,6 @@
+// Test module: diagnostic output to stdout/stderr is expected here. ~keep
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use alef::backends::go::trait_bridge::gen_trait_bridges_file;
 use alef::core::config::TraitBridgeConfig;
 use alef::core::ir::*;

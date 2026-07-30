@@ -1,3 +1,6 @@
+// Test module: debug output to stderr is expected here. ~keep
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use crate::e2e::config::{ArgMapping, CallConfig, E2eConfig};
 use crate::e2e::fixture::{Assertion, Fixture};
 

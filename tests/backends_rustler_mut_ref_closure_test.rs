@@ -1,3 +1,6 @@
+// Test module: diagnostic output to stdout/stderr is expected here. ~keep
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 //! Verifies that Rustler backend correctly propagates &mut T references in nested closures.
 //!
 //! Regression test for Block B9: When a Rust core function expects Vec<&mut T> or similar
