@@ -103,7 +103,11 @@ fn emit_method_shim(
                 rust_name
             }
         } else if p.optional {
-            format!("Some({rust_name})")
+            if p.is_ref {
+                format!("Some(&{rust_name})")
+            } else {
+                format!("Some({rust_name})")
+            }
         } else if needs_vec_string_refs(p, base_ty) {
             out.push_str(&render_vec_string_refs_binding(&rust_name));
             vec_string_refs_arg(&rust_name)
@@ -148,7 +152,11 @@ fn emit_method_shim(
                 ));
             }
             let call_arg = if p.optional {
-                if p.is_ref && is_byte_slice(base_ty) {
+                if p.is_ref {
+                    // The unmarshalled value is owned (String/PathBuf/Vec<u8>/a
+                    // deserialized type); borrow it so an `Option<&str>` /
+                    // `Option<&[u8]>` parameter receives a reference, not the owned
+                    // value. `Some(&name)` deref-coerces to the expected ref type.
                     format!("Some(&{rust_name})")
                 } else {
                     format!("Some({rust_name})")

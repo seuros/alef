@@ -150,6 +150,33 @@ namespace = "dev.sample_crate"
         );
     }
 
+    /// A free function resolved into a *sibling* workspace crate (rust_path
+    /// `<sibling_crate>::<fn>`, where the sibling crate is not the umbrella crate)
+    /// must be reached through the umbrella facade by item path
+    /// (`core_crate::<fn>`), mirroring how opaque types are referenced. Prefixing
+    /// the origin crate — `core_crate::<sibling_crate>::<fn>` — does not resolve
+    /// (E0433: cannot find `<sibling_crate>` in `core_crate`).
+    #[test]
+    fn sibling_crate_function_is_reached_through_umbrella_facade() {
+        let func = crate::core::ir::FunctionDef {
+            name: "schema_query_only".into(),
+            rust_path: "demo_graphql::schema_query_only".into(),
+            params: vec![],
+            return_type: TypeRef::String,
+            error_type: None,
+            ..Default::default()
+        };
+        let content = emit_lib_rs(&api_with_functions(vec![func]), &btree_fixture_config());
+        assert!(
+            content.contains("core_crate::schema_query_only("),
+            "sibling-crate fn must be called as core_crate::schema_query_only(): {content}"
+        );
+        assert!(
+            !content.contains("core_crate::demo_graphql::"),
+            "sibling-crate fn must NOT be prefixed with the origin crate: {content}"
+        );
+    }
+
     /// The generated `throw_jni_error` helper must use `env.throw_new(...).is_err()`
     /// and fall back to `java/lang/RuntimeException` rather than silently discarding
     /// a failed throw (which would leave the Kotlin caller with no exception pending

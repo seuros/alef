@@ -21,6 +21,14 @@ fn emit_function_shim(
     let from_prefix = format!("{}::", core_crate_prefix.replace('-', "_"));
     let core_fn = if path.starts_with(&from_prefix) {
         path.replacen(&from_prefix, "core_crate::", 1)
+    } else if let Some((_sibling_crate, item)) = path.split_once("::") {
+        // A free function resolved into a sibling workspace crate (e.g. a graphql
+        // schema builder). Reach it through the umbrella facade by its item path,
+        // mirroring how opaque *types* are referenced as `core_crate::<Type>`
+        // rather than `core_crate::<origin_crate>::<Type>`. The umbrella re-exports
+        // these items, so the generated crate needs no direct dependency on the
+        // sibling crate; `core_crate::<origin_crate>::<item>` would not resolve.
+        format!("core_crate::{item}")
     } else {
         format!("core_crate::{path}")
     };
