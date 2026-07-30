@@ -40,6 +40,7 @@ dylib-loader = ["dep:libloading"]
 [lints.clippy]
 print_stdout = "deny"
 print_stderr = "deny"
+dbg_macro = "deny"
 
 [dependencies]
 ahash = "0.8"
