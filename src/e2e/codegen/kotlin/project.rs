@@ -8,7 +8,7 @@ pub(crate) fn render_build_gradle(
     kotlin_pkg_id: &str,
     pkg_version: &str,
     dep_mode: crate::e2e::config::DependencyMode,
-    _has_http_fixtures: bool,
+    has_http_fixtures: bool,
 ) -> String {
     let dep_block = match dep_mode {
         crate::e2e::config::DependencyMode::Registry => {
@@ -55,6 +55,20 @@ pub(crate) fn render_build_gradle(
     let junit = maven::JUNIT;
     let jackson = maven::JACKSON_E2E;
     let jvm_target = toolchain::KOTLIN_JVM_TARGET;
+    // The JUnit Platform launcher must be on the test classpath at both compile
+    // and runtime when HTTP fixtures are present: the Gradle Test Executor loads
+    // it at runtime to discover and launch JUnit Platform tests, and the
+    // generated `MockServerListener` implements the `LauncherSessionListener`
+    // SPI, referencing `org.junit.platform.launcher.{LauncherSession,
+    // LauncherSessionListener}` as compile-time symbols. `testRuntimeOnly` keeps
+    // it off the compile classpath and fails Kotlin compilation with
+    // "Unresolved reference 'launcher'", so use `testImplementation` (mirrors
+    // the kotlin_android backend).
+    let launcher_dep = if has_http_fixtures {
+        format!("\n    testImplementation(\"org.junit.platform:junit-platform-launcher:{junit}\")")
+    } else {
+        String::new()
+    };
     format!(
         r#"import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -86,7 +100,7 @@ dependencies {{
     testImplementation("org.junit.jupiter:junit-jupiter-api:{junit}")
     testImplementation("org.junit.jupiter:junit-jupiter-engine:{junit}")
     testImplementation("com.fasterxml.jackson.core:jackson-databind:{jackson}")
-    testImplementation("com.fasterxml.jackson.datatype:jackson-datatype-jdk8:{jackson}")
+    testImplementation("com.fasterxml.jackson.datatype:jackson-datatype-jdk8:{jackson}"){launcher_dep}
     testImplementation(kotlin("test"))
 }}
 

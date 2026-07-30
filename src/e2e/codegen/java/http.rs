@@ -86,10 +86,17 @@ impl client::TestClientRenderer for JavaTestClientRenderer {
         };
 
         let body_publisher = if let Some(body) = ctx.body {
-            // When body is a JSON string, use it directly as the request body content
-            // (no additional serialization). For objects/arrays, serialize to JSON.
+            // String bodies are sent raw only for form/multipart content types, where the
+            // fixture value is already pre-encoded wire content. Otherwise (JSON, the
+            // default), string bodies must be JSON-encoded like any other value — matching
+            // the Python (`json.dumps`) and Node (`JSON.stringify`) backends — so a plain
+            // string body becomes a quoted JSON string rather than raw, invalid JSON.
+            let is_raw_text_content_type = ctx.content_type.is_some_and(|ct| {
+                let ct_lower = ct.to_ascii_lowercase();
+                ct_lower.contains("multipart/form-data") || ct_lower.contains("application/x-www-form-urlencoded")
+            });
             let body_str = match body {
-                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::String(s) if is_raw_text_content_type => s.clone(),
                 other => serde_json::to_string(other).unwrap_or_default(),
             };
             let escaped = escape_java(&body_str);
@@ -384,5 +391,57 @@ mod tests {
         JavaTestClientRenderer.render_call(&mut out, &ctx);
 
         assert!(out.contains("/fixtures/x/search?term=foo"), "got: {out}");
+    }
+
+    #[test]
+    fn render_call_json_encodes_string_body_for_default_content_type() {
+        let headers = BTreeMap::new();
+        let cookies = BTreeMap::new();
+        let query = BTreeMap::new();
+        let body = serde_json::Value::String("not valid json".to_string());
+        let ctx = CallCtx {
+            method: "POST",
+            path: "/fixtures/x",
+            headers: &headers,
+            query_params: &query,
+            cookies: &cookies,
+            body: Some(&body),
+            content_type: None,
+            response_var: "response",
+        };
+
+        let mut out = String::new();
+        JavaTestClientRenderer.render_call(&mut out, &ctx);
+
+        assert!(
+            out.contains(r#"ofString("\"not valid json\"")"#),
+            "expected JSON-encoded string body, got: {out}"
+        );
+    }
+
+    #[test]
+    fn render_call_keeps_raw_string_body_for_form_urlencoded_content_type() {
+        let headers = BTreeMap::new();
+        let cookies = BTreeMap::new();
+        let query = BTreeMap::new();
+        let body = serde_json::Value::String("a=1&b=2".to_string());
+        let ctx = CallCtx {
+            method: "POST",
+            path: "/fixtures/x",
+            headers: &headers,
+            query_params: &query,
+            cookies: &cookies,
+            body: Some(&body),
+            content_type: Some("application/x-www-form-urlencoded"),
+            response_var: "response",
+        };
+
+        let mut out = String::new();
+        JavaTestClientRenderer.render_call(&mut out, &ctx);
+
+        assert!(
+            out.contains(r#"ofString("a=1&b=2")"#),
+            "expected raw form body, got: {out}"
+        );
     }
 }

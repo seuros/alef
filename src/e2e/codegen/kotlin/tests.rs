@@ -866,3 +866,40 @@ fn kotlin_android_test_file_loads_resolved_jni_lib_name_not_crate_name() {
         "kotlin_android test must NOT loadLibrary the raw crate name, got:\n{out}"
     );
 }
+
+/// Regression: when HTTP fixtures are present the generated `MockServerListener`
+/// implements `LauncherSessionListener`, referencing
+/// `org.junit.platform.launcher.{LauncherSession, LauncherSessionListener}` as
+/// compile-time symbols. Without `junit-platform-launcher` on the test
+/// classpath, Kotlin compilation fails with "Unresolved reference 'launcher'".
+#[test]
+fn build_gradle_kotlin_declares_junit_platform_launcher_when_http_fixtures_present() {
+    let out = render_build_gradle(
+        "sample_project-kotlin",
+        "dev.sample_project",
+        "0.1.0",
+        crate::e2e::config::DependencyMode::Local,
+        true,
+    );
+    assert!(
+        out.contains(r#"testImplementation("org.junit.platform:junit-platform-launcher:"#),
+        "build.gradle.kts must declare junit-platform-launcher when HTTP fixtures are present, got:\n{out}"
+    );
+}
+
+/// Regression: without HTTP fixtures, `MockServerListener` is never emitted, so
+/// the launcher dependency is unnecessary weight and must be omitted.
+#[test]
+fn build_gradle_kotlin_omits_junit_platform_launcher_without_http_fixtures() {
+    let out = render_build_gradle(
+        "sample_project-kotlin",
+        "dev.sample_project",
+        "0.1.0",
+        crate::e2e::config::DependencyMode::Local,
+        false,
+    );
+    assert!(
+        !out.contains("junit-platform-launcher"),
+        "build.gradle.kts must not declare junit-platform-launcher without HTTP fixtures, got:\n{out}"
+    );
+}

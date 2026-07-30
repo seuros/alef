@@ -119,12 +119,33 @@ impl E2eCodegen for KotlinE2eCodegen {
         let test_base = test_base.join("e2e");
 
         // Generate test setup for server-pattern tests.
-        // The SUT server is assumed to be running via SUT_URL env var or system property.
+        // SUT_URL is honored verbatim when preset by an external orchestrator
+        // (e.g. `alef test-apps run`). Otherwise, mirroring the Java backend's
+        // `MockServerListener`, spawn the `mock-server` binary once per JUnit
+        // launcher session so `./gradlew test` works standalone without any
+        // external harness — without this, tests reference a server that never
+        // started and every request fails with `ConnectException`.
         if has_http_fixtures {
             files.push(GeneratedFile {
                 path: test_base.join("SutServerSetup.kt"),
                 content: project::render_sut_server_setup_kt(&kotlin_pkg_id),
                 generated_header: true,
+            });
+            files.push(GeneratedFile {
+                path: test_base.join("MockServerListener.kt"),
+                content: project::render_mock_server_listener_kt(&kotlin_pkg_id),
+                generated_header: true,
+            });
+            files.push(GeneratedFile {
+                path: output_base
+                    .join("src")
+                    .join("test")
+                    .join("resources")
+                    .join("META-INF")
+                    .join("services")
+                    .join("org.junit.platform.launcher.LauncherSessionListener"),
+                content: format!("{kotlin_pkg_id}.e2e.MockServerListener\n"),
+                generated_header: false,
             });
         }
 

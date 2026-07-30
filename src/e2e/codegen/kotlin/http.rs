@@ -67,9 +67,15 @@ impl client::TestClientRenderer for KotlinTestClientRenderer {
         // Java's HttpClient restricts certain headers that cannot be set programmatically.
         const JAVA_RESTRICTED_HEADERS: &[&str] = &["connection", "content-length", "expect", "host", "upgrade"];
 
+        // Resolution order: an externally preset SUT_URL (env or system property,
+        // e.g. from `alef test-apps run` pointing at a real bound app) wins.
+        // Otherwise fall back to the `mockServerUrl` system property populated by
+        // `MockServerListener`'s spawned `mock-server` binary (mirrors the Java
+        // backend's `mock_url_list` resolution in args.rs), then the historical
+        // hardcoded default as a last resort.
         let _ = writeln!(
             out,
-            "        val baseUrl = System.getenv(\"SUT_URL\") ?: \"http://127.0.0.1:8007\""
+            "        val baseUrl = System.getenv(\"SUT_URL\") ?: System.getProperty(\"SUT_URL\") ?: System.getProperty(\"mockServerUrl\") ?: \"http://127.0.0.1:8007\""
         );
         // fixture_path is already namespaced like /fixtures/delete_remove_resource from http_call
         // URL-encode special characters in the path to avoid URISyntaxException (e.g., pipe → %7C)
@@ -266,4 +272,45 @@ pub(super) fn render_http_test_method(out: &mut String, fixture: &Fixture, http:
     }
 
     client::http_call::render_http_test(out, &KotlinTestClientRenderer, fixture);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::e2e::codegen::client::{CallCtx, TestClientRenderer};
+    use std::collections::BTreeMap;
+
+    /// Regression: without a preset `SUT_URL`, the base URL must fall back to
+    /// the `mockServerUrl` system property populated by the now-wired
+    /// `MockServerListener` (spawned `mock-server` binary) before the
+    /// hardcoded default — otherwise every request fails with
+    /// `ConnectException` against a server that was never started.
+    #[test]
+    fn render_call_base_url_falls_back_to_mock_server_url_property() {
+        let headers = BTreeMap::new();
+        let cookies = BTreeMap::new();
+        let query = BTreeMap::new();
+        let ctx = CallCtx {
+            method: "GET",
+            path: "/fixtures/x",
+            headers: &headers,
+            query_params: &query,
+            cookies: &cookies,
+            body: None,
+            content_type: None,
+            response_var: "response",
+        };
+
+        let mut out = String::new();
+        KotlinTestClientRenderer.render_call(&mut out, &ctx);
+
+        assert!(
+            out.contains(r#"System.getProperty("mockServerUrl")"#),
+            "expected mockServerUrl system property fallback, got: {out}"
+        );
+        assert!(
+            out.contains(r#"System.getenv("SUT_URL")"#),
+            "expected SUT_URL env var to still take priority, got: {out}"
+        );
+    }
 }
