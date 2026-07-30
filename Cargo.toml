@@ -33,15 +33,6 @@ path = "src/main.rs"
 [features]
 dylib-loader = ["dep:libloading"]
 
-# Diagnostics must flow through `tracing`; genuine command results through the sanctioned
-# `bin_cli::output` helper. Raw print macros are forbidden on production code paths; the few
-# legitimate stdout sites (the output helper, report modules, e2e harness, build.rs, tests)
-# carry a narrow `#[allow]`. ~keep
-[lints.clippy]
-print_stdout = "deny"
-print_stderr = "deny"
-dbg_macro = "deny"
-
 [dependencies]
 ahash = "0.8"
 anyhow = "1"
@@ -80,6 +71,15 @@ zip = { version = "8", default-features = false, features = ["deflate"] }
 criterion = { version = "0.8", features = ["html_reports"] }
 insta = { version = "1.48", features = ["redactions"] }
 tracing-test = "0.2"
+
+# Diagnostics must flow through `tracing`; genuine command results through the sanctioned
+# `bin_cli::output` helper. Raw print macros are forbidden on production code paths; the few
+# legitimate stdout sites (the output helper, report modules, e2e harness, build.rs, tests)
+# carry a narrow `#[allow]`. ~keep
+[lints.clippy]
+print_stdout = "deny"
+print_stderr = "deny"
+dbg_macro = "deny"
 
 [[bench]]
 name = "backends_dart_emit"
