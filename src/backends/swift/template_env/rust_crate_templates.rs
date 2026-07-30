@@ -194,6 +194,10 @@ pub(super) static TEMPLATES: &[(&str, &str)] = &[
         include_str!("../templates/rust_wrapper_free_fn.rs.jinja"),
     ),
     (
+        "rust_wrapper_raw_ptr_fn.rs.jinja",
+        include_str!("../templates/rust_wrapper_raw_ptr_fn.rs.jinja"),
+    ),
+    (
         "rust_enum_to_string_impl.rs.jinja",
         include_str!("../templates/rust_enum_to_string_impl.rs.jinja"),
     ),
