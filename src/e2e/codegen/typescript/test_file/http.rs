@@ -49,22 +49,35 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_http_test_case(out:
         http.request.body.clone()
     };
 
-    // Determine if we need to auto-add Content-Type header for JSON body.
+    // Determine body shape. A raw pre-encoded body (form-urlencoded or a
+    // synthesized/pre-encoded multipart string) is sent as UTF-8 bytes verbatim;
+    // every other body is JSON.stringify'd and needs an application/json
+    // Content-Type. A plain JSON object declared under a multipart param must NOT
+    // receive the synthesized multipart boundary Content-Type — that makes the
+    // server's multipart parser reject the JSON body with 400 before the handler
+    // runs. Mirrors the Python generator's body_is_bytes_literal/body_is_string
+    // branch logic.
     let has_body = effective_body.is_some();
-    let has_content_type = !content_type_lower.is_empty();
-    let needs_json_content_type = has_body && !is_form_body && !is_multipart && !has_content_type;
+    let body_is_string = effective_body
+        .as_ref()
+        .is_some_and(|b| matches!(b, serde_json::Value::String(_)));
+    let body_is_raw = (is_form_body || is_multipart) && body_is_string;
+    let emit_multipart_boundary = is_multipart && body_is_string;
+    let has_content_type_header = http
+        .request
+        .headers
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
+    let needs_json_content_type = has_body && !body_is_raw && !has_content_type_header;
 
-    let has_headers = !http.request.headers.is_empty() || needs_json_content_type || is_multipart && has_body;
+    let has_headers = !http.request.headers.is_empty() || needs_json_content_type || emit_multipart_boundary;
 
     // Build the body entry if present.
     let body_entry: Option<String> = effective_body.as_ref().map(|body| {
         let js_body = json_to_js(body);
-        let body_is_string = matches!(body, serde_json::Value::String(_));
-
-        // For multipart/form-data or form-urlencoded, the body is raw bytes as a string.
-        // Wrap in Buffer.from() to send as UTF-8 bytes without JSON.stringify.
-        if (is_form_body || is_multipart) && body_is_string {
-            // Raw form-urlencoded or multipart: wrap string in Buffer.from() to send as bytes
+        // Raw form-urlencoded/multipart string bodies are sent as UTF-8 bytes
+        // as-is; everything else is JSON.stringify'd.
+        if body_is_raw {
             format!("body: Buffer.from({js_body}, 'utf-8')")
         } else {
             format!("body: JSON.stringify({js_body})")
@@ -84,10 +97,9 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_http_test_case(out:
                 .request
                 .headers
                 .iter()
-                // Skip Content-Type for multipart fixtures — we'll add the correct one below
-                .filter(|(k, _)| {
-                    !(is_multipart && k.eq_ignore_ascii_case("content-type"))
-                })
+                // Skip the fixture Content-Type only when we replace it with the
+                // synthesized multipart boundary header below.
+                .filter(|(k, _)| !(emit_multipart_boundary && k.eq_ignore_ascii_case("content-type")))
                 .map(|(k, v)| {
                     let expanded_v = expand_fixture_templates(v);
                     format!("        \"{}\": \"{}\",", escape_js(k), escape_js(&expanded_v))
@@ -96,8 +108,8 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_http_test_case(out:
             if needs_json_content_type {
                 header_lines.push("        \"Content-Type\": \"application/json\",".to_string());
             }
-            if is_multipart && has_body {
-                // For multipart bodies, add the correct Content-Type with boundary
+            if emit_multipart_boundary {
+                // Real multipart string body: add the Content-Type with our boundary.
                 header_lines
                     .push("        \"Content-Type\": \"multipart/form-data; boundary=alef-boundary\",".to_string());
             }

@@ -654,3 +654,141 @@ fn render_env_setup_uses_defaultassign_semantics() {
         "must use ??= operator for setdefault semantics; got: {output}"
     );
 }
+
+/// Regression: a fixture whose request declares `multipart/form-data` but carries a
+/// plain JSON *object* body (a multipart param with no synthesized body) must be sent
+/// as a JSON.stringify'd body with `application/json`, NOT with the synthesized
+/// multipart boundary Content-Type — that header on a JSON body makes the server's
+/// multipart parser reject the request with 400 before the handler runs. Mirrors the
+/// Python generator's else-branch.
+#[test]
+fn multipart_param_with_json_object_body_does_not_emit_boundary_content_type() {
+    use crate::e2e::fixture::{Fixture, HttpExpectedResponse, HttpFixture, HttpHandler, HttpRequest};
+
+    let fixture = Fixture {
+        id: "upload_file_basic".to_string(),
+        category: Some("upload".to_string()),
+        description: "upload a file".to_string(),
+        tags: vec![],
+        skip: None,
+        env: None,
+        setup: Vec::new(),
+        call: None,
+        input: serde_json::Value::Null,
+        mock_response: None,
+        visitor: None,
+        args: vec![],
+        assertion_recipes: vec![],
+        assertions: vec![],
+        source: String::new(),
+        http: Some(HttpFixture {
+            handler: HttpHandler {
+                route: "/upload".to_string(),
+                method: "POST".to_string(),
+                body_schema: None,
+                parameters: Default::default(),
+                middleware: None,
+            },
+            request: HttpRequest {
+                method: "POST".to_string(),
+                path: "/upload".to_string(),
+                headers: Default::default(),
+                query_params: Default::default(),
+                cookies: Default::default(),
+                body: Some(serde_json::json!({"file": {"content": "hi", "filename": "a.txt"}})),
+                form_data: None,
+                content_type: Some("multipart/form-data".to_string()),
+            },
+            expected_response: HttpExpectedResponse {
+                status_code: 200,
+                body: Some(serde_json::json!({"filename": "a.txt"})),
+                body_partial: None,
+                headers: Default::default(),
+                validation_errors: None,
+            },
+        }),
+    };
+
+    let mut out = String::new();
+    super::http::render_http_test_case(&mut out, &fixture);
+
+    assert!(
+        !out.contains("boundary=alef-boundary"),
+        "a JSON object body must NOT get the multipart boundary Content-Type; got:\n{out}"
+    );
+    assert!(
+        out.contains("JSON.stringify"),
+        "a JSON object body must be JSON.stringify'd; got:\n{out}"
+    );
+    assert!(
+        out.contains("application/json"),
+        "a JSON object body must declare application/json; got:\n{out}"
+    );
+}
+
+/// Regression: a multipart fixture with no explicit body but a `body_schema` still
+/// synthesizes a real multipart string body and MUST carry the boundary Content-Type
+/// (sent via Buffer.from as raw bytes).
+#[test]
+fn multipart_synthesized_body_emits_boundary_content_type() {
+    use crate::e2e::fixture::{Fixture, HttpExpectedResponse, HttpFixture, HttpHandler, HttpRequest};
+
+    let fixture = Fixture {
+        id: "upload_synth".to_string(),
+        category: Some("upload".to_string()),
+        description: "synthesized multipart".to_string(),
+        tags: vec![],
+        skip: None,
+        env: None,
+        setup: Vec::new(),
+        call: None,
+        input: serde_json::Value::Null,
+        mock_response: None,
+        visitor: None,
+        args: vec![],
+        assertion_recipes: vec![],
+        assertions: vec![],
+        source: String::new(),
+        http: Some(HttpFixture {
+            handler: HttpHandler {
+                route: "/upload".to_string(),
+                method: "POST".to_string(),
+                body_schema: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {"file": {"type": "string", "format": "binary"}}
+                })),
+                parameters: Default::default(),
+                middleware: None,
+            },
+            request: HttpRequest {
+                method: "POST".to_string(),
+                path: "/upload".to_string(),
+                headers: Default::default(),
+                query_params: Default::default(),
+                cookies: Default::default(),
+                body: None,
+                form_data: None,
+                content_type: Some("multipart/form-data".to_string()),
+            },
+            expected_response: HttpExpectedResponse {
+                status_code: 200,
+                body: None,
+                body_partial: None,
+                headers: Default::default(),
+                validation_errors: None,
+            },
+        }),
+    };
+
+    let mut out = String::new();
+    super::http::render_http_test_case(&mut out, &fixture);
+
+    assert!(
+        out.contains("boundary=alef-boundary"),
+        "a synthesized multipart body must carry the boundary Content-Type; got:\n{out}"
+    );
+    assert!(
+        out.contains("Buffer.from"),
+        "a synthesized multipart body must be sent as raw bytes via Buffer.from; got:\n{out}"
+    );
+}
