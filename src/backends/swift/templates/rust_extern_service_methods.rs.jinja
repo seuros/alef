@@ -28,5 +28,12 @@
         // member constants — so a dedicated factory is required.
         #[swift_bridge(swift_name = "{{ wc.fn_camel }}")]
         fn {{ wc.fn_snake }}({% for arg in wc.args %}{{ arg.name }}: {{ arg.rust_type }}{% if not loop.last %}, {% endif %}{% endfor %}) -> {{ wc.wrapper_type_name }};
+
+        // Expose the wrapper's heap address as a usize so Swift can hand it, as an
+        // OpaquePointer, to the plain `extern "C"` callback-registration function
+        // (which takes `*mut {{ wc.wrapper_type_name }}` — swift-bridge's own opaque-class
+        // passing convention does not apply to manually declared `extern "C"` functions).
+        #[swift_bridge(swift_name = "{{ wc.raw_ptr_swift_name }}")]
+        fn {{ wc.raw_ptr_fn_snake }}(client: &mut {{ wc.wrapper_type_name }}) -> usize;
     }
 {%- endfor %}

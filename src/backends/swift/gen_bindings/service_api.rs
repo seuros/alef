@@ -192,6 +192,13 @@ fn collect_wrapper_constructor_externs(service: &ServiceDef) -> Vec<minijinja::V
                 })
                 .collect();
 
+            // Raw-pointer accessor so Swift can hand the opaque wrapper's heap
+            // address across the plain `extern "C"` callback-registration boundary
+            // (see rust_extern_c_register_via_callback.rs.jinja), mirroring the
+            // `{{ service_camel }}RawPtr` shim already used for the service type.
+            let raw_ptr_fn_snake = format!("{}_raw_ptr", wc.wrapper_type_name.to_snake_case());
+            let raw_ptr_swift_name = format!("{}RawPtr", wc.wrapper_type_name.to_snake_case().to_lower_camel_case());
+
             result.push(minijinja::context! {
                 fn_snake => &fn_snake,
                 fn_camel => fn_camel,
@@ -199,6 +206,8 @@ fn collect_wrapper_constructor_externs(service: &ServiceDef) -> Vec<minijinja::V
                 wrapper_type_path => &wc.wrapper_type_path,
                 constructor_method => &wc.constructor_method,
                 args => args,
+                raw_ptr_fn_snake => &raw_ptr_fn_snake,
+                raw_ptr_swift_name => &raw_ptr_swift_name,
             });
         }
     }
@@ -421,13 +430,20 @@ pub(super) fn gen_service_swift(api: &ApiSurface, service: &ServiceDef, config: 
             .iter()
             .map(|mp| {
                 let swift_ty = typeref_to_swift_type(&mp.ty);
+                let is_opaque_wrapper = matches!(&mp.ty, TypeRef::Named(_));
                 let bridge_ty = match &mp.ty {
                     TypeRef::Named(n) => format!("RustBridge.{n}"),
                     _ => swift_ty.clone(),
                 };
+                let raw_ptr_swift_name = match &mp.ty {
+                    TypeRef::Named(n) => format!("{}RawPtr", n.to_snake_case().to_lower_camel_case()),
+                    _ => String::new(),
+                };
                 minijinja::context! {
                     name => &mp.name,
                     swift_type => bridge_ty,
+                    is_opaque_wrapper => is_opaque_wrapper,
+                    raw_ptr_swift_name => raw_ptr_swift_name,
                 }
             })
             .collect();
@@ -558,8 +574,15 @@ fn gen_registration_method(
         .metadata_params
         .iter()
         .map(|mp| {
+            let is_opaque_wrapper = matches!(&mp.ty, TypeRef::Named(_));
+            let raw_ptr_swift_name = match &mp.ty {
+                TypeRef::Named(n) => format!("{}RawPtr", n.to_snake_case().to_lower_camel_case()),
+                _ => String::new(),
+            };
             minijinja::context! {
                 name => &mp.name,
+                is_opaque_wrapper => is_opaque_wrapper,
+                raw_ptr_swift_name => raw_ptr_swift_name,
             }
         })
         .collect();
@@ -668,7 +691,22 @@ fn gen_registration_variant(
             },
         ));
     } else {
-        let wrapper_call_args: Vec<String> = variant.signature_params.iter().map(|p| p.name.clone()).collect();
+        let wrapper_call_args: Vec<minijinja::Value> = variant
+            .signature_params
+            .iter()
+            .map(|p| {
+                let is_opaque_wrapper = matches!(&p.ty, TypeRef::Named(_));
+                let raw_ptr_swift_name = match &p.ty {
+                    TypeRef::Named(n) => format!("{}RawPtr", n.to_snake_case().to_lower_camel_case()),
+                    _ => String::new(),
+                };
+                minijinja::context! {
+                    name => &p.name,
+                    is_opaque_wrapper => is_opaque_wrapper,
+                    raw_ptr_swift_name => raw_ptr_swift_name,
+                }
+            })
+            .collect();
 
         out.push_str(&crate::backends::swift::template_env::render(
             "swift_registration_variant.swift.jinja",

@@ -8,18 +8,35 @@
 // so reconstituting via &mut *app is safe given the caller's guarantee of validity.
 // swift-bridge generates its own ABI for opaque wrapper types; the rustc warning
 // about non-FFI-safe param types does not apply to the swift-bridge passing convention.
+//
+// Opaque-wrapper metadata params (e.g. RouteBuilder) are taken as `*mut T` rather
+// than by value: this function is a plain `extern "C"` fn defined outside the
+// `#[swift_bridge::bridge]` module, so swift-bridge's by-value opaque-class passing
+// convention (which the Swift compiler has no visibility into here) does not apply.
+// Swift instead hands over the wrapper's heap address (obtained via the
+// `<Type>RawPtr` bridge shim) as an OpaquePointer, matching the `app` pointer above.
 #[allow(improper_ctypes_definitions)]
 #[unsafe(no_mangle)]
 pub extern "C" fn {{ service_snake }}_{{ reg_snake }}_via_callback(
     app: *mut {{ service_name }},
 {%- for meta_param in metadata_params %}
-    {{ meta_param.name }}: {{ meta_param.rust_type }},
+    {{ meta_param.name }}: {% if meta_param.is_opaque_wrapper %}*mut {{ meta_param.rust_type }}{% else %}{{ meta_param.rust_type }}{% endif %},
 {%- endfor %}
     ctx: *mut std::ffi::c_void,
     callback: extern "C" fn(*mut std::ffi::c_void, *const u8, usize) -> *mut u8,
 ) -> i32 {
     // SAFETY: The caller guarantees a valid, live pointer to the service instance.
     let app = unsafe { &mut *app };
+{%- for meta_param in metadata_params %}
+{%- if meta_param.is_opaque_wrapper %}
+    // SAFETY: the caller (Swift) passes the heap address of a live
+    // {{ meta_param.rust_type }} instance obtained via `<Type>RawPtr`, held alive by a
+    // strong reference on the Swift side for the duration of this call. We borrow
+    // rather than take ownership so the swift-bridge-managed class is released
+    // normally by Swift's ARC once the call returns.
+    let {{ meta_param.name }} = unsafe { &*{{ meta_param.name }} };
+{%- endif %}
+{%- endfor %}
 
     // Wrap the raw C callback function as Arc<dyn {{ trait_path }}>.
     let handler: std::sync::Arc<dyn {{ trait_path }}> =
@@ -27,13 +44,14 @@ pub extern "C" fn {{ service_snake }}_{{ reg_snake }}_via_callback(
 
     // Call the service's registration method with metadata params positionally + handler.
     // Named metadata params arrive as swift-bridge tuple-struct wrappers; `.0` unwraps to
-    // the inner library type the service method expects.
+    // the inner library type the service method expects. Opaque-wrapper params are borrowed
+    // (see above), so `.clone()` is required to move an owned value into the call.
     app.inner.blocking_lock().as_mut().map_or(-1, |service| {
         // Discard the registration result — the host-side wrapper conveys errors via
         // status code only at this boundary; richer reporting is the service's job.
         let _ = service.{{ method_name }}(
 {%- for meta_param in metadata_params %}
-            {{ meta_param.name }}{% if meta_param.is_opaque_wrapper %}.0{% endif %},
+            {{ meta_param.name }}{% if meta_param.is_opaque_wrapper %}.0.clone(){% endif %},
 {%- endfor %}
             handler,
         );

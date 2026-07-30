@@ -1,0 +1,7 @@
+/// Expose the wrapper's heap address as a usize for cross-bridge ptr handoff.
+/// Consumed by the plain `extern "C"` callback-registration function, which
+/// takes `*mut {{ wrapper_type }}` because swift-bridge's opaque-class passing
+/// convention only applies to functions inside the `#[swift_bridge::bridge]` module.
+pub fn {{ fn_snake }}(client: &mut {{ wrapper_type }}) -> usize {
+    client as *mut {{ wrapper_type }} as usize
+}

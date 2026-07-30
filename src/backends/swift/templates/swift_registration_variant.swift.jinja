@@ -34,12 +34,25 @@
         // hides the wrapper's raw pointer behind an `internal` field, so call through
         // the alef-emitted `RustBridge.{{ service_camel }}RawPtr` shim which returns
         // the App address as a `usize` we can reconstitute into an OpaquePointer.
+        //
+        // NOTE: the Rust side declares `app` as a single level of pointer
+        // indirection (`*mut <Service>`). Passing `&innerPtr` instead of
+        // `innerPtr` itself would hand Rust a pointer to the stack slot
+        // holding the address, not the address of the instance itself.
         let rawAddr = RustBridge.{{ service_camel }}RawPtr(inner)
-        var innerPtr = OpaquePointer(bitPattern: rawAddr)!
+        let innerPtr = OpaquePointer(bitPattern: rawAddr)!
+        {% for arg in wrapper_call_args %}{% if arg.is_opaque_wrapper %}
+        // Same reasoning applies to `{{ arg.name }}`: it is a swift-bridge opaque
+        // class, ABI-wise a single pointer, so its raw heap address must be
+        // extracted explicitly for this plain `extern "C"` function.
+        let {{ arg.name }}RawAddr = RustBridge.{{ arg.raw_ptr_swift_name }}({{ arg.name }})
+        let {{ arg.name }}Ptr = OpaquePointer(bitPattern: {{ arg.name }}RawAddr)!
+        {% endif %}{% endfor %}
         let result = _{{ service_snake }}_{{ base_method_name }}_via_callback(
-            &innerPtr,
-            {% for arg in wrapper_call_args %}{{ arg }},
-            {% endfor %}contextPtr,
+            innerPtr,
+            {% for arg in wrapper_call_args %}{% if arg.is_opaque_wrapper %}{{ arg.name }}Ptr,
+            {% else %}{{ arg.name }},
+            {% endif %}{% endfor %}contextPtr,
             trampolineFunc
         )
         guard result == 0 else { throw ServiceError.registrationFailed }

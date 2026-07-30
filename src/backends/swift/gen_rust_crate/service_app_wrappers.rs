@@ -106,6 +106,17 @@ pub fn emit_service_app_wrappers(api: &ApiSurface, source_crate: &str) -> String
                         call_args => call_args_str,
                     },
                 ));
+
+                // Raw-pointer accessor implementation for the extern "Rust" declaration
+                // emitted alongside the factory fn in rust_extern_service_methods.rs.jinja.
+                let raw_ptr_fn_snake = format!("{}_raw_ptr", wc.wrapper_type_name.to_snake_case());
+                out.push_str(&crate::backends::swift::template_env::render(
+                    "rust_wrapper_raw_ptr_fn.rs.jinja",
+                    minijinja::context! {
+                        wrapper_type => wrapper_type,
+                        fn_snake => raw_ptr_fn_snake,
+                    },
+                ));
             }
         }
     }
