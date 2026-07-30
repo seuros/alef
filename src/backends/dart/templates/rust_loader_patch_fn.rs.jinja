@@ -23,11 +23,14 @@ fn patch_published_loader() {
 
     let mut patched = source.replacen(FRB_INIT_PROLOGUE, FRB_INIT_REPLACEMENT, 1);
 
-    // Ensure the helper's `File`/`Isolate`/`Abi` dependencies are imported.
+    // Ensure the helper's `File`/`Isolate`/`Abi` dependencies, and the cache-aware
+    // `native_loader.dart` helpers (`nativeCachedLibPath`, `nativeDownloadAndCacheLibrary`,
+    // `nativeLibDirEnv`), are imported.
     for (probe, line) in [
         ("import 'dart:io';", "import 'dart:io';\n"),
         ("import 'dart:isolate';", "import 'dart:isolate';\n"),
         ("import 'dart:ffi';", "import 'dart:ffi';\n"),
+        ("import '../native_loader.dart';", "import '../native_loader.dart';\n"),
     ] {
         if patched.contains(probe) {
             continue;

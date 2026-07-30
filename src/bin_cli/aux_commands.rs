@@ -341,6 +341,22 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                                         ],
                                     );
                                 }
+                            } else if lang_name == "php" {
+                                let test_app_dir = output_root.join(lang_name);
+                                let composer_json = test_app_dir.join("composer.json");
+                                if composer_json.exists() {
+                                    eprintln!("Regenerating {}/composer.lock...", lang_name);
+                                    run_optional(
+                                        "composer",
+                                        &[
+                                            "update",
+                                            "--lock",
+                                            "--no-install",
+                                            "--working-dir",
+                                            test_app_dir.to_string_lossy().as_ref(),
+                                        ],
+                                    );
+                                }
                             }
                         }
 
