@@ -426,3 +426,63 @@ fn test_file_emits_existing_binding_when_has_http_fixtures() {
         "binding should be followed by the if nil check"
     );
 }
+
+/// The harness readiness probe must only report `ready` when the probe request
+/// actually received an HTTP response — a connection error (e.g. "connection
+/// refused" while the harness is still binding its listener) also completes the
+/// data task, so treating "task completed" as "ready" reports the harness ready
+/// before it can serve requests, masking boot failures as spurious nil-unwraps
+/// downstream instead of a clear timeout error.
+#[test]
+fn test_file_readiness_probe_requires_actual_http_response() {
+    use crate::core::config::ResolvedCrateConfig;
+    use crate::e2e::config::E2eConfig;
+
+    let e2e_config = E2eConfig::default();
+
+    let output = super::test_file::render_test_file(
+        "smoke",
+        &[],
+        &e2e_config,
+        "TestModule",
+        "TestCase",
+        "testFunction",
+        "result",
+        &[],
+        false,
+        None,
+        &Default::default(),
+        &ResolvedCrateConfig::default(),
+        &[],
+        true, // has_http_fixtures = true
+        &[],
+    );
+
+    // The completion handler must gate success on both a nil error and an actual
+    // HTTPURLResponse, not merely on the data task completing.
+    assert!(
+        output.contains("error == nil, response is HTTPURLResponse"),
+        "probe must require a real HTTP response before treating the harness as ready"
+    );
+    assert!(
+        output.contains("_probeSucceeded"),
+        "probe must track response success separately from task completion"
+    );
+
+    // The old dishonest form signaled `_probeSema` directly from a `{ _, _, _ in ... }`
+    // closure that discarded the response/error, treating any completion as success.
+    assert!(
+        !output.contains("{ _, _, _ in _probeSema.signal() }"),
+        "probe must not discard the response/error and treat any completion as ready"
+    );
+
+    // The timeout and boot-failure paths must still surface honestly.
+    assert!(
+        output.contains("Harness did not become ready within 15s"),
+        "must still fatalError with a clear message when the harness never becomes ready"
+    );
+    assert!(
+        output.contains("Failed to start harness"),
+        "must still fatalError when the harness process fails to launch"
+    );
+}

@@ -130,14 +130,33 @@ pub(super) fn render_test_file(
             out,
             "                let _probeSession = URLSession(configuration: .ephemeral)"
         );
+        // Readiness requires an actual HTTP response — a connection error (e.g.
+        // "connection refused" while the harness is still binding its listener)
+        // also completes the data task, so checking only "did the task complete"
+        // reports the harness ready before it can accept requests. Require both
+        // a nil error and an HTTPURLResponse (i.e. a real status code) before
+        // treating the probe as successful.
+        let _ = writeln!(out, "                var _probeSucceeded = false");
         let _ = writeln!(
             out,
-            "                _probeSession.dataTask(with: _probeReq) {{ _, _, _ in _probeSema.signal() }}.resume()"
+            "                _probeSession.dataTask(with: _probeReq) {{ _, response, error in"
         );
+        let _ = writeln!(
+            out,
+            "                    if error == nil, response is HTTPURLResponse {{"
+        );
+        let _ = writeln!(out, "                        _probeSucceeded = true");
+        let _ = writeln!(out, "                    }}");
+        let _ = writeln!(out, "                    _probeSema.signal()");
+        let _ = writeln!(out, "                }}.resume()");
         let _ = writeln!(
             out,
             "                if _probeSema.wait(timeout: .now() + 0.6) == .timedOut {{"
         );
+        let _ = writeln!(out, "                    usleep(100000)");
+        let _ = writeln!(out, "                    continue");
+        let _ = writeln!(out, "                }}");
+        let _ = writeln!(out, "                if !_probeSucceeded {{");
         let _ = writeln!(out, "                    usleep(100000)");
         let _ = writeln!(out, "                    continue");
         let _ = writeln!(out, "                }}");
