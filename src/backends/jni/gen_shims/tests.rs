@@ -341,4 +341,82 @@ namespace = "dev.sample_crate"
             "call site must pass &path and &raw: {content}"
         );
     }
+
+    /// A client type listed in `[crates.kotlin_android].exclude_types` (or the shared
+    /// `[crates.ffi].exclude_types`) must not have any JNI shims emitted. The
+    /// kotlin_android binding backend already drops the Kotlin class via
+    /// `effective_exclude_types`; without the matching filter here the JNI side emits
+    /// orphan `#[no_mangle]` shims and re-exposes a type every other FFI-derived
+    /// binding hides (e.g. the test-only client). The exclusion must be *targeted*:
+    /// a sibling client that is not excluded keeps its shims.
+    #[test]
+    fn excluded_client_type_emits_no_shims_but_keeps_others() {
+        use crate::core::config::NewAlefConfig;
+        let raw: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["kotlin_android", "jni"]
+
+[[crates]]
+name = "demo"
+sources = ["src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.sample_crate"
+namespace = "dev.sample_crate"
+exclude_types = ["Loader"]
+"#,
+        )
+        .unwrap();
+        let config = raw.resolve().unwrap().remove(0);
+        let method = |name: &str| crate::core::ir::MethodDef {
+            name: name.into(),
+            params: vec![crate::core::ir::ParamDef {
+                name: "path".into(),
+                ty: TypeRef::String,
+                is_ref: true,
+                ..Default::default()
+            }],
+            return_type: TypeRef::String,
+            error_type: Some("LoadError".into()),
+            receiver: Some(crate::core::ir::ReceiverKind::Ref),
+            ..Default::default()
+        };
+        let client = |name: &str, m: crate::core::ir::MethodDef| crate::core::ir::TypeDef {
+            name: name.into(),
+            rust_path: format!("demo::{name}"),
+            is_opaque: true,
+            methods: vec![m],
+            ..Default::default()
+        };
+        let api = crate::core::ir::ApiSurface {
+            crate_name: "demo".into(),
+            version: "0.1.0".into(),
+            types: vec![
+                client("Loader", method("excluded_call")),
+                client("Keeper", method("kept_call")),
+            ],
+            functions: vec![],
+            enums: vec![],
+            errors: vec![],
+            excluded_type_paths: Default::default(),
+            excluded_trait_names: ::std::collections::HashSet::new(),
+            services: vec![],
+            handler_contracts: vec![],
+            unsupported_public_items: Vec::new(),
+        };
+        let content = emit_lib_rs(&api, &config);
+        assert!(
+            !content.contains("excluded_call"),
+            "excluded client type must not emit method shims: {content}"
+        );
+        assert!(
+            !content.contains("FreeLoader") && !content.contains("nativeFreeLoader"),
+            "excluded client type must not emit a destructor shim: {content}"
+        );
+        assert!(
+            content.contains("client.kept_call"),
+            "a non-excluded sibling client must keep its shims: {content}"
+        );
+    }
 }

@@ -26,6 +26,27 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
         .map(|c| c.exclude_functions.iter().map(String::as_str).collect())
         .unwrap_or_default();
 
+    // Type-level exclusions inherited from the shared `[crates.ffi].exclude_types`
+    // plus the paired `[crates.kotlin_android].exclude_types` list, mirroring the
+    // kotlin_android binding backend's `effective_exclude_types`. Without this the
+    // JNI shims expose opaque client types (and any top-level function whose
+    // signature references them) that every other FFI-derived binding drops.
+    let exclude_types: std::collections::HashSet<&str> = {
+        let mut set: std::collections::HashSet<&str> = config
+            .ffi
+            .as_ref()
+            .map(|ffi| ffi.exclude_types.iter().map(String::as_str).collect())
+            .unwrap_or_default();
+        if let Some(ka) = config.kotlin_android.as_ref() {
+            set.extend(ka.exclude_types.iter().map(String::as_str));
+        }
+        set
+    };
+    let signature_references_excluded = |params: &[ParamDef], return_type: &TypeRef| -> bool {
+        let references_excluded = |ty: &TypeRef| exclude_types.iter().any(|name| ty.references_named(name));
+        references_excluded(return_type) || params.iter().any(|param| references_excluded(&param.ty))
+    };
+
     let trait_bridge_fn_names: std::collections::HashSet<&str> = config
         .trait_bridges
         .iter()
@@ -45,6 +66,7 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
             !f.sanitized
                 && !exclude_functions.contains(f.name.as_str())
                 && !trait_bridge_fn_names.contains(f.name.as_str())
+                && !signature_references_excluded(&f.params, &f.return_type)
         })
         .collect();
 
@@ -74,7 +96,12 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
     let client_types: Vec<_> = api
         .types
         .iter()
-        .filter(|t| t.is_opaque && !t.is_trait && t.methods.iter().any(|m| !m.sanitized && !m.is_static))
+        .filter(|t| {
+            t.is_opaque
+                && !t.is_trait
+                && !exclude_types.contains(t.name.as_str())
+                && t.methods.iter().any(|m| !m.sanitized && !m.is_static)
+        })
         .collect();
     let client_type_names: std::collections::HashSet<&str> = client_types.iter().map(|t| t.name.as_str()).collect();
 
