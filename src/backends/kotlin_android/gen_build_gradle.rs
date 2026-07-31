@@ -260,9 +260,16 @@ tasks.matching {{ it.name.startsWith("processDebug") || it.name.startsWith("proc
 // during the publish phase. The publish workflow must extract jniLibs from
 // pre-built AARs and stage them into src/main/jniLibs before invoking gradle.
 // This check catches the bug where jniLibs are lost during publish-time rebuild.
+// NOTE: gate on task *name* via allTasks.any, not gradle.taskGraph.hasTask(name),
+// because hasTask(String) matches the fully-qualified path (":assembleRelease")
+// and a bare name never matches — which silently disabled this guard and let a
+// jni-less AAR ship. See html-to-markdown#446.
 tasks.register("validateJniLibsForRelease") {{
     doFirst {{
-        if (gradle.taskGraph.hasTask("assembleRelease") || gradle.taskGraph.hasTask("publishAndReleaseToMavenCentral")) {{
+        val releaseAssemble = gradle.taskGraph.allTasks.any {{
+            it.name == "assembleRelease" || it.name == "publishAndReleaseToMavenCentral"
+        }}
+        if (releaseAssemble) {{
             val jniLibsDir = file("src/main/jniLibs")
             if (!jniLibsDir.exists() || jniLibsDir.listFiles()?.isEmpty() != false) {{
                 throw GradleException(
@@ -490,6 +497,15 @@ description = "Test library"
         assert!(
             gradle.contains("is missing from jniLibs ABI dir(s)"),
             "guard must fail with an actionable message naming the missing ABI dirs"
+        );
+        assert!(
+            gradle.contains("gradle.taskGraph.allTasks.any"),
+            "guard must gate on task name via allTasks.any (hasTask(String) matches the \
+             qualified path and silently disabled the guard — html-to-markdown#446)"
+        );
+        assert!(
+            !gradle.contains("gradle.taskGraph.hasTask(\"assembleRelease\")"),
+            "guard must not use hasTask(String) (bare name never matches the qualified task path)"
         );
     }
 }
