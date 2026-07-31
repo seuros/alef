@@ -406,7 +406,7 @@ pub(super) fn gen_service_swift(api: &ApiSurface, service: &ServiceDef, config: 
          @_silgen_name(\"{}_server_config_free\")\n\
          private func _{}_server_config_free(_ ptr: UnsafeMutableRawPointer?)\n\n\
          @_silgen_name(\"{}_app_config\")\n\
-         private func _{}_app_config(_ app: UnsafeMutablePointer<OpaquePointer>, _ config: UnsafeMutableRawPointer?) -> UnsafeMutableRawPointer?\n\n",
+         private func _{}_app_config(_ app: OpaquePointer, _ config: UnsafeMutableRawPointer?) -> UnsafeMutableRawPointer?\n\n",
         ffi_prefix, ffi_prefix, ffi_prefix, ffi_prefix, ffi_prefix, ffi_prefix
     );
     out.push_str(&ffi_decls);
