@@ -37,7 +37,7 @@ changelog:
 brews:
   - name: alef
     repository:
-      owner: kreuzberg-dev
+      owner: xberg-io
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TOKEN }}"
     directory: Formula
