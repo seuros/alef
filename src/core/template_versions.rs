@@ -194,7 +194,12 @@ pub mod packagist {
     pub const PHPUNIT: &str = "^13.1";
 
     // renovate: datasource=packagist depName=guzzlehttp/guzzle
-    pub const GUZZLE: &str = "^8.0";
+    // Pinned to ^7: guzzle 8 validates Content-Length client-side and rejects a
+    // deliberately-mismatched Content-Length before it reaches the server, which
+    // breaks the generated `content_length_mismatch` e2e test (it needs to send a
+    // malformed request so the server can return 400). Do not bump to ^8 without
+    // reworking that test to send the raw request below guzzle's client validation.
+    pub const GUZZLE: &str = "^7.0";
 }
 
 pub mod maven {

@@ -309,3 +309,41 @@ fn test_java_env_entries_renders_sorted_system_properties() {
         "env keys should be sorted alphabetically"
     );
 }
+
+#[test]
+fn java_fixture_middleware_remaps_cors_allow_to_allowed() {
+    use crate::e2e::fixture::{CorsConfig, HttpMiddleware};
+    let mw = Some(HttpMiddleware {
+        cors: Some(CorsConfig {
+            allow_origins: vec!["https://example.com".to_string()],
+            allow_methods: vec!["GET".to_string(), "POST".to_string()],
+            allow_headers: vec!["Content-Type".to_string()],
+            max_age: Some(600),
+            allow_credentials: true,
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let value = super::build_middleware_value(&mw);
+    let cors = &value["cors"];
+    // Keys must be remapped allow_* -> allowed_* so the java harness can
+    // deserialize straight into the binding's CorsConfig.
+    assert_eq!(cors["allowed_origins"], serde_json::json!(["https://example.com"]));
+    assert_eq!(cors["allowed_methods"], serde_json::json!(["GET", "POST"]));
+    assert_eq!(cors["allowed_headers"], serde_json::json!(["Content-Type"]));
+    assert_eq!(cors["max_age"], serde_json::json!(600));
+    assert_eq!(cors["allow_credentials"], serde_json::json!(true));
+    // The unremapped allow_* keys must NOT leak through.
+    assert!(
+        cors.get("allow_origins").is_none(),
+        "legacy allow_origins must not be emitted"
+    );
+}
+
+#[test]
+fn java_fixture_middleware_is_null_without_cors() {
+    assert_eq!(super::build_middleware_value(&None), serde_json::Value::Null);
+    // Middleware present but no cors -> still Null (harness's middleware.cors is a missing node).
+    let mw = Some(crate::e2e::fixture::HttpMiddleware::default());
+    assert_eq!(super::build_middleware_value(&mw), serde_json::Value::Null);
+}

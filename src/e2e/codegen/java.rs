@@ -15,6 +15,34 @@ use std::path::PathBuf;
 use super::E2eCodegen;
 use super::java_mvnw::{MAVEN_WRAPPER_PROPERTIES, MVNW_UNIX, MVNW_WINDOWS};
 
+/// Build the per-route `middleware` value for a java fixture.
+///
+/// Only CORS is route-scoped in these fixtures (compression, rate-limit, etc.
+/// are server-level and wired elsewhere). Its keys are remapped
+/// `allow_* -> allowed_*` so the java harness can deserialize the object
+/// straight into the binding's `CorsConfig`, mirroring the python/node/ruby
+/// emitters. Returns `Null` when the handler declares no CORS middleware, so
+/// the harness's `middleware.cors` lookup is a missing node.
+fn build_middleware_value(middleware: &Option<crate::e2e::fixture::HttpMiddleware>) -> serde_json::Value {
+    let Some(cors) = middleware.as_ref().and_then(|mw| mw.cors.as_ref()) else {
+        return serde_json::Value::Null;
+    };
+    let mut cors_map = serde_json::Map::new();
+    cors_map.insert("allowed_origins".to_string(), serde_json::json!(cors.allow_origins));
+    cors_map.insert("allowed_methods".to_string(), serde_json::json!(cors.allow_methods));
+    cors_map.insert("allowed_headers".to_string(), serde_json::json!(cors.allow_headers));
+    if !cors.expose_headers.is_empty() {
+        cors_map.insert("expose_headers".to_string(), serde_json::json!(cors.expose_headers));
+    }
+    if let Some(max_age) = cors.max_age {
+        cors_map.insert("max_age".to_string(), serde_json::json!(max_age));
+    }
+    if cors.allow_credentials {
+        cors_map.insert("allow_credentials".to_string(), serde_json::json!(true));
+    }
+    serde_json::json!({ "cors": serde_json::Value::Object(cors_map) })
+}
+
 /// Java e2e code generator.
 pub struct JavaCodegen;
 
@@ -174,6 +202,7 @@ impl E2eCodegen for JavaCodegen {
                             "route": &http_data.handler.route,
                             "method": &http_data.handler.method,
                             "body_schema": http_data.handler.body_schema.clone(),
+                            "middleware": build_middleware_value(&http_data.handler.middleware),
                         },
                         "request": {
                             "path": &http_data.request.path,
