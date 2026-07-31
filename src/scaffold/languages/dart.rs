@@ -175,7 +175,11 @@ linter:
 
     let gitignore = ".dart_tool/\nbuild/\npubspec.lock\n";
 
-    let pubignore = "android/\nios/\nblobs/\nlib/src/native/\nrust/\nexample/\ntest/\n*.so\n*.dylib\n*.dll\n";
+    // NOTE: do NOT exclude lib/src/native/ or *.so/*.dylib/*.dll here. Native FFI
+    // libraries are staged into lib/src/native/<rid>/ at publish time and MUST ship in
+    // the pub.dev tarball; .pubignore fully replaces git-based file listing, so excluding
+    // them silently strips the natives and consumers cannot load the FFI library.
+    let pubignore = "android/\nios/\nblobs/\nrust/\nexample/\ntest/\n";
 
     let test_dart = r#"import 'package:test/test.dart';
 
