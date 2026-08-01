@@ -105,6 +105,20 @@ pub struct SwiftConfig {
     /// is insufficient because cargo unions feature sets across dep instances.
     #[serde(default)]
     pub excluded_default_features: Vec<String>,
+    /// Features to enable on the injected secondary FFI crate dependency (the
+    /// C-ABI `*-ffi` crate the swift-bridge shim links in addition to the core
+    /// crate). By default that dependency is emitted in plain form
+    /// (`{ version, path }`), inheriting the FFI crate's default features.
+    ///
+    /// When this list is non-empty, the dependency is instead emitted with
+    /// `default-features = false` and exactly these features. This is needed so
+    /// the swift shim can drop `heic` (whose `libheif-sys` `build.rs` cannot
+    /// satisfy `pkg-config` under cross-compilation) via a `full-no-heic`-style
+    /// feature set, independently of the primary core dep's feature handling
+    /// (`features` / `excluded_default_features` / `target_dep_overrides`),
+    /// which does not reach this secondary injection.
+    #[serde(default)]
+    pub ffi_features: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

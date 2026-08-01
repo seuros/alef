@@ -108,6 +108,7 @@ pub fn emit(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Ve
         .unwrap_or(&[]);
     let ffi_dep_key = config.ffi_crate_package_name();
     let ffi_dep_path = config.ffi_crate_path_from_swift_rust();
+    let ffi_features = config.swift.as_ref().map(|c| c.ffi_features.as_slice()).unwrap_or(&[]);
     let cargo_toml = cargo::emit_cargo_toml(
         crate_name,
         &core_dep_key,
@@ -125,6 +126,7 @@ pub fn emit(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Ve
         excluded_default_features,
         &ffi_dep_key,
         &ffi_dep_path,
+        ffi_features,
     );
     let effective_features = feature_gate::effective_swift_codegen_features(api, config, &core_crate_dir);
     let configured_features: HashSet<&str> = effective_features.iter().map(String::as_str).collect();

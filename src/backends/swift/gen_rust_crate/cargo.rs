@@ -47,6 +47,7 @@ pub(crate) fn emit_cargo_toml(
     excluded_default_features: &[String],
     ffi_dep_key: &str,
     ffi_dep_path: &str,
+    ffi_features: &[String],
 ) -> String {
     let source_crate_name = core_dep_key;
     let features_block = if features.is_empty() {
@@ -135,7 +136,20 @@ pub(crate) fn emit_cargo_toml(
         dep_entries.push(core_dep_for_block.clone());
     }
     // NOTE: see `ffi_keep_alive_shim.rs.jinja` and `ResolvedCrateConfig::ffi_crate_path_from_swift_rust`.
-    dep_entries.push(crate::scaffold::render_core_dep(ffi_dep_key, ffi_dep_path, "", version));
+    // When `ffi_features` is non-empty, drop the FFI crate's default features and enable exactly
+    // this set — lets the swift shim exclude cross-compile-hostile features (e.g. `heic` via a
+    // `full-no-heic` set) that the primary core dep's feature handling does not reach.
+    let ffi_suffix = if ffi_features.is_empty() {
+        String::new()
+    } else {
+        format!(", default-features = false{}", format_features_array(ffi_features))
+    };
+    dep_entries.push(crate::scaffold::render_core_dep(
+        ffi_dep_key,
+        ffi_dep_path,
+        &ffi_suffix,
+        version,
+    ));
     if has_streaming_adapters {
         dep_entries.push("futures-util = \"0.3\"".to_string());
     }
@@ -288,6 +302,7 @@ mod tests {
             &[],
             "sample-lib-ffi",
             "../../../crates/sample-lib-ffi",
+            &[],
         );
 
         assert!(
@@ -349,6 +364,7 @@ mod tests {
             &[],
             "sample-lib-ffi",
             "../../../crates/sample-lib-ffi",
+            &[],
         );
 
         assert!(
@@ -401,6 +417,7 @@ mod tests {
             &[],
             "sample-lib-ffi",
             "../../../crates/sample-lib-ffi",
+            &[],
         );
 
         assert!(
@@ -450,6 +467,7 @@ mod tests {
             &["heic".to_string()],
             "sample-lib-ffi",
             "../../../crates/sample-lib-ffi",
+            &[],
         );
 
         assert!(
@@ -504,6 +522,7 @@ mod tests {
             &[],
             "sample-lib-ffi",
             "../../../crates/sample-lib-ffi",
+            &[],
         );
 
         assert!(
@@ -511,6 +530,52 @@ mod tests {
             "Cargo.toml must depend on the FFI crate by path; got:\n{}",
             content
         );
+        toml::from_str::<toml::Value>(&content).expect("generated Cargo.toml must be valid TOML");
+    }
+
+    /// When `ffi_features` is non-empty, the injected FFI crate dependency must
+    /// drop default features and enable exactly the listed set. This lets the
+    /// swift shim exclude cross-compile-hostile features (e.g. `heic` via a
+    /// `full-no-heic` set) on the secondary FFI dependency, which the primary
+    /// core dep's `features` / `excluded_default_features` do not reach.
+    #[test]
+    fn cargo_toml_ffi_crate_honors_ffi_features() {
+        let api = ApiSurface::default();
+
+        let content = emit_cargo_toml(
+            "sample-lib",
+            "sample_lib",
+            "sample-lib",
+            "0.1.0",
+            "0.1.0",
+            "0.1.0",
+            "../..",
+            &[],
+            "",
+            "MIT",
+            false,
+            &[],
+            &api,
+            &[],
+            "sample-lib-ffi",
+            "../../../crates/sample-lib-ffi",
+            &["full-no-heic".to_string(), "pdf".to_string(), "ocr".to_string()],
+        );
+
+        let ffi_line = content
+            .lines()
+            .find(|l| l.starts_with("sample-lib-ffi = "))
+            .expect("FFI dependency line must be emitted");
+        assert!(
+            ffi_line.contains("default-features = false"),
+            "FFI dep must disable default features when ffi_features is set; got: {ffi_line}"
+        );
+        for feat in ["full-no-heic", "pdf", "ocr"] {
+            assert!(
+                content.contains(&format!("\"{feat}\"")),
+                "FFI dep features must include `{feat}`; got:\n{content}"
+            );
+        }
         toml::from_str::<toml::Value>(&content).expect("generated Cargo.toml must be valid TOML");
     }
 }

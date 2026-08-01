@@ -31,6 +31,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was removed in favor of a Rust-side `tracing::warn!`; consumers wanting browser output wire a wasm
   tracing subscriber.
 
+## [0.49.0] - 2026-08-01
+
+### Added
+
+- **Swift binding: `ffi_features` config knob.** The swift-bridge Rust shim's injected FFI-crate
+  dependency (`<crate>-ffi`) can now be emitted with `default-features = false` and an explicit
+  feature list via the new `[crates.<name>.swift] ffi_features` field. Previously this secondary
+  dependency was always emitted in plain `{ version, path }` form, inheriting the FFI crate's default
+  features with no way to drop cross-compile-hostile features (e.g. `heic` via `libheif-sys`, whose
+  `build.rs` cannot satisfy `pkg-config` under cross-compilation). The primary core dependency's
+  `features` / `excluded_default_features` / `target_dep_overrides` do not reach this injection.
+  Empty (the default) preserves the previous plain form.
+
 ## [0.48.8] - 2026-07-29
 
 ### Fixed
