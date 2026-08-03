@@ -762,7 +762,7 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
         .as_ref()
         .and_then(|p| p.stubs.as_ref())
         .map(|s| s.output.to_string_lossy().to_string())
-        .unwrap_or_else(|| "packages/php/src/".to_string());
+        .unwrap_or_else(|| resolve_output_dir(config.output_paths.get("php"), &config.name, "packages/php/src/"));
 
     let php_namespace = php_autoload_namespace(config);
 

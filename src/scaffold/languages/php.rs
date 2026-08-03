@@ -238,8 +238,20 @@ pub(crate) fn scaffold_php(_api: &ApiSurface, config: &ResolvedCrateConfig) -> a
         )
     };
 
-    let content = render_composer("src/");
-    let root_content = render_composer("packages/php/src/");
+    // When `[crates.output] php` is configured (or a language template resolves it), the
+    // generated classes co-locate with this composer.json in `pkg_dir` itself, so PSR-4
+    // autoload must point at the current directory rather than a nested `src/` folder that
+    // no longer exists. Unset config keeps the historical split layout. ~keep
+    let co_located = config.output_paths.contains_key("php");
+    let package_autoload_src = if co_located { "" } else { "src/" };
+    let root_autoload_src = if co_located {
+        format!("{}/", pkg_dir.trim_end_matches('/'))
+    } else {
+        "packages/php/src/".to_string()
+    };
+
+    let content = render_composer(package_autoload_src);
+    let root_content = render_composer(&root_autoload_src);
 
     Ok(vec![
         GeneratedFile {

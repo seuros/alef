@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- PHP userland classes and stubs now honor `[crates.output] php`, co-locating with the generated
+  composer.json in the crate (unset config unchanged: `packages/php/`).
+
 ## [0.50.0] - 2026-08-03
 
 ### Added
