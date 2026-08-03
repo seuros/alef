@@ -31,6 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was removed in favor of a Rust-side `tracing::warn!`; consumers wanting browser output wire a wasm
   tracing subscriber.
 
+### Fixed
+
+- **Swift `RustBridgeC` target now emits a real object file.** The Swift backend declared
+  `RustBridgeC` as a compiled SwiftPM target over a directory that held only `RustBridgeC.h`, with no
+  translation unit. `swift build` tolerated the header-only target, but Xcode's XCBuild expected a
+  `RustBridgeC.o` and failed to link, breaking every Xcode/iOS consumer of the published SPM package.
+  The backend now also emits a minimal `RustBridgeC.c`, so a real object file is produced
+  (html-to-markdown#449).
+
 ## [0.49.0] - 2026-08-01
 
 ### Added

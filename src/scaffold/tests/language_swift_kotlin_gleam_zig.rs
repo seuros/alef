@@ -8,8 +8,8 @@ fn test_scaffold_swift() {
     let files = language_files(&all_files);
     assert_eq!(
         files.len(),
-        11,
-        "Expected 11 files for Swift scaffold (original 6 + root Package.swift + 4 extras)"
+        12,
+        "Expected 12 files for Swift scaffold (original 6 + root Package.swift + 4 extras + RustBridgeC.c)"
     );
 
     let package_swift = files
@@ -107,6 +107,24 @@ fn test_scaffold_swift() {
         header.content.contains("#ifndef RUST_BRIDGE_C_H"),
         "got: {}",
         header.content
+    );
+
+    let source = files
+        .iter()
+        .find(|f| f.path == Path::new("packages/swift/Sources/RustBridgeC/RustBridgeC.c"))
+        .expect("RustBridgeC.c must be generated so XCBuild has an object file to link (#449)");
+    assert!(
+        source.content.contains("#include \"RustBridgeC.h\""),
+        "got: {}",
+        source.content
+    );
+    assert!(
+        source
+            .content
+            .contains("void my_lib_swift_rust_bridge_c_anchor(void) {}"),
+        "RustBridgeC.c must define a namespaced anchor symbol so the object file is never \
+         stripped and cannot collide with another package's RustBridgeC target; got: {}",
+        source.content
     );
 
     let modulemap = files.iter().find(|f| f.path.ends_with("module.modulemap")).unwrap();

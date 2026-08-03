@@ -199,6 +199,7 @@ final class {module}Tests: XCTestCase {{
     );
 
     let rust_bridge_c_header = build_rust_bridge_c_header(&binding_crate_name);
+    let rust_bridge_c_source = build_rust_bridge_c_source(&binding_crate_underscore);
 
     let rust_bridge_swift = format!(
         r#"// Placeholder Swift source for the RustBridge target.
@@ -382,6 +383,11 @@ let package = Package(
             generated_header: false,
         },
         GeneratedFile {
+            path: PathBuf::from("packages/swift/Sources/RustBridgeC/RustBridgeC.c"),
+            content: rust_bridge_c_source,
+            generated_header: false,
+        },
+        GeneratedFile {
             path: PathBuf::from("packages/swift/Sources/RustBridge/module.modulemap"),
             content: module_modulemap.to_string(),
             generated_header: false,
@@ -520,6 +526,22 @@ fn render_rust_bridge_c_header(
          typedef struct __private__OptionBool {{ bool val; bool is_some; }} __private__OptionBool;\n\
          \n\
          #endif /* RUST_BRIDGE_C_H */\n"
+    )
+}
+
+/// Build the content for `Sources/RustBridgeC/RustBridgeC.c`.
+///
+/// `RustBridgeC` is otherwise a headers-only C target: `swift build` tolerates that, but
+/// Xcode's XCBuild expects a `RustBridgeC.o` to link and fails without one. This trivial
+/// translation unit gives the target an object file. `binding_crate_underscore` (already a
+/// valid C identifier — hyphens replaced with underscores) namespaces the anchor symbol so
+/// it cannot collide with another RustBridgeC-named C target linked into the same binary.
+fn build_rust_bridge_c_source(binding_crate_underscore: &str) -> String {
+    format!(
+        "#include \"RustBridgeC.h\"\n\
+         \n\
+         // ~keep anchor TU so XCBuild emits RustBridgeC.o (issue #449)\n\
+         void {binding_crate_underscore}_rust_bridge_c_anchor(void) {{}}\n"
     )
 }
 
