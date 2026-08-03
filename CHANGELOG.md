@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.51.0] - 2026-08-03
+
 ### Changed
 
 - PHP userland classes and stubs now honor `[crates.output] php`, co-locating with the generated
