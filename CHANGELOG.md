@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.50.0] - 2026-08-03
+
 ### Added
 
 - **Configurable logging across alef and its generated bindings.** All of alef's own diagnostics now
