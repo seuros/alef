@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.52.0] - 2026-08-04
+
 ### Added
 
 - **WASM binding crates can declare additional opt-in core features.** The new
@@ -14,6 +16,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forwards to the matching core-crate feature without enabling it by default. This supports
   hand-written WASM modules whose `#[cfg(feature = "...")]` gates are not visible in Alef's extracted
   API surface.
+
+### Fixed
+
+- **Swift bindings link the Rust staticlibs by explicit `.a` path.** The generated `Package.swift`
+  linked them via a bare `.linkedLibrary(...)`; with both `lib<name>.a` and `lib<name>.dylib` present
+  in `target/`, ld64 preferred the `dynamic_lookup` dylib, so swift-bridge glue symbols (e.g.
+  `__swift_bridge__$<Type>$_free`) were never linked and the swift test bundle failed to `dlopen`.
+  The scaffold now emits a `resolvedStaticLib` helper and links the two Rust staticlibs by absolute
+  `.a` path so the linker cannot substitute the sibling dylib.
+- **PHP e2e/test_apps autoload path follows the crate move.** The generated composer autoload
+  pkg-path defaulted to the historical `../../packages/php`, stale since 0.51 relocated the PHP
+  source to `crates/<pkg>-php`; it now derives from the configured php crate output path (falling
+  back to `packages/php` when unconfigured).
 
 ## [0.51.2] - 2026-08-04
 
