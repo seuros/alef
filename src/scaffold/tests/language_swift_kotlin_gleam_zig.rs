@@ -72,8 +72,23 @@ fn test_scaffold_swift() {
         package_swift.content
     );
     assert!(
-        package_swift.content.contains("\"-Xlinker\", \"-rpath\", \"-Xlinker\""),
-        "Package.swift must emit a runtime rpath via the swiftc-native -Xlinker -rpath spelling so the FFI dylib loads at runtime; got: {}",
+        package_swift.content.contains("func resolvedStaticLib(_ name: String) -> String"),
+        "Package.swift must resolve staticlibs by explicit .a path so ld64 cannot substitute the sibling .dylib; got: {}",
+        package_swift.content
+    );
+    assert!(
+        package_swift.content.contains("resolvedStaticLib(\"my_lib_swift\")"),
+        "Package.swift must link the swift-bridge staticlib via resolvedStaticLib; got: {}",
+        package_swift.content
+    );
+    assert!(
+        package_swift.content.contains("resolvedStaticLib(\"my_lib_ffi\")"),
+        "Package.swift must link the FFI staticlib via resolvedStaticLib; got: {}",
+        package_swift.content
+    );
+    assert!(
+        !package_swift.content.contains("\"-Xlinker\", \"-rpath\", \"-Xlinker\""),
+        "Package.swift must not rely on bare -rpath linking now that staticlibs are linked by explicit path; got: {}",
         package_swift.content
     );
     assert!(

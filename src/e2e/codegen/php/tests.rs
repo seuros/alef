@@ -609,3 +609,67 @@ mod composer_json_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod default_pkg_path_tests {
+    use super::super::default_php_pkg_path;
+    use crate::core::config::{NewAlefConfig, ResolvedCrateConfig};
+
+    fn resolve_config(toml_text: &str) -> ResolvedCrateConfig {
+        let cfg: NewAlefConfig = toml::from_str(toml_text).expect("valid config");
+        cfg.resolve().expect("resolve").remove(0)
+    }
+
+    /// Unconfigured `[crates.output] php` keeps the historical `packages/php` default,
+    /// unchanged from before the 0.51 co-location option existed.
+    #[test]
+    fn defaults_to_historical_packages_php_when_output_unconfigured() {
+        let config = resolve_config(
+            r#"
+[workspace]
+languages = ["php"]
+[[crates]]
+name = "my-lib"
+sources = []
+"#,
+        );
+        assert_eq!(default_php_pkg_path(&config), "../../packages/php");
+    }
+
+    /// `[crates.output] php = "crates/<pkg>-php/src/"` (the 0.51 co-located layout) must
+    /// resolve to the crate root, not the `src/` subdirectory — `php_autoload_section`
+    /// re-appends its own `/src/` suffix, so keeping it here would double up into a
+    /// nonexistent `.../src/src/`.
+    #[test]
+    fn strips_trailing_src_for_co_located_output() {
+        let config = resolve_config(
+            r#"
+[workspace]
+languages = ["php"]
+[[crates]]
+name = "my-lib"
+sources = []
+[crates.output]
+php = "crates/my-lib-php/src/"
+"#,
+        );
+        assert_eq!(default_php_pkg_path(&config), "../../crates/my-lib-php");
+    }
+
+    /// A co-located output path without a trailing `src` segment is used as-is.
+    #[test]
+    fn keeps_co_located_output_without_trailing_src() {
+        let config = resolve_config(
+            r#"
+[workspace]
+languages = ["php"]
+[[crates]]
+name = "my-lib"
+sources = []
+[crates.output]
+php = "crates/my-lib-php"
+"#,
+        );
+        assert_eq!(default_php_pkg_path(&config), "../../crates/my-lib-php");
+    }
+}

@@ -6,6 +6,7 @@
 
 use crate::backends::php::naming::php_autoload_namespace;
 use crate::core::backend::GeneratedFile;
+use crate::core::config::Language;
 use crate::core::config::ResolvedCrateConfig;
 use crate::e2e::config::E2eConfig;
 use crate::e2e::escape::sanitize_filename;
@@ -90,7 +91,7 @@ impl E2eCodegen for PhpCodegen {
             .as_ref()
             .and_then(|p| p.path.as_ref())
             .cloned()
-            .unwrap_or_else(|| "../../packages/php".to_string());
+            .unwrap_or_else(|| default_php_pkg_path(config));
         let pkg_version = php_pkg
             .as_ref()
             .and_then(|p| p.version.as_ref())
@@ -259,6 +260,35 @@ impl E2eCodegen for PhpCodegen {
     fn language_name(&self) -> &'static str {
         "php"
     }
+}
+
+/// Default `path` for the local PHP composer dependency when
+/// `[crates.e2e.packages.php].path` is unset.
+///
+/// Derived from [`ResolvedCrateConfig::package_dir`] for [`Language::Php`], which
+/// follows `[crates.output] php` when configured — since 0.51 that co-locates the
+/// generated userland classes with the PHP binding crate at `crates/<pkg>-php/src/`
+/// instead of the historical `packages/php/` — or falls back to the historical
+/// `packages/php` default when unconfigured.
+///
+/// `php_autoload_section` (in `project.rs`) always appends its own `/src/` suffix to
+/// this path to build the PSR-4 mapping, mirroring the historical split layout
+/// (`packages/php/composer.json` + `packages/php/src/*.php`). When the resolved
+/// package directory is co-located and already ends in `/src` (the
+/// `crates/<pkg>-php/src/` shape), that trailing segment is stripped here so the
+/// re-appended `/src/` lands back on the real directory instead of doubling up into a
+/// nonexistent `.../src/src/`. ~keep
+fn default_php_pkg_path(config: &ResolvedCrateConfig) -> String {
+    let pkg_dir = config.package_dir(Language::Php);
+    let trimmed = pkg_dir.trim_end_matches('/');
+    if trimmed.is_empty() {
+        return "../../packages/php".to_string();
+    }
+    let crate_root = trimmed.strip_suffix("/src").unwrap_or(trimmed);
+    if crate_root.is_empty() {
+        return "../../packages/php".to_string();
+    }
+    format!("../../{crate_root}")
 }
 
 mod args;
