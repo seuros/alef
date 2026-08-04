@@ -591,7 +591,7 @@ pub fn render_cargo_config(cargo: &ScaffoldCargo) -> String {
                         minijinja::context! {
                             key => key,
                             value => escape_toml_string(value),
-                            relative => relative,
+                            relative => if *relative { "true" } else { "false" },
                         },
                     ));
                 }

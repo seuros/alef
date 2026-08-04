@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Scaffold `.cargo/config.toml` `[env]` structured values render valid TOML booleans.** The
+  `relative` flag was interpolated straight from a bool through minijinja, which stringifies it
+  Python-style as `True`/`False` — invalid TOML that broke `cargo` on any scaffold using a
+  structured env entry (e.g. the Ruby `preferred-ruby.sh` path). The value is now emitted as a
+  lowercase `true`/`false` literal.
+
 ## [0.52.0] - 2026-08-04
 
 ### Added
