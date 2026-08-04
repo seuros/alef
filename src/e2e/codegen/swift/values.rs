@@ -225,6 +225,60 @@ pub(super) fn build_swift_first_class_map(
             _ => false,
         }
     }
+    /// Returns true when `ty` is `Vec<Named(X)>` (or `Option<Vec<Named(X)>>`) and
+    /// `field_optional` is set, for an `X` whose real Swift getter collapses the
+    /// *whole* field to a single JSON-encoded `String` instead of a per-element
+    /// `Vec<String>`/`Vec<Wrapper>`.
+    ///
+    /// Mirrors `emit_vec_enum_string_getter`/`emit_vec_struct_serde_getter`
+    /// (`gen_rust_crate::wrappers::getters`), which special-case `field.optional`
+    /// on top of `needs_json_bridge_for_swift`:
+    /// - `Vec<Named(enum)>`: always serialized via `emit_vec_enum_string_getter`,
+    ///   which emits `getter_vec_enum_string_optional.jinja` (whole-field
+    ///   `serde_json::to_string(&self.0.<field>) -> String`) when optional, vs.
+    ///   `getter_vec_enum_string.jinja` (`Vec<String>`, one element per call) when not.
+    /// - `Vec<Named(struct)>` on a first-class parent DTO with serde: routed through
+    ///   `emit_vec_struct_serde_getter`, which shares the same optional/non-optional
+    ///   template split (whole-field `String` vs. per-element `Vec<String>`).
+    ///
+    /// `needs_json_bridge_for_swift` alone can't see this: it only looks at the
+    /// field's own type shape (`Vec<Named(_)>` is always a leaf-inner Vec, so it
+    /// never reports these as bridged), so the caller must OR this predicate in.
+    fn swift_optional_vec_of_named_is_string_getter(
+        ty: &TypeRef,
+        field_optional: bool,
+        enum_names: &HashSet<&str>,
+        has_serde_names: &HashSet<&str>,
+        parent_first_class: bool,
+    ) -> bool {
+        if !field_optional {
+            return false;
+        }
+        // Field extraction (`unwrap_optional`) always strips a top-level `Optional` off
+        // `field.ty` into the `optional` bool, so `ty` is normally `Vec(Named(_))` already.
+        // Some test fixtures (and any future caller) may still pass the un-stripped
+        // `Optional(Vec(Named(_)))` shape, so unwrap defensively to stay in sync with
+        // `is_vec_ty`/`needs_json_bridge_for_swift`, which both do the same.
+        let vec_ty = match ty {
+            TypeRef::Optional(inner) => inner.as_ref(),
+            other => other,
+        };
+        let TypeRef::Vec(inner) = vec_ty else {
+            return false;
+        };
+        let TypeRef::Named(name) = inner.as_ref() else {
+            return false;
+        };
+        if enum_names.contains(name.as_str()) {
+            return true;
+        }
+        has_serde_names.contains(name.as_str()) && parent_first_class
+    }
+    let has_serde_names: HashSet<&str> = type_defs
+        .iter()
+        .filter(|td| td.has_serde)
+        .map(|td| td.name.as_str())
+        .collect();
     // Seed with unit serde enum names — Codable on the Swift side and can appear
     // as leaf fields on struct DTOs. Also seed data-variant enums (tagged + untagged)
     // that have any fields, matching gen_bindings.rs which seeds both unit + data enums.
@@ -340,15 +394,36 @@ pub(super) fn build_swift_first_class_map(
             // swift-bridge natively exposes it as `Optional<RustVec<T>>`, which has no
             // `.toString()` but IS countable via `?.count`. Only genuinely JSON-bridged
             // shapes — `Vec<Vec<..>>`, `Map<..>`, `Option<Vec<Vec<..>>>`, etc. — return a
-            // plain `RustString` with no `.count`. Do NOT also gate on `f.optional`: that
-            // previously misclassified every optional Vec (including the natively-bridged
-            // `Optional<RustVec<T>>` case) as JSON-bridged, which made the e2e emit
-            // `<accessor>().toString().count` against `RustVec<T>?` and fail to compile
-            // ("value of type 'RustVec<Element>?' has no member 'toString'"). Optionality
-            // is handled separately by `swift_array_count_expr`/`swift_count_target` in
+            // plain `RustString` with no `.count`. Do NOT blanket-gate on `f.optional`: an
+            // earlier version did, which misclassified every optional Vec (including the
+            // natively-bridged `Optional<RustVec<T>>` case) as JSON-bridged, and made the
+            // e2e emit `<accessor>().toString().count` against `RustVec<T>?` — a compile
+            // error ("value of type 'RustVec<Element>?' has no member 'toString'").
+            //
+            // `f.optional` DOES matter for one narrower shape, though:
+            // `swift_optional_vec_of_named_is_string_getter` below catches
+            // `Option<Vec<Named(enum)>>` and `Option<Vec<Named(struct-with-serde)>>` on a
+            // first-class parent DTO. `needs_json_bridge_for_swift` alone reports these as
+            // countable (a `Vec<Named(_)>` inner is always leaf-inner), but
+            // `emit_vec_enum_string_getter`/`emit_vec_struct_serde_getter`
+            // (`gen_rust_crate::wrappers::getters`) collapse the *whole optional field* to
+            // a single `serde_json::to_string(&self.0.<field>) -> String` when the field is
+            // optional — e.g. `headings: Option<Vec<HeadingInfo>>` emits
+            // `fn headings(&self) -> String`, not a countable `RustVec`. Only the
+            // non-optional variant of those getters returns a per-element `Vec<String>`
+            // (still countable). Optionality on genuinely-countable shapes is handled
+            // separately by `swift_array_count_expr`/`swift_count_target` in
             // `accessors.rs`, which already emit `(expr?.count ?? 0)` for optional Vec leaves.
             if is_vec_ty(&f.ty) {
-                if needs_json_bridge_for_swift(&f.ty) {
+                let is_string_getter = needs_json_bridge_for_swift(&f.ty)
+                    || swift_optional_vec_of_named_is_string_getter(
+                        &f.ty,
+                        f.optional,
+                        &enum_names,
+                        &has_serde_names,
+                        first_class_types.contains(&td.name),
+                    );
+                if is_string_getter {
                     json_bridged_vec_names.insert(f.name.clone());
                 } else {
                     vec_field_names.insert(f.name.clone());
@@ -488,6 +563,86 @@ mod tests {
         assert!(
             !map.is_vec_field_name("rows"),
             "Vec<Vec<T>> field is JSON-bridged to RustString and must not be marked countable"
+        );
+    }
+
+    /// Regression test for the `headings()?.count` swift e2e compile failure:
+    /// `headings: Option<Vec<HeadingInfo>>` where `HeadingInfo` is a serde struct.
+    /// Because the parent type (`Metadata`) is first-class and `HeadingInfo` has serde,
+    /// `emit_vec_struct_serde_getter` (`gen_rust_crate::wrappers::getters`) collapses the
+    /// whole optional field to `fn headings(&self) -> String` (whole-field
+    /// `serde_json::to_string`), not a countable `RustVec`/`Vec<String>`. Emitting
+    /// `headings()?.count` against that `String` fails with "cannot use optional
+    /// chaining on non-optional value of type 'RustString'" / "value of type
+    /// 'RustString' has no member 'count'". `headings` must be classified as
+    /// JSON-bridged (non-countable) so the e2e generator never emits `.count` on it.
+    #[test]
+    fn optional_vec_of_serde_struct_on_first_class_parent_is_json_bridged() {
+        let heading_info = TypeDef {
+            name: "HeadingInfo".to_string(),
+            fields: vec![named_field("text", TypeRef::String, false)],
+            has_serde: true,
+            ..Default::default()
+        };
+        let metadata = TypeDef {
+            name: "Metadata".to_string(),
+            fields: vec![named_field(
+                "headings",
+                TypeRef::Vec(Box::new(TypeRef::Named("HeadingInfo".to_string()))),
+                true,
+            )],
+            has_serde: true,
+            ..Default::default()
+        };
+
+        let map = build_swift_first_class_map(
+            &[heading_info, metadata],
+            &[],
+            &E2eConfig::default(),
+            &CallConfig::default(),
+        );
+
+        assert!(
+            !map.is_vec_field_name("headings"),
+            "Option<Vec<Named(struct)>> on a first-class parent is a whole-field String getter \
+             and must not be marked countable"
+        );
+    }
+
+    /// Regression test for the non-optional sibling of the `headings` shape above:
+    /// `Vec<Named(struct)>` (not optional) on a first-class serde parent routes through
+    /// `emit_vec_struct_serde_getter`'s non-optional template, which returns a per-element
+    /// `Vec<String>` — real, countable via `.count`. Only the `Option<...>` variant
+    /// collapses to a whole-field `String`.
+    #[test]
+    fn non_optional_vec_of_serde_struct_on_first_class_parent_is_countable() {
+        let heading_info = TypeDef {
+            name: "HeadingInfo".to_string(),
+            fields: vec![named_field("text", TypeRef::String, false)],
+            has_serde: true,
+            ..Default::default()
+        };
+        let metadata = TypeDef {
+            name: "Metadata".to_string(),
+            fields: vec![named_field(
+                "headings",
+                TypeRef::Vec(Box::new(TypeRef::Named("HeadingInfo".to_string()))),
+                false,
+            )],
+            has_serde: true,
+            ..Default::default()
+        };
+
+        let map = build_swift_first_class_map(
+            &[heading_info, metadata],
+            &[],
+            &E2eConfig::default(),
+            &CallConfig::default(),
+        );
+
+        assert!(
+            map.is_vec_field_name("headings"),
+            "non-optional Vec<Named(struct)> on a first-class parent returns a countable Vec<String>"
         );
     }
 }
