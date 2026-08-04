@@ -76,11 +76,14 @@ pub(super) fn gen_cargo_toml(api: &ApiSurface, config: &ResolvedCrateConfig) -> 
 
     // `#[cfg(feature = X)]` on the binding crate intentionally evaluate false
     let _ = features;
-    let cfg_features = collect_cfg_features(api);
-    let features_table = if cfg_features.is_empty() {
+    let mut declared_features = collect_cfg_features(api);
+    if let Some(wasm) = config.wasm.as_ref() {
+        declared_features.extend(wasm.extra_features.iter().filter(|name| !name.is_empty()).cloned());
+    }
+    let features_table = if declared_features.is_empty() {
         String::new()
     } else {
-        let lines: Vec<String> = cfg_features
+        let lines: Vec<String> = declared_features
             .iter()
             .map(|name| format!(r#"{name} = ["{core_dep_key}/{name}"]"#))
             .collect();

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **WASM binding crates can declare additional opt-in core features.** The new
+  `[crates.wasm].extra_features` list emits each entry as a generated binding-crate feature that
+  forwards to the matching core-crate feature without enabling it by default. This supports
+  hand-written WASM modules whose `#[cfg(feature = "...")]` gates are not visible in Alef's extracted
+  API surface.
+
 ## [0.51.2] - 2026-08-04
 
 ### Fixed

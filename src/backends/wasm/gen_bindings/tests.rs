@@ -150,6 +150,54 @@ fn cargo_toml_omits_features_block_when_no_cfg_attrs() {
 }
 
 #[test]
+fn cargo_toml_declares_configured_extra_features_without_enabling_them() {
+    let cfg: NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["wasm"]
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+[crates.wasm]
+extra_features = ["sceptre-wasm", "", "sceptre-wasm", "telemetry"]
+"#,
+    )
+    .unwrap();
+    let config = cfg.resolve().unwrap().remove(0);
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+    let cargo_toml = gen_cargo_toml(&api, &config);
+
+    assert_eq!(
+        cargo_toml
+            .matches(r#"sceptre-wasm = ["test-lib/sceptre-wasm"]"#)
+            .count(),
+        1,
+        "extra features must be deduplicated in:\n{cargo_toml}"
+    );
+    assert!(
+        cargo_toml.contains(r#"telemetry = ["test-lib/telemetry"]"#),
+        "expected telemetry passthrough in:\n{cargo_toml}"
+    );
+    assert!(
+        !cargo_toml.contains("default = ["),
+        "extra features must remain opt-in in:\n{cargo_toml}"
+    );
+    toml::from_str::<toml::Value>(&cargo_toml).expect("generated Cargo.toml must be valid TOML");
+}
+
+#[test]
 fn cargo_toml_declares_explicit_features_as_passthrough_without_enabling_default() {
     // binding-side `#[cfg(feature = X)]` items intentionally remain hidden
     use crate::core::ir::TypeDef;

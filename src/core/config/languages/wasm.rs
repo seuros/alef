@@ -16,6 +16,11 @@ pub struct WasmConfig {
     pub type_overrides: HashMap<String, String>,
     #[serde(default)]
     pub features: Option<Vec<String>>,
+    /// Core-crate features to declare as opt-in passthrough features on the
+    /// generated WASM binding crate without enabling them on its core dependency.
+    /// Each entry `name` emits `name = ["<core-crate>/name"]` in `[features]`.
+    #[serde(default)]
+    pub extra_features: Vec<String>,
     /// Override the serde rename_all strategy for JSON field names (e.g. "camelCase", "snake_case").
     /// When set, this takes priority over the IR type-level serde_rename_all.
     #[serde(default)]
