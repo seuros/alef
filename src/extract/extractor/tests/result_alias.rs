@@ -61,3 +61,36 @@ fn test_generic_result_alias_supplies_real_error_type_for_method() {
         convert.error_type
     );
 }
+
+/// The alias and the function that returns it normally live in *different* modules
+/// (`error.rs` declares `Result`, `convert_api.rs` returns it). Extraction walks one module at a
+/// time, so a per-module hint map that replaces rather than accumulates loses the alias before the
+/// function is resolved — the single-module cases above pass while every real crate still renders
+/// the placeholder `Error`.
+#[test]
+fn test_result_alias_resolves_when_declared_in_a_different_module() {
+    let source = r#"
+        pub struct ConversionError;
+
+        pub struct ConversionResult;
+
+        pub type Result<T> = std::result::Result<T, ConversionError>;
+
+        pub mod convert_api {
+            use super::{ConversionResult, Result};
+
+            pub fn convert(html: &str) -> Result<ConversionResult> {
+                unimplemented!()
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let convert = surface.functions.iter().find(|f| f.name == "convert").unwrap();
+    assert_eq!(
+        convert.error_type.as_deref(),
+        Some("ConversionError"),
+        "alias declared in a sibling module must still supply the error type, got: {:?}",
+        convert.error_type
+    );
+}

@@ -672,3 +672,42 @@ fn poly_toml_omits_clang_format_without_ffi() {
         "no .clang-format must be shipped without an FFI target"
     );
 }
+
+/// Repos whose CI installs only a subset of toolchains need `poly lint` to skip its
+/// whole-project phase. Without a knob in `alef.toml`, that setting can only be hand-written into
+/// the generated `poly.toml`, where the next scaffold run silently drops it again.
+#[test]
+fn emits_lint_workspace_false_when_configured() {
+    let config = test_config_with_poly("lint-workspace = false");
+    let api = test_api();
+    let files = scaffold(&api, &config, &[Language::Python]).unwrap();
+
+    let content = &poly_toml(&files).content;
+    assert!(
+        content.contains("[lint]\nworkspace = false\n"),
+        "poly.toml must carry the configured [lint] workspace setting, got:\n{content}"
+    );
+    let lint_table = content.find("[lint]").expect("[lint] table must be emitted");
+    let first_sub_table = content.find("[lint.").expect("[lint.*] sub-tables are always emitted");
+    assert!(
+        lint_table < first_sub_table,
+        "[lint] must precede its sub-tables so it reads as a definition, not a redefinition, got:\n{content}"
+    );
+    let parsed: toml::Value = toml::from_str(content).expect("emitted poly.toml must be valid TOML");
+    assert_eq!(parsed["lint"]["workspace"].as_bool(), Some(false));
+}
+
+/// The default must stay byte-identical to the pre-feature output: no `[lint]` table at all,
+/// which lets poly apply its own default rather than alef pinning one.
+#[test]
+fn omits_lint_table_when_not_configured() {
+    let config = test_config();
+    let api = test_api();
+    let files = scaffold(&api, &config, &[Language::Python]).unwrap();
+
+    let content = &poly_toml(&files).content;
+    assert!(
+        !content.contains("[lint]\nworkspace"),
+        "poly.toml must not emit a [lint] workspace setting by default, got:\n{content}"
+    );
+}

@@ -48,6 +48,8 @@ pub fn extract(
 
     let mut visited = Vec::<PathBuf>::new();
 
+    type_resolver::reset_result_error_hints();
+
     let crate_src_dir = sources.first().and_then(|s| s.parent()).map(|p| p.to_path_buf());
 
     for source in sources {
@@ -175,7 +177,7 @@ fn extract_items(
                 let name = item_type.ident.to_string();
                 // A crate-local `Result` alias almost always carries its own generic
                 // parameter (`pub type Result<T> = std::result::Result<T, MyError>;`), so
-                // the hint lookup must not be gated on the alias itself being non-generic.
+                // the hint lookup must not be gated on the alias itself being non-generic. ~keep
                 if name == "Result" {
                     if let Some(error_type) = type_resolver::extract_result_error_type_from_alias(&item_type.ty) {
                         result_error_hints.insert(name.clone(), error_type);
@@ -190,7 +192,7 @@ fn extract_items(
             }
         }
     }
-    type_resolver::set_result_error_hints(result_error_hints);
+    type_resolver::extend_result_error_hints(result_error_hints);
 
     for item in items {
         // `#[cfg(test)]` items do not exist in normal builds; skip them so the

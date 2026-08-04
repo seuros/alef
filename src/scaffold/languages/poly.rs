@@ -235,6 +235,12 @@ pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[La
 
     out.push_str(&format!("[discovery]\nexclude = {excludes}\n\n"));
 
+    // The `[lint]` super-table must precede every `[lint.*]` sub-table below: a super-table
+    // defined after its children parses but reads as a redefinition to a human. ~keep
+    if let Some(workspace) = config.poly.lint_workspace {
+        out.push_str(&format!("[lint]\nworkspace = {workspace}\n\n"));
+    }
+
     let md_disable = toml_array(RUMDL_DISABLE);
     out.push_str(&format!("[lint.markdown.rumdl]\ndisable = {md_disable}\n\n"));
     out.push_str(&format!("[fmt.markdown.rumdl]\ndisable = {md_disable}\n\n"));

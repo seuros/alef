@@ -7,10 +7,25 @@ thread_local! {
     static RESULT_ERROR_HINTS: RefCell<ahash::AHashMap<String, String>> = RefCell::new(ahash::AHashMap::new());
 }
 
-/// Set the Result error hints for the current extraction context.
-pub fn set_result_error_hints(hints: ahash::AHashMap<String, String>) {
+/// Drop every Result error hint collected so far.
+///
+/// Hints accumulate across a crate's modules, so they must be dropped when extraction moves on to
+/// the next crate — otherwise a crate with no `Result` alias of its own inherits the previous
+/// crate's error type. ~keep
+pub fn reset_result_error_hints() {
     RESULT_ERROR_HINTS.with(|h| {
-        *h.borrow_mut() = hints;
+        h.borrow_mut().clear();
+    });
+}
+
+/// Merge additional Result error hints into the current extraction context.
+///
+/// Extraction walks one file at a time, but a crate's `Result` alias is declared in one module
+/// (`error.rs`) and used from others (`convert_api.rs`). Replacing the map per file would drop the
+/// alias before the functions that return it are resolved, so hints must accumulate. ~keep
+pub fn extend_result_error_hints(hints: ahash::AHashMap<String, String>) {
+    RESULT_ERROR_HINTS.with(|h| {
+        h.borrow_mut().extend(hints);
     });
 }
 
@@ -620,7 +635,8 @@ mod tests {
             m.insert("Result".to_string(), "SampleCrateError".to_string());
             m
         };
-        set_result_error_hints(hints);
+        reset_result_error_hints();
+        extend_result_error_hints(hints);
 
         let ty = parse_type("Result<ExtractionResult>");
         assert_eq!(extract_result_error_type(&ty), Some("SampleCrateError".into()));
@@ -628,7 +644,7 @@ mod tests {
 
     #[test]
     fn test_extract_result_error_fallback_without_hint() {
-        set_result_error_hints(ahash::AHashMap::new());
+        reset_result_error_hints();
 
         let ty = parse_type("Result<ExtractionResult>");
         assert_eq!(extract_result_error_type(&ty), Some("anyhow::Error".into()));

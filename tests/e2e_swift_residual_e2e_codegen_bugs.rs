@@ -527,10 +527,12 @@ type = "string"
         TypeRef::Vec(Box::new(TypeRef::Named("Element".to_string()))),
     );
     elements_field.optional = true;
-    let result_ir = vec![
-        make_type("TextResult", vec![elements_field]),
-        make_type("Element", vec![make_field("text", TypeRef::String)]),
-    ];
+    let mut parent = make_type("TextResult", vec![elements_field]);
+    // The parent must stay opaque for this shape to be natively bridged. On a first-class parent,
+    // `emit_vec_struct_serde_getter` collapses an optional `Vec<Named(serde struct)>` into a
+    // whole-field `-> String`, a `RustString` in Swift that genuinely has no `.count`. ~keep
+    parent.is_opaque = true;
+    let result_ir = vec![parent, make_type("Element", vec![make_field("text", TypeRef::String)])];
     let rendered = render_with_config(toml, fixture, result_ir);
 
     assert!(

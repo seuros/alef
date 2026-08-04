@@ -238,6 +238,15 @@ pub struct PolyConfig {
     /// byte-identical to the pre-feature default.
     #[serde(default)]
     pub hooks_sources: Vec<HookSource>,
+
+    /// Whether `poly lint` runs its whole-project lint phase, emitted as `[lint] workspace`.
+    ///
+    /// Absent (the default) emits no `[lint]` table, matching poly's own default of `true`.
+    /// Set to `false` for repos whose CI installs only a subset of toolchains, so the
+    /// whole-workspace linters that cannot run there are skipped — equivalent to always passing
+    /// `poly lint --no-workspace`.
+    #[serde(default)]
+    pub lint_workspace: Option<bool>,
 }
 
 /// A single external git hook source, rendered as a `[[hooks.sources]]` block in the

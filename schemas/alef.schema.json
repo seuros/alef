@@ -4412,6 +4412,14 @@
           },
           "type": "array"
         },
+        "lint-workspace": {
+          "default": null,
+          "description": "Whether `poly lint` runs its whole-project lint phase, emitted as `[lint] workspace`.\n\nAbsent (the default) emits no `[lint]` table, matching poly's own default of `true`.\nSet to `false` for repos whose CI installs only a subset of toolchains, so the\nwhole-workspace linters that cannot run there are skipped — equivalent to always passing\n`poly lint --no-workspace`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "per-file-ignores": {
           "additionalProperties": {
             "items": {
@@ -7333,6 +7341,7 @@
             "exclude": [],
             "file-safety-exclude": [],
             "hooks-sources": [],
+            "lint-workspace": null,
             "per-file-ignores": {},
             "pyrefly-sub-configs": {},
             "typos": {
@@ -7569,7 +7578,7 @@
       "type": "object"
     }
   },
-  "$id": "https://github.com/xberg-io/alef/releases/download/v0.53.0/alef.schema.json",
+  "$id": "https://github.com/xberg-io/alef/releases/download/v0.53.1/alef.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "JSON Schema for the JSON representation of alef.toml.",
@@ -7654,6 +7663,7 @@
           "exclude": [],
           "file-safety-exclude": [],
           "hooks-sources": [],
+          "lint-workspace": null,
           "per-file-ignores": {},
           "pyrefly-sub-configs": {},
           "typos": {
@@ -7688,6 +7698,6 @@
   ],
   "title": "Alef configuration",
   "type": "object",
-  "version": "0.53.0",
-  "x-alef-version": "0.53.0"
+  "version": "0.53.1",
+  "x-alef-version": "0.53.1"
 }

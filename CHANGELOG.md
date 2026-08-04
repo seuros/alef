@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.53.1] - 2026-08-04
+
+### Added
+
+- `[workspace.poly] lint-workspace` controls the generated `poly.toml`'s `[lint] workspace` setting.
+  Repos whose CI installs only a subset of toolchains need `poly lint` to skip its whole-project
+  phase; that setting previously existed only as a hand-edit to the generated file, which the next
+  scaffold run silently dropped. Omitting the key emits no `[lint]` table, leaving poly's own
+  default in force, so existing output is unchanged.
+
+### Fixed
+
+- A crate-local `Result` alias declared in one module is now honoured by functions in other modules.
+  Extraction walks a crate file by file and replaced the alias hint map on every file, so the alias
+  from `error.rs` was discarded before the module using it was resolved and its functions fell back
+  to `anyhow::Error`. Hints now accumulate across a crate's modules and are reset once per crate, so
+  a crate without its own alias no longer inherits the previous crate's error type.
+- Swift e2e: a `count_min` assertion on an optional `Vec<Named>` field of a first-class parent DTO
+  no longer emits `field()?.count ?? 0`. `emit_vec_struct_serde_getter` collapses that shape to a
+  whole-field `-> String`, so the Swift side sees a `RustString` and the generated test failed to
+  compile. The countable-vs-JSON-bridged classifier now mirrors the getter emitter's optional split.
+
 ## [0.53.0] - 2026-08-04
 
 ### Changed
