@@ -263,7 +263,7 @@ tasks.matching {{ it.name.startsWith("processDebug") || it.name.startsWith("proc
 // NOTE: gate on task *name* via allTasks.any, not gradle.taskGraph.hasTask(name),
 // because hasTask(String) matches the fully-qualified path (":assembleRelease")
 // and a bare name never matches — which silently disabled this guard and let a
-// jni-less AAR ship. See html-to-markdown#446.
+// jni-less AAR ship.
 tasks.register("validateJniLibsForRelease") {{
     doFirst {{
         val releaseAssemble = gradle.taskGraph.allTasks.any {{
@@ -501,7 +501,7 @@ description = "Test library"
         assert!(
             gradle.contains("gradle.taskGraph.allTasks.any"),
             "guard must gate on task name via allTasks.any (hasTask(String) matches the \
-             qualified path and silently disabled the guard — html-to-markdown#446)"
+             qualified path and silently disabled the guard)"
         );
         assert!(
             !gradle.contains("gradle.taskGraph.hasTask(\"assembleRelease\")"),

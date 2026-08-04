@@ -210,6 +210,34 @@ fn test_replace_fence_lang_no_fence_unchanged() {
     assert_eq!(out, "Plain prose with `inline code`.");
 }
 
+/// Regression test: the closing ` ``` ` of a fenced code block must stay bare — it must
+/// not be rewritten to carry the language tag too, which would reopen a new fence instead
+/// of closing the existing one and corrupt every line of Markdown that follows.
+#[test]
+fn test_replace_fence_lang_closing_fence_stays_bare() {
+    let body = "```rust\nlet x = run();\n```";
+    let out = replace_fence_lang(body, "rust");
+    assert_eq!(
+        out, "```rust\nlet x = run();\n```",
+        "closing fence must not gain a language tag"
+    );
+}
+
+#[test]
+fn test_replace_fence_lang_closing_fence_stays_bare_across_languages() {
+    let body = "```rust\nlet x = run();\n```";
+    let out = replace_fence_lang(body, "typescript");
+    assert_eq!(out, "```typescript\nlet x = run();\n```");
+}
+
+#[test]
+fn test_replace_fence_lang_multiple_blocks_each_close_bare() {
+    let body = "```rust\nlet a = 1;\n```\n\nMore prose.\n\n```rust\nlet b = 2;\n```";
+    let out = replace_fence_lang(body, "rust");
+    let fence_lines: Vec<&str> = out.lines().filter(|l| l.trim_start().starts_with("```")).collect();
+    assert_eq!(fence_lines, vec!["```rust", "```", "```rust", "```"]);
+}
+
 fn fixture_sections() -> RustdocSections {
     let doc = "Extracts text from a file.\n\n# Arguments\n\n* `path` - The file path.\n* `config` - Optional configuration.\n\n# Returns\n\nThe extracted text and metadata.\n\n# Errors\n\nReturns an error when the file is unreadable.\n\n# Example\n\n```rust\nlet result = extract(\"file.pdf\")?;\n```";
     parse_rustdoc_sections(doc)

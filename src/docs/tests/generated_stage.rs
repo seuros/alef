@@ -200,6 +200,96 @@ sources = ["src/lib.rs"]
 }
 
 #[test]
+fn should_error_when_configured_docs_snippets_dir_does_not_exist() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("templates")).unwrap();
+    fs::write(root.join("templates/llms.txt.jinja"), "Project {{ krate.name }}\n").unwrap();
+    // Note: `docs/snippets` is intentionally never created, mirroring the
+    // shipped bug where `docs.snippets.dirs` pointed at a nonexistent path and
+    // was silently filtered out instead of failing the build. ~keep
+
+    let config = config_from_toml(
+        r#"
+[workspace]
+languages = ["python"]
+
+[workspace.docs.llms]
+template = "templates/llms.txt.jinja"
+
+[workspace.docs.snippets]
+dirs = ["docs/snippets"]
+
+[[crates]]
+name = "mylib"
+sources = ["src/lib.rs"]
+"#,
+    );
+    let api = make_minimal_api("1.0.0");
+
+    let err = generate_docs_stage(&api, &config, &[Language::Python], None, root)
+        .expect_err("a configured docs.snippets.dirs entry that does not exist must be a hard error");
+    let message = err.to_string();
+    assert!(
+        message.contains("docs.snippets.dirs"),
+        "error must name the config key, got: {message}"
+    );
+    assert!(
+        message.contains("docs/snippets"),
+        "error must name the offending configured path, got: {message}"
+    );
+}
+
+#[test]
+fn should_error_with_actionable_message_when_snippet_reference_unresolved() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("templates")).unwrap();
+    fs::create_dir_all(root.join("docs/snippets/python")).unwrap();
+    fs::write(
+        root.join("templates/llms.txt.jinja"),
+        "Project {{ krate.name }}\n{{ \"missing.py\" | include_snippet(\"python\") }}\n",
+    )
+    .unwrap();
+
+    let config = config_from_toml(
+        r#"
+[workspace]
+languages = ["python"]
+
+[workspace.docs.llms]
+template = "templates/llms.txt.jinja"
+
+[workspace.docs.snippets]
+dirs = ["docs/snippets"]
+
+[[crates]]
+name = "mylib"
+sources = ["src/lib.rs"]
+"#,
+    );
+    let api = make_minimal_api("1.0.0");
+
+    let err = generate_docs_stage(&api, &config, &[Language::Python], None, root)
+        .expect_err("an unresolvable snippet reference must fail, not silently omit content");
+    let message = err.to_string();
+    assert!(
+        message.contains("python"),
+        "error must name the language, got: {message}"
+    );
+    assert!(
+        message.contains("missing.py"),
+        "error must name the path, got: {message}"
+    );
+    assert!(
+        message.contains("docs/snippets"),
+        "error must name the root(s) that were searched, got: {message}"
+    );
+}
+
+#[test]
 fn generate_docs_stage_rejects_unmanaged_llms_output_by_default() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();

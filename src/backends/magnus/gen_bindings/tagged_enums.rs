@@ -138,12 +138,14 @@ pub(super) fn gen_tagged_enum_ruby_classes(enum_def: &crate::core::ir::EnumDef, 
         let mut predicate_methods = String::new();
         for variant_name in &variant_names {
             let v_snake = crate::codegen::naming::pascal_to_snake(variant_name);
-            let returns_true = *variant_name == variant.name;
+            // minijinja renders a bool Jinja2-style as `True`/`False`, which Ruby parses as ~keep
+            // constant lookups, so the literal is spelled out here instead of passing a bool. ~keep
+            let ruby_boolean_literal = if *variant_name == variant.name { "true" } else { "false" };
             predicate_methods.push_str(&crate::backends::magnus::template_env::render(
                 "tagged_enum_predicate_method.rb.jinja",
                 minijinja::context! {
                     predicate_name => v_snake,
-                    returns_true => returns_true,
+                    ruby_boolean_literal => ruby_boolean_literal,
                 },
             ));
         }

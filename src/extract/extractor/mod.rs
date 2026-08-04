@@ -173,13 +173,15 @@ fn extract_items(
         if let syn::Item::Type(item_type) = item {
             if is_pub(&item_type.vis) {
                 let name = item_type.ident.to_string();
-                if item_type.generics.params.is_empty() {
-                    if name == "Result" {
-                        if let Some(error_type) = type_resolver::extract_result_error_type_from_alias(&item_type.ty) {
-                            result_error_hints.insert(name.clone(), error_type);
-                        }
+                // A crate-local `Result` alias almost always carries its own generic
+                // parameter (`pub type Result<T> = std::result::Result<T, MyError>;`), so
+                // the hint lookup must not be gated on the alias itself being non-generic.
+                if name == "Result" {
+                    if let Some(error_type) = type_resolver::extract_result_error_type_from_alias(&item_type.ty) {
+                        result_error_hints.insert(name.clone(), error_type);
                     }
-                } else {
+                }
+                if !item_type.generics.params.is_empty() {
                     let rhs = quote::quote!(#item_type).to_string();
                     if rhs.contains("Result <") || rhs.contains("Result<") {
                         result_wrapping_aliases.insert(name);

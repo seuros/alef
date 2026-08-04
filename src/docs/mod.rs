@@ -245,19 +245,19 @@ fn build_snippet_context(
     };
 
     for dir in &snippet_cfg.dirs {
-        if !workspace_root.join(dir).exists() {
-            tracing::warn!("docs.snippets.dirs entry does not exist, skipping: {}", dir.display());
+        let abs_dir = workspace_root.join(dir);
+        if !abs_dir.exists() {
+            anyhow::bail!(
+                "config key `docs.snippets.dirs` includes '{}' (resolved to '{}'), which does not exist",
+                dir.display(),
+                abs_dir.display()
+            );
         }
     }
-    let snippet_dirs = snippet_cfg
-        .dirs
-        .iter()
-        .filter(|dir| workspace_root.join(dir).exists())
-        .cloned()
-        .collect::<Vec<_>>();
+    let snippet_dirs = snippet_cfg.dirs.clone();
     if snippet_dirs.is_empty() {
         if snippet_cfg.validation_level.is_some() || !snippet_cfg.required_languages.is_empty() {
-            tracing::warn!("docs.snippets is configured for validation but no snippet directories exist");
+            tracing::warn!("docs.snippets is configured for validation but docs.snippets.dirs is empty");
         }
         return Ok(Vec::new());
     }

@@ -176,13 +176,34 @@ fn render_template_file(
     let tmpl = env
         .get_template(&template_name)
         .map_err(|err| anyhow::anyhow!("failed to load template '{}': {err}", template_path.display()))?;
-    let mut content = tmpl
-        .render(context)
-        .map_err(|err| anyhow::anyhow!("failed to render template '{}': {err}", template_path.display()))?;
+    let mut content = tmpl.render(context).map_err(|err| {
+        anyhow::anyhow!(
+            "failed to render template '{}': {}",
+            template_path.display(),
+            describe_minijinja_error(&err)
+        )
+    })?;
     if !content.ends_with('\n') {
         content.push('\n');
     }
     Ok(content)
+}
+
+/// Render a minijinja render error together with its full cause chain.
+///
+/// minijinja wraps errors raised inside `{% include %}`'d partials in an outer
+/// "could not render include" error whose `Display` alone drops the
+/// actionable inner message (e.g. the `include_snippet` failure naming the
+/// language, path, and roots searched). Walking `source()` surfaces it. ~keep
+fn describe_minijinja_error(err: &minijinja::Error) -> String {
+    let mut out = err.to_string();
+    let mut source = std::error::Error::source(err);
+    while let Some(cause) = source {
+        out.push_str(": ");
+        out.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    out
 }
 
 fn include_snippet(snippet_roots: &[PathBuf], language: &str, path: &str) -> anyhow::Result<String> {
@@ -199,7 +220,19 @@ fn include_snippet(snippet_roots: &[PathBuf], language: &str, path: &str) -> any
             };
         }
     }
-    anyhow::bail!("snippet not found in configured docs.snippets.dirs")
+    let searched = snippet_roots
+        .iter()
+        .map(|root| root.join(language).join(path).display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    anyhow::bail!(
+        "snippet not found: language `{language}`, path `{path}` (searched: {})",
+        if searched.is_empty() {
+            "no `docs.snippets.dirs` roots configured".to_string()
+        } else {
+            searched
+        }
+    )
 }
 
 fn extract_code_block(md: &str) -> String {

@@ -235,20 +235,31 @@ pub fn example_for_target(example: &str, target_lang: &str) -> Option<String> {
 /// code lines. Replaces the leading ` ```rust ` (or any other tag) with
 /// `lang_replacement`, leaving the rest of the body unchanged.
 ///
+/// Only opening fences gain the language tag — the matching closing fence is
+/// always emitted bare (` ``` `), exactly like the Markdown it is closing. A
+/// fence line is an opener the first time it appears and a closer the next,
+/// alternating for every fenced block found in `body`.
+///
 /// When no fence is present the body is returned unchanged. Used by
 /// emitters that need to convert ` ```rust ` examples into
 /// ` ```typescript ` / ` ```python ` / ` ```swift ` etc.
 pub fn replace_fence_lang(body: &str, lang_replacement: &str) -> String {
     let mut out = String::with_capacity(body.len());
+    let mut in_fence = false;
     for line in body.lines() {
         let trimmed = line.trim_start();
         if let Some(rest) = trimmed.strip_prefix("```") {
             let indent = &line[..line.len() - trimmed.len()];
-            let after_lang = rest.find(',').map(|i| &rest[i..]).unwrap_or("");
             out.push_str(indent);
             out.push_str("```");
-            out.push_str(lang_replacement);
-            out.push_str(after_lang);
+            if in_fence {
+                // Closing fence: always bare, never re-tagged with a language.
+            } else {
+                let after_lang = rest.find(',').map(|i| &rest[i..]).unwrap_or("");
+                out.push_str(lang_replacement);
+                out.push_str(after_lang);
+            }
+            in_fence = !in_fence;
             out.push('\n');
         } else {
             out.push_str(line);

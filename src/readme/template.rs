@@ -134,12 +134,21 @@ fn render_template_readme(
 
     let snippets_dir = readme_cfg.snippets_dir.as_ref().map(|s| workspace_root.join(s));
     let snippets_dir_clone = snippets_dir.clone();
-    env.add_filter("include_snippet", move |path: String, language: String| -> String {
-        match &snippets_dir_clone {
-            Some(dir) => include_snippet(dir, &language, &path),
-            None => format!("<!-- snippet not found: {path} -->"),
-        }
-    });
+    env.add_filter(
+        "include_snippet",
+        move |path: String, language: String| -> Result<String, minijinja::Error> {
+            let Some(dir) = &snippets_dir_clone else {
+                return Err(minijinja::Error::new(
+                    minijinja::ErrorKind::InvalidOperation,
+                    format!(
+                        "cannot include snippet `{language}/{path}`: `crates.readme.snippets_dir` is not configured"
+                    ),
+                ));
+            };
+            include_snippet(dir, &language, &path)
+                .map_err(|err| minijinja::Error::new(minijinja::ErrorKind::InvalidOperation, err.to_string()))
+        },
+    );
 
     env.add_filter(
         "render_performance_table",
@@ -215,9 +224,13 @@ fn render_template_readme(
         .get_template(&template_name)
         .map_err(|e| anyhow::anyhow!("Failed to load template '{}': {}", template_name, e))?;
 
-    let mut content = tmpl
-        .render(ctx)
-        .map_err(|e| anyhow::anyhow!("Failed to render template '{}': {}", template_name, e))?;
+    let mut content = tmpl.render(ctx).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to render template '{}': {}",
+            template_name,
+            describe_minijinja_error(&e)
+        )
+    })?;
 
     if !content.ends_with('\n') {
         content.push('\n');
@@ -230,19 +243,48 @@ fn render_template_readme(
     }))
 }
 
+/// Render a minijinja render error together with its full cause chain.
+///
+/// minijinja wraps errors raised inside `{% include %}`'d partials (such as an
+/// `include_snippet` filter failure) in an outer "could not render include"
+/// error whose `Display` alone drops the actionable inner message. Walking
+/// `source()` surfaces the underlying `include_snippet` failure text (snippet
+/// path, language, and roots searched) instead of just the include wrapper. ~keep
+fn describe_minijinja_error(err: &minijinja::Error) -> String {
+    let mut out = err.to_string();
+    let mut source = std::error::Error::source(err);
+    while let Some(cause) = source {
+        out.push_str(": ");
+        out.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    out
+}
+
 /// Load a snippet file. For `.md` files, extract the first fenced code block.
 /// For other files, wrap the content in a fenced code block.
-pub(super) fn include_snippet(snippets_dir: &Path, lang_code: &str, path: &str) -> String {
+///
+/// Returns an error naming the language, the requested path, the resolved
+/// file path, and the snippets root that was searched when the file does not
+/// exist. A silently-substituted placeholder here previously let unresolvable
+/// README snippet references ship into published packages with `alef readme`
+/// reporting success (0 files skipped). ~keep
+pub(super) fn include_snippet(snippets_dir: &Path, lang_code: &str, path: &str) -> anyhow::Result<String> {
     let file = snippets_dir.join(lang_code).join(path);
     if !file.exists() {
-        return format!("<!-- snippet not found: {path} -->");
+        anyhow::bail!(
+            "snippet not found: language `{lang_code}`, path `{path}` (resolved to `{}`, searched under snippets root `{}`)",
+            file.display(),
+            snippets_dir.display()
+        );
     }
-    let content = fs::read_to_string(&file).unwrap_or_default();
+    let content = fs::read_to_string(&file)
+        .map_err(|err| anyhow::anyhow!("failed to read snippet `{}`: {err}", file.display()))?;
     if path.ends_with(".md") {
-        extract_code_block(&content)
+        Ok(extract_code_block(&content))
     } else {
         let ext = Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("");
-        format!("```{ext}\n{}\n```", content.trim())
+        Ok(format!("```{ext}\n{}\n```", content.trim()))
     }
 }
 

@@ -428,7 +428,7 @@ mod tests {
     }
 
     /// Regression test for the Swift e2e `count_min`/`min_length` assertion emitter
-    /// crash: `Option<Vec<Named>>` fields (e.g. xberg's `elements: Option<Vec<Element>>`,
+    /// crash: `Option<Vec<Named>>` fields (e.g. `elements: Option<Vec<Element>>`,
     /// `extracted_keywords: Option<Vec<Keyword>>`) are natively bridged by swift-bridge
     /// as `Optional<RustVec<T>>` — never JSON-bridged to a `RustString` — so they must
     /// be classified as countable (`vec_field_names`), NOT as `json_bridged_vec_names`.

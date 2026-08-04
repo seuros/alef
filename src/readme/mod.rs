@@ -20,6 +20,8 @@ pub fn generate_readmes(
     config: &ResolvedCrateConfig,
     languages: &[Language],
 ) -> anyhow::Result<Vec<GeneratedFile>> {
+    validate_readme_snippets_dir(config)?;
+
     let mut files = vec![];
     let mut seen_paths = HashSet::new();
     for &lang in languages {
@@ -126,6 +128,34 @@ fn push_unique_readme(
         );
     }
     files.push(file);
+    Ok(())
+}
+
+/// Validate that a configured `crates.readme.snippets_dir` actually exists.
+///
+/// Checked unconditionally, before any template renders, regardless of
+/// whether the language templates currently reference the `include_snippet`
+/// filter: a stale `snippets_dir` must fail the build even for languages
+/// whose README template does not (yet, or ever) call the filter. A
+/// misconfigured path here previously resolved every `include_snippet` call
+/// to a silent `<!-- snippet not found -->` placeholder that shipped into
+/// published READMEs while `alef readme` reported success. ~keep
+fn validate_readme_snippets_dir(config: &ResolvedCrateConfig) -> anyhow::Result<()> {
+    let Some(readme_cfg) = &config.readme else {
+        return Ok(());
+    };
+    let Some(snippets_dir) = &readme_cfg.snippets_dir else {
+        return Ok(());
+    };
+    let workspace_root = config.workspace_root.clone().unwrap_or_else(|| PathBuf::from("."));
+    let abs_snippets_dir = workspace_root.join(snippets_dir);
+    if !abs_snippets_dir.exists() {
+        anyhow::bail!(
+            "config key `crates.readme.snippets_dir` is set to '{}' (resolved to '{}'), which does not exist",
+            snippets_dir.display(),
+            abs_snippets_dir.display()
+        );
+    }
     Ok(())
 }
 

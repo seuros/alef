@@ -7,13 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.53.0] - 2026-08-04
+
+### Changed
+
+- **An unresolvable README or docs snippet is now a hard error instead of a silent placeholder.**
+  `crates.readme.snippets_dir` and `workspace.docs.snippets.dirs` entries that do not exist on disk
+  are rejected up front, naming the config key and both the configured and resolved path; a snippet
+  reference that cannot be resolved fails the run instead of emitting
+  `<!-- snippet not found: ... -->` into the output. The README path previously never failed at all,
+  so that placeholder shipped verbatim to package registries while `alef readme` reported success.
+  The configured-directory check runs even when no template references a snippet, so a stale path
+  cannot hide behind a template that happens not to use the filter.
+
+  **Breaking:** repositories whose snippet references are already broken now fail `alef readme` /
+  `alef docs` until the missing snippet files are added or the references removed.
+
 ### Fixed
 
+- **Closing code fences in generated API reference docs are no longer tagged with a language.**
+  `replace_fence_lang` appended the language to every line starting with a fence, including the
+  closing one, turning ` ``` ` into ` ```rust ` and reopening the block instead of closing it. This
+  corrupted every `**Example:**` block rendered from a doc comment.
+- **A generic `Result<T>` alias now yields the crate's real error type in generated signatures.**
+  Hint extraction was gated on the alias having no generic parameters, so the idiomatic
+  `pub type Result<T> = std::result::Result<T, MyError>;` was skipped and signatures fell back to
+  the placeholder `anyhow::Error`, rendered as a nonexistent `Error` type.
+- **Magnus tagged-enum predicate methods emit Ruby booleans.** The value was interpolated through
+  minijinja, which stringifies a bool Python-style, producing `def system? = True` — parsed by Ruby
+  as a constant lookup, so any predicate call raised `NameError`.
 - **Scaffold `.cargo/config.toml` `[env]` structured values render valid TOML booleans.** The
   `relative` flag was interpolated straight from a bool through minijinja, which stringifies it
   Python-style as `True`/`False` — invalid TOML that broke `cargo` on any scaffold using a
   structured env entry (e.g. the Ruby `preferred-ruby.sh` path). The value is now emitted as a
   lowercase `true`/`false` literal.
+- **Generated Kotlin Android `build.gradle.kts` no longer stamps a downstream issue reference into
+  every consuming project.** The release JNI guard's explanatory comment carried a cross-project
+  issue link that no other repository can resolve; the technical rationale is retained.
 
 ## [0.52.0] - 2026-08-04
 

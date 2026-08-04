@@ -576,7 +576,7 @@ fn test_template_readme_default_path_fallthrough() {
 }
 
 #[test]
-fn test_template_readme_missing_snippets_renders_gracefully() {
+fn should_error_loudly_when_template_uses_snippets_but_none_are_configured() {
     let tmp = std::env::temp_dir().join("alef_readme_test_missing_snippets");
     let _ = fs::remove_dir_all(&tmp);
     let partials_dir = tmp.join("partials");
@@ -616,8 +616,14 @@ fn test_template_readme_missing_snippets_renders_gracefully() {
     config.workspace_root = Some(tmp.clone());
 
     let api = test_api();
-    let files = generate_readmes(&api, &config, &[Language::Ffi]).unwrap();
-    assert_eq!(files.len(), 1);
+    let err = generate_readmes(&api, &config, &[Language::Ffi]).expect_err(
+        "a template that calls include_snippet with no snippets_dir configured must fail, not render a placeholder",
+    );
+    let message = err.to_string();
+    assert!(
+        message.contains("crates.readme.snippets_dir"),
+        "error must name the missing config key, got: {message}"
+    );
 
     let _ = fs::remove_dir_all(&tmp);
 }
@@ -660,6 +666,104 @@ fn test_template_include_snippet_filter() {
         files[0].content.contains("print('hi')"),
         "Expected snippet content, got: {}",
         files[0].content
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn should_error_when_configured_snippets_dir_does_not_exist_even_if_unused() {
+    let tmp = std::env::temp_dir().join("alef_readme_test_snippets_dir_missing");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).unwrap();
+    // No `snippets/` directory is created under `tmp`, and the template below
+    // never references the `include_snippet` filter: the missing directory must
+    // still fail the build, matching the incident where `readme_templates/rust.md`
+    // never called the filter yet `snippets_dir` pointed at a nonexistent path. ~keep
+    fs::write(tmp.join("t.md"), "# {{ name }}").unwrap();
+
+    let mut config = test_config();
+    let mut lang_map = std::collections::HashMap::new();
+    lang_map.insert(
+        "python".to_string(),
+        serde_json::json!({
+            "template": "t.md",
+            "output_path": "packages/python/README.md"
+        }),
+    );
+    config.readme = Some(ReadmeConfig {
+        template_dir: Some(tmp.clone()),
+        snippets_dir: Some(PathBuf::from("docs/snippets")),
+        config: None,
+        output_pattern: None,
+        discord_url: None,
+        banner_url: None,
+        languages: lang_map,
+        targets: std::collections::HashMap::new(),
+    });
+    config.workspace_root = Some(tmp.clone());
+
+    let api = test_api();
+    let err = generate_readmes(&api, &config, &[Language::Python])
+        .expect_err("a configured snippets_dir that does not exist on disk must be a hard error");
+    let message = err.to_string();
+    assert!(
+        message.contains("crates.readme.snippets_dir"),
+        "error must name the config key, got: {message}"
+    );
+    assert!(
+        message.contains("docs/snippets"),
+        "error must name the offending configured path, got: {message}"
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn should_error_when_referenced_snippet_file_cannot_be_resolved() {
+    let tmp = std::env::temp_dir().join("alef_readme_test_snippet_file_missing");
+    let _ = fs::remove_dir_all(&tmp);
+    let snippets_dir = tmp.join("snippets");
+    fs::create_dir_all(snippets_dir.join("python")).unwrap();
+    // `snippets_dir` itself exists, but `missing.py` is never written under it.
+    fs::write(tmp.join("t.md"), r#"{{ "missing.py" | include_snippet("python") }}"#).unwrap();
+
+    let mut config = test_config();
+    let mut lang_map = std::collections::HashMap::new();
+    lang_map.insert(
+        "python".to_string(),
+        serde_json::json!({
+            "template": "t.md",
+            "output_path": "packages/python/README.md"
+        }),
+    );
+    config.readme = Some(ReadmeConfig {
+        template_dir: Some(tmp.clone()),
+        snippets_dir: Some(PathBuf::from("snippets")),
+        config: None,
+        output_pattern: None,
+        discord_url: None,
+        banner_url: None,
+        languages: lang_map,
+        targets: std::collections::HashMap::new(),
+    });
+    config.workspace_root = Some(tmp.clone());
+
+    let api = test_api();
+    let err = generate_readmes(&api, &config, &[Language::Python])
+        .expect_err("an unresolvable snippet reference must fail the build, not render a placeholder comment");
+    let message = err.to_string();
+    assert!(
+        message.contains("python"),
+        "error must name the language, got: {message}"
+    );
+    assert!(
+        message.contains("missing.py"),
+        "error must name the path, got: {message}"
+    );
+    assert!(
+        message.to_lowercase().contains("snippets"),
+        "error must name the snippets root that was searched, got: {message}"
     );
 
     let _ = fs::remove_dir_all(&tmp);

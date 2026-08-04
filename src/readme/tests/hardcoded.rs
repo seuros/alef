@@ -58,9 +58,22 @@ fn test_render_performance_table_empty() {
 }
 
 #[test]
-fn test_include_snippet_missing() {
-    let result = include_snippet(Path::new("/nonexistent"), "python", "foo.py");
-    assert!(result.contains("snippet not found"));
+fn should_error_when_snippet_file_does_not_exist() {
+    let err = include_snippet(Path::new("/nonexistent"), "python", "foo.py")
+        .expect_err("missing snippet file must be a hard error, not a silent placeholder");
+    let message = err.to_string();
+    assert!(
+        message.contains("python"),
+        "error must name the language, got: {message}"
+    );
+    assert!(
+        message.contains("foo.py"),
+        "error must name the requested path, got: {message}"
+    );
+    assert!(
+        message.contains("/nonexistent"),
+        "error must name the snippets root that was searched, got: {message}"
+    );
 }
 
 #[test]
@@ -307,7 +320,7 @@ fn test_include_snippet_non_md_file() {
     fs::create_dir_all(&lang_dir).unwrap();
     fs::write(lang_dir.join("example.py"), "print('hello')").unwrap();
 
-    let result = include_snippet(&tmp, "python", "example.py");
+    let result = include_snippet(&tmp, "python", "example.py").unwrap();
     assert!(result.contains("```py"), "Got: {result}");
     assert!(result.contains("print('hello')"), "Got: {result}");
 
@@ -326,7 +339,7 @@ fn test_include_snippet_md_file_extracts_code_block() {
     )
     .unwrap();
 
-    let result = include_snippet(&tmp, "python", "example.md");
+    let result = include_snippet(&tmp, "python", "example.md").unwrap();
     assert!(result.contains("```python"), "Got: {result}");
     assert!(result.contains("foo()"), "Got: {result}");
 
