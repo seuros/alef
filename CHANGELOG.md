@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.51.1] - 2026-08-04
+
+### Fixed
+
+- Generated Ruby wrappers no longer publish binding types into the global `Object` namespace.
+  The previous `Object.const_set` loop exported every module (e.g. `Parser`) globally, colliding
+  with unrelated gems such as `parser` (`TypeError: Parser is not a module`). Generated types now
+  stay namespaced under their binding module; consumers reference them qualified.
+
 ## [0.51.0] - 2026-08-03
 
 ### Changed
