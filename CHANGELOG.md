@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.51.2] - 2026-08-04
+
+### Fixed
+
+- **Swift e2e: `Option<Vec<Named>>` fields no longer emit non-compiling `.count` assertions.**
+  Fields like `elements: Option<Vec<Element>>` are natively bridged by swift-bridge as
+  `Optional<RustVec<T>>`, not JSON-bridged to `RustString`. The e2e classifier previously
+  treated every optional Vec field as JSON-bridged, so `count_min`/`count_equals`/`min_length`
+  assertions emitted `<accessor>().toString().count` against `RustVec<T>?`, which does not
+  compile ("value of type 'RustVec<Element>?' has no member 'toString'"). Classification now
+  matches the real getter shape used by the Swift binding generator.
+- **PHP e2e `composer.json` accepts guzzle 7 or 8.** The generated `require-dev` constraint was
+  pinned to `^7.0`, which hard-fails `composer install` against a `composer.lock` that already
+  resolved `guzzlehttp/guzzle` to `8.0.0`. The constraint is now `^7.0 || ^8.0`.
+
 ## [0.51.1] - 2026-08-04
 
 ### Fixed

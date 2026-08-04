@@ -331,19 +331,24 @@ pub(super) fn build_swift_first_class_map(
             // countable would make the e2e emit `.count` on a `RustString`
             // and fail to compile.
             //
-            // `RustVec` (which has `.count`). A field the swift-bridge layer
-            // JSON-bridges — an optional vec (`Option<Vec<T>>`), `Vec<Vec<..>>`,
-            // `Map<..>`, etc. — returns a plain `RustString` instead, which has
-            // no `.count`. e.g. `headings: Option<Vec<HeadingInfo>>` becomes a
-            // `headings() -> RustString` getter; recording it as countable makes
-            // the e2e emit `headings()?.count` and fail to compile. Non-optional
-            // `Vec<Named>`/`Vec<primitive>` (e.g. `urls`, `nodes`, `tables`) stay
-            // `RustVec<T>` and remain countable. Optionality is tracked on
-            // `f.optional` separately from `f.ty`, so check both — dropping the
-            // `f.optional` disjunct is what regressed `headings`/`favicons`/
-            // `hreflangs` into non-compiling `.count` assertions.
+            // `needs_json_bridge_for_swift` is the exact predicate the Swift
+            // binding generator (`gen_bindings::dto`) uses to decide a getter's
+            // return type, so classification here must match the real getter
+            // shape. In particular `Option<Vec<T>>` (e.g. `elements: Option<Vec<Element>>`,
+            // `extracted_keywords: Option<Vec<Keyword>>`) is NOT JSON-bridged when `T`
+            // is itself a leaf (opaque swift-bridge type, primitive, or String):
+            // swift-bridge natively exposes it as `Optional<RustVec<T>>`, which has no
+            // `.toString()` but IS countable via `?.count`. Only genuinely JSON-bridged
+            // shapes — `Vec<Vec<..>>`, `Map<..>`, `Option<Vec<Vec<..>>>`, etc. — return a
+            // plain `RustString` with no `.count`. Do NOT also gate on `f.optional`: that
+            // previously misclassified every optional Vec (including the natively-bridged
+            // `Optional<RustVec<T>>` case) as JSON-bridged, which made the e2e emit
+            // `<accessor>().toString().count` against `RustVec<T>?` and fail to compile
+            // ("value of type 'RustVec<Element>?' has no member 'toString'"). Optionality
+            // is handled separately by `swift_array_count_expr`/`swift_count_target` in
+            // `accessors.rs`, which already emit `(expr?.count ?? 0)` for optional Vec leaves.
             if is_vec_ty(&f.ty) {
-                if f.optional || needs_json_bridge_for_swift(&f.ty) {
+                if needs_json_bridge_for_swift(&f.ty) {
                     json_bridged_vec_names.insert(f.name.clone());
                 } else {
                     vec_field_names.insert(f.name.clone());
@@ -404,5 +409,85 @@ pub(super) fn build_swift_first_class_map(
         vec_field_names,
         root_type,
         stringy_fields_by_type,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::config::e2e::{CallConfig, E2eConfig};
+    use crate::core::ir::{FieldDef, TypeDef, TypeRef};
+
+    fn named_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
+        FieldDef {
+            name: name.to_string(),
+            ty,
+            optional,
+            ..Default::default()
+        }
+    }
+
+    /// Regression test for the Swift e2e `count_min`/`min_length` assertion emitter
+    /// crash: `Option<Vec<Named>>` fields (e.g. xberg's `elements: Option<Vec<Element>>`,
+    /// `extracted_keywords: Option<Vec<Keyword>>`) are natively bridged by swift-bridge
+    /// as `Optional<RustVec<T>>` — never JSON-bridged to a `RustString` — so they must
+    /// be classified as countable (`vec_field_names`), NOT as `json_bridged_vec_names`.
+    /// Previously an `f.optional ||` disjunct misclassified every optional Vec as
+    /// JSON-bridged regardless of its element type, which made the e2e generator emit
+    /// `<accessor>().toString().count` against `RustVec<Element>?` — a compile error
+    /// ("value of type 'RustVec<Element>?' has no member 'toString'").
+    #[test]
+    fn optional_vec_of_named_leaf_is_countable_not_json_bridged() {
+        let element_dto = TypeDef {
+            name: "Element".to_string(),
+            fields: vec![named_field("kind", TypeRef::String, false)],
+            ..Default::default()
+        };
+        let result_dto = TypeDef {
+            name: "ExtractionResult".to_string(),
+            fields: vec![named_field(
+                "elements",
+                TypeRef::Optional(Box::new(TypeRef::Vec(Box::new(TypeRef::Named("Element".to_string()))))),
+                true,
+            )],
+            ..Default::default()
+        };
+
+        let map = build_swift_first_class_map(
+            &[element_dto, result_dto],
+            &[],
+            &E2eConfig::default(),
+            &CallConfig::default(),
+        );
+
+        assert!(
+            map.is_vec_field_name("elements"),
+            "Option<Vec<Named>> field must be classified as a countable RustVec, not JSON-bridged"
+        );
+    }
+
+    /// Genuinely JSON-bridged shapes — `Vec<Vec<T>>` (and `Option<Vec<Vec<T>>>`) —
+    /// return a plain `RustString` getter with no `.count`, so they must stay excluded
+    /// from `vec_field_names` (and thus never get a `.count` assertion emitted).
+    #[test]
+    fn optional_vec_of_vec_stays_json_bridged() {
+        let result_dto = TypeDef {
+            name: "TableResult".to_string(),
+            fields: vec![named_field(
+                "rows",
+                TypeRef::Optional(Box::new(TypeRef::Vec(Box::new(TypeRef::Vec(Box::new(
+                    TypeRef::String,
+                )))))),
+                true,
+            )],
+            ..Default::default()
+        };
+
+        let map = build_swift_first_class_map(&[result_dto], &[], &E2eConfig::default(), &CallConfig::default());
+
+        assert!(
+            !map.is_vec_field_name("rows"),
+            "Vec<Vec<T>> field is JSON-bridged to RustString and must not be marked countable"
+        );
     }
 }
