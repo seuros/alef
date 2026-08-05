@@ -170,7 +170,12 @@ fn poly_toml_emits_workspace_lint_hooks_for_non_bundled_linters() {
         ("[hooks.pre-commit.commands.golangci-lint]", "golangci-lint run ./..."),
         ("[hooks.pre-commit.commands.checkstyle]", "mvn -q checkstyle:check"),
         ("[hooks.pre-commit.commands.dart-analyze]", "dart analyze"),
-        ("[hooks.pre-commit.commands.credo]", "mix credo"),
+        // credo is primed with `mix deps.get` because poly's staged snapshot has no
+        // gitignored `deps/` for Elixir to resolve credo itself from. ~keep
+        (
+            "[hooks.pre-commit.commands.credo]",
+            "mix deps.get && mix credo --strict",
+        ),
     ] {
         assert!(c.contains(table), "missing workspace hook {table}");
         assert!(c.contains(cmd), "missing command `{cmd}` for {table}");

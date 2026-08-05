@@ -110,8 +110,11 @@ root = "packages/dart"
 workspace = true
 files = "packages/dart/**/*.dart"
 
+# `mix deps.get` first: hooks run from a staged snapshot outside the repo, and Elixir
+# resolves dependencies strictly project-locally into a gitignored `deps/`, so credo's
+# own package is missing there and mix aborts with "Unchecked dependencies".
 [hooks.pre-commit.commands.credo]
-run = "mix credo --strict"
+run = "mix deps.get && mix credo --strict"
 root = "packages/elixir"
 workspace = true
 files = "packages/elixir/**/*.{ex,exs}"

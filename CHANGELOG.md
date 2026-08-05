@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bit from the scripts poly reformatted (`run_tests.php`, `download_ffi.sh`, `mvnw`, `gradlew`) and
   poly's own `file-safety` hook then rejected the next commit. The formatting pass now snapshots
   executable modes beforehand and restores any the formatter dropped.
+- The generated `credo` pre-commit hook runs `mix deps.get` before `mix credo --strict`. poly runs
+  hooks from a staged snapshot outside the repo and Elixir resolves dependencies strictly
+  project-locally into a gitignored `deps/`, so credo's own package was missing there and every
+  commit touching `.ex`/`.exs` files failed with "Unchecked dependencies for environment dev". The
+  snapshot persists between runs, so the fetch is a one-time cost.
 
 ## [0.53.1] - 2026-08-04
 

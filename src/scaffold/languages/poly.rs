@@ -372,7 +372,18 @@ pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[La
     }
     if has(Language::Elixir) {
         let dir = config.package_dir(Language::Elixir);
-        out.push_str(&workspace_hook("credo", &dir, "mix credo --strict", "**/*.{ex,exs}"));
+        // `mix deps.get` first: poly runs hooks from a staged snapshot outside the repo,
+        // and Elixir resolves dependencies strictly project-locally into a gitignored
+        // `deps/`, so credo's own package is missing there and mix aborts with "Unchecked
+        // dependencies for environment dev". The snapshot persists between runs, so the
+        // fetch is a one-time cost. Every other delegated linter resolves from a global
+        // cache (bundler, maven, go module cache) and needs no such priming. ~keep
+        out.push_str(&workspace_hook(
+            "credo",
+            &dir,
+            "mix deps.get && mix credo --strict",
+            "**/*.{ex,exs}",
+        ));
     }
 
     for source in &config.poly.hooks_sources {
