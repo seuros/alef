@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.54.2] - 2026-08-05
+
+### Fixed
+
+- **Generated FFI code is clean under edition 2024's stricter lints.** Two more consequences of
+  0.54.0's edition bump: the `ffi_set_out_error` helper nested `if let Ok(cs) = …` inside a null
+  check, which edition 2024 rejects as `collapsible_if` now that let-chains are stable; and the
+  error-method emitter wrote raw-pointer dereferences and `CString::from_raw` as bare statements
+  inside `unsafe extern "C"` bodies, which `unsafe_op_in_unsafe_fn` — on by default in 2024 — turns
+  into a hard `error[E0133]` for any error type declaring methods. Consumers lint generated crates
+  with `-D warnings`, so both broke their builds.
+- **The WASM backend no longer emits a duplicate binding for a field and a same-named method.**
+  Mirroring the FFI fix in 0.54.1: the field-getter and method-wrapper loops both emitted
+  `pub fn <name>` into one `#[wasm_bindgen] impl`, so a type with a `providers` field and a
+  `providers()` method failed to compile with `error[E0592]`. The method wrapper is skipped when a
+  field getter of that name was already emitted, leaving the getter as the callable surface. A
+  survey of the other backends found napi, php, jni, go, dart and java unaffected.
+
 ## [0.54.1] - 2026-08-05
 
 ### Fixed
