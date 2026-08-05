@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.54.1] - 2026-08-05
+
+### Fixed
+
+- **The generated FFI error accessors compile under edition 2024.** 0.54.0 moved generated Rust
+  crates to edition 2024 and converted the FFI templates to `#[unsafe(no_mangle)]`, but the sweep
+  missed `error_gen`'s shared emitter, which builds the `status_code`, `is_transient`, `error_type`
+  and `error_type_free` functions from Rust string literals rather than templates. Those four kept a
+  bare `#[no_mangle]`, which edition 2024 rejects (`unsafe attribute used without unsafe`), so any
+  repo with a core error type failed to build its `-ffi` crate after regenerating on 0.54.0.
+- **A field and a method sharing a name no longer emit a duplicate FFI symbol.** The field-accessor
+  and method-wrapper emitters each minted `{prefix}_{type}_{name}` with no collision check, so a
+  type with both a `providers` field and a `providers()` method produced two definitions of the same
+  `#[unsafe(no_mangle)]` function (`error[E0428]`). The method wrapper is now skipped when a
+  same-named field accessor was already emitted, which keeps the existing symbol and its semantics.
+
 ## [0.54.0] - 2026-08-05
 
 ### Added
