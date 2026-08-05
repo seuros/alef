@@ -109,7 +109,8 @@ impl E2eCodegen for PhpCodegen {
         // namespace separator must be JSON-escaped (`\` → `\\`). The trailing
         // pair represents the PHP-mandated trailing `\` (which itself escapes
         // to `\\` in JSON).
-        let php_namespace_escaped = php_autoload_namespace(config).replace('\\', "\\\\");
+        let php_namespace = php_autoload_namespace(config);
+        let php_namespace_escaped = php_namespace.replace('\\', "\\\\");
         let e2e_autoload_ns = format!("{php_namespace_escaped}\\\\E2e\\\\");
 
         // Generate composer.json.
@@ -119,7 +120,7 @@ impl E2eCodegen for PhpCodegen {
                 &e2e_pkg_name,
                 &e2e_autoload_ns,
                 &extension_name,
-                &pkg_name,
+                &php_namespace,
                 &pkg_path,
                 &pkg_version,
                 e2e_config.dep_mode,

@@ -17,16 +17,15 @@ use crate::e2e::fixture::FixtureGroup;
 /// dependency modes need it: `e2e/php` (Local) and `test_apps/php` (Registry)
 /// sit at the same depth relative to the package, so the same relative
 /// `pkg_path` is correct for both.
-fn php_autoload_section(pkg_name: &str, pkg_path: &str) -> String {
-    // Extract the namespace from pkg_name (`<vendor>/<module>`) and map it to src/.
-    let pkg_namespace = pkg_name
-        .split('/')
-        .nth(1)
-        .unwrap_or(pkg_name)
-        .split('-')
-        .map(heck::ToUpperCamelCase::to_upper_camel_case)
-        .collect::<Vec<_>>()
-        .join("\\");
+///
+/// `pkg_namespace` is the resolved `[crates.php] namespace` and is used
+/// verbatim as the PSR-4 prefix. It must never be re-derived from the composer
+/// package name: word-splitting a namespace like `HtmlToMarkdown` into
+/// `Html\To\Markdown` yields a prefix that matches no declared namespace, so
+/// Composer silently autoloads nothing. Namespaces that already contain `\`
+/// (e.g. `Xberg\Crawlberg`) are preserved as written; only JSON escaping is
+/// applied.
+fn php_autoload_section(pkg_namespace: &str, pkg_path: &str) -> String {
     format!(
         r#"
   "autoload": {{
@@ -43,7 +42,7 @@ pub(super) fn render_composer_json(
     e2e_pkg_name: &str,
     e2e_autoload_ns: &str,
     _extension_name: &str,
-    pkg_name: &str,
+    pkg_namespace: &str,
     pkg_path: &str,
     _pkg_version: &str,
     dep_mode: crate::e2e::config::DependencyMode,
@@ -87,7 +86,7 @@ pub(super) fn render_composer_json(
             // The userland PHP classes (layered over the PIE-installed native
             // extension) are autoloaded from the local package source, since the
             // registry `require` deliberately omits the package itself.
-            (require, php_autoload_section(pkg_name, pkg_path))
+            (require, php_autoload_section(pkg_namespace, pkg_path))
         }
         crate::e2e::config::DependencyMode::Local => {
             let require = format!(
@@ -98,7 +97,7 @@ pub(super) fn render_composer_json(
                 phpunit = tv::packagist::PHPUNIT,
                 guzzle = tv::packagist::GUZZLE,
             );
-            (require, php_autoload_section(pkg_name, pkg_path))
+            (require, php_autoload_section(pkg_namespace, pkg_path))
         }
     };
 

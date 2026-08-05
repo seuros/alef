@@ -434,7 +434,7 @@ mod composer_json_tests {
             "sample_crate/e2e-php",
             "SampleLlm\\\\E2e\\\\",
             "demo_client",
-            "sample_crate/demo-client",
+            "Demo\\Client",
             "../../packages/php",
             "1.4.0-rc.32",
             DependencyMode::Registry,
@@ -486,7 +486,7 @@ mod composer_json_tests {
             "sample_crate/e2e-php",
             "SampleLlm\\\\E2e\\\\",
             "demo_client",
-            "sample_crate/demo-client",
+            "Demo\\Client",
             "../../packages/php",
             "1.4.0-rc.32",
             DependencyMode::Registry,
@@ -511,7 +511,7 @@ mod composer_json_tests {
             "sample_crate/e2e-php",
             "SampleLlm\\\\E2e\\\\",
             "demo_client",
-            "sample_crate/demo-client",
+            "Demo\\Client",
             "../../packages/php",
             "1.4.0-rc.32",
             DependencyMode::Local,
@@ -519,6 +519,53 @@ mod composer_json_tests {
         assert!(
             content.contains(r#""Demo\\Client\\": "../../packages/php/src/""#),
             "local composer.json must map the userland namespace to the package src, got:\n{content}"
+        );
+    }
+
+    /// A single-segment camelCase namespace (`[crates.php] namespace = "HtmlToMarkdown"`,
+    /// declared in PHP as `namespace HtmlToMarkdown;`) must stay one PSR-4 segment.
+    /// Word-splitting it into `Html\To\Markdown\` produces a prefix that matches no
+    /// declared namespace, so Composer autoloads none of the userland classes and
+    /// every test dies with `Class "HtmlToMarkdown\..." not found`.
+    #[test]
+    fn composer_json_does_not_word_split_camel_case_namespace() {
+        for dep_mode in [DependencyMode::Local, DependencyMode::Registry] {
+            let content = render_composer_json(
+                "xberg/e2e-php",
+                "HtmlToMarkdown\\\\E2e\\\\",
+                "html_to_markdown",
+                "HtmlToMarkdown",
+                "../../crates/html-to-markdown-php",
+                "1.0.0",
+                dep_mode,
+            );
+            assert!(
+                content.contains(r#""HtmlToMarkdown\\": "../../crates/html-to-markdown-php/src/""#),
+                "{dep_mode:?} composer.json must use the configured namespace verbatim, got:\n{content}"
+            );
+            assert!(
+                !content.contains(r#""Html\\To\\Markdown\\""#),
+                "{dep_mode:?} composer.json must not split camelCase humps into PSR-4 segments, got:\n{content}"
+            );
+        }
+    }
+
+    /// A namespace that legitimately contains separators (`Xberg\Crawlberg`) keeps them,
+    /// JSON-escaped, rather than being re-derived from the composer package name.
+    #[test]
+    fn composer_json_preserves_multi_segment_namespace() {
+        let content = render_composer_json(
+            "xberg/e2e-php",
+            "Xberg\\\\Crawlberg\\\\E2e\\\\",
+            "crawlberg",
+            "Xberg\\Crawlberg",
+            "../../packages/php",
+            "1.0.0",
+            DependencyMode::Local,
+        );
+        assert!(
+            content.contains(r#""Xberg\\Crawlberg\\": "../../packages/php/src/""#),
+            "composer.json must preserve explicit namespace separators, got:\n{content}"
         );
     }
 
@@ -606,6 +653,79 @@ mod composer_json_tests {
         assert!(
             content.contains(">> \"$PHP_INI\""),
             "install.sh must append to php.ini, got:\n{content}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod autoload_namespace_wiring_tests {
+    use crate::core::config::{NewAlefConfig, ResolvedCrateConfig};
+    use crate::e2e::codegen::E2eCodegen;
+    use crate::e2e::codegen::php::PhpCodegen;
+    use crate::e2e::config::E2eConfig;
+
+    fn resolve_config(toml_text: &str) -> ResolvedCrateConfig {
+        let cfg: NewAlefConfig = toml::from_str(toml_text).expect("valid config");
+        cfg.resolve().expect("resolve").remove(0)
+    }
+
+    fn composer_json_for(toml_text: &str) -> String {
+        let config = resolve_config(toml_text);
+        let files = PhpCodegen
+            .generate(&[], &E2eConfig::default(), &config, &[], &[])
+            .expect("php e2e generation must succeed");
+        files
+            .iter()
+            .find(|f| f.path.file_name().is_some_and(|n| n == "composer.json"))
+            .map(|f| f.content.clone())
+            .expect("php e2e generation must emit composer.json")
+    }
+
+    /// The PSR-4 prefix must come from `[crates.php] namespace`, not from the composer
+    /// package name derived from the hyphenated crate name. Deriving it from
+    /// `<vendor>/html-to-markdown` word-split the name into `Html\To\Markdown\`, which
+    /// matches no declared namespace, so Composer autoloaded nothing and every PHPUnit
+    /// e2e test failed with `Class "HtmlToMarkdown\HtmlToMarkdown" not found`.
+    #[test]
+    fn psr4_prefix_uses_configured_namespace_not_hyphenated_package_name() {
+        let content = composer_json_for(
+            r#"
+[workspace]
+languages = ["php"]
+[[crates]]
+name = "html-to-markdown"
+sources = []
+[crates.php]
+namespace = "HtmlToMarkdown"
+"#,
+        );
+        assert!(
+            content.contains(r#""HtmlToMarkdown\\": "../../packages/php/src/""#),
+            "composer.json must map the configured namespace verbatim, got:\n{content}"
+        );
+        assert!(
+            !content.contains("Html\\\\To\\\\Markdown"),
+            "composer.json must not word-split the configured namespace, got:\n{content}"
+        );
+    }
+
+    /// With no `[crates.php] namespace`, the fallback still derives from the extension
+    /// name (`html_to_markdown` → `Html\To\Markdown`), which is the documented default —
+    /// this pins that the fix did not change unconfigured behaviour.
+    #[test]
+    fn psr4_prefix_falls_back_to_extension_derived_namespace() {
+        let content = composer_json_for(
+            r#"
+[workspace]
+languages = ["php"]
+[[crates]]
+name = "html-to-markdown"
+sources = []
+"#,
+        );
+        assert!(
+            content.contains(r#""Html\\To\\Markdown\\": "../../packages/php/src/""#),
+            "composer.json must fall back to the extension-derived namespace, got:\n{content}"
         );
     }
 }
