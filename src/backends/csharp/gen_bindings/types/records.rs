@@ -376,12 +376,23 @@ pub(super) fn emit_record_methods(
 
     let native_type_prefix = class_name;
 
+    // Properties are emitted into this same record body from `typ.fields`, and C# rejects a
+    // member name used twice with `CS0102`. The property is emitted first and wins, so a
+    // same-named method is dropped. Mirrors the field loop's filtering in `gen_record`. ~keep
+    let property_names: HashSet<String> = binding_fields(&typ.fields)
+        .filter(|field| !is_tuple_field(field))
+        .map(|field| to_csharp_name(&field.name))
+        .collect();
+
     for method in &typ.methods {
         if !matches!(&method.return_type, TypeRef::Named(name) if name == &typ.name) {
             continue;
         }
 
         let method_cs_name = to_csharp_name(&method.name);
+        if property_names.contains(&method_cs_name) {
+            continue;
+        }
         let native_method_name = format!("{native_type_prefix}{method_cs_name}");
         let has_receiver = method.receiver.is_some();
 

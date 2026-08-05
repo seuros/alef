@@ -95,3 +95,46 @@ fn record_type_maps_configured_bridge_alias_to_trait_interface() {
     assert!(!code.contains("IHtmlVisitor"));
     assert!(!code.contains("VisitorHandle"));
 }
+
+/// A record property and a `Self`-returning builder method with the same name both land in the
+/// record body, and C# rejects the duplicate member name with `CS0102`. The property is
+/// emitted first and wins.
+#[test]
+fn record_type_skips_method_whose_name_collides_with_a_property() {
+    use crate::core::ir::{MethodDef, ReceiverKind};
+
+    let mut typ = record_type(vec![field("providers", TypeRef::String)]);
+    typ.methods = vec![MethodDef {
+        name: "providers".to_string(),
+        return_type: TypeRef::Named("RenderOptions".to_string()),
+        receiver: Some(ReceiverKind::Ref),
+        ..Default::default()
+    }];
+
+    let code = gen_record_type(
+        &typ,
+        &[],
+        "Demo",
+        "demo",
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        "snake_case",
+        &HashSet::new(),
+        &[],
+        "DemoException",
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+
+    assert!(
+        code.contains("string Providers { get; init; }"),
+        "the property must still be emitted:\n{code}"
+    );
+    let methods = code.matches("public RenderOptions Providers(").count();
+    assert_eq!(
+        methods, 0,
+        "the same-named method must be skipped, found {methods}:\n{code}"
+    );
+}
