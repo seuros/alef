@@ -289,7 +289,7 @@ pub fn gen_ffi_error_codes(error: &ErrorDef) -> String {
     )
 }
 
-/// Generate `#[no_mangle] extern "C"` helper functions for the whitelisted
+/// Generate `#[unsafe(no_mangle)] extern "C"` helper functions for the whitelisted
 /// introspection methods (`status_code`, `is_transient`, `error_type`) declared
 /// in `error.methods`.
 ///
@@ -320,7 +320,7 @@ pub fn gen_ffi_error_methods(error: &ErrorDef, core_import: &str, api_prefix: &s
                 items.push(format!(
                     "/// Return the HTTP status code for the error pointed to by `err`.\n\
                      /// Returns `0` if `err` is null.\n\
-                     #[no_mangle]\n\
+                     #[unsafe(no_mangle)]\n\
                      pub unsafe extern \"C\" fn {fn_name}(err: *const {rust_path}) -> u16 {{\n\
                          // SAFETY: caller guarantees `err` points to a live `{rust_path}` value\n\
                          // allocated by this library, or is null.\n\
@@ -336,7 +336,7 @@ pub fn gen_ffi_error_methods(error: &ErrorDef, core_import: &str, api_prefix: &s
                 items.push(format!(
                     "/// Return whether the error pointed to by `err` is transient.\n\
                      /// Returns `false` if `err` is null.\n\
-                     #[no_mangle]\n\
+                     #[unsafe(no_mangle)]\n\
                      pub unsafe extern \"C\" fn {fn_name}(err: *const {rust_path}) -> bool {{\n\
                          // SAFETY: caller guarantees `err` points to a live `{rust_path}` value\n\
                          // allocated by this library, or is null.\n\
@@ -355,7 +355,7 @@ pub fn gen_ffi_error_methods(error: &ErrorDef, core_import: &str, api_prefix: &s
                      /// to by `err` as a heap-allocated, NUL-terminated C string.\n\
                      /// The caller must free the returned pointer with `{free_fn_name}`.\n\
                      /// Returns a null pointer if `err` is null.\n\
-                     #[no_mangle]\n\
+                     #[unsafe(no_mangle)]\n\
                      pub unsafe extern \"C\" fn {fn_name}(err: *const {rust_path}) -> *mut std::ffi::c_char {{\n\
                          // SAFETY: caller guarantees `err` points to a live `{rust_path}` value\n\
                          // allocated by this library, or is null.\n\
@@ -370,7 +370,7 @@ pub fn gen_ffi_error_methods(error: &ErrorDef, core_import: &str, api_prefix: &s
                      }}\n\n\
                      /// Free a string previously returned by `{fn_name}`.\n\
                      /// Passing a null pointer is a no-op.\n\
-                     #[no_mangle]\n\
+                     #[unsafe(no_mangle)]\n\
                      pub unsafe extern \"C\" fn {free_fn_name}(ptr: *mut std::ffi::c_char) {{\n\
                          // SAFETY: `ptr` was allocated by `CString::into_raw` inside\n\
                          // `{fn_name}` and is now being reclaimed by the matching\n\

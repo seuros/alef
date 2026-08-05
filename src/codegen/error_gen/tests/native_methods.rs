@@ -221,3 +221,25 @@ fn test_gen_ffi_error_methods_safety_comments() {
     let output = gen_ffi_error_methods(&error, "sample_app", "sampleapp");
     assert!(output.contains("// SAFETY:"), "must include SAFETY comments: {output}");
 }
+
+/// Regression test for a 0.54.0 edition-2024 sweep gap: `gen_ffi_error_methods` kept
+/// emitting bare `#[no_mangle]` on its `status_code` / `is_transient` / `error_type` /
+/// `error_type_free` accessors after generated crates moved to `edition = "2024"`, where
+/// a bare `#[no_mangle]` on an `unsafe extern "C" fn` is rejected with
+/// `error: unsafe attribute used without unsafe`. Every emitted attribute must be the
+/// edition-2024-safe `#[unsafe(no_mangle)]` form.
+#[test]
+fn test_gen_ffi_error_methods_uses_unsafe_no_mangle() {
+    let error = error_with_methods();
+    let output = gen_ffi_error_methods(&error, "sample_app", "sampleapp");
+    assert!(
+        !output.contains("#[no_mangle]"),
+        "must not emit a bare #[no_mangle] under edition 2024: {output}"
+    );
+    let unsafe_no_mangle_count = output.matches("#[unsafe(no_mangle)]").count();
+    assert_eq!(
+        unsafe_no_mangle_count, 4,
+        "expected status_code, is_transient, error_type, and error_type_free to each carry \
+         #[unsafe(no_mangle)]: {output}"
+    );
+}
