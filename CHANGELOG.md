@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.55.1] - 2026-08-05
+
+### Fixed
+
+- **Generated Rust e2e harness compiles under edition 2024.** `tests/common.rs` called
+  `std::env::set_var` at three points to publish the mock-server URLs, which edition 2024 made an
+  unsafe function, so every integration-test binary failed to build with `error[E0133]` and the
+  whole Rust e2e suite was uncompilable (seen on liter-llm). The calls are now wrapped in `unsafe`
+  with a SAFETY note: they run inside the `OnceLock` initializer, before any test thread exists.
+  (`src/e2e/codegen/rust/mock_server/common_module.rs`)
+
 ## [0.55.0] - 2026-08-05
 
 ### Changed

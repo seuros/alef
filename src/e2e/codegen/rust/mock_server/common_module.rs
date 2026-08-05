@@ -105,11 +105,14 @@ pub fn mock_server_url() -> &'static str {
                             for (fid, furl) in servers {
                                 if let serde_json::Value::String(url_str) = furl {
                                     let env_key = format!("MOCK_SERVER_{}", fid.to_uppercase());
-                                    std::env::set_var(&env_key, &url_str);
+                                    // SAFETY: runs inside the OnceLock initializer, before any
+                                    // test thread has been spawned, so no concurrent env access.
+                                    unsafe { std::env::set_var(&env_key, &url_str) };
                                 }
                             }
                         }
-                        std::env::set_var("MOCK_SERVERS", json_str);
+                        // SAFETY: see above — single-threaded OnceLock initialization.
+                        unsafe { std::env::set_var("MOCK_SERVERS", json_str) };
                         // We have seen both lines; stop reading.
                         break;
                     }
@@ -120,7 +123,8 @@ pub fn mock_server_url() -> &'static str {
         }
 
         // Set the main URL env var globally.
-        std::env::set_var("MOCK_SERVER_URL", &url);
+        // SAFETY: see above — single-threaded OnceLock initialization.
+        unsafe { std::env::set_var("MOCK_SERVER_URL", &url) };
 
         // Drain remaining stdout in a background thread to prevent the server from blocking.
         std::thread::spawn(move || {
