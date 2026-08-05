@@ -364,3 +364,38 @@ fn function_param_of_trait_interface_type_is_substituted_to_underscore_prefixed_
         "the bare trait name is never declared as an RBS type (steep RBS::UnknownTypeName): {stub}"
     );
 }
+
+/// RBS rejects a class that declares an attribute and a same-named method
+/// (`RBS::DuplicatedMethodDefinition`). A core type with a public `providers` field and an
+/// inherent `providers()` method feeds both emitters, so the attribute wins and the method
+/// stub is dropped — matching what the magnus binding emits.
+#[test]
+fn attr_and_same_named_method_emit_the_name_once() {
+    use crate::core::ir::{ApiSurface, TypeDef};
+
+    let typ = TypeDef {
+        name: "LlmConfig".to_string(),
+        rust_path: "test_lib::LlmConfig".to_string(),
+        fields: vec![optional_field("providers", TypeRef::String)],
+        methods: vec![MethodDef {
+            name: "providers".to_string(),
+            return_type: TypeRef::String,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let api = ApiSurface {
+        types: vec![typ],
+        ..Default::default()
+    };
+
+    let stub = super::gen_stubs(&api, "test_lib", false, &ahash::AHashMap::new(), &[]);
+
+    let attrs = stub.matches("attr_reader providers:").count();
+    let methods = stub.matches("def providers:").count();
+    assert_eq!(attrs, 1, "the attribute must still be declared once:\n{stub}");
+    assert_eq!(
+        methods, 0,
+        "the same-named method stub must be dropped, found {methods}:\n{stub}"
+    );
+}

@@ -259,3 +259,44 @@ gem_name = "my_gem"
         "struct types must be in re-export list via const_get"
     );
 }
+
+/// A field accessor and a same-named inherent method both mint `fn providers(&self)` in the
+/// single `#[magnus::wrap]` impl block, which rustc rejects with `E0592`, and both register
+/// `define_method("providers", ...)`. The accessor is emitted first and must win.
+#[test]
+fn gen_struct_methods_skips_method_wrapper_when_field_accessor_already_emitted() {
+    let backend = MagnusBackend;
+    let config = make_config();
+    let mut api = make_api_surface();
+    api.types = vec![TypeDef {
+        name: "LlmConfig".to_string(),
+        rust_path: "test_lib::LlmConfig".to_string(),
+        fields: vec![FieldDef {
+            name: "providers".to_string(),
+            ty: TypeRef::String,
+            optional: true,
+            ..Default::default()
+        }],
+        methods: vec![MethodDef {
+            name: "providers".to_string(),
+            return_type: TypeRef::String,
+            receiver: Some(ReceiverKind::Ref),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+
+    let files = backend.generate_bindings(&api, &config).unwrap();
+    let content = &files[0].content;
+
+    let definitions = content.matches("fn providers(&self)").count();
+    assert_eq!(
+        definitions, 1,
+        "`providers` must be defined exactly once, found {definitions} in:\n{content}"
+    );
+    let registrations = content.matches(r#"define_method("providers""#).count();
+    assert_eq!(
+        registrations, 1,
+        "`providers` must be registered exactly once, found {registrations} in:\n{content}"
+    );
+}

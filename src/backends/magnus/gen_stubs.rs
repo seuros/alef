@@ -310,6 +310,7 @@ fn gen_type_stub(
     } else {
         "attr_reader"
     };
+    let mut emitted_attr_names: ahash::AHashSet<&str> = ahash::AHashSet::default();
     for f in binding_fields(&typ.fields) {
         let mut field_type = rbs_type(&f.ty);
         if typ.has_default && !field_type.ends_with('?') {
@@ -325,6 +326,7 @@ fn gen_type_stub(
                 }
             }
         }
+        emitted_attr_names.insert(f.name.as_str());
         lines.push(format!(r#"    {accessor} {}: {field_type}"#, f.name));
     }
 
@@ -352,6 +354,13 @@ fn gen_type_stub(
 
     for method in &typ.methods {
         if !method.is_static {
+            // `attr_accessor providers` already declares `providers`, so a same-named method
+            // stub makes the class carry two definitions of it — RBS rejects that with
+            // `RBS::DuplicatedMethodDefinition`. The attribute is declared first and wins,
+            // matching what the magnus binding emits (see `classes::gen_struct_methods`). ~keep
+            if emitted_attr_names.contains(method.name.as_str()) {
+                continue;
+            }
             lines.push(gen_method_stub(
                 method,
                 false,

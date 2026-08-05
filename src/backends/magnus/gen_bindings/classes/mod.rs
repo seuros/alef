@@ -461,15 +461,24 @@ pub(super) fn gen_struct_methods(
         }
     }
 
+    let mut emitted_field_names: AHashSet<&str> = AHashSet::default();
     for field in binding_fields(&typ.fields) {
         if is_thread_unsafe_field(field, trait_bridges) {
             continue;
         }
+        emitted_field_names.insert(field.name.as_str());
         impl_builder.add_method(&gen_field_accessor(field, mapper));
     }
 
     for method in &typ.methods {
         if !method.is_static {
+            // A field accessor and a sync instance method with the same name both mint
+            // `fn {name}(&self)` in this one impl block, which rustc rejects with `E0592`.
+            // The accessor is emitted first and wins. Async methods are exempt: they are
+            // named `{name}_async`, so they cannot collide. ~keep
+            if !method.is_async && emitted_field_names.contains(method.name.as_str()) {
+                continue;
+            }
             if method.is_async {
                 impl_builder.add_method(&gen_async_instance_method(
                     method,

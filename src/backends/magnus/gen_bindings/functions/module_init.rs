@@ -106,11 +106,13 @@ pub(in crate::backends::magnus::gen_bindings) fn gen_module_init(
             }
         }
 
+        let mut registered_field_names: ahash::AHashSet<&str> = ahash::AHashSet::default();
         if !typ.is_opaque {
             for field in binding_fields(&typ.fields) {
                 if is_thread_unsafe_field(field, &config.trait_bridges) {
                     continue;
                 }
+                registered_field_names.insert(field.name.as_str());
                 lines.push(crate::backends::magnus::template_env::render(
                     "module_class_method_register.rs.jinja",
                     minijinja::context! {
@@ -150,6 +152,13 @@ pub(in crate::backends::magnus::gen_bindings) fn gen_module_init(
                 }
 
                 if streaming_owner_methods.contains(&method.name) {
+                    continue;
+                }
+
+                // The field accessor with this name was registered just above and the
+                // same-named `fn` is dropped from the impl block (see `gen_struct_methods`),
+                // so registering the method here would reference a non-existent function. ~keep
+                if !method.is_async && registered_field_names.contains(method.name.as_str()) {
                     continue;
                 }
 
