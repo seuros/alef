@@ -339,23 +339,25 @@ fn stem_regex() -> &'static Regex {
 }
 
 /// Apply the published-package loader fix to a frb-generated file, deriving the
-/// package, bridge-module, and library stem from the file's own
+/// bridge-module and library stem from the file's own
 /// `kDefaultExternalLibraryLoaderConfig`.
 ///
-/// alef's dart backend names the bridge cdylib `<crate>_dart` (the FRB `stem`),
-/// emits its bridge sources under `lib/src/<crate>_bridge_generated/`, and (by
-/// default) publishes the package as `<crate>`. The shared `<crate>` prefix is
-/// recovered by stripping the trailing `_dart` from the stem, which is the
-/// information needed to resolve the package's own native library at runtime.
+/// alef's dart backend names the bridge cdylib `<crate>_dart` (the FRB `stem`)
+/// and emits its bridge sources under `lib/src/<crate>_bridge_generated/`, so
+/// the module name is recovered by stripping the trailing `_dart` from the stem.
+///
+/// `package_name` must be the resolved `[dart] pubspec_name` — it is only a
+/// coincidence that it equals the crate base when `pubspec_name` is
+/// unconfigured. Deriving it from the stem emitted
+/// `package:<crate>/src/native_loader.dart` into every renamed package, an
+/// import that resolves nowhere and takes the whole bridge down with it.
 ///
 /// No-op when no loader config is present (returns `source` unchanged), so this
 /// is safe to call on `lib.dart` as well as `frb_generated.dart`.
-pub(super) fn apply_loader_fix_from_stem(source: &str) -> String {
+pub(super) fn apply_loader_fix_from_stem(source: &str, package_name: &str) -> String {
     let Some(stem) = extract_loader_stem(source) else {
         return source.to_string();
     };
-    let crate_base = stem.strip_suffix("_dart").unwrap_or(&stem);
-    let package_name = crate_base;
-    let module_name = crate_base;
-    rewrite_frb_external_library_loader(source, package_name, module_name, &stem)
+    let module_name = stem.strip_suffix("_dart").unwrap_or(&stem).to_string();
+    rewrite_frb_external_library_loader(source, package_name, &module_name, &stem)
 }

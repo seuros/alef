@@ -19,7 +19,7 @@ fn named_struct_payload_preserves_field0() {
       FormatMetadata_Docx;
 }
 "#;
-    let out = rewrite_frb_sealed_variants(input);
+    let out = rewrite_frb_sealed_variants(input, "sample_router");
     assert!(
         out.contains("required PdfMetadata field0"),
         "PdfMetadata payload should keep `field0`, got:\n{out}"
@@ -35,7 +35,7 @@ fn primitive_payload_preserves_field0() {
     let input = r#"  const factory OutputFormat.custom({required String field0}) =
       OutputFormat_Custom;
 "#;
-    let out = rewrite_frb_sealed_variants(input);
+    let out = rewrite_frb_sealed_variants(input, "sample_router");
     assert!(
         out.contains("required String field0"),
         "String payload should keep `field0`, got:\n{out}"
@@ -47,7 +47,7 @@ fn multi_field_tuple_preserves_field_indices() {
     let input = r#"  const factory Point.xy({required int field0, required int field1}) =
       Point_Xy;
 "#;
-    let out = rewrite_frb_sealed_variants(input);
+    let out = rewrite_frb_sealed_variants(input, "sample_router");
     assert!(
         out.contains("required int field0"),
         "first tuple field should keep `field0`, got:\n{out}"
@@ -63,7 +63,7 @@ fn named_struct_field_is_preserved() {
     let input = r#"  const factory Shape.rect({required double width, required double height}) =
       Shape_Rect;
 "#;
-    let out = rewrite_frb_sealed_variants(input);
+    let out = rewrite_frb_sealed_variants(input, "sample_router");
     assert!(
         out.contains("required double width"),
         "named field `width` must be preserved, got:\n{out}"
@@ -87,7 +87,7 @@ class Foo {
   Foo({required this.field0});
 }
 "#;
-    let out = rewrite_frb_sealed_variants(input);
+    let out = rewrite_frb_sealed_variants(input, "sample_router");
     assert_eq!(out, input, "non-variant code must round-trip unchanged");
 }
 
@@ -96,7 +96,7 @@ fn unrelated_payload_preserves_field0() {
     let input = r#"  const factory Drawable.image({required Bitmap field0}) =
       Drawable_Image;
 "#;
-    let out = rewrite_frb_sealed_variants(input);
+    let out = rewrite_frb_sealed_variants(input, "sample_router");
     assert!(
         out.contains("required Bitmap field0"),
         "unrelated payload type should keep `field0`, got:\n{out}"
@@ -108,7 +108,7 @@ fn nullable_payload_preserves_field0() {
     let input = r#"  const factory Either.left({required LeftValue? field0}) =
       Either_Left;
 "#;
-    let out = rewrite_frb_sealed_variants(input);
+    let out = rewrite_frb_sealed_variants(input, "sample_router");
     assert!(
         out.contains("required LeftValue? field0"),
         "nullable payload should keep `field0`, got:\n{out}"
@@ -130,7 +130,7 @@ fn realistic_sample_crate_format_metadata_block_preserves_field0() {
       FormatMetadata_Code;
 }
 "#;
-    let out = rewrite_frb_sealed_variants(input);
+    let out = rewrite_frb_sealed_variants(input, "sample_router");
     assert!(out.contains("required PdfMetadata field0"));
     assert!(out.contains("required DocxMetadata field0"));
     assert!(out.contains("required ExcelMetadata field0"));
@@ -144,8 +144,8 @@ fn idempotent_when_run_twice() {
     let input = r#"  const factory FormatMetadata.pdf({required PdfMetadata field0}) =
       FormatMetadata_Pdf;
 "#;
-    let once = rewrite_frb_sealed_variants(input);
-    let twice = rewrite_frb_sealed_variants(&once);
+    let once = rewrite_frb_sealed_variants(input, "sample_router");
+    let twice = rewrite_frb_sealed_variants(&once, "sample_router");
     assert_eq!(once, twice, "rewriter must be idempotent");
 }
 
@@ -169,7 +169,7 @@ sealed class OutputFormat with _$OutputFormat {
       OutputFormat_Json;
 }
 "#;
-    let out = rewrite_frb_sealed_variants(input);
+    let out = rewrite_frb_sealed_variants(input, "sample_router");
     assert!(out.contains("required PdfMetadata field0"));
     assert!(out.contains("required DocxMetadata field0"));
     assert!(out.contains("required String field0"));
@@ -299,14 +299,48 @@ fn loader_rewrite_is_noop_without_init_prologue() {
 
 #[test]
 fn sealed_variant_rewrite_also_applies_loader_fix_via_stem() {
-    let out = rewrite_frb_sealed_variants(frb_generated_fixture());
+    let out = rewrite_frb_sealed_variants(frb_generated_fixture(), "sample_router");
     assert!(
         out.contains("externalLibrary ??= await _alefResolveExternalLibrary();"),
         "sealed-variant pass must also inject the loader, got:\n{out}"
     );
     assert!(
         out.contains("Isolate.resolvePackageUri(_DartCore.Uri.parse('package:sample_router/sample_router.dart'))"),
-        "package derived from stem must be `sample_router`, got:\n{out}"
+        "package URI must use the supplied pubspec name, got:\n{out}"
+    );
+}
+
+/// A `[dart] pubspec_name` that differs from the crate name (and therefore from the
+/// FRB library stem) must drive every generated `package:` URI. Deriving the package
+/// from the stem emitted `package:sample_router/src/native_loader.dart` into a package
+/// actually published as `router`, so the import resolved nowhere and every bridge
+/// symbol it provides (`nativeCachedLibPath`, `nativeComputeRid`, `nativeCacheDir`,
+/// `nativeAssetUrlBase`) came back as "method not found".
+#[test]
+fn loader_uses_pubspec_name_not_stem_derived_crate_name() {
+    let out = rewrite_frb_sealed_variants(frb_generated_fixture(), "router");
+
+    assert!(
+        out.contains("import 'package:router/src/native_loader.dart';"),
+        "native_loader import must use the pubspec name, got:\n{out}"
+    );
+    assert!(
+        !out.contains("package:sample_router/"),
+        "no `package:` URI may fall back to the stem-derived crate name, got:\n{out}"
+    );
+    assert!(
+        out.contains("Isolate.resolvePackageUri(_DartCore.Uri.parse('package:router/router.dart'))"),
+        "package root resolution must use the pubspec name, got:\n{out}"
+    );
+    assert!(
+        out.contains("dart run router:download_libs"),
+        "the download hint must name the pubspec package, got:\n{out}"
+    );
+    // ~keep The bridge module directory is still derived from the stem — it is the Rust
+    // crate's bridge output dir, not the pub package name, so it must NOT be renamed.
+    assert!(
+        out.contains("src/sample_router_bridge_generated/"),
+        "bridge module dir must stay stem-derived, got:\n{out}"
     );
 }
 
@@ -317,7 +351,7 @@ fn sealed_variant_rewrite_leaves_lib_dart_loader_untouched() {
 Future<int> extractBytes({required List<int> content}) =>
     RustLib.instance.api.crateExtractBytes(content: content);
 "#;
-    let out = rewrite_frb_sealed_variants(input);
+    let out = rewrite_frb_sealed_variants(input, "sample_router");
     assert!(
         !out.contains("_alefResolveExternalLibrary"),
         "lib.dart must not get a loader, got:\n{out}"

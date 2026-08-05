@@ -483,7 +483,7 @@ pub fn run_post_build(
                         .with_context(|| format!("failed to read post-process target {}", file_path.display()))?;
                     let processed = match processor {
                         PostProcessor::FrbDartSealedVariants => {
-                            crate::backends::dart::rewrite_frb_sealed_variants(&content)
+                            crate::backends::dart::rewrite_frb_sealed_variants(&content, &config.dart_pubspec_name())
                         }
                         PostProcessor::FrbDartExcludeFunctions(excluded) => {
                             let exclude_set: std::collections::HashSet<&str> =
