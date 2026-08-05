@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Generated shebang scripts keep their executable bit across a regen. `poly fmt` rewrites changed
+  files via atomic rename, which resets the mode to `0644`, so every full regen silently stripped the
+  bit from the scripts poly reformatted (`run_tests.php`, `download_ffi.sh`, `mvnw`, `gradlew`) and
+  poly's own `file-safety` hook then rejected the next commit. The formatting pass now snapshots
+  executable modes beforehand and restores any the formatter dropped.
+
 ## [0.53.1] - 2026-08-04
 
 ### Added

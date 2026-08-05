@@ -427,6 +427,58 @@ fn poly_fmt_is_clean_reflects_check_state() {
     );
 }
 
+/// poly rewrites changed files via atomic rename, which resets the mode to `0644`.
+/// `poly_format` must put the executable bit back, or every regen strips it from
+/// the generated shebang scripts and poly's own `file-safety` lint rejects the
+/// next commit.
+#[cfg(unix)]
+#[test]
+fn poly_format_restores_executable_bit_on_reformatted_shebang_script() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    if !is_tool_available("poly") {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dir.path();
+    let script = base.join("run_tests.php");
+    std::fs::write(&script, "#!/usr/bin/env php\n<?php\n$x   =   1;\necho $x;\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    poly_format(&[base.to_path_buf()], base);
+
+    let mode = std::fs::metadata(&script).unwrap().permissions().mode();
+    assert_eq!(
+        mode & 0o777,
+        0o755,
+        "poly_format must restore the pre-format mode, got {mode:#o}"
+    );
+}
+
+/// The snapshot must not walk dependency-cache and build directories: on a
+/// repo-root pass they dwarf the tree being formatted and hold no generated
+/// scripts.
+#[cfg(unix)]
+#[test]
+fn executable_mode_snapshot_skips_dependency_and_build_directories() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dir.path();
+    let tracked = base.join("scripts/run.sh");
+    let ignored = base.join("node_modules/.bin/tool");
+    for path in [&tracked, &ignored] {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let snapshot = snapshot_executable_modes(&[base.to_path_buf()]);
+
+    let recorded: Vec<&PathBuf> = snapshot.iter().map(|(path, _)| path).collect();
+    assert_eq!(recorded, vec![&tracked], "only the non-skipped script may be recorded");
+}
+
 #[test]
 fn converge_full_regen_formatting_leaves_workspace_sorted_and_poly_fmt_check_clean() {
     let dir = tempfile::tempdir().expect("tempdir");

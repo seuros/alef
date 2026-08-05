@@ -311,6 +311,12 @@ fn poly_paths(
 /// files in place. `config_start` is poly's working directory; it walks up from
 /// there for `poly.toml`. Best-effort: a missing `poly` binary or a non-zero exit
 /// is logged and never propagated (matching the per-language formatter contract).
+///
+/// Executable permission bits are snapshotted before the pass and restored after:
+/// poly rewrites changed files via atomic rename, which resets the mode to `0644`
+/// and silently strips the exec bit from every generated shebang script it
+/// reformats (`run_tests.php`, `download_ffi.sh`, `mvnw`, `gradlew`, …) — which
+/// poly's own `file-safety` lint then rejects on the next commit.
 pub(crate) fn poly_format(paths: &[PathBuf], config_start: &Path) {
     if paths.is_empty() {
         return;
@@ -319,6 +325,7 @@ pub(crate) fn poly_format(paths: &[PathBuf], config_start: &Path) {
         warn!("poly not found on PATH (skipping post-generation formatting)");
         return;
     }
+    let executable_modes = snapshot_executable_modes(paths);
     let mut args: Vec<String> = vec!["fmt".to_owned(), "--fix".to_owned()];
     args.extend(paths.iter().map(|path| path.to_string_lossy().into_owned()));
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -326,7 +333,91 @@ pub(crate) fn poly_format(paths: &[PathBuf], config_start: &Path) {
         Ok(()) => debug!("poly fmt over {} path(s) ok", paths.len()),
         Err(e) => warn!("poly fmt failed (non-fatal): {e}"),
     }
+    restore_executable_modes(&executable_modes);
 }
+
+/// Directory names the executable-mode snapshot never descends into. They hold
+/// dependency caches and build output — never alef-generated scripts — and
+/// walking them on a repo-root pass costs far more than the whole format run.
+#[cfg(unix)]
+const EXEC_SNAPSHOT_SKIP_DIRS: &[&str] = &[
+    ".git",
+    "target",
+    "node_modules",
+    ".venv",
+    "venv",
+    "vendor",
+    "deps",
+    "_build",
+    "build",
+    ".build",
+    "zig-out",
+    "dist",
+    "__pycache__",
+    ".gradle",
+    ".dart_tool",
+    ".zig-cache",
+    ".cache",
+];
+
+/// Mode bits granting execute permission to owner, group, or other.
+#[cfg(unix)]
+const EXECUTE_BITS: u32 = 0o111;
+
+/// Record the mode of every regular file under `paths` that is currently
+/// executable, so [`restore_executable_modes`] can put back exactly what was
+/// there if `poly fmt` drops it.
+#[cfg(unix)]
+fn snapshot_executable_modes(paths: &[PathBuf]) -> Vec<(PathBuf, u32)> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let mut snapshot = Vec::new();
+    for root in paths {
+        let walker = walkdir::WalkDir::new(root).into_iter().filter_entry(|entry| {
+            !entry.file_type().is_dir()
+                || entry
+                    .file_name()
+                    .to_str()
+                    .is_none_or(|name| !EXEC_SNAPSHOT_SKIP_DIRS.contains(&name))
+        });
+        for entry in walker.filter_map(Result::ok) {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let Ok(metadata) = entry.metadata() else { continue };
+            let mode = metadata.permissions().mode();
+            if mode & EXECUTE_BITS != 0 {
+                snapshot.push((entry.into_path(), mode));
+            }
+        }
+    }
+    snapshot
+}
+
+/// Re-apply each recorded mode whose execute bits the formatter dropped.
+#[cfg(unix)]
+fn restore_executable_modes(snapshot: &[(PathBuf, u32)]) {
+    use std::os::unix::fs::PermissionsExt as _;
+    for (path, mode) in snapshot {
+        let Ok(metadata) = std::fs::metadata(path) else {
+            continue;
+        };
+        if metadata.permissions().mode() & EXECUTE_BITS == mode & EXECUTE_BITS {
+            continue;
+        }
+        match std::fs::set_permissions(path, std::fs::Permissions::from_mode(*mode)) {
+            Ok(()) => debug!("restored exec bit on {}", path.display()),
+            Err(e) => warn!("failed to restore exec bit on {}: {e}", path.display()),
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn snapshot_executable_modes(_paths: &[PathBuf]) -> Vec<(PathBuf, u32)> {
+    Vec::new()
+}
+
+#[cfg(not(unix))]
+fn restore_executable_modes(_snapshot: &[(PathBuf, u32)]) {}
 
 /// Best-effort wiring of poly's git-hook shims (`poly hooks install`) into the
 /// generated repo. This installs the pre-commit + commit-msg stages declared in
