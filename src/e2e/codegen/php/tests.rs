@@ -522,49 +522,49 @@ mod composer_json_tests {
         );
     }
 
-    /// A single-segment camelCase namespace (`[crates.php] namespace = "HtmlToMarkdown"`,
-    /// declared in PHP as `namespace HtmlToMarkdown;`) must stay one PSR-4 segment.
-    /// Word-splitting it into `Html\To\Markdown\` produces a prefix that matches no
+    /// A single-segment camelCase namespace (`[crates.php] namespace = "WidgetToolkit"`,
+    /// declared in PHP as `namespace WidgetToolkit;`) must stay one PSR-4 segment.
+    /// Word-splitting it into `Widget\Toolkit\` produces a prefix that matches no
     /// declared namespace, so Composer autoloads none of the userland classes and
-    /// every test dies with `Class "HtmlToMarkdown\..." not found`.
+    /// every test dies with `Class "WidgetToolkit\..." not found`.
     #[test]
     fn composer_json_does_not_word_split_camel_case_namespace() {
         for dep_mode in [DependencyMode::Local, DependencyMode::Registry] {
             let content = render_composer_json(
-                "xberg/e2e-php",
-                "HtmlToMarkdown\\\\E2e\\\\",
-                "html_to_markdown",
-                "HtmlToMarkdown",
-                "../../crates/html-to-markdown-php",
+                "acme/e2e-php",
+                "WidgetToolkit\\\\E2e\\\\",
+                "widget_toolkit",
+                "WidgetToolkit",
+                "../../crates/widget-toolkit-php",
                 "1.0.0",
                 dep_mode,
             );
             assert!(
-                content.contains(r#""HtmlToMarkdown\\": "../../crates/html-to-markdown-php/src/""#),
+                content.contains(r#""WidgetToolkit\\": "../../crates/widget-toolkit-php/src/""#),
                 "{dep_mode:?} composer.json must use the configured namespace verbatim, got:\n{content}"
             );
             assert!(
-                !content.contains(r#""Html\\To\\Markdown\\""#),
+                !content.contains(r#""Widget\\Toolkit\\""#),
                 "{dep_mode:?} composer.json must not split camelCase humps into PSR-4 segments, got:\n{content}"
             );
         }
     }
 
-    /// A namespace that legitimately contains separators (`Xberg\Crawlberg`) keeps them,
+    /// A namespace that legitimately contains separators (`Acme\Widget`) keeps them,
     /// JSON-escaped, rather than being re-derived from the composer package name.
     #[test]
     fn composer_json_preserves_multi_segment_namespace() {
         let content = render_composer_json(
-            "xberg/e2e-php",
-            "Xberg\\\\Crawlberg\\\\E2e\\\\",
-            "crawlberg",
-            "Xberg\\Crawlberg",
+            "acme/e2e-php",
+            "Acme\\\\Widget\\\\E2e\\\\",
+            "widget",
+            "Acme\\Widget",
             "../../packages/php",
             "1.0.0",
             DependencyMode::Local,
         );
         assert!(
-            content.contains(r#""Xberg\\Crawlberg\\": "../../packages/php/src/""#),
+            content.contains(r#""Acme\\Widget\\": "../../packages/php/src/""#),
             "composer.json must preserve explicit namespace separators, got:\n{content}"
         );
     }
@@ -683,9 +683,9 @@ mod autoload_namespace_wiring_tests {
 
     /// The PSR-4 prefix must come from `[crates.php] namespace`, not from the composer
     /// package name derived from the hyphenated crate name. Deriving it from
-    /// `<vendor>/html-to-markdown` word-split the name into `Html\To\Markdown\`, which
+    /// `<vendor>/widget-toolkit` word-split the name into `Widget\Toolkit\`, which
     /// matches no declared namespace, so Composer autoloaded nothing and every PHPUnit
-    /// e2e test failed with `Class "HtmlToMarkdown\HtmlToMarkdown" not found`.
+    /// e2e test failed with `Class "WidgetToolkit\WidgetToolkit" not found`.
     #[test]
     fn psr4_prefix_uses_configured_namespace_not_hyphenated_package_name() {
         let content = composer_json_for(
@@ -693,24 +693,24 @@ mod autoload_namespace_wiring_tests {
 [workspace]
 languages = ["php"]
 [[crates]]
-name = "html-to-markdown"
+name = "widget-toolkit"
 sources = []
 [crates.php]
-namespace = "HtmlToMarkdown"
+namespace = "WidgetToolkit"
 "#,
         );
         assert!(
-            content.contains(r#""HtmlToMarkdown\\": "../../packages/php/src/""#),
+            content.contains(r#""WidgetToolkit\\": "../../packages/php/src/""#),
             "composer.json must map the configured namespace verbatim, got:\n{content}"
         );
         assert!(
-            !content.contains("Html\\\\To\\\\Markdown"),
+            !content.contains("Widget\\\\Toolkit"),
             "composer.json must not word-split the configured namespace, got:\n{content}"
         );
     }
 
     /// With no `[crates.php] namespace`, the fallback still derives from the extension
-    /// name (`html_to_markdown` → `Html\To\Markdown`), which is the documented default —
+    /// name (`widget_toolkit` → `Widget\Toolkit`), which is the documented default —
     /// this pins that the fix did not change unconfigured behaviour.
     #[test]
     fn psr4_prefix_falls_back_to_extension_derived_namespace() {
@@ -719,12 +719,12 @@ namespace = "HtmlToMarkdown"
 [workspace]
 languages = ["php"]
 [[crates]]
-name = "html-to-markdown"
+name = "widget-toolkit"
 sources = []
 "#,
         );
         assert!(
-            content.contains(r#""Html\\To\\Markdown\\": "../../packages/php/src/""#),
+            content.contains(r#""Widget\\Toolkit\\": "../../packages/php/src/""#),
             "composer.json must fall back to the extension-derived namespace, got:\n{content}"
         );
     }

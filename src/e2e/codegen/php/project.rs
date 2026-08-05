@@ -20,10 +20,10 @@ use crate::e2e::fixture::FixtureGroup;
 ///
 /// `pkg_namespace` is the resolved `[crates.php] namespace` and is used
 /// verbatim as the PSR-4 prefix. It must never be re-derived from the composer
-/// package name: word-splitting a namespace like `HtmlToMarkdown` into
-/// `Html\To\Markdown` yields a prefix that matches no declared namespace, so
+/// package name: word-splitting a namespace like `WidgetToolkit` into
+/// `Widget\Toolkit` yields a prefix that matches no declared namespace, so
 /// Composer silently autoloads nothing. Namespaces that already contain `\`
-/// (e.g. `Xberg\Crawlberg`) are preserved as written; only JSON escaping is
+/// (e.g. `Acme\Widget`) are preserved as written; only JSON escaping is
 /// applied.
 fn php_autoload_section(pkg_namespace: &str, pkg_path: &str) -> String {
     format!(
