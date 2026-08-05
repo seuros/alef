@@ -7,8 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.54.0] - 2026-08-05
+
+### Added
+
+- `crates.readme.languages.<name>.snippet_language` lets a README language borrow its code
+  snippets from a differently-named snippet directory (e.g. an `ffi` README pulling examples
+  from a `c/` snippet root, since the FFI binding's usage examples are C code and a consumer
+  repo already maintains one `c/` snippet set rather than a duplicate `ffi/` one). Defaults to
+  the language's own code, so existing configs are unaffected. Only applies to
+  `include_snippet(language)` calls using the current README's own language variable — a
+  template calling `include_snippet` with an explicit literal (e.g. `include_snippet("python")`)
+  is unaffected.
+
+### Changed
+
+- Generated Rust crates (e2e `Cargo.toml`, scaffolded FFI crates) now declare `edition = "2024"`
+  instead of `"2021"`, matching every other scaffolded language crate.
+
 ### Fixed
 
+- **The generated PHP e2e `composer.json` uses the configured namespace verbatim as its PSR-4
+  prefix.** The autoload key was re-derived from the *composer package name* by splitting it on
+  `-` and upper-camel-casing each part, so `xberg/html-to-markdown` produced the three-segment
+  prefix `Html\To\Markdown\` while the emitted PHP declared the one-segment `namespace
+  HtmlToMarkdown;`. The prefix never matched, Composer never autoloaded the facade class, and
+  every PHP e2e test failed with `Class "…\HtmlToMarkdown" not found`. A namespace that really
+  does contain separators (e.g. `Xberg\Crawlberg`) is still preserved as written.
+- **Generated Dart FRB loader code derives its `package:` URIs from `pubspec_name`.** The package
+  segment was reconstructed from the bridge crate's file stem (`<crate>_dart` → `<crate>`), so a
+  repository whose Dart package is named differently from its Rust crate emitted
+  `package:html_to_markdown_rs/src/native_loader.dart` for a package actually named `h2m`. Every
+  Dart e2e test failed to load with `Not found: 'package:…/src/native_loader.dart'`. This affected
+  the loader import, both `Isolate.resolvePackageUri` calls, and the `dart run …:download_libs`
+  hint. The bridge output directory stays crate-derived, since that is a Rust output path.
+- The C FFI backend's static-constructor, string-parameter, and trait-bridge registration
+  templates now compile under edition 2024. Three emitters (`ffi_opaque_constructor_header.jinja`
+  and the `service_api_*`/`registration_variant` templates) still wrote a bare `#[no_mangle]`,
+  which edition 2024 rejects outright (`unsafe attribute used without unsafe`). Several
+  trait-bridge templates also dereferenced raw pointers (`&*vtable`) and called the `unsafe fn`
+  `ffi_set_out_error` without an explicit `unsafe { }` block, which edition 2024 now warns on
+  (`unsafe_op_in_unsafe_fn`) even inside an `unsafe fn` body. No generated symbol name, signature,
+  or behavior changed.
 - Generated shebang scripts keep their executable bit across a regen. `poly fmt` rewrites changed
   files via atomic rename, which resets the mode to `0644`, so every full regen silently stripped the
   bit from the scripts poly reformatted (`run_tests.php`, `download_ffi.sh`, `mvnw`, `gradlew`) and
