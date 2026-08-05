@@ -134,6 +134,23 @@ fn render_template_readme(
 
     let snippets_dir = readme_cfg.snippets_dir.as_ref().map(|s| workspace_root.join(s));
     let snippets_dir_clone = snippets_dir.clone();
+
+    // A README language may borrow its code snippets from a differently-named
+    // snippet directory (e.g. an `ffi` README pulling examples from a `c/`
+    // snippet root, because the FFI binding *is* a C API and consumer repos
+    // already maintain a single `c/` snippet set rather than a duplicate
+    // `ffi/` one). `crates.readme.languages.<name>.snippet_language` names
+    // that source directory; it defaults to the language's own code so every
+    // existing config is unaffected. Only applies when a template calls
+    // `include_snippet(language)` with the current README's own language
+    // variable — an explicit literal (e.g. `include_snippet("python")`) is
+    // passed through unchanged.
+    let snippet_language_alias: Option<String> = entry_json
+        .get("snippet_language")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let language_context_owned = language_context.to_string();
+
     env.add_filter(
         "include_snippet",
         move |path: String, language: String| -> Result<String, minijinja::Error> {
@@ -145,7 +162,12 @@ fn render_template_readme(
                     ),
                 ));
             };
-            include_snippet(dir, &language, &path)
+            let resolved_language = if language == language_context_owned {
+                snippet_language_alias.as_deref().unwrap_or(&language)
+            } else {
+                &language
+            };
+            include_snippet(dir, resolved_language, &path)
                 .map_err(|err| minijinja::Error::new(minijinja::ErrorKind::InvalidOperation, err.to_string()))
         },
     );

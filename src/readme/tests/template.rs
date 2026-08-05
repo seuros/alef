@@ -671,6 +671,125 @@ fn test_template_include_snippet_filter() {
     let _ = fs::remove_dir_all(&tmp);
 }
 
+// --- crates.readme.languages.<name>.snippet_language: cross-directory alias ---
+//
+// A README language may borrow its snippets from a differently-named snippet
+// directory (e.g. `ffi` pulling from a `c/` root, since the FFI binding's
+// examples *are* C code and a consumer repo already maintains one `c/`
+// snippet set rather than a duplicate `ffi/` one). Regression coverage for
+// the incident where xberg's `[crates.readme.languages.ffi]` entry had no
+// snippet source at all: `docs-site/src/snippets/` only ever had a `c/`
+// directory, never an `ffi/` one, so every `include_snippet(language)` call
+// in `partials/quick_start.md.jinja` failed once alef stopped silently
+// swallowing missing snippets (see `include_snippet`'s `~keep` doc comment). ~keep
+
+#[test]
+fn test_readme_snippet_language_alias_resolves_from_aliased_directory() {
+    let tmp = std::env::temp_dir().join("alef_readme_test_snippet_language_alias");
+    let _ = fs::remove_dir_all(&tmp);
+    let snippets_dir = tmp.join("snippets");
+    // Only a `c/` snippet directory exists — no `ffi/` directory anywhere.
+    let c_snippet_dir = snippets_dir.join("c");
+    fs::create_dir_all(&c_snippet_dir).unwrap();
+    fs::write(c_snippet_dir.join("hello.c"), "int main(void) { return 0; }").unwrap();
+    fs::write(tmp.join("t.md"), r#"{{ "hello.c" | include_snippet(language) }}"#).unwrap();
+
+    let mut config = test_config();
+    let mut lang_map = std::collections::HashMap::new();
+    lang_map.insert(
+        "ffi".to_string(),
+        serde_json::json!({
+            "template": "t.md",
+            "output_path": "crates/my-lib-ffi/README.md",
+            "snippet_language": "c"
+        }),
+    );
+    config.readme = Some(ReadmeConfig {
+        template_dir: Some(tmp.clone()),
+        snippets_dir: Some(PathBuf::from("snippets")),
+        config: None,
+        output_pattern: None,
+        discord_url: None,
+        banner_url: None,
+        languages: lang_map,
+        targets: std::collections::HashMap::new(),
+    });
+    config.workspace_root = Some(tmp.clone());
+
+    let api = test_api();
+    let files = generate_readmes(&api, &config, &[Language::Ffi]).unwrap_or_else(|err| {
+        panic!("expected `snippet_language = \"c\"` to resolve the ffi README's snippets from the `c/` directory, got error: {err}")
+    });
+    assert_eq!(files.len(), 1);
+    assert!(
+        files[0].content.contains("int main(void) { return 0; }"),
+        "Expected the aliased `c/hello.c` snippet content, got: {}",
+        files[0].content
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn test_readme_snippet_language_alias_does_not_affect_explicit_language_calls() {
+    let tmp = std::env::temp_dir().join("alef_readme_test_snippet_language_alias_explicit");
+    let _ = fs::remove_dir_all(&tmp);
+    let snippets_dir = tmp.join("snippets");
+    let c_snippet_dir = snippets_dir.join("c");
+    let python_snippet_dir = snippets_dir.join("python");
+    fs::create_dir_all(&c_snippet_dir).unwrap();
+    fs::create_dir_all(&python_snippet_dir).unwrap();
+    fs::write(c_snippet_dir.join("hello.c"), "int main(void) { return 0; }").unwrap();
+    fs::write(python_snippet_dir.join("hello.py"), "print('hi')").unwrap();
+    // The own-language lookup (`language`) must resolve via the alias to `c/`,
+    // while an explicit literal request for a different language's snippet
+    // (as a comparison callout might do) must be honoured verbatim.
+    fs::write(
+        tmp.join("t.md"),
+        r#"{{ "hello.c" | include_snippet(language) }}
+{{ "hello.py" | include_snippet("python") }}"#,
+    )
+    .unwrap();
+
+    let mut config = test_config();
+    let mut lang_map = std::collections::HashMap::new();
+    lang_map.insert(
+        "ffi".to_string(),
+        serde_json::json!({
+            "template": "t.md",
+            "output_path": "crates/my-lib-ffi/README.md",
+            "snippet_language": "c"
+        }),
+    );
+    config.readme = Some(ReadmeConfig {
+        template_dir: Some(tmp.clone()),
+        snippets_dir: Some(PathBuf::from("snippets")),
+        config: None,
+        output_pattern: None,
+        discord_url: None,
+        banner_url: None,
+        languages: lang_map,
+        targets: std::collections::HashMap::new(),
+    });
+    config.workspace_root = Some(tmp.clone());
+
+    let api = test_api();
+    let files = generate_readmes(&api, &config, &[Language::Ffi]).unwrap();
+    assert_eq!(files.len(), 1);
+    assert!(
+        files[0].content.contains("int main(void) { return 0; }"),
+        "Expected the aliased `c/hello.c` snippet content, got: {}",
+        files[0].content
+    );
+    assert!(
+        files[0].content.contains("print('hi')"),
+        "Expected the explicitly-requested `python/hello.py` snippet content, got: {}",
+        files[0].content
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
 #[test]
 fn should_error_when_configured_snippets_dir_does_not_exist_even_if_unused() {
     let tmp = std::env::temp_dir().join("alef_readme_test_snippets_dir_missing");
