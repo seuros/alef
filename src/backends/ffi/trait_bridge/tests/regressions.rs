@@ -713,3 +713,25 @@ fn vtable_registration_signature_takes_const_pointer() {
          actual code:\n{code}"
     );
 }
+
+/// Regression test for a third edition-2024 sweep gap: `gen_ffi_set_out_error_helper`
+/// emitted a nested `if !out_error.is_null() { if let Ok(cs) = ... { ... } }`, which is
+/// clippy-clean under edition 2021 but trips `clippy::collapsible_if` under edition 2024
+/// (let-chains are stable there, so clippy suggests collapsing into a single
+/// `if ... && let Ok(cs) = ...` condition). Consumer CI runs clippy with `-D warnings`,
+/// so the uncollapsed form fails their build.
+#[test]
+fn bug3_ffi_set_out_error_helper_uses_collapsed_let_chain() {
+    let code = crate::backends::ffi::trait_bridge::gen_ffi_set_out_error_helper();
+
+    assert!(
+        code.contains("if !out_error.is_null() && let Ok(cs) = std::ffi::CString::new(msg) {"),
+        "ffi_set_out_error must use a collapsed let-chain condition, not a nested `if let`, \
+         to stay clippy::collapsible_if-clean under edition 2024;\nactual code:\n{code}"
+    );
+    assert!(
+        !code.contains("if let Ok(cs) = std::ffi::CString::new(msg) {\n"),
+        "ffi_set_out_error must not nest a bare `if let` inside the null check;\n\
+         actual code:\n{code}"
+    );
+}

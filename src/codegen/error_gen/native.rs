@@ -322,12 +322,12 @@ pub fn gen_ffi_error_methods(error: &ErrorDef, core_import: &str, api_prefix: &s
                      /// Returns `0` if `err` is null.\n\
                      #[unsafe(no_mangle)]\n\
                      pub unsafe extern \"C\" fn {fn_name}(err: *const {rust_path}) -> u16 {{\n\
-                         // SAFETY: caller guarantees `err` points to a live `{rust_path}` value\n\
-                         // allocated by this library, or is null.\n\
                          if err.is_null() {{\n\
                              return 0;\n\
                          }}\n\
-                         (*err).status_code()\n\
+                         // SAFETY: caller guarantees `err` points to a live `{rust_path}` value\n\
+                         // allocated by this library, or is null (checked above).\n\
+                         unsafe {{ (*err).status_code() }}\n\
                      }}"
                 ));
             }
@@ -338,12 +338,12 @@ pub fn gen_ffi_error_methods(error: &ErrorDef, core_import: &str, api_prefix: &s
                      /// Returns `false` if `err` is null.\n\
                      #[unsafe(no_mangle)]\n\
                      pub unsafe extern \"C\" fn {fn_name}(err: *const {rust_path}) -> bool {{\n\
-                         // SAFETY: caller guarantees `err` points to a live `{rust_path}` value\n\
-                         // allocated by this library, or is null.\n\
                          if err.is_null() {{\n\
                              return false;\n\
                          }}\n\
-                         (*err).is_transient()\n\
+                         // SAFETY: caller guarantees `err` points to a live `{rust_path}` value\n\
+                         // allocated by this library, or is null (checked above).\n\
+                         unsafe {{ (*err).is_transient() }}\n\
                      }}"
                 ));
             }
@@ -357,12 +357,12 @@ pub fn gen_ffi_error_methods(error: &ErrorDef, core_import: &str, api_prefix: &s
                      /// Returns a null pointer if `err` is null.\n\
                      #[unsafe(no_mangle)]\n\
                      pub unsafe extern \"C\" fn {fn_name}(err: *const {rust_path}) -> *mut std::ffi::c_char {{\n\
-                         // SAFETY: caller guarantees `err` points to a live `{rust_path}` value\n\
-                         // allocated by this library, or is null.\n\
                          if err.is_null() {{\n\
                              return std::ptr::null_mut();\n\
                          }}\n\
-                         let s = (*err).error_type();\n\
+                         // SAFETY: caller guarantees `err` points to a live `{rust_path}` value\n\
+                         // allocated by this library, or is null (checked above).\n\
+                         let s = unsafe {{ (*err).error_type() }};\n\
                          // SAFETY: `error_type()` returns a `'static str` containing no NUL bytes.\n\
                          std::ffi::CString::new(s)\n\
                              .map(|c| c.into_raw())\n\
@@ -372,11 +372,11 @@ pub fn gen_ffi_error_methods(error: &ErrorDef, core_import: &str, api_prefix: &s
                      /// Passing a null pointer is a no-op.\n\
                      #[unsafe(no_mangle)]\n\
                      pub unsafe extern \"C\" fn {free_fn_name}(ptr: *mut std::ffi::c_char) {{\n\
-                         // SAFETY: `ptr` was allocated by `CString::into_raw` inside\n\
-                         // `{fn_name}` and is now being reclaimed by the matching\n\
-                         // `CString::from_raw`.  Passing null is explicitly allowed.\n\
                          if !ptr.is_null() {{\n\
-                             drop(std::ffi::CString::from_raw(ptr));\n\
+                             // SAFETY: `ptr` was allocated by `CString::into_raw` inside\n\
+                             // `{fn_name}` and is now being reclaimed by the matching\n\
+                             // `CString::from_raw`.  Passing null is explicitly allowed.\n\
+                             unsafe {{ drop(std::ffi::CString::from_raw(ptr)) }};\n\
                          }}\n\
                      }}"
                 ));

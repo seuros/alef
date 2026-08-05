@@ -243,3 +243,36 @@ fn test_gen_ffi_error_methods_uses_unsafe_no_mangle() {
          #[unsafe(no_mangle)]: {output}"
     );
 }
+
+/// Regression test for a third edition-2024 sweep gap: `gen_ffi_error_methods` dereferenced
+/// the raw `err` pointer (and called `CString::from_raw`) directly in the body of an
+/// `unsafe extern "C" fn`, relying on the enclosing `unsafe` function to cover it. Edition
+/// 2024 enables `unsafe_op_in_unsafe_fn` by default, so every raw-pointer deref and
+/// unsafe-fn call inside an `unsafe fn` body now needs its own explicit `unsafe {}` block,
+/// or `-D warnings` CI fails with `error[E0133]`.
+#[test]
+fn test_gen_ffi_error_methods_wraps_derefs_in_explicit_unsafe_blocks() {
+    let error = error_with_methods();
+    let output = gen_ffi_error_methods(&error, "sample_app", "sampleapp");
+
+    assert!(
+        output.contains("unsafe { (*err).status_code() }"),
+        "status_code accessor must wrap its raw-pointer deref in an explicit `unsafe` block: \
+         {output}"
+    );
+    assert!(
+        output.contains("unsafe { (*err).is_transient() }"),
+        "is_transient accessor must wrap its raw-pointer deref in an explicit `unsafe` block: \
+         {output}"
+    );
+    assert!(
+        output.contains("unsafe { (*err).error_type() }"),
+        "error_type accessor must wrap its raw-pointer deref in an explicit `unsafe` block: \
+         {output}"
+    );
+    assert!(
+        output.contains("unsafe { drop(std::ffi::CString::from_raw(ptr)) }"),
+        "error_type_free must wrap its `CString::from_raw` call in an explicit `unsafe` block: \
+         {output}"
+    );
+}
