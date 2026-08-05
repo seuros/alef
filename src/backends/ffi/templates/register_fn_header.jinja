@@ -20,15 +20,19 @@ pub unsafe extern "C" fn {{ full_register_name }}(
     out_error: *mut *mut std::ffi::c_char,
 ) -> i32 {
     if name.is_null() {
-        ffi_set_out_error(out_error, "name must not be null");
+        // SAFETY: out_error is validated by ffi_set_out_error itself (null-checked internally).
+        unsafe { ffi_set_out_error(out_error, "name must not be null") };
         return 1;
     }
     if vtable.is_null() {
-        ffi_set_out_error(out_error, "vtable must not be null");
+        // SAFETY: out_error is validated by ffi_set_out_error itself (null-checked internally).
+        unsafe { ffi_set_out_error(out_error, "vtable must not be null") };
         return 1;
     }
-    let vtable_ref = &*vtable;
+    // SAFETY: null check above guarantees vtable is a valid pointer.
+    let vtable_ref = unsafe { &*vtable };
     if vtable_ref.free_string.is_none() {
-        ffi_set_out_error(out_error, "vtable.free_string must not be null");
+        // SAFETY: out_error is validated by ffi_set_out_error itself (null-checked internally).
+        unsafe { ffi_set_out_error(out_error, "vtable.free_string must not be null") };
         return 1;
     }

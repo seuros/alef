@@ -7,7 +7,7 @@
 /// - `context` is an opaque pointer passed to the callback on each invocation.
 ///   The caller is responsible for keeping it valid.
 /// Returns 0 on success, non-zero error code on failure.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn {{ fn_name }}(
     owner: *mut {{ opaque_name }},
     callback: extern "C" fn(*mut c_void, *const c_char) -> *mut c_char,

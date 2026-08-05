@@ -212,7 +212,7 @@ pub fn render_cargo_toml(
     let middle_separator = if middle_block.is_empty() { "" } else { "\n\n" };
 
     format!(
-        "{header}\n[workspace]\n\n[package]\nname = \"{e2e_name}\"\nversion = \"{pkg_version}\"\nedition = \"2021\"\nlicense = \"MIT\"\npublish = false{middle_separator}{middle_block}\n\n[dependencies]\n{dep_block}\n"
+        "{header}\n[workspace]\n\n[package]\nname = \"{e2e_name}\"\nversion = \"{pkg_version}\"\nedition = \"2024\"\nlicense = \"MIT\"\npublish = false{middle_separator}{middle_block}\n\n[dependencies]\n{dep_block}\n"
     )
 }
 
@@ -243,7 +243,7 @@ mod tests {
             out.contains("my_crate = { package = \"my-crate\", path = \"../../crates/my-crate\" }"),
             "got:\n{out}"
         );
-        assert!(out.contains("edition = \"2021\""));
+        assert!(out.contains("edition = \"2024\""));
     }
 
     #[test]

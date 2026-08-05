@@ -3,7 +3,8 @@
     let plugin_name = match unsafe { std::ffi::CStr::from_ptr(name) }.to_str() {
         Ok(s) => s.to_owned(),
         Err(_) => {
-            ffi_set_out_error(out_error, "name is not valid UTF-8");
+            // SAFETY: out_error is validated by ffi_set_out_error itself (null-checked internally).
+            unsafe { ffi_set_out_error(out_error, "name is not valid UTF-8") };
             return 1;
         }
     };
@@ -16,7 +17,8 @@
     let mut registry = registry.write();
 
     if let Err(e) = {{ register_call }} {
-        ffi_set_out_error(out_error, &e.to_string());
+        // SAFETY: out_error is validated by ffi_set_out_error itself (null-checked internally).
+        unsafe { ffi_set_out_error(out_error, &e.to_string()) };
         return 1;
     }
     0

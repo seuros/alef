@@ -5,7 +5,7 @@
 /// - The same `owner` pointer is returned on success — the caller does **not**
 ///   need to swap the handle they hold. Returns `null` on failure (the original
 ///   handle is still valid in that case but should be inspected for usability).
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn {{ fn_name }}(
     owner: *mut {{ opaque_name }}{{ param_decls }}
 ) -> *mut {{ opaque_name }} {

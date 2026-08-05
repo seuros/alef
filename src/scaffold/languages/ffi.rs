@@ -67,7 +67,7 @@ pub(crate) fn scaffold_ffi(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
     let version = &api.version;
     let core_crate_dir = config.core_crate_dir();
     let ws = detect_workspace_inheritance(config.workspace_root.as_deref());
-    let pkg_header = cargo_package_header(&format!("{core_crate_dir}-ffi"), version, "2021", &meta, &ws);
+    let pkg_header = cargo_package_header(&format!("{core_crate_dir}-ffi"), version, "2024", &meta, &ws);
 
     let rendered_extra_deps = render_extra_deps(config, Language::Ffi);
     let mut extra_dep_lines: Vec<String> = if rendered_extra_deps.is_empty() {

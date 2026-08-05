@@ -6,7 +6,7 @@
 ///   with `inner = None`. The caller may still invoke `{{ free_fn_name }}()`
 ///   afterwards to release the shell; subsequent registration/configurator calls
 ///   on the same pointer will fail with the null-return error code.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn {{ fn_name }}(
     owner: *mut {{ opaque_name }}{{ param_decls }}
 ) -> {{ return_type }} {

@@ -1,4 +1,5 @@
     if vtable_ref.{{ method_name }}.is_none() {
-        ffi_set_out_error(out_error, "vtable.{{ method_name }} must not be null");
+        // SAFETY: out_error is validated by ffi_set_out_error itself (null-checked internally).
+        unsafe { ffi_set_out_error(out_error, "vtable.{{ method_name }} must not be null") };
         return 1;
     }

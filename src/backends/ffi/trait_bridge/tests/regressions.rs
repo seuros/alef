@@ -707,8 +707,9 @@ fn vtable_registration_signature_takes_const_pointer() {
     );
 
     assert!(
-        code.contains("let vtable_ref = &*vtable;"),
-        "FFI registration function body must dereference vtable pointer;\n\
+        code.contains("let vtable_ref = unsafe { &*vtable };"),
+        "FFI registration function body must dereference vtable pointer inside an explicit \
+         `unsafe` block (edition 2024 requires it even though the enclosing fn is `unsafe`);\n\
          actual code:\n{code}"
     );
 }

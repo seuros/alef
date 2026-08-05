@@ -125,7 +125,7 @@ fn test_gen_service_rs_produces_valid_rust() {
 
     let rs = gen_service_rs(&api, &config);
 
-    assert!(rs.contains("#[no_mangle]"));
+    assert!(rs.contains("#[unsafe(no_mangle)]"));
     assert!(rs.contains("extern \"C\""));
     assert!(rs.contains("TestServiceOpaque"));
     assert!(rs.contains("test_service_new"));
@@ -375,14 +375,14 @@ fn test_variant_fn_has_no_mangle_and_extern_c() {
 
     let variant_start = rs.find("fn my_crate_app_get(").expect("variant fn not found");
     let preamble = &rs[..variant_start];
-    let preamble_tail = preamble.rsplit("#[no_mangle]").next().unwrap_or(preamble);
+    let preamble_tail = preamble.rsplit("#[unsafe(no_mangle)]").next().unwrap_or(preamble);
     assert!(
-        preamble.contains("#[no_mangle]"),
-        "#[no_mangle] must precede the variant fn"
+        preamble.contains("#[unsafe(no_mangle)]"),
+        "#[unsafe(no_mangle)] must precede the variant fn"
     );
     assert!(
         preamble_tail.trim().starts_with("pub extern") || preamble_tail.trim().starts_with("pub unsafe extern"),
-        "#[no_mangle] must directly precede the extern fn (intervening: `{preamble_tail}`)"
+        "#[unsafe(no_mangle)] must directly precede the extern fn (intervening: `{preamble_tail}`)"
     );
 }
 
