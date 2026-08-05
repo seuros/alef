@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.55.0] - 2026-08-05
+
+### Changed
+
+- **Python: a field whose name matches a method is an attribute again, not a bound method.** When a
+  core type declared both a public field and a same-named inherent method, the PyO3 backend emitted
+  a `#[pyo3(get)]` getter *and* a `#[pymethods]` wrapper. The wrapper is registered last and kills
+  the getter, so `config.providers` silently returned a bound method while the generated stub and
+  the constructor keyword both promised a list. The method wrapper is now skipped and the attribute
+  wins, matching every other binding. Any caller written against the accidental `config.providers()`
+  spelling must drop the parentheses.
+
+### Fixed
+
+- **A field and a same-named method no longer collide in the Go, Ruby, Swift and C# backends.** The
+  same defect already fixed for the FFI (0.54.1) and WASM (0.54.2) backends, in four more emitters
+  an earlier survey wrongly cleared. Go emitted both into one struct (`field and method with the
+  same name Providers` — a hard compile error); Ruby emitted a duplicate inherent method
+  (`error[E0592]`), a duplicate `define_method`, and an RBS `DuplicatedMethodDefinition` that failed
+  `steep`; Swift and C# admitted the collision but had no live instance downstream. Each backend now
+  emits the field and skips the method. A parameterized method of the same name is still emitted.
+- **alef's own CI is green again.** The e2e PHP composer tests hardcoded real downstream project
+  names, which `check_project_mentions.py` forbids — alef must stay project-agnostic — failing
+  `no_project_name_special_casing_in_enforced_files` on all three platforms.
+
 ## [0.54.2] - 2026-08-05
 
 ### Fixed
