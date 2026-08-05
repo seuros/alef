@@ -421,8 +421,36 @@ impl Backend for Pyo3Backend {
                     Some(&py_field_renames)
                 };
 
+                // A `#[pyo3(get)]` field getter and a `#[pymethods]` wrapper with the same
+                // Python name both bind that name on the class; pyo3 registers the method last,
+                // which silently kills the getter and makes the attribute a bound method. Drop
+                // the wrapper so the field stays readable, matching every other backend. ~keep
+                let py_visible_field_names: std::collections::HashSet<&str> =
+                    crate::codegen::shared::binding_fields(&typ.fields)
+                        .map(|field| {
+                            py_field_renames
+                                .get(&field.name)
+                                .map_or(field.name.as_str(), String::as_str)
+                        })
+                        .collect();
+                let typ_without_field_collisions;
+                let impl_typ = if typ
+                    .methods
+                    .iter()
+                    .any(|method| !method.is_static && py_visible_field_names.contains(method.name.as_str()))
+                {
+                    let mut filtered = typ.clone();
+                    filtered
+                        .methods
+                        .retain(|method| method.is_static || !py_visible_field_names.contains(method.name.as_str()));
+                    typ_without_field_collisions = filtered;
+                    &typ_without_field_collisions
+                } else {
+                    typ
+                };
+
                 let mut impl_block = generators::gen_impl_block_with_renames(
-                    typ,
+                    impl_typ,
                     &mapper,
                     type_cfg,
                     &adapter_bodies,

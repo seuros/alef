@@ -171,6 +171,7 @@ pub(super) fn gen_type_stub(
     }
 
     let shadowed = shadowed_builtins(typ, config);
+    let mut emitted_attribute_names: std::collections::HashSet<String> = std::collections::HashSet::new();
     // The underlying `#[pyo3(get, name = "class")]` attribute on the Rust struct exposes
     for field in binding_fields(&typ.fields) {
         let type_str = if let Some((_, type_alias, trait_name)) = options_field_bridges.get(typ.name.as_str()) {
@@ -196,6 +197,7 @@ pub(super) fn gen_type_stub(
         let stub_field_name = config
             .resolve_field_name(Language::Python, &typ.name, &field.name)
             .unwrap_or_else(|| field.name.clone());
+        emitted_attribute_names.insert(stub_field_name.clone());
         lines.push(format!("    {stub_field_name}: {field_type}"));
         if emit_docstrings {
             if let Some(docstring) = pyi_docstring(&field.doc, "    ") {
@@ -208,6 +210,13 @@ pub(super) fn gen_type_stub(
 
     for method in &typ.methods {
         if !method.is_static {
+            // The attribute above already binds this name in the class body, so a same-named
+            // `def` is a redefinition (`mypy: Name "x" already defined`). The binding drops the
+            // matching `#[pymethods]` wrapper for the same reason — see the pyo3 `gen_bindings`
+            // collision guard — so the stub must not advertise it either. ~keep
+            if emitted_attribute_names.contains(&method.name) {
+                continue;
+            }
             lines.push(gen_method_stub(
                 method,
                 false,

@@ -148,3 +148,67 @@ fn cfg_present_for_pyo3_rejects_unsupported_gates() {
     assert!(!cfg_present_for_pyo3("any(unix, windows)"));
     assert!(!cfg_present_for_pyo3("any(unix, feature=\"pdf\")"));
 }
+
+fn python_config() -> crate::core::config::ResolvedCrateConfig {
+    let cfg: crate::core::config::new_config::NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["python"]
+
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+
+[crates.python]
+module_name = "test_lib"
+"#,
+    )
+    .unwrap();
+    cfg.resolve().unwrap().remove(0)
+}
+
+/// A `#[pyo3(get)]` field getter and a `#[pymethods]` wrapper with the same Python name both
+/// bind that name on the class. pyo3 registers the method last, which silently kills the getter
+/// and turns the documented attribute into a bound method. The field wins; the wrapper is
+/// dropped, matching the ffi/wasm/go/ruby resolution.
+#[test]
+fn struct_impl_block_skips_method_colliding_with_a_field_getter() {
+    use crate::core::ir::{ApiSurface, MethodDef, ReceiverKind, TypeDef};
+
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "LlmConfig".to_string(),
+            rust_path: "test_lib::LlmConfig".to_string(),
+            has_serde: true,
+            fields: vec![FieldDef {
+                name: "providers".to_string(),
+                ty: TypeRef::String,
+                optional: true,
+                ..Default::default()
+            }],
+            methods: vec![MethodDef {
+                name: "providers".to_string(),
+                return_type: TypeRef::String,
+                receiver: Some(ReceiverKind::Ref),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let files = Pyo3Backend.generate_bindings(&api, &python_config()).unwrap();
+    let content = &files[0].content;
+
+    assert!(
+        content.contains("pub providers:"),
+        "the struct field must still be emitted:\n{content}"
+    );
+    let wrappers = content.matches("fn providers(&self)").count();
+    assert_eq!(
+        wrappers, 0,
+        "the same-named #[pymethods] wrapper must be skipped, found {wrappers}:\n{content}"
+    );
+}

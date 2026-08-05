@@ -425,3 +425,71 @@ pub(super) fn substitute_capsule_type(type_str: &str, capsule_names: &std::colle
     }
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::gen_stubs;
+    use crate::core::config::ResolvedCrateConfig;
+    use crate::core::config::new_config::NewAlefConfig;
+    use crate::core::ir::{ApiSurface, FieldDef, MethodDef, ReceiverKind, TypeDef, TypeRef};
+
+    fn python_config() -> ResolvedCrateConfig {
+        let cfg: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["python"]
+
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+
+[crates.python]
+module_name = "test_lib"
+"#,
+        )
+        .unwrap();
+        cfg.resolve().unwrap().remove(0)
+    }
+
+    /// A class-level attribute annotation and a same-named `def` in one `.pyi` class body is a
+    /// redefinition (`mypy: Name "providers" already defined`). The attribute wins, matching the
+    /// binding, which drops the same-named `#[pymethods]` wrapper.
+    #[test]
+    fn class_stub_emits_a_field_and_same_named_method_once() {
+        let api = ApiSurface {
+            crate_name: "test-lib".to_string(),
+            version: "0.1.0".to_string(),
+            types: vec![TypeDef {
+                name: "LlmConfig".to_string(),
+                rust_path: "test_lib::LlmConfig".to_string(),
+                has_serde: true,
+                fields: vec![FieldDef {
+                    name: "providers".to_string(),
+                    ty: TypeRef::String,
+                    optional: true,
+                    ..Default::default()
+                }],
+                methods: vec![MethodDef {
+                    name: "providers".to_string(),
+                    return_type: TypeRef::String,
+                    receiver: Some(ReceiverKind::Ref),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let stub = gen_stubs(&api, &[], &python_config(), &ahash::AHashSet::default());
+
+        assert!(
+            stub.contains("providers: str | None"),
+            "the attribute must still be declared:\n{stub}"
+        );
+        let methods = stub.matches("def providers(").count();
+        assert_eq!(
+            methods, 0,
+            "the same-named method stub must be dropped, found {methods}:\n{stub}"
+        );
+    }
+}
