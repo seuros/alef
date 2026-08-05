@@ -324,10 +324,22 @@ pub(super) fn emit_first_class_struct(
         }
     }
 
+    let property_names: std::collections::HashSet<String> = visible_fields
+        .iter()
+        .map(|field| swift_case_ident(&field.name.to_lower_camel_case()))
+        .collect();
+
     let (instance_methods, _static_methods) = crate::codegen::shared::partition_methods(&ty.methods);
     let mut methods_source = String::new();
     for method in instance_methods {
         if method.sanitized || method.is_static {
+            continue;
+        }
+        // A stored property and a nullary method with the same name land in the same struct
+        // body, and Swift rejects that with `invalid redeclaration of 'name()'`. The property
+        // is emitted first and wins. A method taking at least one argument has a distinct
+        // selector (`name(arg:)`) and compiles fine, so only nullary methods are dropped. ~keep
+        if method.params.is_empty() && property_names.contains(&swift_case_ident(&method.name.to_lower_camel_case())) {
             continue;
         }
         emit_instance_method_for_first_class_struct(method, type_name, mapper, &mut methods_source);
@@ -891,4 +903,107 @@ fn emit_instance_method_for_first_class_struct(
     }
 
     out.push_str("    }\n\n");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::ir::{MethodDef, ReceiverKind};
+
+    /// A stored property and a nullary method with the same name both land in the first-class
+    /// struct body, and Swift rejects that with `invalid redeclaration of 'providers()'`. The
+    /// property is emitted first and wins.
+    #[test]
+    fn first_class_struct_skips_nullary_method_colliding_with_a_property() {
+        let ty = TypeDef {
+            name: "LlmConfig".to_string(),
+            rust_path: "demo::LlmConfig".to_string(),
+            has_serde: true,
+            fields: vec![FieldDef {
+                name: "providers".to_string(),
+                ty: TypeRef::String,
+                optional: true,
+                ..Default::default()
+            }],
+            methods: vec![MethodDef {
+                name: "providers".to_string(),
+                return_type: TypeRef::String,
+                receiver: Some(ReceiverKind::Ref),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let mut out = String::new();
+        emit_first_class_struct(
+            &ty,
+            &SwiftMapper,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            "DemoError",
+            &std::collections::HashSet::new(),
+            &mut out,
+        );
+
+        assert!(
+            out.contains("public let providers: String?"),
+            "the stored property must still be emitted:\n{out}"
+        );
+        let methods = out.matches("public func providers(").count();
+        assert_eq!(
+            methods, 0,
+            "the same-named nullary method must be skipped, found {methods}:\n{out}"
+        );
+    }
+
+    /// Only nullary methods redeclare a property in Swift — `providers(limit:)` has a distinct
+    /// selector and must survive.
+    #[test]
+    fn first_class_struct_keeps_method_with_params_despite_same_base_name() {
+        let ty = TypeDef {
+            name: "LlmConfig".to_string(),
+            rust_path: "demo::LlmConfig".to_string(),
+            has_serde: true,
+            fields: vec![FieldDef {
+                name: "providers".to_string(),
+                ty: TypeRef::String,
+                optional: true,
+                ..Default::default()
+            }],
+            methods: vec![MethodDef {
+                name: "providers".to_string(),
+                return_type: TypeRef::String,
+                receiver: Some(ReceiverKind::Ref),
+                params: vec![crate::core::ir::ParamDef {
+                    name: "limit".to_string(),
+                    ty: TypeRef::Primitive(crate::core::ir::PrimitiveType::U32),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let mut out = String::new();
+        emit_first_class_struct(
+            &ty,
+            &SwiftMapper,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            "DemoError",
+            &std::collections::HashSet::new(),
+            &mut out,
+        );
+
+        assert!(
+            out.contains("public func providers(limit: UInt32)"),
+            "a method with parameters must not be dropped:\n{out}"
+        );
+    }
 }
