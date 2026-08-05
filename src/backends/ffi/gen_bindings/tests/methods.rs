@@ -199,3 +199,102 @@ fn test_skips_method_with_receiver_reference_return() {
         "builder-style method returning &mut Self should NOT be wrapped as C function"
     );
 }
+
+/// Verify that a public field and an inherent method sharing the same name do not both
+/// emit a C function under the same `{prefix}_{type_snake}_{name}` symbol. Both the
+/// field-accessor emitter and the method-wrapper emitter mint that symbol independently,
+/// so without a collision guard the crate defines the exported function twice, which
+/// `rustc` rejects with `E0428: the name ... is defined multiple times`.
+///
+/// The field accessor is emitted first and kept; the same-named method wrapper is
+/// skipped, since it is redundant with the field accessor and callers can reach the
+/// field's value through it.
+#[test]
+fn test_field_and_same_named_method_do_not_emit_duplicate_symbol() {
+    let api = ApiSurface {
+        crate_name: "my-lib".to_string(),
+        version: "1.0.0".to_string(),
+        types: vec![TypeDef {
+            name: "LlmConfig".to_string(),
+            rust_path: "my_lib::LlmConfig".to_string(),
+            original_rust_path: String::new(),
+            fields: vec![FieldDef {
+                name: "providers".to_string(),
+                ty: TypeRef::Optional(Box::new(TypeRef::String)),
+                optional: true,
+                default: None,
+                doc: String::new(),
+                sanitized: false,
+                is_boxed: false,
+                type_rust_path: None,
+                cfg: None,
+                typed_default: None,
+                core_wrapper: crate::core::ir::CoreWrapper::None,
+                vec_inner_core_wrapper: crate::core::ir::CoreWrapper::None,
+                newtype_wrapper: None,
+                serde_rename: None,
+                serde_flatten: false,
+                original_type: None,
+                binding_excluded: false,
+                binding_exclusion_reason: None,
+            }],
+            methods: vec![MethodDef {
+                name: "providers".to_string(),
+                params: vec![],
+                return_type: TypeRef::String,
+                is_async: false,
+                is_static: false,
+                error_type: None,
+                doc: "Return the resolved providers.".to_string(),
+                receiver: Some(ReceiverKind::Ref),
+                sanitized: false,
+                trait_source: None,
+                returns_ref: false,
+                returns_cow: false,
+                return_newtype_wrapper: None,
+                has_default_impl: false,
+                binding_excluded: false,
+                binding_exclusion_reason: None,
+                version: Default::default(),
+            }],
+            is_opaque: false,
+            is_clone: true,
+            is_copy: false,
+            is_trait: false,
+            has_default: false,
+            has_stripped_cfg_fields: false,
+            is_return_type: false,
+            serde_rename_all: None,
+            has_serde: true,
+            super_traits: vec![],
+            doc: "LLM client configuration.".to_string(),
+            cfg: None,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            is_variant_wrapper: false,
+            has_lifetime_params: false,
+            has_private_fields: false,
+            version: Default::default(),
+        }],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+    let config = sample_config();
+    let backend = FfiBackend;
+
+    let files = backend.generate_bindings(&api, &config).unwrap();
+    let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+    let occurrences = lib.content.matches("fn my_lib_llm_config_providers(").count();
+    assert_eq!(
+        occurrences, 1,
+        "field/method name collision must emit the symbol exactly once, got {occurrences}:\n{}",
+        lib.content
+    );
+}

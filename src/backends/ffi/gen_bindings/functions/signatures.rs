@@ -11,6 +11,10 @@ use super::support::{ffi_doxygen_block, sanitized_recoverable};
 /// 1. Have generic type parameters (detected by parameters with Named types not in the path_map)
 /// 2. Return a reference to the receiver type (builder-style methods returning `&mut Self` or `&Self`)
 /// 3. Are static constructors on opaque types (handled via gen_opaque_static_constructor instead)
+/// 4. Share a name with a field on the same type that already has a field-accessor emitted —
+///    both emitters mint the same `{prefix}_{type_snake}_{name}` C symbol, and the field
+///    accessor is emitted first, so the method wrapper is dropped to avoid a duplicate
+///    `#[unsafe(no_mangle)]` definition (`E0428`). See `emitted_field_names`.
 ///
 /// Such methods are handled through the service-API registration path instead of as
 /// standalone C function wrappers.
@@ -18,7 +22,12 @@ pub(in crate::backends::ffi::gen_bindings) fn should_skip_method_wrapper(
     method: &MethodDef,
     typ: &TypeDef,
     path_map: &AHashMap<String, String>,
+    emitted_field_names: &AHashSet<&str>,
 ) -> bool {
+    if emitted_field_names.contains(method.name.as_str()) {
+        return true;
+    }
+
     for param in &method.params {
         if let TypeRef::Named(name) = &param.ty {
             if !path_map.contains_key(name.as_str()) {

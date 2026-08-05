@@ -209,8 +209,10 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
             builder.add_item(&gen_type_new(typ, prefix, &core_import, &params_str, &body, err_ty));
         }
 
+        let mut emitted_field_names: ahash::AHashSet<&str> = ahash::AHashSet::default();
         for field in &typ.fields {
             if !field.sanitized && !field.binding_excluded {
+                emitted_field_names.insert(field.name.as_str());
                 builder.add_item(&gen_field_accessor(
                     typ,
                     field,
@@ -247,7 +249,7 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
                 continue;
             }
 
-            if should_skip_method_wrapper(method, typ, path_map) {
+            if should_skip_method_wrapper(method, typ, path_map, &emitted_field_names) {
                 continue;
             }
 
