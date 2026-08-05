@@ -41,6 +41,18 @@ pub(in crate::backends::go::gen_bindings) fn gen_opaque_type_free_only(typ: &Typ
     String::new()
 }
 
+/// Exported Go field names that [`gen_struct_type`] emits for `typ`.
+///
+/// Go rejects a struct that has both a field and a method named `X`, so the method-wrapper
+/// pass consults this set and drops instance methods that would shadow a field. The filtering
+/// here must stay in step with the field loop in [`gen_struct_type`]. ~keep
+pub(in crate::backends::go::gen_bindings) fn go_struct_field_names(typ: &TypeDef) -> std::collections::HashSet<String> {
+    binding_fields(&typ.fields)
+        .filter(|field| !is_tuple_field(field))
+        .map(|field| to_go_name(&field.name))
+        .collect()
+}
+
 /// Generate a Go struct type definition with json tags for marshaling.
 /// Accepts enum_names (unit enums), passthrough_enum_names (untagged enums emitted
 /// as `json.RawMessage`-backed named types) and data_enum_names (sealed-interface enums).

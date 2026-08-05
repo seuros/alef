@@ -5,9 +5,10 @@ use super::functions::{
 use super::methods::{gen_method_wrapper, gen_streaming_method_wrapper};
 use super::types::{
     gen_config_options, gen_enum_type, gen_last_error_helper, gen_opaque_type, gen_opaque_type_free_only,
-    gen_ptr_helper, gen_struct_type, gen_unmarshal_bytes_helper, is_passthrough_raw_message_enum, is_tuple_field,
+    gen_ptr_helper, gen_struct_type, gen_unmarshal_bytes_helper, go_struct_field_names,
+    is_passthrough_raw_message_enum, is_tuple_field,
 };
-use crate::codegen::naming::go_type_name;
+use crate::codegen::naming::{go_type_name, to_go_name};
 use crate::core::config::{AdapterPattern, ResolvedCrateConfig, TraitBridgeConfig};
 use crate::core::hash::{self, CommentStyle};
 use crate::core::ir::{ApiSurface, TypeRef};
@@ -312,6 +313,8 @@ pub(super) fn gen_go_file(
         .map(|t| t.name.as_str())
         .collect();
 
+    let mut emitted_struct_fields: std::collections::HashMap<&str, HashSet<String>> = std::collections::HashMap::new();
+
     for typ in api
         .types
         .iter()
@@ -330,6 +333,7 @@ pub(super) fn gen_go_file(
                 body.push_str("\n\n");
             }
         } else {
+            emitted_struct_fields.insert(typ.name.as_str(), go_struct_field_names(typ));
             body.push_str(&gen_struct_type(
                 typ,
                 &unit_enum_names,
@@ -436,6 +440,17 @@ pub(super) fn gen_go_file(
         }
         for method in &typ.methods {
             if method.name == "default" {
+                continue;
+            }
+            // A field and an inherent method sharing a name both map to the same exported Go
+            // identifier, and Go rejects `field and method with the same name` at compile time.
+            // The struct field is emitted first and wins; the instance-method wrapper is dropped.
+            // Static methods mint a free `func TypeMethod(...)`, so they never collide. ~keep
+            if !method.is_static
+                && emitted_struct_fields
+                    .get(typ.name.as_str())
+                    .is_some_and(|fields| fields.contains(&to_go_name(&method.name)))
+            {
                 continue;
             }
             if typ.is_opaque

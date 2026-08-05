@@ -469,3 +469,62 @@ fn free_function_colliding_with_type_name_is_renamed_get_prefixed() {
         binding.content
     );
 }
+
+/// Go rejects a struct that carries both a field and a method named `Providers`
+/// (`field and method with the same name`). A core type with a public `providers` field and
+/// an inherent `providers()` method feeds both the struct emitter and the method-wrapper
+/// emitter, so the wrapper must be dropped and the field kept.
+#[test]
+fn generate_bindings_skips_method_wrapper_when_struct_field_has_same_name() {
+    use crate::core::ir::{ApiSurface, FieldDef, MethodDef, ReceiverKind, TypeDef, TypeRef};
+
+    let config = make_config();
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "LlmConfig".to_string(),
+            rust_path: "test_lib::LlmConfig".to_string(),
+            has_serde: true,
+            fields: vec![FieldDef {
+                name: "providers".to_string(),
+                ty: TypeRef::String,
+                optional: true,
+                ..Default::default()
+            }],
+            methods: vec![MethodDef {
+                name: "providers".to_string(),
+                return_type: TypeRef::String,
+                receiver: Some(ReceiverKind::Ref),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+
+    let files = GoBackend.generate_bindings(&api, &config).unwrap();
+    let binding = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().ends_with("binding.go"))
+        .expect("binding.go present");
+
+    assert!(
+        binding.content.contains("Providers "),
+        "the struct field must still be emitted. Got:\n{}",
+        binding.content
+    );
+    let wrappers = binding.content.matches("func (r *LlmConfig) Providers(").count();
+    assert_eq!(
+        wrappers, 0,
+        "the same-named method wrapper must be skipped, found {wrappers} in:\n{}",
+        binding.content
+    );
+}

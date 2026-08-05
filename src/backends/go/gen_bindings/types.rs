@@ -10,7 +10,7 @@ pub(super) use helpers::{
     emit_type_doc, gen_last_error_helper, gen_ptr_helper, gen_unmarshal_bytes_helper, is_tuple_field,
 };
 pub(super) use mapping::{cgo_type_for_primitive, go_return_expr, primitive_max_sentinel};
-pub(super) use structs::{gen_opaque_type, gen_opaque_type_free_only, gen_struct_type};
+pub(super) use structs::{gen_opaque_type, gen_opaque_type_free_only, gen_struct_type, go_struct_field_names};
 
 #[cfg(test)]
 #[path = "types/tests.rs"]
