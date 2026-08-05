@@ -88,3 +88,47 @@ fn gen_getter_setter_required_vec_unit_enum_unchanged() {
         "required Vec setter must not Option::map: {setter}"
     );
 }
+
+/// A field and an inherent method sharing the same name each mint `pub fn {name}(&self)`
+/// in the generated `#[wasm_bindgen]` impl block. Without a collision guard, both the
+/// field-getter emitter and the method-wrapper emitter would define the function, which
+/// rustc rejects with `E0592: duplicate definitions with name`. The getter is emitted
+/// first and kept; the same-named method wrapper must be skipped.
+#[test]
+fn gen_struct_methods_skips_method_wrapper_when_field_getter_already_emitted() {
+    let typ = TypeDef {
+        name: "LlmConfig".to_string(),
+        rust_path: "my_lib::LlmConfig".to_string(),
+        fields: vec![FieldDef {
+            name: "providers".to_string(),
+            ty: TypeRef::String,
+            optional: false,
+            ..Default::default()
+        }],
+        methods: vec![MethodDef {
+            name: "providers".to_string(),
+            return_type: TypeRef::String,
+            receiver: Some(ReceiverKind::Ref),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let out = gen_struct_methods(
+        &typ,
+        &mapper(),
+        &[],
+        "my_lib",
+        &AHashSet::default(),
+        &[],
+        "Wasm",
+        &AHashSet::default(),
+        &ahash::AHashMap::default(),
+    );
+
+    let occurrences = out.matches("fn providers(").count();
+    assert_eq!(
+        occurrences, 1,
+        "field/method name collision must emit `providers` exactly once, got {occurrences}:\n{out}"
+    );
+}

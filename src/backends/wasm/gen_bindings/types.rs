@@ -489,10 +489,12 @@ pub(super) fn gen_struct_methods(
         }
     }
 
+    let mut emitted_field_names: AHashSet<&str> = AHashSet::default();
     for field in shared::binding_fields(&typ.fields) {
         if field_references_excluded_type(&field.ty, exclude_types) {
             continue;
         }
+        emitted_field_names.insert(field.name.as_str());
         impl_builder.add_method(&gen_getter(
             field,
             mapper,
@@ -511,6 +513,12 @@ pub(super) fn gen_struct_methods(
 
     if !exclude_types.contains(&typ.name) {
         for method in &typ.methods {
+            // A field and an inherent method sharing the same name both mint a
+            // `pub fn {name}` in this impl block — the getter above is emitted first and
+            // wins, so the method wrapper is skipped to avoid `E0592: duplicate definitions`. ~keep
+            if emitted_field_names.contains(method.name.as_str()) {
+                continue;
+            }
             let refs_excluded = method
                 .params
                 .iter()
