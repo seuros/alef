@@ -4633,3 +4633,86 @@ fn trait_bridge_sync_infallible_primitive_uses_direct_value_convention() {
         "infallible Bytes handler must carry no out-pointers: {bridge}"
     );
 }
+
+fn make_plain_enum_variant(name: &str, serde_rename: Option<&str>) -> EnumVariant {
+    EnumVariant {
+        name: name.to_string(),
+        fields: vec![],
+        doc: String::new(),
+        is_default: false,
+        serde_rename: serde_rename.map(str::to_string),
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        is_tuple: false,
+        originally_had_data_fields: false,
+        cfg: None,
+        version: Default::default(),
+    }
+}
+
+fn generate_plain_enum_content(serde_rename_all: Option<&str>, serde_rename: Option<&str>) -> String {
+    let backend = JavaBackend;
+    let api = ApiSurface {
+        crate_name: "test_lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![],
+        functions: vec![],
+        enums: vec![EnumDef {
+            name: "NodeContent".to_string(),
+            rust_path: "test_lib::NodeContent".to_string(),
+            original_rust_path: String::new(),
+            variants: vec![make_plain_enum_variant("ListItem", serde_rename)],
+            methods: vec![],
+            doc: String::new(),
+            cfg: None,
+            is_copy: false,
+            has_serde: true,
+            has_default: false,
+            serde_tag: None,
+            serde_untagged: false,
+            serde_rename_all: serde_rename_all.map(str::to_string),
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            excluded_variants: vec![],
+            version: Default::default(),
+        }],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+
+    let files = backend
+        .generate_bindings(&api, &make_test_config("dev.example"))
+        .expect("generation should succeed");
+    files
+        .iter()
+        .find(|f| f.path.to_string_lossy().ends_with("NodeContent.java"))
+        .expect("NodeContent.java should be generated")
+        .content
+        .clone()
+}
+
+/// Regression for the fallback wire-name bug: with no `#[serde(rename_all)]` and no
+/// `#[serde(rename)]`, serde emits the variant name verbatim (`ListItem`), not lowercased
+/// (`listitem`). An explicit `serde(rename)` must beat `rename_all` when both are present.
+#[test]
+fn plain_enum_json_name_matches_serde_wire_format() {
+    let cases: &[(Option<&str>, Option<&str>, &str)] = &[
+        (None, None, "ListItem(\"ListItem\")"),
+        (Some("snake_case"), None, "ListItem(\"list_item\")"),
+        (Some("camelCase"), None, "ListItem(\"listItem\")"),
+        (Some("SCREAMING_SNAKE_CASE"), None, "ListItem(\"LIST_ITEM\")"),
+        (Some("snake_case"), Some("li"), "ListItem(\"li\")"),
+    ];
+
+    for (rename_all, serde_rename, expected) in cases {
+        let content = generate_plain_enum_content(*rename_all, *serde_rename);
+        assert!(
+            content.contains(expected),
+            "rename_all={rename_all:?} serde_rename={serde_rename:?}: expected {expected:?} in generated enum, got:\n{content}"
+        );
+    }
+}

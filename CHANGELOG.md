@@ -27,6 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `^11.5 || ^12.0 || ^13.1`, letting Composer pick the newest major the actual PHP supports.
   (`src/core/template_versions.rs`)
 
+- **Java enum wire names now match serde's actual no-`rename_all` fallback.** The Java backend's
+  tagged-discriminator and simple-enum generators lowercased the variant name (`listitem`) when an
+  enum had no `#[serde(rename_all)]`, but serde with no rename attributes emits the PascalCase
+  variant name verbatim (`ListItem`). Generated `json_name` values — and the matching
+  `excluded_variants` handling — now fall through to the same verbatim behavior as every other
+  backend. (`src/backends/java/gen_bindings/types/enums.rs`)
+
 ## [0.55.6] - 2026-08-06
 
 ### Fixed

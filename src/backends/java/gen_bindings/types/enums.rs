@@ -42,14 +42,10 @@ pub(crate) fn gen_enum_class(package: &str, enum_def: &EnumDef, main_class: &str
     let mut variants_block = String::new();
     for (i, variant) in enum_def.variants.iter().enumerate() {
         let comma = if i < enum_def.variants.len() - 1 { "," } else { ";" };
-        // When the Rust enum has no explicit #[serde(rename_all)], Serde uses the variant
         let json_name = variant
             .serde_rename
             .clone()
-            .unwrap_or_else(|| match enum_def.serde_rename_all.as_deref() {
-                Some(rename_all) => java_apply_rename_all(&variant.name, Some(rename_all)),
-                None => variant.name.to_lowercase(),
-            });
+            .unwrap_or_else(|| java_apply_rename_all(&variant.name, enum_def.serde_rename_all.as_deref()));
         emit_javadoc(&mut variants_block, &variant.doc, "    ");
         variants_block.push_str("    ");
         variants_block.push_str(&variant.name);
@@ -67,10 +63,7 @@ pub(crate) fn gen_enum_class(package: &str, enum_def: &EnumDef, main_class: &str
         .map(|v| {
             v.serde_rename
                 .clone()
-                .unwrap_or_else(|| match enum_def.serde_rename_all.as_deref() {
-                    Some(rename_all) => java_apply_rename_all(&v.name, Some(rename_all)),
-                    None => v.name.to_lowercase(),
-                })
+                .unwrap_or_else(|| java_apply_rename_all(&v.name, enum_def.serde_rename_all.as_deref()))
         })
         .collect();
 
