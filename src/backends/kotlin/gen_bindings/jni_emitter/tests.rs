@@ -63,7 +63,7 @@ mod tests {
         );
         assert!(
             !file.content.contains("nativeFreeGraphQLRouteConfig"),
-            "close() must not emit the verbatim (mis-cased) acronym free name; got:\n{}",
+            "close() must not emit the verbatim (miscased) acronym free name; got:\n{}",
             file.content
         );
     }

@@ -27,7 +27,7 @@ fn emit_function_shim(
         // mirroring how opaque *types* are referenced as `core_crate::<Type>`
         // rather than `core_crate::<origin_crate>::<Type>`. The umbrella re-exports
         // these items, so the generated crate needs no direct dependency on the
-        // sibling crate; `core_crate::<origin_crate>::<item>` would not resolve.
+        // sibling crate; `core_crate::<origin_crate>::<item>` would not resolve. ~keep
         format!("core_crate::{item}")
     } else {
         format!("core_crate::{path}")

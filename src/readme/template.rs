@@ -144,7 +144,7 @@ fn render_template_readme(
     // existing config is unaffected. Only applies when a template calls
     // `include_snippet(language)` with the current README's own language
     // variable — an explicit literal (e.g. `include_snippet("python")`) is
-    // passed through unchanged.
+    // passed through unchanged. ~keep
     let snippet_language_alias: Option<String> = entry_json
         .get("snippet_language")
         .and_then(|v| v.as_str())

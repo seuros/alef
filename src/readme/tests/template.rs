@@ -743,7 +743,7 @@ fn test_readme_snippet_language_alias_does_not_affect_explicit_language_calls() 
     fs::write(python_snippet_dir.join("hello.py"), "print('hi')").unwrap();
     // The own-language lookup (`language`) must resolve via the alias to `c/`,
     // while an explicit literal request for a different language's snippet
-    // (as a comparison callout might do) must be honoured verbatim.
+    // (as a comparison callout might do) must be honoured verbatim. ~keep
     fs::write(
         tmp.join("t.md"),
         r#"{{ "hello.c" | include_snippet(language) }}

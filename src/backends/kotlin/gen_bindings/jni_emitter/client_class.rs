@@ -151,8 +151,8 @@ pub fn emit_jni_client_class(
 
         // Match the bridge external-fun declaration (bridge_object.rs / external_functions.rs)
         // and the Rust JNI export, all of which pascal-case the owner via to_pascal_case.
-        // Using the class name verbatim here mis-cases acronym owners (e.g. GraphQLRouteConfig
-        // -> nativeFreeGraphQLRouteConfig) so the call fails to resolve the GraphQl-cased decl.
+        // Using the class name verbatim here miscases acronym owners (e.g. GraphQLRouteConfig
+        // -> nativeFreeGraphQLRouteConfig) so the call fails to resolve the GraphQl-cased decl. ~keep
         let free_name = format!("nativeFree{}", to_pascal_case(class_name));
         body.push_str(&template_env::render(
             "jni_client_close_method.jinja",
