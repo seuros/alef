@@ -54,7 +54,7 @@ mod tests {
             ..ResolvedCrateConfig::default()
         };
 
-        let file = emit_jni_client_class(&api, &config, Some("dev.spikard")).expect("client class must be emitted");
+        let file = emit_jni_client_class(&api, &config, Some("dev.example")).expect("client class must be emitted");
 
         assert!(
             file.content.contains("nativeFreeGraphQlRouteConfig"),

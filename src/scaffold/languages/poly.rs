@@ -62,9 +62,10 @@ const EXCLUDES: &[&str] = &[
 ///   `cargo` hook) canonicalize TOML differently; letting both touch Cargo.toml
 ///   produces an infinite format/regen loop on the embedded hash. cargo-sort owns
 ///   Cargo.toml.
-/// * `packages/elixir/**/*.ex` / `*.exs` — poly's tree-sitter tier would reindent
-///   Elixir before the residual `mix format` runs, breaking hash stability. mix
-///   owns Elixir source.
+///
+/// Elixir is deliberately NOT excluded here any more: poly ≥0.19.6 lets a declared
+/// `[tools.mix]` displace its generic tree-sitter reindenter, so `mix format` owns
+/// Elixir source through poly rather than around it.
 const POLY_FORMAT_EXCLUDES: &[&str] = &["**/Cargo.toml"];
 
 /// Canonical clang-format style for cbindgen-generated C FFI headers, shipped so
@@ -177,15 +178,22 @@ const TEST_IGNORES: &[&str] = &[
 ];
 
 /// Render a TOML array of strings indented under `key = [`, one entry per line
-/// with a trailing comma — taplo's canonical multi-line form. An empty slice
-/// renders as the inline empty array `[]` (taplo's canonical empty form).
+/// with a trailing comma. An empty slice renders as the inline empty array `[]`.
+///
+/// The indent is 2 spaces because that is what taplo — and therefore
+/// `poly fmt --check` in every consumer repo — emits; this used to be 4, which
+/// meant the freshly written file was never poly-clean. taplo also collapses an
+/// array onto one line when it fits, which this cannot know without the key
+/// prefix, so [`normalize_poly_config`] hands the finished file to poly.
+///
+/// [`normalize_poly_config`]: crate::cli::pipeline::generate::scaffold
 fn toml_array(entries: &[&str]) -> String {
     if entries.is_empty() {
         return "[]".to_string();
     }
     let inner = entries
         .iter()
-        .map(|e| format!("    \"{e}\","))
+        .map(|e| format!("  \"{e}\","))
         .collect::<Vec<_>>()
         .join("\n");
     format!("[\n{inner}\n]")
@@ -264,7 +272,7 @@ pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[La
 
     if has(Language::Php) {
         out.push_str(&format!(
-            "[lint.php.mago]\nselect = [ \"correctness\", \"security\" ]\nignore = {ignore}\nphp_version = \"8.2\"\n\n",
+            "[lint.php.mago]\nselect = [\"correctness\", \"security\"]\nignore = {ignore}\nphp_version = \"8.2\"\n\n",
             ignore = toml_array(MAGO_IGNORE)
         ));
     }
@@ -305,6 +313,17 @@ pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[La
         out.push_str("[tools.clang-format]\nenabled = true\n\n");
     }
 
+    // poly has no native Elixir formatter and no bundled `indents.scm`, so without
+    // this it reindents `.ex`/`.exs` with a hand-rolled tree-sitter query that models
+    // only `do…end` and `fn…end` — every other construct captured nothing and was
+    // re-emitted at column 0, so poly and `mix format` flattened and re-indented the
+    // same file forever. Declaring the catalog tool hands the language to `mix
+    // format`; poly ≥0.19.6 then drops its own reindenter for Elixir. ~keep
+    if has(Language::Elixir) {
+        let dir = config.package_dir(Language::Elixir);
+        out.push_str(&format!("[tools.mix]\nenabled = true\nroot = \"{dir}\"\n\n"));
+    }
+
     out.push_str("[per-file-ignores]\n");
     if has(Language::Python) {
         out.push_str(
@@ -324,12 +343,12 @@ pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[La
     }
     out.push('\n');
 
-    out.push_str("[hooks]\nstages = [ \"pre-commit\" ]\n\n[hooks.builtin]\n");
+    out.push_str("[hooks]\nstages = [\"pre-commit\"]\n\n[hooks.builtin]\n");
     out.push_str(&format!("lint = {{ exclude = {excludes} }}\n"));
     out.push_str(&format!("fmt = {{ exclude = {excludes} }}\n"));
     out.push_str(&format!("file_safety = {{ exclude = {file_safety_excludes} }}\n"));
     out.push_str("cargo = true\n");
-    out.push_str("commit = { stages = [ \"commit-msg\" ] }\n");
+    out.push_str("commit = { stages = [\"commit-msg\"] }\n");
 
     // Whole-project linters / type-checkers that poly does not bundle. Each runs
     // once on `poly lint .` via a `workspace = true` hook (the per-file `[tools.*]`

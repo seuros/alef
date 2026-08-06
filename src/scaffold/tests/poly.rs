@@ -100,11 +100,11 @@ fn poly_toml_drives_hooks_builtins_and_excludes() {
     let files = scaffold(&api, &config, &[Language::Python]).unwrap();
     let c = &poly_toml(&files).content;
 
-    assert!(c.contains("[hooks]") && c.contains("stages = [ \"pre-commit\" ]"));
+    assert!(c.contains("[hooks]") && c.contains("stages = [\"pre-commit\"]"));
     assert!(c.contains("[hooks.builtin]"));
     assert!(c.contains("cargo = true"), "cargo builtin must be enabled");
     assert!(
-        c.contains("commit = { stages = [ \"commit-msg\" ] }"),
+        c.contains("commit = { stages = [\"commit-msg\"] }"),
         "commit builtin must run on commit-msg"
     );
     assert!(c.contains("[discovery]") && c.contains("\"target/**\""));
@@ -199,7 +199,7 @@ fn poly_toml_php_uses_mago_correctness_security() {
     let c = &poly_toml(&files).content;
 
     assert!(
-        c.contains("[lint.php.mago]") && c.contains("select = [ \"correctness\", \"security\" ]"),
+        c.contains("[lint.php.mago]") && c.contains("select = [\"correctness\", \"security\"]"),
         "PHP must use mago correctness/security ruleset (replacing phpstan/php-cs-fixer)"
     );
 }
@@ -277,6 +277,55 @@ fn poly_toml_excludes_only_cargo_toml_from_formatting() {
         c[fmt_pos..].contains("\"**/Cargo.toml\","),
         "Cargo.toml exclude must be mirrored into the fmt builtin"
     );
+}
+
+/// Arrays must use taplo's 2-space indent. A 4-space indent means the freshly
+/// written `poly.toml` fails the consumer's own `poly fmt --check`, and — since
+/// the byte-equality skip then never fires — alef rewrites the file on every run.
+#[test]
+fn poly_toml_arrays_use_taplos_two_space_indent() {
+    let config = test_config();
+    let api = test_api();
+    let files = scaffold(&api, &config, &[Language::Python]).unwrap();
+    let c = &poly_toml(&files).content;
+
+    assert!(
+        c.contains("\n  \"target/**\","),
+        "multi-line array entries must be indented 2 spaces; got:\n{c}"
+    );
+    assert!(
+        !c.contains("\n    \"target/**\","),
+        "4-space indent is not taplo-canonical and never survives `poly fmt`; got:\n{c}"
+    );
+}
+
+/// poly has no native Elixir formatter, so without this opt-in it reindents
+/// `.ex`/`.exs` with its own tree-sitter query and fights `mix format` forever.
+#[test]
+fn poly_toml_hands_elixir_to_mix_format() {
+    let config = test_config();
+    let api = test_api();
+    let files = scaffold(&api, &config, &[Language::Elixir]).unwrap();
+    let c = &poly_toml(&files).content;
+
+    assert!(
+        c.contains("[tools.mix]") && c.contains("enabled = true"),
+        "Elixir repos must declare the mix catalog formatter; got:\n{c}"
+    );
+    assert!(
+        c.contains("root = \"packages/elixir\""),
+        "mix must run from the mix project root so it reads .formatter.exs; got:\n{c}"
+    );
+}
+
+#[test]
+fn poly_toml_omits_mix_tool_without_elixir() {
+    let config = test_config();
+    let api = test_api();
+    let files = scaffold(&api, &config, &[Language::Python]).unwrap();
+    let c = &poly_toml(&files).content;
+
+    assert!(!c.contains("[tools.mix]"), "no mix tool without Elixir; got:\n{c}");
 }
 
 #[test]

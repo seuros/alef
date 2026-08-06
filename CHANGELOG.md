@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The generated `poly.toml` is now poly-canonical when it is written.** `toml_array` hard-coded a
+  4-space indent while its doc-comment claimed to emit "taplo's canonical multi-line form" — taplo
+  uses 2 — and several inline arrays carried inner padding (`select = [ "correctness", … ]`). The
+  freshly written file therefore never matched the committed one, so the byte-equality skip in
+  `write_scaffold_files_with_overwrite` never fired and `poly.toml` was rewritten on every run in
+  every repo. What normally hid this is the post-generation `poly fmt --fix` pass repairing it
+  afterwards — but that runs after post-build, stubs, README, e2e and docs, so an abort in any of
+  those leaves the raw file behind (observed on xberg, where the run died in the Dart FRB
+  post-build), and the partial-regen paths never pass the repo root to poly at all. The emitter now
+  matches taplo, and `poly.toml` is handed to poly immediately after it is written rather than many
+  fallible stages later.
+  (`src/scaffold/languages/poly.rs`, `src/cli/pipeline/generate/scaffold.rs`)
+
+### Added
+
+- **`[tools.mix]` is emitted for repos with an Elixir binding.** poly has no native Elixir formatter
+  and `tree-sitter-elixir` ships no `indents.scm`, so poly reindented `.ex`/`.exs` with a hand-rolled
+  query that modelled only `do…end` and `fn…end`; every other construct was re-emitted at column 0
+  and poly then fought `mix format` indefinitely. Declaring the catalog tool hands the language to
+  `mix format` — poly ≥0.19.6 drops its own reindenter when a runnable catalog formatter owns the
+  language. (`src/scaffold/languages/poly.rs`)
+
 ## [0.55.1] - 2026-08-05
 
 ### Fixed

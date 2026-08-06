@@ -129,6 +129,27 @@ pub fn write_scaffold_files_with_overwrite(
         apply_shebang_chmod(&full_path, &normalized)?;
         count += 1;
         debug!("  wrote: {}", full_path.display());
+        if file.path == Path::new(POLY_CONFIG) {
+            normalize_poly_config(&full_path, base_dir);
+        }
     }
     Ok(count)
+}
+
+/// Repo-root poly config, emitted by the scaffold pass.
+const POLY_CONFIG: &str = "poly.toml";
+
+/// Hand `poly.toml` to poly immediately after writing it.
+///
+/// poly defines the canonical TOML form and the scaffold emits the file from a
+/// hand-rolled string template that does not match it, so the file is rewritten on
+/// every run and, left raw, fails the consumer's own `poly fmt --check`. The
+/// full-regen convergence pass normally repairs it, but that runs many fallible
+/// stages later (post-build, stubs, readme, e2e, docs) — an abort in any of them
+/// leaves the raw file behind — and the partial-regen paths never pass the repo
+/// root to poly at all. Formatting it here closes both gaps for the cost of one
+/// single-file invocation. Best-effort: `poly_format` warns and returns when poly
+/// is not on PATH.
+fn normalize_poly_config(full_path: &Path, base_dir: &Path) {
+    crate::cli::pipeline::poly_format(std::slice::from_ref(&full_path.to_path_buf()), base_dir);
 }
