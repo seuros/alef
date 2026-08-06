@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`src/backends/php/gen_bindings/rust_bindings.rs`,
   `src/backends/php/gen_bindings/types/structs.rs`)
 
+- **The scaffolded PHP `composer.json` declares a PHPUnit constraint that is installable on the PHP
+  version it claims to support.** The generated manifests paired `"php": ">=8.2"` with
+  `"phpunit/phpunit": "^13.1"`, but PHPUnit 13 requires PHP >= 8.4.1 — so `composer install` could
+  not resolve on 8.2 or 8.3, and Dependabot, which resolves Composer against the declared platform
+  floor rather than the runtime PHP, failed on every run in the consumer repos. The constraint is now
+  `^11.5 || ^12.0 || ^13.1`, letting Composer pick the newest major the actual PHP supports.
+  (`src/core/template_versions.rs`)
+
 ## [0.55.6] - 2026-08-06
 
 ### Fixed

@@ -191,7 +191,12 @@ pub mod gem {
 pub mod packagist {
 
     // renovate: datasource=packagist depName=phpunit/phpunit
-    pub const PHPUNIT: &str = "^13.1";
+    // ~keep Span every PHPUnit major that supports the generated `"php": ">=8.2"` floor: 11.x needs
+    // >=8.2, 12.x needs >=8.3, 13.x needs >=8.4.1. A 13-only constraint is unsatisfiable on 8.2/8.3,
+    // so `composer install` hard-fails there, and Dependabot — which resolves Composer against the
+    // declared platform floor rather than the runtime PHP — reported "requirements could not be
+    // resolved" on every run. Composer picks the highest major the actual PHP supports.
+    pub const PHPUNIT: &str = "^11.5 || ^12.0 || ^13.1";
 
     // renovate: datasource=packagist depName=guzzlehttp/guzzle
     // Accept both ^7 and ^8: a Composer resolver picking guzzle 8.x (e.g. because

@@ -350,6 +350,8 @@ mod methods_errors;
 mod params_formatting;
 #[path = "backends_php_gen_bindings/public_api_stubs.rs"]
 mod public_api_stubs;
+#[path = "backends_php_gen_bindings/scaffold_composer_requirements.rs"]
+mod scaffold_composer_requirements;
 #[path = "backends_php_gen_bindings/scaffold_pie_url.rs"]
 mod scaffold_pie_url;
 #[path = "backends_php_gen_bindings/streaming_method_order.rs"]
