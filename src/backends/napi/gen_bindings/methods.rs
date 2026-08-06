@@ -2,7 +2,9 @@
 
 use crate::{
     codegen::{
-        conversions::{field_conversion_from_core, helpers::sanitized_vec_field_to_core_expr},
+        conversions::helpers::{
+            sanitized_field_to_binding_expr, sanitized_map_field_to_core_expr, sanitized_vec_field_to_core_expr,
+        },
         naming::wire_variant_value,
     },
     core::ir::{EnumDef, TypeRef},
@@ -13,6 +15,58 @@ use super::enums::{
     tagged_enum_mixed_named_fields, variant_data_field_names,
 };
 use super::functions::{core_prim_str, needs_napi_cast};
+
+/// Build the binding→core conversion expression for a sanitized tagged-enum field, gated to
+/// the specific shapes this backend can invert (`Vec<Vec<String>>` and `Map<String, String>`,
+/// matching what `sanitized_vec_field_to_core_expr`/`sanitized_map_field_to_core_expr`
+/// support). Every other sanitized shape keeps the pre-#218 `Default::default()` fallback,
+/// which always compiles. The binding-side struct field is always `Option<T>` regardless of
+/// the core field's own optionality (see `tagged_enum_binding_struct_fields` field emission in
+/// `enums.rs`), so `optional` only changes whether the *result* is re-wrapped in `Option<_>`.
+fn sanitized_binding_to_core_expr(binding_field_name: &str, ty: &TypeRef, optional: bool) -> String {
+    let is_vec_vec_string = matches!(
+        ty,
+        TypeRef::Vec(outer) if matches!(outer.as_ref(), TypeRef::Vec(inner) if matches!(inner.as_ref(), TypeRef::String))
+    );
+    if is_vec_vec_string {
+        return if optional {
+            format!(
+                "val.{binding_field_name}.map(|v| {})",
+                sanitized_vec_field_to_core_expr("v", ty)
+            )
+        } else {
+            sanitized_vec_field_to_core_expr(&format!("val.{binding_field_name}.as_deref().unwrap_or_default()"), ty)
+        };
+    }
+    if optional {
+        if let Some(inner) = sanitized_map_field_to_core_expr("m", ty) {
+            return format!("val.{binding_field_name}.map(|m| {inner})");
+        }
+    } else if let Some(expr) =
+        sanitized_map_field_to_core_expr(&format!("val.{binding_field_name}.unwrap_or_default()"), ty)
+    {
+        return expr;
+    }
+    "Default::default()".to_string()
+}
+
+/// Build the core→binding field-init expression for a sanitized tagged-enum field, gated to
+/// the same shapes as [`sanitized_binding_to_core_expr`] via
+/// `sanitized_field_to_binding_expr`. `f` is the already-destructured core-side variable
+/// name; unsupported shapes fall back to `None`, which always compiles (and matches the
+/// `destructured` pattern binding that field with an ignored `_`-prefixed name).
+fn sanitized_core_to_binding_expr(f: &str, ty: &TypeRef, optional: bool) -> String {
+    if optional {
+        return match sanitized_field_to_binding_expr("v", ty) {
+            Some(inner) => format!("{f}: {f}.map(|v| {inner})"),
+            None => format!("{f}: None"),
+        };
+    }
+    match sanitized_field_to_binding_expr(f, ty) {
+        Some(expr) => format!("{f}: Some({expr})"),
+        None => format!("{f}: None"),
+    }
+}
 
 /// Generate `From<JsTaggedEnum> for core::TaggedEnum` for a flattened struct representation.
 pub(super) fn gen_tagged_enum_binding_to_core(
@@ -58,7 +112,10 @@ pub(super) fn gen_tagged_enum_binding_to_core(
                             && tagged_enum_field_is_tuple(f)
                             && matches!(&f.ty, TypeRef::Named(_));
                         let is_mixed = !is_single_tuple_named && mixed_named_fields.contains(&f.name);
-                        if f.optional {
+                        if f.sanitized {
+                            let expr = sanitized_binding_to_core_expr(&binding_field_name, &f.ty, f.optional);
+                            if f.is_boxed { format!("Box::new({expr})") } else { expr }
+                        } else if f.optional {
                             match &f.ty {
                                 TypeRef::Path => {
                                     format!("val.{binding_field_name}.map(std::path::PathBuf::from)")
@@ -89,16 +146,6 @@ pub(super) fn gen_tagged_enum_binding_to_core(
                                     format!("val.{binding_field_name}")
                                 }
                             }
-                        } else if f.sanitized {
-                            let expr = if matches!(&f.ty, TypeRef::Vec(_)) {
-                                sanitized_vec_field_to_core_expr(
-                                    &format!("val.{binding_field_name}.as_deref().unwrap_or_default()"),
-                                    &f.ty,
-                                )
-                            } else {
-                                "Default::default()".to_string()
-                            };
-                            if f.is_boxed { format!("Box::new({expr})") } else { expr }
                         } else {
                             let expr = match &f.ty {
                                 TypeRef::Named(n) if is_mixed => {
@@ -274,7 +321,7 @@ pub(super) fn gen_tagged_enum_core_to_binding(
                     .iter()
                     .map(|f| {
                         let binding_field_name = tagged_enum_field_name(variant, f);
-                        if f.sanitized && !matches!(&f.ty, TypeRef::Vec(_)) {
+                        if f.sanitized && sanitized_field_to_binding_expr("_", &f.ty).is_none() {
                             if is_tuple {
                                 format!("_{binding_field_name}")
                             } else {
@@ -292,7 +339,9 @@ pub(super) fn gen_tagged_enum_core_to_binding(
                             let has_binding = fields_with_binding_struct.contains(f.as_str());
                             let is_mixed = mixed_named_fields.contains(field.name.as_str());
                             let boxed_deref = if field.is_boxed { "*" } else { "" };
-                            if field.optional {
+                            if field.sanitized {
+                                sanitized_core_to_binding_expr(f, &field.ty, field.optional)
+                            } else if field.optional {
                                 match &field.ty {
                                     TypeRef::Path => format!("{f}: {f}.map(|p| p.to_string_lossy().to_string())"),
                                     TypeRef::Named(_) if is_mixed => {
@@ -308,27 +357,6 @@ pub(super) fn gen_tagged_enum_core_to_binding(
                                         format!("{f}: {f}.map(|v| v.into_iter().map(Into::into).collect())")
                                     }
                                     _ => format!("{f}: {f}"),
-                                }
-                            } else if field.sanitized {
-                                if matches!(&field.ty, TypeRef::Vec(_)) {
-                                    let conversion = field_conversion_from_core(
-                                        f,
-                                        &field.ty,
-                                        field.optional,
-                                        true,
-                                        &ahash::AHashSet::new(),
-                                    );
-                                    let expression = conversion
-                                        .strip_prefix(&format!("{f}: "))
-                                        .unwrap_or(&conversion)
-                                        .replace(&format!("val.{f}"), f);
-                                    if field.optional {
-                                        format!("{f}: {expression}")
-                                    } else {
-                                        format!("{f}: Some({expression})")
-                                    }
-                                } else {
-                                    format!("{f}: None")
                                 }
                             } else {
                                 match &field.ty {
@@ -397,98 +425,4 @@ pub(super) fn gen_tagged_enum_core_to_binding(
             has_excluded_variants => has_excluded_variants,
         },
     )
-}
-
-/// Determine which Named fields in a tagged enum have **different** Named types across variants.
-/// These fields cannot use a single `JsXxx` binding type, so they are stored as `String` (JSON)
-/// and converted via `serde_json` per variant in the From impls.
-#[cfg(test)]
-mod tests {
-    use super::{gen_tagged_enum_binding_to_core, gen_tagged_enum_core_to_binding};
-    use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeRef};
-    use ahash::AHashSet;
-
-    fn node_content(variants: Vec<EnumVariant>) -> EnumDef {
-        EnumDef {
-            name: "NodeContent".to_string(),
-            rust_path: "fixture_core::NodeContent".to_string(),
-            variants,
-            serde_tag: Some("node_type".to_string()),
-            serde_rename_all: Some("snake_case".to_string()),
-            ..Default::default()
-        }
-    }
-
-    fn generated_conversions(enum_def: &EnumDef) -> (String, String) {
-        let struct_names = AHashSet::new();
-        (
-            gen_tagged_enum_binding_to_core(enum_def, "fixture_core", "Js", &struct_names),
-            gen_tagged_enum_core_to_binding(enum_def, "fixture_core", "Js", &struct_names),
-        )
-    }
-
-    #[test]
-    fn tagged_enum_conversions_use_serde_wire_names() {
-        let enum_def = node_content(vec![
-            EnumVariant {
-                name: "ListItem".to_string(),
-                fields: vec![FieldDef {
-                    name: "text".to_string(),
-                    ty: TypeRef::String,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            },
-            EnumVariant {
-                name: "PageBreak".to_string(),
-                serde_rename: Some("explicit-page-break".to_string()),
-                ..Default::default()
-            },
-        ]);
-
-        let (binding_to_core, core_to_binding) = generated_conversions(&enum_def);
-
-        for generated in [&binding_to_core, &core_to_binding] {
-            assert!(generated.contains("\"list_item\""), "generated:\n{generated}");
-            assert!(generated.contains("\"explicit-page-break\""), "generated:\n{generated}");
-            assert!(!generated.contains("\"listitem\""), "generated:\n{generated}");
-            assert!(!generated.contains("\"pagebreak\""), "generated:\n{generated}");
-        }
-    }
-
-    #[test]
-    fn tagged_enum_conversions_preserve_sanitized_tuple_entries() {
-        let enum_def = node_content(vec![EnumVariant {
-            name: "MetadataBlock".to_string(),
-            fields: vec![FieldDef {
-                name: "entries".to_string(),
-                ty: TypeRef::Vec(Box::new(TypeRef::Vec(Box::new(TypeRef::String)))),
-                sanitized: true,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }]);
-
-        let (binding_to_core, core_to_binding) = generated_conversions(&enum_def);
-
-        assert!(binding_to_core.contains("\"metadata_block\""));
-        assert!(
-            binding_to_core.contains("entries: val.entries.as_deref().unwrap_or_default().iter().filter_map"),
-            "generated:\n{binding_to_core}"
-        );
-
-        assert!(core_to_binding.contains("\"metadata_block\""));
-        assert!(
-            core_to_binding.contains("entries: Some(entries.iter().map(|(a, b)|"),
-            "generated:\n{core_to_binding}"
-        );
-        assert!(
-            !core_to_binding.contains("entries: None"),
-            "generated:\n{core_to_binding}"
-        );
-        assert!(
-            !core_to_binding.contains("entries: _entries"),
-            "generated:\n{core_to_binding}"
-        );
-    }
 }

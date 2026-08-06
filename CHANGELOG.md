@@ -43,6 +43,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `excluded_variants` handling — now fall through to the same verbatim behavior as every other
   backend. (`src/backends/java/gen_bindings/types/enums.rs`)
 
+- **NAPI tagged-enum sanitized fields no longer drop data or emit non-compiling conversions.**
+  #218 (@thisislvca) fixed the tagged-enum discriminator wire names but its sanitized-field
+  handling had follow-on gaps: an unreachable `optional` branch inside the `sanitized` arm meant
+  `field_conversion_from_core` was always called with `optional: false`; checking `f.optional`
+  before `f.sanitized` meant an `Option<Vec<(String, String)>>` field never reached the sanitized
+  path in either direction; gating on any `Vec<_>` shape (rather than the specific
+  `Vec<Vec<String>>` shape actually handled) could emit a `format!("{:?}", …)` assigned to a
+  `Vec<_>`-typed field, which does not compile; and the core→binding direction re-parsed a
+  rendered `"name: expr"` string with `strip_prefix`/`replace` instead of composing an expression
+  directly. Sanitized `Vec<Vec<String>>` (optional and non-optional) and `Map<String, String>`
+  fields now convert correctly in both directions; every other sanitized shape keeps the
+  pre-#218 `Default::default()` / `None` fallback, which always compiles.
+  (`src/backends/napi/gen_bindings/methods.rs`,
+  `src/codegen/conversions/helpers/field_fragments.rs`)
+
 ## [0.55.6] - 2026-08-06
 
 ### Fixed

@@ -1,6 +1,9 @@
 use super::NapiBackend;
+use super::methods::{gen_tagged_enum_binding_to_core, gen_tagged_enum_core_to_binding};
 use crate::core::backend::Backend;
 use crate::core::config::Language;
+use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeRef};
+use ahash::AHashSet;
 
 /// NapiBackend::name returns "napi".
 #[test]
@@ -236,4 +239,168 @@ fn napi_self_ref_builder_shares_arc_instead_of_cloning_returned_ref() {
         !code.contains("let result ="),
         "self-returning builder must not bind the returned &mut ref, got:\n{code}"
     );
+}
+
+/// Build a single-variant tagged enum with one sanitized field named `entries`, for exercising
+/// the binding↔core conversion of sanitized tagged-enum fields.
+fn sanitized_field_test_enum(ty: TypeRef, optional: bool) -> EnumDef {
+    EnumDef {
+        name: "NodeContent".to_string(),
+        rust_path: "fixture_core::NodeContent".to_string(),
+        variants: vec![EnumVariant {
+            name: "MetadataBlock".to_string(),
+            fields: vec![FieldDef {
+                name: "entries".to_string(),
+                ty,
+                optional,
+                sanitized: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        serde_tag: Some("node_type".to_string()),
+        serde_rename_all: Some("snake_case".to_string()),
+        ..Default::default()
+    }
+}
+
+fn sanitized_field_conversions(enum_def: &EnumDef) -> (String, String) {
+    let struct_names = AHashSet::new();
+    (
+        gen_tagged_enum_binding_to_core(enum_def, "fixture_core", "Js", &struct_names),
+        gen_tagged_enum_core_to_binding(enum_def, "fixture_core", "Js", &struct_names),
+    )
+}
+
+/// Tagged-enum discriminator values (`#[serde(rename_all/rename)]`) must drive the wire tag in
+/// both conversion directions, never the raw variant/field Rust identifier.
+/// Regression coverage for PR #218 (the discriminator half, unrelated to sanitized fields).
+#[test]
+fn tagged_enum_conversions_use_serde_wire_names() {
+    let enum_def = EnumDef {
+        name: "NodeContent".to_string(),
+        rust_path: "fixture_core::NodeContent".to_string(),
+        variants: vec![
+            EnumVariant {
+                name: "ListItem".to_string(),
+                fields: vec![FieldDef {
+                    name: "text".to_string(),
+                    ty: TypeRef::String,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            EnumVariant {
+                name: "PageBreak".to_string(),
+                serde_rename: Some("explicit-page-break".to_string()),
+                ..Default::default()
+            },
+        ],
+        serde_tag: Some("node_type".to_string()),
+        serde_rename_all: Some("snake_case".to_string()),
+        ..Default::default()
+    };
+
+    let (binding_to_core, core_to_binding) = sanitized_field_conversions(&enum_def);
+
+    for generated in [&binding_to_core, &core_to_binding] {
+        assert!(generated.contains("\"list_item\""), "generated:\n{generated}");
+        assert!(generated.contains("\"explicit-page-break\""), "generated:\n{generated}");
+        assert!(!generated.contains("\"listitem\""), "generated:\n{generated}");
+        assert!(!generated.contains("\"pagebreak\""), "generated:\n{generated}");
+    }
+}
+
+/// A table of sanitized tagged-enum field shapes, asserting both conversion directions in one
+/// pass. Covers: the `Vec<Vec<String>>` shape (issue #217's `Vec<(String, String)>` case) both
+/// non-optional and optional, the `Map<String, String>` shape, and an unsupported shape
+/// (`Vec<Named>`) that must keep emitting the pre-#218 `Default::default()` / `None` fallback —
+/// the only form that is guaranteed to compile for a shape this backend cannot invert.
+struct SanitizedFieldCase {
+    label: &'static str,
+    ty: TypeRef,
+    optional: bool,
+    binding_to_core_expect: &'static str,
+    core_to_binding_expect: &'static str,
+    /// Substrings that must be absent from the core→binding output: the pre-fix behavior either
+    /// dropped the field entirely (`entries: None`) or left the destructured variable unused
+    /// (`entries: _entries`) even though a real conversion was possible.
+    core_to_binding_forbid: &'static [&'static str],
+}
+
+#[test]
+fn sanitized_tagged_enum_field_conversions_table() {
+    let cases = [
+        SanitizedFieldCase {
+            label: "vec_vec_string non-optional (issue #217)",
+            ty: TypeRef::Vec(Box::new(TypeRef::Vec(Box::new(TypeRef::String)))),
+            optional: false,
+            binding_to_core_expect: "entries: val.entries.as_deref().unwrap_or_default().iter().filter_map",
+            core_to_binding_expect: "entries: Some(entries.iter().map(|(a, b)| vec![a.to_string(), b.to_string()]).collect::<Vec<Vec<String>>>())",
+            core_to_binding_forbid: &["entries: None", "entries: _entries"],
+        },
+        SanitizedFieldCase {
+            label: "vec_vec_string optional",
+            ty: TypeRef::Vec(Box::new(TypeRef::Vec(Box::new(TypeRef::String)))),
+            optional: true,
+            binding_to_core_expect: "entries: val.entries.map(|v| v.iter().filter_map(|inner| { let mut it = inner.iter().cloned(); Some((it.next()?, it.next()?)) }).collect())",
+            core_to_binding_expect: "entries: entries.map(|v| v.iter().map(|(a, b)| vec![a.to_string(), b.to_string()]).collect::<Vec<Vec<String>>>())",
+            core_to_binding_forbid: &["entries: None", "entries: _entries"],
+        },
+        SanitizedFieldCase {
+            label: "map_string_string non-optional",
+            ty: TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String)),
+            optional: false,
+            binding_to_core_expect: "entries: val.entries.unwrap_or_default().into_iter().map(|(k, v)| (k.into(), v.into())).collect()",
+            core_to_binding_expect: "entries: Some(entries.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect())",
+            core_to_binding_forbid: &["entries: None", "entries: _entries"],
+        },
+        SanitizedFieldCase {
+            label: "map_string_string optional",
+            ty: TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String)),
+            optional: true,
+            binding_to_core_expect: "entries: val.entries.map(|m| m.into_iter().map(|(k, v)| (k.into(), v.into())).collect())",
+            core_to_binding_expect: "entries: entries.map(|v| v.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect())",
+            core_to_binding_forbid: &["entries: None", "entries: _entries"],
+        },
+        SanitizedFieldCase {
+            label: "unsupported vec_named shape falls back to Default/None",
+            ty: TypeRef::Vec(Box::new(TypeRef::Named("Widget".to_string()))),
+            optional: false,
+            binding_to_core_expect: "entries: Default::default()",
+            core_to_binding_expect: "entries: None",
+            core_to_binding_forbid: &[],
+        },
+    ];
+
+    for case in cases {
+        let enum_def = sanitized_field_test_enum(case.ty, case.optional);
+        let (binding_to_core, core_to_binding) = sanitized_field_conversions(&enum_def);
+
+        assert!(
+            binding_to_core.contains(case.binding_to_core_expect),
+            "[{}] binding->core missing expected fragment {:?}, got:\n{binding_to_core}",
+            case.label,
+            case.binding_to_core_expect
+        );
+        assert!(
+            core_to_binding.contains(case.core_to_binding_expect),
+            "[{}] core->binding missing expected fragment {:?}, got:\n{core_to_binding}",
+            case.label,
+            case.core_to_binding_expect
+        );
+        for forbidden in case.core_to_binding_forbid {
+            assert!(
+                !core_to_binding.contains(forbidden),
+                "[{}] core->binding must not contain {:?}, got:\n{core_to_binding}",
+                case.label,
+                forbidden
+            );
+        }
+        assert!(
+            !binding_to_core.contains("format!(\"{:?}\""),
+            "[{}] binding->core must never re-parse a Debug-formatted string, got:\n{binding_to_core}",
+            case.label
+        );
+    }
 }
