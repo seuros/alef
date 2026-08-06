@@ -153,6 +153,15 @@ jobs:
           - label: macos-arm64
             runner: macos-latest
             target: aarch64-apple-darwin
+          # ~keep Without a published Windows binary, `xberg-io/actions/install-alef` finds no
+          # asset and falls back to `cargo install --git --tag`, which builds alef from source on
+          # a Windows runner and blows the consumer's 60-minute job timeout — html-to-markdown's
+          # Windows Node e2e job was cancelled twice this way. The `.zip` branch in the archive
+          # step and the `disable-cache` toggle below were already written for Windows; only this
+          # matrix entry was missing.
+          - label: windows-x86_64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7

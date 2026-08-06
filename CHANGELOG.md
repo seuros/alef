@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The CLI release now includes a Windows binary.** The publish matrix built only
+  linux-x86_64, linux-aarch64 and macos-arm64, while the archive step's `.zip` branch and
+  its `disable-cache` toggle were already written for Windows — the matrix entry was simply
+  missing. `xberg-io/actions/install-alef` therefore found no asset on a Windows runner and
+  fell back to `cargo install --git --tag`, building alef from source; html-to-markdown's
+  Windows Node e2e job was cancelled at its 60-minute timeout twice because of it.
+  (`.github/workflows/publish.yaml`)
+
 ## [0.55.4] - 2026-08-06
 
 ### Fixed
