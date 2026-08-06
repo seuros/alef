@@ -57,10 +57,20 @@ pub fn default_update_config(lang: Language, output_dir: &str, ctx: &LangContext
                     vec![format!("cd {output_dir} && yarn upgrade --latest")],
                 ),
                 _ => (
-                    vec!["corepack up".to_string(), "pnpm up -r".to_string()],
+                    // `--config.auto-install-peers=false --config.dedupe-peer-dependents=false`:
+                    // without these, `pnpm up` promotes optional peer deps of installed packages
+                    // (e.g. napi-rs's @emnapi/*, @octokit/core, typanion) into the project's own
+                    // `dependencies` and stamps them with the workspace version — corrupting
+                    // package.json on every update. ~keep
+                    vec![
+                        "corepack up".to_string(),
+                        "pnpm up -r --config.auto-install-peers=false --config.dedupe-peer-dependents=false"
+                            .to_string(),
+                    ],
                     vec![
                         "corepack use pnpm@latest".to_string(),
-                        "pnpm up --latest -r -w".to_string(),
+                        "pnpm up --latest -r -w --config.auto-install-peers=false --config.dedupe-peer-dependents=false"
+                            .to_string(),
                     ],
                 ),
             };
@@ -320,6 +330,12 @@ mod tests {
         let upgrade = c.upgrade.unwrap().commands().join(" ");
         assert!(update.contains("pnpm up"));
         assert!(upgrade.contains("pnpm up --latest"));
+        // Both flags are required to stop `pnpm up` from promoting optional peer deps
+        // into package.json with the workspace version stamped on them.
+        for cmds in [&update, &upgrade] {
+            assert!(cmds.contains("--config.auto-install-peers=false"));
+            assert!(cmds.contains("--config.dedupe-peer-dependents=false"));
+        }
     }
 
     #[test]

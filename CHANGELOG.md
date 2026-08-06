@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`alef update`/`upgrade` no longer corrupt a pnpm project's `package.json`.** The default Node
+  recipes ran bare `pnpm up -r` (and `pnpm up --latest -r -w`). With pnpm's default
+  `auto-install-peers`/`dedupe-peer-dependents`, `pnpm up` promotes the optional peer deps of
+  installed packages (e.g. napi-rs's `@emnapi/core`, `@emnapi/runtime`, `@octokit/core`, `typanion`)
+  into the project's own `dependencies` and stamps them with the *workspace* version — so every
+  update rewrote `package.json` with bogus, version-mismatched dependencies. Both recipes now pass
+  `--config.auto-install-peers=false --config.dedupe-peer-dependents=false`, so only the real,
+  declared dependency ranges are bumped. (`src/core/config/update_defaults.rs`)
+
 - **PHP streaming methods are emitted in adapter-declaration order.** The PHP backend collected the
   streaming method keys into an `AHashSet` and then *iterated* it to emit the `#[php_impl]` methods —
   the only place in the backend where a hash container drove output order. ahash seeds itself per
