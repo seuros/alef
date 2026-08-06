@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Go e2e harness import no longer collides with a reserved keyword.** The harness derived its
+  import alias from the last segment of the module path with no sanitization, so a module ending in
+  `/go` (e.g. `.../packages/go`) emitted `import go "..."` — and `go` is a reserved word, so the file
+  failed to compile with `missing import path`. Aliases are now routed through a new `go_ident`
+  helper that escapes reserved keywords and invalid identifiers (`go` → `go_`).
+  (`src/core/keywords.rs`, `src/e2e/codegen/go.rs`)
+
 - **`alef update`/`upgrade` no longer corrupt a pnpm project's `package.json`.** The default Node
   recipes ran bare `pnpm up -r` (and `pnpm up --latest -r -w`). With pnpm's default
   `auto-install-peers`/`dedupe-peer-dependents`, `pnpm up` promotes the optional peer deps of

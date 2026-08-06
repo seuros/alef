@@ -971,3 +971,23 @@ fn render_go_mod_extras_idempotent() {
     let second = render_go_mod("github.com/example/mylib", None, "v1.0.0", Some(&extras));
     assert_eq!(first, second, "re-rendering with same extras should be stable");
 }
+
+/// A module path whose last segment is a Go reserved keyword (e.g. `.../packages/go`)
+/// must not be emitted verbatim as an import alias — `import go "..."` is a compile
+/// error because `go` is a reserved word. The alias is escaped to `go_`.
+#[test]
+fn render_harness_uses_escaped_alias_for_reserved_keyword_module_segment() {
+    let out = super::render_harness_main(&E2eConfig::default(), &[], "github.com/example/spikard/packages/go");
+    assert!(
+        !out.contains("go \"github.com/example/spikard/packages/go\""),
+        "reserved keyword `go` must not be used as a verbatim import alias, got:\n{out}"
+    );
+    assert!(
+        out.contains("go_ \"github.com/example/spikard/packages/go\""),
+        "reserved keyword segment `go` should be escaped to alias `go_`, got:\n{out}"
+    );
+    assert!(
+        out.contains("go_.NewApp()"),
+        "escaped alias `go_` should be used as the package qualifier, got:\n{out}"
+    );
+}

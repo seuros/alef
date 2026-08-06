@@ -887,5 +887,39 @@ pub fn zig_ident(name: &str) -> String {
     zig_safe_name(&sanitized).unwrap_or(sanitized)
 }
 
+/// Returns `Some(escaped_name)` if `name` is a Go reserved keyword, else `None`.
+pub fn go_safe_name(name: &str) -> Option<String> {
+    if GO_KEYWORDS.contains(&name) {
+        Some(format!("{name}_"))
+    } else {
+        None
+    }
+}
+
+/// Convenience: always returns a usable Go identifier.
+///
+/// Sanitizes the input so that it is a valid Go identifier:
+///   1. Non-`[A-Za-z0-9_]` characters are replaced with `_` (so a module path
+///      segment like `my-lib` becomes `my_lib`).
+///   2. A leading digit is prefixed with `_`.
+///   3. The result is then checked against Go's reserved-word list and escaped
+///      with a trailing `_` if necessary (so a segment like `go` — the last
+///      element of a `.../packages/go` module path — becomes `go_` rather than
+///      the reserved `go`, which is not a legal import alias). ~keep
+pub fn go_ident(name: &str) -> String {
+    let mut sanitized = String::with_capacity(name.len() + 1);
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            sanitized.push(ch);
+        } else {
+            sanitized.push('_');
+        }
+    }
+    if sanitized.chars().next().is_some_and(|ch| ch.is_ascii_digit()) {
+        sanitized.insert(0, '_');
+    }
+    go_safe_name(&sanitized).unwrap_or(sanitized)
+}
+
 #[cfg(test)]
 mod tests;

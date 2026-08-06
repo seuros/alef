@@ -853,8 +853,11 @@ fn render_harness_main(_e2e_config: &E2eConfig, groups: &[FixtureGroup], go_modu
     let harness_template = include_str!("../templates/go/harness_main.go.jinja");
     env.add_template("harness", harness_template).ok();
 
-    // Derive a short import alias from the module path (e.g., the last path segment).
-    let import_alias = go_module_path.rsplit('/').next().unwrap_or("pkg").to_string();
+    // Derive a short import alias from the module path (the last path segment), then
+    // sanitize it into a legal Go import alias: a segment that is a reserved keyword
+    // (e.g. `.../packages/go` → `go`) or otherwise not a valid identifier would fail to
+    // compile as `import go "..."`. `go_ident` escapes it (`go` → `go_`). ~keep
+    let import_alias = crate::core::keywords::go_ident(go_module_path.rsplit('/').next().unwrap_or("pkg"));
 
     let template = env.get_template("harness").unwrap();
     let output = template

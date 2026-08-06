@@ -82,6 +82,20 @@ fn zig_comptime_is_reserved() {
 }
 
 #[test]
+fn go_ident_escapes_reserved_keywords_and_invalid_chars() {
+    assert_eq!(go_safe_name("go"), Some("go_".to_string()));
+    assert_eq!(go_safe_name("map"), Some("map_".to_string()));
+    assert_eq!(go_safe_name("binding"), None);
+    // Reserved keyword as a module segment (`.../packages/go`) must not stay verbatim.
+    assert_eq!(go_ident("go"), "go_");
+    assert_eq!(go_ident("type"), "type_");
+    // Non-identifier characters are sanitized, and a leading digit is prefixed.
+    assert_eq!(go_ident("my-lib"), "my_lib");
+    assert_eq!(go_ident("2fast"), "_2fast");
+    assert_eq!(go_ident("binding"), "binding");
+}
+
+#[test]
 fn python_keywords_covers_common_cases() {
     for kw in &[
         "def", "return", "yield", "pass", "import", "from", "type", "None", "True", "False",
