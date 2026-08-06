@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.55.6] - 2026-08-06
+
+### Fixed
+
+- **The Dart native loader downloads and caches the library again on a cold cache.** alef had
+  two divergent implementations of the same injected `_alefResolveExternalLibrary` prologue: a
+  hardcoded `format!` in `frb_rewrite::external_library_loader` and
+  `dart_init_prologue_replacement.jinja`, rendered into the generated bridge crate's `build.rs`.
+  Within alef's own pipeline the `format!` variant always wins — a `post_build` FRB regeneration
+  clobbers `build.rs`'s patch before `FrbDartSealedVariants` runs — and that variant only ever
+  *read* the versioned cache, so a cache miss threw `StateError` even though
+  `nativeDownloadAndCacheLibrary()` was defined and exported for exactly that case. Both call
+  sites now render the one template, which keeps the `format!` variant's improvements
+  (absolute-path `dlopen`, the `Platform.script` package-root fallback, the descriptive miss) and
+  restores the download-on-miss step ahead of the `StateError`.
+  (`src/backends/dart/templates/dart_init_prologue_replacement.jinja`,
+  `src/backends/dart/frb_rewrite/external_library_loader.rs`,
+  `src/backends/dart/gen_rust_crate/cargo.rs`)
+
+- **`build.rs`'s embedded loader searches for the library that is actually built.** The bridge
+  crate emitted at `packages/dart/rust/` is `<source>-dart`, so its cdylib is
+  `lib<source>_dart.dylib` — but the source crate name was passed as the candidate stem, leaving
+  the embedded loader looking for a `libhtml_to_markdown_rs.dylib` that no build produces. Only
+  reachable when a consumer builds the bridge crate outside alef's pipeline, where it silently
+  degraded every bundled-native lookup into a cache lookup.
+  (`src/backends/dart/gen_rust_crate/mod.rs`)
+
+- **The loader's "not found" message now names the actual environment variable.** The override
+  was suggested as an escaped `\$nativeLibDirEnv`, so Dart printed the identifier rather than
+  interpolating it and the reader was told to set a variable whose name was never given. The
+  lookup also repeated the variable's value as a string literal instead of reading the
+  `nativeLibDirEnv` constant, leaving two places that had to agree on it.
+  (`src/backends/dart/templates/dart_init_prologue_replacement.jinja`)
+
 ## [0.55.5] - 2026-08-06
 
 ### Fixed

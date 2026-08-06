@@ -764,6 +764,25 @@ mod build_rs_tests {
         );
     }
 
+    /// The build.rs loader patch and the in-process `frb_init_prologue_replacement`
+    /// (`frb_rewrite::external_library_loader`) both render `dart_init_prologue_replacement.jinja`
+    /// — assert the embedded copy also reaches `nativeDownloadAndCacheLibrary()` on a cache
+    /// miss, so the two call sites cannot silently diverge again.
+    #[test]
+    fn emitted_build_rs_downloads_and_caches_library_on_cache_miss() {
+        let file = emit_build_rs(
+            "packages/dart/rust",
+            "sample_router",
+            "sample_router",
+            "sample_router_dart",
+        );
+        assert!(
+            file.content.contains("await nativeDownloadAndCacheLibrary()"),
+            "build.rs replacement must call nativeDownloadAndCacheLibrary() on a cache miss, got:\n{}",
+            file.content
+        );
+    }
+
     #[test]
     fn emitted_build_rs_runs_dart_format_after_patch() {
         let file = emit_build_rs(

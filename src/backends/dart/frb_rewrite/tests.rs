@@ -902,6 +902,44 @@ fn fix_handler_executor_strips_orphaned_paren_async_task() {
     );
 }
 
+/// Regression test for a shipped defect: an older prologue variant only read an
+/// already-populated versioned cache and threw `StateError` on a cold cache, even though
+/// `nativeDownloadAndCacheLibrary()` was defined and exported for exactly this case. Assert
+/// the emitted prologue actually calls it on a cache miss, so a cold cache self-heals
+/// instead of throwing.
+#[test]
+fn loader_replacement_downloads_and_caches_library_on_cache_miss() {
+    let out = frb_init_prologue_replacement("test_pkg", "test_mod", "test_stem");
+
+    assert!(
+        out.contains("await nativeDownloadAndCacheLibrary()"),
+        "prologue must call nativeDownloadAndCacheLibrary() on a versioned-cache miss, got:\n{out}"
+    );
+
+    let cache_check_pos = out
+        .find("final cachedLibPath = nativeCachedLibPath();")
+        .expect("cache-path check must exist");
+    let download_pos = out
+        .find("await nativeDownloadAndCacheLibrary()")
+        .expect("download call must exist");
+    assert!(
+        cache_check_pos < download_pos,
+        "download must only be attempted after the cache-path check, got:\n{out}"
+    );
+
+    let state_error_pos = out
+        .find("throw StateError(")
+        .expect("StateError fallback must still exist");
+    assert!(
+        download_pos < state_error_pos,
+        "download must be attempted before the descriptive StateError is thrown, got:\n{out}"
+    );
+    assert!(
+        out.contains("Native library for test_pkg"),
+        "StateError message must still name the package, got:\n{out}"
+    );
+}
+
 #[test]
 fn loader_replacement_uses_real_string_interpolation_for_cache_dir_and_url() {
     let out = frb_init_prologue_replacement("test_pkg", "test_mod", "test_stem");

@@ -2,6 +2,7 @@ use regex::Regex;
 use std::sync::OnceLock;
 
 use super::imports_helpers::ensure_loader_imports;
+use crate::backends::dart::template_env;
 
 /// Idempotency marker injected into `RustLib.init` by
 /// [`rewrite_frb_external_library_loader`]. Presence of this token means the
@@ -119,209 +120,21 @@ fn init_prologue_regex() -> &'static Regex {
 /// `externalLibrary ??= ...` resolution line, followed by the
 /// `_alefResolveExternalLibrary` helper method.
 ///
-/// # Brace Balancing
-/// The generated string maintains balanced braces and parentheses. The
-/// `_alefResolveExternalLibrary()` helper method is fully closed (lines 126–204
-/// in the template), and the `init()` method signature and start are opened
-/// (lines 207–213), allowing the original FRB method body to follow seamlessly.
+/// Renders `dart_init_prologue_replacement.jinja`, the single source of truth for the
+/// injected prologue also used to build the `patch_published_loader` fallback embedded in
+/// the generated dart-bridge crate's `build.rs` (see
+/// `gen_rust_crate::cargo::dart_init_prologue_replacement`). Both call sites must stay on
+/// this one template — a second, hand-written copy previously drifted and shipped a
+/// version that couldn't reach `nativeDownloadAndCacheLibrary()`, breaking cold-cache
+/// installs.
 pub(super) fn frb_init_prologue_replacement(package_name: &str, module_name: &str, stem: &str) -> String {
-    format!(
-        r#"  /// Resolve the prebuilt native library from environment variable,
-  /// package-relative location, or defer to flutter_rust_bridge's default loader.
-  /// Returns `null` to defer to flutter_rust_bridge's default loader.
-  ///
-  /// Checks in order:
-  /// 1. FRB_DART_LOAD_EXTERNAL_LIBRARY_NATIVE_LIB_DIR environment variable
-  ///    (allows test harnesses to point to development build paths)
-  /// 2. Package-installed location with RID subdirectory (lib/src/native/<rid>/)
-  ///    (for published pub.dev packages with platform-specific bundled native libraries)
-  /// 3. Package-installed location (lib/src/{module}_bridge_generated/)
-  ///    (legacy fallback for development or packages without per-platform binaries)
-  /// 4. Versioned user cache populated by `dart run {package}:download_libs`
-  ///    (`<cache>/{package}/<version>/<rid>/`), shared with the download script
-  ///    via `nativeCachedLibPath()` in `native_loader.dart`.
-  /// 5. Throws a StateError naming the expected release asset URL, the
-  ///    download command, and the env-var override (never a silent null miss).
-  static Future<ExternalLibrary?> {marker}() async {{
-    try {{
-      const candidates = <String>[
-        // macOS: framework bundle (preferred modern packaging)
-        '{stem}.framework',
-        // macOS: bare dylib fallback
-        'lib{stem}.dylib',
-        // Linux
-        'lib{stem}.so',
-        // Windows
-        '{stem}.dll',
-      ];
-
-      // Helper to open a native library by absolute path.
-      // Normalizes path to absolute to avoid hardened-runtime "relative path rejected" errors.
-      ExternalLibrary? tryOpenAbsolute(String libPath) {{
-        try {{
-          final absPath = File(libPath).absolute.path;
-          return ExternalLibrary.open(absPath);
-        }} catch (_) {{
-          return null;
-        }}
-      }}
-
-      bool candidateExists(String libPath) {{
-        return File(libPath).existsSync() || Directory(libPath).existsSync();
-      }}
-
-      // Check FRB_DART_LOAD_EXTERNAL_LIBRARY_NATIVE_LIB_DIR env var first.
-      // This allows test harnesses to override library location for development.
-      final envDir = Platform.environment['FRB_DART_LOAD_EXTERNAL_LIBRARY_NATIVE_LIB_DIR'];
-      if (envDir != null && envDir.isNotEmpty) {{
-        final absEnvDir = Directory(envDir).absolute.path;
-        final libDir = Directory(absEnvDir);
-        if (libDir.existsSync()) {{
-          for (final candidate in candidates) {{
-            final libPath = '$absEnvDir/$candidate';
-            if (candidateExists(libPath)) {{
-              final result = tryOpenAbsolute(libPath);
-              if (result != null) return result;
-            }}
-          }}
-        }}
-      }}
-
-      // Compute RID (runtime identifier) from platform and architecture using Abi.current().
-      // This is more reliable than parsing Platform.version.
-      String? computeRid() {{
-        final abi = Abi.current();
-        final os = Platform.operatingSystem;
-
-        // Map from (os, Abi) to RID string.
-        String? ridFromAbi() {{
-          if (os == 'linux') {{
-            if (abi == Abi.linuxX64) return 'linux-x64';
-            if (abi == Abi.linuxArm64) return 'linux-arm64';
-          }} else if (os == 'macos') {{
-            if (abi == Abi.macosX64) return 'macos-x64';
-            if (abi == Abi.macosArm64) return 'macos-arm64';
-          }} else if (os == 'windows') {{
-            if (abi == Abi.windowsX64) return 'windows-x64';
-            if (abi == Abi.windowsArm64) return 'windows-arm64';
-          }}
-          return null;
-        }}
-
-        return ridFromAbi();
-      }}
-
-      final rid = computeRid();
-      if (rid != null) {{
-        final packageRoot =
-            await Isolate.resolvePackageUri(Uri.parse('package:{package}/{package}.dart'));
-        if (packageRoot != null) {{
-          final ridDir = packageRoot.resolve('src/native/$rid/');
-          for (final candidate in candidates) {{
-            final libPath = ridDir.resolve(candidate).toFilePath();
-            if (candidateExists(libPath)) {{
-              final result = tryOpenAbsolute(libPath);
-              if (result != null) return result;
-            }}
-          }}
-        }}
-      }}
-
-      // Check legacy package-installed location as fallback.
-      final packageRoot =
-          await Isolate.resolvePackageUri(Uri.parse('package:{package}/{package}.dart'));
-      if (packageRoot != null) {{
-        final libDir = packageRoot.resolve('src/{module}_bridge_generated/');
-        for (final candidate in candidates) {{
-          final libPath = libDir.resolve(candidate).toFilePath();
-          if (candidateExists(libPath)) {{
-            final result = tryOpenAbsolute(libPath);
-            if (result != null) return result;
-          }}
-        }}
-      }}
-
-      // As a last resort, resolve the running test/script's package root via
-      // `Platform.script` and search standard RID-relative locations there.
-      // Critical on macOS: `Directory.current` under hardened-runtime `dart` is
-      // the dart binary's own bin dir (relative-path dlopen rejected), whereas
-      // `Platform.script` resolves to the running .dart file's absolute URI,
-      // from which we can walk up to find the package root (the dir containing
-      // `pubspec.yaml`) and look for the bundled native library at standard
-      // paths. This handles the case where `Isolate.resolvePackageUri`
-      // resolution did not yield the actual staging location (e.g., a path
-      // dependency in local development, or a test_app whose host package
-      // contains the native lib directly rather than via the bridged package).
-      try {{
-        final scriptPath = Platform.script.toFilePath();
-        var dir = File(scriptPath).absolute.parent;
-        while (dir.parent.path != dir.path
-            && !File('${{dir.path}}/pubspec.yaml').existsSync()) {{
-          dir = dir.parent;
-        }}
-        if (File('${{dir.path}}/pubspec.yaml').existsSync()) {{
-          final rid = computeRid();
-          final absRootPath = dir.absolute.path;
-          final searchRoots = <String>[
-            if (rid != null) '$absRootPath/lib/src/native/$rid',
-            '$absRootPath/lib',
-            absRootPath,
-          ];
-          for (final root in searchRoots) {{
-            final absRoot = Directory(root).absolute.path;
-            for (final candidate in candidates) {{
-              final libPath = '$absRoot/$candidate';
-              if (candidateExists(libPath)) {{
-                final result = tryOpenAbsolute(libPath);
-                if (result != null) return result;
-              }}
-            }}
-          }}
-        }}
-      }} catch (_) {{
-        // fall through to default loader
-      }}
-
-      // Versioned user cache populated by `dart run {package}:download_libs`.
-      // Shares its cache-path logic with the download script via
-      // `nativeCachedLibPath()` so the two can never disagree on the location.
-      final cachedLibPath = nativeCachedLibPath();
-      if (cachedLibPath != null && candidateExists(cachedLibPath)) {{
-        final result = tryOpenAbsolute(cachedLibPath);
-        if (result != null) return result;
-      }}
-    }} catch (_) {{
-      // Fall through to the descriptive miss below on any resolution failure.
-    }}
-
-    // Nothing bundled and nothing staged in the cache: fail loudly rather than
-    // let flutter_rust_bridge attempt a doomed relative-path dlopen. Name the
-    // exact release asset, the fetch command, and the env-var override so the
-    // consumer can recover.
-    final rid = nativeComputeRid() ?? Platform.operatingSystem;
-    throw StateError(
-      'Native library for {package} ($rid) was not found. '
-      'Expected it in the versioned cache (${{nativeCacheDir() ?? '<unresolved cache dir>'}}) '
-      'or bundled with the package. Download it with '
-      '`dart run {package}:download_libs`, which fetches '
-      '${{nativeAssetUrlBase()}}.tar.gz and verifies its SHA-256, '
-      'or point \$nativeLibDirEnv at a directory containing the native library.',
-    );
-  }}
-
-  /// Initialize flutter_rust_bridge
-  static Future<void> init({{
-    RustLibApi? api,
-    BaseHandler? handler,
-    ExternalLibrary? externalLibrary,
-    bool forceSameCodegenVersion = true,
-  }}) async {{
-    externalLibrary ??= await {marker}();
-"#,
-        marker = ALEF_LOADER_MARKER,
-        package = package_name,
-        module = module_name,
-        stem = stem,
+    template_env::render(
+        "dart_init_prologue_replacement.jinja",
+        minijinja::context! {
+            package_name => package_name,
+            module_name => module_name,
+            stem => stem,
+        },
     )
 }
 

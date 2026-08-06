@@ -588,6 +588,39 @@ fn build_rs_is_emitted() {
     assert!(build.contains("fn main()"), "missing fn main(): {build}");
 }
 
+/// The bridge crate emitted at `packages/dart/rust/` is `<source>-dart`, so its cdylib is
+/// `lib<source>_dart.dylib`. build.rs embeds a copy of the loader prologue whose candidate
+/// filenames are baked in at generation time; passing the *source* crate name as the stem made it
+/// search for a library that is never built.
+#[test]
+fn build_rs_loader_searches_for_the_dart_bridge_cdylib_stem() {
+    let api = ApiSurface {
+        crate_name: "demo-crate".into(),
+        version: "0.1.0".into(),
+        types: vec![],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+
+    let files = DartBackend.generate_bindings(&api, &make_config()).unwrap();
+    let build = find_file(&files, "packages/dart/rust/build.rs").expect("build.rs not found");
+
+    assert!(
+        build.contains("'libdemo_crate_dart.dylib'"),
+        "build.rs loader must search the _dart-suffixed cdylib: {build}"
+    );
+    assert!(
+        !build.contains("'libdemo_crate.dylib'"),
+        "build.rs loader must not search the source crate stem: {build}"
+    );
+}
+
 #[test]
 fn frb_yaml_is_emitted_with_module_name() {
     let api = ApiSurface {

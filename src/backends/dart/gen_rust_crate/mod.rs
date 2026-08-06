@@ -62,7 +62,16 @@ pub fn emit(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Ve
             &exclude_types,
             &stub_methods,
         ),
-        emit_build_rs(&rust_dir, &config.dart_pubspec_name(), &module_name, &source_crate_name),
+        // ~keep The stem is the emitted bridge crate's cdylib name (`<source>_dart`), not the
+        // source crate's. `frb_rewrite` reads the real stem out of the FRB source; this path has
+        // to derive it, and passing `source_crate_name` made build.rs's embedded loader search for
+        // a `libhtml_to_markdown_rs.dylib` that is never built.
+        emit_build_rs(
+            &rust_dir,
+            &config.dart_pubspec_name(),
+            &module_name,
+            &format!("{source_crate_name}_dart"),
+        ),
         emit_frb_yaml(&rust_dir, &module_name),
     ])
 }
