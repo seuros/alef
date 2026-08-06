@@ -127,6 +127,13 @@ fn test_gen_service_rs_produces_valid_rust() {
 
     assert!(rs.contains("#[unsafe(no_mangle)]"));
     assert!(rs.contains("extern \"C\""));
+    // Edition 2024: extern blocks must be `unsafe extern "C"`. Regression: the free() shim
+    // in the handler bridge was emitted as bare `extern "C" {`, breaking downstream
+    // compilation (spikard-ffi failed `extern blocks must be unsafe`).
+    assert!(
+        rs.contains("unsafe extern \"C\" {"),
+        "extern blocks (e.g. the free() shim) must be `unsafe extern \"C\"` for edition 2024"
+    );
     assert!(rs.contains("TestServiceOpaque"));
     assert!(rs.contains("test_service_new"));
     assert!(rs.contains("test_service_free"));

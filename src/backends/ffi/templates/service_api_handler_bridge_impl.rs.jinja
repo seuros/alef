@@ -39,7 +39,7 @@ impl {{ core_import }}::{{ trait_name }} for {{ bridge_name }} {
                 // and hands ownership to us; we release it with the C runtime's free.
                 // SAFETY: resp_ptr is null-checked above and was produced by the host callback.
                 unsafe {
-                    extern "C" {
+                    unsafe extern "C" {
                         fn free(ptr: *mut c_void);
                     }
                     free(resp_ptr as *mut c_void);
