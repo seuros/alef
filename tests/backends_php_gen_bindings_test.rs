@@ -352,6 +352,8 @@ mod params_formatting;
 mod public_api_stubs;
 #[path = "backends_php_gen_bindings/scaffold_pie_url.rs"]
 mod scaffold_pie_url;
+#[path = "backends_php_gen_bindings/streaming_method_order.rs"]
+mod streaming_method_order;
 #[path = "backends_php_gen_bindings/stubs_dtos.rs"]
 mod stubs_dtos;
 #[path = "backends_php_gen_bindings/tagged_enums.rs"]

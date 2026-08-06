@@ -111,7 +111,7 @@ pub(crate) fn gen_opaque_struct_methods_with_exclude(
     core_import: &str,
     adapter_bodies: &AdapterBodies,
     mutex_types: &AHashSet<String>,
-    streaming_method_keys: &AHashSet<String>,
+    streaming_method_keys: &[String],
     trait_bridges: &[crate::core::config::TraitBridgeConfig],
 ) -> String {
     let mut impl_builder = ImplBuilder::new(&typ.name);

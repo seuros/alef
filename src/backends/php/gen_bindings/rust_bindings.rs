@@ -254,11 +254,17 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
 
     let adapter_bodies = crate::adapters::build_adapter_bodies(config, Language::Php)?;
 
-    let streaming_method_keys: AHashSet<String> = config
+    // ~keep Source order, not a hash set: the PHP backend is the only one that *iterates* these keys
+    // to emit methods (`types::gen_opaque_struct_methods_with_exclude`), and an `AHashSet` is seeded
+    // per process, so the emitted `#[php_impl]` method order flipped between builds of an unchanged
+    // tree. A `Vec` also matches the config-declared order used by every other PHP emitter.
+    let mut seen_streaming_keys = AHashSet::new();
+    let streaming_method_keys: Vec<String> = config
         .adapters
         .iter()
         .filter(|a| matches!(a.pattern, crate::core::config::AdapterPattern::Streaming))
         .filter_map(|a| a.owner_type.as_deref().map(|owner| format!("{owner}.{}", a.name)))
+        .filter(|key| seen_streaming_keys.insert(key.clone()))
         .collect();
 
     for adapter in &config.adapters {

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **PHP streaming methods are emitted in adapter-declaration order.** The PHP backend collected the
+  streaming method keys into an `AHashSet` and then *iterated* it to emit the `#[php_impl]` methods —
+  the only place in the backend where a hash container drove output order. ahash seeds itself per
+  process, so regenerating an unchanged tree could swap two streaming methods in the generated Rust
+  binding, producing a spurious diff and an intermittently red `alef verify` freshness gate. The keys
+  are now an order-preserving, deduplicated `Vec` built from `config.adapters`, matching the
+  config-declared order every other PHP emitter already uses.
+  (`src/backends/php/gen_bindings/rust_bindings.rs`,
+  `src/backends/php/gen_bindings/types/structs.rs`)
+
 ## [0.55.6] - 2026-08-06
 
 ### Fixed
