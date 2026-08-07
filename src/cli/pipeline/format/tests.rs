@@ -42,6 +42,29 @@ fn required_formatters_add_cargo_sort_for_residual_languages() {
 }
 
 #[test]
+fn required_formatters_add_mix_only_when_elixir_is_generated() {
+    let tools: Vec<&str> = required_formatters(&[Language::Elixir])
+        .iter()
+        .map(|f| f.tool)
+        .collect();
+    assert!(tools.contains(&"mix"), "Elixir must require `mix` on PATH");
+
+    for language in [
+        Language::Python,
+        Language::Wasm,
+        Language::Ffi,
+        Language::Ruby,
+        Language::R,
+    ] {
+        let tools: Vec<&str> = required_formatters(&[language]).iter().map(|f| f.tool).collect();
+        assert!(
+            !tools.contains(&"mix"),
+            "{language} must not require `mix` (only Elixir generation does)"
+        );
+    }
+}
+
+#[test]
 fn formatter_error_includes_stdout_and_stderr() {
     let err = run_formatter(
         "sh",
@@ -126,10 +149,15 @@ fn ruby_residual_sorts_the_native_crate() {
 }
 
 #[test]
-fn elixir_residual_is_cargo_sort_n_only() {
+fn elixir_residual_is_cargo_sort_then_mix_deps_get_then_mix_format() {
     let config = make_config("sample-model");
     let steps = language_residuals(&config, Language::Elixir, Path::new("/repo"));
-    assert_eq!(steps.len(), 1, "Elixir residual must be cargo sort only");
+    assert_eq!(
+        steps.len(),
+        3,
+        "Elixir residual must be cargo sort, then mix deps.get, then mix format"
+    );
+
     assert_eq!(steps[0].command, "cargo");
     assert_eq!(steps[0].args[0], "sort");
     assert_eq!(steps[0].args[1], "-n");
@@ -139,6 +167,22 @@ fn elixir_residual_is_cargo_sort_n_only() {
         steps[0].args
     );
     assert_eq!(steps[0].work_dir, Path::new("/repo/packages/elixir"));
+
+    assert_eq!(steps[1].command, "mix");
+    assert_eq!(steps[1].args, vec!["deps.get"]);
+    assert_eq!(
+        steps[1].work_dir,
+        Path::new("/repo/packages/elixir"),
+        "mix deps.get must run in the elixir package dir so it resolves mix.exs"
+    );
+
+    assert_eq!(steps[2].command, "mix");
+    assert_eq!(steps[2].args, vec!["format"]);
+    assert_eq!(
+        steps[2].work_dir,
+        Path::new("/repo/packages/elixir"),
+        "mix format must run in the elixir package dir so it resolves mix.exs"
+    );
 }
 
 #[test]
@@ -194,6 +238,23 @@ fn cargo_sort_residuals_includes_workspace_wide_step() {
     assert!(
         has_workspace_wide,
         "cargo_sort_residuals must include a workspace-wide step"
+    );
+}
+
+#[test]
+fn cargo_sort_residuals_excludes_elixirs_mix_steps() {
+    // Elixir's own `language_residuals` entry now returns 3 steps (cargo sort,
+    // mix deps.get, mix format). `cargo_sort_residuals` must still report exactly
+    // 5 steps, all `cargo` -- the fixed set stays a pure cargo-sort aggregator and
+    // must not silently start running `mix` commands under a name/contract that
+    // says "cargo sort only" (this backs `run_cargo_sort_residuals`, used by the
+    // `alef fmt` command).
+    let config = make_config("sample-model");
+    let steps = cargo_sort_residuals(&config, Path::new("/repo"));
+    assert_eq!(steps.len(), 5, "mix steps must not leak into the cargo-sort aggregator");
+    assert!(
+        steps.iter().all(|s| s.command == "cargo"),
+        "cargo_sort_residuals must only ever contain `cargo` steps, got: {steps:?}"
     );
 }
 
@@ -404,6 +465,124 @@ fn run_cargo_fmt_is_noop_without_root_cargo_toml() {
         std::fs::read_to_string(&file_path).unwrap(),
         "fn noop( ) {}\n",
         "a directory with no root Cargo.toml is not a cargo workspace; must be left untouched"
+    );
+}
+
+/// Writes a minimal, dependency-free mix project at `elixir_dir` (`mix.exs`,
+/// `.formatter.exs`, and `lib/sample.ex` with `content`). Deliberately has no
+/// `deps` (no `import_deps`), so `mix deps.get`/`mix format` never touch the
+/// network -- these tests must stay hermetic per test-independence, unlike the
+/// scaffolded `.formatter.exs`'s real `import_deps: [:rustler]`.
+fn write_minimal_mix_project(elixir_dir: &Path, content: &str) {
+    std::fs::create_dir_all(elixir_dir.join("lib")).unwrap();
+    std::fs::write(
+        elixir_dir.join("mix.exs"),
+        "defmodule Sample.MixProject do\n  use Mix.Project\n\n  def project do\n    [app: :sample, \
+         version: \"0.1.0\", elixir: \"~> 1.14\"]\n  end\nend\n",
+    )
+    .unwrap();
+    std::fs::write(
+        elixir_dir.join(".formatter.exs"),
+        "[inputs: [\"mix.exs\", \"lib/**/*.{ex,exs}\"]]\n",
+    )
+    .unwrap();
+    std::fs::write(elixir_dir.join("lib/sample.ex"), content).unwrap();
+}
+
+#[test]
+fn run_elixir_mix_format_is_noop_without_packages_elixir() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dir.path();
+
+    run_elixir_mix_format(base);
+
+    assert!(
+        !base.join("packages/elixir").exists(),
+        "must not create a packages/elixir when there was none"
+    );
+}
+
+#[test]
+fn run_elixir_mix_format_reformats_the_generated_package_when_mix_installed() {
+    if !is_tool_available("mix") {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dir.path();
+    let elixir_dir = base.join("packages/elixir");
+    write_minimal_mix_project(&elixir_dir, "defmodule Sample do\n  def noop, do:    :ok\nend\n");
+
+    run_elixir_mix_format(base);
+
+    assert_eq!(
+        std::fs::read_to_string(elixir_dir.join("lib/sample.ex")).unwrap(),
+        "defmodule Sample do\n  def noop, do: :ok\nend\n",
+        "mix format must collapse the misaligned `do:` spacing"
+    );
+}
+
+#[test]
+fn poly_format_never_rewrites_elixir_source() {
+    if !is_tool_available("poly") || !is_tool_available("mix") {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dir.path();
+    let elixir_dir = base.join("packages/elixir");
+    let correctly_formatted = "defmodule Sample do\n  def clean(map) do\n    map\n    |> Enum.reject(fn {_k, v} -> v == nil end)\n    \
+         |> Map.new()\n  end\nend\n";
+    write_minimal_mix_project(&elixir_dir, correctly_formatted);
+    // A sibling non-Elixir file in the same package dir proves the exclude is
+    // scoped to `.ex`/`.exs`, not the whole `packages/elixir` directory (the
+    // native NIF crate's Rust sources still need poly's rustfmt engine).
+    std::fs::write(elixir_dir.join("unrelated.py"), "x=1").unwrap();
+
+    poly_format(&[base.to_path_buf()], base);
+
+    assert_eq!(
+        std::fs::read_to_string(elixir_dir.join("lib/sample.ex")).unwrap(),
+        correctly_formatted,
+        "poly must never rewrite .ex files -- mix format is their sole authority"
+    );
+    assert_eq!(
+        std::fs::read_to_string(elixir_dir.join("unrelated.py")).unwrap(),
+        "x = 1\n",
+        "excluding .ex/.exs must not stop poly from formatting other files in the same dir"
+    );
+}
+
+#[test]
+fn format_generated_partial_regen_leaves_mix_formatted_elixir_untouched_by_poly() {
+    if !is_tool_available("poly") || !is_tool_available("mix") {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dir.path();
+    let cfg: NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["elixir"]
+[[crates]]
+name = "sample-model"
+sources = ["src/lib.rs"]
+"#,
+    )
+    .expect("valid config");
+    let config = cfg.resolve().unwrap().remove(0);
+    let elixir_dir = base.join(config.package_dir(Language::Elixir));
+    let correctly_formatted = "defmodule Sample do\n  def clean(map) do\n    map\n    |> Enum.reject(fn {_k, v} -> \
+         v == nil end)\n    |> Map.new()\n  end\nend\n";
+    write_minimal_mix_project(&elixir_dir, correctly_formatted);
+
+    let files: Vec<(Language, Vec<GeneratedFile>)> = vec![(Language::Elixir, vec![])];
+    let only: HashSet<Language> = [Language::Elixir].into_iter().collect();
+    format_generated(&files, &config, base, Some(&only));
+
+    assert_eq!(
+        std::fs::read_to_string(elixir_dir.join("lib/sample.ex")).unwrap(),
+        correctly_formatted,
+        "the full format_generated pipeline (poly excluded + mix residual) must leave \
+         already-mix-formatted Elixir source unchanged"
     );
 }
 
