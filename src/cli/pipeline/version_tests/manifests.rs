@@ -533,3 +533,93 @@ fn sync_registry_package_versions_handles_go_and_bare_semver_langs() {
         "php composer constraint must be updated: {updated}"
     );
 }
+
+/// `sync_versions` must not stamp the release version onto a workspace
+/// member whose `[package].publish` is `false` — those are local-only
+/// compatibility shims kept only to satisfy a path dependency, and stamping
+/// them adds unreviewable churn to every release diff. A member with
+/// `publish = ["some-registry"]` is a real, restricted-registry publish and
+/// must still be updated, same as a member with no `publish` field at all.
+#[test]
+fn sync_versions_skips_publish_false_workspace_member_but_updates_others() {
+    use crate::core::config::NewAlefConfig;
+    let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let original_cwd = std::env::current_dir().expect("cwd");
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+
+    std::fs::write(
+        root.join("Cargo.toml"),
+        concat!(
+            "[workspace.package]\nversion = \"1.0.0\"\n\n",
+            "[workspace]\nresolver = \"2\"\n",
+            "members = [\"crates/pub-default\", \"crates/pub-registry\", \"crates/priv-shim\"]\n",
+        ),
+    )
+    .expect("write Cargo.toml");
+
+    for (dir, manifest) in [
+        (
+            "crates/pub-default",
+            "[package]\nname = \"pub-default\"\nversion = \"0.9.0\"\n",
+        ),
+        (
+            "crates/pub-registry",
+            "[package]\nname = \"pub-registry\"\nversion = \"0.9.0\"\npublish = [\"some-registry\"]\n",
+        ),
+        (
+            "crates/priv-shim",
+            "[package]\nname = \"priv-shim\"\nversion = \"0.9.0\"\npublish = false\n",
+        ),
+    ] {
+        let dir_path = root.join(dir);
+        std::fs::create_dir_all(&dir_path).expect("mkdir member dir");
+        std::fs::write(dir_path.join("Cargo.toml"), manifest).expect("write member Cargo.toml");
+    }
+
+    let alef_toml = format!(
+        "[workspace]\nlanguages = [\"node\"]\n[[crates]]\nname = \"mylib\"\nsources = []\nversion_from = \"{}\"\n",
+        root.join("Cargo.toml").display().to_string().replace('\\', "/")
+    );
+    let alef_toml_path = root.join("alef.toml");
+    std::fs::write(&alef_toml_path, &alef_toml).expect("write alef.toml");
+
+    let cfg: NewAlefConfig = toml::from_str(&alef_toml).expect("parse alef.toml");
+    let mut resolved = cfg.resolve().expect("resolve config");
+    let resolved_cfg = resolved.remove(0);
+
+    std::env::set_current_dir(root).expect("set_current_dir");
+    let sync_result = sync_versions(&resolved_cfg, &alef_toml_path, None, true, true, None);
+    let _ = std::env::set_current_dir(&original_cwd);
+    sync_result.expect("sync_versions ok");
+
+    let pub_default =
+        std::fs::read_to_string(root.join("crates/pub-default/Cargo.toml")).expect("read pub-default Cargo.toml");
+    assert!(
+        pub_default.contains("version = \"1.0.0\""),
+        "default-publishable member (no publish field) must be bumped:\n{pub_default}"
+    );
+
+    let pub_registry =
+        std::fs::read_to_string(root.join("crates/pub-registry/Cargo.toml")).expect("read pub-registry Cargo.toml");
+    assert!(
+        pub_registry.contains("version = \"1.0.0\""),
+        "publish = [\"registry\"] member must still be bumped:\n{pub_registry}"
+    );
+    assert!(
+        pub_registry.contains(r#"publish = ["some-registry"]"#),
+        "publish array itself must be preserved verbatim:\n{pub_registry}"
+    );
+
+    let priv_shim =
+        std::fs::read_to_string(root.join("crates/priv-shim/Cargo.toml")).expect("read priv-shim Cargo.toml");
+    assert!(
+        priv_shim.contains("version = \"0.9.0\""),
+        "publish = false member must be left at its original version:\n{priv_shim}"
+    );
+    assert!(
+        !priv_shim.contains("1.0.0"),
+        "publish = false member must not pick up the new release version:\n{priv_shim}"
+    );
+}

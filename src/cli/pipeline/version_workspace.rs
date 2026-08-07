@@ -15,9 +15,13 @@ pub(super) fn sync_workspace_cargo_toml_versions(
     };
 
     for path_str in &cargo_toml_paths {
-        if write_version_to_cargo_toml(path_str, version).is_ok() && !updated.contains(path_str) {
-            updated.push(path_str.clone());
-            *any_cargo_toml_modified = true;
+        if crate::publish::workspace::manifest_is_publishable(Path::new(path_str)) {
+            if write_version_to_cargo_toml(path_str, version).is_ok() && !updated.contains(path_str) {
+                updated.push(path_str.clone());
+                *any_cargo_toml_modified = true;
+            }
+        } else {
+            debug!("Skipping version stamp for {path_str}: publish = false (local-only compatibility shim)");
         }
 
         if workspace_member_names.is_empty() {

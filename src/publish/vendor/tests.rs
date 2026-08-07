@@ -172,6 +172,7 @@ fn members_with(names: &[&str]) -> WorkspaceMembers {
     WorkspaceMembers {
         names: names.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>(),
         versions: BTreeMap::new(),
+        ..Default::default()
     }
 }
 

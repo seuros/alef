@@ -111,6 +111,20 @@ pub(super) fn write_version_to_cargo_toml(cargo_toml_path: &str, new_version: &s
     Ok(())
 }
 
+/// Determine whether a `package.json`'s `"private": true` field marks it as
+/// a local-only package that must never be published — npm's equivalent of
+/// Cargo's `publish = false` for compatibility shims kept only to satisfy a
+/// workspace/path dependency.
+///
+/// Malformed or unparseable JSON is treated as **not** private (fail open),
+/// mirroring `manifest_is_publishable`'s fail-open behavior for Cargo.toml.
+pub(super) fn package_json_is_private(content: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(content)
+        .ok()
+        .and_then(|value| value.get("private").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false)
+}
+
 /// Convert a semver pre-release version to PEP 440 format for Python/PyPI.
 /// e.g., "0.1.0-rc.1" → "0.1.0rc1", "0.1.0-alpha.2" → "0.1.0a2", "0.1.0-beta.3" → "0.1.0b3"
 /// Non-pre-release versions are returned unchanged.

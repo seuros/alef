@@ -19,6 +19,12 @@ pub struct WorkspaceMembers {
     /// is resolved against the root `[workspace.package].version`. Members
     /// without a discoverable version are omitted.
     pub versions: BTreeMap<String, String>,
+    /// Subset of `names` whose `[package].publish` field permits publishing
+    /// to a registry — absent, `true`, or an array of registry names all
+    /// count as publishable. Members with `publish = false` (local-only
+    /// compatibility shims kept just to satisfy a path dependency) are
+    /// excluded here even though they remain in `names`.
+    pub publishable: BTreeSet<String>,
 }
 
 /// Glob the root `Cargo.toml` `[workspace]` `members` patterns and collect each
@@ -66,6 +72,10 @@ pub fn workspace_member_crates(workspace_root: &Path) -> Result<WorkspaceMembers
             };
             members.names.insert(name.to_string());
 
+            if package_is_publishable(package) {
+                members.publishable.insert(name.to_string());
+            }
+
             if let Some(version) = resolve_package_version(package, workspace_version.as_deref()) {
                 members.versions.insert(name.to_string(), version);
             }
@@ -109,6 +119,46 @@ fn resolve_package_version(package: &toml_edit::Item, workspace_version: Option<
     }
 
     None
+}
+
+/// Determine whether a `[package]` table's `publish` field permits
+/// publishing to a registry.
+///
+/// - Absent -> publishable (Cargo's own default is `true`)
+/// - `publish = true` -> publishable
+/// - `publish = ["some-registry"]` -> publishable (restricted to specific
+///   registries, but still a real, published crate — must NOT be treated
+///   as a local-only shim)
+/// - `publish = false` -> NOT publishable
+///
+/// Any other shape (which Cargo itself would reject) is treated as
+/// publishable — fail open, so an unexpected manifest shape does not
+/// silently swallow version-sync writes.
+fn package_is_publishable(package: &toml_edit::Item) -> bool {
+    match package.get("publish").and_then(|item| item.as_value()) {
+        None => true,
+        Some(value) => value.as_bool().unwrap_or(true),
+    }
+}
+
+/// Read a Cargo.toml at `cargo_toml_path` and report whether its
+/// `[package].publish` field permits publishing to a registry — see
+/// [`package_is_publishable`] for the exact rules.
+///
+/// Manifests that are missing, unparseable, or lack a `[package]` table are
+/// treated as publishable (fail open): a parse hiccup elsewhere must not
+/// silently suppress a version-sync write that previously happened.
+pub fn manifest_is_publishable(cargo_toml_path: &Path) -> bool {
+    let Ok(content) = std::fs::read_to_string(cargo_toml_path) else {
+        return true;
+    };
+    let Ok(doc) = content.parse::<DocumentMut>() else {
+        return true;
+    };
+    let Some(package) = doc.get("package") else {
+        return true;
+    };
+    package_is_publishable(package)
 }
 
 #[cfg(test)]
@@ -226,5 +276,125 @@ version = "1.0.0"
         assert!(members.names.contains("good"));
         assert!(!members.names.contains("broken"));
         assert_eq!(members.versions.get("good").map(String::as_str), Some("1.0.0"));
+    }
+
+    /// Build a temp workspace with three members exercising each `publish`
+    /// field shape: absent (default-publishable), `publish = ["registry"]`
+    /// (restricted-registry, still publishable), and `publish = false` (a
+    /// local-only compatibility shim that must never be published).
+    fn setup_publish_field_workspace(root: &Path) {
+        fs::write(
+            root.join("Cargo.toml"),
+            r#"
+[workspace]
+resolver = "2"
+members = ["crates/default-pub", "crates/registry-pub", "crates/private-shim"]
+
+[workspace.package]
+version = "2.0.0"
+edition = "2024"
+"#,
+        )
+        .unwrap();
+
+        for (dir, manifest) in [
+            (
+                "crates/default-pub",
+                "[package]\nname = \"default-pub\"\nversion = \"2.0.0\"\n",
+            ),
+            (
+                "crates/registry-pub",
+                "[package]\nname = \"registry-pub\"\nversion = \"2.0.0\"\npublish = [\"some-registry\"]\n",
+            ),
+            (
+                "crates/private-shim",
+                "[package]\nname = \"private-shim\"\nversion = \"2.0.0\"\npublish = false\n",
+            ),
+        ] {
+            let src = root.join(dir).join("src");
+            fs::create_dir_all(&src).unwrap();
+            fs::write(src.join("lib.rs"), "pub fn hello() {}").unwrap();
+            fs::write(root.join(dir).join("Cargo.toml"), manifest).unwrap();
+        }
+    }
+
+    #[test]
+    fn workspace_member_crates_reports_publishable_set_across_publish_shapes() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        setup_publish_field_workspace(root);
+
+        let members = workspace_member_crates(root).unwrap();
+
+        assert!(members.names.contains("default-pub"));
+        assert!(members.names.contains("registry-pub"));
+        assert!(members.names.contains("private-shim"));
+
+        assert!(
+            members.publishable.contains("default-pub"),
+            "absent publish field must default to publishable: {:?}",
+            members.publishable
+        );
+        assert!(
+            members.publishable.contains("registry-pub"),
+            "publish = [array] must be treated as publishable: {:?}",
+            members.publishable
+        );
+        assert!(
+            !members.publishable.contains("private-shim"),
+            "publish = false must be excluded from publishable: {:?}",
+            members.publishable
+        );
+    }
+
+    #[test]
+    fn manifest_is_publishable_absent_field_is_true() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("Cargo.toml");
+        fs::write(&path, "[package]\nname = \"sample\"\nversion = \"1.0.0\"\n").unwrap();
+        assert!(manifest_is_publishable(&path));
+    }
+
+    #[test]
+    fn manifest_is_publishable_true_is_true() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("Cargo.toml");
+        fs::write(
+            &path,
+            "[package]\nname = \"sample\"\nversion = \"1.0.0\"\npublish = true\n",
+        )
+        .unwrap();
+        assert!(manifest_is_publishable(&path));
+    }
+
+    #[test]
+    fn manifest_is_publishable_registry_array_is_true() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("Cargo.toml");
+        fs::write(
+            &path,
+            "[package]\nname = \"sample\"\nversion = \"1.0.0\"\npublish = [\"my-registry\"]\n",
+        )
+        .unwrap();
+        assert!(manifest_is_publishable(&path));
+    }
+
+    #[test]
+    fn manifest_is_publishable_false_is_false() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("Cargo.toml");
+        fs::write(
+            &path,
+            "[package]\nname = \"sample\"\nversion = \"1.0.0\"\npublish = false\n",
+        )
+        .unwrap();
+        assert!(!manifest_is_publishable(&path));
+    }
+
+    #[test]
+    fn manifest_is_publishable_missing_file_fails_open() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("does-not-exist.toml");
+        assert!(manifest_is_publishable(&path));
     }
 }

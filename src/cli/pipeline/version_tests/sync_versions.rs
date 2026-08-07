@@ -64,6 +64,58 @@ fn sync_versions_writes_root_and_node_crate_package_json() {
     );
 }
 
+/// A `crates/*-node/package.json` marked `"private": true` is npm's
+/// equivalent of Cargo's `publish = false` — a local-only compatibility
+/// package that must never be stamped with the release version.
+#[test]
+fn sync_versions_skips_private_crate_node_package_json() {
+    use crate::core::config::NewAlefConfig;
+    let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let original_cwd = std::env::current_dir().expect("cwd");
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[workspace.package]\nversion = \"1.0.0\"\n\n[workspace]\nresolver = \"2\"\nmembers = []\n",
+    )
+    .expect("write Cargo.toml");
+    std::fs::create_dir_all(root.join("crates/mylib-node")).expect("mkdir crates/mylib-node");
+    std::fs::write(
+        root.join("crates/mylib-node/package.json"),
+        "{\n  \"name\": \"mylib\",\n  \"version\": \"0.9.0\",\n  \"private\": true\n}\n",
+    )
+    .expect("write crates/mylib-node/package.json");
+
+    let alef_toml = format!(
+        "[workspace]\nlanguages = [\"node\"]\n[[crates]]\nname = \"mylib\"\nsources = []\nversion_from = \"{}\"\n",
+        root.join("Cargo.toml").display().to_string().replace('\\', "/")
+    );
+    let alef_toml_path = root.join("alef.toml");
+    std::fs::write(&alef_toml_path, &alef_toml).expect("write alef.toml");
+
+    let cfg: NewAlefConfig = toml::from_str(&alef_toml).expect("parse alef.toml");
+    let mut resolved = cfg.resolve().expect("resolve config");
+    let resolved_cfg = resolved.remove(0);
+
+    std::env::set_current_dir(root).expect("set_current_dir");
+    let sync_result = sync_versions(&resolved_cfg, &alef_toml_path, None, true, true, None);
+    let _ = std::env::set_current_dir(&original_cwd);
+    sync_result.expect("sync_versions ok");
+
+    let node_pkg = std::fs::read_to_string(root.join("crates/mylib-node/package.json"))
+        .expect("read crates/mylib-node/package.json");
+    assert!(
+        node_pkg.contains(r#""version": "0.9.0""#),
+        "private crates/*-node/package.json must be left at its original version, got:\n{node_pkg}"
+    );
+    assert!(
+        !node_pkg.contains("1.0.0"),
+        "private crates/*-node/package.json must not pick up the new release version, got:\n{node_pkg}"
+    );
+}
+
 /// `sync_versions` must rewrite `optionalDependencies` pins to sibling NAPI
 /// platform packages and the pre-staged platform manifests under
 /// `crates/*-node/npm/<platform>/package.json`. Leaving these stale makes

@@ -5,7 +5,8 @@ use tracing::{debug, info, warn};
 
 use super::helpers::{run_command, run_optional};
 use super::version_core::{
-    bump_version, patch_workspace_dep_versions, read_version, to_pep440, write_version_to_cargo_toml,
+    bump_version, package_json_is_private, patch_workspace_dep_versions, read_version, to_pep440,
+    write_version_to_cargo_toml,
 };
 use super::version_python::sync_python_versions;
 use super::version_regen::{regenerate_readmes, regenerate_scaffold_after_sync, regenerate_test_apps_after_sync};
@@ -72,6 +73,9 @@ pub fn sync_versions(
     let node_paths: Vec<String> = vec![format!("{node_pkg_dir}/package.json")];
     for node_path in node_paths {
         if let Ok(content) = std::fs::read_to_string(&node_path) {
+            if package_json_is_private(&content) {
+                continue;
+            }
             if let Some(new_content) = replace_version_pattern(&content, r#""version": "[^"]*""#, &version) {
                 std::fs::write(&node_path, &new_content).with_context(|| format!("failed to write {node_path}"))?;
                 updated.push(node_path);
@@ -234,6 +238,9 @@ pub fn sync_versions(
 
     for wasm_pkg in glob::glob("crates/*-wasm/package.json").into_iter().flatten().flatten() {
         if let Ok(content) = std::fs::read_to_string(&wasm_pkg) {
+            if package_json_is_private(&content) {
+                continue;
+            }
             if let Some(new_content) = replace_version_pattern(&content, r#""version":\s*"[^"]*""#, &version) {
                 std::fs::write(&wasm_pkg, &new_content)?;
                 updated.push(wasm_pkg.to_string_lossy().to_string());
@@ -243,6 +250,9 @@ pub fn sync_versions(
 
     for node_pkg in glob::glob("crates/*-node/package.json").into_iter().flatten().flatten() {
         if let Ok(content) = std::fs::read_to_string(&node_pkg) {
+            if package_json_is_private(&content) {
+                continue;
+            }
             let mut working = content.clone();
             if let Some(rewritten) = replace_version_pattern(&working, r#""version":\s*"[^"]*""#, &version) {
                 working = rewritten;
@@ -270,6 +280,9 @@ pub fn sync_versions(
         .flatten()
     {
         if let Ok(content) = std::fs::read_to_string(&platform_pkg) {
+            if package_json_is_private(&content) {
+                continue;
+            }
             if let Some(new_content) = replace_version_pattern(&content, r#""version":\s*"[^"]*""#, &version) {
                 std::fs::write(&platform_pkg, &new_content)?;
                 updated.push(platform_pkg.to_string_lossy().to_string());
