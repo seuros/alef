@@ -50,6 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `excluded_variants` handling — now fall through to the same verbatim behavior as every other
   backend. (`src/backends/java/gen_bindings/types/enums.rs`)
 
+- **NAPI tagged-enum discriminator wire names now match the declared `#[serde(tag = ...)]`
+  contract.** (#218, @thisislvca)
+
 - **NAPI tagged-enum sanitized fields no longer drop data or emit non-compiling conversions.**
   #218 (@thisislvca) fixed the tagged-enum discriminator wire names but its sanitized-field
   handling had follow-on gaps: an unreachable `optional` branch inside the `sanitized` arm meant
@@ -113,7 +116,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.55.4] - 2026-08-06
 
+`v0.55.2` and `v0.55.3` were tagged and pushed but never published to crates.io — the
+`Publish` workflow only triggers on `release: types: [published]`, and no GitHub release
+was created for either tag (see the `publish-flow` fix below). Their fixes are folded into
+this section, in the order they actually landed, since 0.55.4 is the first version anyone
+could actually install.
+
 ### Fixed
+
+- **`nativeFree<Owner>` calls now pascal-case an acronym owner in the generated Kotlin JNI
+  client's `close()`.** `close()` built the free-function name from the class name verbatim
+  (`nativeFreeGraphQLRouteConfig`), while every other JNI emission site pascal-cases the
+  owner via `to_pascal_case` (`nativeFreeGraphQlRouteConfig`) — so `close()` on any client
+  type whose name contained an acronym called a native function that was never registered.
+  `close()` now derives `free_name` from `to_pascal_case(class_name)`, matching the bridge's
+  `external fun` declaration and the Rust JNI export.
+  (`src/backends/kotlin/gen_bindings/jni_emitter/client_class.rs`)
+
+- **Generated FFI free functions compile under edition 2024.** `free_function_header.jinja`
+  emitted `pub extern "C" fn ...` for the generated `_free` shims; edition 2024 requires an
+  `extern "C"` function containing raw-pointer or FFI-unsafe operations to be written as
+  `unsafe extern "C" fn`, so every generated FFI binding with a free shim failed to compile.
+  The template now emits `pub unsafe extern "C" fn`.
+  (`src/backends/ffi/templates/free_function_header.jinja`)
 
 - **The generated `poly.toml` is now poly-canonical when it is written.** `toml_array` hard-coded a
   4-space indent while its doc-comment claimed to emit "taplo's canonical multi-line form" — taplo
