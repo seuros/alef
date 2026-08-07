@@ -1,4 +1,6 @@
-use super::attributes::{extract_alef_since, extract_deprecation, has_derive, has_derive_path};
+use super::attributes::{
+    extract_alef_since, extract_deprecation, extract_serde_rename_all, has_derive, has_derive_path,
+};
 use super::normalize_rustdoc;
 
 // --- normalize_rustdoc ---
@@ -192,6 +194,50 @@ fn test_has_derive_path_empty_attrs() {
     let attrs: Vec<syn::Attribute> = vec![];
     assert!(!has_derive(&attrs, "Debug"));
     assert!(!has_derive_path(&attrs, &["Debug"]));
+}
+
+// --- extract_serde_rename_all ---
+
+#[test]
+fn test_extract_serde_rename_all_bare_attribute() {
+    let attrs = parse_attrs(r#"#[serde(rename_all = "snake_case")]"#);
+    assert_eq!(extract_serde_rename_all(&attrs).as_deref(), Some("snake_case"));
+}
+
+#[test]
+fn test_extract_serde_rename_all_cfg_attr_simple_condition() {
+    let attrs = parse_attrs(r#"#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]"#);
+    assert_eq!(extract_serde_rename_all(&attrs).as_deref(), Some("snake_case"));
+}
+
+#[test]
+fn test_extract_serde_rename_all_cfg_attr_any_condition() {
+    // ~keep: the shape a downstream consumer hit in the wild — `rename_all` lives behind an
+    // `any(...)` gate, which the naive `parse_nested_meta` walk used to fail to skip, silently
+    // dropping the rename_all and emitting verbatim PascalCase wire names.
+    let attrs =
+        parse_attrs(r#"#[cfg_attr(any(feature = "serde", feature = "metadata"), serde(rename_all = "snake_case"))]"#);
+    assert_eq!(extract_serde_rename_all(&attrs).as_deref(), Some("snake_case"));
+}
+
+#[test]
+fn test_extract_serde_rename_all_nested_cfg_attr() {
+    let attrs = parse_attrs(r#"#[cfg_attr(feature = "a", cfg_attr(feature = "b", serde(rename_all = "camelCase")))]"#);
+    assert_eq!(extract_serde_rename_all(&attrs).as_deref(), Some("camelCase"));
+}
+
+#[test]
+fn test_extract_serde_rename_all_cfg_attr_multiple_inner_attrs() {
+    let attrs = parse_attrs(
+        r#"#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(rename_all = "kebab-case"))]"#,
+    );
+    assert_eq!(extract_serde_rename_all(&attrs).as_deref(), Some("kebab-case"));
+}
+
+#[test]
+fn test_extract_serde_rename_all_absent_returns_none() {
+    let attrs = parse_attrs(r#"#[derive(Debug, Clone)]"#);
+    assert_eq!(extract_serde_rename_all(&attrs), None);
 }
 
 use super::detect_core_wrapper;

@@ -43,8 +43,8 @@ fn is_php_prop_scalar_with_enums(ty: &TypeRef, enum_names: &AHashSet<String>) ->
         }
         TypeRef::Named(n) if enum_names.contains(n) => true,
         // `HashMap<K, V, H>` implements `IntoZval`/`FromZval` for any `K: Into<ArrayKey>` +
-        // `V: IntoZval`/`FromZval` (ext-php-rs 0.15 `hash_map.rs`). All of xberg's maps are
-        // String-keyed, so recurse on the value type; a Map of Json or a non-enum struct is
+        // `V: IntoZval`/`FromZval` (ext-php-rs 0.15 `hash_map.rs`). Alef only models String-keyed
+        // maps, so recurse on the value type; a Map of Json or a non-enum struct is
         // still not representable and falls through to the `false` arm below.
         TypeRef::Map(k, v) => matches!(k.as_ref(), TypeRef::String) && is_php_prop_scalar_with_enums(v, enum_names),
         TypeRef::Named(_) | TypeRef::Json | TypeRef::Bytes | TypeRef::Unit => false,
@@ -303,7 +303,7 @@ pub(crate) fn gen_php_struct(
             // `HashMap<String, SomeStruct>`) — String-keyed maps of scalars are handled above.
             // This is a real, permanent gap (PHP can read the field via `get_<name>()` but can
             // never set it — there is no `#[php(setter)]` for non-prop fields), so surface it
-            // instead of silently dropping the field from the constructor and property list.
+            // instead of silently dropping the field from the constructor and property list. ~keep
             if matches!(&field.ty, TypeRef::Map(_, _)) {
                 tracing::warn!(
                     "php backend: {}.{} is a Map whose value type can't cross the ext-php-rs \

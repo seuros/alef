@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.55.8] - 2026-08-07
+
+### Fixed
+
+- **`serde` attributes hidden behind `cfg_attr` are honoured again, so enum wire names under a
+  conditional `rename_all` are correct.** `extract_serde_rename_all` unwrapped `cfg_attr` with
+  `Attribute::parse_nested_meta`, which silently gave up when the condition was anything more
+  complex than a bare ident or `feature = "x"` — so a `#[cfg_attr(any(feature = "serde", feature =
+  "metadata"), serde(rename_all = "snake_case"))]` enum was extracted as having no `rename_all` at
+  all. That was harmless until 0.55.7 changed the Java backend's no-`rename_all` fallback from
+  lowercasing the variant to emitting it verbatim: the two agree for single-word variants
+  (`Auto` → `auto`), so the missing attribute only became visible once the fallback changed, at
+  which point the generated Java sent `Auto` to a core that deserialises `auto` and every call
+  failed with ``unknown variant `Auto` ``. The condition is now parsed structurally as a
+  `syn::Meta` (handling `any`/`all`/`not` and nesting), nested `cfg_attr` is unwrapped
+  recursively, and the bare and `cfg_attr` paths share one walk. The predicate itself is still
+  never evaluated — alef cannot know which features a downstream build enables, so every inner
+  attribute is treated as if it applied unconditionally.
+  (`src/extract/extractor/helpers/attributes.rs`)
+
 ## [0.55.7] - 2026-08-07
 
 ### Added

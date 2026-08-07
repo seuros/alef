@@ -99,6 +99,52 @@ fn test_has_serde_only_serialize_not_set() {
 }
 
 #[test]
+fn test_enum_rename_all_under_cfg_attr_any_is_honoured() {
+    // Regression for the html-to-markdown `TierStrategy` bug: `rename_all` living inside
+    // `#[cfg_attr(any(...), serde(rename_all = "..."))]` used to be invisible to Alef's
+    // extractor, so the enum's `serde_rename_all` came back `None` and the Java backend fell
+    // back to emitting the bare PascalCase variant name (`Auto`) instead of the wire name the
+    // Rust core actually deserializes (`auto`).
+    let source = r#"
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+        #[cfg_attr(any(feature = "serde", feature = "metadata"), derive(serde::Serialize, serde::Deserialize))]
+        #[cfg_attr(any(feature = "serde", feature = "metadata"), serde(rename_all = "snake_case"))]
+        pub enum TierStrategy {
+            #[default]
+            Auto,
+            Tier2,
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    assert_eq!(surface.enums.len(), 1);
+    let enum_def = &surface.enums[0];
+    assert!(
+        enum_def.has_serde,
+        "cfg_attr-gated derive(Serialize, Deserialize) must set has_serde"
+    );
+    assert_eq!(
+        enum_def.serde_rename_all.as_deref(),
+        Some("snake_case"),
+        "rename_all nested inside cfg_attr(any(...), ...) must be extracted"
+    );
+
+    let auto_variant = enum_def
+        .variants
+        .iter()
+        .find(|v| v.name == "Auto")
+        .expect("Auto variant present");
+    let wire_name = crate::backends::java::gen_bindings::helpers::java_apply_rename_all(
+        &auto_variant.name,
+        enum_def.serde_rename_all.as_deref(),
+    );
+    assert_eq!(
+        wire_name, "auto",
+        "Java wire name must honour the cfg_attr-gated rename_all"
+    );
+}
+
+#[test]
 fn test_extract_function_since_annotation_is_populated() {
     let source = r#"
         #[alef(since = "1.0.0")]

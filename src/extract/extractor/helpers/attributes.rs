@@ -69,32 +69,58 @@ fn cfg_attr_has_derive_path(attr: &syn::Attribute, segments: &[&str]) -> bool {
 /// idents, `feature = "x"`, `any(...)`, `all(...)`, `not(...)`, and combinations). A comma
 /// is then consumed, and the remaining attribute metas are iterated.
 fn cfg_attr_walk_derives(attr: &syn::Attribute, mut predicate: impl FnMut(&syn::Path) -> bool) -> bool {
-    let meta_list = match attr.meta.require_list() {
-        Ok(list) => list,
-        Err(_) => return false,
-    };
-
-    use syn::Token;
-    use syn::parse::ParseStream;
-
     let mut found = false;
-    let parse_fn = |input: ParseStream<'_>| -> syn::Result<()> {
-        let _condition: syn::Meta = input.parse()?;
-
-        let _: Token![,] = input.parse()?;
-
-        while !input.is_empty() {
-            let attr_meta: syn::Meta = input.parse()?;
-            if let syn::Meta::List(list) = &attr_meta {
-                if list.path.is_ident("derive") {
-                    let inner_paths =
-                        list.parse_args_with(syn::punctuated::Punctuated::<syn::Path, Token![,]>::parse_terminated)?;
+    let mut visit = |meta: &syn::Meta| {
+        if let syn::Meta::List(list) = meta {
+            if list.path.is_ident("derive") {
+                if let Ok(inner_paths) =
+                    list.parse_args_with(syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated)
+                {
                     for path in &inner_paths {
                         if predicate(path) {
                             found = true;
                         }
                     }
                 }
+            }
+        }
+    };
+    cfg_attr_walk_inner_metas(attr, &mut visit);
+    found
+}
+
+/// Structurally walk a `#[cfg_attr(condition, inner1, inner2, ...)]` attribute, skip the
+/// condition, and invoke `visit` with each inner attribute meta found after it.
+///
+/// The condition is skipped by parsing it as a `syn::Meta` (correctly handling bare idents,
+/// `feature = "x"`, and nested `any(...)`/`all(...)`/`not(...)` combinations) rather than by
+/// string-matching — Alef never evaluates the predicate itself, since it cannot know which
+/// features a downstream build enables; every inner attribute is treated as if it applied
+/// unconditionally. `cfg_attr` may nest (`cfg_attr(a, cfg_attr(b, serde(...)))`); nested
+/// `cfg_attr` lists are unwrapped recursively rather than surfaced to `visit`, so callers
+/// always see the "real" inner attributes regardless of nesting depth.
+fn cfg_attr_walk_inner_metas(attr: &syn::Attribute, visit: &mut impl FnMut(&syn::Meta)) {
+    let Ok(meta_list) = attr.meta.require_list() else {
+        return;
+    };
+    cfg_attr_meta_list_walk_inner_metas(meta_list, visit);
+}
+
+fn cfg_attr_meta_list_walk_inner_metas(meta_list: &syn::MetaList, visit: &mut impl FnMut(&syn::Meta)) {
+    use syn::Token;
+    use syn::parse::ParseStream;
+
+    let parse_fn = |input: ParseStream<'_>| -> syn::Result<()> {
+        let _condition: syn::Meta = input.parse()?;
+        let _: Token![,] = input.parse()?;
+
+        while !input.is_empty() {
+            let inner_meta: syn::Meta = input.parse()?;
+            match &inner_meta {
+                syn::Meta::List(inner_list) if inner_list.path.is_ident("cfg_attr") => {
+                    cfg_attr_meta_list_walk_inner_metas(inner_list, visit);
+                }
+                _ => visit(&inner_meta),
             }
             if input.peek(Token![,]) {
                 let _: Token![,] = input.parse()?;
@@ -104,7 +130,6 @@ fn cfg_attr_walk_derives(attr: &syn::Attribute, mut predicate: impl FnMut(&syn::
     };
 
     let _ = syn::parse::Parser::parse2(parse_fn, meta_list.tokens.clone());
-    found
 }
 
 /// Extract the condition string from a `#[cfg(...)]` attribute, if present.
@@ -173,64 +198,62 @@ fn cfg_meta_gates_on_test(meta: &syn::Meta) -> bool {
 }
 
 /// Extract `rename_all` value from `#[serde(rename_all = "...")]` or
-/// `#[cfg_attr(..., serde(rename_all = "..."))]` attributes.
-///
-/// Uses `attr.parse_nested_meta` to walk the attribute tree without
-/// stringifying the token stream — the previous implementation called
-/// `format!("{}", list.tokens).to_string()` on every attribute, which
-/// allocates the full attribute representation per type/enum and then does
-/// O(n) string scanning. This implementation only allocates the matched
-/// literal value (if any).
+/// `#[cfg_attr(..., serde(rename_all = "..."))]` attributes (`cfg_attr` condition can be
+/// arbitrarily complex, e.g. `any(feature = "a", feature = "b")`, and `cfg_attr` may nest).
 pub(crate) fn extract_serde_rename_all(attrs: &[syn::Attribute]) -> Option<String> {
-    fn extract_from_serde(attr: &syn::Attribute) -> Option<String> {
-        let mut found: Option<String> = None;
-        let _ = attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("rename_all") {
-                if let Ok(value) = meta.value() {
-                    if let Ok(s) = value.parse::<syn::LitStr>() {
-                        found = Some(s.value());
-                    }
-                }
-            } else if let Ok(value) = meta.value() {
-                let _: syn::Expr = value.parse()?;
-            }
-            Ok(())
-        });
-        found
-    }
+    let mut found: Option<String> = None;
+    for_each_serde_meta_list(attrs, |list| {
+        if found.is_none() {
+            found = serde_meta_list_lit_str(list, "rename_all");
+        }
+    });
+    found
+}
 
+/// Invoke `visit` with the `syn::MetaList` of every `#[serde(...)]` attribute in `attrs`,
+/// including ones nested inside `#[cfg_attr(...)]` (recursively, and regardless of how
+/// complex the gating condition is — Alef never evaluates `cfg`/`cfg_attr` predicates, so a
+/// gated `serde(...)` attribute is treated the same as a bare one).
+fn for_each_serde_meta_list(attrs: &[syn::Attribute], mut visit: impl FnMut(&syn::MetaList)) {
     for attr in attrs {
         if attr.path().is_ident("serde") {
-            if let Some(v) = extract_from_serde(attr) {
-                return Some(v);
+            if let Ok(list) = attr.meta.require_list() {
+                visit(list);
             }
         } else if attr.path().is_ident("cfg_attr") {
-            let mut inner: Option<String> = None;
-            let _ = attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("serde") {
-                    let _ = meta.parse_nested_meta(|inner_meta| {
-                        if inner_meta.path.is_ident("rename_all") {
-                            if let Ok(value) = inner_meta.value() {
-                                if let Ok(s) = value.parse::<syn::LitStr>() {
-                                    inner = Some(s.value());
-                                }
-                            }
-                        } else if let Ok(value) = inner_meta.value() {
-                            let _: syn::Expr = value.parse()?;
-                        }
-                        Ok(())
-                    });
-                } else if let Ok(value) = meta.value() {
-                    let _: syn::Expr = value.parse()?;
+            cfg_attr_walk_inner_metas(attr, &mut |meta| {
+                if let syn::Meta::List(list) = meta {
+                    if list.path.is_ident("serde") {
+                        visit(list);
+                    }
                 }
-                Ok(())
             });
-            if let Some(v) = inner {
-                return Some(v);
-            }
         }
     }
-    None
+}
+
+/// Extract a `key = "value"` string literal from a `serde(...)` meta list (e.g. `rename_all`).
+///
+/// Uses `MetaList::parse_nested_meta` to walk the attribute tree without stringifying the
+/// token stream — this only allocates the matched literal value (if any), not the full
+/// attribute representation.
+fn serde_meta_list_lit_str(list: &syn::MetaList, key: &str) -> Option<String> {
+    let mut found: Option<String> = None;
+    let _ = list.parse_nested_meta(|meta| {
+        if meta.path.is_ident(key) {
+            if let Ok(value) = meta.value() {
+                if let Ok(s) = value.parse::<syn::LitStr>() {
+                    found = Some(s.value());
+                }
+            }
+        } else if let Ok(value) = meta.value() {
+            let _: syn::Expr = value.parse()?;
+        } else {
+            let _ = meta.parse_nested_meta(|_| Ok(()));
+        }
+        Ok(())
+    });
+    found
 }
 
 /// Extract the source annotation that excludes a top-level item from generated binding APIs.
