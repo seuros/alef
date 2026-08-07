@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.57.0] - 2026-08-07
+
+### Changed
+
+- **MSRV raised to 1.88.** The declared 1.85 floor was never real: `zip` 8.6 requires 1.88 and
+  `criterion` 0.8.2 requires 1.86. Because `cargo upgrade` is MSRV-aware, the false floor made it
+  propose *downgrades* (`libloading` 0.9→0.8, `zip` 8→7, `criterion` 0.8→0.7) instead of upgrades,
+  so dependency maintenance had to route around it with `--ignore-rust-version`. Raising the floor
+  also unlocks clippy's let-chain `collapsible_if` suggestions, applied across 868 sites in 250
+  files. Consumers building alef from source now need Rust 1.88 or newer. (`Cargo.toml`)
+
+### Fixed
+
+- **Generated Elixir e2e/test_apps projects are now formatted by `mix format`.** `.ex`/`.exs` are
+  excluded from poly's pass so `mix format` can own them, but `mix format` only ever ran in
+  `packages/elixir` — the generated e2e and test_apps suites were therefore formatted by nothing at
+  all and shipped exactly as the emitter wrote them, with calls left unwrapped well past the line
+  limit. A `.formatter.exs` is now emitted next to the generated `mix.exs` (a bare `mix format` has
+  no `inputs:` without one, so it refuses to run), and `mix format` runs over the directory as an
+  Elixir residual alongside the existing `go mod tidy` one. `line_length` matches the binding
+  package's `.formatter.exs` so every generated Elixir tree wraps identically; `import_deps` is
+  deliberately omitted so formatting never depends on a fetched `deps/`.
+  (`src/e2e/codegen/elixir.rs`, `src/e2e/format.rs`)
+
+- Two redundant derefs in the PHP type-stub backend that were failing `poly lint` on main.
+  (`src/backends/php/gen_bindings/type_stubs.rs`)
+
 ## [0.56.0] - 2026-08-07
 
 ### Changed
