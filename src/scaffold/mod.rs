@@ -192,10 +192,10 @@ pub(crate) fn render_core_dep_with_overrides(
         format!("any({})", cfgs.join(", "))
     };
 
-    let mut blocks = format!(
-        "[target.'cfg(not({combined_cfg}))'.dependencies]\n{}\n",
-        render_core_dep(crate_name, rel_path, default_features, version)
-    );
+    let mut entries: Vec<(String, String)> = vec![(
+        format!("not({combined_cfg})"),
+        render_core_dep(crate_name, rel_path, default_features, version),
+    )];
     for override_ in overrides {
         let feats = if override_.features.is_empty() {
             String::new()
@@ -203,13 +203,40 @@ pub(crate) fn render_core_dep_with_overrides(
             let quoted: Vec<String> = override_.features.iter().map(|f| format!("\"{f}\"")).collect();
             format!(", features = [{}]", quoted.join(", "))
         };
-        blocks.push_str(&format!(
-            "\n[target.'cfg({})'.dependencies]\n{}\n",
-            override_.cfg,
-            render_core_dep(crate_name, rel_path, &feats, version)
+        entries.push((
+            override_.cfg.clone(),
+            render_core_dep(crate_name, rel_path, &feats, version),
         ));
     }
-    (String::new(), blocks)
+    (String::new(), join_sorted_target_dep_blocks(entries))
+}
+
+/// Assemble a sequence of `[target.'cfg(...)'.dependencies]` blocks in the
+/// table order `cargo-sort` expects: alphabetically by the raw cfg predicate
+/// string, using plain byte-wise (case-sensitive) comparison — the same
+/// ordering `Vec<String>::sort()` / `str::cmp` produce.
+///
+/// `entries` is `(cfg_predicate, dependency_line)` pairs — one per target
+/// block, including the default `not(...)` branch alongside every override.
+/// Emitting the default branch unconditionally first (as earlier revisions of
+/// this code did) is only coincidentally correct: `not(...)` sorts after
+/// `all(...)` but before `target_os = "..."`, so a config with an `all(...)`
+/// override (e.g. the macOS-Intel target) needs its block to precede the
+/// default branch. Sorting all entries together — rather than hard-coding the
+/// default first — is what keeps `cargo sort --check` passing regardless of
+/// which cfg predicates a consumer configures.
+///
+/// Returns an empty string when `entries` is empty. Each block ends with a
+/// trailing newline and blocks are separated by a single blank line, matching
+/// the spacing callers already emit between `[dependencies]` and the first
+/// target block.
+pub(crate) fn join_sorted_target_dep_blocks(mut entries: Vec<(String, String)>) -> String {
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries
+        .into_iter()
+        .map(|(cfg, dep_line)| format!("[target.'cfg({cfg})'.dependencies]\n{dep_line}\n"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 ///

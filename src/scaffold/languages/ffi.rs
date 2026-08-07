@@ -43,10 +43,10 @@ fn render_core_dep(
         format!("any({})", cfgs.join(", "))
     };
 
-    let mut blocks = String::new();
-    blocks.push_str(&format!(
-        "[target.'cfg(not({combined_cfg}))'.dependencies]\n{crate_name} = {{ path = \"../{core_crate_dir}\", version = \"{version}\"{default_features} }}\n"
-    ));
+    let mut entries: Vec<(String, String)> = vec![(
+        format!("not({combined_cfg})"),
+        format!("{crate_name} = {{ path = \"../{core_crate_dir}\", version = \"{version}\"{default_features} }}"),
+    )];
     for override_ in overrides {
         let features_str = if override_.features.is_empty() {
             String::new()
@@ -54,12 +54,15 @@ fn render_core_dep(
             let quoted: Vec<String> = override_.features.iter().map(|f| format!("\"{f}\"")).collect();
             format!(", features = [{}]", quoted.join(", "))
         };
-        blocks.push_str(&format!(
-            "\n[target.'cfg({})'.dependencies]\n{crate_name} = {{ path = \"../{core_crate_dir}\", version = \"{version}\"{features_str} }}\n",
-            override_.cfg
+        entries.push((
+            override_.cfg.clone(),
+            format!("{crate_name} = {{ path = \"../{core_crate_dir}\", version = \"{version}\"{features_str} }}"),
         ));
     }
-    (String::new(), blocks)
+    // See `crate::scaffold::join_sorted_target_dep_blocks`: cargo-sort orders
+    // `[target.'cfg(...)'.dependencies]` tables alphabetically by the raw cfg
+    // predicate string, so the default `not(...)` branch is not always first.
+    (String::new(), crate::scaffold::join_sorted_target_dep_blocks(entries))
 }
 
 pub(crate) fn scaffold_ffi(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {

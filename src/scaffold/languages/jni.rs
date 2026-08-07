@@ -32,11 +32,10 @@ fn render_jni_target_blocks(
         format!("any({})", cfgs.join(", "))
     };
 
-    let mut blocks = String::new();
-    blocks.push_str(&format!(
-        "\n[target.'cfg(not({combined_cfg}))'.dependencies]\n{}\n",
-        crate::scaffold::render_core_dep(crate_name, rel_path, default_features, version)
-    ));
+    let mut entries: Vec<(String, String)> = vec![(
+        format!("not({combined_cfg})"),
+        crate::scaffold::render_core_dep(crate_name, rel_path, default_features, version),
+    )];
     for override_ in overrides {
         let features_str = if override_.features.is_empty() {
             String::new()
@@ -44,13 +43,16 @@ fn render_jni_target_blocks(
             let quoted: Vec<String> = override_.features.iter().map(|f| format!("\"{f}\"")).collect();
             format!(", features = [{}]", quoted.join(", "))
         };
-        blocks.push_str(&format!(
-            "\n[target.'cfg({})'.dependencies]\n{}\n",
-            override_.cfg,
-            crate::scaffold::render_core_dep(crate_name, rel_path, &features_str, version)
+        entries.push((
+            override_.cfg.clone(),
+            crate::scaffold::render_core_dep(crate_name, rel_path, &features_str, version),
         ));
     }
-    blocks
+    // See `crate::scaffold::join_sorted_target_dep_blocks`: cargo-sort orders
+    // `[target.'cfg(...)'.dependencies]` tables alphabetically by the raw cfg
+    // predicate string, so the default `not(...)` branch is not always first.
+    let joined = crate::scaffold::join_sorted_target_dep_blocks(entries);
+    format!("\n{joined}")
 }
 
 /// Scaffold the `<crate>-jni/Cargo.toml` for a JNI shim crate.
@@ -509,6 +511,77 @@ features = ["windows-target"]
         assert_eq!(
             core_dep_lines, 4,
             "expected one core-dep line per target branch (default + 3 overrides); got {core_dep_lines}:\n{cargo_toml}"
+        );
+        toml::from_str::<toml::Value>(cargo_toml).expect("generated JNI Cargo.toml must be valid TOML");
+    }
+
+    /// Regression test: `cargo-sort` (and hence `poly lint`) orders
+    /// `[target.'cfg(...)'.dependencies]` tables alphabetically by the raw cfg
+    /// predicate string (plain byte-wise comparison), NOT with the default
+    /// `cfg(not(any(...)))` branch always first. An `all(...)` override (e.g.
+    /// the macOS-Intel target xberg actually configures) sorts *before*
+    /// `not(...)` — `'a'` < `'n'` — so emitting the default branch
+    /// unconditionally first produces an unsorted manifest that
+    /// `cargo sort --check` rejects. This reproduces xberg's real
+    /// `crates/xberg-jni/Cargo.toml` override set (android/ios/windows plus a
+    /// macOS-Intel `all(...)` override) and asserts the `all(...)` block comes
+    /// before the `not(...)` default block in the emitted text.
+    #[test]
+    fn scaffold_jni_target_dep_overrides_sort_all_before_not() {
+        let config = resolved_one(
+            r#"
+[workspace]
+languages = ["kotlin_android", "jni"]
+
+[[crates]]
+name = "demo-doc"
+sources = ["src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.example.demo"
+namespace = "dev.example.demo"
+features = ["full"]
+
+[[crates.jni.target_dep_overrides]]
+cfg = 'target_os = "android"'
+features = ["android-target"]
+
+[[crates.jni.target_dep_overrides]]
+cfg = 'target_os = "ios"'
+features = ["android-target"]
+
+[[crates.jni.target_dep_overrides]]
+cfg = 'target_os = "windows"'
+features = ["windows-target"]
+
+[[crates.jni.target_dep_overrides]]
+cfg = 'all(target_os = "macos", target_arch = "x86_64")'
+features = ["macos-intel-target"]
+"#,
+        );
+        let api = ApiSurface::default();
+        let files = scaffold_jni(&api, &config).unwrap();
+        let cargo_toml = &files[0].content;
+
+        let all_pos = cargo_toml
+            .find(r#"[target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]"#)
+            .expect("expected the macOS-Intel `all(...)` override block");
+        let not_pos = cargo_toml
+            .find("[target.'cfg(not(any(")
+            .expect("expected the default `not(any(...))` block");
+        let android_pos = cargo_toml
+            .find(r#"[target.'cfg(target_os = "android")'.dependencies]"#)
+            .expect("expected the android override block");
+
+        assert!(
+            all_pos < not_pos,
+            "the `all(...)` override must sort BEFORE the `not(...)` default branch \
+             (cargo-sort compares raw cfg predicate strings byte-wise: 'a' < 'n'); got:\n{cargo_toml}"
+        );
+        assert!(
+            not_pos < android_pos,
+            "the `not(...)` default branch must sort before `target_os = \"android\"` \
+             ('n' < 't'); got:\n{cargo_toml}"
         );
         toml::from_str::<toml::Value>(cargo_toml).expect("generated JNI Cargo.toml must be valid TOML");
     }

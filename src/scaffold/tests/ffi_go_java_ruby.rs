@@ -194,6 +194,77 @@ fn test_scaffold_ffi_target_dep_overrides_emit_cfg_blocks() {
     );
 }
 
+/// Regression test: `cargo-sort` (and hence `poly lint`) orders
+/// `[target.'cfg(...)'.dependencies]` tables alphabetically by the raw cfg
+/// predicate string (plain byte-wise comparison), NOT with the default
+/// `cfg(not(any(...)))` branch always first. With multiple overrides whose
+/// combined cfg is wrapped in `any(...)`, an `all(...)`-prefixed override (as
+/// xberg configures for its macOS-Intel target) must sort *before* the
+/// `not(any(...))` default branch — `'a'` < `'n'` — while a `target_os = ...`
+/// override sorts after it (`'n'` < `'t'`).
+#[test]
+fn test_scaffold_ffi_target_dep_overrides_sort_all_before_not() {
+    use crate::core::config::FfiTargetDepOverride;
+    use crate::core::config::languages::FfiConfig;
+
+    let mut config = test_config();
+    config.features = vec!["full".to_string(), "ocr".to_string()];
+    config.ffi = Some(FfiConfig {
+        prefix: None,
+        error_style: "last_error".to_string(),
+        header_name: None,
+        lib_name: None,
+        visitor_callbacks: false,
+        features: None,
+        extra_features: vec![],
+        serde_rename_all: None,
+        exclude_functions: vec![],
+        exclude_types: vec![],
+        capsule_types: Default::default(),
+        rename_fields: Default::default(),
+        plugin_error_constructor: None,
+        target_dep_overrides: vec![
+            FfiTargetDepOverride {
+                cfg: "target_os = \"android\"".to_string(),
+                features: vec!["android-target".to_string()],
+            },
+            FfiTargetDepOverride {
+                cfg: "target_os = \"windows\"".to_string(),
+                features: vec!["windows-target".to_string()],
+            },
+            FfiTargetDepOverride {
+                cfg: "all(target_os = \"macos\", target_arch = \"x86_64\")".to_string(),
+                features: vec!["macos-intel-target".to_string()],
+            },
+        ],
+    });
+
+    let api = test_api();
+    let all_files = scaffold(&api, &config, &[Language::Ffi]).unwrap();
+    let files = language_files(&all_files);
+    let cargo_toml = &files[0].content;
+
+    let all_pos = cargo_toml
+        .find("[target.'cfg(all(target_os = \"macos\", target_arch = \"x86_64\"))'.dependencies]")
+        .expect("expected the macOS-Intel `all(...)` override block");
+    let not_pos = cargo_toml
+        .find("[target.'cfg(not(any(")
+        .expect("expected the default `not(any(...))` block");
+    let android_pos = cargo_toml
+        .find("[target.'cfg(target_os = \"android\")'.dependencies]")
+        .expect("expected the android override block");
+
+    assert!(
+        all_pos < not_pos,
+        "the `all(...)` override must sort BEFORE the `not(...)` default branch; got:\n{cargo_toml}"
+    );
+    assert!(
+        not_pos < android_pos,
+        "the `not(...)` default branch must sort before `target_os = \"android\"`; got:\n{cargo_toml}"
+    );
+    toml::from_str::<toml::Value>(cargo_toml).expect("generated FFI Cargo.toml must be valid TOML");
+}
+
 #[test]
 fn test_scaffold_ffi_emits_android_target_aggregate_feature() {
     use std::fs;

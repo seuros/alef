@@ -371,3 +371,57 @@ serde_json = { version = "1", features = ["preserve_order"] }
         "unexpected dev-deps in:\n{plain}"
     );
 }
+
+/// Regression test: `cargo-sort` (and hence `poly lint`) orders manifest
+/// tables `[dependencies]` -> `[target.'cfg(...)'.dependencies]` ->
+/// `[build-dependencies]` -> `[dev-dependencies]`. The wasm binding crate
+/// always carries a `[target.'cfg(target_arch = "wasm32")'.dependencies]`
+/// block for `getrandom`, so whenever `extra_dev_dependencies` also produces a
+/// `[dev-dependencies]` section, the target block must come first — cargo-sort
+/// rejects a manifest with `[dev-dependencies]` before a later `[target.*]`
+/// table.
+#[test]
+fn cargo_toml_orders_target_block_before_dev_dependencies() {
+    let cfg: NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["wasm"]
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+[crates.wasm]
+[crates.wasm.extra_dev_dependencies]
+wasm-bindgen-test = "0.3"
+"#,
+    )
+    .unwrap();
+    let config = cfg.resolve().unwrap().remove(0);
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+
+    let cargo_toml = gen_cargo_toml(&api, &config);
+
+    let target_pos = cargo_toml
+        .find("[target.'cfg(target_arch = \"wasm32\")'.dependencies]")
+        .expect("expected the wasm32 target block");
+    let dev_pos = cargo_toml
+        .find("[dev-dependencies]")
+        .expect("expected a [dev-dependencies] section");
+
+    assert!(
+        target_pos < dev_pos,
+        "the [target.*] block must precede [dev-dependencies]; got:\n{cargo_toml}"
+    );
+    toml::from_str::<toml::Value>(&cargo_toml).expect("generated Cargo.toml must be valid TOML");
+}

@@ -272,17 +272,21 @@ pub(crate) fn emit_cargo_toml(
                 .join(", ");
             format!("any({any})")
         };
-        let mut blocks = template_env::render(
-            "rust_cargo_target_dependency.rs.jinja",
-            minijinja::context! {
-                cfg => format!("not({neg_cfg})"),
-                core_dep_key => core_dep_key.as_str(),
-                core_path => core_path.as_str(),
-                package_rename_block => package_rename_block.as_str(),
-                default_block => "",
-                features_block => features_block.as_str(),
-            },
-        );
+        let default_cfg = format!("not({neg_cfg})");
+        let mut entries: Vec<(String, String)> = vec![(
+            default_cfg.clone(),
+            template_env::render(
+                "rust_cargo_target_dependency.rs.jinja",
+                minijinja::context! {
+                    cfg => default_cfg.as_str(),
+                    core_dep_key => core_dep_key.as_str(),
+                    core_path => core_path.as_str(),
+                    package_rename_block => package_rename_block.as_str(),
+                    default_block => "",
+                    features_block => features_block.as_str(),
+                },
+            ),
+        )];
         for override_entry in target_overrides {
             let feat_list = override_entry
                 .features
@@ -300,18 +304,27 @@ pub(crate) fn emit_cargo_toml(
             } else {
                 ", default-features = false".to_string()
             };
-            blocks.push_str(&template_env::render(
-                "rust_cargo_target_dependency.rs.jinja",
-                minijinja::context! {
-                    cfg => override_entry.cfg.as_str(),
-                    core_dep_key => core_dep_key.as_str(),
-                    core_path => core_path.as_str(),
-                    package_rename_block => package_rename_block.as_str(),
-                    default_block => default_block.as_str(),
-                    features_block => feats_block.as_str(),
-                },
+            entries.push((
+                override_entry.cfg.clone(),
+                template_env::render(
+                    "rust_cargo_target_dependency.rs.jinja",
+                    minijinja::context! {
+                        cfg => override_entry.cfg.as_str(),
+                        core_dep_key => core_dep_key.as_str(),
+                        core_path => core_path.as_str(),
+                        package_rename_block => package_rename_block.as_str(),
+                        default_block => default_block.as_str(),
+                        features_block => feats_block.as_str(),
+                    },
+                ),
             ));
         }
+        // cargo-sort orders `[target.'cfg(...)'.dependencies]` tables
+        // alphabetically by the raw cfg predicate string (plain byte-wise
+        // comparison), so the default `not(...)` branch is not always first —
+        // e.g. an `all(...)` override (macOS-Intel) sorts before it.
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        let blocks = entries.into_iter().map(|(_, text)| text).collect::<String>();
         (String::new(), blocks)
     };
 
@@ -713,6 +726,68 @@ embeddings = []
             file.content
         );
         toml::from_str::<toml::Value>(&file.content).expect("generated Cargo.toml must be valid TOML");
+    }
+
+    /// Regression test: `cargo-sort` (and hence `poly lint`) orders
+    /// `[target.'cfg(...)'.dependencies]` tables alphabetically by the raw cfg
+    /// predicate string (plain byte-wise comparison), NOT with the default
+    /// `cfg(not(any(...)))` branch always first. With multiple overrides, an
+    /// `all(...)`-prefixed override (xberg's macOS-Intel target) must sort
+    /// *before* the `not(any(...))` default branch (`'a'` < `'n'`), while a
+    /// `target_os = ...` override sorts after it (`'n'` < `'t'`).
+    #[test]
+    fn cargo_toml_target_dep_overrides_sort_all_before_not() {
+        use crate::core::config::ResolvedCrateConfig;
+        use crate::core::config::languages::{DartConfig, DartTargetDepOverride};
+        use crate::core::ir::ApiSurface;
+
+        let api = ApiSurface::default();
+        let config = ResolvedCrateConfig {
+            name: "sample-lib".to_string(),
+            dart: Some(DartConfig {
+                target_dep_overrides: vec![
+                    DartTargetDepOverride {
+                        cfg: "target_os = \"android\"".to_string(),
+                        features: vec!["android-target".to_string()],
+                        default_features: false,
+                    },
+                    DartTargetDepOverride {
+                        cfg: "target_os = \"windows\"".to_string(),
+                        features: vec!["windows-target".to_string()],
+                        default_features: false,
+                    },
+                    DartTargetDepOverride {
+                        cfg: "all(target_os = \"macos\", target_arch = \"x86_64\")".to_string(),
+                        features: vec!["macos-intel-target".to_string()],
+                        default_features: false,
+                    },
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let file = emit_cargo_toml("packages/dart/rust", &api, &config, "sample_lib");
+        let content = &file.content;
+
+        let all_pos = content
+            .find("[target.'cfg(all(target_os = \"macos\", target_arch = \"x86_64\"))'.dependencies]")
+            .expect("expected the macOS-Intel `all(...)` override block");
+        let not_pos = content
+            .find("[target.'cfg(not(any(")
+            .expect("expected the default `not(any(...))` block");
+        let android_pos = content
+            .find("[target.'cfg(target_os = \"android\")'.dependencies]")
+            .expect("expected the android override block");
+
+        assert!(
+            all_pos < not_pos,
+            "the `all(...)` override must sort BEFORE the `not(...)` default branch; got:\n{content}"
+        );
+        assert!(
+            not_pos < android_pos,
+            "the `not(...)` default branch must sort before `target_os = \"android\"`; got:\n{content}"
+        );
+        toml::from_str::<toml::Value>(content).expect("generated Cargo.toml must be valid TOML");
     }
 }
 

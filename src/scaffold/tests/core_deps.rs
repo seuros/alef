@@ -215,6 +215,62 @@ fn render_core_dep_with_overrides_emits_default_and_override_blocks() {
     );
 }
 
+/// Regression test: `cargo-sort` (and hence `poly lint`) orders
+/// `[target.'cfg(...)'.dependencies]` tables alphabetically by the raw cfg
+/// predicate string (plain byte-wise comparison), NOT with the default
+/// `cfg(not(any(...)))` branch always first. With multiple overrides, an
+/// `all(...)`-prefixed override sorts *before* the `not(any(...))` default
+/// branch (`'a'` < `'n'`), while a `target_os = ...` override sorts after it
+/// (`'n'` < `'t'`). `render_core_dep_with_overrides` backs every scripting
+/// binding (python/node/ruby/php/elixir), so this test covers all of them at
+/// once.
+#[test]
+fn render_core_dep_with_overrides_sorts_all_before_not_before_target_os() {
+    let overrides = vec![
+        crate::core::config::FfiTargetDepOverride {
+            cfg: "target_os = \"android\"".to_string(),
+            features: vec!["android-target".to_string()],
+        },
+        crate::core::config::FfiTargetDepOverride {
+            cfg: "target_os = \"windows\"".to_string(),
+            features: vec!["windows-target".to_string()],
+        },
+        crate::core::config::FfiTargetDepOverride {
+            cfg: "all(target_os = \"macos\", target_arch = \"x86_64\")".to_string(),
+            features: vec!["macos-intel-target".to_string()],
+        },
+    ];
+    let (line, blocks) =
+        render_core_dep_with_overrides("my-lib", "../my-lib", ", features = [\"full\"]", "1.2.3", &overrides);
+    assert!(line.is_empty(), "with overrides the core dep moves into target blocks");
+
+    let all_pos = blocks
+        .find("[target.'cfg(all(target_os = \"macos\", target_arch = \"x86_64\"))'.dependencies]")
+        .expect("expected the macOS-Intel `all(...)` override block");
+    let not_pos = blocks
+        .find("[target.'cfg(not(any(")
+        .expect("expected the default `not(any(...))` block");
+    let android_pos = blocks
+        .find("[target.'cfg(target_os = \"android\")'.dependencies]")
+        .expect("expected the android override block");
+    let windows_pos = blocks
+        .find("[target.'cfg(target_os = \"windows\")'.dependencies]")
+        .expect("expected the windows override block");
+
+    assert!(
+        all_pos < not_pos,
+        "the `all(...)` override must sort BEFORE the `not(...)` default branch; got:\n{blocks}"
+    );
+    assert!(
+        not_pos < android_pos,
+        "the `not(...)` default branch must sort before `target_os = \"android\"`; got:\n{blocks}"
+    );
+    assert!(
+        android_pos < windows_pos,
+        "`target_os = \"android\"` must sort before `target_os = \"windows\"`; got:\n{blocks}"
+    );
+}
+
 #[test]
 fn scripting_backends_emit_target_dep_override_blocks() {
     let override_for = |lang: &str| {
