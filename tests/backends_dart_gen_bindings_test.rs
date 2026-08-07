@@ -431,10 +431,11 @@ fn simple_sync_function_emits_static_method() {
 /// `export 'traits.dart';` alone does not bring the trait names into the file's
 /// own scope, so `comment_references` flags every doc comment (`[OcrBackend]`,
 /// etc.) that points at a type declared in traits.dart. The module file must
-/// also `import 'traits.dart';`, mirroring the established pattern for the FRB
-/// bridge library a few lines above (`export ...; import ... as rust_bridge;`).
+/// also `import 'traits.dart';` — but ONLY when it actually names a trait.
+/// Emitting the import unconditionally trips the opposite lint, `unused_import`,
+/// in every crate whose module file never refers to one (the common case).
 #[test]
-fn module_file_imports_traits_dart_in_addition_to_exporting_it() {
+fn module_file_omits_traits_import_when_no_trait_is_referenced() {
     let api = ApiSurface {
         crate_name: "demo-crate".into(),
         version: "0.1.0".into(),
@@ -462,8 +463,59 @@ fn module_file_imports_traits_dart_in_addition_to_exporting_it() {
         .expect("missing src/demo_crate.dart");
 
     assert!(
+        content.contains("export 'traits.dart';"),
+        "the module file must still re-export traits.dart: {content}"
+    );
+    assert!(
+        !content.contains("import 'traits.dart';"),
+        "a module file that names no trait must not import traits.dart — dart analyze \
+         reports it as unused_import: {content}"
+    );
+}
+
+/// The counterpart: when the module file *does* name a trait (a configured bridge
+/// with a `register_fn` emits `OcrBackendDartImpl` into the body), the import is
+/// required and must sit immediately after the export, mirroring the FRB bridge
+/// pattern a few lines above (`export ...; import ... as rust_bridge;`).
+#[test]
+fn module_file_imports_traits_dart_when_a_trait_is_referenced() {
+    let api = ApiSurface {
+        crate_name: "demo-crate".into(),
+        version: "0.1.0".into(),
+        types: vec![],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+
+    let mut config = make_config_with_bridge("OcrBackend");
+    config.trait_bridges[0].register_fn = Some("register_ocr_backend".to_string());
+
+    let files = DartBackend.generate_bindings(&api, &config).unwrap();
+    let content = files
+        .iter()
+        .find(|f| {
+            f.path
+                .to_string_lossy()
+                .replace('\\', "/")
+                .ends_with("/src/demo_crate.dart")
+        })
+        .map(|f| f.content.as_str())
+        .expect("missing src/demo_crate.dart");
+
+    assert!(
+        content.contains("OcrBackend"),
+        "precondition: the bridge's register_fn must put the trait name in the body: {content}"
+    );
+    assert!(
         content.contains("export 'traits.dart';\nimport 'traits.dart';\n"),
-        "export 'traits.dart' must be immediately followed by import 'traits.dart': {content}"
+        "when a trait is referenced, export 'traits.dart' must be immediately followed by \
+         import 'traits.dart': {content}"
     );
 }
 
