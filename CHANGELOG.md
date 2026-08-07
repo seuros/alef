@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.57.1] - 2026-08-07
+
+### Fixed
+
+- **The Dart module file no longer emits an unused `import 'traits.dart';`.** 0.56.0 added the
+  import unconditionally so that a doc comment naming a trait (`[OcrBackend]`) would not trip
+  `comment_references`. But the module file usually names no trait at all, so `dart analyze` then
+  reported the import as `unused_import` — a hard lint failure in every consuming repo that
+  regenerated on 0.56.0 or 0.57.0. The import is now emitted only when the generated body actually
+  refers to one of the configured bridge trait names, which keeps both lints satisfied.
+  (`src/backends/dart/gen_bindings/mod.rs`)
+
 ## [0.57.0] - 2026-08-07
 
 ### Changed
