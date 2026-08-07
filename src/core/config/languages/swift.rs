@@ -119,6 +119,31 @@ pub struct SwiftConfig {
     /// which does not reach this secondary injection.
     #[serde(default)]
     pub ffi_features: Vec<String>,
+    /// Per-target overrides for the injected secondary FFI crate dependency
+    /// (the C-ABI `*-ffi` crate; see [`Self::ffi_features`]). Each entry
+    /// replaces the default `[dependencies]` entry for that dependency with a
+    /// `[target.'cfg(...)'.dependencies]` block scoped to the cfg predicate.
+    /// When non-empty, the default entry (using `ffi_features`, if any) is
+    /// gated on `cfg(not(any(<override cfgs>)))` so exactly one branch
+    /// matches per build target — mirrors [`Self::target_dep_overrides`], but
+    /// for the FFI crate dependency instead of the core crate dependency.
+    ///
+    /// Needed because Cargo unifies feature sets across all dependency edges
+    /// to the same resolved package: an unconditionally-enabled feature set
+    /// on the FFI dep (e.g. `full-no-heic`, which pulls in `sceptre-ocr` ->
+    /// `sceptre-ocr-ort`) can activate desktop/server-only code even on
+    /// targets where the *core* dep only asks for a reduced feature set (e.g.
+    /// `android-target`), tripping `compile_error!` guards meant to keep
+    /// mobile builds from linking incompatible native dependencies. Without
+    /// this knob, the injected FFI dep has no equivalent to
+    /// [`Self::target_dep_overrides`] / [`Self::excluded_default_features`],
+    /// which only govern the primary core dep.
+    ///
+    /// A configuration that sets only `ffi_features` and leaves this list
+    /// empty is unaffected: the FFI dependency is still emitted as a single
+    /// `[dependencies]` line.
+    #[serde(default)]
+    pub ffi_target_dep_overrides: Vec<SwiftTargetDepOverride>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

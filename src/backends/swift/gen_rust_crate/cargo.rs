@@ -48,6 +48,7 @@ pub(crate) fn emit_cargo_toml(
     ffi_dep_key: &str,
     ffi_dep_path: &str,
     ffi_features: &[String],
+    ffi_target_overrides: &[crate::core::config::languages::SwiftTargetDepOverride],
 ) -> String {
     let source_crate_name = core_dep_key;
     let features_block = if features.is_empty() {
@@ -78,10 +79,16 @@ pub(crate) fn emit_cargo_toml(
         &format!("{features_block}{package_rename_block}"),
         version,
     );
-    let target_override_blocks = if target_overrides.is_empty() {
-        String::new()
-    } else {
-        let mut blocks = String::new();
+    // Both the core-dep and FFI-dep override loops below emit
+    // `[target.'cfg(...)'.dependencies]` tables into the same `[dependencies]`
+    // section of the final manifest, so cargo-sort's table-order rule
+    // (alphabetical by the raw cfg predicate string, plain byte-wise
+    // comparison) applies across both groups together — sorting each group
+    // independently and concatenating them is not enough. Collect every
+    // target-cfg entry (core + FFI) into one list and sort it once, in
+    // `target_blocks_section` below.
+    let mut target_dep_entries: Vec<(String, String)> = Vec::new();
+    if !target_overrides.is_empty() {
         // Gate the default dep on cfg(not(any(<overrides>))) to keep one and only
         let neg_cfg = if target_overrides.len() == 1 {
             target_overrides[0].cfg.clone()
@@ -93,9 +100,7 @@ pub(crate) fn emit_cargo_toml(
                 .join(", ");
             format!("any({any})")
         };
-        blocks.push_str(&format!(
-            "\n[target.'cfg(not({neg_cfg}))'.dependencies]\n{core_dep_for_block}\n"
-        ));
+        target_dep_entries.push((format!("not({neg_cfg})"), core_dep_for_block.clone()));
         for entry in target_overrides {
             let feat_list = entry
                 .features
@@ -119,10 +124,9 @@ pub(crate) fn emit_cargo_toml(
                 &format!("{feats_block}{default_block}{package_rename_block}"),
                 version,
             );
-            blocks.push_str(&format!("\n[target.'cfg({})'.dependencies]\n{entry_dep}\n", entry.cfg));
+            target_dep_entries.push((entry.cfg.clone(), entry_dep));
         }
-        blocks
-    };
+    }
     let mut dep_entries: Vec<String> = vec![
         "ahash = \"0.8\"".to_string(),
         "async-trait = \"0.1\"".to_string(),
@@ -144,12 +148,67 @@ pub(crate) fn emit_cargo_toml(
     } else {
         format!(", default-features = false{}", format_features_array(ffi_features))
     };
-    dep_entries.push(crate::scaffold::render_core_dep(
-        ffi_dep_key,
-        ffi_dep_path,
-        &ffi_suffix,
-        version,
-    ));
+    // When `ffi_target_overrides` is set the FFI dep moves out of the flat
+    // `[dependencies]` table entirely and into `target_dep_entries` below —
+    // mirrors how the core dep's `target_overrides` loop above excludes
+    // `core_dep_for_block` from `dep_entries` once overrides apply.
+    if ffi_target_overrides.is_empty() {
+        dep_entries.push(crate::scaffold::render_core_dep(
+            ffi_dep_key,
+            ffi_dep_path,
+            &ffi_suffix,
+            version,
+        ));
+    }
+    if !ffi_target_overrides.is_empty() {
+        let neg_cfg = if ffi_target_overrides.len() == 1 {
+            ffi_target_overrides[0].cfg.clone()
+        } else {
+            let any = ffi_target_overrides
+                .iter()
+                .map(|o| o.cfg.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("any({any})")
+        };
+        let default_entry = crate::scaffold::render_core_dep(ffi_dep_key, ffi_dep_path, &ffi_suffix, version);
+        target_dep_entries.push((format!("not({neg_cfg})"), default_entry));
+        for entry in ffi_target_overrides {
+            let feat_list = entry
+                .features
+                .iter()
+                .map(|f| format!("\"{f}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let feats_block = if feat_list.is_empty() {
+                String::new()
+            } else {
+                format!(", features = [{feat_list}]")
+            };
+            // Order matches `ffi_suffix` above (`default-features` before
+            // `features`), not the core-dep override loop's order, so a
+            // single override entry reproduces the same dep-line shape as
+            // the flat `ffi_features`-only case.
+            let entry_suffix = if entry.default_features {
+                feats_block
+            } else {
+                format!(", default-features = false{feats_block}")
+            };
+            let entry_dep = crate::scaffold::render_core_dep(ffi_dep_key, ffi_dep_path, &entry_suffix, version);
+            target_dep_entries.push((entry.cfg.clone(), entry_dep));
+        }
+    }
+    // The core-dep and FFI-dep loops above both contribute to
+    // `target_dep_entries`; sort them together (not each group separately) so
+    // the combined `[target.'cfg(...)'.dependencies]` table sequence matches
+    // what `cargo-sort` expects regardless of which dependency a given block
+    // is about.
+    let target_blocks_section = crate::scaffold::join_sorted_target_dep_blocks(target_dep_entries);
+    let target_blocks_section = if target_blocks_section.is_empty() {
+        String::new()
+    } else {
+        format!("\n{target_blocks_section}")
+    };
     if has_streaming_adapters {
         dep_entries.push("futures-util = \"0.3\"".to_string());
     }
@@ -220,11 +279,11 @@ bench = false
 
 {features_table}[dependencies]
 {dep_block}
-{target_override_blocks}
-{lints_block}
-
+{target_blocks_section}
 [build-dependencies]
 swift-bridge-build = "{swift_bridge_build_ver}"
+
+{lints_block}
 "#
     )
 }
@@ -303,6 +362,7 @@ mod tests {
             "sample-lib-ffi",
             "../../../crates/sample-lib-ffi",
             &[],
+            &[],
         );
 
         assert!(
@@ -365,6 +425,7 @@ mod tests {
             "sample-lib-ffi",
             "../../../crates/sample-lib-ffi",
             &[],
+            &[],
         );
 
         assert!(
@@ -418,6 +479,7 @@ mod tests {
             "sample-lib-ffi",
             "../../../crates/sample-lib-ffi",
             &[],
+            &[],
         );
 
         assert!(
@@ -467,6 +529,7 @@ mod tests {
             &["heic".to_string()],
             "sample-lib-ffi",
             "../../../crates/sample-lib-ffi",
+            &[],
             &[],
         );
 
@@ -523,6 +586,7 @@ mod tests {
             "sample-lib-ffi",
             "../../../crates/sample-lib-ffi",
             &[],
+            &[],
         );
 
         assert!(
@@ -560,6 +624,7 @@ mod tests {
             "sample-lib-ffi",
             "../../../crates/sample-lib-ffi",
             &["full-no-heic".to_string(), "pdf".to_string(), "ocr".to_string()],
+            &[],
         );
 
         let ffi_line = content
@@ -576,6 +641,228 @@ mod tests {
                 "FFI dep features must include `{feat}`; got:\n{content}"
             );
         }
+        toml::from_str::<toml::Value>(&content).expect("generated Cargo.toml must be valid TOML");
+    }
+
+    /// Regression test for issue #370: without `ffi_target_dep_overrides`, the
+    /// injected FFI dep has no way to split per target the way the core dep
+    /// can via `target_dep_overrides`. This reproduces xberg's exact
+    /// hand-patched `packages/swift/rust/Cargo.toml` split — a flat
+    /// `full-no-heic` default gated off iOS/Android, and `android-target` on
+    /// iOS/Android — so that downstream patch can be deleted.
+    #[test]
+    fn cargo_toml_ffi_target_overrides_reproduce_xberg_ios_android_split() {
+        use crate::core::config::languages::SwiftTargetDepOverride;
+
+        let api = ApiSurface::default();
+        let ffi_overrides = vec![SwiftTargetDepOverride {
+            cfg: r#"any(target_os = "ios", target_os = "android")"#.to_string(),
+            features: vec!["android-target".to_string()],
+            default_features: false,
+        }];
+
+        let content = emit_cargo_toml(
+            "xberg",
+            "xberg",
+            "xberg",
+            "1.1.0",
+            "0.1.59",
+            "0.1.59",
+            "../../..",
+            &[],
+            "",
+            "MIT",
+            false,
+            &[],
+            &api,
+            &[],
+            "xberg-ffi",
+            "../../../crates/xberg-ffi",
+            &["full-no-heic".to_string()],
+            &ffi_overrides,
+        );
+
+        assert!(
+            content.contains(
+                "[target.'cfg(not(any(target_os = \"ios\", target_os = \"android\")))'.dependencies]\n\
+xberg-ffi = { version = \"1.1.0\", path = \"../../../crates/xberg-ffi\", default-features = false, features = [\"full-no-heic\"] }"
+            ),
+            "must emit the default (non-iOS/Android) target block exactly; got:\n{content}"
+        );
+        assert!(
+            content.contains(
+                "[target.'cfg(any(target_os = \"ios\", target_os = \"android\"))'.dependencies]\n\
+xberg-ffi = { version = \"1.1.0\", path = \"../../../crates/xberg-ffi\", default-features = false, features = [\"android-target\"] }"
+            ),
+            "must emit the iOS/Android target block exactly; got:\n{content}"
+        );
+        // Both target-gated dep lines start with "xberg-ffi = ", so distinguish
+        // "no flat-table duplicate" by an exact count rather than a substring
+        // match, which would also match the (expected) lines inside the two
+        // target blocks asserted above.
+        let ffi_dep_line_count = content.lines().filter(|l| l.starts_with("xberg-ffi = ")).count();
+        assert_eq!(
+            ffi_dep_line_count, 2,
+            "exactly the two target-gated xberg-ffi lines must be emitted, with no bare \
+             flat-table duplicate; got {ffi_dep_line_count} in:\n{content}"
+        );
+        assert!(
+            !content.contains(r#"xberg-ffi = { version = "1.1.0", path = "../../../crates/xberg-ffi" }"#),
+            "the flat `[dependencies]` table must not carry a bare, feature-less xberg-ffi entry \
+             once target overrides apply; got:\n{content}"
+        );
+        toml::from_str::<toml::Value>(&content).expect("generated Cargo.toml must be valid TOML");
+    }
+
+    /// Backward compatibility: a config that sets only the flat `ffi_features`
+    /// and no `ffi_target_dep_overrides` must emit exactly what it emits
+    /// today — a single ungated `[dependencies]` line, no
+    /// `[target.'cfg(...)'.dependencies]` blocks for the FFI dep. Existing
+    /// users must not have to migrate.
+    #[test]
+    fn cargo_toml_ffi_target_overrides_empty_is_unchanged_from_flat_ffi_features() {
+        let api = ApiSurface::default();
+
+        let with_empty_overrides = emit_cargo_toml(
+            "sample-lib",
+            "sample_lib",
+            "sample-lib",
+            "0.1.0",
+            "0.1.0",
+            "0.1.0",
+            "../..",
+            &[],
+            "",
+            "MIT",
+            false,
+            &[],
+            &api,
+            &[],
+            "sample-lib-ffi",
+            "../../../crates/sample-lib-ffi",
+            &["full-no-heic".to_string()],
+            &[],
+        );
+
+        assert!(
+            with_empty_overrides.contains(
+                r#"sample-lib-ffi = { version = "0.1.0", path = "../../../crates/sample-lib-ffi", default-features = false, features = ["full-no-heic"] }"#
+            ),
+            "no-override case must keep the flat single-line FFI dep; got:\n{with_empty_overrides}"
+        );
+        assert!(
+            !with_empty_overrides.contains("[target.'cfg("),
+            "no-override case must not emit any target-gated blocks; got:\n{with_empty_overrides}"
+        );
+        toml::from_str::<toml::Value>(&with_empty_overrides).expect("generated Cargo.toml must be valid TOML");
+    }
+
+    /// Regression test: `cargo-sort` (and hence `poly lint`) orders every
+    /// `[target.'cfg(...)'.dependencies]` table in the manifest alphabetically
+    /// by the raw cfg predicate string — across ALL dependencies sharing the
+    /// `[dependencies]` section, not per-dependency. The core dep's
+    /// `target_overrides` and the FFI dep's `ffi_target_overrides` both emit
+    /// such tables into the same manifest, so sorting each group independently
+    /// (and simply concatenating them) is not enough: this reproduces xberg's
+    /// real config (a core `all(...)` macOS-Intel override plus an FFI
+    /// `any(ios, android)` override) and asserts the fully merged, globally
+    /// sorted order.
+    #[test]
+    fn cargo_toml_merges_and_sorts_core_and_ffi_target_blocks_together() {
+        use crate::core::config::languages::SwiftTargetDepOverride;
+
+        let api = ApiSurface::default();
+        let core_overrides = vec![
+            SwiftTargetDepOverride {
+                cfg: "target_os = \"android\"".to_string(),
+                features: vec!["android-target".to_string()],
+                default_features: false,
+            },
+            SwiftTargetDepOverride {
+                cfg: "target_os = \"windows\"".to_string(),
+                features: vec!["windows-target".to_string()],
+                default_features: false,
+            },
+            SwiftTargetDepOverride {
+                cfg: "all(target_os = \"macos\", target_arch = \"x86_64\")".to_string(),
+                features: vec!["macos-intel-target".to_string()],
+                default_features: false,
+            },
+        ];
+        let ffi_overrides = vec![SwiftTargetDepOverride {
+            cfg: r#"any(target_os = "ios", target_os = "android")"#.to_string(),
+            features: vec!["android-target".to_string()],
+            default_features: false,
+        }];
+
+        let content = emit_cargo_toml(
+            "xberg",
+            "xberg",
+            "xberg",
+            "1.1.0",
+            "0.1.59",
+            "0.1.59",
+            "../../..",
+            &[],
+            "",
+            "MIT",
+            false,
+            &core_overrides,
+            &api,
+            &[],
+            "xberg-ffi",
+            "../../../crates/xberg-ffi",
+            &["full-no-heic".to_string()],
+            &ffi_overrides,
+        );
+
+        // Expected global order (plain byte-wise comparison of the raw cfg
+        // predicate string): `all(` < `any(` < `not(` < `target_os`.
+        let all_pos = content
+            .find("[target.'cfg(all(target_os = \"macos\", target_arch = \"x86_64\"))'.dependencies]")
+            .expect("expected the macOS-Intel `all(...)` override block");
+        let any_pos = content
+            .find("[target.'cfg(any(target_os = \"ios\", target_os = \"android\"))'.dependencies]")
+            .expect("expected the FFI `any(ios, android)` override block");
+        let not_ffi_pos = content
+            .find("[target.'cfg(not(any(target_os = \"ios\", target_os = \"android\")))'.dependencies]")
+            .expect("expected the FFI default `not(any(ios, android))` block");
+        let not_core_pos = content
+            .find("[target.'cfg(not(any(target_os = \"android\", target_os = \"windows\", all(")
+            .expect("expected the core default `not(any(...))` block");
+        let android_pos = content
+            .find("[target.'cfg(target_os = \"android\")'.dependencies]")
+            .expect("expected the core android override block");
+
+        assert!(
+            all_pos < any_pos,
+            "`all(...)` must sort before `any(...)`; got:\n{content}"
+        );
+        assert!(
+            any_pos < not_core_pos,
+            "`any(...)` must sort before `not(any(android, ...))`; got:\n{content}"
+        );
+        assert!(
+            not_core_pos < not_ffi_pos,
+            "the core `not(any(android, windows, all(...)))` must sort before the FFI \
+             `not(any(ios, android))` (byte-wise: \"android\" < \"ios\" right after the \
+             shared `not(any(target_os = \"` prefix); got:\n{content}"
+        );
+        assert!(
+            not_ffi_pos < android_pos,
+            "`not(...)` must sort before `target_os = \"android\"`; got:\n{content}"
+        );
+
+        // `[build-dependencies]` must precede `[lints.rust]`.
+        let build_deps_pos = content
+            .find("[build-dependencies]")
+            .expect("expected a [build-dependencies] section");
+        let lints_pos = content.find("[lints.rust]").expect("expected a [lints.rust] section");
+        assert!(
+            build_deps_pos < lints_pos,
+            "[build-dependencies] must precede [lints.rust]; got:\n{content}"
+        );
+
         toml::from_str::<toml::Value>(&content).expect("generated Cargo.toml must be valid TOML");
     }
 }
