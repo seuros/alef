@@ -40,12 +40,15 @@ Every release step has a concrete verification — never assume; always check.
 5. **Add tests for any fix that changed behavior.** A release that includes a
    fix without a regression test is a release that will regress.
 6. **Use the Taskfile** for version setting — never hand-edit `Cargo.toml`,
-   `alef.toml`, or `src/core/template_versions.rs`. `task set-version`
-   rewrites all three in lockstep.
+   `alef.toml`, `src/core/template_versions.rs`, or `schemas/alef.schema.json`.
+   `task set-version` rewrites all four in lockstep.
 7. **Publish with `gh release create`** — a bare `git tag` is not a release.
-   The GitHub release is what triggers consumer automation and what users
-   discover. Alef ships as a single crate, so the tag push triggers exactly
-   one `cargo publish` — no multi-crate sequencing, no index propagation race.
+   The `Publish` workflow triggers on `release: types: [published]`, so the
+   GitHub release is literally what runs `cargo publish`; a tag push alone
+   runs nothing at all. This is not theoretical: v0.55.2 and v0.55.3 were
+   tagged and pushed with no release created, and neither ever reached
+   crates.io. Alef ships as a single crate, so one release means exactly one
+   `cargo publish` — no multi-crate sequencing, no index propagation race.
 
 ## Procedure
 
@@ -74,14 +77,17 @@ asks for it.
 ### 2. Set the version via Taskfile
 
 ```bash
-task set-version -- X.Y.Z           # bumps Cargo.toml, alef.toml, ALEF_REV; runs cargo update
+task set-version -- X.Y.Z           # bumps Cargo.toml, alef.toml, ALEF_REV; regenerates
+                                    # schemas/alef.schema.json; runs cargo update
 ```
 
 The `set-version` task is the **only** sanctioned way to bump versions in this
 repo. It rewrites `Cargo.toml` (`package.version`), `alef.toml`
-(`alef_version`), and `src/core/template_versions.rs::ALEF_REV` in one shot,
-then runs `cargo update`. Never hand-edit any of these — they must stay in
-lockstep.
+(`alef_version`), and `src/core/template_versions.rs::ALEF_REV`, regenerates
+`schemas/alef.schema.json` (`cargo run -- schema --schema-version`), then runs
+`cargo update` — all in one shot. Never hand-edit any of these — they must stay
+in lockstep. The regenerated schema shows up in the release diff (its `$id` and
+`version` both carry the new version); that is expected output, not drift.
 
 After the task finishes, **verify**:
 
@@ -89,9 +95,11 @@ After the task finishes, **verify**:
 grep -E '^version' Cargo.toml                       # package version
 grep -E '^alef_version' alef.toml                   # alef.toml mirror
 grep ALEF_REV src/core/template_versions.rs        # template version pin
+grep '"version"' schemas/alef.schema.json           # regenerated schema
 ```
 
-All three must match `X.Y.Z` (the `ALEF_REV` line includes a leading `v`).
+All four must match `X.Y.Z` (the `ALEF_REV` line and the schema `$id` both
+include a leading `v`).
 
 ### 3. Lint pass
 
@@ -165,7 +173,9 @@ PR that bumps the pin. Don't bundle that into the release commit.
 
 ## Anti-patterns
 
-- Tagging without a `gh release create` — invisible release, breaks automation.
+- Tagging without a `gh release create` — the crate is never published at all.
+  `Publish` fires on `release: published`, not on the tag. This silently lost
+  v0.55.2 and v0.55.3; both are tagged on origin and absent from crates.io.
 - Empty `## [Unreleased]` rolled forward to a new version section.
 - Hand-editing `version = "..."` in `Cargo.toml`, `alef_version` in
   `alef.toml`, or `ALEF_REV` in `src/core/template_versions.rs` instead of
