@@ -91,14 +91,28 @@ pub fn csharp_type(ty: &TypeRef) -> Cow<'static, str> {
 /// Uses `JsonElement` for Json types to properly deserialize embedded objects
 /// via System.Text.Json. This avoids the "Cannot get the value of a token type
 /// 'StartObject' as a string" error when Rust embeds a JSON object.
+///
+/// Recurses through `Optional`, `Vec`, and `Map` so that Json is mapped to
+/// `JsonElement` at any nesting depth (e.g. `Vec<Json>`, `Option<Vec<Json>>`),
+/// not just the three shapes handled directly at the top level. Non-Json types
+/// recurse to the same result as [`csharp_type`], since the wrapping formats
+/// mirror [`CsharpMapper`]'s `optional`/`vec`/`map` combinators.
 pub fn csharp_type_for_dto_field(ty: &TypeRef) -> Cow<'static, str> {
     match ty {
         TypeRef::Json => Cow::Borrowed("JsonElement"),
-        TypeRef::Map(k, v) if matches!(v.as_ref(), TypeRef::Json) => {
-            let key_type = csharp_type(k);
-            Cow::Owned(format!("Dictionary<{}, JsonElement>", key_type))
+        TypeRef::Optional(inner) => {
+            let inner_type = csharp_type_for_dto_field(inner);
+            Cow::Owned(format!("{inner_type}?"))
         }
-        TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Json) => Cow::Borrowed("JsonElement?"),
+        TypeRef::Vec(inner) => {
+            let inner_type = csharp_type_for_dto_field(inner);
+            Cow::Owned(format!("List<{inner_type}>"))
+        }
+        TypeRef::Map(k, v) => {
+            let key_type = csharp_type(k);
+            let value_type = csharp_type_for_dto_field(v);
+            Cow::Owned(format!("Dictionary<{key_type}, {value_type}>"))
+        }
         _ => csharp_type(ty),
     }
 }
@@ -161,6 +175,40 @@ mod tests {
     fn test_optional_json_for_dto_field() {
         let opt_type = TypeRef::Optional(Box::new(TypeRef::Json));
         assert_eq!(csharp_type_for_dto_field(&opt_type), "JsonElement?");
+    }
+
+    #[test]
+    fn test_vec_json_for_dto_field() {
+        let vec_type = TypeRef::Vec(Box::new(TypeRef::Json));
+        assert_eq!(csharp_type_for_dto_field(&vec_type), "List<JsonElement>");
+    }
+
+    #[test]
+    fn test_optional_vec_json_for_dto_field() {
+        let ty = TypeRef::Optional(Box::new(TypeRef::Vec(Box::new(TypeRef::Json))));
+        assert_eq!(csharp_type_for_dto_field(&ty), "List<JsonElement>?");
+    }
+
+    #[test]
+    fn test_optional_map_json_for_dto_field() {
+        let ty = TypeRef::Optional(Box::new(TypeRef::Map(
+            Box::new(TypeRef::String),
+            Box::new(TypeRef::Json),
+        )));
+        assert_eq!(csharp_type_for_dto_field(&ty), "Dictionary<string, JsonElement>?");
+    }
+
+    #[test]
+    fn test_vec_optional_json_for_dto_field() {
+        let ty = TypeRef::Vec(Box::new(TypeRef::Optional(Box::new(TypeRef::Json))));
+        assert_eq!(csharp_type_for_dto_field(&ty), "List<JsonElement?>");
+    }
+
+    #[test]
+    fn test_non_json_type_unaffected_for_dto_field() {
+        let ty = TypeRef::Optional(Box::new(TypeRef::Vec(Box::new(TypeRef::Primitive(PrimitiveType::I32)))));
+        assert_eq!(csharp_type_for_dto_field(&ty), csharp_type(&ty));
+        assert_eq!(csharp_type_for_dto_field(&ty), "List<int>?");
     }
 
     #[test]
