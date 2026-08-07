@@ -356,7 +356,10 @@ pub(super) fn gen_tagged_enum_core_to_binding(
                                     TypeRef::Vec(inner) if matches!(inner.as_ref(), TypeRef::Named(_)) => {
                                         format!("{f}: {f}.map(|v| v.into_iter().map(Into::into).collect())")
                                     }
-                                    _ => format!("{f}: {f}"),
+                                    // No cast or wrap needed: the destructured binding is
+                                    // already named `f`, identical to the field it fills, so
+                                    // this is true field-init shorthand, not `f: f`.
+                                    _ => f.clone(),
                                 }
                             } else {
                                 match &field.ty {

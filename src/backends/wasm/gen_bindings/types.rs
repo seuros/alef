@@ -603,10 +603,11 @@ fn convert_constructor_params_to_camel_case(
                 }
             } else {
                 let field_name = assignment.trim();
-                if let Some(camel_name) = field_to_camel.get(field_name) {
-                    format!("{}: {}", field_name, camel_name)
-                } else {
-                    assignment.to_string()
+                match field_to_camel.get(field_name) {
+                    // Only emit `field: camelVar` when the rename actually changes the
+                    // identifier; single-word fields (snake == camel) stay shorthand.
+                    Some(camel_name) if camel_name != field_name => format!("{}: {}", field_name, camel_name),
+                    _ => assignment.to_string(),
                 }
             }
         })

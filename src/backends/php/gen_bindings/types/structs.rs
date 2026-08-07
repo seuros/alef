@@ -592,7 +592,11 @@ fn gen_struct_methods_impl(
                                 }
                                 return format!("{}: {}.0", f.name, php_param_name);
                             }
-                            format!("{}: {}", f.name, php_param_name)
+                            if f.name == php_param_name {
+                                f.name.clone()
+                            } else {
+                                format!("{}: {}", f.name, php_param_name)
+                            }
                         } else {
                             format!("{}: Default::default()", f.name)
                         }
@@ -684,7 +688,11 @@ fn gen_struct_methods_impl(
                                 }
                             }
                         }
-                        format!("{}: {}", f.name, php_param_name)
+                        if f.name == php_param_name {
+                            f.name.clone()
+                        } else {
+                            format!("{}: {}", f.name, php_param_name)
+                        }
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -832,4 +840,139 @@ fn gen_struct_methods_impl(
     }
 
     impl_builder.build()
+}
+
+#[cfg(test)]
+mod redundant_field_shorthand_tests {
+    use super::*;
+    use crate::backends::php::type_map::PhpMapper;
+    use crate::core::ir::PrimitiveType;
+
+    fn mapper() -> PhpMapper {
+        PhpMapper {
+            enum_names: AHashSet::new(),
+            data_enum_names: AHashSet::new(),
+            untagged_data_enum_names: AHashSet::new(),
+            json_string_enum_names: AHashSet::new(),
+        }
+    }
+
+    fn field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
+        FieldDef {
+            name: name.to_string(),
+            ty,
+            optional,
+            ..Default::default()
+        }
+    }
+
+    /// `from_json`-constructor path (`use_from_json == true`): a single-word field name
+    /// (e.g. `provider`) is already valid snake_case, so `to_php_name` maps it to itself.
+    /// The emitted `Self { ... }` literal must use field-init shorthand, not `provider:
+    /// provider`.
+    #[test]
+    fn from_json_constructor_uses_shorthand_for_single_word_field() {
+        let typ = TypeDef {
+            name: "LlmConfig".to_string(),
+            rust_path: "test_lib::LlmConfig".to_string(),
+            fields: vec![field("provider", TypeRef::String, false)],
+            has_default: true,
+            ..Default::default()
+        };
+
+        let out = gen_struct_methods_with_exclude(
+            &typ,
+            &mapper(),
+            true,
+            "test_lib",
+            &AHashSet::new(),
+            &AHashSet::new(),
+            &[],
+            &[],
+            &AHashSet::new(),
+            &[],
+            &AHashSet::new(),
+            &[],
+        );
+
+        assert!(
+            !out.contains("provider: provider"),
+            "single-word field must use shorthand, not `provider: provider`:\n{out}"
+        );
+        assert!(
+            out.contains("{ provider }") || out.contains("{ provider, "),
+            "expected field-init shorthand for `provider`:\n{out}"
+        );
+    }
+
+    /// Same `from_json`-constructor path, but for a multi-word field whose PHP param name
+    /// (`chunkSize`) genuinely differs from the Rust field name (`chunk_size`) — the real
+    /// `field: expr` form must still be emitted.
+    #[test]
+    fn from_json_constructor_keeps_named_form_for_multi_word_field() {
+        let typ = TypeDef {
+            name: "ChunkConfig".to_string(),
+            rust_path: "test_lib::ChunkConfig".to_string(),
+            fields: vec![field("chunk_size", TypeRef::Primitive(PrimitiveType::U32), false)],
+            has_default: true,
+            ..Default::default()
+        };
+
+        let out = gen_struct_methods_with_exclude(
+            &typ,
+            &mapper(),
+            true,
+            "test_lib",
+            &AHashSet::new(),
+            &AHashSet::new(),
+            &[],
+            &[],
+            &AHashSet::new(),
+            &[],
+            &AHashSet::new(),
+            &[],
+        );
+
+        assert!(
+            out.contains("chunk_size: chunkSize"),
+            "differing param name must keep explicit field-init form:\n{out}"
+        );
+    }
+
+    /// Plain `#[php(constructor)]` path (no serde, no defaults): single-word field must
+    /// also emit shorthand rather than `label: label`.
+    #[test]
+    fn plain_constructor_uses_shorthand_for_single_word_field() {
+        let typ = TypeDef {
+            name: "SimpleLabel".to_string(),
+            rust_path: "test_lib::SimpleLabel".to_string(),
+            fields: vec![field("label", TypeRef::String, false)],
+            has_default: false,
+            ..Default::default()
+        };
+
+        let out = gen_struct_methods_with_exclude(
+            &typ,
+            &mapper(),
+            false,
+            "test_lib",
+            &AHashSet::new(),
+            &AHashSet::new(),
+            &[],
+            &[],
+            &AHashSet::new(),
+            &[],
+            &AHashSet::new(),
+            &[],
+        );
+
+        assert!(
+            !out.contains("label: label"),
+            "single-word field must use shorthand, not `label: label`:\n{out}"
+        );
+        assert!(
+            out.contains("{ label }") || out.contains("{ label, "),
+            "expected field-init shorthand for `label`:\n{out}"
+        );
+    }
 }

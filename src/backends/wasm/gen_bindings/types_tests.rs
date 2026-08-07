@@ -132,3 +132,32 @@ fn gen_struct_methods_skips_method_wrapper_when_field_getter_already_emitted() {
         "field/method name collision must emit `providers` exactly once, got {occurrences}:\n{out}"
     );
 }
+
+/// Regression coverage for the `clippy::redundant_field_names` fix: a single-word field name
+/// (e.g. `provider`) is already valid camelCase, so `to_node_name` maps it to itself. The
+/// no-colon branch of `convert_constructor_params_to_camel_case` must keep the assignment as
+/// field-init shorthand, not rewrite it to `provider: provider`.
+#[test]
+fn convert_constructor_params_keeps_shorthand_for_single_word_field() {
+    let field_names = vec!["provider".to_string()];
+
+    let (_params, assignments) = convert_constructor_params_to_camel_case("provider: String", "provider", &field_names);
+
+    assert_eq!(
+        assignments, "provider",
+        "single-word field must stay shorthand, not be rewritten to `provider: provider`"
+    );
+}
+
+/// Same no-colon branch, but for a multi-word field whose camelCase form (`chunkSize`)
+/// genuinely differs from the snake_case field name (`chunk_size`) — the real `field: camel`
+/// form must still be emitted so the JS-facing local variable is in scope.
+#[test]
+fn convert_constructor_params_renames_multi_word_field() {
+    let field_names = vec!["chunk_size".to_string()];
+
+    let (_params, assignments) =
+        convert_constructor_params_to_camel_case("chunk_size: u32", "chunk_size", &field_names);
+
+    assert_eq!(assignments, "chunk_size: chunkSize");
+}

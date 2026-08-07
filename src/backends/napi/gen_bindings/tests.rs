@@ -404,3 +404,72 @@ fn sanitized_tagged_enum_field_conversions_table() {
         );
     }
 }
+
+/// Regression coverage for the `clippy::redundant_field_names` fix: an optional tagged-enum
+/// field whose type needs no cast/wrap (e.g. plain `Option<String>`) falls into the fallback
+/// match arm in `gen_tagged_enum_core_to_binding`, where the destructured core-side variable
+/// is bound under the same name as the binding field it fills. The field-init expression must
+/// use shorthand (`text`), never `text: text`.
+#[test]
+fn core_to_binding_uses_shorthand_for_self_assigned_optional_field() {
+    let enum_def = EnumDef {
+        name: "Content".to_string(),
+        rust_path: "fixture_core::Content".to_string(),
+        variants: vec![EnumVariant {
+            name: "Text".to_string(),
+            fields: vec![FieldDef {
+                name: "text".to_string(),
+                ty: TypeRef::String,
+                optional: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        serde_tag: Some("type".to_string()),
+        serde_rename_all: Some("snake_case".to_string()),
+        ..Default::default()
+    };
+
+    let struct_names = AHashSet::new();
+    let core_to_binding = gen_tagged_enum_core_to_binding(&enum_def, "fixture_core", "Js", &struct_names);
+
+    assert!(
+        !core_to_binding.contains("text: text"),
+        "self-assigned optional field must use shorthand, not `text: text`:\n{core_to_binding}"
+    );
+    assert!(
+        core_to_binding.contains("text }") || core_to_binding.contains("text,"),
+        "expected field-init shorthand for `text`:\n{core_to_binding}"
+    );
+}
+
+/// Same fallback arm, but for a field whose type does need a cast/wrap (`Vec<Named>` maps
+/// through `.into()`) — this must keep the real `field: expr` form, not collapse to shorthand.
+#[test]
+fn core_to_binding_keeps_expr_form_when_conversion_is_required() {
+    let enum_def = EnumDef {
+        name: "Content".to_string(),
+        rust_path: "fixture_core::Content".to_string(),
+        variants: vec![EnumVariant {
+            name: "Items".to_string(),
+            fields: vec![FieldDef {
+                name: "items".to_string(),
+                ty: TypeRef::Vec(Box::new(TypeRef::Named("Widget".to_string()))),
+                optional: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        serde_tag: Some("type".to_string()),
+        serde_rename_all: Some("snake_case".to_string()),
+        ..Default::default()
+    };
+
+    let struct_names = AHashSet::new();
+    let core_to_binding = gen_tagged_enum_core_to_binding(&enum_def, "fixture_core", "Js", &struct_names);
+
+    assert!(
+        core_to_binding.contains("items: items.map(|v| v.into_iter().map(Into::into).collect())"),
+        "Vec<Named> optional field must keep its real conversion expression:\n{core_to_binding}"
+    );
+}
