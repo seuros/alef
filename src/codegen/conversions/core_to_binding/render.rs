@@ -1,5 +1,7 @@
 use crate::codegen::conversions::ConversionConfig;
-use crate::codegen::conversions::helpers::{core_type_path_remapped, field_references_excluded_type, is_newtype};
+use crate::codegen::conversions::helpers::{
+    core_type_path_remapped, field_references_excluded_type, is_newtype, is_tuple_type_name, needs_clippy_allow,
+};
 use crate::core::ir::{CoreWrapper, TypeDef, TypeRef};
 use ahash::AHashSet;
 
@@ -24,11 +26,16 @@ pub fn gen_from_core_to_binding_cfg(
     if is_newtype(typ) {
         let field = &typ.fields[0];
         let newtype_inner_expr = match &field.ty {
+            // An identity/tuple-passthrough Named type is never actually converted (no
+            // separate binding-side type exists for it), so `.into()` would be a no-op.
+            TypeRef::Named(name) if is_tuple_type_name(name) => "val.0".to_string(),
             TypeRef::Named(_) => "val.0.into()".to_string(),
             TypeRef::Path => "val.0.to_string_lossy().to_string()".to_string(),
             TypeRef::Duration => "val.0.as_millis() as u64".to_string(),
             _ => "val.0".to_string(),
         };
+        let (needs_redundant_closure_allow, needs_useless_conversion_allow) =
+            needs_clippy_allow(std::iter::once(newtype_inner_expr.as_str()));
         return crate::codegen::template_env::render(
             "conversions/core_to_binding_impl",
             minijinja::context! {
@@ -38,6 +45,8 @@ pub fn gen_from_core_to_binding_cfg(
                 is_newtype => true,
                 newtype_inner_expr => newtype_inner_expr,
                 fields => vec![] as Vec<String>,
+                needs_redundant_closure_allow => needs_redundant_closure_allow,
+                needs_useless_conversion_allow => needs_useless_conversion_allow,
             },
         );
     }
@@ -68,9 +77,25 @@ pub fn gen_from_core_to_binding_cfg(
         );
         let base_conversion = if field.is_boxed && matches!(&field.ty, TypeRef::Named(_)) {
             if field.optional {
-                let src = format!("{}: val.{}.map(Into::into)", field.name, field.name);
-                let dst = format!("{}: val.{}.map(|v| (*v).into())", field.name, field.name);
-                if base_conversion == src { dst } else { base_conversion }
+                if let Some(expr) = base_conversion.strip_prefix(&format!("{}: ", field.name)) {
+                    let src = format!("val.{}.map(Into::into)", field.name);
+                    if expr == src {
+                        // Exact byte-for-byte output for the common (non-opaque) case that
+                        // already works across every generated binding today.
+                        format!("{}: val.{}.map(|v| (*v).into())", field.name, field.name)
+                    } else if let Some(rest) = expr.strip_prefix(&format!("val.{}", field.name)) {
+                        // Structural fallback for any other producer (e.g. an opaque handle
+                        // whose base conversion wraps the unboxed value in
+                        // `Wrapper { inner: Arc::new(v) }`): unbox the `Option<Box<T>>` to
+                        // `Option<T>` first, then apply whatever the rest of the expression
+                        // already does to that value.
+                        format!("{}: val.{}.map(|v| *v){rest}", field.name, field.name)
+                    } else {
+                        base_conversion.clone()
+                    }
+                } else {
+                    base_conversion.clone()
+                }
             } else {
                 base_conversion.replace(&format!("val.{}", field.name), &format!("(*val.{})", field.name))
             }
@@ -179,6 +204,9 @@ pub fn gen_from_core_to_binding_cfg(
         fields.push(conversion);
     }
 
+    let (needs_redundant_closure_allow, needs_useless_conversion_allow) =
+        needs_clippy_allow(fields.iter().map(String::as_str));
+
     crate::codegen::template_env::render(
         "conversions/core_to_binding_impl",
         minijinja::context! {
@@ -188,6 +216,8 @@ pub fn gen_from_core_to_binding_cfg(
             is_newtype => false,
             newtype_inner_expr => "",
             fields => fields,
+            needs_redundant_closure_allow => needs_redundant_closure_allow,
+            needs_useless_conversion_allow => needs_useless_conversion_allow,
         },
     )
 }

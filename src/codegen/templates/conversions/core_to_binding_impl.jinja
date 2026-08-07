@@ -1,4 +1,10 @@
+{%- if needs_redundant_closure_allow and needs_useless_conversion_allow %}
 #[allow(clippy::redundant_closure, clippy::useless_conversion)]
+{%- elif needs_redundant_closure_allow %}
+#[allow(clippy::redundant_closure)]
+{%- elif needs_useless_conversion_allow %}
+#[allow(clippy::useless_conversion)]
+{%- endif %}
 impl From<{{ core_path }}{% if has_lifetime_params %}<'_>{% endif %}> for {{ binding_name }} {
     fn from(val: {{ core_path }}{% if has_lifetime_params %}<'_>{% endif %}) -> Self {
         {%- if is_newtype %}

@@ -43,7 +43,10 @@ pub fn apply_core_wrapper_to_core(
                 if expr == "Default::default()" {
                     conversion.to_string()
                 } else if optional {
-                    format!("{name}: {expr}.map(|v| std::sync::Arc::new(v))")
+                    // Bare function reference instead of `|v| std::sync::Arc::new(v)`: the
+                    // closure's body is exactly a single by-value call matching its own
+                    // parameter, which is what `clippy::redundant_closure` flags.
+                    format!("{name}: {expr}.map(std::sync::Arc::new)")
                 } else {
                     format!("{name}: std::sync::Arc::new({expr})")
                 }

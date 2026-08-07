@@ -1,3 +1,4 @@
+mod clippy_allow;
 mod eligibility;
 mod enum_arms;
 mod field_fragments;
@@ -5,6 +6,7 @@ mod paths;
 mod primitives;
 mod type_discovery;
 
+pub(crate) use clippy_allow::{clippy_allow_attr_line, needs_clippy_allow};
 pub(crate) use eligibility::is_tuple_type_name;
 pub use eligibility::{
     can_generate_conversion, can_generate_enum_conversion, can_generate_enum_conversion_from_core, convertible_types,

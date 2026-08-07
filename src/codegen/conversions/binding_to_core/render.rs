@@ -1,7 +1,7 @@
 use crate::codegen::conversions::ConversionConfig;
 use crate::codegen::conversions::helpers::{
-    core_prim_str, core_type_path_remapped, field_references_excluded_type, is_newtype, needs_f64_cast, needs_i32_cast,
-    needs_i64_cast,
+    clippy_allow_attr_line, core_prim_str, core_type_path_remapped, field_references_excluded_type, is_newtype,
+    is_tuple_type_name, needs_clippy_allow, needs_f64_cast, needs_i32_cast, needs_i64_cast,
 };
 use crate::core::ir::{CoreWrapper, FieldDef, TypeDef, TypeRef};
 
@@ -25,11 +25,16 @@ pub fn gen_from_binding_to_core_cfg(typ: &TypeDef, core_import: &str, config: &C
     if is_newtype(typ) {
         let field = &typ.fields[0];
         let newtype_inner_expr = match &field.ty {
+            // An identity/tuple-passthrough Named type is never actually converted (no
+            // separate binding-side type exists for it), so `.into()` would be a no-op.
+            TypeRef::Named(name) if is_tuple_type_name(name) => "val._0".to_string(),
             TypeRef::Named(_) => "val._0.into()".to_string(),
             TypeRef::Path => "val._0.into()".to_string(),
             TypeRef::Duration => "std::time::Duration::from_millis(val._0)".to_string(),
             _ => "val._0".to_string(),
         };
+        let (needs_redundant_closure_allow, needs_useless_conversion_allow) =
+            needs_clippy_allow(std::iter::once(newtype_inner_expr.as_str()));
         return crate::codegen::template_env::render(
             "conversions/binding_to_core_impl",
             minijinja::context! {
@@ -44,6 +49,8 @@ pub fn gen_from_binding_to_core_cfg(typ: &TypeDef, core_import: &str, config: &C
                 has_stripped_cfg_fields => typ.has_stripped_cfg_fields,
                 statements => vec![] as Vec<String>,
                 fields => vec![] as Vec<String>,
+                needs_redundant_closure_allow => needs_redundant_closure_allow,
+                needs_useless_conversion_allow => needs_useless_conversion_allow,
             },
         );
     }
@@ -66,6 +73,8 @@ pub fn gen_from_binding_to_core_cfg(typ: &TypeDef, core_import: &str, config: &C
                 has_stripped_cfg_fields => typ.has_stripped_cfg_fields,
                 statements => vec![] as Vec<String>,
                 fields => vec![] as Vec<String>,
+                needs_redundant_closure_allow => false,
+                needs_useless_conversion_allow => false,
             },
         );
     }
@@ -88,6 +97,8 @@ pub fn gen_from_binding_to_core_cfg(typ: &TypeDef, core_import: &str, config: &C
                 has_stripped_cfg_fields => typ.has_stripped_cfg_fields,
                 statements => vec![] as Vec<String>,
                 fields => vec![] as Vec<String>,
+                needs_redundant_closure_allow => false,
+                needs_useless_conversion_allow => false,
             },
         );
     }
@@ -160,6 +171,8 @@ pub fn gen_from_binding_to_core_cfg(typ: &TypeDef, core_import: &str, config: &C
             }
         }
 
+        let (needs_redundant_closure_allow, needs_useless_conversion_allow) =
+            needs_clippy_allow(statements.iter().map(String::as_str));
         return crate::codegen::template_env::render(
             "conversions/binding_to_core_impl",
             minijinja::context! {
@@ -174,6 +187,8 @@ pub fn gen_from_binding_to_core_cfg(typ: &TypeDef, core_import: &str, config: &C
                 has_stripped_cfg_fields => typ.has_stripped_cfg_fields,
                 statements => statements,
                 fields => vec![] as Vec<String>,
+                needs_redundant_closure_allow => needs_redundant_closure_allow,
+                needs_useless_conversion_allow => needs_useless_conversion_allow,
             },
         );
     }
@@ -233,6 +248,13 @@ pub fn gen_from_binding_to_core_cfg(typ: &TypeDef, core_import: &str, config: &C
 
     let emit_trailer = typ.has_stripped_cfg_fields || core_has_default;
 
+    let (needs_redundant_closure_allow, needs_useless_conversion_allow) = needs_clippy_allow(
+        fields
+            .iter()
+            .map(String::as_str)
+            .chain(statements.iter().map(String::as_str)),
+    );
+
     crate::codegen::template_env::render(
         "conversions/binding_to_core_impl",
         minijinja::context! {
@@ -247,6 +269,8 @@ pub fn gen_from_binding_to_core_cfg(typ: &TypeDef, core_import: &str, config: &C
             has_stripped_cfg_fields => emit_trailer,
             statements => statements,
             fields => fields,
+            needs_redundant_closure_allow => needs_redundant_closure_allow,
+            needs_useless_conversion_allow => needs_useless_conversion_allow,
         },
     )
 }
@@ -300,6 +324,22 @@ fn gen_private_field_construction(
         });
     }
 
+    // When the core type has no `Default`, the emitted impl is a bare `compile_error!` that
+    // never references `assignments` at all, so neither lint can fire regardless of their
+    // content.
+    let (needs_redundant_closure_allow, needs_useless_conversion_allow) = if typ.has_default {
+        needs_clippy_allow(assignments.iter().map(|a| a.expr.as_str()))
+    } else {
+        (false, false)
+    };
+    let mut allow_attrs: Vec<&str> = vec!["clippy::field_reassign_with_default, clippy::let_and_return"];
+    match (needs_redundant_closure_allow, needs_useless_conversion_allow) {
+        (true, true) => allow_attrs.push("clippy::redundant_closure, clippy::useless_conversion"),
+        (true, false) => allow_attrs.push("clippy::redundant_closure"),
+        (false, true) => allow_attrs.push("clippy::useless_conversion"),
+        (false, false) => {}
+    }
+
     crate::codegen::conversions::construction::gen_private_field_from_impl(
         &crate::codegen::conversions::construction::PrivateFieldImpl {
             core_path,
@@ -307,10 +347,7 @@ fn gen_private_field_construction(
             param: "val",
             has_default: typ.has_default,
             assignments: &assignments,
-            allow_attrs: &[
-                "clippy::field_reassign_with_default, clippy::let_and_return",
-                "clippy::redundant_closure, clippy::useless_conversion",
-            ],
+            allow_attrs: &allow_attrs,
         },
     )
 }
@@ -382,14 +419,35 @@ fn field_core_conversion(
             .opaque_types
             .is_some_and(|opaque| opaque.contains(n.as_str())));
     let conversion = if is_opaque_arc_field {
-        if field.optional {
+        // The opaque wrapper's `inner` field is always `Arc<T>`. When the core field is
+        // `Box<T>` instead, moving `.inner` out directly would produce `Arc<T>`, not `Box<T>`
+        // — deref-clone the shared value and rebox it instead of moving the handle.
+        if field.is_boxed {
+            if field.optional {
+                format!(
+                    "{}: val.{}.map(|v| Box::new((*v.inner).clone()))",
+                    field.name, field.name
+                )
+            } else {
+                format!("{}: Box::new((*val.{}.inner).clone())", field.name, field.name)
+            }
+        } else if field.optional {
             format!("{}: val.{}.map(|v| v.inner)", field.name, field.name)
         } else {
             format!("{}: val.{}.inner", field.name, field.name)
         }
     } else if is_opaque_no_wrapper_field {
         if config.trait_bridge_field_is_arc_wrapper(&field.name) {
-            if field.optional {
+            if field.is_boxed {
+                if field.optional {
+                    format!(
+                        "{}: val.{}.map(|v| Box::new((*v.inner).clone()))",
+                        field.name, field.name
+                    )
+                } else {
+                    format!("{}: Box::new((*val.{}.inner).clone())", field.name, field.name)
+                }
+            } else if field.optional {
                 format!("{}: val.{}.map(|v| (*v.inner).clone())", field.name, field.name)
             } else {
                 format!("{}: (*val.{}.inner).clone()", field.name, field.name)
@@ -485,9 +543,11 @@ pub fn gen_from_explicit_new_constructor(
     }
 
     let args_str = args.join(",\n        ");
+    let (needs_redundant_closure_allow, needs_useless_conversion_allow) =
+        needs_clippy_allow(args.iter().map(String::as_str));
+    let allow_attr = clippy_allow_attr_line(needs_redundant_closure_allow, needs_useless_conversion_allow);
     Some(format!(
-        "#[allow(clippy::redundant_closure, clippy::useless_conversion)]\n\
-         impl From<{binding_name}> for {core_path} {{\n\
+        "{allow_attr}impl From<{binding_name}> for {core_path} {{\n\
              fn from(val: {binding_name}) -> Self {{\n\
                  Self::{constructor_name}(\n\
                      {args_str},\n\
@@ -612,9 +672,11 @@ pub fn gen_from_lifetime_type_constructor(
     }
 
     let args_str = args.join(",\n        ");
+    let (needs_redundant_closure_allow, needs_useless_conversion_allow) =
+        needs_clippy_allow(args.iter().map(String::as_str));
+    let allow_attr = clippy_allow_attr_line(needs_redundant_closure_allow, needs_useless_conversion_allow);
     let code = format!(
-        "#[allow(clippy::redundant_closure, clippy::useless_conversion)]\n\
-         impl From<{binding_name}> for {core_path}<'_> {{\n\
+        "{allow_attr}impl From<{binding_name}> for {core_path}<'_> {{\n\
              fn from(val: {binding_name}) -> Self {{\n\
                  {core_path}::{constructor_name}(\n\
                      {args_str},\n\

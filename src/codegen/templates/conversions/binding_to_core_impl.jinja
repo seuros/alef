@@ -4,7 +4,13 @@
 {%- if uses_builder_pattern %}
 #[allow(clippy::field_reassign_with_default, clippy::let_and_return)]
 {%- endif %}
+{%- if needs_redundant_closure_allow and needs_useless_conversion_allow %}
 #[allow(clippy::redundant_closure, clippy::useless_conversion)]
+{%- elif needs_redundant_closure_allow %}
+#[allow(clippy::redundant_closure)]
+{%- elif needs_useless_conversion_allow %}
+#[allow(clippy::useless_conversion)]
+{%- endif %}
 impl From<{{ binding_name }}> for {{ core_path }}{% if has_lifetime_params %}<'_>{% endif %} {
     fn from(val: {{ binding_name }}) -> Self {
         {%- if is_newtype %}

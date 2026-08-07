@@ -419,3 +419,133 @@ fn fully_mirrored_type_without_default_keeps_exhaustive_literal() {
          impl — it would fail to compile (E0277); got:\n{out}"
     );
 }
+
+fn boxed_named_field(name: &str, optional: bool, core_wrapper: CoreWrapper) -> FieldDef {
+    FieldDef {
+        name: name.to_string(),
+        ty: TypeRef::Named("Inner".to_string()),
+        optional,
+        default: None,
+        doc: String::new(),
+        sanitized: false,
+        is_boxed: true,
+        type_rust_path: None,
+        cfg: None,
+        typed_default: None,
+        core_wrapper,
+        vec_inner_core_wrapper: CoreWrapper::None,
+        newtype_wrapper: None,
+        serde_rename: None,
+        serde_flatten: false,
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        original_type: None,
+    }
+}
+
+/// Regression guard: a plain (non-opaque) `Option<Box<Inner>>` struct field must keep
+/// generating `.map(Into::into).map(Box::new)` — this is the path every generated binding
+/// relies on today (e.g. `Option<Box<ExtractedDocument>>`), so it must not change shape
+/// while fixing the opaque+boxed combination.
+#[test]
+fn boxed_named_field_optional_transparent_path_unchanged() {
+    let typ = type_with_field(boxed_named_field("child", true, CoreWrapper::None));
+
+    let out = gen_from_binding_to_core(&typ, "crate");
+
+    assert!(
+        out.contains("child: val.child.map(Into::into).map(Box::new)"),
+        "expected the existing transparent Option<Box<T>> shape to be preserved; got:\n{out}"
+    );
+}
+
+/// Companion to the above for the non-optional `Box<Inner>` shape.
+#[test]
+fn boxed_named_field_non_optional_transparent_path_unchanged() {
+    let typ = type_with_field(boxed_named_field("child", false, CoreWrapper::None));
+
+    let out = gen_from_binding_to_core(&typ, "crate");
+
+    assert!(
+        out.contains("child: Box::new(val.child.into())"),
+        "expected the existing transparent Box<T> shape to be preserved; got:\n{out}"
+    );
+}
+
+/// Regression: an opaque `Arc`-wrapper field (`OpaqueHandle { inner: Arc<T> }`) that is also
+/// `Box<T>` on the core struct must deref-clone the shared value and rebox it, not move the
+/// `Arc<T>` out directly — moving it would produce `Option<Arc<T>>` where `Option<Box<T>>`
+/// is required.
+#[test]
+fn boxed_opaque_arc_field_optional_reboxes_instead_of_moving_arc() {
+    let opaque_type_name = "Inner".to_string();
+    let mut opaque_set = AHashSet::new();
+    opaque_set.insert(opaque_type_name);
+
+    let field = boxed_named_field("child", true, CoreWrapper::Arc);
+    let config = ConversionConfig {
+        opaque_types: Some(&opaque_set),
+        ..ConversionConfig::default()
+    };
+
+    let out = gen_from_binding_to_core_cfg(&type_with_field(field), "crate", &config);
+
+    assert!(
+        out.contains("child: val.child.map(|v| Box::new((*v.inner).clone()))"),
+        "expected the opaque Arc handle to be deref-cloned and reboxed, got:\n{out}"
+    );
+    assert!(
+        !out.contains("val.child.map(|v| v.inner)"),
+        "must not move the bare Arc<T> handle into a Box<T> field, got:\n{out}"
+    );
+}
+
+/// Non-optional companion: `Box<Inner>` sourced from an opaque `Arc`-wrapper field.
+#[test]
+fn boxed_opaque_arc_field_non_optional_reboxes_instead_of_moving_arc() {
+    let opaque_type_name = "Inner".to_string();
+    let mut opaque_set = AHashSet::new();
+    opaque_set.insert(opaque_type_name);
+
+    let field = boxed_named_field("child", false, CoreWrapper::Arc);
+    let config = ConversionConfig {
+        opaque_types: Some(&opaque_set),
+        ..ConversionConfig::default()
+    };
+
+    let out = gen_from_binding_to_core_cfg(&type_with_field(field), "crate", &config);
+
+    assert!(
+        out.contains("child: Box::new((*val.child.inner).clone())"),
+        "expected the opaque Arc handle to be deref-cloned and reboxed, got:\n{out}"
+    );
+    assert!(
+        !out.contains("child: val.child.inner"),
+        "must not move the bare Arc<T> handle into a Box<T> field, got:\n{out}"
+    );
+}
+
+/// Regression: a trait-bridge, no-wrapper opaque field (`core_wrapper == None`, resolved via
+/// `trait_bridge_arc_wrapper_field_names`) that is also `Box<T>` on the core struct must
+/// rebox the cloned value rather than emitting a bare (un-boxed) clone.
+#[test]
+fn boxed_opaque_no_wrapper_trait_bridge_field_reboxes_clone() {
+    let opaque_type_name = "Inner".to_string();
+    let mut opaque_set = AHashSet::new();
+    opaque_set.insert(opaque_type_name);
+    let arc_wrapper = vec!["child".to_string()];
+
+    let field = boxed_named_field("child", true, CoreWrapper::None);
+    let config = ConversionConfig {
+        opaque_types: Some(&opaque_set),
+        trait_bridge_arc_wrapper_field_names: &arc_wrapper,
+        ..ConversionConfig::default()
+    };
+
+    let out = gen_from_binding_to_core_cfg(&type_with_field(field), "crate", &config);
+
+    assert!(
+        out.contains("child: val.child.map(|v| Box::new((*v.inner).clone()))"),
+        "expected the trait-bridge clone to be reboxed for a Box<T> field, got:\n{out}"
+    );
+}
