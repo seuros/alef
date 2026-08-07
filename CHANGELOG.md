@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.56.0] - 2026-08-07
+
+### Changed
+
+- **BREAKING: `FieldDef` gains a `version` field.** `alef(since = "...")` written on a struct
+  field was parsed and immediately discarded — every other IR item (structs, methods, params)
+  already carried a `VersionAnnotation`, but the field-level annotation had nowhere to land.
+  `FieldDef` now has `pub version: VersionAnnotation` alongside the rest, so field-level `since`/
+  `deprecated` metadata survives extraction and reaches backends. Any code that builds a `FieldDef`
+  with an exhaustive struct literal — the pattern used ~300 times in this crate's own extractor and
+  IR-construction tests, and likely used by any downstream code that constructs the IR directly
+  rather than only reading it — now fails to compile with a missing-field error. Add
+  `..Default::default()` to the literal (the field carries `#[serde(default)]`, so deserializing an
+  older IR document is unaffected) or set `version` explicitly if you need to preserve field-level
+  annotations. (`src/core/ir/items.rs`)
+
+### Fixed
+
+- **A boxed field on a struct-variant (named-field) enum arm now converts correctly in both
+  directions.** wasm tagged-enum codegen already threaded `field.is_boxed` through the tuple-variant
+  branch, but the named-field branch ignored it, so a `Box<T>` payload on a struct variant generated
+  a conversion with no `Box::new`/deref — code that did not compile. Both branches now share
+  `box_wrap_map_into`/`box_unwrap_map_into`/`box_unwrap_into` helpers, so tuple and struct variants
+  wrap and unwrap boxed fields identically in both directions.
+  (`src/backends/wasm/gen_bindings/enums.rs`)
+
+- **A wasm type that drops a field during extraction no longer emits a delegating `Default` impl it
+  cannot satisfy.** The delegating impl is `<core::T as Default>::default().into()`, which requires
+  a `From<core::T>` able to carry every core field into the binding type; a field omitted from the
+  binding (e.g. an unknown/sanitized type) makes that conversion impossible to generate correctly.
+  Such types now fall back to `#[derive(Default)]` on the fields the binding actually has, matching
+  the same core-to-binding convertibility check already used for the `From` impl itself.
+  (`src/backends/wasm/gen_bindings/mod.rs`)
+
+- **Generated Dart code passes `dart analyze` with zero warnings.** Three independent issues: `lib.dart`
+  exported `traits.dart` but never imported it, so every `///` doc reference to a plugin trait was an
+  unresolvable `comment_references` — `export` puts a name in downstream scope, not the exporting
+  file's own scope, and doc-comment resolution only looks at the latter; `render_type` unconditionally
+  added `import 'dart:typed_data'` even when the FRB typed-list import already superseded it, tripping
+  `unused_import`; and the scaffolded `bin/download_libs.dart` reached into `lib/` via a relative
+  `../lib/...` path instead of the package import. `lib.dart` now also imports `traits.dart`, the
+  redundant `dart:typed_data` import is dropped once the FRB import is present, and
+  `download_libs.dart` uses a `package:` import.
+  (`src/backends/dart/gen_bindings/mod.rs`)
+
+- **flutter_rust_bridge no longer emits calls to functions that were compiled out.** FRB is not
+  feature-aware: it generates bindings straight from `lib.rs`, so a function behind a `#[cfg(...)]`
+  gate that a reduced feature set (e.g. Android's trimmed OCR backend list) compiles out still gets a
+  generated call site, which fails to build. A new post-build step,
+  `PostBuildStep::CarryFrbCfgGates`, reads the `#[cfg(...)]` gates directly off `lib.rs` and rewrites
+  the frb-generated glue to carry the same gates, via `carry_lib_rs_cfg_gates_into_frb_generated`.
+  (`src/backends/dart/frb_rewrite/cfg_gates.rs`, `src/backends/dart/frb_rewrite.rs`,
+  `src/cli/pipeline/commands/build.rs`)
+
+- **The generated PHPStan stub declares a getter for every binding field, matching the extension it
+  describes.** The real ext-php-rs extension emits a getter for every field unconditionally (a
+  `for field in binding_fields(&typ.fields)` loop in `structs.rs`), including fields with no
+  constructor-param support. The stub used to skip some of those, so PHPStan reported a false
+  "undefined method" on a getter call that works fine at runtime. The stub's getter loop now mirrors
+  the extension's exactly, including the `?string` return type Json/untagged-enum getters always
+  serialize to regardless of the field's own optionality.
+  (`src/backends/php/gen_bindings/type_stubs.rs`)
+
+- **Generated Python stubs annotate `Json` fields as `str`, not `dict[str, Any]`.** `Pyo3Mapper::json()`
+  maps `TypeRef::Json` to Rust `String`, so the field is always a JSON-encoded string at the pyo3
+  boundary — the stub previously advertised `dict[str, Any]`, a type the runtime value never actually
+  has. Stubs now declare `str`, and the now-unneeded `from typing import Any` import tied to that
+  annotation is dropped so it doesn't trip ruff's `F401` (the `from_native` converters are still the
+  only remaining source of `Any`). (`src/backends/pyo3/gen_bindings/types.rs`)
+
 ## [0.55.8] - 2026-08-07
 
 ### Fixed
