@@ -646,12 +646,12 @@ mod tests {
 
     /// Regression test for issue #370: without `ffi_target_dep_overrides`, the
     /// injected FFI dep has no way to split per target the way the core dep
-    /// can via `target_dep_overrides`. This reproduces xberg's exact
-    /// hand-patched `packages/swift/rust/Cargo.toml` split — a flat
+    /// can via `target_dep_overrides`. This reproduces a downstream consumer's
+    /// exact hand-patched `packages/swift/rust/Cargo.toml` split — a flat
     /// `full-no-heic` default gated off iOS/Android, and `android-target` on
     /// iOS/Android — so that downstream patch can be deleted.
     #[test]
-    fn cargo_toml_ffi_target_overrides_reproduce_xberg_ios_android_split() {
+    fn cargo_toml_ffi_target_overrides_reproduce_downstream_ios_android_split() {
         use crate::core::config::languages::SwiftTargetDepOverride;
 
         let api = ApiSurface::default();
@@ -662,9 +662,9 @@ mod tests {
         }];
 
         let content = emit_cargo_toml(
-            "xberg",
-            "xberg",
-            "xberg",
+            "acme",
+            "acme",
+            "acme",
             "1.1.0",
             "0.1.59",
             "0.1.59",
@@ -676,8 +676,8 @@ mod tests {
             &[],
             &api,
             &[],
-            "xberg-ffi",
-            "../../../crates/xberg-ffi",
+            "acme-ffi",
+            "../../../crates/acme-ffi",
             &["full-no-heic".to_string()],
             &ffi_overrides,
         );
@@ -685,30 +685,30 @@ mod tests {
         assert!(
             content.contains(
                 "[target.'cfg(not(any(target_os = \"ios\", target_os = \"android\")))'.dependencies]\n\
-xberg-ffi = { version = \"1.1.0\", path = \"../../../crates/xberg-ffi\", default-features = false, features = [\"full-no-heic\"] }"
+acme-ffi = { version = \"1.1.0\", path = \"../../../crates/acme-ffi\", default-features = false, features = [\"full-no-heic\"] }"
             ),
             "must emit the default (non-iOS/Android) target block exactly; got:\n{content}"
         );
         assert!(
             content.contains(
                 "[target.'cfg(any(target_os = \"ios\", target_os = \"android\"))'.dependencies]\n\
-xberg-ffi = { version = \"1.1.0\", path = \"../../../crates/xberg-ffi\", default-features = false, features = [\"android-target\"] }"
+acme-ffi = { version = \"1.1.0\", path = \"../../../crates/acme-ffi\", default-features = false, features = [\"android-target\"] }"
             ),
             "must emit the iOS/Android target block exactly; got:\n{content}"
         );
-        // Both target-gated dep lines start with "xberg-ffi = ", so distinguish
+        // Both target-gated dep lines start with "acme-ffi = ", so distinguish
         // "no flat-table duplicate" by an exact count rather than a substring
         // match, which would also match the (expected) lines inside the two
-        // target blocks asserted above.
-        let ffi_dep_line_count = content.lines().filter(|l| l.starts_with("xberg-ffi = ")).count();
+        // target blocks asserted above. ~keep
+        let ffi_dep_line_count = content.lines().filter(|l| l.starts_with("acme-ffi = ")).count();
         assert_eq!(
             ffi_dep_line_count, 2,
-            "exactly the two target-gated xberg-ffi lines must be emitted, with no bare \
+            "exactly the two target-gated acme-ffi lines must be emitted, with no bare \
              flat-table duplicate; got {ffi_dep_line_count} in:\n{content}"
         );
         assert!(
-            !content.contains(r#"xberg-ffi = { version = "1.1.0", path = "../../../crates/xberg-ffi" }"#),
-            "the flat `[dependencies]` table must not carry a bare, feature-less xberg-ffi entry \
+            !content.contains(r#"acme-ffi = { version = "1.1.0", path = "../../../crates/acme-ffi" }"#),
+            "the flat `[dependencies]` table must not carry a bare, feature-less acme-ffi entry \
              once target overrides apply; got:\n{content}"
         );
         toml::from_str::<toml::Value>(&content).expect("generated Cargo.toml must be valid TOML");
@@ -763,10 +763,10 @@ xberg-ffi = { version = \"1.1.0\", path = \"../../../crates/xberg-ffi\", default
     /// `[dependencies]` section, not per-dependency. The core dep's
     /// `target_overrides` and the FFI dep's `ffi_target_overrides` both emit
     /// such tables into the same manifest, so sorting each group independently
-    /// (and simply concatenating them) is not enough: this reproduces xberg's
-    /// real config (a core `all(...)` macOS-Intel override plus an FFI
-    /// `any(ios, android)` override) and asserts the fully merged, globally
-    /// sorted order.
+    /// (and simply concatenating them) is not enough: this reproduces a
+    /// downstream consumer's real config (a core `all(...)` macOS-Intel
+    /// override plus an FFI `any(ios, android)` override) and asserts the
+    /// fully merged, globally sorted order.
     #[test]
     fn cargo_toml_merges_and_sorts_core_and_ffi_target_blocks_together() {
         use crate::core::config::languages::SwiftTargetDepOverride;
@@ -796,9 +796,9 @@ xberg-ffi = { version = \"1.1.0\", path = \"../../../crates/xberg-ffi\", default
         }];
 
         let content = emit_cargo_toml(
-            "xberg",
-            "xberg",
-            "xberg",
+            "acme",
+            "acme",
+            "acme",
             "1.1.0",
             "0.1.59",
             "0.1.59",
@@ -810,14 +810,14 @@ xberg-ffi = { version = \"1.1.0\", path = \"../../../crates/xberg-ffi\", default
             &core_overrides,
             &api,
             &[],
-            "xberg-ffi",
-            "../../../crates/xberg-ffi",
+            "acme-ffi",
+            "../../../crates/acme-ffi",
             &["full-no-heic".to_string()],
             &ffi_overrides,
         );
 
         // Expected global order (plain byte-wise comparison of the raw cfg
-        // predicate string): `all(` < `any(` < `not(` < `target_os`.
+        // predicate string): `all(` < `any(` < `not(` < `target_os`. ~keep
         let all_pos = content
             .find("[target.'cfg(all(target_os = \"macos\", target_arch = \"x86_64\"))'.dependencies]")
             .expect("expected the macOS-Intel `all(...)` override block");

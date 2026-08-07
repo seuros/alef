@@ -977,13 +977,13 @@ fn render_go_mod_extras_idempotent() {
 /// error because `go` is a reserved word. The alias is escaped to `go_`.
 #[test]
 fn render_harness_uses_escaped_alias_for_reserved_keyword_module_segment() {
-    let out = super::render_harness_main(&E2eConfig::default(), &[], "github.com/example/spikard/packages/go");
+    let out = super::render_harness_main(&E2eConfig::default(), &[], "github.com/example/acme/packages/go");
     assert!(
-        !out.contains("go \"github.com/example/spikard/packages/go\""),
+        !out.contains("go \"github.com/example/acme/packages/go\""),
         "reserved keyword `go` must not be used as a verbatim import alias, got:\n{out}"
     );
     assert!(
-        out.contains("go_ \"github.com/example/spikard/packages/go\""),
+        out.contains("go_ \"github.com/example/acme/packages/go\""),
         "reserved keyword segment `go` should be escaped to alias `go_`, got:\n{out}"
     );
     assert!(

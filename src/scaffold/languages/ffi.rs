@@ -61,7 +61,7 @@ fn render_core_dep(
     }
     // See `crate::scaffold::join_sorted_target_dep_blocks`: cargo-sort orders
     // `[target.'cfg(...)'.dependencies]` tables alphabetically by the raw cfg
-    // predicate string, so the default `not(...)` branch is not always first.
+    // predicate string, so the default `not(...)` branch is not always first. ~keep
     (String::new(), crate::scaffold::join_sorted_target_dep_blocks(entries))
 }
 

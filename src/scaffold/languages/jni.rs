@@ -50,7 +50,7 @@ fn render_jni_target_blocks(
     }
     // See `crate::scaffold::join_sorted_target_dep_blocks`: cargo-sort orders
     // `[target.'cfg(...)'.dependencies]` tables alphabetically by the raw cfg
-    // predicate string, so the default `not(...)` branch is not always first.
+    // predicate string, so the default `not(...)` branch is not always first. ~keep
     let joined = crate::scaffold::join_sorted_target_dep_blocks(entries);
     format!("\n{joined}")
 }
@@ -519,11 +519,11 @@ features = ["windows-target"]
     /// `[target.'cfg(...)'.dependencies]` tables alphabetically by the raw cfg
     /// predicate string (plain byte-wise comparison), NOT with the default
     /// `cfg(not(any(...)))` branch always first. An `all(...)` override (e.g.
-    /// the macOS-Intel target xberg actually configures) sorts *before*
-    /// `not(...)` — `'a'` < `'n'` — so emitting the default branch
+    /// the macOS-Intel target a downstream consumer actually configures) sorts
+    /// *before* `not(...)` — `'a'` < `'n'` — so emitting the default branch
     /// unconditionally first produces an unsorted manifest that
-    /// `cargo sort --check` rejects. This reproduces xberg's real
-    /// `crates/xberg-jni/Cargo.toml` override set (android/ios/windows plus a
+    /// `cargo sort --check` rejects. This reproduces a downstream consumer's
+    /// real `crates/acme-jni/Cargo.toml` override set (android/ios/windows plus a
     /// macOS-Intel `all(...)` override) and asserts the `all(...)` block comes
     /// before the `not(...)` default block in the emitted text.
     #[test]

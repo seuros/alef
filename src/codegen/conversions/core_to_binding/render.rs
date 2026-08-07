@@ -88,7 +88,7 @@ pub fn gen_from_core_to_binding_cfg(
                         // whose base conversion wraps the unboxed value in
                         // `Wrapper { inner: Arc::new(v) }`): unbox the `Option<Box<T>>` to
                         // `Option<T>` first, then apply whatever the rest of the expression
-                        // already does to that value.
+                        // already does to that value. ~keep
                         format!("{}: val.{}.map(|v| *v){rest}", field.name, field.name)
                     } else {
                         base_conversion.clone()

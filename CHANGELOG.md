@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.55.7] - 2026-08-07
+
+### Added
+
+- **The Swift bridge crate's injected FFI dependency accepts per-target overrides.** A new
+  `[crates.swift] ffi_target_dep_overrides` list — `cfg`/`features`/`default_features`, the same
+  shape as `target_dep_overrides` — moves the secondary `*-ffi` dep out of the flat `[dependencies]`
+  table into one `[target.'cfg(...)'.dependencies]` block per predicate, with the default gated on
+  `cfg(not(any(...)))`. Until now `ffi_features` could only apply to a single ungated dep line, and
+  because Cargo unifies features across every edge to a package, an unconditional `full-no-heic`
+  pulled `sceptre-ocr-ort` onto iOS even where the core dep asked only for `android-target`,
+  tripping the mobile `compile_error!` guards; xberg carried a hand-written post-regen patch that
+  every local `alef all` reverted (#370). The FFI and core target entries are merged into one
+  globally sorted list, since cargo-sort orders all target tables per manifest, not per dependency.
+  Empty by default, so a config that sets only `ffi_features` is byte-identical.
+  (`src/core/config/languages/swift.rs`, `src/backends/swift/gen_rust_crate/cargo.rs`,
+  `src/backends/swift/gen_rust_crate/mod.rs`)
+
 ### Fixed
 
 - **Go e2e harness import no longer collides with a reserved keyword.** The harness derived its
@@ -67,6 +85,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pre-#218 `Default::default()` / `None` fallback, which always compiles.
   (`src/backends/napi/gen_bindings/methods.rs`,
   `src/codegen/conversions/helpers/field_fragments.rs`)
+
+- **Generated `[target.'cfg(...)'.dependencies]` tables are ordered the way `cargo-sort` expects.**
+  cargo-sort enforces table order, not just entries within a table: target-cfg blocks sort
+  alphabetically by the raw cfg predicate, byte-wise. Every generator emitted the default
+  `cfg(not(any(...)))` branch first, which is only coincidentally correct — `not(` sorts after
+  `all(` but before `target_os`, so an `all(...)` override (xberg's macOS-Intel target) produced an
+  unsorted manifest that `cargo sort --check`, and hence `poly lint`, rejects. A new
+  `join_sorted_target_dep_blocks` sorts the default branch together with every override, and the
+  FFI, JNI, Dart and shared `render_core_dep_with_overrides` (python/node/ruby/php/elixir) emitters
+  all route through it. Separately, the wasm template emitted `[dev-dependencies]` ahead of its
+  trailing `getrandom` target block; it now comes after. (`src/scaffold/mod.rs`,
+  `src/scaffold/languages/ffi.rs`, `src/scaffold/languages/jni.rs`,
+  `src/backends/dart/gen_rust_crate/cargo.rs`, `src/backends/wasm/gen_bindings/cargo.rs`)
+
+- **The Swift bridge crate's `Cargo.toml` emits `[build-dependencies]` before `[lints.rust]`.** The
+  manifest format string placed the lints table between the target-cfg blocks and
+  `[build-dependencies]`, which is not the section order `cargo-sort` accepts, so the generated
+  manifest failed `cargo sort --check`. (`src/backends/swift/gen_rust_crate/cargo.rs`)
+
+- **`sync-versions` leaves unpublished manifests at their own version.** The release version was
+  stamped onto every manifest the pipeline globbed, including `publish = false` workspace members —
+  compatibility shims that exist only to keep a path dependency resolvable — and npm `package.json`
+  files marked `"private": true`. Neither is ever published, so the churn was pure noise in every
+  release diff. `publish` is now parsed properly by `manifest_is_publishable`: absent, `true` and
+  `["some-registry"]` all stay publishable and only the literal `false` is skipped. Both that check
+  and the new `package_json_is_private` fail open — a missing or unparseable manifest counts as
+  publishable — so an odd manifest shape cannot silently freeze a real crate's version.
+  (`src/publish/workspace.rs`, `src/cli/pipeline/version_workspace.rs`,
+  `src/cli/pipeline/version_core.rs`, `src/cli/pipeline/version.rs`)
+
+- **The PHP, NAPI and wasm emitters use field-init shorthand instead of a redundant `x: x`.** All
+  three built struct literals with an unconditional `format!("{}: {}", name, expr)`, so any field
+  whose expression is just its own name came out as a `clippy::redundant_field_names` violation —
+  which is why xberg's generated crates carry a file-level allow for it: 423 sites in php, 318 in
+  wasm, 18 in node. Each emitter now compares the field name against the expression and emits the
+  bare name when they are equal, porting the guard the PyO3 backend already had (and why its count
+  is zero). A field whose type genuinely needs a cast or wrap keeps its full `field: expr` form.
+  (`src/backends/php/gen_bindings/types/structs.rs`, `src/backends/napi/gen_bindings/methods.rs`,
+  `src/backends/wasm/gen_bindings/types.rs`)
+
+- **Nested `Json` maps to `JsonElement` at any depth in the generated C# DTOs.**
+  `csharp_type_for_dto_field` matched only bare `Json`, `Map<_, Json>` and `Option<Json>` and then
+  fell through to `csharp_type`, which maps `Json` to `string` — so `Vec<Value>` became
+  `List<string>`, reintroducing the exact "Cannot get the value of a token type 'StartObject' as a
+  string" failure the function's own doc comment says it exists to prevent. It now recurses through
+  `Optional`, `Vec` and `Map`, reusing the same wrapping formats as `CsharpMapper`'s
+  `optional`/`vec`/`map` combinators, so non-Json types still resolve exactly as `csharp_type` does.
+  The Java `resolve_field_type` doc comment is corrected in the same pass: it claimed unknown
+  `Named` types are replaced with `JsonNode` when the backend actually emits `Object`, so the doc
+  was wrong, not the code. (`src/backends/csharp/type_map.rs`,
+  `src/backends/java/gen_bindings/types/shared.rs`)
+
+- **Generated `From` impls carry only the clippy allows they can actually trigger.** Every emitted
+  impl had an unconditional `#[allow(clippy::redundant_closure, clippy::useless_conversion)]` —
+  ~1435 sites across xberg's four generated crates, half of it duplicating a crate-level allow. A
+  new `needs_clippy_allow` scans the assembled field/statement/argument fragments for `(|` and for
+  `.into()`/`Into::into`, and each allow is emitted only when its lint can fire, matching how
+  `needless_update` was already gated. Two of the underlying closures are removed rather than
+  suppressed: an optional `Arc` core wrapper now emits `.map(std::sync::Arc::new)` instead of
+  `.map(|v| std::sync::Arc::new(v))`, and a newtype over an identity/tuple-passthrough `Named` type
+  drops the no-op `.into()`. (`src/codegen/conversions/helpers/clippy_allow.rs`,
+  `src/codegen/conversions/binding_to_core/render.rs`,
+  `src/codegen/conversions/core_to_binding/render.rs`,
+  `src/codegen/conversions/binding_to_core/wrappers.rs`,
+  `src/codegen/templates/conversions/binding_to_core_impl.jinja`,
+  `src/codegen/templates/conversions/core_to_binding_impl.jinja`)
+
+- **A boxed opaque field converts to `Box<T>` in both directions.** `field.is_boxed` was ignored on
+  both opaque paths. Binding→core moved the opaque wrapper's `Arc<T>` handle out of `.inner`
+  directly, overwriting the `Box::new` applied upstream and yielding `Option<Arc<T>>` where the core
+  struct declares `Option<Box<T>>`; core→binding nested the value as `Arc<Box<T>>`. Both branches
+  now deref-clone the shared value and rebox it. The core→binding unbox rewrite also matched its
+  input by exact string equality against `val.<field>.map(Into::into)`, so any other producer
+  silently skipped the deref; it is structural now — strip the `<field>: val.<field>` prefix, unbox,
+  then re-apply whatever the rest of the expression already did. Boxed struct fields had no test
+  coverage in either direction. (`src/codegen/conversions/binding_to_core/render.rs`,
+  `src/codegen/conversions/core_to_binding/render.rs`)
+
+- **`mix format` is the sole formatter for generated Elixir; poly no longer touches `.ex`/`.exs`.**
+  poly's pure-Rust Elixir formatter rewrites valid, mix-compliant source — `|>` pipe continuation
+  drops from 6 spaces to 4, multi-line struct/map field continuation collapses to flush-left — and
+  then its own `--check` reports the corrupted result as clean, so no freshness gate caught it: 247
+  generated Elixir files in xberg drifted with every gate passing. Fixing the templates could not
+  work, because poly re-corrupted correctly indented input on every run. Both the `--fix` and
+  `--check` poly invocations now pass `--exclude **/*.ex --exclude **/*.exs`, and `mix deps.get`
+  followed by `mix format` runs as an Elixir residual on a partial regen and once after the
+  full-regen convergence loop. `mix` joins `required_formatters` whenever Elixir is targeted, so a
+  missing binary warns loudly rather than silently leaving the output unformatted — silent skipping
+  is what let this hide in the first place. (`src/cli/pipeline/format.rs`)
 
 ## [0.55.6] - 2026-08-06
 

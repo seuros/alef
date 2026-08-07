@@ -45,7 +45,7 @@ pub fn apply_core_wrapper_to_core(
                 } else if optional {
                     // Bare function reference instead of `|v| std::sync::Arc::new(v)`: the
                     // closure's body is exactly a single by-value call matching its own
-                    // parameter, which is what `clippy::redundant_closure` flags.
+                    // parameter, which is what `clippy::redundant_closure` flags. ~keep
                     format!("{name}: {expr}.map(std::sync::Arc::new)")
                 } else {
                     format!("{name}: std::sync::Arc::new({expr})")

@@ -605,7 +605,7 @@ fn convert_constructor_params_to_camel_case(
                 let field_name = assignment.trim();
                 match field_to_camel.get(field_name) {
                     // Only emit `field: camelVar` when the rename actually changes the
-                    // identifier; single-word fields (snake == camel) stay shorthand.
+                    // identifier; single-word fields (snake == camel) stay shorthand. ~keep
                     Some(camel_name) if camel_name != field_name => format!("{}: {}", field_name, camel_name),
                     _ => assignment.to_string(),
                 }

@@ -6291,6 +6291,14 @@
           },
           "type": "array"
         },
+        "ffi_target_dep_overrides": {
+          "default": [],
+          "description": "Per-target overrides for the injected secondary FFI crate dependency\n(the C-ABI `*-ffi` crate; see [`Self::ffi_features`]). Each entry\nreplaces the default `[dependencies]` entry for that dependency with a\n`[target.'cfg(...)'.dependencies]` block scoped to the cfg predicate.\nWhen non-empty, the default entry (using `ffi_features`, if any) is\ngated on `cfg(not(any(<override cfgs>)))` so exactly one branch\nmatches per build target — mirrors [`Self::target_dep_overrides`], but\nfor the FFI crate dependency instead of the core crate dependency.\n\nNeeded because Cargo unifies feature sets across all dependency edges\nto the same resolved package: an unconditionally-enabled feature set\non the FFI dep (e.g. `full-no-heic`, which pulls in `sceptre-ocr` ->\n`sceptre-ocr-ort`) can activate desktop/server-only code even on\ntargets where the *core* dep only asks for a reduced feature set (e.g.\n`android-target`), tripping `compile_error!` guards meant to keep\nmobile builds from linking incompatible native dependencies. Without\nthis knob, the injected FFI dep has no equivalent to\n[`Self::target_dep_overrides`] / [`Self::excluded_default_features`],\nwhich only govern the primary core dep.\n\nA configuration that sets only `ffi_features` and leaves this list\nempty is unaffected: the FFI dependency is still emitted as a single\n`[dependencies]` line.",
+          "items": {
+            "$ref": "#/$defs/SwiftTargetDepOverride"
+          },
+          "type": "array"
+        },
         "min_ios_version": {
           "default": null,
           "description": "Minimum iOS deployment target. Defaults to `template_versions::toolchain::SWIFT_MIN_IOS` when unset.",
@@ -7578,7 +7586,7 @@
       "type": "object"
     }
   },
-  "$id": "https://github.com/xberg-io/alef/releases/download/v0.55.6/alef.schema.json",
+  "$id": "https://github.com/xberg-io/alef/releases/download/v0.55.7/alef.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "JSON Schema for the JSON representation of alef.toml.",
@@ -7698,6 +7706,6 @@
   ],
   "title": "Alef configuration",
   "type": "object",
-  "version": "0.55.6",
-  "x-alef-version": "0.55.6"
+  "version": "0.55.7",
+  "x-alef-version": "0.55.7"
 }

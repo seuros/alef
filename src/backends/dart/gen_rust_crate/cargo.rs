@@ -322,7 +322,7 @@ pub(crate) fn emit_cargo_toml(
         // cargo-sort orders `[target.'cfg(...)'.dependencies]` tables
         // alphabetically by the raw cfg predicate string (plain byte-wise
         // comparison), so the default `not(...)` branch is not always first —
-        // e.g. an `all(...)` override (macOS-Intel) sorts before it.
+        // e.g. an `all(...)` override (macOS-Intel) sorts before it. ~keep
         entries.sort_by(|a, b| a.0.cmp(&b.0));
         let blocks = entries.into_iter().map(|(_, text)| text).collect::<String>();
         (String::new(), blocks)
@@ -732,8 +732,8 @@ embeddings = []
     /// `[target.'cfg(...)'.dependencies]` tables alphabetically by the raw cfg
     /// predicate string (plain byte-wise comparison), NOT with the default
     /// `cfg(not(any(...)))` branch always first. With multiple overrides, an
-    /// `all(...)`-prefixed override (xberg's macOS-Intel target) must sort
-    /// *before* the `not(any(...))` default branch (`'a'` < `'n'`), while a
+    /// `all(...)`-prefixed override (a downstream consumer's macOS-Intel target)
+    /// must sort *before* the `not(any(...))` default branch (`'a'` < `'n'`), while a
     /// `target_os = ...` override sorts after it (`'n'` < `'t'`).
     #[test]
     fn cargo_toml_target_dep_overrides_sort_all_before_not() {
