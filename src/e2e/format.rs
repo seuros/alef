@@ -60,6 +60,14 @@ pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) {
         if lang == "go" {
             run_go_mod_tidy(&dir);
         }
+
+        // Residual: `mix format` is the SOLE formatter for `.ex`/`.exs` — the poly
+        // pass above excludes them (see `POLY_ELIXIR_EXCLUDE_GLOBS`), so without
+        // this the generated Elixir suite is never formatted at all and ships with
+        // the emitter's unwrapped long lines.
+        if lang == "elixir" {
+            run_mix_format(&dir);
+        }
     }
 
     // poly (and user format overrides) rewrite files via atomic rename, which
@@ -89,6 +97,16 @@ fn run_shell(cmd: &str, lang: &str) {
 fn run_go_mod_tidy(dir: &str) {
     let cmd = format!("(cd {dir} && go mod tidy)");
     run_shell(&cmd, "go");
+}
+
+/// Format `.ex`/`.exs` in the e2e Elixir directory with `mix format`. Best-effort.
+///
+/// Must run from `dir` so mix reads that project's own `.formatter.exs` (emitted
+/// alongside `mix.exs`) — a bare `mix format` has no `inputs:` without it. That
+/// file deliberately omits `import_deps`, so this needs no prior `mix deps.get`.
+fn run_mix_format(dir: &str) {
+    let cmd = format!("(cd {dir} && mix format)");
+    run_shell(&cmd, "elixir");
 }
 
 #[cfg(test)]
@@ -199,6 +217,51 @@ mod tests {
             mode & 0o111 != 0,
             "shebang script must be executable after run_formatters, got mode {mode:#o}"
         );
+    }
+
+    /// `.ex`/`.exs` are excluded from the poly pass, so the Elixir residual is the
+    /// only thing that can format them: without it the generated suite ships with
+    /// the emitter's unwrapped long lines. Uses a call well past the emitted
+    /// `.formatter.exs`'s `line_length: 140` so mix is forced to wrap it — proving
+    /// mix ran, not merely that the file was left alone.
+    #[test]
+    fn default_path_formats_elixir_with_mix() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = dir.path().join("e2e-out");
+        std::fs::create_dir_all(out.join("elixir/test")).unwrap();
+        std::fs::write(
+            out.join("elixir/.formatter.exs"),
+            "[\n  inputs: [\"{mix,.formatter}.exs\", \"{config,lib,test}/**/*.{ex,exs}\"],\n  line_length: 140\n]\n",
+        )
+        .unwrap();
+        let long_call = format!("<blockquote><p>{}</p></blockquote>", "x".repeat(160));
+        let unformatted =
+            format!("defmodule T do\n  def go do\n    {{:ok, r}} = M.convert(\"{long_call}\")\n  end\nend\n");
+        let test_file = out.join("elixir/test/smoke_test.exs");
+        std::fs::write(&test_file, &unformatted).unwrap();
+
+        let e2e_config = e2e_config_for(&out);
+        let files = vec![GeneratedFile {
+            path: test_file.clone(),
+            content: unformatted.clone(),
+            generated_header: false,
+        }];
+
+        run_formatters(&files, &e2e_config);
+
+        let formatted = std::fs::read_to_string(&test_file).unwrap();
+        if which::which("mix").is_ok() {
+            assert_ne!(
+                formatted, unformatted,
+                "with mix installed, the elixir residual must reformat the over-long call"
+            );
+            assert!(
+                formatted.contains("M.convert(\n"),
+                "mix must wrap the over-long call onto its own line, got:\n{formatted}"
+            );
+        } else {
+            assert_eq!(formatted, unformatted, "without mix the file must be left untouched");
+        }
     }
 
     /// A language poly does not know still runs cleanly (poly no-ops on unknown

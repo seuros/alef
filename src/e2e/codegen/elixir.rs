@@ -137,6 +137,23 @@ impl E2eCodegen for ElixirCodegen {
             generated_header: false,
         });
 
+        // ~keep Without a `.formatter.exs` a bare `mix format` has no `inputs:` and refuses to
+        // run, so this tree would fall through to poly's own Elixir engine — whose output is not
+        // mix-canonical (it leaves a call unwrapped where mix breaks it across lines). Emitting
+        // one is what lets `mix format` own these files, matching `packages/elixir`.
+        //
+        // `line_length` matches the binding package's `.formatter.exs` so every generated Elixir
+        // tree wraps identically. Deliberately no `import_deps: [:rustler]` (which the package
+        // does use): these projects never invoke rustler's macros, and importing it would make
+        // formatting fail whenever `deps/` has not been fetched.
+        files.push(GeneratedFile {
+            path: output_base.join(".formatter.exs"),
+            content: "[\n  inputs: [\"{mix,.formatter}.exs\", \"{config,lib,test}/**/*.{ex,exs}\"],\n  \
+                      line_length: 140\n]\n"
+                .to_string(),
+            generated_header: false,
+        });
+
         // Generate lib/e2e_elixir.ex — required so the mix project compiles.
         files.push(GeneratedFile {
             path: output_base.join("lib").join("e2e_elixir.ex"),
