@@ -59,10 +59,10 @@ pub fn find_bridge_param<'a>(
             if bridge.bind_via != BridgeBinding::FunctionParam {
                 continue;
             }
-            if let Some(type_name) = named {
-                if bridge.type_alias.as_deref() == Some(type_name) {
-                    return Some((idx, bridge));
-                }
+            if let Some(type_name) = named
+                && bridge.type_alias.as_deref() == Some(type_name)
+            {
+                return Some((idx, bridge));
             }
             if bridge.param_name.as_deref() == Some(param.name.as_str()) {
                 return Some((idx, bridge));
@@ -202,10 +202,10 @@ pub fn native_marshalled_struct_params(trait_def: &TypeDef, api: &ApiSurface) ->
     let mut out = std::collections::HashSet::new();
     for method in &trait_def.methods {
         for param in &method.params {
-            if let Some(name) = leaf_named(&param.ty) {
-                if is_native_marshalled_struct(name, api) {
-                    out.insert(name.to_string());
-                }
+            if let Some(name) = leaf_named(&param.ty)
+                && is_native_marshalled_struct(name, api)
+            {
+                out.insert(name.to_string());
             }
         }
     }
@@ -223,10 +223,10 @@ pub fn native_marshalled_struct_params(trait_def: &TypeDef, api: &ApiSurface) ->
 pub fn native_marshalled_struct_returns(trait_def: &TypeDef, api: &ApiSurface) -> std::collections::HashSet<String> {
     let mut out = std::collections::HashSet::new();
     for method in &trait_def.methods {
-        if let TypeRef::Named(name) = &method.return_type {
-            if is_native_marshalled_struct(name, api) {
-                out.insert(name.clone());
-            }
+        if let TypeRef::Named(name) = &method.return_type
+            && is_native_marshalled_struct(name, api)
+        {
+            out.insert(name.clone());
         }
     }
     out

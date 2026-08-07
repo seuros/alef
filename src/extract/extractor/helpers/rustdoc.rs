@@ -8,16 +8,14 @@ use syn;
 pub(crate) fn extract_doc_comments(attrs: &[syn::Attribute]) -> String {
     let mut lines = Vec::new();
     for attr in attrs {
-        if attr.path().is_ident("doc") {
-            if let syn::Meta::NameValue(meta) = &attr.meta {
-                if let syn::Expr::Lit(expr_lit) = &meta.value {
-                    if let syn::Lit::Str(lit_str) = &expr_lit.lit {
-                        let val = lit_str.value();
-                        let trimmed = val.strip_prefix(' ').unwrap_or(&val);
-                        lines.push(trimmed.to_string());
-                    }
-                }
-            }
+        if attr.path().is_ident("doc")
+            && let syn::Meta::NameValue(meta) = &attr.meta
+            && let syn::Expr::Lit(expr_lit) = &meta.value
+            && let syn::Lit::Str(lit_str) = &expr_lit.lit
+        {
+            let val = lit_str.value();
+            let trimmed = val.strip_prefix(' ').unwrap_or(&val);
+            lines.push(trimmed.to_string());
         }
     }
     let raw = lines.join("\n");
@@ -59,10 +57,10 @@ pub fn normalize_rustdoc(raw: &str) -> String {
         }
         if in_rust_fence {
             let after_hash = trimmed.strip_prefix('#');
-            if let Some(suffix) = after_hash {
-                if suffix.is_empty() || suffix.starts_with(' ') {
-                    continue;
-                }
+            if let Some(suffix) = after_hash
+                && (suffix.is_empty() || suffix.starts_with(' '))
+            {
+                continue;
             }
         }
         filtered.push_str(line);

@@ -238,10 +238,10 @@ pub(super) fn emit_module_kt(
     };
 
     let is_vec_of_dtos = |ty: &crate::core::ir::TypeRef| -> bool {
-        if let crate::core::ir::TypeRef::Vec(inner) = ty {
-            if let crate::core::ir::TypeRef::Named(n) = inner.as_ref() {
-                return !opaque_type_names.contains(n.as_str());
-            }
+        if let crate::core::ir::TypeRef::Vec(inner) = ty
+            && let crate::core::ir::TypeRef::Named(n) = inner.as_ref()
+        {
+            return !opaque_type_names.contains(n.as_str());
         }
         false
     };

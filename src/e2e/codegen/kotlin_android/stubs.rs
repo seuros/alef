@@ -61,17 +61,17 @@ pub fn emit_test_backend(
     for method in methods {
         // Collect parameter types.
         for param in &method.params {
-            if let crate::core::ir::TypeRef::Named(name) = &param.ty {
-                if !KOTLIN_BUILTINS.contains(&name.as_str()) {
-                    type_imports.insert(name.clone());
-                }
+            if let crate::core::ir::TypeRef::Named(name) = &param.ty
+                && !KOTLIN_BUILTINS.contains(&name.as_str())
+            {
+                type_imports.insert(name.clone());
             }
         }
         // Collect return type.
-        if let crate::core::ir::TypeRef::Named(name) = &method.return_type {
-            if !KOTLIN_BUILTINS.contains(&name.as_str()) {
-                type_imports.insert(name.clone());
-            }
+        if let crate::core::ir::TypeRef::Named(name) = &method.return_type
+            && !KOTLIN_BUILTINS.contains(&name.as_str())
+        {
+            type_imports.insert(name.clone());
         }
     }
 

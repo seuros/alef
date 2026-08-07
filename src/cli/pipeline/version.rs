@@ -88,15 +88,13 @@ pub fn sync_versions(
     if let Ok(entries) = std::fs::read_dir("packages/ruby") {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().is_some_and(|e| e == "gemspec") {
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    if let Some(new_content) =
-                        replace_version_pattern(&content, r#"spec\.version\s*=\s*['"][^'"]*['"]"#, &ruby_version)
-                    {
-                        std::fs::write(&path, &new_content)?;
-                        updated.push(path.to_string_lossy().to_string());
-                    }
-                }
+            if path.extension().is_some_and(|e| e == "gemspec")
+                && let Ok(content) = std::fs::read_to_string(&path)
+                && let Some(new_content) =
+                    replace_version_pattern(&content, r#"spec\.version\s*=\s*['"][^'"]*['"]"#, &ruby_version)
+            {
+                std::fs::write(&path, &new_content)?;
+                updated.push(path.to_string_lossy().to_string());
             }
         }
     }
@@ -107,26 +105,23 @@ pub fn sync_versions(
         "packages/ruby/ext/*/native/src/*/version.rb",
     ] {
         for entry in glob::glob(pattern).into_iter().flatten().flatten() {
-            if let Ok(content) = std::fs::read_to_string(&entry) {
-                if let Some(new_content) =
+            if let Ok(content) = std::fs::read_to_string(&entry)
+                && let Some(new_content) =
                     replace_version_pattern(&content, r#"VERSION\s*=\s*['"][^'"]*['"]"#, &ruby_version)
-                {
-                    std::fs::write(&entry, &new_content)?;
-                    updated.push(entry.to_string_lossy().to_string());
-                }
+            {
+                std::fs::write(&entry, &new_content)?;
+                updated.push(entry.to_string_lossy().to_string());
             }
         }
     }
 
     let gemfile_lock_path = std::path::Path::new("packages/ruby/Gemfile.lock");
-    if gemfile_lock_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(gemfile_lock_path) {
-            if let Some(new_content) = sync_gemfile_lock(&content, &ruby_version) {
-                std::fs::write(gemfile_lock_path, &new_content)
-                    .context("failed to write packages/ruby/Gemfile.lock")?;
-                updated.push("packages/ruby/Gemfile.lock".to_string());
-            }
-        }
+    if gemfile_lock_path.exists()
+        && let Ok(content) = std::fs::read_to_string(gemfile_lock_path)
+        && let Some(new_content) = sync_gemfile_lock(&content, &ruby_version)
+    {
+        std::fs::write(gemfile_lock_path, &new_content).context("failed to write packages/ruby/Gemfile.lock")?;
+        updated.push("packages/ruby/Gemfile.lock".to_string());
     }
 
     {
@@ -149,12 +144,12 @@ pub fn sync_versions(
         }
     }
 
-    if let Ok(content) = std::fs::read_to_string("packages/php/composer.json") {
-        if let Some(new_content) = replace_version_pattern(&content, r#""version": "[^"]*""#, &version) {
-            std::fs::write("packages/php/composer.json", &new_content)?;
-            updated.push("packages/php/composer.json".to_string());
-            any_composer_json_modified = true;
-        }
+    if let Ok(content) = std::fs::read_to_string("packages/php/composer.json")
+        && let Some(new_content) = replace_version_pattern(&content, r#""version": "[^"]*""#, &version)
+    {
+        std::fs::write("packages/php/composer.json", &new_content)?;
+        updated.push("packages/php/composer.json".to_string());
+        any_composer_json_modified = true;
     }
 
     // Elixir: mix.exs — handle both `version: "X.Y.Z"` and `@version "X.Y.Z"` patterns
@@ -174,21 +169,20 @@ pub fn sync_versions(
         let elixir_pkg = config.package_dir(Language::Elixir);
         let nif_lock_glob = format!("{elixir_pkg}/native/*/Cargo.lock");
         for entry in glob::glob(&nif_lock_glob).into_iter().flatten().flatten() {
-            if let Ok(content) = std::fs::read_to_string(&entry) {
-                if let Some(new_content) = sync_cargo_lock_path_versions(&content, &version) {
-                    std::fs::write(&entry, &new_content)
-                        .with_context(|| format!("failed to write {}", entry.display()))?;
-                    updated.push(entry.to_string_lossy().to_string());
-                }
+            if let Ok(content) = std::fs::read_to_string(&entry)
+                && let Some(new_content) = sync_cargo_lock_path_versions(&content, &version)
+            {
+                std::fs::write(&entry, &new_content).with_context(|| format!("failed to write {}", entry.display()))?;
+                updated.push(entry.to_string_lossy().to_string());
             }
         }
     }
 
-    if let Ok(content) = std::fs::read_to_string("packages/java/pom.xml") {
-        if let Some(new_content) = replace_version_pattern(&content, r#"<version>[^<]*</version>"#, &version) {
-            std::fs::write("packages/java/pom.xml", &new_content)?;
-            updated.push("packages/java/pom.xml".to_string());
-        }
+    if let Ok(content) = std::fs::read_to_string("packages/java/pom.xml")
+        && let Some(new_content) = replace_version_pattern(&content, r#"<version>[^<]*</version>"#, &version)
+    {
+        std::fs::write("packages/java/pom.xml", &new_content)?;
+        updated.push("packages/java/pom.xml".to_string());
     }
 
     for entry in glob::glob("packages/csharp/**/*.csproj")
@@ -216,12 +210,12 @@ pub fn sync_versions(
     }
 
     let kotlin_gradle = std::path::Path::new(&config.package_dir(Language::Kotlin)).join("build.gradle.kts");
-    if let Ok(content) = std::fs::read_to_string(&kotlin_gradle) {
-        if let Some(new_content) = replace_gradle_project_version(&content, &version) {
-            std::fs::write(&kotlin_gradle, &new_content)
-                .with_context(|| format!("failed to write {}", kotlin_gradle.display()))?;
-            updated.push(kotlin_gradle.to_string_lossy().to_string());
-        }
+    if let Ok(content) = std::fs::read_to_string(&kotlin_gradle)
+        && let Some(new_content) = replace_gradle_project_version(&content, &version)
+    {
+        std::fs::write(&kotlin_gradle, &new_content)
+            .with_context(|| format!("failed to write {}", kotlin_gradle.display()))?;
+        updated.push(kotlin_gradle.to_string_lossy().to_string());
     }
 
     let kotlin_android_gradle =
@@ -257,13 +251,13 @@ pub fn sync_versions(
             if let Some(rewritten) = replace_version_pattern(&working, r#""version":\s*"[^"]*""#, &version) {
                 working = rewritten;
             }
-            if let Ok(pkg_json) = serde_json::from_str::<serde_json::Value>(&working) {
-                if let Some(parent_name) = pkg_json.get("name").and_then(|v| v.as_str()) {
-                    let pattern = format!(r#""({}-[^"]+)":\s*"[^"]*""#, regex::escape(parent_name));
-                    if let Ok(re) = regex::Regex::new(&pattern) {
-                        let replacement = format!(r#""$1": "{version}""#);
-                        working = re.replace_all(&working, replacement.as_str()).to_string();
-                    }
+            if let Ok(pkg_json) = serde_json::from_str::<serde_json::Value>(&working)
+                && let Some(parent_name) = pkg_json.get("name").and_then(|v| v.as_str())
+            {
+                let pattern = format!(r#""({}-[^"]+)":\s*"[^"]*""#, regex::escape(parent_name));
+                if let Ok(re) = regex::Regex::new(&pattern) {
+                    let replacement = format!(r#""$1": "{version}""#);
+                    working = re.replace_all(&working, replacement.as_str()).to_string();
                 }
             }
             if working != content {
@@ -291,20 +285,20 @@ pub fn sync_versions(
         }
     }
 
-    if let Ok(content) = std::fs::read_to_string("package.json") {
-        if let Some(new_content) = replace_version_pattern(&content, r#""version":\s*"[^"]*""#, &version) {
-            std::fs::write("package.json", &new_content)?;
-            updated.push("package.json".to_string());
-            any_node_pkg_modified = true;
-        }
+    if let Ok(content) = std::fs::read_to_string("package.json")
+        && let Some(new_content) = replace_version_pattern(&content, r#""version":\s*"[^"]*""#, &version)
+    {
+        std::fs::write("package.json", &new_content)?;
+        updated.push("package.json".to_string());
+        any_node_pkg_modified = true;
     }
 
-    if let Ok(content) = std::fs::read_to_string("composer.json") {
-        if let Some(new_content) = replace_version_pattern(&content, r#""version":\s*"[^"]*""#, &version) {
-            std::fs::write("composer.json", &new_content)?;
-            updated.push("composer.json".to_string());
-            any_composer_json_modified = true;
-        }
+    if let Ok(content) = std::fs::read_to_string("composer.json")
+        && let Some(new_content) = replace_version_pattern(&content, r#""version":\s*"[^"]*""#, &version)
+    {
+        std::fs::write("composer.json", &new_content)?;
+        updated.push("composer.json".to_string());
+        any_composer_json_modified = true;
     }
 
     if let Ok(content) = std::fs::read_to_string("packages/r/DESCRIPTION") {
@@ -339,11 +333,11 @@ pub fn sync_versions(
         }
     }
 
-    if let Ok(content) = std::fs::read_to_string("packages/go/ffi_loader.go") {
-        if let Some(new_content) = replace_version_pattern(&content, r#"defaultFFIVersion\s*=\s*"[^"]*""#, &version) {
-            std::fs::write("packages/go/ffi_loader.go", &new_content)?;
-            updated.push("packages/go/ffi_loader.go".to_string());
-        }
+    if let Ok(content) = std::fs::read_to_string("packages/go/ffi_loader.go")
+        && let Some(new_content) = replace_version_pattern(&content, r#"defaultFFIVersion\s*=\s*"[^"]*""#, &version)
+    {
+        std::fs::write("packages/go/ffi_loader.go", &new_content)?;
+        updated.push("packages/go/ffi_loader.go".to_string());
     }
 
     for entry in glob::glob("packages/go/cmd/setup/main.go")
@@ -351,20 +345,20 @@ pub fn sync_versions(
         .flatten()
         .flatten()
     {
-        if let Ok(content) = std::fs::read_to_string(&entry) {
-            if let Some(new_content) = replace_version_pattern(&content, r#"moduleVersion\s*=\s*"[^"]*""#, &version) {
-                std::fs::write(&entry, &new_content).with_context(|| format!("failed to write {}", entry.display()))?;
-                updated.push(entry.to_string_lossy().to_string());
-            }
+        if let Ok(content) = std::fs::read_to_string(&entry)
+            && let Some(new_content) = replace_version_pattern(&content, r#"moduleVersion\s*=\s*"[^"]*""#, &version)
+        {
+            std::fs::write(&entry, &new_content).with_context(|| format!("failed to write {}", entry.display()))?;
+            updated.push(entry.to_string_lossy().to_string());
         }
     }
 
-    if let Ok(content) = std::fs::read_to_string("packages/go/native_setup.go") {
-        if let Some(new_content) = sync_go_native_setup_sentinel(&content, &version) {
-            std::fs::write("packages/go/native_setup.go", &new_content)
-                .context("failed to write packages/go/native_setup.go")?;
-            updated.push("packages/go/native_setup.go".to_string());
-        }
+    if let Ok(content) = std::fs::read_to_string("packages/go/native_setup.go")
+        && let Some(new_content) = sync_go_native_setup_sentinel(&content, &version)
+    {
+        std::fs::write("packages/go/native_setup.go", &new_content)
+            .context("failed to write packages/go/native_setup.go")?;
+        updated.push("packages/go/native_setup.go".to_string());
     }
 
     if let Ok(content) = std::fs::read_to_string("Package.swift") {
@@ -380,32 +374,31 @@ pub fn sync_versions(
 
     for sh_pattern in &["e2e/c/download_ffi.sh", "test_apps/c/download_ffi.sh"] {
         for sh_script in glob::glob(sh_pattern).into_iter().flatten().flatten() {
-            if let Ok(content) = std::fs::read_to_string(&sh_script) {
-                if let Some(new_content) = replace_version_pattern(&content, r#"VERSION="[^"]*""#, &version) {
-                    std::fs::write(&sh_script, &new_content)
-                        .with_context(|| format!("failed to write {}", sh_script.display()))?;
-                    updated.push(sh_script.to_string_lossy().to_string());
-                }
+            if let Ok(content) = std::fs::read_to_string(&sh_script)
+                && let Some(new_content) = replace_version_pattern(&content, r#"VERSION="[^"]*""#, &version)
+            {
+                std::fs::write(&sh_script, &new_content)
+                    .with_context(|| format!("failed to write {}", sh_script.display()))?;
+                updated.push(sh_script.to_string_lossy().to_string());
             }
         }
     }
 
     let e2e_java_pom = std::path::Path::new("e2e/java/pom.xml");
-    if let Ok(content) = std::fs::read_to_string(e2e_java_pom) {
-        if let Some(new_content) = sync_e2e_java_pom(&content, &version) {
-            std::fs::write(e2e_java_pom, &new_content).context("failed to write e2e/java/pom.xml")?;
-            updated.push("e2e/java/pom.xml".to_string());
-        }
+    if let Ok(content) = std::fs::read_to_string(e2e_java_pom)
+        && let Some(new_content) = sync_e2e_java_pom(&content, &version)
+    {
+        std::fs::write(e2e_java_pom, &new_content).context("failed to write e2e/java/pom.xml")?;
+        updated.push("e2e/java/pom.xml".to_string());
     }
 
     let e2e_ruby_lock = std::path::Path::new("e2e/ruby/Gemfile.lock");
-    if e2e_ruby_lock.exists() {
-        if let Ok(content) = std::fs::read_to_string(e2e_ruby_lock) {
-            if let Some(new_content) = sync_gemfile_lock(&content, &ruby_version) {
-                std::fs::write(e2e_ruby_lock, &new_content).context("failed to write e2e/ruby/Gemfile.lock")?;
-                updated.push("e2e/ruby/Gemfile.lock".to_string());
-            }
-        }
+    if e2e_ruby_lock.exists()
+        && let Ok(content) = std::fs::read_to_string(e2e_ruby_lock)
+        && let Some(new_content) = sync_gemfile_lock(&content, &ruby_version)
+    {
+        std::fs::write(e2e_ruby_lock, &new_content).context("failed to write e2e/ruby/Gemfile.lock")?;
+        updated.push("e2e/ruby/Gemfile.lock".to_string());
     }
 
     for entry in glob::glob("e2e/go/go.mod").into_iter().flatten().flatten() {
@@ -425,13 +418,12 @@ pub fn sync_versions(
     }
 
     let e2e_dart_lock = std::path::Path::new("e2e/dart/pubspec.lock");
-    if e2e_dart_lock.exists() {
-        if let Ok(content) = std::fs::read_to_string(e2e_dart_lock) {
-            if let Some(new_content) = sync_e2e_dart_pubspec_lock(&content, &version) {
-                std::fs::write(e2e_dart_lock, &new_content).context("failed to write e2e/dart/pubspec.lock")?;
-                updated.push("e2e/dart/pubspec.lock".to_string());
-            }
-        }
+    if e2e_dart_lock.exists()
+        && let Ok(content) = std::fs::read_to_string(e2e_dart_lock)
+        && let Some(new_content) = sync_e2e_dart_pubspec_lock(&content, &version)
+    {
+        std::fs::write(e2e_dart_lock, &new_content).context("failed to write e2e/dart/pubspec.lock")?;
+        updated.push("e2e/dart/pubspec.lock".to_string());
     }
 
     if let Some(citation_config) = config.citation.as_ref() {
@@ -456,11 +448,11 @@ pub fn sync_versions(
             std::fs::write("CITATION.cff", &rendered)?;
             updated.push("CITATION.cff".to_string());
         }
-    } else if let Ok(content) = std::fs::read_to_string("CITATION.cff") {
-        if let Some(new_content) = replace_citation_version(&content, &version) {
-            std::fs::write("CITATION.cff", &new_content)?;
-            updated.push("CITATION.cff".to_string());
-        }
+    } else if let Ok(content) = std::fs::read_to_string("CITATION.cff")
+        && let Some(new_content) = replace_citation_version(&content, &version)
+    {
+        std::fs::write("CITATION.cff", &new_content)?;
+        updated.push("CITATION.cff".to_string());
     }
 
     if let Some(sync_config) = &config.sync {

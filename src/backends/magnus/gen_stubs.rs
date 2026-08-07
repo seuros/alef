@@ -98,30 +98,30 @@ pub fn gen_stubs(
     let declared_function_names: std::collections::HashSet<&str> =
         api.functions.iter().map(|f| f.name.as_str()).collect();
     for bridge in trait_bridges {
-        if let Some(register_fn) = bridge.register_fn.as_deref() {
-            if !declared_function_names.contains(register_fn) {
-                let backend_type = if trait_interfaces.contains(bridge.trait_name.as_str()) {
-                    plugin_interface_name(&bridge.trait_name)
-                } else {
-                    "untyped".to_string()
-                };
-                lines.push(format!(
-                    "  def self.{register_fn}: ({backend_type} backend, String name) -> nil"
-                ));
-                lines.push("".to_string());
-            }
+        if let Some(register_fn) = bridge.register_fn.as_deref()
+            && !declared_function_names.contains(register_fn)
+        {
+            let backend_type = if trait_interfaces.contains(bridge.trait_name.as_str()) {
+                plugin_interface_name(&bridge.trait_name)
+            } else {
+                "untyped".to_string()
+            };
+            lines.push(format!(
+                "  def self.{register_fn}: ({backend_type} backend, String name) -> nil"
+            ));
+            lines.push("".to_string());
         }
-        if let Some(unregister_fn) = bridge.unregister_fn.as_deref() {
-            if !declared_function_names.contains(unregister_fn) {
-                lines.push(format!("  def self.{unregister_fn}: (String name) -> nil"));
-                lines.push("".to_string());
-            }
+        if let Some(unregister_fn) = bridge.unregister_fn.as_deref()
+            && !declared_function_names.contains(unregister_fn)
+        {
+            lines.push(format!("  def self.{unregister_fn}: (String name) -> nil"));
+            lines.push("".to_string());
         }
-        if let Some(clear_fn) = bridge.clear_fn.as_deref() {
-            if !declared_function_names.contains(clear_fn) {
-                lines.push(format!("  def self.{clear_fn}: () -> nil"));
-                lines.push("".to_string());
-            }
+        if let Some(clear_fn) = bridge.clear_fn.as_deref()
+            && !declared_function_names.contains(clear_fn)
+        {
+            lines.push(format!("  def self.{clear_fn}: () -> nil"));
+            lines.push("".to_string());
         }
     }
 

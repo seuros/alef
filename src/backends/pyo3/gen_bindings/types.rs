@@ -125,16 +125,16 @@ pub(super) fn gen_options_py(
         changed = false;
         let current: Vec<String> = needed_enums.iter().cloned().collect();
         for name in current {
-            if let Some(enum_def) = enum_defs_by_name.get(name.as_str()) {
-                if generators::enum_has_data_variants(enum_def) {
-                    for variant in &enum_def.variants {
-                        for field in &variant.fields {
-                            let mut discovered = AHashSet::new();
-                            collect_named_types_filtered(&field.ty, &enum_names, &mut discovered);
-                            for discovered_name in discovered {
-                                if needed_enums.insert(discovered_name) {
-                                    changed = true;
-                                }
+            if let Some(enum_def) = enum_defs_by_name.get(name.as_str())
+                && generators::enum_has_data_variants(enum_def)
+            {
+                for variant in &enum_def.variants {
+                    for field in &variant.fields {
+                        let mut discovered = AHashSet::new();
+                        collect_named_types_filtered(&field.ty, &enum_names, &mut discovered);
+                        for discovered_name in discovered {
+                            if needed_enums.insert(discovered_name) {
+                                changed = true;
                             }
                         }
                     }
@@ -622,15 +622,15 @@ fn typed_default_to_python(
             format!("\"{}\"", v.to_snake_case())
         }
         DefaultValue::Empty => {
-            if let TypeRef::Named(name) = ty {
-                if data_enum_names.contains(name.as_str()) {
-                    return "None".to_string();
-                }
+            if let TypeRef::Named(name) = ty
+                && data_enum_names.contains(name.as_str())
+            {
+                return "None".to_string();
             }
-            if let TypeRef::Named(name) = ty {
-                if let Some(default_variant) = enum_defaults.get(name) {
-                    return format!("\"{}\"", default_variant);
-                }
+            if let TypeRef::Named(name) = ty
+                && let Some(default_variant) = enum_defaults.get(name)
+            {
+                return format!("\"{}\"", default_variant);
             }
             match ty {
                 TypeRef::Primitive(p) => match p {

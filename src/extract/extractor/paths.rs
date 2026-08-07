@@ -52,34 +52,32 @@ pub(super) fn apply_parent_reexport_shortening(
 
     let mut reexported_names = std::collections::HashSet::new();
     for item in &parent_file.items {
-        if let syn::Item::Use(item_use) = item {
-            if is_pub(&item_use.vis) {
-                if let syn::UseTree::Path(use_path) = &item_use.tree {
-                    if use_path.ident == mod_name {
-                        match collect_use_names(&use_path.tree) {
-                            UseFilter::All => {
-                                let parent_module_path = module_path.rsplit_once("::").map(|(p, _)| p).unwrap_or("");
-                                let parent_prefix = if parent_module_path.is_empty() {
-                                    crate_name.to_string()
-                                } else {
-                                    format!("{crate_name}::{parent_module_path}")
-                                };
-                                for ty in &mut surface.types[types_before..] {
-                                    ty.rust_path = format!("{parent_prefix}::{}", ty.name);
-                                }
-                                for en in &mut surface.enums[enums_before..] {
-                                    en.rust_path = format!("{parent_prefix}::{}", en.name);
-                                }
-                                for func in &mut surface.functions[fns_before..] {
-                                    func.rust_path = format!("{parent_prefix}::{}", func.name);
-                                }
-                                return;
-                            }
-                            UseFilter::Names(names) => {
-                                reexported_names.extend(names);
-                            }
-                        }
+        if let syn::Item::Use(item_use) = item
+            && is_pub(&item_use.vis)
+            && let syn::UseTree::Path(use_path) = &item_use.tree
+            && use_path.ident == mod_name
+        {
+            match collect_use_names(&use_path.tree) {
+                UseFilter::All => {
+                    let parent_module_path = module_path.rsplit_once("::").map(|(p, _)| p).unwrap_or("");
+                    let parent_prefix = if parent_module_path.is_empty() {
+                        crate_name.to_string()
+                    } else {
+                        format!("{crate_name}::{parent_module_path}")
+                    };
+                    for ty in &mut surface.types[types_before..] {
+                        ty.rust_path = format!("{parent_prefix}::{}", ty.name);
                     }
+                    for en in &mut surface.enums[enums_before..] {
+                        en.rust_path = format!("{parent_prefix}::{}", en.name);
+                    }
+                    for func in &mut surface.functions[fns_before..] {
+                        func.rust_path = format!("{parent_prefix}::{}", func.name);
+                    }
+                    return;
+                }
+                UseFilter::Names(names) => {
+                    reexported_names.extend(names);
                 }
             }
         }

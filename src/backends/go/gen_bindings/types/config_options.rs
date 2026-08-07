@@ -86,21 +86,21 @@ pub(in crate::backends::go::gen_bindings) fn gen_config_options(
             "nil".to_string()
         } else {
             let mut val = crate::codegen::config_gen::default_value_for_field(field, "go");
-            if let TypeRef::Named(name) = &field.ty {
-                if passthrough_enum_names.contains(name.as_str()) {
-                    val = "nil".to_string();
-                }
+            if let TypeRef::Named(name) = &field.ty
+                && passthrough_enum_names.contains(name.as_str())
+            {
+                val = "nil".to_string();
             }
-            if val == "nil" {
-                if let TypeRef::Named(name) = &field.ty {
-                    if passthrough_enum_names.contains(name.as_str()) {
-                    } else if enum_names.contains(name.as_str()) {
-                        val = "\"\"".to_string();
-                    } else if data_enum_names.contains(name.as_str()) {
-                        val = "nil".to_string();
-                    } else {
-                        val = format!("{}{{}}", go_type_name(name));
-                    }
+            if val == "nil"
+                && let TypeRef::Named(name) = &field.ty
+            {
+                if passthrough_enum_names.contains(name.as_str()) {
+                } else if enum_names.contains(name.as_str()) {
+                    val = "\"\"".to_string();
+                } else if data_enum_names.contains(name.as_str()) {
+                    val = "nil".to_string();
+                } else {
+                    val = format!("{}{{}}", go_type_name(name));
                 }
             }
             val

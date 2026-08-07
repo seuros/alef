@@ -58,14 +58,14 @@ pub fn cfg_gated_free_functions(lib_rs_source: &str) -> Vec<(String, String)> {
 
     while i < lines.len() {
         let line = lines[i];
-        if line.starts_with("#[cfg(") {
-            if let Some(end) = find_attribute_end(&lines, i) {
-                if let Some(name) = lines.get(end + 1).and_then(|l| free_pub_fn_name(l)) {
-                    result.push((name, lines[i..=end].join("\n")));
-                }
-                i = end + 1;
-                continue;
+        if line.starts_with("#[cfg(")
+            && let Some(end) = find_attribute_end(&lines, i)
+        {
+            if let Some(name) = lines.get(end + 1).and_then(|l| free_pub_fn_name(l)) {
+                result.push((name, lines[i..=end].join("\n")));
             }
+            i = end + 1;
+            continue;
         }
         i += 1;
     }
@@ -94,7 +94,9 @@ fn paren_delta(line: &str) -> i32 {
 /// Returns the function name if `line` is a top-level (`col 0`) `pub fn` or
 /// `pub async fn` declaration.
 fn free_pub_fn_name(line: &str) -> Option<String> {
-    let rest = line.strip_prefix("pub async fn ").or_else(|| line.strip_prefix("pub fn "))?;
+    let rest = line
+        .strip_prefix("pub async fn ")
+        .or_else(|| line.strip_prefix("pub fn "))?;
     let name_end = rest.find('(')?;
     Some(rest[..name_end].to_string())
 }
@@ -115,14 +117,14 @@ pub fn inject_frb_cfg_gates(frb_generated_source: &str, cfg_gated_fns: &[(String
     let mut result = String::with_capacity(frb_generated_source.len());
 
     for (idx, line) in lines.iter().enumerate() {
-        if let Some(gate) = gate_for_wire_line(line, cfg_gated_fns) {
-            if !already_gated(&lines, idx, gate) {
-                let indent = leading_whitespace(line);
-                for gate_line in gate.lines() {
-                    result.push_str(&indent);
-                    result.push_str(gate_line);
-                    result.push('\n');
-                }
+        if let Some(gate) = gate_for_wire_line(line, cfg_gated_fns)
+            && !already_gated(&lines, idx, gate)
+        {
+            let indent = leading_whitespace(line);
+            for gate_line in gate.lines() {
+                result.push_str(&indent);
+                result.push_str(gate_line);
+                result.push('\n');
             }
         }
         result.push_str(line);
@@ -184,7 +186,10 @@ mod tests {
     fn cfg_gated_free_functions_finds_async_fn() {
         let lib_rs = "#[cfg(feature = \"url-ingestion\")]\npub async fn map_url(uri: String) -> String {\n    uri\n}\n";
         let found = cfg_gated_free_functions(lib_rs);
-        assert_eq!(found, vec![("map_url".to_string(), "#[cfg(feature = \"url-ingestion\")]".to_string())]);
+        assert_eq!(
+            found,
+            vec![("map_url".to_string(), "#[cfg(feature = \"url-ingestion\")]".to_string())]
+        );
     }
 
     #[test]
@@ -273,7 +278,10 @@ mod tests {
             ") {\n",
             "}\n",
         );
-        let gated = vec![("timestamp_token_to_ms".to_string(), "#[cfg(feature = \"transcription\")]".to_string())];
+        let gated = vec![(
+            "timestamp_token_to_ms".to_string(),
+            "#[cfg(feature = \"transcription\")]".to_string(),
+        )];
 
         let once = inject_frb_cfg_gates(frb_generated, &gated);
         let twice = inject_frb_cfg_gates(&once, &gated);

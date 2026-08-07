@@ -11,10 +11,10 @@ impl ResolvedCrateConfig {
     /// 2. `[package_metadata] repository`
     /// 3. `[scaffold] repository`
     pub fn try_github_repo(&self) -> Result<String, String> {
-        if let Some(e2e) = &self.e2e {
-            if let Some(url) = &e2e.registry.github_repo {
-                return Ok(url.clone());
-            }
+        if let Some(e2e) = &self.e2e
+            && let Some(url) = &e2e.registry.github_repo
+        {
+            return Ok(url.clone());
         }
         if let Some(url) = self.package_metadata.as_ref().and_then(|p| p.repository.as_ref()) {
             return Ok(url.clone());
@@ -40,10 +40,10 @@ impl ResolvedCrateConfig {
         if let Some(module) = self.go.as_ref().and_then(|g| g.module.as_ref()) {
             return Ok(module.clone());
         }
-        if let Ok(repo) = self.try_github_repo() {
-            if let Some(module) = derive_go_module_from_repo(&repo) {
-                return Ok(module);
-            }
+        if let Ok(repo) = self.try_github_repo()
+            && let Some(module) = derive_go_module_from_repo(&repo)
+        {
+            return Ok(module);
         }
         Err(format!(
             "no Go module configured — set `[go] module = \"...\"` or `[scaffold] repository = \"https://<host>/<org>/...\"` for crate `{}`",
@@ -63,10 +63,10 @@ impl ResolvedCrateConfig {
         if let Some(pkg) = self.java.as_ref().and_then(|j| j.package.as_ref()) {
             return Ok(pkg.clone());
         }
-        if let Ok(repo) = self.try_github_repo() {
-            if let Some(pkg) = derive_reverse_dns_package(&repo) {
-                return Ok(pkg);
-            }
+        if let Ok(repo) = self.try_github_repo()
+            && let Some(pkg) = derive_reverse_dns_package(&repo)
+        {
+            return Ok(pkg);
         }
         Err(format!(
             "no Java package configured — set `[java] package = \"...\"` or `[scaffold] repository = \"https://<host>/<org>/...\"` for crate `{}`",
@@ -109,10 +109,10 @@ impl ResolvedCrateConfig {
         if let Some(pkg) = self.kotlin.as_ref().and_then(|k| k.package.as_ref()) {
             return Ok(pkg.clone());
         }
-        if let Ok(repo) = self.try_github_repo() {
-            if let Some(pkg) = derive_reverse_dns_package(&repo) {
-                return Ok(pkg);
-            }
+        if let Ok(repo) = self.try_github_repo()
+            && let Some(pkg) = derive_reverse_dns_package(&repo)
+        {
+            return Ok(pkg);
         }
         Err(format!(
             "no Kotlin package configured — set `[kotlin] package = \"...\"` or `[scaffold] repository = \"https://<host>/<org>/...\"` for crate `{}`",

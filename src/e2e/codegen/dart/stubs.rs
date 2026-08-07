@@ -176,10 +176,10 @@ pub(super) fn map_dart_type_with_fallback(
     ty: &crate::core::ir::TypeRef,
 ) -> String {
     use crate::codegen::type_mapper::TypeMapper as _;
-    if let crate::core::ir::TypeRef::Named(name) = ty {
-        if name.contains("Internal") {
-            return format!("{name}Bridge");
-        }
+    if let crate::core::ir::TypeRef::Named(name) = ty
+        && name.contains("Internal")
+    {
+        return format!("{name}Bridge");
     }
     mapper.map_type(ty).to_string()
 }
@@ -192,17 +192,17 @@ pub(super) fn emit_dart_default_for_type(
 ) -> String {
     // Special case: Named(Float64List) and similar typed-list types need
     // explicit Dart construction. Return Float64List.fromList([]) for the default.
-    if let TypeRef::Named(name) = ty {
-        if name == "Float64List" {
-            return "Float64List.fromList([])".to_string();
-        }
+    if let TypeRef::Named(name) = ty
+        && name == "Float64List"
+    {
+        return "Float64List.fromList([])".to_string();
     }
     // Special case: Vec<Float64List> should return an empty list of Float64Lists.
     if let TypeRef::Vec(inner) = ty {
-        if let TypeRef::Named(name) = inner.as_ref() {
-            if name == "Float64List" {
-                return "[]".to_string(); // Dart infers as List<Float64List>
-            }
+        if let TypeRef::Named(name) = inner.as_ref()
+            && name == "Float64List"
+        {
+            return "[]".to_string(); // Dart infers as List<Float64List>
         }
         // Vec<f32>/Vec<f64> maps to Float64List in Dart — needs typed constructor for default
         if let TypeRef::Primitive(crate::core::ir::PrimitiveType::F32 | crate::core::ir::PrimitiveType::F64) =
@@ -212,12 +212,11 @@ pub(super) fn emit_dart_default_for_type(
         }
     }
     // When return type is Optional<Float64List>, unwrap and return Float64List.fromList([])
-    if let TypeRef::Optional(inner) = ty {
-        if let TypeRef::Named(name) = inner.as_ref() {
-            if name == "Float64List" {
-                return "Float64List.fromList([])".to_string();
-            }
-        }
+    if let TypeRef::Optional(inner) = ty
+        && let TypeRef::Named(name) = inner.as_ref()
+        && name == "Float64List"
+    {
+        return "Float64List.fromList([])".to_string();
     }
 
     // Map internal-only types to the opaque bridge carrier for default generation.
@@ -228,11 +227,11 @@ pub(super) fn emit_dart_default_for_type(
 
     if let TypeRef::Named(name) = &effective_ty {
         // Check if this Named type is an enum in the IR; if so, return the first variant
-        if let Some(enum_def) = enums.iter().find(|e| &e.name == name) {
-            if let Some(first_variant) = enum_def.variants.first() {
-                let variant_name = first_variant.name.to_lowercase();
-                return format!("{name}.{variant_name}");
-            }
+        if let Some(enum_def) = enums.iter().find(|e| &e.name == name)
+            && let Some(first_variant) = enum_def.variants.first()
+        {
+            let variant_name = first_variant.name.to_lowercase();
+            return format!("{name}.{variant_name}");
         }
         // For non-enum Named types, throw UnimplementedError (struct/complex type stubs
         // are registration-only and methods are never invoked).

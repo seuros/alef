@@ -591,23 +591,21 @@ fn render_test_method(
         // Check if any arg is a mock_url_list (needs wrapping) but doesn't have its own
         // adapter_request_type wrapping (mock_url args auto-wrap via adapter_request_type)
         let has_mock_url_list = args.iter().any(|arg| arg.arg_type == "mock_url_list");
-        if has_mock_url_list {
-            if let Some(req_type) = &adapter_request_type_owned {
-                // Find the urls argument part in args_str and wrap it in the request type
-                // The args_str typically looks like "engine, urls" where urls is List<string>
-                // We need to change it to "req" where req is a BatchedStreamItemsRequest wrapping urls
-                let parts: Vec<&str> = args_str.split(", ").collect();
-                if parts.len() >= 2 {
-                    let urls_var = parts[parts.len() - 1]; // Last arg is the URLs
-                    let req_var = format!("{}Req", urls_var);
-                    setup_lines.push(format!("var {req_var} = new {req_type} {{ Urls = {urls_var} }};"));
-                    // Replace the urls arg with the wrapped request
-                    args_str = parts[..parts.len() - 1].join(", ");
-                    if !args_str.is_empty() {
-                        args_str.push_str(", ");
-                    }
-                    args_str.push_str(&req_var);
+        if has_mock_url_list && let Some(req_type) = &adapter_request_type_owned {
+            // Find the urls argument part in args_str and wrap it in the request type
+            // The args_str typically looks like "engine, urls" where urls is List<string>
+            // We need to change it to "req" where req is a BatchedStreamItemsRequest wrapping urls
+            let parts: Vec<&str> = args_str.split(", ").collect();
+            if parts.len() >= 2 {
+                let urls_var = parts[parts.len() - 1]; // Last arg is the URLs
+                let req_var = format!("{}Req", urls_var);
+                setup_lines.push(format!("var {req_var} = new {req_type} {{ Urls = {urls_var} }};"));
+                // Replace the urls arg with the wrapped request
+                args_str = parts[..parts.len() - 1].join(", ");
+                if !args_str.is_empty() {
+                    args_str.push_str(", ");
                 }
+                args_str.push_str(&req_var);
             }
         }
     }
@@ -971,17 +969,15 @@ fn fixture_has_csharp_callable(fixture: &Fixture, e2e_config: &E2eConfig) -> boo
 pub(super) fn classify_bytes_value_csharp(s: &str) -> String {
     // File paths: start with alphanumeric/underscore, contain "/" with extension
     // e.g., "pdf/fake.pdf", "images/test.png"
-    if let Some(first) = s.chars().next() {
-        if first.is_ascii_alphanumeric() || first == '_' {
-            if let Some(slash_pos) = s.find('/') {
-                if slash_pos > 0 {
-                    let after_slash = &s[slash_pos + 1..];
-                    if after_slash.contains('.') && !after_slash.is_empty() {
-                        // File path: use File.ReadAllBytes(path)
-                        return format!("System.IO.File.ReadAllBytes(\"{}\")", s);
-                    }
-                }
-            }
+    if let Some(first) = s.chars().next()
+        && (first.is_ascii_alphanumeric() || first == '_')
+        && let Some(slash_pos) = s.find('/')
+        && slash_pos > 0
+    {
+        let after_slash = &s[slash_pos + 1..];
+        if after_slash.contains('.') && !after_slash.is_empty() {
+            // File path: use File.ReadAllBytes(path)
+            return format!("System.IO.File.ReadAllBytes(\"{}\")", s);
         }
     }
 

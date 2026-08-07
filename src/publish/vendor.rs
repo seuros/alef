@@ -228,12 +228,11 @@ fn inline_workspace_package_fields(doc: &mut DocumentMut, ws_pkg: &Table) -> Res
 
 /// Check if a field is `field.workspace = true` (either dotted key or table form).
 fn is_workspace_inherited(table: &Table, key: &str) -> bool {
-    if let Some(item) = table.get(key) {
-        if let Some(tbl) = item.as_table_like() {
-            if let Some(ws) = tbl.get("workspace") {
-                return ws.as_value().and_then(|v| v.as_bool()) == Some(true);
-            }
-        }
+    if let Some(item) = table.get(key)
+        && let Some(tbl) = item.as_table_like()
+        && let Some(ws) = tbl.get("workspace")
+    {
+        return ws.as_value().and_then(|v| v.as_bool()) == Some(true);
     }
     false
 }
@@ -248,15 +247,14 @@ fn inline_workspace_deps(doc: &mut DocumentMut, section: &str, ws_deps: &Table) 
     let keys_to_inline: Vec<String> = deps
         .iter()
         .filter_map(|(key, item)| {
-            if let Some(tbl) = item.as_table_like() {
-                if tbl
+            if let Some(tbl) = item.as_table_like()
+                && tbl
                     .get("workspace")
                     .and_then(|w| w.as_value())
                     .and_then(|v| v.as_bool())
                     == Some(true)
-                {
-                    return Some(key.to_string());
-                }
+            {
+                return Some(key.to_string());
             }
             None
         })
@@ -711,15 +709,14 @@ fn strip_workspace_member_entries(lock_path: &Path, member_names: &std::collecti
 
 /// Remove `[lints] workspace = true` section.
 fn remove_workspace_lints(doc: &mut DocumentMut) {
-    if let Some(lints) = doc.get("lints").and_then(|l| l.as_table_like()) {
-        if lints
+    if let Some(lints) = doc.get("lints").and_then(|l| l.as_table_like())
+        && lints
             .get("workspace")
             .and_then(|w| w.as_value())
             .and_then(|v| v.as_bool())
             == Some(true)
-        {
-            doc.remove("lints");
-        }
+    {
+        doc.remove("lints");
     }
 }
 

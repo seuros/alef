@@ -397,10 +397,10 @@ fn gen_registration_method(
     let mut params = vec!["handler HandlerFunc".to_owned()];
     for meta_param in &reg.metadata_params {
         let mut go_type = typeref_to_go_type(&meta_param.ty);
-        if let TypeRef::Named(type_name) = &meta_param.ty {
-            if api.types.iter().any(|t| t.name == *type_name) {
-                go_type = format!("*{}", go_type);
-            }
+        if let TypeRef::Named(type_name) = &meta_param.ty
+            && api.types.iter().any(|t| t.name == *type_name)
+        {
+            go_type = format!("*{}", go_type);
         }
         params.push(format!("{} {}", meta_param.name, go_type));
     }

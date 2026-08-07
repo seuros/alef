@@ -218,15 +218,13 @@ impl Backend for ZigBackend {
                     .functions
                     .iter()
                     .find(|f| matches!(&f.return_type, crate::core::ir::TypeRef::Named(n) if n == &opaque_ty.name))
+                    && let Some(config_param) = creator.params.first()
+                    && let Some(config_name) = functions::opaque_type_name_inner(&config_param.ty)
                 {
-                    if let Some(config_param) = creator.params.first() {
-                        if let Some(config_name) = functions::opaque_type_name_inner(&config_param.ty) {
-                            map.insert(
-                                opaque_ty.name.clone(),
-                                (creator.name.clone(), heck::AsSnakeCase(config_name).to_string()),
-                            );
-                        }
-                    }
+                    map.insert(
+                        opaque_ty.name.clone(),
+                        (creator.name.clone(), heck::AsSnakeCase(config_name).to_string()),
+                    );
                 }
             }
             map

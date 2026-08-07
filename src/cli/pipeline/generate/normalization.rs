@@ -92,10 +92,10 @@ pub(super) fn detect_crate_edition(path: &Path) -> String {
     loop {
         let candidate = current.join("Cargo.toml");
         if candidate.is_file() {
-            if let Ok(text) = std::fs::read_to_string(&candidate) {
-                if let Some(edition) = parse_package_edition(&text) {
-                    return edition;
-                }
+            if let Ok(text) = std::fs::read_to_string(&candidate)
+                && let Some(edition) = parse_package_edition(&text)
+            {
+                return edition;
             }
             return "2024".to_string();
         }

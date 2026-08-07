@@ -206,23 +206,23 @@ pub(crate) fn dart_call_arg(p: &ParamDef) -> String {
         }
     }
 
-    if let TypeRef::Vec(inner) = &p.ty {
-        if let TypeRef::Primitive(prim) = inner.as_ref() {
-            let target = primitive_name(prim);
-            if target != "i64" && target != "f64" && target != "bool" {
-                if p.optional {
-                    if p.is_ref {
-                        return format!(
-                            "{name}.as_ref().map(|v| v.iter().map(|x| *x as {target}).collect::<Vec<_>>()).as_deref()"
-                        );
-                    }
-                    return format!("{name}.map(|v| v.into_iter().map(|x| x as {target}).collect::<Vec<_>>())");
-                }
+    if let TypeRef::Vec(inner) = &p.ty
+        && let TypeRef::Primitive(prim) = inner.as_ref()
+    {
+        let target = primitive_name(prim);
+        if target != "i64" && target != "f64" && target != "bool" {
+            if p.optional {
                 if p.is_ref {
-                    return format!("{name}.iter().map(|x| *x as {target}).collect::<Vec<_>>().as_slice()");
+                    return format!(
+                        "{name}.as_ref().map(|v| v.iter().map(|x| *x as {target}).collect::<Vec<_>>()).as_deref()"
+                    );
                 }
-                return format!("{name}.into_iter().map(|x| x as {target}).collect::<Vec<_>>()");
+                return format!("{name}.map(|v| v.into_iter().map(|x| x as {target}).collect::<Vec<_>>())");
             }
+            if p.is_ref {
+                return format!("{name}.iter().map(|x| *x as {target}).collect::<Vec<_>>().as_slice()");
+            }
+            return format!("{name}.into_iter().map(|x| x as {target}).collect::<Vec<_>>()");
         }
     }
 

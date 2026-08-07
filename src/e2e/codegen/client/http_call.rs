@@ -102,20 +102,20 @@ pub fn render_http_test<R: TestClientRenderer + ?Sized>(out: &mut String, render
         renderer.render_assert_header(out, response_var, name, value);
     }
 
-    if has_meaningful_body(&http.expected_response) {
-        if let Some(body) = http.expected_response.body.as_ref() {
-            renderer.render_assert_json_body(out, response_var, body);
-        }
+    if has_meaningful_body(&http.expected_response)
+        && let Some(body) = http.expected_response.body.as_ref()
+    {
+        renderer.render_assert_json_body(out, response_var, body);
     }
 
     if let Some(partial) = http.expected_response.body_partial.as_ref() {
         renderer.render_assert_partial_body(out, response_var, partial);
     }
 
-    if let Some(errors) = http.expected_response.validation_errors.as_ref() {
-        if !errors.is_empty() {
-            renderer.render_assert_validation_errors(out, response_var, errors);
-        }
+    if let Some(errors) = http.expected_response.validation_errors.as_ref()
+        && !errors.is_empty()
+    {
+        renderer.render_assert_validation_errors(out, response_var, errors);
     }
 
     renderer.render_test_close(out);

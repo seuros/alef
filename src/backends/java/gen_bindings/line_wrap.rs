@@ -64,40 +64,40 @@ fn visible_len(s: &str) -> usize {
 fn wrap_line(line: &str) -> String {
     let indent = leading_whitespace(line);
 
-    if let Some(wrapped) = wrap_javadoc_line(line, indent) {
-        if all_lines_fit(&wrapped) {
-            return wrapped;
-        }
+    if let Some(wrapped) = wrap_javadoc_line(line, indent)
+        && all_lines_fit(&wrapped)
+    {
+        return wrapped;
     }
-    if let Some(wrapped) = wrap_record_field_annotations(line, indent) {
-        if all_lines_fit(&wrapped) {
-            return wrapped;
-        }
+    if let Some(wrapped) = wrap_record_field_annotations(line, indent)
+        && all_lines_fit(&wrapped)
+    {
+        return wrapped;
     }
-    if let Some(wrapped) = wrap_function_descriptor_call(line, indent) {
-        if all_lines_fit(&wrapped) {
-            return wrapped;
-        }
+    if let Some(wrapped) = wrap_function_descriptor_call(line, indent)
+        && all_lines_fit(&wrapped)
+    {
+        return wrapped;
     }
-    if let Some(wrapped) = wrap_method_type_call(line, indent) {
-        if all_lines_fit(&wrapped) {
-            return wrapped;
-        }
+    if let Some(wrapped) = wrap_method_type_call(line, indent)
+        && all_lines_fit(&wrapped)
+    {
+        return wrapped;
     }
-    if let Some(wrapped) = wrap_method_signature(line, indent) {
-        if all_lines_fit(&wrapped) {
-            return wrapped;
-        }
+    if let Some(wrapped) = wrap_method_signature(line, indent)
+        && all_lines_fit(&wrapped)
+    {
+        return wrapped;
     }
-    if let Some(wrapped) = wrap_ternary_string_msg(line, indent) {
-        if all_lines_fit(&wrapped) {
-            return wrapped;
-        }
+    if let Some(wrapped) = wrap_ternary_string_msg(line, indent)
+        && all_lines_fit(&wrapped)
+    {
+        return wrapped;
     }
-    if let Some(wrapped) = wrap_invoke_call(line, indent) {
-        if all_lines_fit(&wrapped) {
-            return wrapped;
-        }
+    if let Some(wrapped) = wrap_invoke_call(line, indent)
+        && all_lines_fit(&wrapped)
+    {
+        return wrapped;
     }
     line.to_string()
 }

@@ -442,23 +442,24 @@ fn strip_markdown_links(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'[' {
-            if let Some(close) = bytes[i + 1..].iter().position(|&b| b == b']') {
-                let text_end = i + 1 + close;
-                if text_end + 1 < bytes.len() && bytes[text_end + 1] == b'(' {
-                    if let Some(paren_close) = bytes[text_end + 2..].iter().position(|&b| b == b')') {
-                        let url_start = text_end + 2;
-                        let url_end = url_start + paren_close;
-                        let text = &s[i + 1..text_end];
-                        let url = &s[url_start..url_end];
-                        out.push_str(text);
-                        out.push_str(" (");
-                        out.push_str(url);
-                        out.push(')');
-                        i = url_end + 1;
-                        continue;
-                    }
-                }
+        if bytes[i] == b'['
+            && let Some(close) = bytes[i + 1..].iter().position(|&b| b == b']')
+        {
+            let text_end = i + 1 + close;
+            if text_end + 1 < bytes.len()
+                && bytes[text_end + 1] == b'('
+                && let Some(paren_close) = bytes[text_end + 2..].iter().position(|&b| b == b')')
+            {
+                let url_start = text_end + 2;
+                let url_end = url_start + paren_close;
+                let text = &s[i + 1..text_end];
+                let url = &s[url_start..url_end];
+                out.push_str(text);
+                out.push_str(" (");
+                out.push_str(url);
+                out.push(')');
+                i = url_end + 1;
+                continue;
             }
         }
         out.push(bytes[i] as char);
@@ -603,14 +604,14 @@ pub fn render_yard_sections(sections: &RustdocSections) -> String {
         out.push_str("@raise ");
         out.push_str(err.trim());
     }
-    if let Some(example) = sections.example.as_deref() {
-        if let Some(body) = example_for_target(example, "ruby") {
-            if !out.is_empty() {
-                out.push('\n');
-            }
-            out.push_str("@example\n");
-            out.push_str(&body);
+    if let Some(example) = sections.example.as_deref()
+        && let Some(body) = example_for_target(example, "ruby")
+    {
+        if !out.is_empty() {
+            out.push('\n');
         }
+        out.push_str("@example\n");
+        out.push_str(&body);
     }
     out
 }

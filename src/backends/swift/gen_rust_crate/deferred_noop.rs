@@ -13,10 +13,10 @@ pub(super) fn emit_shims(deferred_empty_handle_types: &HashSet<String>, visible_
     for ty_name in deferred_empty_handle_types {
         let type_snake = ty_name.to_snake_case();
         let noop_fn_name = format!("{type_snake}_noop");
-        if let Some(ty) = visible_types.iter().find(|t| t.name == *ty_name) {
-            if let Some(cfg) = ty.cfg.as_deref() {
-                out.push_str(&format!("#[cfg({cfg})]\n"));
-            }
+        if let Some(ty) = visible_types.iter().find(|t| t.name == *ty_name)
+            && let Some(cfg) = ty.cfg.as_deref()
+        {
+            out.push_str(&format!("#[cfg({cfg})]\n"));
         }
         out.push_str(&crate::backends::swift::template_env::render(
             "rust_wrapper_free_fn.rs.jinja",

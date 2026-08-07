@@ -251,10 +251,10 @@ impl E2eConfig {
         names.sort();
         for name in names {
             let call_config = &self.calls[name];
-            if let Some(sel) = &call_config.select_when {
-                if sel.matches(fixture_id, fixture_category, fixture_tags, fixture_input) {
-                    return call_config;
-                }
+            if let Some(sel) = &call_config.select_when
+                && sel.matches(fixture_id, fixture_category, fixture_tags, fixture_input)
+            {
+                return call_config;
             }
         }
         &self.call

@@ -248,11 +248,9 @@ pub fn visitor_param_type(ty: &TypeRef, is_ref: bool, optional: bool, tp: &HashM
     if optional && matches!(ty, TypeRef::String) && is_ref {
         return "Option<&str>".to_string();
     }
-    if is_ref {
-        if let TypeRef::Vec(inner) = ty {
-            let inner_str = bridge_param_type(inner, "", false, tp);
-            return format!("&[{inner_str}]");
-        }
+    if is_ref && let TypeRef::Vec(inner) = ty {
+        let inner_str = bridge_param_type(inner, "", false, tp);
+        return format!("&[{inner_str}]");
     }
     bridge_param_type(ty, "", is_ref, tp)
 }

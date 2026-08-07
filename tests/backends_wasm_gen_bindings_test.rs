@@ -4725,7 +4725,11 @@ fn field_referencing_a_known_named_type_is_not_treated_as_unbound() {
             TypeDef {
                 name: "PageConfig".to_string(),
                 rust_path: "test_lib::PageConfig".to_string(),
-                fields: vec![make_field("include_page_breaks", TypeRef::Primitive(PrimitiveType::Bool), false)],
+                fields: vec![make_field(
+                    "include_page_breaks",
+                    TypeRef::Primitive(PrimitiveType::Bool),
+                    false,
+                )],
                 is_clone: true,
                 has_default: true,
                 ..Default::default()

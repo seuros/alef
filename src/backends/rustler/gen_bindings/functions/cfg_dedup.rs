@@ -63,10 +63,10 @@ pub(in crate::backends::rustler::gen_bindings) fn regate_ungated_same_name_funct
         .iter()
         .cloned()
         .map(|mut function| {
-            if function.cfg.is_none() {
-                if let Some(Some(gated)) = gated_cfg_by_name.get(function.name.as_str()) {
-                    function.cfg = Some(format!("not({gated})"));
-                }
+            if function.cfg.is_none()
+                && let Some(Some(gated)) = gated_cfg_by_name.get(function.name.as_str())
+            {
+                function.cfg = Some(format!("not({gated})"));
             }
             function
         })

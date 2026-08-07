@@ -231,40 +231,40 @@ pub(super) fn render_count_min_assertion(
     is_unwrapped: bool,
     field_resolver: &FieldResolver,
 ) {
-    if let Some(val) = &assertion.value {
-        if let Some(n) = val.as_u64() {
-            let opt_arr_field = assertion.field.as_ref().is_some_and(|f| {
-                let resolved = field_resolver.resolve(f);
-                let is_opt = !is_unwrapped && field_resolver.is_optional(resolved);
-                let is_arr = field_resolver.is_array(resolved);
-                is_opt && is_arr
-            });
-            let base = field_access.strip_suffix(".len()").unwrap_or(field_access);
-            if opt_arr_field {
-                // Option<Vec<T>>: must be Some AND inner len >= n.
-                if n == 0 {
-                    // count_min: 0 is always true — no assertion needed
-                } else if n == 1 {
-                    let _ = writeln!(
-                        out,
-                        "    assert!({base}.as_ref().is_some_and(|v| !v.is_empty()), \"expected >= {n}\");"
-                    );
-                } else {
-                    let _ = writeln!(
-                        out,
-                        "    assert!({base}.as_ref().is_some_and(|v| v.len() >= {n}), \"expected at least {n} elements\");"
-                    );
-                }
-            } else if n == 0 {
+    if let Some(val) = &assertion.value
+        && let Some(n) = val.as_u64()
+    {
+        let opt_arr_field = assertion.field.as_ref().is_some_and(|f| {
+            let resolved = field_resolver.resolve(f);
+            let is_opt = !is_unwrapped && field_resolver.is_optional(resolved);
+            let is_arr = field_resolver.is_array(resolved);
+            is_opt && is_arr
+        });
+        let base = field_access.strip_suffix(".len()").unwrap_or(field_access);
+        if opt_arr_field {
+            // Option<Vec<T>>: must be Some AND inner len >= n.
+            if n == 0 {
                 // count_min: 0 is always true — no assertion needed
             } else if n == 1 {
-                let _ = writeln!(out, "    assert!(!{base}.is_empty(), \"expected >= {n}\");");
+                let _ = writeln!(
+                    out,
+                    "    assert!({base}.as_ref().is_some_and(|v| !v.is_empty()), \"expected >= {n}\");"
+                );
             } else {
                 let _ = writeln!(
                     out,
-                    "    assert!({field_access}.len() >= {n}, \"expected at least {n} elements, got {{}}\", {field_access}.len());"
+                    "    assert!({base}.as_ref().is_some_and(|v| v.len() >= {n}), \"expected at least {n} elements\");"
                 );
             }
+        } else if n == 0 {
+            // count_min: 0 is always true — no assertion needed
+        } else if n == 1 {
+            let _ = writeln!(out, "    assert!(!{base}.is_empty(), \"expected >= {n}\");");
+        } else {
+            let _ = writeln!(
+                out,
+                "    assert!({field_access}.len() >= {n}, \"expected at least {n} elements, got {{}}\", {field_access}.len());"
+            );
         }
     }
 }
@@ -276,26 +276,26 @@ pub(super) fn render_count_equals_assertion(
     is_unwrapped: bool,
     field_resolver: &FieldResolver,
 ) {
-    if let Some(val) = &assertion.value {
-        if let Some(n) = val.as_u64() {
-            let opt_arr_field = assertion.field.as_ref().is_some_and(|f| {
-                let resolved = field_resolver.resolve(f);
-                let is_opt = !is_unwrapped && field_resolver.is_optional(resolved);
-                let is_arr = field_resolver.is_array(resolved);
-                is_opt && is_arr
-            });
-            let base = field_access.strip_suffix(".len()").unwrap_or(field_access);
-            if opt_arr_field {
-                let _ = writeln!(
-                    out,
-                    "    assert!({base}.as_ref().is_some_and(|v| v.len() == {n}), \"expected exactly {n} elements\");"
-                );
-            } else {
-                let _ = writeln!(
-                    out,
-                    "    assert_eq!({field_access}.len(), {n}, \"expected exactly {n} elements, got {{}}\", {field_access}.len());"
-                );
-            }
+    if let Some(val) = &assertion.value
+        && let Some(n) = val.as_u64()
+    {
+        let opt_arr_field = assertion.field.as_ref().is_some_and(|f| {
+            let resolved = field_resolver.resolve(f);
+            let is_opt = !is_unwrapped && field_resolver.is_optional(resolved);
+            let is_arr = field_resolver.is_array(resolved);
+            is_opt && is_arr
+        });
+        let base = field_access.strip_suffix(".len()").unwrap_or(field_access);
+        if opt_arr_field {
+            let _ = writeln!(
+                out,
+                "    assert!({base}.as_ref().is_some_and(|v| v.len() == {n}), \"expected exactly {n} elements\");"
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "    assert_eq!({field_access}.len(), {n}, \"expected exactly {n} elements, got {{}}\", {field_access}.len());"
+            );
         }
     }
 }

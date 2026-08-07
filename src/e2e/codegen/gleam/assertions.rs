@@ -179,33 +179,33 @@ pub(super) fn render_tagged_union_assertion(
             }
         }
         "count_min" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    if suffix_is_optional {
-                        let _ = writeln!(
-                            out,
-                            "      {inner_field_expr} |> option.unwrap([]) |> list.length |> fn(n__) {{ n__ >= {n} }} |> should.equal(True)"
-                        );
-                    } else {
-                        let _ = writeln!(
-                            out,
-                            "      {inner_field_expr} |> list.length |> fn(n__) {{ n__ >= {n} }} |> should.equal(True)"
-                        );
-                    }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                if suffix_is_optional {
+                    let _ = writeln!(
+                        out,
+                        "      {inner_field_expr} |> option.unwrap([]) |> list.length |> fn(n__) {{ n__ >= {n} }} |> should.equal(True)"
+                    );
+                } else {
+                    let _ = writeln!(
+                        out,
+                        "      {inner_field_expr} |> list.length |> fn(n__) {{ n__ >= {n} }} |> should.equal(True)"
+                    );
                 }
             }
         }
         "count_equals" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    if suffix_is_optional {
-                        let _ = writeln!(
-                            out,
-                            "      {inner_field_expr} |> option.unwrap([]) |> list.length |> should.equal({n})"
-                        );
-                    } else {
-                        let _ = writeln!(out, "      {inner_field_expr} |> list.length |> should.equal({n})");
-                    }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                if suffix_is_optional {
+                    let _ = writeln!(
+                        out,
+                        "      {inner_field_expr} |> option.unwrap([]) |> list.length |> should.equal({n})"
+                    );
+                } else {
+                    let _ = writeln!(out, "      {inner_field_expr} |> list.length |> should.equal({n})");
                 }
             }
         }
@@ -267,11 +267,12 @@ pub(super) fn render_assertion(
     result_is_array: bool,
     pkg_module: &str,
 ) {
-    if let Some(f) = &assertion.field {
-        if !f.is_empty() && !field_resolver.is_valid_for_result(f) {
-            let _ = writeln!(out, "  // skipped: field '{f}' not available on result type");
-            return;
-        }
+    if let Some(f) = &assertion.field
+        && !f.is_empty()
+        && !field_resolver.is_valid_for_result(f)
+    {
+        let _ = writeln!(out, "  // skipped: field '{f}' not available on result type");
+        return;
     }
 
     if let Some(f) = &assertion.field {
@@ -302,95 +303,94 @@ pub(super) fn render_assertion(
         }
     }
 
-    if let Some(f) = &assertion.field {
-        if !f.is_empty() {
-            if let Some((prefix, variant, suffix)) = field_resolver.tagged_union_split(f) {
-                render_tagged_union_assertion(
-                    out,
-                    assertion,
-                    result_var,
-                    &prefix,
-                    &variant,
-                    &suffix,
-                    field_resolver,
-                    pkg_module,
-                );
-                return;
-            }
-        }
+    if let Some(f) = &assertion.field
+        && !f.is_empty()
+        && let Some((prefix, variant, suffix)) = field_resolver.tagged_union_split(f)
+    {
+        render_tagged_union_assertion(
+            out,
+            assertion,
+            result_var,
+            &prefix,
+            &variant,
+            &suffix,
+            field_resolver,
+            pkg_module,
+        );
+        return;
     }
 
-    if let Some(f) = &assertion.field {
-        if !f.is_empty() {
-            let parts: Vec<&str> = f.split('.').collect();
-            let mut opt_prefix: Option<(String, usize)> = None;
-            for i in 1..parts.len() {
-                let prefix_path = parts[..i].join(".");
-                if field_resolver.is_optional(&prefix_path) {
-                    opt_prefix = Some((prefix_path, i));
-                    break;
-                }
+    if let Some(f) = &assertion.field
+        && !f.is_empty()
+    {
+        let parts: Vec<&str> = f.split('.').collect();
+        let mut opt_prefix: Option<(String, usize)> = None;
+        for i in 1..parts.len() {
+            let prefix_path = parts[..i].join(".");
+            if field_resolver.is_optional(&prefix_path) {
+                opt_prefix = Some((prefix_path, i));
+                break;
             }
-            if let Some((optional_prefix, suffix_start)) = opt_prefix {
-                let prefix_expr = format!("{result_var}.{optional_prefix}");
-                let suffix_parts = &parts[suffix_start..];
-                let suffix_str = suffix_parts.join(".");
-                let inner_var = "opt_inner__";
-                let inner_expr = if suffix_str.is_empty() {
-                    inner_var.to_string()
-                } else {
-                    format!("{inner_var}.{suffix_str}")
-                };
-                let _ = writeln!(out, "  case {prefix_expr} {{");
-                let _ = writeln!(out, "    option.Some({inner_var}) -> {{");
-                match assertion.assertion_type.as_str() {
-                    "count_min" => {
-                        if let Some(val) = &assertion.value {
-                            if let Some(n) = val.as_u64() {
-                                let _ = writeln!(
-                                    out,
-                                    "      {inner_expr} |> list.length |> fn(n__) {{ n__ >= {n} }} |> should.equal(True)"
-                                );
-                            }
-                        }
-                    }
-                    "count_equals" => {
-                        if let Some(val) = &assertion.value {
-                            if let Some(n) = val.as_u64() {
-                                let _ = writeln!(out, "      {inner_expr} |> list.length |> should.equal({n})");
-                            }
-                        }
-                    }
-                    "not_empty" => {
-                        let is_arr = field_resolver.is_array(f) || field_resolver.is_array(field_resolver.resolve(f));
-                        if is_arr {
-                            let _ = writeln!(out, "      {inner_expr} |> list.is_empty |> should.equal(False)");
-                        } else {
-                            let _ = writeln!(out, "      {inner_expr} |> string.is_empty |> should.equal(False)");
-                        }
-                    }
-                    "min_length" => {
-                        if let Some(val) = &assertion.value {
-                            if let Some(n) = val.as_u64() {
-                                let _ = writeln!(
-                                    out,
-                                    "      {inner_expr} |> string.length |> fn(n__) {{ n__ >= {n} }} |> should.equal(True)"
-                                );
-                            }
-                        }
-                    }
-                    other => {
+        }
+        if let Some((optional_prefix, suffix_start)) = opt_prefix {
+            let prefix_expr = format!("{result_var}.{optional_prefix}");
+            let suffix_parts = &parts[suffix_start..];
+            let suffix_str = suffix_parts.join(".");
+            let inner_var = "opt_inner__";
+            let inner_expr = if suffix_str.is_empty() {
+                inner_var.to_string()
+            } else {
+                format!("{inner_var}.{suffix_str}")
+            };
+            let _ = writeln!(out, "  case {prefix_expr} {{");
+            let _ = writeln!(out, "    option.Some({inner_var}) -> {{");
+            match assertion.assertion_type.as_str() {
+                "count_min" => {
+                    if let Some(val) = &assertion.value
+                        && let Some(n) = val.as_u64()
+                    {
                         let _ = writeln!(
                             out,
-                            "      // optional-prefix assertion '{other}' not yet implemented for Gleam"
+                            "      {inner_expr} |> list.length |> fn(n__) {{ n__ >= {n} }} |> should.equal(True)"
                         );
                     }
                 }
-                let _ = writeln!(out, "    }}");
-                let _ = writeln!(out, "    option.None -> should.fail()");
-                let _ = writeln!(out, "  }}");
-                return;
+                "count_equals" => {
+                    if let Some(val) = &assertion.value
+                        && let Some(n) = val.as_u64()
+                    {
+                        let _ = writeln!(out, "      {inner_expr} |> list.length |> should.equal({n})");
+                    }
+                }
+                "not_empty" => {
+                    let is_arr = field_resolver.is_array(f) || field_resolver.is_array(field_resolver.resolve(f));
+                    if is_arr {
+                        let _ = writeln!(out, "      {inner_expr} |> list.is_empty |> should.equal(False)");
+                    } else {
+                        let _ = writeln!(out, "      {inner_expr} |> string.is_empty |> should.equal(False)");
+                    }
+                }
+                "min_length" => {
+                    if let Some(val) = &assertion.value
+                        && let Some(n) = val.as_u64()
+                    {
+                        let _ = writeln!(
+                            out,
+                            "      {inner_expr} |> string.length |> fn(n__) {{ n__ >= {n} }} |> should.equal(True)"
+                        );
+                    }
+                }
+                other => {
+                    let _ = writeln!(
+                        out,
+                        "      // optional-prefix assertion '{other}' not yet implemented for Gleam"
+                    );
+                }
             }
+            let _ = writeln!(out, "    }}");
+            let _ = writeln!(out, "    option.None -> should.fail()");
+            let _ = writeln!(out, "  }}");
+            return;
         }
     }
 
@@ -519,40 +519,40 @@ pub(super) fn render_assertion(
             }
         }
         "min_length" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(
-                        out,
-                        "  {field_expr} |> string.length |> fn(n__) {{ n__ >= {n} }} |> should.equal(True)"
-                    );
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(
+                    out,
+                    "  {field_expr} |> string.length |> fn(n__) {{ n__ >= {n} }} |> should.equal(True)"
+                );
             }
         }
         "max_length" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(
-                        out,
-                        "  {field_expr} |> string.length |> fn(n__) {{ n__ <= {n} }} |> should.equal(True)"
-                    );
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(
+                    out,
+                    "  {field_expr} |> string.length |> fn(n__) {{ n__ <= {n} }} |> should.equal(True)"
+                );
             }
         }
         "count_min" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(
-                        out,
-                        "  {field_expr} |> list.length |> fn(n__) {{ n__ >= {n} }} |> should.equal(True)"
-                    );
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(
+                    out,
+                    "  {field_expr} |> list.length |> fn(n__) {{ n__ >= {n} }} |> should.equal(True)"
+                );
             }
         }
         "count_equals" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(out, "  {field_expr} |> list.length |> should.equal({n})");
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(out, "  {field_expr} |> list.length |> should.equal({n})");
             }
         }
         "is_true" => {

@@ -28,10 +28,10 @@ pub(in crate::backends::magnus::gen_bindings) fn gen_async_function(
         "args: &[magnus::Value]".to_string()
     } else {
         function_params(&func.params, &|ty| {
-            if let TypeRef::Named(name) = ty {
-                if !opaque_types.contains(name.as_str()) {
-                    return "magnus::Value".to_string();
-                }
+            if let TypeRef::Named(name) = ty
+                && !opaque_types.contains(name.as_str())
+            {
+                return "magnus::Value".to_string();
             }
             mapper.map_type(ty)
         })
@@ -97,21 +97,20 @@ pub(in crate::backends::magnus::gen_bindings) fn gen_async_function(
                         ));
                     }
                 }
-            } else if let TypeRef::Vec(inner) = &p.ty {
-                if let TypeRef::Named(name) = inner.as_ref() {
-                    if !opaque_types.contains(name.as_str()) {
-                        let core_inner_ty = format!("{core_import}::{name}");
-                        let vec_ty = format!("Vec<{core_inner_ty}>");
-                        deser_lines.push(crate::backends::magnus::template_env::render(
-                            "function_named_vec_binding.rs.jinja",
-                            minijinja::context! {
-                                name => &p.name,
-                                vec_ty => &vec_ty,
-                                optional => p.optional,
-                            },
-                        ));
-                    }
-                }
+            } else if let TypeRef::Vec(inner) = &p.ty
+                && let TypeRef::Named(name) = inner.as_ref()
+                && !opaque_types.contains(name.as_str())
+            {
+                let core_inner_ty = format!("{core_import}::{name}");
+                let vec_ty = format!("Vec<{core_inner_ty}>");
+                deser_lines.push(crate::backends::magnus::template_env::render(
+                    "function_named_vec_binding.rs.jinja",
+                    minijinja::context! {
+                        name => &p.name,
+                        vec_ty => &vec_ty,
+                        optional => p.optional,
+                    },
+                ));
             }
         }
     }

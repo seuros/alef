@@ -91,19 +91,19 @@ pub(in crate::backends::magnus::gen_bindings) fn gen_module_init(
                     arity => -1,
                 },
             ));
-        } else if has_variant_wrapper_ctor {
-            if let Some(ctor_method) = typ.methods.iter().find(|m| m.name == "new" && m.receiver.is_none()) {
-                let arity = ctor_method.params.len() as i32;
-                lines.push(crate::backends::magnus::template_env::render(
-                    "module_class_singleton_method_register.rs.jinja",
-                    minijinja::context! {
-                        ruby_name => "new",
-                        type_name => &typ.name,
-                        function_name => "new",
-                        arity => arity,
-                    },
-                ));
-            }
+        } else if has_variant_wrapper_ctor
+            && let Some(ctor_method) = typ.methods.iter().find(|m| m.name == "new" && m.receiver.is_none())
+        {
+            let arity = ctor_method.params.len() as i32;
+            lines.push(crate::backends::magnus::template_env::render(
+                "module_class_singleton_method_register.rs.jinja",
+                minijinja::context! {
+                    ruby_name => "new",
+                    type_name => &typ.name,
+                    function_name => "new",
+                    arity => arity,
+                },
+            ));
         }
 
         let mut registered_field_names: ahash::AHashSet<&str> = ahash::AHashSet::default();

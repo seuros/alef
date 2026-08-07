@@ -190,48 +190,48 @@ pub(super) fn build_args_and_setup(
         }
 
         if arg.arg_type == "test_backend" {
-            if let Some(trait_name) = &arg.trait_name {
-                if let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name) {
-                    // Collect methods from both the main trait and its super-trait (if present).
-                    // The super-trait methods are needed so stubs implement the full interface.
-                    let mut methods: Vec<&crate::core::ir::MethodDef> = type_defs
-                        .iter()
-                        .find(|t| t.name == *trait_name)
-                        .map(|t| t.methods.iter().collect())
-                        .unwrap_or_default();
+            if let Some(trait_name) = &arg.trait_name
+                && let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name)
+            {
+                // Collect methods from both the main trait and its super-trait (if present).
+                // The super-trait methods are needed so stubs implement the full interface.
+                let mut methods: Vec<&crate::core::ir::MethodDef> = type_defs
+                    .iter()
+                    .find(|t| t.name == *trait_name)
+                    .map(|t| t.methods.iter().collect())
+                    .unwrap_or_default();
 
-                    // If there's a super-trait, also collect its methods.
-                    if let Some(super_trait) = &trait_bridge.super_trait {
-                        // Extract the simple name from the full path (e.g., "Plugin" from "crate::plugins::Plugin").
-                        let super_trait_simple = super_trait.rsplit("::").next().unwrap_or(super_trait.as_str());
-                        if let Some(super_type) = type_defs.iter().find(|t| t.name == super_trait_simple) {
-                            for method in &super_type.methods {
-                                // Only add if not already present (avoid duplicates).
-                                if !methods.iter().any(|m| m.name == method.name) {
-                                    methods.push(method);
-                                }
+                // If there's a super-trait, also collect its methods.
+                if let Some(super_trait) = &trait_bridge.super_trait {
+                    // Extract the simple name from the full path (e.g., "Plugin" from "crate::plugins::Plugin").
+                    let super_trait_simple = super_trait.rsplit("::").next().unwrap_or(super_trait.as_str());
+                    if let Some(super_type) = type_defs.iter().find(|t| t.name == super_trait_simple) {
+                        for method in &super_type.methods {
+                            // Only add if not already present (avoid duplicates).
+                            if !methods.iter().any(|m| m.name == method.name) {
+                                methods.push(method);
                             }
                         }
                     }
-
-                    let enum_names: std::collections::HashSet<&str> = enums.iter().map(|e| e.name.as_str()).collect();
-                    let excluded_named = crate::e2e::codegen::recipe::trait_bridge_excluded_type_names_with_enums(
-                        config,
-                        type_defs,
-                        &methods,
-                        &enum_names,
-                    );
-                    let emission =
-                        emit_test_backend_with_class_name(trait_bridge, &methods, fixture, class_name, &excluded_named);
-                    // setup_block is a private nested class declaration — must be at class
-                    // scope in C#, not inside the method body.
-                    class_decls.push(emission.setup_block);
-                    parts.push(emission.arg_expr);
-                    if !emission.teardown_block.is_empty() {
-                        teardown_lines.push(emission.teardown_block);
-                    }
-                    continue;
                 }
+
+                let enum_names: std::collections::HashSet<&str> = enums.iter().map(|e| e.name.as_str()).collect();
+                let excluded_named = crate::e2e::codegen::recipe::trait_bridge_excluded_type_names_with_enums(
+                    config,
+                    type_defs,
+                    &methods,
+                    &enum_names,
+                );
+                let emission =
+                    emit_test_backend_with_class_name(trait_bridge, &methods, fixture, class_name, &excluded_named);
+                // setup_block is a private nested class declaration — must be at class
+                // scope in C#, not inside the method body.
+                class_decls.push(emission.setup_block);
+                parts.push(emission.arg_expr);
+                if !emission.teardown_block.is_empty() {
+                    teardown_lines.push(emission.teardown_block);
+                }
+                continue;
             }
             let emission = crate::e2e::codegen::TestBackendEmission::unimplemented("csharp");
             setup_lines.push(format!("// {}", emission.arg_expr));
@@ -361,17 +361,17 @@ pub(super) fn build_args_and_setup(
                         continue;
                     }
                     // Object value with known type: generate idiomatic C# object initializer.
-                    if let Some(opts_type) = json_object_type {
-                        if let Some(obj) = v.as_object() {
-                            parts.push(csharp_object_initializer(
-                                obj,
-                                opts_type,
-                                enum_fields,
-                                nested_types,
-                                type_defs,
-                            ));
-                            continue;
-                        }
+                    if let Some(opts_type) = json_object_type
+                        && let Some(obj) = v.as_object()
+                    {
+                        parts.push(csharp_object_initializer(
+                            obj,
+                            opts_type,
+                            enum_fields,
+                            nested_types,
+                            type_defs,
+                        ));
+                        continue;
                     }
                 }
                 parts.push(json_to_csharp(v));
@@ -413,26 +413,26 @@ fn resolve_json_object_default(
     options_via: Option<&str>,
 ) -> String {
     // Explicit options_type from call config: highest priority
-    if let Some(opts_type) = options_type {
-        if is_default_constructible(opts_type, type_defs) {
-            // When options_via == "from_json", use the factory method for consistency
-            if options_via == Some("from_json") {
-                return format!("{opts_type}.FromJson(\"{{}}\")");
-            }
-            return format!("new {opts_type}()");
+    if let Some(opts_type) = options_type
+        && is_default_constructible(opts_type, type_defs)
+    {
+        // When options_via == "from_json", use the factory method for consistency
+        if options_via == Some("from_json") {
+            return format!("{opts_type}.FromJson(\"{{}}\")");
         }
-        // Explicit type exists but cannot be default-constructed; fall through
+        return format!("new {opts_type}()");
     }
+    // Explicit type exists but cannot be default-constructed; fall through
 
     // Fall back to element_type from arg mapping
-    if let Some(elem_type) = element_type {
-        if is_default_constructible(elem_type, type_defs) {
-            // When options_via == "from_json", use the factory method for consistency
-            if options_via == Some("from_json") {
-                return format!("{elem_type}.FromJson(\"{{}}\")");
-            }
-            return format!("new {elem_type}()");
+    if let Some(elem_type) = element_type
+        && is_default_constructible(elem_type, type_defs)
+    {
+        // When options_via == "from_json", use the factory method for consistency
+        if options_via == Some("from_json") {
+            return format!("{elem_type}.FromJson(\"{{}}\")");
         }
+        return format!("new {elem_type}()");
     }
 
     // Try to infer type name from parameter name:

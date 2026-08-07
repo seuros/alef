@@ -14,78 +14,70 @@ pub fn field_conversion_from_core(
     opaque_types: &AHashSet<String>,
 ) -> String {
     if sanitized {
-        if let TypeRef::Vec(inner) = ty {
-            if matches!(inner.as_ref(), TypeRef::Primitive(_)) {
-                if optional {
-                    return format!(
-                        "{name}: val.{name}.map(|t| {{ let arr: Vec<_> = [t.0, t.1].into_iter().map(|v| v as _).collect(); arr }})"
-                    );
-                }
-                return format!("{name}: vec![val.{name}.0 as _, val.{name}.1 as _]");
-            }
-        }
-        if let TypeRef::Optional(opt_inner) = ty {
-            if let TypeRef::Vec(vec_inner) = opt_inner.as_ref() {
-                if matches!(vec_inner.as_ref(), TypeRef::Primitive(_)) {
-                    return format!("{name}: val.{name}.map(|t| vec![t.0 as _, t.1 as _])");
-                }
-            }
-        }
-        if let TypeRef::Map(k, v) = ty {
-            if matches!(k.as_ref(), TypeRef::String) && matches!(v.as_ref(), TypeRef::String) {
-                if optional {
-                    return format!(
-                        "{name}: val.{name}.as_ref().map(|m| m.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect())"
-                    );
-                }
+        if let TypeRef::Vec(inner) = ty
+            && matches!(inner.as_ref(), TypeRef::Primitive(_))
+        {
+            if optional {
                 return format!(
-                    "{name}: val.{name}.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()"
+                    "{name}: val.{name}.map(|t| {{ let arr: Vec<_> = [t.0, t.1].into_iter().map(|v| v as _).collect(); arr }})"
                 );
             }
+            return format!("{name}: vec![val.{name}.0 as _, val.{name}.1 as _]");
         }
-        if let TypeRef::Vec(outer_inner) = ty {
-            if let TypeRef::Vec(inner) = outer_inner.as_ref() {
-                if matches!(inner.as_ref(), TypeRef::String) {
-                    if optional {
-                        return format!(
-                            "{name}: val.{name}.as_ref().map(|v| v.iter().map(|(a, b)| vec![a.to_string(), b.to_string()]).collect::<Vec<Vec<String>>>())"
-                        );
-                    }
-                    return format!(
-                        "{name}: val.{name}.iter().map(|(a, b)| vec![a.to_string(), b.to_string()]).collect::<Vec<Vec<String>>>()"
-                    );
-                }
-            }
+        if let TypeRef::Optional(opt_inner) = ty
+            && let TypeRef::Vec(vec_inner) = opt_inner.as_ref()
+            && matches!(vec_inner.as_ref(), TypeRef::Primitive(_))
+        {
+            return format!("{name}: val.{name}.map(|t| vec![t.0 as _, t.1 as _])");
         }
-        if let TypeRef::Optional(opt_inner) = ty {
-            if let TypeRef::Vec(outer_inner) = opt_inner.as_ref() {
-                if let TypeRef::Vec(inner) = outer_inner.as_ref() {
-                    if matches!(inner.as_ref(), TypeRef::String) {
-                        return format!(
-                            "{name}: val.{name}.as_ref().map(|v| v.iter().map(|(a, b)| vec![a.to_string(), b.to_string()]).collect::<Vec<Vec<String>>>())"
-                        );
-                    }
-                }
+        if let TypeRef::Map(k, v) = ty
+            && matches!(k.as_ref(), TypeRef::String)
+            && matches!(v.as_ref(), TypeRef::String)
+        {
+            if optional {
+                return format!(
+                    "{name}: val.{name}.as_ref().map(|m| m.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect())"
+                );
             }
+            return format!("{name}: val.{name}.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()");
         }
-        if let TypeRef::Vec(inner) = ty {
-            if matches!(inner.as_ref(), TypeRef::String) {
-                if optional {
-                    return format!(
-                        "{name}: val.{name}.as_ref().map(|v| v.iter().map(|i| format!(\"{{:?}}\", i)).collect())"
-                    );
-                }
-                return format!("{name}: val.{name}.iter().map(|i| format!(\"{{:?}}\", i)).collect()");
+        if let TypeRef::Vec(outer_inner) = ty
+            && let TypeRef::Vec(inner) = outer_inner.as_ref()
+            && matches!(inner.as_ref(), TypeRef::String)
+        {
+            if optional {
+                return format!(
+                    "{name}: val.{name}.as_ref().map(|v| v.iter().map(|(a, b)| vec![a.to_string(), b.to_string()]).collect::<Vec<Vec<String>>>())"
+                );
             }
+            return format!(
+                "{name}: val.{name}.iter().map(|(a, b)| vec![a.to_string(), b.to_string()]).collect::<Vec<Vec<String>>>()"
+            );
         }
-        if let TypeRef::Optional(opt_inner) = ty {
-            if let TypeRef::Vec(vec_inner) = opt_inner.as_ref() {
-                if matches!(vec_inner.as_ref(), TypeRef::String) {
-                    return format!(
-                        "{name}: val.{name}.as_ref().map(|v| v.iter().map(|i| format!(\"{{:?}}\", i)).collect())"
-                    );
-                }
+        if let TypeRef::Optional(opt_inner) = ty
+            && let TypeRef::Vec(outer_inner) = opt_inner.as_ref()
+            && let TypeRef::Vec(inner) = outer_inner.as_ref()
+            && matches!(inner.as_ref(), TypeRef::String)
+        {
+            return format!(
+                "{name}: val.{name}.as_ref().map(|v| v.iter().map(|(a, b)| vec![a.to_string(), b.to_string()]).collect::<Vec<Vec<String>>>())"
+            );
+        }
+        if let TypeRef::Vec(inner) = ty
+            && matches!(inner.as_ref(), TypeRef::String)
+        {
+            if optional {
+                return format!(
+                    "{name}: val.{name}.as_ref().map(|v| v.iter().map(|i| format!(\"{{:?}}\", i)).collect())"
+                );
             }
+            return format!("{name}: val.{name}.iter().map(|i| format!(\"{{:?}}\", i)).collect()");
+        }
+        if let TypeRef::Optional(opt_inner) = ty
+            && let TypeRef::Vec(vec_inner) = opt_inner.as_ref()
+            && matches!(vec_inner.as_ref(), TypeRef::String)
+        {
+            return format!("{name}: val.{name}.as_ref().map(|v| v.iter().map(|i| format!(\"{{:?}}\", i)).collect())");
         }
         if matches!(ty, TypeRef::String) {
             if optional {
@@ -247,85 +239,81 @@ pub fn field_conversion_from_core_cfg(
 ) -> String {
     if sanitized {
         if config.map_uses_jsvalue {
-            if let TypeRef::Map(k, v) = ty {
-                if matches!(k.as_ref(), TypeRef::String) && matches!(v.as_ref(), TypeRef::String) {
-                    if optional {
-                        return format!(
-                            "{name}: val.{name}.as_ref().and_then(|v| serde_json::to_string(v).ok()).and_then(|s| js_sys::JSON::parse(&s).ok())"
-                        );
-                    }
+            if let TypeRef::Map(k, v) = ty
+                && matches!(k.as_ref(), TypeRef::String)
+                && matches!(v.as_ref(), TypeRef::String)
+            {
+                if optional {
                     return format!(
-                        "{name}: js_sys::JSON::parse(&serde_json::to_string(&val.{name}).unwrap_or_default()).unwrap_or(JsValue::NULL)"
+                        "{name}: val.{name}.as_ref().and_then(|v| serde_json::to_string(v).ok()).and_then(|s| js_sys::JSON::parse(&s).ok())"
                     );
                 }
+                return format!(
+                    "{name}: js_sys::JSON::parse(&serde_json::to_string(&val.{name}).unwrap_or_default()).unwrap_or(JsValue::NULL)"
+                );
             }
-            if let TypeRef::Vec(inner) = ty {
-                if matches!(inner.as_ref(), TypeRef::Json) {
-                    if optional {
-                        return format!(
-                            "{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::to_value(v).ok())"
-                        );
-                    }
-                    return format!("{name}: serde_wasm_bindgen::to_value(&val.{name}).unwrap_or(JsValue::NULL)");
+            if let TypeRef::Vec(inner) = ty
+                && matches!(inner.as_ref(), TypeRef::Json)
+            {
+                if optional {
+                    return format!("{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::to_value(v).ok())");
                 }
+                return format!("{name}: serde_wasm_bindgen::to_value(&val.{name}).unwrap_or(JsValue::NULL)");
             }
-            if let TypeRef::Vec(outer_inner) = ty {
-                if let TypeRef::Vec(inner) = outer_inner.as_ref() {
-                    if matches!(inner.as_ref(), TypeRef::String) {
-                        if optional {
-                            return format!(
-                                "{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::to_value(&v.iter().map(|(a, b)| vec![a.to_string(), b.to_string()]).collect::<Vec<Vec<String>>>()).ok())"
-                            );
-                        }
-                        return format!(
-                            "{name}: serde_wasm_bindgen::to_value(&val.{name}.iter().map(|(a, b)| vec![a.to_string(), b.to_string()]).collect::<Vec<Vec<String>>>()).unwrap_or(JsValue::NULL)"
-                        );
-                    }
+            if let TypeRef::Vec(outer_inner) = ty
+                && let TypeRef::Vec(inner) = outer_inner.as_ref()
+                && matches!(inner.as_ref(), TypeRef::String)
+            {
+                if optional {
+                    return format!(
+                        "{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::to_value(&v.iter().map(|(a, b)| vec![a.to_string(), b.to_string()]).collect::<Vec<Vec<String>>>()).ok())"
+                    );
                 }
+                return format!(
+                    "{name}: serde_wasm_bindgen::to_value(&val.{name}.iter().map(|(a, b)| vec![a.to_string(), b.to_string()]).collect::<Vec<Vec<String>>>()).unwrap_or(JsValue::NULL)"
+                );
             }
-            if let TypeRef::Optional(opt_inner) = ty {
-                if let TypeRef::Vec(outer_inner) = opt_inner.as_ref() {
-                    if let TypeRef::Vec(inner) = outer_inner.as_ref() {
-                        if matches!(inner.as_ref(), TypeRef::String) {
-                            return format!(
-                                "{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::to_value(&v.iter().map(|(a, b)| vec![a.to_string(), b.to_string()]).collect::<Vec<Vec<String>>>()).ok())"
-                            );
-                        }
-                    }
-                }
+            if let TypeRef::Optional(opt_inner) = ty
+                && let TypeRef::Vec(outer_inner) = opt_inner.as_ref()
+                && let TypeRef::Vec(inner) = outer_inner.as_ref()
+                && matches!(inner.as_ref(), TypeRef::String)
+            {
+                return format!(
+                    "{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::to_value(&v.iter().map(|(a, b)| vec![a.to_string(), b.to_string()]).collect::<Vec<Vec<String>>>()).ok())"
+                );
             }
         }
         return field_conversion_from_core(name, ty, optional, sanitized, opaque_types);
     }
 
-    if config.map_uses_jsvalue {
-        if let Some(tagged_names) = config.tagged_data_enum_names {
-            let bare_named = matches!(ty, TypeRef::Named(n) if tagged_names.contains(n));
-            let optional_named = matches!(ty, TypeRef::Optional(inner)
+    if config.map_uses_jsvalue
+        && let Some(tagged_names) = config.tagged_data_enum_names
+    {
+        let bare_named = matches!(ty, TypeRef::Named(n) if tagged_names.contains(n));
+        let optional_named = matches!(ty, TypeRef::Optional(inner)
                 if matches!(inner.as_ref(), TypeRef::Named(n) if tagged_names.contains(n)));
-            let vec_named = matches!(ty, TypeRef::Vec(inner)
+        let vec_named = matches!(ty, TypeRef::Vec(inner)
                 if matches!(inner.as_ref(), TypeRef::Named(n) if tagged_names.contains(n)));
-            let optional_vec_named = matches!(ty, TypeRef::Optional(outer)
+        let optional_vec_named = matches!(ty, TypeRef::Optional(outer)
                 if matches!(outer.as_ref(), TypeRef::Vec(inner)
                     if matches!(inner.as_ref(), TypeRef::Named(n) if tagged_names.contains(n))));
-            if bare_named {
-                if optional {
-                    return format!("{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::to_value(v).ok())");
-                }
-                return format!("{name}: serde_wasm_bindgen::to_value(&val.{name}).unwrap_or(JsValue::NULL)");
-            }
-            if optional_named {
+        if bare_named {
+            if optional {
                 return format!("{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::to_value(v).ok())");
             }
-            if vec_named {
-                if optional {
-                    return format!("{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::to_value(v).ok())");
-                }
-                return format!("{name}: serde_wasm_bindgen::to_value(&val.{name}).unwrap_or(JsValue::NULL)");
-            }
-            if optional_vec_named {
+            return format!("{name}: serde_wasm_bindgen::to_value(&val.{name}).unwrap_or(JsValue::NULL)");
+        }
+        if optional_named {
+            return format!("{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::to_value(v).ok())");
+        }
+        if vec_named {
+            if optional {
                 return format!("{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::to_value(v).ok())");
             }
+            return format!("{name}: serde_wasm_bindgen::to_value(&val.{name}).unwrap_or(JsValue::NULL)");
+        }
+        if optional_vec_named {
+            return format!("{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::to_value(v).ok())");
         }
     }
 
@@ -377,24 +365,23 @@ pub fn field_conversion_from_core_cfg(
         }
     }
 
-    if config.vec_named_to_string {
-        if let TypeRef::Vec(inner) = ty {
-            if matches!(inner.as_ref(), TypeRef::Named(_)) {
-                if optional {
-                    return format!("{name}: val.{name}.as_ref().and_then(|v| serde_json::to_string(v).ok())");
-                }
-                return format!("{name}: serde_json::to_string(&val.{name}).unwrap_or_default()");
-            }
+    if config.vec_named_to_string
+        && let TypeRef::Vec(inner) = ty
+        && matches!(inner.as_ref(), TypeRef::Named(_))
+    {
+        if optional {
+            return format!("{name}: val.{name}.as_ref().and_then(|v| serde_json::to_string(v).ok())");
         }
+        return format!("{name}: serde_json::to_string(&val.{name}).unwrap_or_default()");
     }
 
-    if config.map_flatten_to_string {
-        if let TypeRef::Map(_, _) = ty {
-            if optional {
-                return format!("{name}: val.{name}.as_ref().and_then(|v| serde_json::to_string(v).ok())");
-            }
-            return format!("{name}: serde_json::to_string(&val.{name}).unwrap_or_default()");
+    if config.map_flatten_to_string
+        && let TypeRef::Map(_, _) = ty
+    {
+        if optional {
+            return format!("{name}: val.{name}.as_ref().and_then(|v| serde_json::to_string(v).ok())");
         }
+        return format!("{name}: serde_json::to_string(&val.{name}).unwrap_or_default()");
     }
     if config.map_as_string && matches!(ty, TypeRef::Map(_, _)) {
         if optional {
@@ -402,12 +389,11 @@ pub fn field_conversion_from_core_cfg(
         }
         return format!("{name}: format!(\"{{:?}}\", val.{name})");
     }
-    if config.map_as_string {
-        if let TypeRef::Optional(inner) = ty {
-            if matches!(inner.as_ref(), TypeRef::Map(_, _)) {
-                return format!("{name}: val.{name}.as_ref().map(|m| format!(\"{{m:?}}\"))");
-            }
-        }
+    if config.map_as_string
+        && let TypeRef::Optional(inner) = ty
+        && matches!(inner.as_ref(), TypeRef::Map(_, _))
+    {
+        return format!("{name}: val.{name}.as_ref().map(|m| format!(\"{{m:?}}\"))");
     }
 
     if config.map_uses_jsvalue {

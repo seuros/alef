@@ -72,10 +72,10 @@ impl TypeMapper for DartMapper {
     /// fixture stubs must surface these typed names to satisfy the
     /// FRB-generated `create_*_dart_impl` factory signatures.
     fn map_type(&self, ty: &TypeRef) -> String {
-        if let TypeRef::Vec(inner) = ty {
-            if let Some(typed) = dart_typed_list_for(inner) {
-                return typed.to_string();
-            }
+        if let TypeRef::Vec(inner) = ty
+            && let Some(typed) = dart_typed_list_for(inner)
+        {
+            return typed.to_string();
         }
         match ty {
             TypeRef::Primitive(p) => self.primitive(p).into_owned(),

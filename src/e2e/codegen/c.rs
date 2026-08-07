@@ -420,18 +420,18 @@ fn resolve_fixture_call_info(fixture: &Fixture, e2e_config: &E2eConfig, lang: &s
 
     // Fallback: if the named call has no client_factory override, inherit from the
     // default call config so all calls use the same client pattern.
-    if info.client_factory.is_none() {
-        if let Some(factory) = default_overrides.and_then(|o| o.client_factory.as_ref()) {
-            info.client_factory = Some(factory.clone());
-        }
+    if info.client_factory.is_none()
+        && let Some(factory) = default_overrides.and_then(|o| o.client_factory.as_ref())
+    {
+        info.client_factory = Some(factory.clone());
     }
 
     // Fallback: if the named call has no c_engine_factory override, inherit from the
     // default call config so all calls use the same engine pattern.
-    if info.c_engine_factory.is_none() {
-        if let Some(factory) = default_overrides.and_then(|o| o.c_engine_factory.as_ref()) {
-            info.c_engine_factory = Some(factory.clone());
-        }
+    if info.c_engine_factory.is_none()
+        && let Some(factory) = default_overrides.and_then(|o| o.c_engine_factory.as_ref())
+    {
+        info.c_engine_factory = Some(factory.clone());
     }
 
     info

@@ -47,39 +47,38 @@ pub(super) fn render_test_file(
         );
         let resolved_args = fixture.resolved_args(call_config);
         for arg in resolved_args.iter() {
-            if arg.arg_type == "test_backend" {
-                if let Some(trait_name) = &arg.trait_name {
-                    if let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name) {
-                        let mut methods: Vec<&crate::core::ir::MethodDef> = type_defs
-                            .iter()
-                            .find(|t| t.name == *trait_name)
-                            .map(|t| t.methods.iter().collect())
-                            .unwrap_or_default();
-                        if let Some(super_trait) = &trait_bridge.super_trait {
-                            if let Some(super_type) = type_defs.iter().find(|t| &t.name == super_trait) {
-                                for method in &super_type.methods {
-                                    if !methods.iter().any(|m| m.name == method.name) {
-                                        methods.push(method);
-                                    }
-                                }
-                            }
+            if arg.arg_type == "test_backend"
+                && let Some(trait_name) = &arg.trait_name
+                && let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name)
+            {
+                let mut methods: Vec<&crate::core::ir::MethodDef> = type_defs
+                    .iter()
+                    .find(|t| t.name == *trait_name)
+                    .map(|t| t.methods.iter().collect())
+                    .unwrap_or_default();
+                if let Some(super_trait) = &trait_bridge.super_trait
+                    && let Some(super_type) = type_defs.iter().find(|t| &t.name == super_trait)
+                {
+                    for method in &super_type.methods {
+                        if !methods.iter().any(|m| m.name == method.name) {
+                            methods.push(method);
                         }
-                        let elixir_nif_module = format!("{module_path}.Native");
-                        // This pass only harvests module-level defs (module_defs_str below) for
-                        // file-level emission; teardown_block is consumed separately in
-                        // args.rs/test_case.rs where the per-test setup is rendered, so the
-                        // facade_module argument here is inert (pass "" to skip building it twice).
-                        let emission = emit_test_backend(trait_bridge, &methods, fixture, &elixir_nif_module, "");
+                    }
+                }
+                let elixir_nif_module = format!("{module_path}.Native");
+                // This pass only harvests module-level defs (module_defs_str below) for
+                // file-level emission; teardown_block is consumed separately in
+                // args.rs/test_case.rs where the per-test setup is rendered, so the
+                // facade_module argument here is inert (pass "" to skip building it twice).
+                let emission = emit_test_backend(trait_bridge, &methods, fixture, &elixir_nif_module, "");
 
-                        // Extract module defs from the combined setup_block
-                        if let Some(pos) = emission.setup_block.find("__TRAIT_BRIDGE_MODULE_DEFS_END__") {
-                            let marker_start = emission.setup_block[..pos].rfind('\n').unwrap_or(0);
-                            let module_defs_str = emission.setup_block[..marker_start].trim_end().to_string();
-                            for line in module_defs_str.lines() {
-                                if !line.is_empty() {
-                                    trait_bridge_module_defs.push(line.to_string());
-                                }
-                            }
+                // Extract module defs from the combined setup_block
+                if let Some(pos) = emission.setup_block.find("__TRAIT_BRIDGE_MODULE_DEFS_END__") {
+                    let marker_start = emission.setup_block[..pos].rfind('\n').unwrap_or(0);
+                    let module_defs_str = emission.setup_block[..marker_start].trim_end().to_string();
+                    for line in module_defs_str.lines() {
+                        if !line.is_empty() {
+                            trait_bridge_module_defs.push(line.to_string());
                         }
                     }
                 }

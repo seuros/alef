@@ -565,17 +565,16 @@ fn gen_call_args_with_let_bindings_mutex_inner(
 
     let mut patched = base;
     for p in params {
-        if let TypeRef::Named(type_name) = &p.ty {
-            if opaque_types.contains(type_name.as_str())
-                && mutex_types.contains(type_name.as_str())
-                && p.is_ref
-                && p.is_mut
-                && !p.optional
-            {
-                let old_expr = format!("&{}.inner", p.name);
-                let new_expr = format!("&mut *{}.inner.lock().unwrap()", p.name);
-                patched = patched.replace(&old_expr, &new_expr);
-            }
+        if let TypeRef::Named(type_name) = &p.ty
+            && opaque_types.contains(type_name.as_str())
+            && mutex_types.contains(type_name.as_str())
+            && p.is_ref
+            && p.is_mut
+            && !p.optional
+        {
+            let old_expr = format!("&{}.inner", p.name);
+            let new_expr = format!("&mut *{}.inner.lock().unwrap()", p.name);
+            patched = patched.replace(&old_expr, &new_expr);
         }
     }
     patched

@@ -122,14 +122,13 @@ pub(super) fn emit_function_wrappers(
             if return_type_names.contains(name) && !reexported_names.contains(name.as_str()) {
                 return_type_str = format!("_rust.{return_type_str}");
             }
-        } else if let crate::core::ir::TypeRef::Optional(inner) = &func.return_type {
-            if let crate::core::ir::TypeRef::Named(name) = inner.as_ref() {
-                if return_type_names.contains(name) && !reexported_names.contains(name.as_str()) {
-                    if let Some(base) = return_type_str.strip_suffix(" | None") {
-                        return_type_str = format!("_rust.{} | None", base);
-                    }
-                }
-            }
+        } else if let crate::core::ir::TypeRef::Optional(inner) = &func.return_type
+            && let crate::core::ir::TypeRef::Named(name) = inner.as_ref()
+            && return_type_names.contains(name)
+            && !reexported_names.contains(name.as_str())
+            && let Some(base) = return_type_str.strip_suffix(" | None")
+        {
+            return_type_str = format!("_rust.{} | None", base);
         }
         let def_keyword = if func.is_async { "async def" } else { "def" };
         let has_builtin_param = sig_parts.iter().any(|p| {

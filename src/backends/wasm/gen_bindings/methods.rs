@@ -113,34 +113,34 @@ pub(super) fn gen_method(
         let mut serde_bindings = String::new();
         if has_named {
             for p in &method.params {
-                if let crate::core::ir::TypeRef::Named(name) = &p.ty {
-                    if !opaque_types.contains(name.as_str()) {
-                        let core_path = format!("{}::{}", core_import, name);
-                        let err_conv = ".map_err(|e| wasm_bindgen::JsValue::from_str(&e.to_string()))";
-                        if p.optional {
-                            serde_bindings.push_str(&crate::backends::wasm::template_env::render(
-                                "serde_named_optional",
-                                minijinja::context! {
-                                    param_name => &p.name,
-                                    core_path => &core_path,
-                                    err_conv => &err_conv,
-                                },
-                            ));
-                            serde_bindings.push_str("    ");
-                        } else {
-                            let has_default = false;
-                            serde_bindings.push_str(&crate::backends::wasm::template_env::render(
-                                "serde_named_required",
-                                minijinja::context! {
-                                    param_name => &p.name,
-                                    core_path => &core_path,
-                                    err_conv => &err_conv,
-                                    has_default => has_default,
-                                    is_mut => p.is_mut,
-                                },
-                            ));
-                            serde_bindings.push_str("    ");
-                        }
+                if let crate::core::ir::TypeRef::Named(name) = &p.ty
+                    && !opaque_types.contains(name.as_str())
+                {
+                    let core_path = format!("{}::{}", core_import, name);
+                    let err_conv = ".map_err(|e| wasm_bindgen::JsValue::from_str(&e.to_string()))";
+                    if p.optional {
+                        serde_bindings.push_str(&crate::backends::wasm::template_env::render(
+                            "serde_named_optional",
+                            minijinja::context! {
+                                param_name => &p.name,
+                                core_path => &core_path,
+                                err_conv => &err_conv,
+                            },
+                        ));
+                        serde_bindings.push_str("    ");
+                    } else {
+                        let has_default = false;
+                        serde_bindings.push_str(&crate::backends::wasm::template_env::render(
+                            "serde_named_required",
+                            minijinja::context! {
+                                param_name => &p.name,
+                                core_path => &core_path,
+                                err_conv => &err_conv,
+                                has_default => has_default,
+                                is_mut => p.is_mut,
+                            },
+                        ));
+                        serde_bindings.push_str("    ");
                     }
                 }
             }

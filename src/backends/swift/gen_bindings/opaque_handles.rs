@@ -21,10 +21,10 @@ use std::path::Path;
 pub(crate) fn collect_already_declared_owner_types(config: &ResolvedCrateConfig) -> std::collections::BTreeSet<String> {
     let mut owner_types = std::collections::BTreeSet::new();
     for adapter in &config.adapters {
-        if matches!(adapter.pattern, AdapterPattern::Streaming) {
-            if let Some(owner) = adapter.owner_type.as_deref() {
-                owner_types.insert(owner.to_string());
-            }
+        if matches!(adapter.pattern, AdapterPattern::Streaming)
+            && let Some(owner) = adapter.owner_type.as_deref()
+        {
+            owner_types.insert(owner.to_string());
         }
     }
     owner_types

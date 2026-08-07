@@ -124,18 +124,18 @@ pub fn kotlin_field_name_with_type(
         return escape_kotlin_keyword(&to_lower_camel(field_name));
     }
 
-    if total_fields == 1 {
-        if let Some(type_name) = field_type_name {
-            if let Some(remainder) = type_name.strip_prefix(variant_name) {
-                let derived = to_lower_camel(remainder);
-                if !derived.is_empty() {
-                    return escape_kotlin_keyword(&derived);
-                }
+    if total_fields == 1
+        && let Some(type_name) = field_type_name
+    {
+        if let Some(remainder) = type_name.strip_prefix(variant_name) {
+            let derived = to_lower_camel(remainder);
+            if !derived.is_empty() {
+                return escape_kotlin_keyword(&derived);
             }
+        }
 
-            if is_primitive_or_stdlib_type(type_name) {
-                return "value".to_string();
-            }
+        if is_primitive_or_stdlib_type(type_name) {
+            return "value".to_string();
         }
     }
 

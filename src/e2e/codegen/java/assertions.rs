@@ -253,95 +253,98 @@ pub(super) fn render_assertion(
     // Gate on `is_streaming` so non-streaming fixtures (e.g. consumers whose real
     // result struct has a literal `chunks` field) don't divert into the virtual
     // accessor path — they should fall through to the normal field resolver.
-    if let Some(f) = &assertion.field {
-        if is_streaming && !f.is_empty() && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(f) {
-            if let Some(expr) =
-                crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::accessor_with_streaming_context(
-                    f,
-                    "java",
-                    "chunks",
-                    None,
-                    streaming_item_type,
-                )
-            {
-                let line = match assertion.assertion_type.as_str() {
-                    "count_min" => {
-                        if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                            format!("        assertTrue({expr}.size() >= {n}, \"expected >= {n} chunks\");\n")
-                        } else {
-                            String::new()
-                        }
+    if let Some(f) = &assertion.field
+        && is_streaming
+        && !f.is_empty()
+        && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(f)
+    {
+        if let Some(expr) =
+            crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::accessor_with_streaming_context(
+                f,
+                "java",
+                "chunks",
+                None,
+                streaming_item_type,
+            )
+        {
+            let line = match assertion.assertion_type.as_str() {
+                "count_min" => {
+                    if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
+                        format!("        assertTrue({expr}.size() >= {n}, \"expected >= {n} chunks\");\n")
+                    } else {
+                        String::new()
                     }
-                    "count_equals" => {
-                        if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                            format!("        assertEquals({n}, {expr}.size());\n")
-                        } else {
-                            String::new()
-                        }
-                    }
-                    "equals" => {
-                        if let Some(serde_json::Value::String(s)) = &assertion.value {
-                            let escaped = crate::e2e::escape::escape_java(s);
-                            format!("        assertEquals(\"{escaped}\", {expr});\n")
-                        } else if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                            format!("        assertEquals({n}, {expr});\n")
-                        } else {
-                            String::new()
-                        }
-                    }
-                    "not_empty" => format!("        assertFalse({expr}.isEmpty(), \"expected non-empty\");\n"),
-                    "is_empty" => format!("        assertTrue({expr}.isEmpty(), \"expected empty\");\n"),
-                    "is_true" => format!("        assertTrue({expr}, \"expected true\");\n"),
-                    "is_false" => format!("        assertFalse({expr}, \"expected false\");\n"),
-                    "greater_than" => {
-                        if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                            format!("        assertTrue({expr} > {n}, \"expected > {n}\");\n")
-                        } else {
-                            String::new()
-                        }
-                    }
-                    "greater_than_or_equal" => {
-                        if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                            format!("        assertTrue({expr} >= {n}, \"expected >= {n}\");\n")
-                        } else {
-                            String::new()
-                        }
-                    }
-                    "contains" => {
-                        if let Some(serde_json::Value::String(s)) = &assertion.value {
-                            let escaped = crate::e2e::escape::escape_java(s);
-                            format!(
-                                "        assertTrue({expr}.contains(\"{escaped}\"), \"expected to contain: {escaped}\");\n"
-                            )
-                        } else {
-                            String::new()
-                        }
-                    }
-                    _ => format!(
-                        "        // streaming field '{f}': assertion type '{}' not rendered\n",
-                        assertion.assertion_type
-                    ),
-                };
-                if !line.is_empty() {
-                    out.push_str(&line);
                 }
+                "count_equals" => {
+                    if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
+                        format!("        assertEquals({n}, {expr}.size());\n")
+                    } else {
+                        String::new()
+                    }
+                }
+                "equals" => {
+                    if let Some(serde_json::Value::String(s)) = &assertion.value {
+                        let escaped = crate::e2e::escape::escape_java(s);
+                        format!("        assertEquals(\"{escaped}\", {expr});\n")
+                    } else if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
+                        format!("        assertEquals({n}, {expr});\n")
+                    } else {
+                        String::new()
+                    }
+                }
+                "not_empty" => format!("        assertFalse({expr}.isEmpty(), \"expected non-empty\");\n"),
+                "is_empty" => format!("        assertTrue({expr}.isEmpty(), \"expected empty\");\n"),
+                "is_true" => format!("        assertTrue({expr}, \"expected true\");\n"),
+                "is_false" => format!("        assertFalse({expr}, \"expected false\");\n"),
+                "greater_than" => {
+                    if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
+                        format!("        assertTrue({expr} > {n}, \"expected > {n}\");\n")
+                    } else {
+                        String::new()
+                    }
+                }
+                "greater_than_or_equal" => {
+                    if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
+                        format!("        assertTrue({expr} >= {n}, \"expected >= {n}\");\n")
+                    } else {
+                        String::new()
+                    }
+                }
+                "contains" => {
+                    if let Some(serde_json::Value::String(s)) = &assertion.value {
+                        let escaped = crate::e2e::escape::escape_java(s);
+                        format!(
+                            "        assertTrue({expr}.contains(\"{escaped}\"), \"expected to contain: {escaped}\");\n"
+                        )
+                    } else {
+                        String::new()
+                    }
+                }
+                _ => format!(
+                    "        // streaming field '{f}': assertion type '{}' not rendered\n",
+                    assertion.assertion_type
+                ),
+            };
+            if !line.is_empty() {
+                out.push_str(&line);
             }
-            return;
         }
+        return;
     }
 
     // Skip assertions on fields that don't exist on the result type.
-    if let Some(f) = &assertion.field {
-        if !f.is_empty() && !field_resolver.is_valid_for_result(f) {
-            out.push_str(&crate::e2e::template_env::render(
-                "java/synthetic_assertion.jinja",
-                minijinja::context! {
-                    assertion_kind => "skipped",
-                    field_name => f,
-                },
-            ));
-            return;
-        }
+    if let Some(f) = &assertion.field
+        && !f.is_empty()
+        && !field_resolver.is_valid_for_result(f)
+    {
+        out.push_str(&crate::e2e::template_env::render(
+            "java/synthetic_assertion.jinja",
+            minijinja::context! {
+                assertion_kind => "skipped",
+                field_name => f,
+            },
+        ));
+        return;
     }
 
     // Determine if this field maps to a sealed-interface type declared in

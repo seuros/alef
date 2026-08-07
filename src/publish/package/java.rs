@@ -61,12 +61,11 @@ pub fn package_java(
 ///
 /// Tries the per-language config override first, then derives from the target triple.
 fn jni_classifier(config: &ResolvedCrateConfig, target: &RustTarget) -> String {
-    if let Some(publish) = &config.publish {
-        if let Some(lang_cfg) = publish.languages.get("java") {
-            if let Some(override_cls) = &lang_cfg.jni_classifier {
-                return override_cls.clone();
-            }
-        }
+    if let Some(publish) = &config.publish
+        && let Some(lang_cfg) = publish.languages.get("java")
+        && let Some(override_cls) = &lang_cfg.jni_classifier
+    {
+        return override_cls.clone();
     }
     derive_jni_classifier(target)
 }

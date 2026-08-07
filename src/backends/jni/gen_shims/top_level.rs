@@ -122,10 +122,11 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
     let top_level_opaque_returns: std::collections::HashSet<&str> = visible_functions
         .iter()
         .filter_map(|f| {
-            if let TypeRef::Named(n) = &f.return_type {
-                if opaque_type_names.contains(n.as_str()) && !client_type_names.contains(n.as_str()) {
-                    return Some(n.as_str());
-                }
+            if let TypeRef::Named(n) = &f.return_type
+                && opaque_type_names.contains(n.as_str())
+                && !client_type_names.contains(n.as_str())
+            {
+                return Some(n.as_str());
             }
             None
         })

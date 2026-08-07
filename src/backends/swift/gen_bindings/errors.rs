@@ -104,10 +104,10 @@ pub(super) fn emit_error(error: &ErrorDef, module_name: &str, out: &mut String, 
                         .enumerate()
                         .map(|(i, f)| {
                             let label = super::enums::swift_associated_label(&f.name, i);
-                            if let Some(fm) = &field_match {
-                                if fm.name == f.name {
-                                    return format!("{label}: let matched");
-                                }
+                            if let Some(fm) = &field_match
+                                && fm.name == f.name
+                            {
+                                return format!("{label}: let matched");
                             }
                             format!("{label}: _")
                         })

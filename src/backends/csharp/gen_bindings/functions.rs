@@ -82,10 +82,10 @@ pub(super) fn gen_native_methods(
                 opaque_param_types.insert(name.clone());
             }
         }
-        if let Some(name) = inner_named(&func.return_type) {
-            if !enum_names.contains(name) {
-                opaque_return_types.insert(name.to_string());
-            }
+        if let Some(name) = inner_named(&func.return_type)
+            && !enum_names.contains(name)
+        {
+            opaque_return_types.insert(name.to_string());
         }
     }
     for typ in api.types.iter().filter(|typ| !typ.is_trait) {
@@ -106,10 +106,10 @@ pub(super) fn gen_native_methods(
                     opaque_param_types.insert(name.clone());
                 }
             }
-            if let Some(name) = inner_named(&method.return_type) {
-                if !enum_names.contains(name) {
-                    opaque_return_types.insert(name.to_string());
-                }
+            if let Some(name) = inner_named(&method.return_type)
+                && !enum_names.contains(name)
+            {
+                opaque_return_types.insert(name.to_string());
             }
             if method.receiver.is_some() {
                 opaque_param_types.insert(typ.name.clone());

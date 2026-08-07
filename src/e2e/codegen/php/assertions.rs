@@ -133,127 +133,127 @@ pub(super) fn render_assertion(
 
     // Skip enum variant accessors (metadata.format.excel etc.) — PHP bindings
     // serialize FormatMetadata to JSON, so variants are unavailable in PHP.
-    if let Some(f) = &assertion.field {
-        if f.contains("metadata.format.") && f.matches('.').count() >= 2 {
-            out.push_str(&crate::e2e::template_env::render(
-                "php/synthetic_assertion.jinja",
-                minijinja::context! {
-                    assertion_kind => "skipped",
-                    field_name => f,
-                },
-            ));
-            return;
-        }
+    if let Some(f) = &assertion.field
+        && f.contains("metadata.format.")
+        && f.matches('.').count() >= 2
+    {
+        out.push_str(&crate::e2e::template_env::render(
+            "php/synthetic_assertion.jinja",
+            minijinja::context! {
+                assertion_kind => "skipped",
+                field_name => f,
+            },
+        ));
+        return;
     }
 
     // Streaming virtual fields: intercept before is_valid_for_result so they are
     // never skipped.  These fields resolve against the `$chunks` collected-list variable.
     // Only treat a field as streaming if the call is actually streaming.
-    if let Some(f) = &assertion.field {
-        if !f.is_empty() && is_streaming && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(f) {
-            if let Some(expr) =
-                crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::accessor(f, "php", "chunks")
-            {
-                let line = match assertion.assertion_type.as_str() {
-                    "count_min" => {
-                        if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                            format!(
-                                "        $this->assertGreaterThanOrEqual({n}, count({expr}), 'expected >= {n} chunks');\n"
-                            )
-                        } else {
-                            String::new()
-                        }
+    if let Some(f) = &assertion.field
+        && !f.is_empty()
+        && is_streaming
+        && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(f)
+    {
+        if let Some(expr) =
+            crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::accessor(f, "php", "chunks")
+        {
+            let line = match assertion.assertion_type.as_str() {
+                "count_min" => {
+                    if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
+                        format!(
+                            "        $this->assertGreaterThanOrEqual({n}, count({expr}), 'expected >= {n} chunks');\n"
+                        )
+                    } else {
+                        String::new()
                     }
-                    "count_equals" => {
-                        if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                            format!("        $this->assertCount({n}, {expr});\n")
-                        } else {
-                            String::new()
-                        }
-                    }
-                    "equals" => {
-                        if let Some(serde_json::Value::String(s)) = &assertion.value {
-                            let escaped = s.replace('\\', "\\\\").replace('\'', "\\'");
-                            format!("        $this->assertEquals('{escaped}', {expr});\n")
-                        } else if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                            format!("        $this->assertEquals({n}, {expr});\n")
-                        } else {
-                            String::new()
-                        }
-                    }
-                    "not_empty" => format!("        $this->assertNotEmpty({expr});\n"),
-                    "is_empty" => format!("        $this->assertEmpty({expr});\n"),
-                    "is_true" => format!("        $this->assertTrue({expr});\n"),
-                    "is_false" => format!("        $this->assertFalse({expr});\n"),
-                    "greater_than" => {
-                        if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                            format!("        $this->assertGreaterThan({n}, {expr});\n")
-                        } else {
-                            String::new()
-                        }
-                    }
-                    "greater_than_or_equal" => {
-                        if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                            format!("        $this->assertGreaterThanOrEqual({n}, {expr});\n")
-                        } else {
-                            String::new()
-                        }
-                    }
-                    "contains" => {
-                        if let Some(serde_json::Value::String(s)) = &assertion.value {
-                            let escaped = s.replace('\\', "\\\\").replace('\'', "\\'");
-                            format!("        $this->assertStringContainsString('{escaped}', {expr});\n")
-                        } else {
-                            String::new()
-                        }
-                    }
-                    _ => format!(
-                        "        // streaming field '{f}': assertion type '{}' not rendered\n",
-                        assertion.assertion_type
-                    ),
-                };
-                if !line.is_empty() {
-                    out.push_str(&line);
                 }
+                "count_equals" => {
+                    if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
+                        format!("        $this->assertCount({n}, {expr});\n")
+                    } else {
+                        String::new()
+                    }
+                }
+                "equals" => {
+                    if let Some(serde_json::Value::String(s)) = &assertion.value {
+                        let escaped = s.replace('\\', "\\\\").replace('\'', "\\'");
+                        format!("        $this->assertEquals('{escaped}', {expr});\n")
+                    } else if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
+                        format!("        $this->assertEquals({n}, {expr});\n")
+                    } else {
+                        String::new()
+                    }
+                }
+                "not_empty" => format!("        $this->assertNotEmpty({expr});\n"),
+                "is_empty" => format!("        $this->assertEmpty({expr});\n"),
+                "is_true" => format!("        $this->assertTrue({expr});\n"),
+                "is_false" => format!("        $this->assertFalse({expr});\n"),
+                "greater_than" => {
+                    if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
+                        format!("        $this->assertGreaterThan({n}, {expr});\n")
+                    } else {
+                        String::new()
+                    }
+                }
+                "greater_than_or_equal" => {
+                    if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
+                        format!("        $this->assertGreaterThanOrEqual({n}, {expr});\n")
+                    } else {
+                        String::new()
+                    }
+                }
+                "contains" => {
+                    if let Some(serde_json::Value::String(s)) = &assertion.value {
+                        let escaped = s.replace('\\', "\\\\").replace('\'', "\\'");
+                        format!("        $this->assertStringContainsString('{escaped}', {expr});\n")
+                    } else {
+                        String::new()
+                    }
+                }
+                _ => format!(
+                    "        // streaming field '{f}': assertion type '{}' not rendered\n",
+                    assertion.assertion_type
+                ),
+            };
+            if !line.is_empty() {
+                out.push_str(&line);
             }
-            return;
         }
+        return;
     }
 
     // Skip assertions on fields that don't exist on the result type.
-    if let Some(f) = &assertion.field {
-        if !f.is_empty() && !field_resolver.is_valid_for_result(f) {
-            out.push_str(&crate::e2e::template_env::render(
-                "php/synthetic_assertion.jinja",
-                minijinja::context! {
-                    assertion_kind => "skipped",
-                    field_name => f,
-                },
-            ));
-            return;
-        }
+    if let Some(f) = &assertion.field
+        && !f.is_empty()
+        && !field_resolver.is_valid_for_result(f)
+    {
+        out.push_str(&crate::e2e::template_env::render(
+            "php/synthetic_assertion.jinja",
+            minijinja::context! {
+                assertion_kind => "skipped",
+                field_name => f,
+            },
+        ));
+        return;
     }
 
     // When result_is_simple, skip assertions that reference non-content fields
     // (e.g., metadata, document, structure) since the binding returns a plain value.
-    if result_is_simple {
-        if let Some(f) = &assertion.field {
-            let f_lower = f.to_lowercase();
-            if !f.is_empty()
-                && f_lower != "content"
-                && (f_lower.starts_with("metadata")
-                    || f_lower.starts_with("document")
-                    || f_lower.starts_with("structure"))
-            {
-                out.push_str(&crate::e2e::template_env::render(
-                    "php/synthetic_assertion.jinja",
-                    minijinja::context! {
-                        assertion_kind => "result_is_simple",
-                        field_name => f,
-                    },
-                ));
-                return;
-            }
+    if result_is_simple && let Some(f) = &assertion.field {
+        let f_lower = f.to_lowercase();
+        if !f.is_empty()
+            && f_lower != "content"
+            && (f_lower.starts_with("metadata") || f_lower.starts_with("document") || f_lower.starts_with("structure"))
+        {
+            out.push_str(&crate::e2e::template_env::render(
+                "php/synthetic_assertion.jinja",
+                minijinja::context! {
+                    assertion_kind => "result_is_simple",
+                    field_name => f,
+                },
+            ));
+            return;
         }
     }
 

@@ -121,26 +121,26 @@ pub(crate) fn emit_inbound_wrapper(
     }
     out.push_str("}\n\n");
 
-    if let Some(register_fn) = bridge_config.register_fn.as_deref() {
-        if let Some(registry_getter) = bridge_config.registry_getter.as_deref() {
-            let extra_args = bridge_config
-                .register_extra_args
-                .as_deref()
-                .map(|a| format!(", {a}"))
-                .unwrap_or_default();
-            out.push_str(&crate::backends::swift::template_env::render(
-                "inbound_register_fn.rs.jinja",
-                minijinja::context! {
-                    trait_name => trait_name,
-                    register_fn => register_fn,
-                    box_name => &box_name,
-                    trait_path => &trait_path,
-                    wrapper_name => &wrapper_name,
-                    registry_getter => registry_getter,
-                    extra_args => &extra_args,
-                },
-            ));
-        }
+    if let Some(register_fn) = bridge_config.register_fn.as_deref()
+        && let Some(registry_getter) = bridge_config.registry_getter.as_deref()
+    {
+        let extra_args = bridge_config
+            .register_extra_args
+            .as_deref()
+            .map(|a| format!(", {a}"))
+            .unwrap_or_default();
+        out.push_str(&crate::backends::swift::template_env::render(
+            "inbound_register_fn.rs.jinja",
+            minijinja::context! {
+                trait_name => trait_name,
+                register_fn => register_fn,
+                box_name => &box_name,
+                trait_path => &trait_path,
+                wrapper_name => &wrapper_name,
+                registry_getter => registry_getter,
+                extra_args => &extra_args,
+            },
+        ));
     }
 
     let spec = build_bridge_spec(

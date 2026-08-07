@@ -19,45 +19,44 @@ pub(super) fn render_assertion(
     result_is_simple: bool,
 ) {
     // When result_is_simple, skip fields that reference struct sub-fields.
-    if result_is_simple {
-        if let Some(f) = &assertion.field {
-            let f_lower = f.to_lowercase();
-            if !f.is_empty()
-                && f_lower != "content"
-                && f_lower != "result"
-                && (f_lower.starts_with("metadata")
-                    || f_lower.starts_with("document")
-                    || f_lower.starts_with("structure")
-                    || f_lower.starts_with("pages")
-                    || f_lower.starts_with("chunks")
-                    || f_lower.starts_with("tables")
-                    || f_lower.starts_with("images")
-                    || f_lower.starts_with("mime_type")
-                    || f_lower.starts_with("is_")
-                    || f_lower == "byte_length"
-                    || f_lower == "page_count"
-                    || f_lower == "output_format"
-                    || f_lower == "extraction_method")
-            {
-                let _ = writeln!(out, "    # skipped: field '{f}' not applicable for simple result type");
-                return;
-            }
+    if result_is_simple && let Some(f) = &assertion.field {
+        let f_lower = f.to_lowercase();
+        if !f.is_empty()
+            && f_lower != "content"
+            && f_lower != "result"
+            && (f_lower.starts_with("metadata")
+                || f_lower.starts_with("document")
+                || f_lower.starts_with("structure")
+                || f_lower.starts_with("pages")
+                || f_lower.starts_with("chunks")
+                || f_lower.starts_with("tables")
+                || f_lower.starts_with("images")
+                || f_lower.starts_with("mime_type")
+                || f_lower.starts_with("is_")
+                || f_lower == "byte_length"
+                || f_lower == "page_count"
+                || f_lower == "output_format"
+                || f_lower == "extraction_method")
+        {
+            let _ = writeln!(out, "    # skipped: field '{f}' not applicable for simple result type");
+            return;
         }
     }
 
     // Handle synthetic / derived fields.
-    if let Some(f) = &assertion.field {
-        if render_synthetic_field(out, assertion, result_var, f) {
-            return;
-        }
+    if let Some(f) = &assertion.field
+        && render_synthetic_field(out, assertion, result_var, f)
+    {
+        return;
     }
 
     // Skip assertions on fields that don't exist on the result type.
-    if let Some(f) = &assertion.field {
-        if !f.is_empty() && !field_resolver.is_valid_for_result(f) {
-            let _ = writeln!(out, "    # skipped: field '{f}' not available on result type");
-            return;
-        }
+    if let Some(f) = &assertion.field
+        && !f.is_empty()
+        && !field_resolver.is_valid_for_result(f)
+    {
+        let _ = writeln!(out, "    # skipped: field '{f}' not available on result type");
+        return;
     }
 
     let field_access = if result_is_simple {
@@ -190,17 +189,17 @@ fn emit_bool_assertion(out: &mut String, pred: &str, assertion_type: &str, field
 fn render_embeddings_assertion(out: &mut String, assertion: &Assertion, result_var: &str) {
     match assertion.assertion_type.as_str() {
         "count_equals" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(out, "    assert len({result_var}) == {n}  # noqa: S101");
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(out, "    assert len({result_var}) == {n}  # noqa: S101");
             }
         }
         "count_min" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(out, "    assert len({result_var}) >= {n}  # noqa: S101");
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(out, "    assert len({result_var}) >= {n}  # noqa: S101");
             }
         }
         "not_empty" => {

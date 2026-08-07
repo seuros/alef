@@ -457,22 +457,22 @@ pub(super) fn render_test_method(
         // (e.g. keyword extraction) whose types are excluded from the Swift
         // binding via `[languages.swift].exclude_types` /
         // `[languages.swift].exclude_fields` in `alef.toml`.
-        if let Some(f) = assertion.field.as_deref() {
-            if !f.is_empty() {
-                let resolved_f = fixture_resolver.resolve(f);
-                if is_assertion_field_swift_excluded(
-                    resolved_f,
-                    fixture_resolver.swift_root_type().map(String::as_str),
-                    &swift_first_class_map.field_types,
-                    &swift_excluded_fields_by_type,
-                    &swift_excluded_types,
-                ) {
-                    let _ = writeln!(
-                        body_buffer,
-                        "        // skipped: field '{f}' references a field or type excluded from the Swift binding"
-                    );
-                    continue;
-                }
+        if let Some(f) = assertion.field.as_deref()
+            && !f.is_empty()
+        {
+            let resolved_f = fixture_resolver.resolve(f);
+            if is_assertion_field_swift_excluded(
+                resolved_f,
+                fixture_resolver.swift_root_type().map(String::as_str),
+                &swift_first_class_map.field_types,
+                &swift_excluded_fields_by_type,
+                &swift_excluded_types,
+            ) {
+                let _ = writeln!(
+                    body_buffer,
+                    "        // skipped: field '{f}' references a field or type excluded from the Swift binding"
+                );
+                continue;
             }
         }
         let mut assertion_out = String::new();
@@ -525,21 +525,20 @@ pub(super) fn render_test_method(
 
     // Emit teardown for test backends: unregister to prevent leaking into subsequent tests.
     for arg in args {
-        if arg.arg_type == "test_backend" {
-            if let Some(trait_name) = &arg.trait_name {
-                if let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name) {
-                    let unregister_fn = format!("unregister{}", trait_bridge.trait_name.to_upper_camel_case());
-                    // Use the actual plugin name from fixture.input["name"] or default to fixture.id,
-                    // matching what the stub's `name` property declares. This ensures unregister()
-                    // matches the registered backend name.
-                    let plugin_name = fixture
-                        .input
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(&fixture.id);
-                    let _ = writeln!(out, "        try? {module_name}.{unregister_fn}(\"{plugin_name}\")");
-                }
-            }
+        if arg.arg_type == "test_backend"
+            && let Some(trait_name) = &arg.trait_name
+            && let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name)
+        {
+            let unregister_fn = format!("unregister{}", trait_bridge.trait_name.to_upper_camel_case());
+            // Use the actual plugin name from fixture.input["name"] or default to fixture.id,
+            // matching what the stub's `name` property declares. This ensures unregister()
+            // matches the registered backend name.
+            let plugin_name = fixture
+                .input
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&fixture.id);
+            let _ = writeln!(out, "        try? {module_name}.{unregister_fn}(\"{plugin_name}\")");
         }
     }
 
@@ -604,10 +603,10 @@ fn is_assertion_field_swift_excluded(
         // Advance the type cursor to the named type that `segment` leads into.
         let next: Option<String> = field_types.get(owner_str).and_then(|m| m.get(segment).cloned());
         // 2. The resolved target type is excluded from the Swift binding.
-        if let Some(ref next_type) = next {
-            if excluded_types.contains(next_type.as_str()) {
-                return true;
-            }
+        if let Some(ref next_type) = next
+            && excluded_types.contains(next_type.as_str())
+        {
+            return true;
         }
         current_type = next;
     }

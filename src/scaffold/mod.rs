@@ -323,36 +323,31 @@ fn workspace_dep_specs(config: &ResolvedCrateConfig) -> std::collections::BTreeM
         return std::collections::BTreeMap::new();
     };
 
-    if !dir.is_absolute() {
-        if let Ok(abs) = std::fs::canonicalize(&dir) {
-            dir = abs;
-        }
+    if !dir.is_absolute()
+        && let Ok(abs) = std::fs::canonicalize(&dir)
+    {
+        dir = abs;
     }
 
     loop {
         let cargo_path = dir.join("Cargo.toml");
-        if let Ok(contents) = std::fs::read_to_string(&cargo_path) {
-            if let Ok(doc) = contents.parse::<toml_edit::DocumentMut>() {
-                if let Some(workspace) = doc.get("workspace") {
-                    if let Some(dependencies) = workspace.get("dependencies") {
-                        if let Some(table) = dependencies.as_table() {
-                            let mut result = std::collections::BTreeMap::new();
-                            for (key, value) in table.iter() {
-                                let val_str = value.to_string().trim().to_string();
-                                let wrapped = format!("x = {}", val_str);
-                                if let Ok(map) =
-                                    toml::from_str::<std::collections::HashMap<String, toml::Value>>(&wrapped)
-                                {
-                                    if let Some(v) = map.get("x") {
-                                        result.insert(key.to_string(), v.clone());
-                                    }
-                                }
-                            }
-                            return result;
-                        }
-                    }
+        if let Ok(contents) = std::fs::read_to_string(&cargo_path)
+            && let Ok(doc) = contents.parse::<toml_edit::DocumentMut>()
+            && let Some(workspace) = doc.get("workspace")
+            && let Some(dependencies) = workspace.get("dependencies")
+            && let Some(table) = dependencies.as_table()
+        {
+            let mut result = std::collections::BTreeMap::new();
+            for (key, value) in table.iter() {
+                let val_str = value.to_string().trim().to_string();
+                let wrapped = format!("x = {}", val_str);
+                if let Ok(map) = toml::from_str::<std::collections::HashMap<String, toml::Value>>(&wrapped)
+                    && let Some(v) = map.get("x")
+                {
+                    result.insert(key.to_string(), v.clone());
                 }
             }
+            return result;
         }
         if !dir.pop() {
             return std::collections::BTreeMap::new();
@@ -707,12 +702,12 @@ pub fn xml_escape(s: &str) -> String {
 /// Parse an author string like `"Name <email>"` into `(name, email)`.
 /// If no angle brackets are found, returns `(input, "")`.
 pub fn parse_author(s: &str) -> (&str, &str) {
-    if let Some(start) = s.find('<') {
-        if let Some(end) = s.find('>') {
-            let name = s[..start].trim();
-            let email = &s[start + 1..end];
-            return (name, email);
-        }
+    if let Some(start) = s.find('<')
+        && let Some(end) = s.find('>')
+    {
+        let name = s[..start].trim();
+        let email = &s[start + 1..end];
+        return (name, email);
     }
     (s.trim(), "")
 }

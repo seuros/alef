@@ -19,23 +19,16 @@ pub(super) fn sanitize_unknown_types(api: &mut ApiSurface) {
                     field.original_type = Some(orig);
                 }
             }
-            if !field.sanitized {
-                if let Some(path) = field.type_rust_path.as_deref() {
-                    if let Some(name) = named_type_name(&field.ty) {
-                        let known_name = known_types.contains(name) || known_enums.contains(name);
-                        if known_name
-                            && !field_path_matches_known_type(
-                                path,
-                                name,
-                                &known_type_paths,
-                                &known_enum_paths,
-                                &api_crate_name,
-                            )
-                        {
-                            field.ty = TypeRef::String;
-                            field.sanitized = true;
-                        }
-                    }
+            if !field.sanitized
+                && let Some(path) = field.type_rust_path.as_deref()
+                && let Some(name) = named_type_name(&field.ty)
+            {
+                let known_name = known_types.contains(name) || known_enums.contains(name);
+                if known_name
+                    && !field_path_matches_known_type(path, name, &known_type_paths, &known_enum_paths, &api_crate_name)
+                {
+                    field.ty = TypeRef::String;
+                    field.sanitized = true;
                 }
             }
         }
@@ -288,12 +281,11 @@ pub(super) fn strip_binding_excluded(api: &mut ApiSurface) -> anyhow::Result<()>
 /// language-native pair types instead of a plain list.
 fn extract_tuple_vec_original_type(ty: &TypeRef) -> Option<String> {
     fn inner_tuple_name(ty: &TypeRef) -> Option<String> {
-        if let TypeRef::Vec(inner) = ty {
-            if let TypeRef::Named(name) = inner.as_ref() {
-                if name.trim_start().starts_with('(') {
-                    return Some(format!("Vec<{name}>"));
-                }
-            }
+        if let TypeRef::Vec(inner) = ty
+            && let TypeRef::Named(name) = inner.as_ref()
+            && name.trim_start().starts_with('(')
+        {
+            return Some(format!("Vec<{name}>"));
         }
         None
     }

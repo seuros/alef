@@ -48,57 +48,55 @@ pub(super) fn resolve_newtypes(surface: &mut ApiSurface) {
 
     for typ in &mut surface.types {
         for field in &mut typ.fields {
-            if let TypeRef::Named(name) = &field.ty {
-                if let Some(rust_path) = newtype_rust_paths.get(name.as_str()) {
-                    field.newtype_wrapper = Some(rust_path.clone());
-                }
+            if let TypeRef::Named(name) = &field.ty
+                && let Some(rust_path) = newtype_rust_paths.get(name.as_str())
+            {
+                field.newtype_wrapper = Some(rust_path.clone());
             }
-            if let TypeRef::Optional(inner) = &field.ty {
-                if let TypeRef::Named(name) = inner.as_ref() {
-                    if let Some(rust_path) = newtype_rust_paths.get(name.as_str()) {
-                        field.newtype_wrapper = Some(rust_path.clone());
-                    }
-                }
+            if let TypeRef::Optional(inner) = &field.ty
+                && let TypeRef::Named(name) = inner.as_ref()
+                && let Some(rust_path) = newtype_rust_paths.get(name.as_str())
+            {
+                field.newtype_wrapper = Some(rust_path.clone());
             }
-            if let TypeRef::Vec(inner) = &field.ty {
-                if let TypeRef::Named(name) = inner.as_ref() {
-                    if let Some(rust_path) = newtype_rust_paths.get(name.as_str()) {
-                        field.newtype_wrapper = Some(rust_path.clone());
-                    }
-                }
+            if let TypeRef::Vec(inner) = &field.ty
+                && let TypeRef::Named(name) = inner.as_ref()
+                && let Some(rust_path) = newtype_rust_paths.get(name.as_str())
+            {
+                field.newtype_wrapper = Some(rust_path.clone());
             }
             resolve_typeref(&newtype_map, &mut field.ty);
         }
         for method in &mut typ.methods {
             for param in &mut method.params {
-                if let TypeRef::Named(name) = &param.ty {
-                    if let Some(rust_path) = newtype_rust_paths.get(name.as_str()) {
-                        param.newtype_wrapper = Some(rust_path.clone());
-                    }
+                if let TypeRef::Named(name) = &param.ty
+                    && let Some(rust_path) = newtype_rust_paths.get(name.as_str())
+                {
+                    param.newtype_wrapper = Some(rust_path.clone());
                 }
                 resolve_typeref(&newtype_map, &mut param.ty);
             }
-            if let TypeRef::Named(name) = &method.return_type {
-                if let Some(rust_path) = newtype_rust_paths.get(name.as_str()) {
-                    method.return_newtype_wrapper = Some(rust_path.clone());
-                }
+            if let TypeRef::Named(name) = &method.return_type
+                && let Some(rust_path) = newtype_rust_paths.get(name.as_str())
+            {
+                method.return_newtype_wrapper = Some(rust_path.clone());
             }
             resolve_typeref(&newtype_map, &mut method.return_type);
         }
     }
     for func in &mut surface.functions {
         for param in &mut func.params {
-            if let TypeRef::Named(name) = &param.ty {
-                if let Some(rust_path) = newtype_rust_paths.get(name.as_str()) {
-                    param.newtype_wrapper = Some(rust_path.clone());
-                }
+            if let TypeRef::Named(name) = &param.ty
+                && let Some(rust_path) = newtype_rust_paths.get(name.as_str())
+            {
+                param.newtype_wrapper = Some(rust_path.clone());
             }
             resolve_typeref(&newtype_map, &mut param.ty);
         }
-        if let TypeRef::Named(name) = &func.return_type {
-            if let Some(rust_path) = newtype_rust_paths.get(name.as_str()) {
-                func.return_newtype_wrapper = Some(rust_path.clone());
-            }
+        if let TypeRef::Named(name) = &func.return_type
+            && let Some(rust_path) = newtype_rust_paths.get(name.as_str())
+        {
+            func.return_newtype_wrapper = Some(rust_path.clone());
         }
         resolve_typeref(&newtype_map, &mut func.return_type);
     }

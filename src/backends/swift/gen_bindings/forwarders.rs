@@ -247,10 +247,10 @@ pub(super) fn emit_free_function_forwarders(
         .map(|c| c.exclude_functions.iter().cloned().collect())
         .unwrap_or_default();
     for contract in &api.handler_contracts {
-        if let Some(adapter) = contract.response_adapter.as_deref() {
-            if let Some(short) = adapter.rsplit("::").next() {
-                exclude_functions.insert(short.to_string());
-            }
+        if let Some(adapter) = contract.response_adapter.as_deref()
+            && let Some(short) = adapter.rsplit("::").next()
+        {
+            exclude_functions.insert(short.to_string());
         }
     }
 
@@ -506,10 +506,8 @@ pub(super) fn emit_async_free_function_forwarder(
         let param_default = if param.optional { " = nil" } else { "" };
         sig_params.push(format!("{swift_param_name}: {swift_ty}{param_default}"));
         let is_enum_param = matches!(&param.ty, TypeRef::Named(name) if enum_names.contains(name));
-        if !is_enum_param {
-            if let Some(line) = local_expr.setup_line.clone() {
-                conversion_lines.push(line);
-            }
+        if !is_enum_param && let Some(line) = local_expr.setup_line.clone() {
+            conversion_lines.push(line);
         }
         let arg_expr = if is_enum_param {
             let local = format!("_rb_{swift_param_name}");

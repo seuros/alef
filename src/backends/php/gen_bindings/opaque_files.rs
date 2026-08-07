@@ -151,19 +151,18 @@ pub(super) fn gen_php_opaque_class_file(
     }
 
     for bridge in trait_bridges {
-        if let Some(ref type_alias) = bridge.type_alias {
-            if type_alias == &typ.name {
-                content.push_str("    /**\n");
-                content
-                    .push_str("     * Wrap a PHP object implementing the visitor interface as a shareable handle.\n");
-                content.push_str("     */\n");
-                content.push_str("    public static function from_php_object(object $visitor): self\n");
-                content.push_str("    {\n");
-                content.push_str(
-                    "        throw new \\RuntimeException('Not implemented — provided by the native extension.');\n",
-                );
-                content.push_str("    }\n");
-            }
+        if let Some(ref type_alias) = bridge.type_alias
+            && type_alias == &typ.name
+        {
+            content.push_str("    /**\n");
+            content.push_str("     * Wrap a PHP object implementing the visitor interface as a shareable handle.\n");
+            content.push_str("     */\n");
+            content.push_str("    public static function from_php_object(object $visitor): self\n");
+            content.push_str("    {\n");
+            content.push_str(
+                "        throw new \\RuntimeException('Not implemented — provided by the native extension.');\n",
+            );
+            content.push_str("    }\n");
         }
     }
 

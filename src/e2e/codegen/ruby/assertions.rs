@@ -21,53 +21,52 @@ pub(super) fn render_assertion(
     // For simple-result methods (e.g. `speech` returning bytes), every field-based
     // assertion targets the result itself — there's no struct to access. Drop
     // length-only assertions onto the result directly and skip anything else.
-    if result_is_simple {
-        if let Some(f) = &assertion.field {
-            if !f.is_empty() {
-                match assertion.assertion_type.as_str() {
-                    "not_empty" => {
-                        out.push_str(&format!("    expect({result_var}.to_s).not_to be_empty\n"));
-                        return;
-                    }
-                    "is_empty" => {
-                        out.push_str(&format!("    expect({result_var}.to_s).to be_empty\n"));
-                        return;
-                    }
-                    "count_equals" => {
-                        if let Some(val) = &assertion.value {
-                            let rb_val = json_to_ruby(val);
-                            out.push_str(&format!("    expect({result_var}.length).to eq({rb_val})\n"));
-                        }
-                        return;
-                    }
-                    "count_min" => {
-                        if let Some(val) = &assertion.value {
-                            let rb_val = json_to_ruby(val);
-                            out.push_str(&format!("    expect({result_var}.length).to be >= {rb_val}\n"));
-                        }
-                        return;
-                    }
-                    "equals" => {
-                        if let Some(val) = &assertion.value {
-                            let rb_val = json_to_ruby(val);
-                            out.push_str(&format!("    expect({result_var}).to eq({rb_val})\n"));
-                        }
-                        return;
-                    }
-                    "contains" => {
-                        if let Some(serde_json::Value::String(s)) = &assertion.value {
-                            let escaped = crate::e2e::escape::ruby_string_literal(s);
-                            out.push_str(&format!("    expect({result_var}).to include({escaped})\n"));
-                        }
-                        return;
-                    }
-                    _ => {
-                        out.push_str(&format!(
-                            "    # skipped: field '{f}' not applicable for simple result type\n"
-                        ));
-                        return;
-                    }
+    if result_is_simple
+        && let Some(f) = &assertion.field
+        && !f.is_empty()
+    {
+        match assertion.assertion_type.as_str() {
+            "not_empty" => {
+                out.push_str(&format!("    expect({result_var}.to_s).not_to be_empty\n"));
+                return;
+            }
+            "is_empty" => {
+                out.push_str(&format!("    expect({result_var}.to_s).to be_empty\n"));
+                return;
+            }
+            "count_equals" => {
+                if let Some(val) = &assertion.value {
+                    let rb_val = json_to_ruby(val);
+                    out.push_str(&format!("    expect({result_var}.length).to eq({rb_val})\n"));
                 }
+                return;
+            }
+            "count_min" => {
+                if let Some(val) = &assertion.value {
+                    let rb_val = json_to_ruby(val);
+                    out.push_str(&format!("    expect({result_var}.length).to be >= {rb_val}\n"));
+                }
+                return;
+            }
+            "equals" => {
+                if let Some(val) = &assertion.value {
+                    let rb_val = json_to_ruby(val);
+                    out.push_str(&format!("    expect({result_var}).to eq({rb_val})\n"));
+                }
+                return;
+            }
+            "contains" => {
+                if let Some(serde_json::Value::String(s)) = &assertion.value {
+                    let escaped = crate::e2e::escape::ruby_string_literal(s);
+                    out.push_str(&format!("    expect({result_var}).to include({escaped})\n"));
+                }
+                return;
+            }
+            _ => {
+                out.push_str(&format!(
+                    "    # skipped: field '{f}' not applicable for simple result type\n"
+                ));
+                return;
             }
         }
     }
@@ -228,25 +227,22 @@ pub(super) fn render_assertion(
     }
 
     // Skip assertions on fields that don't exist on the result type.
-    if let Some(f) = &assertion.field {
-        if !f.is_empty() && !field_resolver.is_valid_for_result(f) {
-            out.push_str(&format!("    # skipped: field '{f}' not available on result type\n"));
-            return;
-        }
+    if let Some(f) = &assertion.field
+        && !f.is_empty()
+        && !field_resolver.is_valid_for_result(f)
+    {
+        out.push_str(&format!("    # skipped: field '{f}' not available on result type\n"));
+        return;
     }
 
     // When result_is_simple, skip assertions that reference non-content fields.
-    if result_is_simple {
-        if let Some(f) = &assertion.field {
-            let f_lower = f.to_lowercase();
-            if !f.is_empty()
-                && f_lower != "content"
-                && (f_lower.starts_with("metadata")
-                    || f_lower.starts_with("document")
-                    || f_lower.starts_with("structure"))
-            {
-                return;
-            }
+    if result_is_simple && let Some(f) = &assertion.field {
+        let f_lower = f.to_lowercase();
+        if !f.is_empty()
+            && f_lower != "content"
+            && (f_lower.starts_with("metadata") || f_lower.starts_with("document") || f_lower.starts_with("structure"))
+        {
+            return;
         }
     }
 
@@ -496,18 +492,18 @@ pub(super) fn render_assertion(
             }
         }
         "min_length" | "max_length" | "count_min" | "count_equals" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let rendered = crate::e2e::template_env::render(
-                        "ruby/assertion.jinja",
-                        minijinja::context! {
-                            assertion_type => assertion.assertion_type.as_str(),
-                            field_expr => field_expr.clone(),
-                            check_n => n,
-                        },
-                    );
-                    out.push_str(&rendered);
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let rendered = crate::e2e::template_env::render(
+                    "ruby/assertion.jinja",
+                    minijinja::context! {
+                        assertion_type => assertion.assertion_type.as_str(),
+                        field_expr => field_expr.clone(),
+                        check_n => n,
+                    },
+                );
+                out.push_str(&rendered);
             }
         }
         "is_true" => {

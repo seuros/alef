@@ -510,37 +510,35 @@ pub(crate) fn write_pyo3_variant_accessors(out: &mut String, enum_def: &EnumDef,
                 .name
                 .strip_prefix('_')
                 .is_some_and(|s| s.chars().all(|c| c.is_ascii_digit()));
-            if is_tuple_field {
-                if let TypeRef::Named(inner_type_name) = &field.ty {
-                    let variant_pascal = &variant.name;
-                    let clone_expr = if field.is_boxed {
-                        "(**data).clone().into()".to_string()
-                    } else {
-                        "data.clone().into()".to_string()
-                    };
-                    out.push('\n');
-                    out.push_str("    #[getter]\n");
-                    out.push_str(&crate::codegen::template_env::render(
-                        "generators/enums/getter_accessor.jinja",
-                        minijinja::context! {
-                            fn_name => &fn_name,
-                            inner_type_name => inner_type_name,
-                        },
-                    ));
-                    out.push_str("        match &self.inner {\n");
-                    out.push_str(&crate::codegen::template_env::render(
-                        "generators/enums/match_variant.jinja",
-                        minijinja::context! {
-                            core_path => &core_path,
-                            variant_pascal => variant_pascal,
-                            clone_expr => &clone_expr,
-                        },
-                    ));
-                    out.push_str("            _ => None,\n");
-                    out.push_str("        }\n");
-                    out.push_str("    }\n");
-                    continue;
-                }
+            if is_tuple_field && let TypeRef::Named(inner_type_name) = &field.ty {
+                let variant_pascal = &variant.name;
+                let clone_expr = if field.is_boxed {
+                    "(**data).clone().into()".to_string()
+                } else {
+                    "data.clone().into()".to_string()
+                };
+                out.push('\n');
+                out.push_str("    #[getter]\n");
+                out.push_str(&crate::codegen::template_env::render(
+                    "generators/enums/getter_accessor.jinja",
+                    minijinja::context! {
+                        fn_name => &fn_name,
+                        inner_type_name => inner_type_name,
+                    },
+                ));
+                out.push_str("        match &self.inner {\n");
+                out.push_str(&crate::codegen::template_env::render(
+                    "generators/enums/match_variant.jinja",
+                    minijinja::context! {
+                        core_path => &core_path,
+                        variant_pascal => variant_pascal,
+                        clone_expr => &clone_expr,
+                    },
+                ));
+                out.push_str("            _ => None,\n");
+                out.push_str("        }\n");
+                out.push_str("    }\n");
+                continue;
             }
         }
 

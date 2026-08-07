@@ -71,11 +71,11 @@ fn strip_typescript_annotations(ts_code: &str) -> String {
 
         let trimmed = modified_line.trim();
         if trimmed.starts_with("export {") && trimmed.ends_with("};") {
-            if let Some(start_brace) = modified_line.find('{') {
-                if let Some(end_brace) = modified_line.rfind('}') {
-                    let exports = &modified_line[start_brace..=end_brace];
-                    modified_line = format!("module.exports = {};", exports);
-                }
+            if let Some(start_brace) = modified_line.find('{')
+                && let Some(end_brace) = modified_line.rfind('}')
+            {
+                let exports = &modified_line[start_brace..=end_brace];
+                modified_line = format!("module.exports = {};", exports);
             }
             result.push_str(&modified_line);
             result.push('\n');
@@ -124,15 +124,14 @@ fn strip_typescript_annotations(ts_code: &str) -> String {
         modified_line = without_optional_marker;
 
         if modified_line.trim().starts_with("import type {") && modified_line.contains("from") {
-            if let Some(start_brace) = modified_line.find('{') {
-                if let Some(end_brace) = modified_line.rfind('}') {
-                    if let Some(from_pos) = modified_line.find("from") {
-                        let imports = modified_line[start_brace..=end_brace].replace(" as ", ": ");
-                        let module_spec = modified_line[from_pos + 4..].trim();
-                        let module_spec = module_spec.trim_end_matches(';');
-                        modified_line = format!("const {imports} = require({module_spec});");
-                    }
-                }
+            if let Some(start_brace) = modified_line.find('{')
+                && let Some(end_brace) = modified_line.rfind('}')
+                && let Some(from_pos) = modified_line.find("from")
+            {
+                let imports = modified_line[start_brace..=end_brace].replace(" as ", ": ");
+                let module_spec = modified_line[from_pos + 4..].trim();
+                let module_spec = module_spec.trim_end_matches(';');
+                modified_line = format!("const {imports} = require({module_spec});");
             }
             result.push_str(&modified_line);
             result.push('\n');
@@ -140,15 +139,14 @@ fn strip_typescript_annotations(ts_code: &str) -> String {
         }
 
         if modified_line.trim().starts_with("import {") && modified_line.contains("from") {
-            if let Some(start_brace) = modified_line.find('{') {
-                if let Some(end_brace) = modified_line.rfind('}') {
-                    if let Some(from_pos) = modified_line.find("from") {
-                        let imports = modified_line[start_brace..=end_brace].replace(" as ", ": ");
-                        let module_spec = modified_line[from_pos + 4..].trim();
-                        let module_spec = module_spec.trim_end_matches(';');
-                        modified_line = format!("const {imports} = require({module_spec});");
-                    }
-                }
+            if let Some(start_brace) = modified_line.find('{')
+                && let Some(end_brace) = modified_line.rfind('}')
+                && let Some(from_pos) = modified_line.find("from")
+            {
+                let imports = modified_line[start_brace..=end_brace].replace(" as ", ": ");
+                let module_spec = modified_line[from_pos + 4..].trim();
+                let module_spec = module_spec.trim_end_matches(';');
+                modified_line = format!("const {imports} = require({module_spec});");
             }
             result.push_str(&modified_line);
             result.push('\n');

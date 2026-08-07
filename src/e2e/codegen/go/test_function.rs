@@ -43,14 +43,13 @@ fn trait_from_register_function(fn_name: &str) -> Option<String> {
 
 /// Emit cleanup call for trait-bridge fixtures to avoid cgo finalizer panics.
 fn emit_trait_bridge_cleanup(out: &mut String, fixture: &Fixture, base_function_name: &str, import_alias: &str) {
-    if fixture.tags.contains(&"trait-bridge".to_string()) {
-        if let Some(trait_type) = trait_from_register_function(base_function_name) {
-            if let Some(clear_fn) = clear_function_for_trait(&trait_type) {
-                let _ = writeln!(out, "\tif err := {import_alias}.{clear_fn}(); err != nil {{");
-                let _ = writeln!(out, "\t\tt.Logf(\"{clear_fn} cleanup failed: %v\", err)");
-                let _ = writeln!(out, "\t}}");
-            }
-        }
+    if fixture.tags.contains(&"trait-bridge".to_string())
+        && let Some(trait_type) = trait_from_register_function(base_function_name)
+        && let Some(clear_fn) = clear_function_for_trait(&trait_type)
+    {
+        let _ = writeln!(out, "\tif err := {import_alias}.{clear_fn}(); err != nil {{");
+        let _ = writeln!(out, "\t\tt.Logf(\"{clear_fn} cleanup failed: %v\", err)");
+        let _ = writeln!(out, "\t}}");
     }
 }
 
@@ -490,108 +489,77 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
 
     let mut optional_locals: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for assertion in &fixture.assertions {
-        if let Some(f) = &assertion.field {
-            if !f.is_empty() {
-                if !result_is_simple && !field_resolver.is_valid_for_result(f) {
+        if let Some(f) = &assertion.field
+            && !f.is_empty()
+        {
+            if !result_is_simple && !field_resolver.is_valid_for_result(f) {
+                continue;
+            }
+            let resolved = field_resolver.resolve(f);
+            if field_resolver.is_optional(resolved) && !optional_locals.contains_key(f.as_str()) {
+                let is_string_field = assertion.value.as_ref().is_some_and(|v| v.is_string());
+                let is_array_field = field_resolver.is_array(resolved);
+                // Both plain-string and display_as_text optional fields only need a
+                // local binding when the assertion value is a string. Non-string
+                // assertions (numeric, boolean) and array fields are handled elsewhere.
+                if !is_string_field || is_array_field {
                     continue;
                 }
-                let resolved = field_resolver.resolve(f);
-                if field_resolver.is_optional(resolved) && !optional_locals.contains_key(f.as_str()) {
-                    let is_string_field = assertion.value.as_ref().is_some_and(|v| v.is_string());
-                    let is_array_field = field_resolver.is_array(resolved);
-                    // Both plain-string and display_as_text optional fields only need a
-                    // local binding when the assertion value is a string. Non-string
-                    // assertions (numeric, boolean) and array fields are handled elsewhere.
-                    if !is_string_field || is_array_field {
-                        continue;
-                    }
-                    let is_dat = field_resolver.is_display_as_text(f);
-                    let field_expr = field_resolver.accessor(f, "go", &effective_result_var);
-                    let local_var = go_param_name(&resolved.replace(['.', '[', ']'], "_"));
-                    if field_resolver.has_map_access(f) {
-                        let _ = writeln!(out, "\t{local_var} := {field_expr}");
-                    } else if is_dat {
-                        // Non-String inner type with a .Text() accessor: calling
-                        // `string(*field_expr)` would fail to compile because the pointer
-                        // element is not a primitive string. Use the text accessor instead.
-                        let _ = writeln!(out, "\tvar {local_var} string");
-                        let _ = writeln!(out, "\tif {field_expr} != nil {{");
-                        let _ = writeln!(out, "\t\t{local_var} = {field_expr}.Text()");
-                        let _ = writeln!(out, "\t}}");
-                    } else {
-                        let _ = writeln!(out, "\tvar {local_var} string");
-                        let _ = writeln!(out, "\tif {field_expr} != nil {{");
-                        let _ = writeln!(out, "\t\t{local_var} = string(*{field_expr})");
-                        let _ = writeln!(out, "\t}}");
-                    }
-                    optional_locals.insert(f.clone(), local_var);
+                let is_dat = field_resolver.is_display_as_text(f);
+                let field_expr = field_resolver.accessor(f, "go", &effective_result_var);
+                let local_var = go_param_name(&resolved.replace(['.', '[', ']'], "_"));
+                if field_resolver.has_map_access(f) {
+                    let _ = writeln!(out, "\t{local_var} := {field_expr}");
+                } else if is_dat {
+                    // Non-String inner type with a .Text() accessor: calling
+                    // `string(*field_expr)` would fail to compile because the pointer
+                    // element is not a primitive string. Use the text accessor instead.
+                    let _ = writeln!(out, "\tvar {local_var} string");
+                    let _ = writeln!(out, "\tif {field_expr} != nil {{");
+                    let _ = writeln!(out, "\t\t{local_var} = {field_expr}.Text()");
+                    let _ = writeln!(out, "\t}}");
+                } else {
+                    let _ = writeln!(out, "\tvar {local_var} string");
+                    let _ = writeln!(out, "\tif {field_expr} != nil {{");
+                    let _ = writeln!(out, "\t\t{local_var} = string(*{field_expr})");
+                    let _ = writeln!(out, "\t}}");
                 }
+                optional_locals.insert(f.clone(), local_var);
             }
         }
     }
 
     for assertion in &fixture.assertions {
-        if let Some(f) = &assertion.field {
-            if !f.is_empty() && !optional_locals.contains_key(f.as_str()) {
-                let parts: Vec<&str> = f.split('.').collect();
-                let mut guard_expr: Option<String> = None;
-                for i in 1..parts.len() {
-                    let prefix = parts[..i].join(".");
-                    let resolved_prefix = field_resolver.resolve(&prefix);
-                    if field_resolver.is_optional(resolved_prefix) {
-                        let guard_prefix = if let Some(bracket_pos) = resolved_prefix.rfind('[') {
-                            let suffix = &resolved_prefix[bracket_pos + 1..];
-                            let is_numeric_index = suffix.trim_end_matches(']').chars().all(|c| c.is_ascii_digit());
-                            if is_numeric_index {
-                                &resolved_prefix[..bracket_pos]
-                            } else {
-                                resolved_prefix
-                            }
+        if let Some(f) = &assertion.field
+            && !f.is_empty()
+            && !optional_locals.contains_key(f.as_str())
+        {
+            let parts: Vec<&str> = f.split('.').collect();
+            let mut guard_expr: Option<String> = None;
+            for i in 1..parts.len() {
+                let prefix = parts[..i].join(".");
+                let resolved_prefix = field_resolver.resolve(&prefix);
+                if field_resolver.is_optional(resolved_prefix) {
+                    let guard_prefix = if let Some(bracket_pos) = resolved_prefix.rfind('[') {
+                        let suffix = &resolved_prefix[bracket_pos + 1..];
+                        let is_numeric_index = suffix.trim_end_matches(']').chars().all(|c| c.is_ascii_digit());
+                        if is_numeric_index {
+                            &resolved_prefix[..bracket_pos]
                         } else {
                             resolved_prefix
-                        };
-                        let accessor = field_resolver.accessor(guard_prefix, "go", &effective_result_var);
-                        guard_expr = Some(accessor);
-                        break;
-                    }
-                }
-                if let Some(guard) = guard_expr {
-                    if field_resolver.is_valid_for_result(f) {
-                        let is_struct_value = !guard.contains('[') && !guard.contains('(') && !guard.contains("map");
-                        if is_struct_value {
-                            render_assertion(
-                                out,
-                                assertion,
-                                &effective_result_var,
-                                import_alias,
-                                field_resolver,
-                                &optional_locals,
-                                result_is_simple,
-                                result_is_array,
-                                is_streaming,
-                                streaming_item_type,
-                            );
-                            continue;
                         }
-                        let _ = writeln!(out, "\tif {guard} != nil {{");
-                        let mut nil_buf = String::new();
-                        render_assertion(
-                            &mut nil_buf,
-                            assertion,
-                            &effective_result_var,
-                            import_alias,
-                            field_resolver,
-                            &optional_locals,
-                            result_is_simple,
-                            result_is_array,
-                            is_streaming,
-                            streaming_item_type,
-                        );
-                        for line in nil_buf.lines() {
-                            let _ = writeln!(out, "\t{line}");
-                        }
-                        let _ = writeln!(out, "\t}}");
                     } else {
+                        resolved_prefix
+                    };
+                    let accessor = field_resolver.accessor(guard_prefix, "go", &effective_result_var);
+                    guard_expr = Some(accessor);
+                    break;
+                }
+            }
+            if let Some(guard) = guard_expr {
+                if field_resolver.is_valid_for_result(f) {
+                    let is_struct_value = !guard.contains('[') && !guard.contains('(') && !guard.contains("map");
+                    if is_struct_value {
                         render_assertion(
                             out,
                             assertion,
@@ -604,9 +572,41 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
                             is_streaming,
                             streaming_item_type,
                         );
+                        continue;
                     }
-                    continue;
+                    let _ = writeln!(out, "\tif {guard} != nil {{");
+                    let mut nil_buf = String::new();
+                    render_assertion(
+                        &mut nil_buf,
+                        assertion,
+                        &effective_result_var,
+                        import_alias,
+                        field_resolver,
+                        &optional_locals,
+                        result_is_simple,
+                        result_is_array,
+                        is_streaming,
+                        streaming_item_type,
+                    );
+                    for line in nil_buf.lines() {
+                        let _ = writeln!(out, "\t{line}");
+                    }
+                    let _ = writeln!(out, "\t}}");
+                } else {
+                    render_assertion(
+                        out,
+                        assertion,
+                        &effective_result_var,
+                        import_alias,
+                        field_resolver,
+                        &optional_locals,
+                        result_is_simple,
+                        result_is_array,
+                        is_streaming,
+                        streaming_item_type,
+                    );
                 }
+                continue;
             }
         }
         render_assertion(

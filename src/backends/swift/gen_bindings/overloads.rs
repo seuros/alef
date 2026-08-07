@@ -32,12 +32,12 @@ pub(super) fn emit_json_string_overloads(
                 .iter()
                 .enumerate()
                 .filter_map(move |(idx, param)| {
-                    if let TypeRef::Named(type_name) = &param.ty {
-                        if let Some(typ) = api.types.iter().find(|t| &t.name == type_name) {
-                            if typ.has_serde && !typ.is_opaque {
-                                return Some((func, idx, type_name.as_str()));
-                            }
-                        }
+                    if let TypeRef::Named(type_name) = &param.ty
+                        && let Some(typ) = api.types.iter().find(|t| &t.name == type_name)
+                        && typ.has_serde
+                        && !typ.is_opaque
+                    {
+                        return Some((func, idx, type_name.as_str()));
                     }
                     None
                 })

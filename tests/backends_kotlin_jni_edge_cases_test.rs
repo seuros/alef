@@ -174,20 +174,21 @@ fn kotlin_jni_pairing_sentinel() {
     let bridge_name = alef::core::jni::bridge_class_name("demo");
     let free_call_prefix = format!("{bridge_name}.native");
     for file in &kotlin_files {
-        if let Some(name) = file.path.file_name().and_then(|n| n.to_str()) {
-            if name.ends_with(".kt") && !name.ends_with("Bridge.kt") {
-                for line in file.content.lines() {
-                    let mut search = line;
-                    while let Some(pos) = search.find(&free_call_prefix) {
-                        let rest = &search[pos + free_call_prefix.len()..];
-                        if let Some(paren) = rest.find('(') {
-                            let method_name = format!("native{}", &rest[..paren]);
-                            if method_name.starts_with("nativeFree") {
-                                kotlin_native_names.insert(method_name);
-                            }
+        if let Some(name) = file.path.file_name().and_then(|n| n.to_str())
+            && name.ends_with(".kt")
+            && !name.ends_with("Bridge.kt")
+        {
+            for line in file.content.lines() {
+                let mut search = line;
+                while let Some(pos) = search.find(&free_call_prefix) {
+                    let rest = &search[pos + free_call_prefix.len()..];
+                    if let Some(paren) = rest.find('(') {
+                        let method_name = format!("native{}", &rest[..paren]);
+                        if method_name.starts_with("nativeFree") {
+                            kotlin_native_names.insert(method_name);
                         }
-                        search = &search[pos + 1..];
                     }
+                    search = &search[pos + 1..];
                 }
             }
         }
@@ -218,12 +219,12 @@ fn extract_kotlin_native_names(content: &str) -> std::collections::BTreeSet<Stri
     let mut names = std::collections::BTreeSet::new();
     for line in content.lines() {
         let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("external fun ") {
-            if let Some(paren) = rest.find('(') {
-                let name = rest[..paren].trim().to_string();
-                if !name.is_empty() {
-                    names.insert(name);
-                }
+        if let Some(rest) = trimmed.strip_prefix("external fun ")
+            && let Some(paren) = rest.find('(')
+        {
+            let name = rest[..paren].trim().to_string();
+            if !name.is_empty() {
+                names.insert(name);
             }
         }
     }
@@ -235,12 +236,12 @@ fn extract_rust_java_symbols(content: &str) -> std::collections::BTreeSet<String
     let marker = "pub unsafe extern \"system\" fn ";
     for line in content.lines() {
         let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix(marker) {
-            if let Some(paren) = rest.find('(') {
-                let sym = rest[..paren].trim().to_string();
-                if sym.starts_with("Java_") {
-                    syms.insert(sym);
-                }
+        if let Some(rest) = trimmed.strip_prefix(marker)
+            && let Some(paren) = rest.find('(')
+        {
+            let sym = rest[..paren].trim().to_string();
+            if sym.starts_with("Java_") {
+                syms.insert(sym);
             }
         }
     }

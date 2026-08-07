@@ -52,17 +52,16 @@ pub fn emit(api: &ApiSurface, config: &ResolvedCrateConfig, kotlin_source_dir: &
         .map(|c| c.exclude_types.iter().cloned().collect())
         .unwrap_or_default();
     for bridge in &config.trait_bridges {
-        if bridge.exclude_languages.iter().any(|l| l == "kotlin_android") {
-            if let Some(alias) = &bridge.type_alias {
-                effective_excluded_types.insert(alias.clone());
-            }
+        if bridge.exclude_languages.iter().any(|l| l == "kotlin_android")
+            && let Some(alias) = &bridge.type_alias
+        {
+            effective_excluded_types.insert(alias.clone());
         }
-        if let Some(name) = bridge.param_name.as_deref() {
-            if kotlin_android_excluded_function_names.contains(name) {
-                if let Some(alias) = &bridge.type_alias {
-                    effective_excluded_types.insert(alias.clone());
-                }
-            }
+        if let Some(name) = bridge.param_name.as_deref()
+            && kotlin_android_excluded_function_names.contains(name)
+            && let Some(alias) = &bridge.type_alias
+        {
+            effective_excluded_types.insert(alias.clone());
         }
     }
     for (name, path) in &config.opaque_types {

@@ -102,11 +102,11 @@ pub fn write_scaffold_files_with_overwrite(
             let binary_content = base64::engine::general_purpose::STANDARD
                 .decode(&file.content)
                 .with_context(|| format!("failed to decode base64 for {}", full_path.display()))?;
-            if let Ok(existing) = std::fs::read(&full_path) {
-                if existing == binary_content {
-                    debug!("  unchanged: {}", full_path.display());
-                    continue;
-                }
+            if let Ok(existing) = std::fs::read(&full_path)
+                && existing == binary_content
+            {
+                debug!("  unchanged: {}", full_path.display());
+                continue;
             }
             std::fs::write(&full_path, &binary_content)
                 .with_context(|| format!("failed to write binary file {}", full_path.display()))?;

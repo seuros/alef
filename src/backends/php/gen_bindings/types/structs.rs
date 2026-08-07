@@ -208,36 +208,36 @@ pub(crate) fn gen_opaque_struct_methods_with_exclude(
     }
 
     for streaming_key in streaming_method_keys.iter() {
-        if streaming_key.starts_with(&format!("{}.", typ.name)) {
-            if let Some(body) = adapter_bodies.get(streaming_key) {
-                let method_name = streaming_key.strip_prefix(&format!("{}.", typ.name)).unwrap_or("");
-                if !method_name.is_empty() {
-                    let orig_method = instance.iter().find(|m| m.name == method_name);
+        if streaming_key.starts_with(&format!("{}.", typ.name))
+            && let Some(body) = adapter_bodies.get(streaming_key)
+        {
+            let method_name = streaming_key.strip_prefix(&format!("{}.", typ.name)).unwrap_or("");
+            if !method_name.is_empty() {
+                let orig_method = instance.iter().find(|m| m.name == method_name);
 
-                    let params_str = if let Some(method) = orig_method {
-                        super::super::helpers::gen_php_function_params(
-                            &method.params,
-                            mapper,
-                            opaque_types,
-                            &AHashSet::new(),
-                        )
-                    } else {
-                        String::new()
-                    };
+                let params_str = if let Some(method) = orig_method {
+                    super::super::helpers::gen_php_function_params(
+                        &method.params,
+                        mapper,
+                        opaque_types,
+                        &AHashSet::new(),
+                    )
+                } else {
+                    String::new()
+                };
 
-                    let method_code = format!(
-                        "    #[php(name = \"{}\")]\n    \
+                let method_code = format!(
+                    "    #[php(name = \"{}\")]\n    \
                          pub fn {}(&self{}{}) -> std::result::Result<Vec<String>, ext_php_rs::exception::PhpException> {{\n    \
                          {}\n    \
                          }}",
-                        method_name.to_lower_camel_case(),
-                        method_name,
-                        if params_str.is_empty() { "" } else { ", " },
-                        params_str,
-                        body
-                    );
-                    impl_builder.add_method(&method_code);
-                }
+                    method_name.to_lower_camel_case(),
+                    method_name,
+                    if params_str.is_empty() { "" } else { ", " },
+                    params_str,
+                    body
+                );
+                impl_builder.add_method(&method_code);
             }
         }
     }
@@ -262,42 +262,40 @@ pub(crate) fn gen_opaque_struct_methods_with_exclude(
         }
     }
 
-    if typ.is_variant_wrapper {
-        if let Some(ctor_method) =
+    if typ.is_variant_wrapper
+        && let Some(ctor_method) =
             crate::backends::php::gen_bindings::rust_items::php_variant_wrapper_constructor_method(
                 typ,
                 mapper,
                 core_import,
                 opaque_types,
             )
-        {
-            impl_builder.add_method(&ctor_method);
-        }
+    {
+        impl_builder.add_method(&ctor_method);
     }
 
     for bridge in trait_bridges {
-        if let Some(ref type_alias) = bridge.type_alias {
-            if type_alias == &typ.name {
-                let bridge_struct_name = format!("Php{}Bridge", bridge.trait_name.to_pascal_case().replace('-', ""));
-                let _trait_path = format!(
-                    "{}::visitor::{}",
-                    core_import,
-                    bridge.trait_name.split("::").last().unwrap_or(&bridge.trait_name)
-                );
-                let handle_path =
-                    crate::codegen::generators::trait_bridge::bridge_handle_path(api, bridge, core_import);
-                let method_code = format!(
-                    "    #[php(name = \"from_php_object\")]\n    \
+        if let Some(ref type_alias) = bridge.type_alias
+            && type_alias == &typ.name
+        {
+            let bridge_struct_name = format!("Php{}Bridge", bridge.trait_name.to_pascal_case().replace('-', ""));
+            let _trait_path = format!(
+                "{}::visitor::{}",
+                core_import,
+                bridge.trait_name.split("::").last().unwrap_or(&bridge.trait_name)
+            );
+            let handle_path = crate::codegen::generators::trait_bridge::bridge_handle_path(api, bridge, core_import);
+            let method_code = format!(
+                "    #[php(name = \"from_php_object\")]\n    \
                      pub fn from_php_object(obj: &mut ext_php_rs::types::ZendObject) -> ext_php_rs::prelude::PhpResult<Self> {{\n    \
                      use ext_php_rs::prelude::*;\n    \
                      let bridge = {}::new(obj);\n    \
                      let visitor_handle: {handle_path} = std::sync::Arc::new(std::sync::Mutex::new(bridge));\n    \
                      Ok(Self {{ inner: std::sync::Arc::new(visitor_handle) }})\n    \
                      }}\n",
-                    bridge_struct_name
-                );
-                impl_builder.add_method(&method_code);
-            }
+                bridge_struct_name
+            );
+            impl_builder.add_method(&method_code);
         }
     }
 
@@ -605,21 +603,21 @@ fn gen_struct_methods_impl(
                     .filter(|f| f.cfg.is_none())
                     .filter(|f| php_field_can_be_constructor_param(&f.ty, enum_names, opaque_types))
                 {
-                    if let TypeRef::Vec(inner) = &f.ty {
-                        if let TypeRef::Named(name) = inner.as_ref() {
-                            if !opaque_types.contains(name.as_str()) && !enum_names.contains(name.as_str()) {
-                                let php_param_name = crate::codegen::naming::to_php_name(&f.name);
-                                let_bindings.push_str(&crate::backends::php::template_env::render(
-                                    "php_vec_named_struct_let_binding.jinja",
-                                    minijinja::context! {
-                                        php_name => php_param_name.as_str(),
-                                        core_import => core_import,
-                                        struct_name => name.as_str(),
-                                        is_optional => f.optional,
-                                    },
-                                ));
-                            }
-                        }
+                    if let TypeRef::Vec(inner) = &f.ty
+                        && let TypeRef::Named(name) = inner.as_ref()
+                        && !opaque_types.contains(name.as_str())
+                        && !enum_names.contains(name.as_str())
+                    {
+                        let php_param_name = crate::codegen::naming::to_php_name(&f.name);
+                        let_bindings.push_str(&crate::backends::php::template_env::render(
+                            "php_vec_named_struct_let_binding.jinja",
+                            minijinja::context! {
+                                php_name => php_param_name.as_str(),
+                                core_import => core_import,
+                                struct_name => name.as_str(),
+                                is_optional => f.optional,
+                            },
+                        ));
                     }
                 }
 
@@ -633,13 +631,11 @@ fn gen_struct_methods_impl(
                             return format!("{}: Default::default()", f.name);
                         }
                         if php_field_can_be_constructor_param(&f.ty, enum_names, opaque_types) {
-                            if let TypeRef::Vec(inner) = &f.ty {
-                                if let TypeRef::Named(name) = inner.as_ref() {
-                                    if !opaque_types.contains(name.as_str()) && !enum_names.contains(name.as_str()) {
+                            if let TypeRef::Vec(inner) = &f.ty
+                                && let TypeRef::Named(name) = inner.as_ref()
+                                    && !opaque_types.contains(name.as_str()) && !enum_names.contains(name.as_str()) {
                                         return format!("{}: {}_core", f.name, php_param_name);
                                     }
-                                }
-                            }
                             let is_bytes = matches!(&f.ty, TypeRef::Bytes)
                                 || matches!(&f.ty, TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Bytes));
                             if is_bytes {
@@ -710,21 +706,21 @@ fn gen_struct_methods_impl(
 
                 let mut let_bindings = String::new();
                 for f in binding_fields(&typ.fields).filter(|f| f.cfg.is_none()) {
-                    if let TypeRef::Vec(inner) = &f.ty {
-                        if let TypeRef::Named(name) = inner.as_ref() {
-                            if !opaque_types.contains(name.as_str()) && !enum_names.contains(name.as_str()) {
-                                let php_param_name = crate::codegen::naming::to_php_name(&f.name);
-                                let_bindings.push_str(&crate::backends::php::template_env::render(
-                                    "php_vec_named_struct_let_binding.jinja",
-                                    minijinja::context! {
-                                        php_name => php_param_name.as_str(),
-                                        core_import => core_import,
-                                        struct_name => name.as_str(),
-                                        is_optional => f.optional,
-                                    },
-                                ));
-                            }
-                        }
+                    if let TypeRef::Vec(inner) = &f.ty
+                        && let TypeRef::Named(name) = inner.as_ref()
+                        && !opaque_types.contains(name.as_str())
+                        && !enum_names.contains(name.as_str())
+                    {
+                        let php_param_name = crate::codegen::naming::to_php_name(&f.name);
+                        let_bindings.push_str(&crate::backends::php::template_env::render(
+                            "php_vec_named_struct_let_binding.jinja",
+                            minijinja::context! {
+                                php_name => php_param_name.as_str(),
+                                core_import => core_import,
+                                struct_name => name.as_str(),
+                                is_optional => f.optional,
+                            },
+                        ));
                     }
                 }
 
@@ -737,12 +733,12 @@ fn gen_struct_methods_impl(
                         if f.cfg.is_some() {
                             return format!("{}: Default::default()", f.name);
                         }
-                        if let TypeRef::Vec(inner) = &f.ty {
-                            if let TypeRef::Named(name) = inner.as_ref() {
-                                if !opaque_types.contains(name.as_str()) && !enum_names.contains(name.as_str()) {
-                                    return format!("{}: {}_core", f.name, php_param_name);
-                                }
-                            }
+                        if let TypeRef::Vec(inner) = &f.ty
+                            && let TypeRef::Named(name) = inner.as_ref()
+                            && !opaque_types.contains(name.as_str())
+                            && !enum_names.contains(name.as_str())
+                        {
+                            return format!("{}: {}_core", f.name, php_param_name);
                         }
                         if f.name == php_param_name {
                             f.name.clone()

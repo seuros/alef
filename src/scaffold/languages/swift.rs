@@ -501,10 +501,10 @@ fn render_rust_bridge_c_header(
         );
     }
 
-    if let Some(existing) = existing_header {
-        if header_is_populated(existing) {
-            return existing.to_string();
-        }
+    if let Some(existing) = existing_header
+        && header_is_populated(existing)
+    {
+        return existing.to_string();
     }
 
     format!(

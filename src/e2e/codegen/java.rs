@@ -254,10 +254,10 @@ impl E2eCodegen for JavaCodegen {
         let options_type = overrides.and_then(|o| o.options_type.clone()).or_else(|| {
             // Inherit from non-Java language overrides (C# first, then C, Go, PHP, Python).
             for cand in ["csharp", "c", "go", "php", "python"] {
-                if let Some(o) = e2e_config.call.overrides.get(cand) {
-                    if let Some(t) = &o.options_type {
-                        return Some(t.clone());
-                    }
+                if let Some(o) = e2e_config.call.overrides.get(cand)
+                    && let Some(t) = &o.options_type
+                {
+                    return Some(t.clone());
                 }
             }
             None

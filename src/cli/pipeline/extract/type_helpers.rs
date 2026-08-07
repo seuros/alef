@@ -256,12 +256,11 @@ pub(super) fn normalize_field_type_paths(api: &mut ApiSurface) {
 
     let fix = |fields: &mut Vec<FieldDef>| {
         for field in fields {
-            if field.type_rust_path.is_none() {
-                if let Some(name) = named_name(&field.ty) {
-                    if let Some(path) = canonical.get(name) {
-                        field.type_rust_path = Some(path.clone());
-                    }
-                }
+            if field.type_rust_path.is_none()
+                && let Some(name) = named_name(&field.ty)
+                && let Some(path) = canonical.get(name)
+            {
+                field.type_rust_path = Some(path.clone());
             }
         }
     };

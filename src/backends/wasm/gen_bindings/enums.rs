@@ -82,7 +82,11 @@ fn is_sanitized_fixed_tuple_array(field: &FieldDef) -> bool {
 /// box-wrap handling already applied to boxed plain-struct fields by the shared codegen helpers
 /// in `src/codegen/conversions`.
 fn box_wrap_map_into(base: String, is_boxed: bool) -> String {
-    if is_boxed { format!("{base}.map(Box::new)") } else { base }
+    if is_boxed {
+        format!("{base}.map(Box::new)")
+    } else {
+        base
+    }
 }
 
 fn tagged_enum_binding_to_core_expr(
@@ -129,7 +133,11 @@ fn tagged_enum_binding_to_core_expr(
 /// already applied to boxed plain-struct fields by the shared codegen helpers in
 /// `src/codegen/conversions` (e.g. `bedrock: val.bedrock.map(|v| (*v).into())`).
 fn box_unwrap_into(local: &str, is_boxed: bool) -> String {
-    if is_boxed { format!("(*{local}).into()") } else { format!("{local}.into()") }
+    if is_boxed {
+        format!("(*{local}).into()")
+    } else {
+        format!("{local}.into()")
+    }
 }
 
 /// Deref a boxed `.map(Into::into)` conversion (`Option<Box<T>>` field).
@@ -150,7 +158,10 @@ fn tagged_enum_core_to_binding_expr(
 ) -> String {
     if field_optional {
         return match field_ty {
-            TypeRef::Named(_) => format!("                {field_ident}: {}", box_unwrap_map_into(local, is_boxed)),
+            TypeRef::Named(_) => format!(
+                "                {field_ident}: {}",
+                box_unwrap_map_into(local, is_boxed)
+            ),
             TypeRef::Path => format!("                {field_ident}: {local}.map(|p| p.to_string_lossy().to_string())"),
             TypeRef::Map(_, _) => {
                 format!(
@@ -162,7 +173,10 @@ fn tagged_enum_core_to_binding_expr(
     }
     match field_ty {
         TypeRef::Optional(inner) => match inner.as_ref() {
-            TypeRef::Named(_) => format!("                {field_ident}: {}", box_unwrap_map_into(local, is_boxed)),
+            TypeRef::Named(_) => format!(
+                "                {field_ident}: {}",
+                box_unwrap_map_into(local, is_boxed)
+            ),
             TypeRef::Path => format!("                {field_ident}: {local}.map(|p| p.to_string_lossy().to_string())"),
             TypeRef::Map(_, _) => {
                 format!(
@@ -171,7 +185,10 @@ fn tagged_enum_core_to_binding_expr(
             }
             _ => format!("                {field_ident}: {local}"),
         },
-        TypeRef::Named(_) => format!("                {field_ident}: Some({})", box_unwrap_into(local, is_boxed)),
+        TypeRef::Named(_) => format!(
+            "                {field_ident}: Some({})",
+            box_unwrap_into(local, is_boxed)
+        ),
         TypeRef::Vec(inner) if matches!(inner.as_ref(), TypeRef::Named(_)) => {
             format!("                {field_ident}: Some({local}.into_iter().map(Into::into).collect())")
         }

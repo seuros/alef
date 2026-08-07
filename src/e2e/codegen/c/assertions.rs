@@ -84,19 +84,19 @@ pub(super) fn emit_nested_accessor(
             // If the segment also includes a numeric index `[N]`, drill into
             // the Nth element of the extracted array; otherwise stay on the
             // object/array substring.
-            if let Some(key) = bracket_key {
-                if let Ok(idx) = key.parse::<usize>() {
-                    let elem_var = format!("{seg_snake}_{idx}_json");
-                    if !intermediate_handles.iter().any(|(h, _)| h == &elem_var) {
-                        let _ = writeln!(
-                            out,
-                            "    char* {elem_var} = alef_json_array_get_index({json_var}, {idx});"
-                        );
-                        intermediate_handles.push((elem_var.clone(), "free".to_string()));
-                    }
-                    current_handle = elem_var;
-                    continue;
+            if let Some(key) = bracket_key
+                && let Ok(idx) = key.parse::<usize>()
+            {
+                let elem_var = format!("{seg_snake}_{idx}_json");
+                if !intermediate_handles.iter().any(|(h, _)| h == &elem_var) {
+                    let _ = writeln!(
+                        out,
+                        "    char* {elem_var} = alef_json_array_get_index({json_var}, {idx});"
+                    );
+                    intermediate_handles.push((elem_var.clone(), "free".to_string()));
                 }
+                current_handle = elem_var;
+                continue;
             }
             current_handle = json_var;
             continue;
@@ -302,26 +302,26 @@ pub(super) fn build_args_string_c(
     for arg in args {
         // Handle test_backend args: emit the stub and use it.
         if arg.arg_type == "test_backend" {
-            if let Some(trait_name) = &arg.trait_name {
-                if let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name) {
-                    let mut methods: Vec<&crate::core::ir::MethodDef> = type_defs
-                        .iter()
-                        .find(|t| t.name == *trait_name)
-                        .map(|t| t.methods.iter().collect())
-                        .unwrap_or_default();
-                    if let Some(super_trait) = &trait_bridge.super_trait {
-                        if let Some(super_type) = type_defs.iter().find(|t| &t.rust_path == super_trait) {
-                            for method in &super_type.methods {
-                                if !methods.iter().any(|m| m.name == method.name) {
-                                    methods.push(method);
-                                }
-                            }
+            if let Some(trait_name) = &arg.trait_name
+                && let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name)
+            {
+                let mut methods: Vec<&crate::core::ir::MethodDef> = type_defs
+                    .iter()
+                    .find(|t| t.name == *trait_name)
+                    .map(|t| t.methods.iter().collect())
+                    .unwrap_or_default();
+                if let Some(super_trait) = &trait_bridge.super_trait
+                    && let Some(super_type) = type_defs.iter().find(|t| &t.rust_path == super_trait)
+                {
+                    for method in &super_type.methods {
+                        if !methods.iter().any(|m| m.name == method.name) {
+                            methods.push(method);
                         }
                     }
-                    let emission = crate::e2e::codegen::emit_test_backend("c", trait_bridge, &methods, fixture);
-                    parts.push(emission.arg_expr);
-                    continue;
                 }
+                let emission = crate::e2e::codegen::emit_test_backend("c", trait_bridge, &methods, fixture);
+                parts.push(emission.arg_expr);
+                continue;
             }
             // Unimplemented trait fallback
             parts.push("NULL".to_string());
@@ -364,11 +364,12 @@ pub(super) fn render_assertion(
     opaque_handle_locals: &HashMap<String, String>,
 ) {
     // Skip assertions on fields that don't exist on the result type.
-    if let Some(f) = &assertion.field {
-        if !f.is_empty() && !_field_resolver.is_valid_for_result(f) {
-            let _ = writeln!(out, "    // skipped: field '{f}' not available on result type");
-            return;
-        }
+    if let Some(f) = &assertion.field
+        && !f.is_empty()
+        && !_field_resolver.is_valid_for_result(f)
+    {
+        let _ = writeln!(out, "    // skipped: field '{f}' not available on result type");
+        return;
     }
 
     let field_expr = match &assertion.field {
@@ -641,56 +642,56 @@ pub(super) fn render_assertion(
             }
         }
         "min_length" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(
-                        out,
-                        "    assert(strlen({field_expr}) >= {n} && \"expected minimum length\");"
-                    );
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(
+                    out,
+                    "    assert(strlen({field_expr}) >= {n} && \"expected minimum length\");"
+                );
             }
         }
         "max_length" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(
-                        out,
-                        "    assert(strlen({field_expr}) <= {n} && \"expected maximum length\");"
-                    );
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(
+                    out,
+                    "    assert(strlen({field_expr}) <= {n} && \"expected maximum length\");"
+                );
             }
         }
         "count_min" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(out, "    {{");
-                    let _ = writeln!(out, "        /* count_min: count top-level JSON array elements */");
-                    let _ = writeln!(
-                        out,
-                        "        assert({field_expr} != NULL && \"expected non-null collection JSON\");"
-                    );
-                    let _ = writeln!(out, "        int elem_count = alef_json_array_count({field_expr});");
-                    let _ = writeln!(
-                        out,
-                        "        assert(elem_count >= {n} && \"expected at least {n} elements\");"
-                    );
-                    let _ = writeln!(out, "    }}");
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(out, "    {{");
+                let _ = writeln!(out, "        /* count_min: count top-level JSON array elements */");
+                let _ = writeln!(
+                    out,
+                    "        assert({field_expr} != NULL && \"expected non-null collection JSON\");"
+                );
+                let _ = writeln!(out, "        int elem_count = alef_json_array_count({field_expr});");
+                let _ = writeln!(
+                    out,
+                    "        assert(elem_count >= {n} && \"expected at least {n} elements\");"
+                );
+                let _ = writeln!(out, "    }}");
             }
         }
         "count_equals" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(out, "    {{");
-                    let _ = writeln!(out, "        /* count_equals: count elements in array */");
-                    let _ = writeln!(
-                        out,
-                        "        assert({field_expr} != NULL && \"expected non-null collection JSON\");"
-                    );
-                    let _ = writeln!(out, "        int elem_count = alef_json_array_count({field_expr});");
-                    let _ = writeln!(out, "        assert(elem_count == {n} && \"expected {n} elements\");");
-                    let _ = writeln!(out, "    }}");
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(out, "    {{");
+                let _ = writeln!(out, "        /* count_equals: count elements in array */");
+                let _ = writeln!(
+                    out,
+                    "        assert({field_expr} != NULL && \"expected non-null collection JSON\");"
+                );
+                let _ = writeln!(out, "        int elem_count = alef_json_array_count({field_expr});");
+                let _ = writeln!(out, "        assert(elem_count == {n} && \"expected {n} elements\");");
+                let _ = writeln!(out, "    }}");
             }
         }
         "is_true" => {

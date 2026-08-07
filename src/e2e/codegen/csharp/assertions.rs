@@ -131,33 +131,33 @@ pub(super) fn render_assertion(
             "embeddings" => {
                 match assertion.assertion_type.as_str() {
                     "count_equals" => {
-                        if let Some(val) = &assertion.value {
-                            if let Some(n) = val.as_u64() {
-                                let rendered = crate::e2e::template_env::render(
-                                    "csharp/assertion.jinja",
-                                    minijinja::context! {
-                                        assertion_type => "synthetic_embeddings_count_equals",
-                                        synthetic_pred => format!("{result_var}.Count"),
-                                        n => n,
-                                    },
-                                );
-                                out.push_str(&rendered);
-                            }
+                        if let Some(val) = &assertion.value
+                            && let Some(n) = val.as_u64()
+                        {
+                            let rendered = crate::e2e::template_env::render(
+                                "csharp/assertion.jinja",
+                                minijinja::context! {
+                                    assertion_type => "synthetic_embeddings_count_equals",
+                                    synthetic_pred => format!("{result_var}.Count"),
+                                    n => n,
+                                },
+                            );
+                            out.push_str(&rendered);
                         }
                     }
                     "count_min" => {
-                        if let Some(val) = &assertion.value {
-                            if let Some(n) = val.as_u64() {
-                                let rendered = crate::e2e::template_env::render(
-                                    "csharp/assertion.jinja",
-                                    minijinja::context! {
-                                        assertion_type => "synthetic_embeddings_count_min",
-                                        synthetic_pred => format!("{result_var}.Count"),
-                                        n => n,
-                                    },
-                                );
-                                out.push_str(&rendered);
-                            }
+                        if let Some(val) = &assertion.value
+                            && let Some(n) = val.as_u64()
+                        {
+                            let rendered = crate::e2e::template_env::render(
+                                "csharp/assertion.jinja",
+                                minijinja::context! {
+                                    assertion_type => "synthetic_embeddings_count_min",
+                                    synthetic_pred => format!("{result_var}.Count"),
+                                    n => n,
+                                },
+                            );
+                            out.push_str(&rendered);
                         }
                     }
                     "not_empty" => {
@@ -192,33 +192,33 @@ pub(super) fn render_assertion(
                 let expr = format!("({result_var}.Count > 0 ? {result_var}[0].Count : 0)");
                 match assertion.assertion_type.as_str() {
                     "equals" => {
-                        if let Some(val) = &assertion.value {
-                            if let Some(n) = val.as_u64() {
-                                let rendered = crate::e2e::template_env::render(
-                                    "csharp/assertion.jinja",
-                                    minijinja::context! {
-                                        assertion_type => "synthetic_embedding_dimensions_equals",
-                                        synthetic_pred => expr,
-                                        n => n,
-                                    },
-                                );
-                                out.push_str(&rendered);
-                            }
+                        if let Some(val) = &assertion.value
+                            && let Some(n) = val.as_u64()
+                        {
+                            let rendered = crate::e2e::template_env::render(
+                                "csharp/assertion.jinja",
+                                minijinja::context! {
+                                    assertion_type => "synthetic_embedding_dimensions_equals",
+                                    synthetic_pred => expr,
+                                    n => n,
+                                },
+                            );
+                            out.push_str(&rendered);
                         }
                     }
                     "greater_than" => {
-                        if let Some(val) = &assertion.value {
-                            if let Some(n) = val.as_u64() {
-                                let rendered = crate::e2e::template_env::render(
-                                    "csharp/assertion.jinja",
-                                    minijinja::context! {
-                                        assertion_type => "synthetic_embedding_dimensions_greater_than",
-                                        synthetic_pred => expr,
-                                        n => n,
-                                    },
-                                );
-                                out.push_str(&rendered);
-                            }
+                        if let Some(val) = &assertion.value
+                            && let Some(n) = val.as_u64()
+                        {
+                            let rendered = crate::e2e::template_env::render(
+                                "csharp/assertion.jinja",
+                                minijinja::context! {
+                                    assertion_type => "synthetic_embedding_dimensions_greater_than",
+                                    synthetic_pred => expr,
+                                    n => n,
+                                },
+                            );
+                            out.push_str(&rendered);
                         }
                     }
                     _ => {
@@ -284,18 +284,19 @@ pub(super) fn render_assertion(
     }
 
     // Skip assertions on fields that don't exist on the result type.
-    if let Some(f) = &assertion.field {
-        if !f.is_empty() && !field_resolver.is_valid_for_result(f) {
-            let skipped_reason = format!("field '{f}' not available on result type");
-            let rendered = crate::e2e::template_env::render(
-                "csharp/assertion.jinja",
-                minijinja::context! {
-                    skipped_reason => skipped_reason,
-                },
-            );
-            out.push_str(&rendered);
-            return;
-        }
+    if let Some(f) = &assertion.field
+        && !f.is_empty()
+        && !field_resolver.is_valid_for_result(f)
+    {
+        let skipped_reason = format!("field '{f}' not available on result type");
+        let rendered = crate::e2e::template_env::render(
+            "csharp/assertion.jinja",
+            minijinja::context! {
+                skipped_reason => skipped_reason,
+            },
+        );
+        out.push_str(&rendered);
+        return;
     }
 
     // For count assertions on list results with no field specified, use the list directly.
@@ -320,58 +321,57 @@ pub(super) fn render_assertion(
         .is_some_and(|f| parse_discriminated_union_access(f).is_some());
 
     // For discriminated union assertions, generate pattern-matching wrapper
-    if is_discriminated_union {
-        if let Some((_, variant_name, inner_field)) = assertion
+    if is_discriminated_union
+        && let Some((_, variant_name, inner_field)) = assertion
             .field
             .as_ref()
             .and_then(|f| parse_discriminated_union_access(f))
-        {
-            // Use a unique variable name based on the field hash to avoid shadowing
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            inner_field.hash(&mut hasher);
-            let var_hash = format!("{:x}", hasher.finish());
-            let variant_var = format!("variant_{}", &var_hash[..8]);
-            // Resolve the discriminated-union container (`…Metadata.Format`) through the
-            // field resolver so list-result field paths (`results[0].metadata.format.…`)
-            // index into `.Results[0]` exactly like the flat-field assertions do, instead
-            // of hardcoding `{effective_result_var}.Metadata.Format` (which assumes the
-            // metadata lives on the top-level `ExtractionResult`, breaking batch results).
-            let container = assertion
-                .field
-                .as_ref()
-                .map(|f| {
-                    let format_path = match f.find(".format") {
-                        Some(idx) => &f[..idx + ".format".len()],
-                        None => f.as_str(),
-                    };
-                    field_resolver.accessor(format_path, "csharp", &effective_result_var)
-                })
-                .unwrap_or_else(|| format!("{effective_result_var}.Metadata.Format"));
-            let _ = writeln!(
-                out,
-                "        if ({container} is FormatMetadata.{} {})",
-                variant_name, variant_var
-            );
-            let _ = writeln!(out, "        {{");
-            render_discriminated_union_assertion(
-                out,
-                assertion,
-                &variant_var,
-                &inner_field,
-                result_is_vec,
-                assert_enum_fields,
-            );
-            let _ = writeln!(out, "        }}");
-            let _ = writeln!(out, "        else");
-            let _ = writeln!(out, "        {{");
-            let _ = writeln!(
-                out,
-                "            Assert.Fail(\"Expected {} format metadata\");",
-                variant_name.to_lowercase()
-            );
-            let _ = writeln!(out, "        }}");
-            return;
-        }
+    {
+        // Use a unique variable name based on the field hash to avoid shadowing
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        inner_field.hash(&mut hasher);
+        let var_hash = format!("{:x}", hasher.finish());
+        let variant_var = format!("variant_{}", &var_hash[..8]);
+        // Resolve the discriminated-union container (`…Metadata.Format`) through the
+        // field resolver so list-result field paths (`results[0].metadata.format.…`)
+        // index into `.Results[0]` exactly like the flat-field assertions do, instead
+        // of hardcoding `{effective_result_var}.Metadata.Format` (which assumes the
+        // metadata lives on the top-level `ExtractionResult`, breaking batch results).
+        let container = assertion
+            .field
+            .as_ref()
+            .map(|f| {
+                let format_path = match f.find(".format") {
+                    Some(idx) => &f[..idx + ".format".len()],
+                    None => f.as_str(),
+                };
+                field_resolver.accessor(format_path, "csharp", &effective_result_var)
+            })
+            .unwrap_or_else(|| format!("{effective_result_var}.Metadata.Format"));
+        let _ = writeln!(
+            out,
+            "        if ({container} is FormatMetadata.{} {})",
+            variant_name, variant_var
+        );
+        let _ = writeln!(out, "        {{");
+        render_discriminated_union_assertion(
+            out,
+            assertion,
+            &variant_var,
+            &inner_field,
+            result_is_vec,
+            assert_enum_fields,
+        );
+        let _ = writeln!(out, "        }}");
+        let _ = writeln!(out, "        else");
+        let _ = writeln!(out, "        {{");
+        let _ = writeln!(
+            out,
+            "            Assert.Fail(\"Expected {} format metadata\");",
+            variant_name.to_lowercase()
+        );
+        let _ = writeln!(out, "        }}");
+        return;
     }
 
     let field_expr = if result_is_simple {
@@ -698,63 +698,63 @@ pub(super) fn render_assertion(
             }
         }
         "min_length" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let rendered = crate::e2e::template_env::render(
-                        "csharp/assertion.jinja",
-                        minijinja::context! {
-                            assertion_type => "min_length",
-                            field_expr => field_expr.clone(),
-                            n => n,
-                        },
-                    );
-                    out.push_str(&rendered);
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let rendered = crate::e2e::template_env::render(
+                    "csharp/assertion.jinja",
+                    minijinja::context! {
+                        assertion_type => "min_length",
+                        field_expr => field_expr.clone(),
+                        n => n,
+                    },
+                );
+                out.push_str(&rendered);
             }
         }
         "max_length" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let rendered = crate::e2e::template_env::render(
-                        "csharp/assertion.jinja",
-                        minijinja::context! {
-                            assertion_type => "max_length",
-                            field_expr => field_expr.clone(),
-                            n => n,
-                        },
-                    );
-                    out.push_str(&rendered);
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let rendered = crate::e2e::template_env::render(
+                    "csharp/assertion.jinja",
+                    minijinja::context! {
+                        assertion_type => "max_length",
+                        field_expr => field_expr.clone(),
+                        n => n,
+                    },
+                );
+                out.push_str(&rendered);
             }
         }
         "count_min" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let rendered = crate::e2e::template_env::render(
-                        "csharp/assertion.jinja",
-                        minijinja::context! {
-                            assertion_type => "count_min",
-                            field_expr => field_expr.clone(),
-                            n => n,
-                        },
-                    );
-                    out.push_str(&rendered);
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let rendered = crate::e2e::template_env::render(
+                    "csharp/assertion.jinja",
+                    minijinja::context! {
+                        assertion_type => "count_min",
+                        field_expr => field_expr.clone(),
+                        n => n,
+                    },
+                );
+                out.push_str(&rendered);
             }
         }
         "count_equals" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let rendered = crate::e2e::template_env::render(
-                        "csharp/assertion.jinja",
-                        minijinja::context! {
-                            assertion_type => "count_equals",
-                            field_expr => field_expr.clone(),
-                            n => n,
-                        },
-                    );
-                    out.push_str(&rendered);
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let rendered = crate::e2e::template_env::render(
+                    "csharp/assertion.jinja",
+                    minijinja::context! {
+                        assertion_type => "count_equals",
+                        field_expr => field_expr.clone(),
+                        n => n,
+                    },
+                );
+                out.push_str(&rendered);
             }
         }
         "is_true" => {

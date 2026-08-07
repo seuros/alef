@@ -165,18 +165,18 @@ fn gen_visitor_method_php(
     if has_args {
         out.push_str("        let mut args: Vec<ext_php_rs::types::Zval> = Vec::new();\n");
         for p in &method.params {
-            if let TypeRef::Named(n) = &p.ty {
-                if Some(n.as_str()) == bridge_cfg.context_type.as_deref() {
-                    out.push_str(&crate::backends::php::template_env::render(
-                        "php_visitor_arg_nodecontext.jinja",
-                        context! {
-                            name => &p.name,
-                            ref => if p.is_ref { "" } else { "&" },
-                        },
-                    ));
-                    out.push('\n');
-                    continue;
-                }
+            if let TypeRef::Named(n) = &p.ty
+                && Some(n.as_str()) == bridge_cfg.context_type.as_deref()
+            {
+                out.push_str(&crate::backends::php::template_env::render(
+                    "php_visitor_arg_nodecontext.jinja",
+                    context! {
+                        name => &p.name,
+                        ref => if p.is_ref { "" } else { "&" },
+                    },
+                ));
+                out.push('\n');
+                continue;
             }
             if p.optional && matches!(&p.ty, TypeRef::String) && p.is_ref {
                 out.push_str(&crate::backends::php::template_env::render(
@@ -241,10 +241,10 @@ fn gen_visitor_method_php(
 
     let mut tmpl_var_names: Vec<String> = Vec::new();
     for p in &method.params {
-        if let TypeRef::Named(n) = &p.ty {
-            if Some(n.as_str()) == bridge_cfg.context_type.as_deref() {
-                continue;
-            }
+        if let TypeRef::Named(n) = &p.ty
+            && Some(n.as_str()) == bridge_cfg.context_type.as_deref()
+        {
+            continue;
         }
         if matches!(&p.ty, TypeRef::Vec(_)) {
             continue;

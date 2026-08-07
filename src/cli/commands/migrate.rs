@@ -89,49 +89,48 @@ pub fn run(options: MigrateOptions) -> Result<()> {
 
     let legacy_crate = doc.remove("crate");
 
-    if let Some(version) = doc.remove("version") {
-        if let Some(ws_tbl) = workspace_table.as_table_mut() {
-            ws_tbl["alef_version"] = version;
-        }
+    if let Some(version) = doc.remove("version")
+        && let Some(ws_tbl) = workspace_table.as_table_mut()
+    {
+        ws_tbl["alef_version"] = version;
     }
 
-    if let Some(languages) = doc.remove("languages") {
-        if let Some(ws_tbl) = workspace_table.as_table_mut() {
-            ws_tbl["languages"] = languages;
-        }
+    if let Some(languages) = doc.remove("languages")
+        && let Some(ws_tbl) = workspace_table.as_table_mut()
+    {
+        ws_tbl["languages"] = languages;
     }
 
     for key in WORKSPACE_SCOPED_KEYS {
-        if let Some(value) = doc.remove(key) {
-            if let Some(ws_tbl) = workspace_table.as_table_mut() {
-                ws_tbl[key] = value;
-            }
+        if let Some(value) = doc.remove(key)
+            && let Some(ws_tbl) = workspace_table.as_table_mut()
+        {
+            ws_tbl[key] = value;
         }
     }
 
     let had_legacy_crate = legacy_crate.is_some();
     let mut crate_table = table();
-    if let Some(legacy_item) = &legacy_crate {
-        if let Some(legacy_tbl) = legacy_item.as_table() {
-            if let Some(cr_tbl) = crate_table.as_table_mut() {
-                copy_table_into(legacy_tbl, cr_tbl);
-            }
-        }
+    if let Some(legacy_item) = &legacy_crate
+        && let Some(legacy_tbl) = legacy_item.as_table()
+        && let Some(cr_tbl) = crate_table.as_table_mut()
+    {
+        copy_table_into(legacy_tbl, cr_tbl);
     }
 
     for key in CRATE_SCOPED_KEYS {
-        if let Some(value) = doc.remove(key) {
-            if let Some(cr_tbl) = crate_table.as_table_mut() {
-                cr_tbl.insert(key, strip_position(value));
-            }
+        if let Some(value) = doc.remove(key)
+            && let Some(cr_tbl) = crate_table.as_table_mut()
+        {
+            cr_tbl.insert(key, strip_position(value));
         }
     }
 
     for key in CRATE_SCOPED_ARRAY_KEYS {
-        if let Some(value) = doc.remove(key) {
-            if let Some(cr_tbl) = crate_table.as_table_mut() {
-                cr_tbl.insert(key, strip_position(value));
-            }
+        if let Some(value) = doc.remove(key)
+            && let Some(cr_tbl) = crate_table.as_table_mut()
+        {
+            cr_tbl.insert(key, strip_position(value));
         }
     }
 
@@ -166,10 +165,10 @@ pub fn run(options: MigrateOptions) -> Result<()> {
         }
     }
 
-    if let Some(ws_tbl) = workspace_table.as_table() {
-        if !ws_tbl.is_empty() {
-            doc["workspace"] = workspace_table;
-        }
+    if let Some(ws_tbl) = workspace_table.as_table()
+        && !ws_tbl.is_empty()
+    {
+        doc["workspace"] = workspace_table;
     }
 
     let mut crates_array = ArrayOfTables::new();
@@ -251,13 +250,13 @@ fn strip_position(mut item: toml_edit::Item) -> toml_edit::Item {
 /// a rename over a symlink would silently redirect to the link's target.
 fn atomic_write(dest: &std::path::Path, content: &str) -> Result<()> {
     let meta = dest.symlink_metadata();
-    if let Ok(m) = meta {
-        if m.file_type().is_symlink() {
-            return Err(anyhow!(
-                "refusing to overwrite symlink at {}; resolve the symlink first",
-                dest.display()
-            ));
-        }
+    if let Ok(m) = meta
+        && m.file_type().is_symlink()
+    {
+        return Err(anyhow!(
+            "refusing to overwrite symlink at {}; resolve the symlink first",
+            dest.display()
+        ));
     }
 
     let parent = dest

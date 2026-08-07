@@ -22,12 +22,11 @@ pub(crate) fn gen_convertible_enum_tainted(
             continue;
         }
         for field in binding_fields(&typ.fields) {
-            if let Some(enum_name) = get_direct_enum_named(&field.ty, enum_names) {
-                if let Some(enum_def) = enums.iter().find(|e| e.name == enum_name) {
-                    if enum_def.variants.iter().any(|v| !v.fields.is_empty()) {
-                        unconvertible.insert(typ.name.clone());
-                    }
-                }
+            if let Some(enum_name) = get_direct_enum_named(&field.ty, enum_names)
+                && let Some(enum_def) = enums.iter().find(|e| e.name == enum_name)
+                && enum_def.variants.iter().any(|v| !v.fields.is_empty())
+            {
+                unconvertible.insert(typ.name.clone());
             }
         }
     }
@@ -66,12 +65,11 @@ pub(crate) fn gen_enum_tainted_from_binding_to_core(
 ) -> String {
     let core_path = crate::codegen::conversions::core_type_path(typ, core_import);
 
-    if typ.has_lifetime_params {
-        if let Some(code) =
+    if typ.has_lifetime_params
+        && let Some(code) =
             crate::codegen::conversions::gen_from_lifetime_type_constructor(typ, &core_path, &typ.name, config)
-        {
-            return code;
-        }
+    {
+        return code;
     }
 
     let mut fields: Vec<(&str, String)> = Vec::new();

@@ -164,10 +164,8 @@ pub(super) fn gen_type_stub(
 
     lines.push(format!("class {}:", typ.name));
 
-    if emit_docstrings {
-        if let Some(docstring) = pyi_docstring(&typ.doc, "    ") {
-            lines.push(docstring);
-        }
+    if emit_docstrings && let Some(docstring) = pyi_docstring(&typ.doc, "    ") {
+        lines.push(docstring);
     }
 
     let shadowed = shadowed_builtins(typ, config);
@@ -199,10 +197,8 @@ pub(super) fn gen_type_stub(
             .unwrap_or_else(|| field.name.clone());
         emitted_attribute_names.insert(stub_field_name.clone());
         lines.push(format!("    {stub_field_name}: {field_type}"));
-        if emit_docstrings {
-            if let Some(docstring) = pyi_docstring(&field.doc, "    ") {
-                lines.push(docstring);
-            }
+        if emit_docstrings && let Some(docstring) = pyi_docstring(&field.doc, "    ") {
+            lines.push(docstring);
         }
     }
 

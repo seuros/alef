@@ -249,31 +249,31 @@ pub(crate) fn emit_trait_bridge(
             },
         ));
 
-        if bridge_config.bind_via == BridgeBinding::OptionsField {
-            if let (Some(options_type), Some(field_raw)) = (
+        if bridge_config.bind_via == BridgeBinding::OptionsField
+            && let (Some(options_type), Some(field_raw)) = (
                 bridge_config.options_type.as_deref(),
                 bridge_config.resolved_options_field(),
-            ) {
-                let field = field_raw.to_string();
-                let options_snake = options_type.to_snake_case();
-                let opts_def = api.types.iter().find(|t| t.name == options_type);
-                let core_options_path = match opts_def {
-                    Some(td) if !td.rust_path.is_empty() => td.rust_path.replace('-', "_"),
-                    _ => format!("{}::{}", source_crate_name.replace('-', "_"), options_type),
-                };
-                out.push('\n');
-                out.push_str(&crate::backends::dart::template_env::render(
-                    "rust_trait_options_from_json_with_field.jinja",
-                    minijinja::context! {
-                        options_type => options_type,
-                        type_alias => type_alias,
-                        field => &field,
-                        options_snake => &options_snake,
-                        core_options_path => &core_options_path,
-                        inner_path => &inner_path,
-                    },
-                ));
-            }
+            )
+        {
+            let field = field_raw.to_string();
+            let options_snake = options_type.to_snake_case();
+            let opts_def = api.types.iter().find(|t| t.name == options_type);
+            let core_options_path = match opts_def {
+                Some(td) if !td.rust_path.is_empty() => td.rust_path.replace('-', "_"),
+                _ => format!("{}::{}", source_crate_name.replace('-', "_"), options_type),
+            };
+            out.push('\n');
+            out.push_str(&crate::backends::dart::template_env::render(
+                "rust_trait_options_from_json_with_field.jinja",
+                minijinja::context! {
+                    options_type => options_type,
+                    type_alias => type_alias,
+                    field => &field,
+                    options_snake => &options_snake,
+                    core_options_path => &core_options_path,
+                    inner_path => &inner_path,
+                },
+            ));
         }
     } else {
         out.push_str(&crate::backends::dart::template_env::render(

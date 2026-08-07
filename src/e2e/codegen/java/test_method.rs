@@ -295,13 +295,11 @@ pub(super) fn render_test_method(
         .assertions
         .iter()
         .any(|a| a.assertion_type == "method_result" && a.method.as_deref() == Some("run_query"));
-    if needs_source_var {
-        if let Some(source_arg) = args.iter().find(|a| a.field == "source_code") {
-            let field = source_arg.field.strip_prefix("input.").unwrap_or(&source_arg.field);
-            if let Some(val) = fixture.input.get(field) {
-                let java_val = json_to_java(val);
-                assertions_body.push_str(&format!("        var source = {}.getBytes();\n", java_val));
-            }
+    if needs_source_var && let Some(source_arg) = args.iter().find(|a| a.field == "source_code") {
+        let field = source_arg.field.strip_prefix("input.").unwrap_or(&source_arg.field);
+        if let Some(val) = fixture.input.get(field) {
+            let java_val = json_to_java(val);
+            assertions_body.push_str(&format!("        var source = {}.getBytes();\n", java_val));
         }
     }
 

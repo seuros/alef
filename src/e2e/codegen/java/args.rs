@@ -150,72 +150,72 @@ pub(super) fn build_args_and_setup(
         }
 
         if arg.arg_type == "test_backend" {
-            if let Some(trait_name) = &arg.trait_name {
-                if let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name) {
-                    // Filter to only methods that appear in the Java trait-bridge interface.
-                    // Async methods (extract_bytes, extract_file) are handled by the FFI bridge internally.
-                    let mut methods: Vec<&crate::core::ir::MethodDef> = type_defs
-                        .iter()
-                        .find(|t| t.name == *trait_name)
-                        .map(|t| {
-                            t.methods
-                                .iter()
-                                .filter(|m| {
-                                    // Skip methods in the ffi_skip_methods list
-                                    if trait_bridge.ffi_skip_methods.contains(&m.name) {
-                                        return false;
-                                    }
-
-                                    // Skip only known non-trait methods not in Java trait-bridge interfaces
-                                    match m.name.as_str() {
-                                        "description" | "author" => return false,
-                                        _ => {}
-                                    }
-
-                                    // As of the trait method extraction fix, methods returning excluded types
-                                    // are now kept in the interface with type substitution.
-                                    // Methods like extract_bytes/extract_file and backend_type are now included.
-                                    true
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    // Include super-trait methods so the stub can implement them.
-                    if let Some(super_trait) = &trait_bridge.super_trait {
-                        if let Some(super_type) = type_defs.iter().find(|t| &t.rust_path == super_trait) {
-                            for method in &super_type.methods {
-                                if !methods.iter().any(|m| m.name == method.name)
-                                    && !trait_bridge.ffi_skip_methods.contains(&method.name)
-                                    && !matches!(method.name.as_str(), "description" | "author")
-                                {
-                                    methods.push(method);
+            if let Some(trait_name) = &arg.trait_name
+                && let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name)
+            {
+                // Filter to only methods that appear in the Java trait-bridge interface.
+                // Async methods (extract_bytes, extract_file) are handled by the FFI bridge internally.
+                let mut methods: Vec<&crate::core::ir::MethodDef> = type_defs
+                    .iter()
+                    .find(|t| t.name == *trait_name)
+                    .map(|t| {
+                        t.methods
+                            .iter()
+                            .filter(|m| {
+                                // Skip methods in the ffi_skip_methods list
+                                if trait_bridge.ffi_skip_methods.contains(&m.name) {
+                                    return false;
                                 }
-                            }
+
+                                // Skip only known non-trait methods not in Java trait-bridge interfaces
+                                match m.name.as_str() {
+                                    "description" | "author" => return false,
+                                    _ => {}
+                                }
+
+                                // As of the trait method extraction fix, methods returning excluded types
+                                // are now kept in the interface with type substitution.
+                                // Methods like extract_bytes/extract_file and backend_type are now included.
+                                true
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                // Include super-trait methods so the stub can implement them.
+                if let Some(super_trait) = &trait_bridge.super_trait
+                    && let Some(super_type) = type_defs.iter().find(|t| &t.rust_path == super_trait)
+                {
+                    for method in &super_type.methods {
+                        if !methods.iter().any(|m| m.name == method.name)
+                            && !trait_bridge.ffi_skip_methods.contains(&method.name)
+                            && !matches!(method.name.as_str(), "description" | "author")
+                        {
+                            methods.push(method);
                         }
                     }
-
-                    let excluded_named =
-                        crate::e2e::codegen::recipe::trait_bridge_excluded_type_names(config, type_defs, &methods);
-
-                    // Do NOT filter out methods that return excluded types. As of the trait method extraction
-                    // fix, trait methods with excluded type signatures are now kept in the interface with type
-                    // substitution (excluded types become String). The trait-bridge interface properly handles
-                    // these via emit_test_backend_with_context, which uses excluded_named to substitute types.
-
-                    // Call java::stubs::emit_test_backend_with_context so stubs handle excluded types correctly.
-                    let emission = super::stubs::emit_test_backend_with_context(
-                        trait_bridge,
-                        &methods,
-                        fixture,
-                        &config.java_package(),
-                        &excluded_named,
-                        class_name,
-                    );
-                    setup_lines.push(emission.setup_block);
-                    parts.push(emission.arg_expr);
-                    teardown_block.push_str(&emission.teardown_block);
-                    continue;
                 }
+
+                let excluded_named =
+                    crate::e2e::codegen::recipe::trait_bridge_excluded_type_names(config, type_defs, &methods);
+
+                // Do NOT filter out methods that return excluded types. As of the trait method extraction
+                // fix, trait methods with excluded type signatures are now kept in the interface with type
+                // substitution (excluded types become String). The trait-bridge interface properly handles
+                // these via emit_test_backend_with_context, which uses excluded_named to substitute types.
+
+                // Call java::stubs::emit_test_backend_with_context so stubs handle excluded types correctly.
+                let emission = super::stubs::emit_test_backend_with_context(
+                    trait_bridge,
+                    &methods,
+                    fixture,
+                    &config.java_package(),
+                    &excluded_named,
+                    class_name,
+                );
+                setup_lines.push(emission.setup_block);
+                parts.push(emission.arg_expr);
+                teardown_block.push_str(&emission.teardown_block);
+                continue;
             }
             let emission = crate::e2e::codegen::TestBackendEmission::unimplemented("java");
             setup_lines.push(format!("// {}", emission.arg_expr));

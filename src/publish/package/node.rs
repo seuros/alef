@@ -113,14 +113,12 @@ pub fn package_node(
 
 /// Return the configured npm subpackage platforms for Node, or the default set.
 pub fn npm_platforms(config: &ResolvedCrateConfig) -> Vec<String> {
-    if let Some(publish) = &config.publish {
-        if let Some(lang_cfg) = publish.languages.get("node") {
-            if let Some(platforms) = &lang_cfg.npm_subpackage_platforms {
-                if !platforms.is_empty() {
-                    return platforms.clone();
-                }
-            }
-        }
+    if let Some(publish) = &config.publish
+        && let Some(lang_cfg) = publish.languages.get("node")
+        && let Some(platforms) = &lang_cfg.npm_subpackage_platforms
+        && !platforms.is_empty()
+    {
+        return platforms.clone();
     }
     DEFAULT_PLATFORMS.iter().map(|s| s.to_string()).collect()
 }

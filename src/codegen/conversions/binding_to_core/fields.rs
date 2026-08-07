@@ -216,65 +216,59 @@ pub fn field_conversion_to_core_cfg(name: &str, ty: &TypeRef, optional: bool, co
         }
     }
 
-    if config.vec_named_to_string {
-        if let TypeRef::Vec(inner) = ty {
-            if matches!(inner.as_ref(), TypeRef::Named(_)) {
-                if optional {
-                    return format!("{name}: val.{name}.as_ref().and_then(|s| serde_json::from_str(s).ok())");
-                }
-                return format!("{name}: serde_json::from_str(&val.{name}).unwrap_or_default()");
-            }
+    if config.vec_named_to_string
+        && let TypeRef::Vec(inner) = ty
+        && matches!(inner.as_ref(), TypeRef::Named(_))
+    {
+        if optional {
+            return format!("{name}: val.{name}.as_ref().and_then(|s| serde_json::from_str(s).ok())");
         }
+        return format!("{name}: serde_json::from_str(&val.{name}).unwrap_or_default()");
     }
-    if config.map_flatten_to_string {
-        if let TypeRef::Map(_, _) = ty {
-            if optional {
-                return format!("{name}: val.{name}.as_ref().and_then(|s| serde_json::from_str(s).ok())");
-            }
-            return format!("{name}: serde_json::from_str(&val.{name}).unwrap_or_default()");
+    if config.map_flatten_to_string
+        && let TypeRef::Map(_, _) = ty
+    {
+        if optional {
+            return format!("{name}: val.{name}.as_ref().and_then(|s| serde_json::from_str(s).ok())");
         }
+        return format!("{name}: serde_json::from_str(&val.{name}).unwrap_or_default()");
     }
     if config.map_as_string && matches!(ty, TypeRef::Map(_, _)) {
         return format!("{name}: Default::default()");
     }
-    if config.map_as_string {
-        if let TypeRef::Optional(inner) = ty {
-            if matches!(inner.as_ref(), TypeRef::Map(_, _)) {
-                return format!("{name}: Default::default()");
-            }
-        }
+    if config.map_as_string
+        && let TypeRef::Optional(inner) = ty
+        && matches!(inner.as_ref(), TypeRef::Map(_, _))
+    {
+        return format!("{name}: Default::default()");
     }
-    if config.map_uses_jsvalue {
-        if let Some(tagged_names) = config.tagged_data_enum_names {
-            let bare_named = matches!(ty, TypeRef::Named(n) if tagged_names.contains(n));
-            let optional_named = matches!(ty, TypeRef::Optional(inner)
+    if config.map_uses_jsvalue
+        && let Some(tagged_names) = config.tagged_data_enum_names
+    {
+        let bare_named = matches!(ty, TypeRef::Named(n) if tagged_names.contains(n));
+        let optional_named = matches!(ty, TypeRef::Optional(inner)
                 if matches!(inner.as_ref(), TypeRef::Named(n) if tagged_names.contains(n)));
-            let vec_named = matches!(ty, TypeRef::Vec(inner)
+        let vec_named = matches!(ty, TypeRef::Vec(inner)
                 if matches!(inner.as_ref(), TypeRef::Named(n) if tagged_names.contains(n)));
-            let optional_vec_named = matches!(ty, TypeRef::Optional(outer)
+        let optional_vec_named = matches!(ty, TypeRef::Optional(outer)
                 if matches!(outer.as_ref(), TypeRef::Vec(inner)
                     if matches!(inner.as_ref(), TypeRef::Named(n) if tagged_names.contains(n))));
-            if bare_named {
-                if optional {
-                    return format!(
-                        "{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::from_value(v.clone()).ok())"
-                    );
-                }
-                return format!("{name}: serde_wasm_bindgen::from_value(val.{name}.clone()).unwrap_or_default()");
-            }
-            if optional_named {
+        if bare_named {
+            if optional {
                 return format!(
                     "{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::from_value(v.clone()).ok())"
                 );
             }
-            if vec_named {
-                return format!("{name}: serde_wasm_bindgen::from_value(val.{name}.clone()).unwrap_or_default()");
-            }
-            if optional_vec_named {
-                return format!(
-                    "{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::from_value(v.clone()).ok())"
-                );
-            }
+            return format!("{name}: serde_wasm_bindgen::from_value(val.{name}.clone()).unwrap_or_default()");
+        }
+        if optional_named {
+            return format!("{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::from_value(v.clone()).ok())");
+        }
+        if vec_named {
+            return format!("{name}: serde_wasm_bindgen::from_value(val.{name}.clone()).unwrap_or_default()");
+        }
+        if optional_vec_named {
+            return format!("{name}: val.{name}.as_ref().and_then(|v| serde_wasm_bindgen::from_value(v.clone()).ok())");
         }
     }
 
@@ -338,26 +332,26 @@ pub fn field_conversion_to_core_cfg(name: &str, ty: &TypeRef, optional: bool, co
         return format!("{name}: val.{name}");
     }
     if config.json_as_value {
-        if let TypeRef::Optional(inner) = ty {
-            if matches!(inner.as_ref(), TypeRef::Json) {
-                return format!("{name}: val.{name}");
-            }
+        if let TypeRef::Optional(inner) = ty
+            && matches!(inner.as_ref(), TypeRef::Json)
+        {
+            return format!("{name}: val.{name}");
         }
-        if let TypeRef::Vec(inner) = ty {
-            if matches!(inner.as_ref(), TypeRef::Json) {
-                if optional {
-                    return format!("{name}: val.{name}.unwrap_or_default()");
-                }
-                return format!("{name}: val.{name}");
+        if let TypeRef::Vec(inner) = ty
+            && matches!(inner.as_ref(), TypeRef::Json)
+        {
+            if optional {
+                return format!("{name}: val.{name}.unwrap_or_default()");
             }
+            return format!("{name}: val.{name}");
         }
-        if let TypeRef::Map(_k, v) = ty {
-            if matches!(v.as_ref(), TypeRef::Json) {
-                if optional {
-                    return format!("{name}: val.{name}.map(|m| m.into_iter().map(|(k, v)| (k.into(), v)).collect())");
-                }
-                return format!("{name}: val.{name}.into_iter().map(|(k, v)| (k.into(), v)).collect()");
+        if let TypeRef::Map(_k, v) = ty
+            && matches!(v.as_ref(), TypeRef::Json)
+        {
+            if optional {
+                return format!("{name}: val.{name}.map(|m| m.into_iter().map(|(k, v)| (k.into(), v)).collect())");
             }
+            return format!("{name}: val.{name}.into_iter().map(|(k, v)| (k.into(), v)).collect()");
         }
     }
     if config.map_uses_jsvalue && matches!(ty, TypeRef::Json) {

@@ -40,12 +40,11 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_async_function(
                     return format!("{}: Option<{}>", p.name, n);
                 }
             }
-            if let TypeRef::Vec(inner) = &p.ty {
-                if let TypeRef::Named(inner_name) = inner.as_ref() {
-                    if !opaque_types.contains(inner_name.as_str()) {
-                        return format!("{}: Option<String>", p.name);
-                    }
-                }
+            if let TypeRef::Vec(inner) = &p.ty
+                && let TypeRef::Named(inner_name) = inner.as_ref()
+                && !opaque_types.contains(inner_name.as_str())
+            {
+                return format!("{}: Option<String>", p.name);
             }
             if matches!(&p.ty, TypeRef::Bytes) {
                 return if p.optional {
@@ -74,10 +73,10 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_async_function(
         .any(|p| matches!(&p.ty, TypeRef::Named(n) if default_types.contains(n)));
 
     let has_batch_vec_params = func.params.iter().any(|p| {
-        if let TypeRef::Vec(inner) = &p.ty {
-            if let TypeRef::Named(inner_name) = inner.as_ref() {
-                return !opaque_types.contains(inner_name.as_str());
-            }
+        if let TypeRef::Vec(inner) = &p.ty
+            && let TypeRef::Named(inner_name) = inner.as_ref()
+        {
+            return !opaque_types.contains(inner_name.as_str());
         }
         false
     });
@@ -96,8 +95,8 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_async_function(
             .params
             .iter()
             .map(|p| {
-                if let TypeRef::Named(n) = &p.ty {
-                    if default_types.contains(n) {
+                if let TypeRef::Named(n) = &p.ty
+                    && default_types.contains(n) {
                         let core_ty = resolve_core_type_path(n, types_by_name, core_import);
                         deser_lines.push(render_deser_line(
                             "default_deser_with_error.rs.jinja",
@@ -116,10 +115,9 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_async_function(
                             return format!("{}_core.unwrap_or_default()", p.name);
                         }
                     }
-                }
-                if let TypeRef::Vec(inner) = &p.ty {
-                    if let TypeRef::Named(inner_name) = inner.as_ref() {
-                        if !opaque_types.contains(inner_name.as_str()) {
+                if let TypeRef::Vec(inner) = &p.ty
+                    && let TypeRef::Named(inner_name) = inner.as_ref()
+                        && !opaque_types.contains(inner_name.as_str()) {
                             let inner_ty = resolve_core_type_path(inner_name, types_by_name, core_import);
                             let core_ty = format!("Vec<{inner_ty}>");
                             deser_lines.push(if func.error_type.is_some() {
@@ -139,10 +137,8 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_async_function(
                                 format!("{}_core", p.name)
                             };
                         }
-                    }
-                }
-                if let TypeRef::Map(_, _) = &p.ty {
-                    if p.map_is_ahash && p.map_key_is_cow {
+                if let TypeRef::Map(_, _) = &p.ty
+                    && p.map_is_ahash && p.map_key_is_cow {
                         let bound_name = format!("__{}_ahash", p.name);
                         deser_lines.push(format!(
                             "let {bound_name} = {}.map(|m| m.into_iter().map(|(k, v)| (std::borrow::Cow::Owned(k), serde_json::Value::String(v))).collect::<ahash::AHashMap<std::borrow::Cow<'static, str>, serde_json::Value>>());",
@@ -156,7 +152,6 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_async_function(
                             bound_name
                         };
                     }
-                }
                 match &p.ty {
                     TypeRef::Named(name) if opaque_types.contains(name.as_str()) => {
                         format!("&{}.inner.read().unwrap_or_else(|e| e.into_inner()).clone()", p.name)

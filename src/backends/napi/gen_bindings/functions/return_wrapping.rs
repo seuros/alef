@@ -276,16 +276,16 @@ pub(in crate::backends::napi::gen_bindings) fn napi_wrap_return_fn(
                 format!("{expr}.into_iter().map(|v| v as {target_ty}).collect()")
             }
             TypeRef::Vec(inner2) => {
-                if let TypeRef::Primitive(p) = inner2.as_ref() {
-                    if needs_napi_cast(p) {
-                        let target_ty = match p {
-                            crate::core::ir::PrimitiveType::F32 => "f64",
-                            _ => "i64",
-                        };
-                        return format!(
-                            "{expr}.into_iter().map(|row| row.into_iter().map(|x| x as {target_ty}).collect::<Vec<_>>()).collect::<Vec<_>>()"
-                        );
-                    }
+                if let TypeRef::Primitive(p) = inner2.as_ref()
+                    && needs_napi_cast(p)
+                {
+                    let target_ty = match p {
+                        crate::core::ir::PrimitiveType::F32 => "f64",
+                        _ => "i64",
+                    };
+                    return format!(
+                        "{expr}.into_iter().map(|row| row.into_iter().map(|x| x as {target_ty}).collect::<Vec<_>>()).collect::<Vec<_>>()"
+                    );
                 }
                 expr.to_string()
             }

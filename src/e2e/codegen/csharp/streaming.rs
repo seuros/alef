@@ -123,19 +123,17 @@ pub(super) fn render_streaming_test_method(
     // For streaming methods with mock_url_list, wrap the URL list in the request type.
     if adapter_request_type_cs.is_some() {
         let has_mock_url_list = args.iter().any(|arg| arg.arg_type == "mock_url_list");
-        if has_mock_url_list {
-            if let Some(req_type) = &adapter_request_type_cs {
-                let parts: Vec<&str> = args_str.split(", ").collect();
-                if parts.len() >= 2 {
-                    let urls_var = parts[parts.len() - 1];
-                    let req_var = format!("{}Req", urls_var);
-                    setup_lines.push(format!("var {req_var} = new {req_type} {{ Urls = {urls_var} }};"));
-                    args_str = parts[..parts.len() - 1].join(", ");
-                    if !args_str.is_empty() {
-                        args_str.push_str(", ");
-                    }
-                    args_str.push_str(&req_var);
+        if has_mock_url_list && let Some(req_type) = &adapter_request_type_cs {
+            let parts: Vec<&str> = args_str.split(", ").collect();
+            if parts.len() >= 2 {
+                let urls_var = parts[parts.len() - 1];
+                let req_var = format!("{}Req", urls_var);
+                setup_lines.push(format!("var {req_var} = new {req_type} {{ Urls = {urls_var} }};"));
+                args_str = parts[..parts.len() - 1].join(", ");
+                if !args_str.is_empty() {
+                    args_str.push_str(", ");
                 }
+                args_str.push_str(&req_var);
             }
         }
     }

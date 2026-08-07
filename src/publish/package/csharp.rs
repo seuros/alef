@@ -161,12 +161,11 @@ fn file_name(path: &Path) -> Result<String> {
 
 /// Return the NuGet RID for this target.
 fn csharp_rid(config: &ResolvedCrateConfig, target: &RustTarget) -> String {
-    if let Some(publish) = &config.publish {
-        if let Some(lang_cfg) = publish.languages.get("csharp") {
-            if let Some(override_rid) = &lang_cfg.csharp_rid {
-                return override_rid.clone();
-            }
-        }
+    if let Some(publish) = &config.publish
+        && let Some(lang_cfg) = publish.languages.get("csharp")
+        && let Some(override_rid) = &lang_cfg.csharp_rid
+    {
+        return override_rid.clone();
     }
     target.platform_for(Language::Csharp)
 }

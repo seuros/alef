@@ -51,10 +51,11 @@ pub(crate) fn is_bridgeable_fn(
                 }
             }
             TypeRef::Vec(inner) => {
-                if let TypeRef::Named(n) = inner.as_ref() {
-                    if unit_enum_names.contains(n.as_str()) && (p.is_ref || no_serde_enum_names.contains(n.as_str())) {
-                        return false;
-                    }
+                if let TypeRef::Named(n) = inner.as_ref()
+                    && unit_enum_names.contains(n.as_str())
+                    && (p.is_ref || no_serde_enum_names.contains(n.as_str()))
+                {
+                    return false;
                 }
             }
             _ => {}
@@ -80,12 +81,11 @@ pub(crate) fn is_bridgeable_fn(
             _ => None,
         }
     }
-    if needs_json_bridge_with_handles(&f.return_type, handle_returned_types) {
-        if let Some(inner_name) = inner_named(&f.return_type) {
-            if !type_paths.contains_key(inner_name) || no_serde_names.contains(inner_name) {
-                return false;
-            }
-        }
+    if needs_json_bridge_with_handles(&f.return_type, handle_returned_types)
+        && let Some(inner_name) = inner_named(&f.return_type)
+        && (!type_paths.contains_key(inner_name) || no_serde_names.contains(inner_name))
+    {
+        return false;
     }
     true
 }
@@ -136,63 +136,64 @@ pub(crate) fn swift_call_arg(
             .replace('-', "_")
     };
 
-    if let TypeRef::Named(n) = &p.ty {
+    if let TypeRef::Named(n) = &p.ty
+        && unit_enum_names.contains(n.as_str())
+    {
+        let native_ty = source_type(n);
+        let from_expr = format!("<{native_ty} as ::std::convert::From<String>>::from({name})");
+        if p.optional {
+            return format!("{name}.map(|s| <{native_ty} as ::std::convert::From<String>>::from(s))");
+        }
+        return from_expr;
+    }
+
+    if let TypeRef::Vec(inner) = &p.ty
+        && let TypeRef::Named(n) = inner.as_ref()
+    {
         if unit_enum_names.contains(n.as_str()) {
             let native_ty = source_type(n);
-            let from_expr = format!("<{native_ty} as ::std::convert::From<String>>::from({name})");
-            if p.optional {
-                return format!("{name}.map(|s| <{native_ty} as ::std::convert::From<String>>::from(s))");
-            }
-            return from_expr;
-        }
-    }
-
-    if let TypeRef::Vec(inner) = &p.ty {
-        if let TypeRef::Named(n) = inner.as_ref() {
-            if unit_enum_names.contains(n.as_str()) {
-                let native_ty = source_type(n);
-                let map_expr = format!(
-                    "values.into_iter().map(|s| <{native_ty} as ::std::convert::From<String>>::from(s)).collect::<Vec<_>>()"
-                );
-                let converted = if p.optional {
-                    format!("{name}.map(|values| {map_expr})")
-                } else {
-                    format!("{{ let values = {name}; {map_expr} }}")
-                };
-                if p.is_ref && !p.optional {
-                    return format!("&{{ let values = {name}; {map_expr} }}");
-                }
-                return converted;
-            }
-            if tagged_enum_names.contains(n.as_str()) {
-                let native_ty = source_type(n);
-                let map_expr = format!(
-                    "values.into_iter().map(|s| ::serde_json::from_str::<{native_ty}>(&s).expect(\"valid JSON for {name} element\")).collect::<Vec<_>>()"
-                );
-                let converted = if p.optional {
-                    format!("{name}.map(|values| {map_expr})")
-                } else {
-                    format!("{{ let values = {name}; {map_expr} }}")
-                };
-                if p.is_ref && !p.optional {
-                    return format!("&{{ let values = {name}; {map_expr} }}");
-                }
-                return converted;
-            }
-        }
-    }
-
-    if let TypeRef::Map(_, _) = &p.ty {
-        if p.map_is_ahash && p.map_key_is_cow {
-            let bound_name = format!("__{}_ahash", p.name);
-            return if p.optional && p.is_ref {
-                format!("{bound_name}.as_ref()")
-            } else if p.is_ref {
-                format!("{bound_name}.as_ref().unwrap()")
+            let map_expr = format!(
+                "values.into_iter().map(|s| <{native_ty} as ::std::convert::From<String>>::from(s)).collect::<Vec<_>>()"
+            );
+            let converted = if p.optional {
+                format!("{name}.map(|values| {map_expr})")
             } else {
-                bound_name
+                format!("{{ let values = {name}; {map_expr} }}")
             };
+            if p.is_ref && !p.optional {
+                return format!("&{{ let values = {name}; {map_expr} }}");
+            }
+            return converted;
         }
+        if tagged_enum_names.contains(n.as_str()) {
+            let native_ty = source_type(n);
+            let map_expr = format!(
+                "values.into_iter().map(|s| ::serde_json::from_str::<{native_ty}>(&s).expect(\"valid JSON for {name} element\")).collect::<Vec<_>>()"
+            );
+            let converted = if p.optional {
+                format!("{name}.map(|values| {map_expr})")
+            } else {
+                format!("{{ let values = {name}; {map_expr} }}")
+            };
+            if p.is_ref && !p.optional {
+                return format!("&{{ let values = {name}; {map_expr} }}");
+            }
+            return converted;
+        }
+    }
+
+    if let TypeRef::Map(_, _) = &p.ty
+        && p.map_is_ahash
+        && p.map_key_is_cow
+    {
+        let bound_name = format!("__{}_ahash", p.name);
+        return if p.optional && p.is_ref {
+            format!("{bound_name}.as_ref()")
+        } else if p.is_ref {
+            format!("{bound_name}.as_ref().unwrap()")
+        } else {
+            bound_name
+        };
     }
 
     if needs_json_bridge(&p.ty) {
@@ -239,21 +240,21 @@ pub(crate) fn swift_call_arg(
         return format!("{name}.0");
     }
 
-    if let TypeRef::Vec(inner) = &p.ty {
-        if let TypeRef::Named(_) = inner.as_ref() {
-            if p.optional {
-                if p.is_ref {
-                    return format!(
-                        "{name}.as_ref().map(|v| v.iter().map(|w| w.0.clone()).collect::<Vec<_>>()).as_deref()"
-                    );
-                }
-                return format!("{name}.map(|v| v.into_iter().map(|w| w.0).collect::<Vec<_>>())");
-            }
+    if let TypeRef::Vec(inner) = &p.ty
+        && let TypeRef::Named(_) = inner.as_ref()
+    {
+        if p.optional {
             if p.is_ref {
-                return format!("&{name}.iter().map(|w| w.0.clone()).collect::<Vec<_>>()");
+                return format!(
+                    "{name}.as_ref().map(|v| v.iter().map(|w| w.0.clone()).collect::<Vec<_>>()).as_deref()"
+                );
             }
-            return format!("{name}.into_iter().map(|w| w.0).collect::<Vec<_>>()");
+            return format!("{name}.map(|v| v.into_iter().map(|w| w.0).collect::<Vec<_>>())");
         }
+        if p.is_ref {
+            return format!("&{name}.iter().map(|w| w.0.clone()).collect::<Vec<_>>()");
+        }
+        return format!("{name}.into_iter().map(|w| w.0).collect::<Vec<_>>()");
     }
 
     if p.is_ref
@@ -348,15 +349,14 @@ pub(crate) fn emit_function_shim(f: &FunctionDef, context: &FunctionShimContext<
         .params
         .iter()
         .map(|p| {
-            if let TypeRef::Map(_, _) = &p.ty {
-                if p.map_is_ahash && p.map_key_is_cow {
+            if let TypeRef::Map(_, _) = &p.ty
+                && p.map_is_ahash && p.map_key_is_cow {
                     let bound_name = format!("__{}_ahash", p.name);
                     let name = p.name.to_snake_case();
                     pre_call_bindings.push(format!(
                         "    let {bound_name} = {name}.map(|json_str| {{ let hm = ::serde_json::from_str::<std::collections::HashMap<String, String>>(&json_str).expect(\"valid JSON for {name}\"); hm.into_iter().map(|(k, v)| (std::borrow::Cow::Owned(k), serde_json::Value::String(v))).collect::<ahash::AHashMap<std::borrow::Cow<'static, str>, serde_json::Value>>() }});"
                     ));
                 }
-            }
             swift_call_arg(p, unit_enum_names, tagged_enum_names, type_paths)
         })
         .collect();
@@ -376,18 +376,17 @@ pub(crate) fn emit_function_shim(f: &FunctionDef, context: &FunctionShimContext<
             _ => None,
         }
     }
-    if needs_json_bridge_with_handles(&f.return_type, handle_returned_types) {
-        if let Some(inner_name) = inner_named_type(&f.return_type) {
-            if !type_paths.contains_key(inner_name) || no_serde_names.contains(inner_name) {
-                let fn_name_snake = swift_ident(&f.name.to_snake_case());
-                return format!(
-                    "// alef: skipped — return type `{inner_name}` is excluded from codegen (no serde derive)\n\
+    if needs_json_bridge_with_handles(&f.return_type, handle_returned_types)
+        && let Some(inner_name) = inner_named_type(&f.return_type)
+        && (!type_paths.contains_key(inner_name) || no_serde_names.contains(inner_name))
+    {
+        let fn_name_snake = swift_ident(&f.name.to_snake_case());
+        return format!(
+            "// alef: skipped — return type `{inner_name}` is excluded from codegen (no serde derive)\n\
                      pub fn {fn_name_snake}({params_str}) -> {return_ty} {{\n    \
                      compile_error!(\"alef cannot bridge Swift return type {inner_name}; configure swift.exclude_functions for {fn_name_snake} or expose serde for the type\")\n\
                      }}\n"
-                );
-            }
-        }
+        );
     }
 
     let json_wrap_ok = needs_json_bridge_with_handles(&f.return_type, handle_returned_types);

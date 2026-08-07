@@ -81,10 +81,10 @@ pub(in crate::backends::pyo3::gen_bindings) fn gen_api_py(
         }
         if let Some(typ) = default_types.get(type_name) {
             for field in binding_fields(&typ.fields) {
-                if let Some((name, _)) = classify_param_type(&field.ty) {
-                    if default_types.contains_key(name) {
-                        collect_needed(name, default_types, needed, visited);
-                    }
+                if let Some((name, _)) = classify_param_type(&field.ty)
+                    && default_types.contains_key(name)
+                {
+                    collect_needed(name, default_types, needed, visited);
                 }
             }
             needed.push(type_name.to_string());
@@ -231,10 +231,11 @@ pub(in crate::backends::pyo3::gen_bindings) fn gen_api_py(
                     }
                     _ => None,
                 };
-                if let Some(name) = inner_name {
-                    if enum_names.contains(name) && !data_enum_names.contains(name) {
-                        set.insert(name.to_string());
-                    }
+                if let Some(name) = inner_name
+                    && enum_names.contains(name)
+                    && !data_enum_names.contains(name)
+                {
+                    set.insert(name.to_string());
                 }
             }
         }

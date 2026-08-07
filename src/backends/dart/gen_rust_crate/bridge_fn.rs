@@ -284,43 +284,43 @@ fn dart_call_arg_with_mirror_transmute(
         }
     }
 
-    if let TypeRef::Vec(inner) = &p.ty {
-        if let TypeRef::Primitive(prim) = inner.as_ref() {
-            let target = primitive_name(prim);
-            if target != "i64" && target != "f64" && target != "bool" {
-                if p.optional {
-                    if p.is_ref {
-                        return format!(
-                            "{name}.as_ref().map(|v| v.iter().map(|x| *x as {target}).collect::<Vec<_>>()).as_deref()"
-                        );
-                    }
-                    return format!("{name}.map(|v| v.into_iter().map(|x| x as {target}).collect::<Vec<_>>())");
-                }
+    if let TypeRef::Vec(inner) = &p.ty
+        && let TypeRef::Primitive(prim) = inner.as_ref()
+    {
+        let target = primitive_name(prim);
+        if target != "i64" && target != "f64" && target != "bool" {
+            if p.optional {
                 if p.is_ref {
-                    return format!("{name}.iter().map(|x| *x as {target}).collect::<Vec<_>>().as_slice()");
+                    return format!(
+                        "{name}.as_ref().map(|v| v.iter().map(|x| *x as {target}).collect::<Vec<_>>()).as_deref()"
+                    );
                 }
-                return format!("{name}.into_iter().map(|x| x as {target}).collect::<Vec<_>>()");
+                return format!("{name}.map(|v| v.into_iter().map(|x| x as {target}).collect::<Vec<_>>())");
             }
+            if p.is_ref {
+                return format!("{name}.iter().map(|x| *x as {target}).collect::<Vec<_>>().as_slice()");
+            }
+            return format!("{name}.into_iter().map(|x| x as {target}).collect::<Vec<_>>()");
         }
     }
 
     // These use #[frb(opaque)] struct { inner: source::T } pattern, so the bridge fn
-    if let TypeRef::Named(type_name) = &p.ty {
-        if opaque_type_names.contains(type_name.as_str()) {
-            if p.optional {
-                if p.is_ref {
-                    return format!("{name}.as_ref().map(|h| &h.inner)");
-                }
-                return format!("{name}.map(|h| h.inner)");
-            }
-            if p.is_mut {
-                return format!("&mut {name}.inner");
-            }
+    if let TypeRef::Named(type_name) = &p.ty
+        && opaque_type_names.contains(type_name.as_str())
+    {
+        if p.optional {
             if p.is_ref {
-                return format!("&{name}.inner");
+                return format!("{name}.as_ref().map(|h| &h.inner)");
             }
-            return format!("{name}.inner");
+            return format!("{name}.map(|h| h.inner)");
         }
+        if p.is_mut {
+            return format!("&mut {name}.inner");
+        }
+        if p.is_ref {
+            return format!("&{name}.inner");
+        }
+        return format!("{name}.inner");
     }
 
     if let TypeRef::Named(type_name) = &p.ty {
@@ -331,64 +331,67 @@ fn dart_call_arg_with_mirror_transmute(
         return build_named_in_transmute(name, type_name, &core_ty, p.is_ref, p.is_mut, p.optional);
     }
 
-    if let TypeRef::Vec(inner) = &p.ty {
-        if p.is_ref && !p.optional && !matches!(inner.as_ref(), TypeRef::Named(_)) {
-            if matches!(inner.as_ref(), TypeRef::String) && p.vec_inner_is_ref {
-                return format!("&{name}.iter().map(|s| s.as_str()).collect::<Vec<_>>()");
-            }
-            return format!("&{name}");
+    if let TypeRef::Vec(inner) = &p.ty
+        && p.is_ref
+        && !p.optional
+        && !matches!(inner.as_ref(), TypeRef::Named(_))
+    {
+        if matches!(inner.as_ref(), TypeRef::String) && p.vec_inner_is_ref {
+            return format!("&{name}.iter().map(|s| s.as_str()).collect::<Vec<_>>()");
         }
+        return format!("&{name}");
     }
 
-    if let TypeRef::Vec(inner) = &p.ty {
-        if let TypeRef::Named(type_name) = inner.as_ref() {
-            let core_ty = resolve_core_type(type_name, source_crate_name, type_paths);
-            if types_needing_from_conversion.contains(type_name.as_str()) {
-                if p.optional {
-                    return format!("{name}.map(|v| v.into_iter().map({core_ty}::from).collect::<Vec<_>>())");
-                }
-                let collected = format!("{name}.into_iter().map({core_ty}::from).collect::<Vec<_>>()");
-                return if p.is_ref { format!("&{collected}") } else { collected };
-            }
+    if let TypeRef::Vec(inner) = &p.ty
+        && let TypeRef::Named(type_name) = inner.as_ref()
+    {
+        let core_ty = resolve_core_type(type_name, source_crate_name, type_paths);
+        if types_needing_from_conversion.contains(type_name.as_str()) {
             if p.optional {
-                return format!(
-                    "{name}.map(|v| v.into_iter().map(|x| unsafe {{ std::mem::transmute::<{type_name}, {core_ty}>(x) }}).collect::<Vec<_>>())"
-                );
+                return format!("{name}.map(|v| v.into_iter().map({core_ty}::from).collect::<Vec<_>>())");
             }
-            if p.is_ref {
-                return format!(
-                    "unsafe {{ std::slice::from_raw_parts(\
-                        std::mem::transmute::<*const {type_name}, *const {core_ty}>({name}.as_ptr()), \
-                        {name}.len()) }}"
-                );
-            }
-            if p.is_mut {
-                return format!(
-                    "unsafe {{ std::slice::from_raw_parts_mut(\
-                        std::mem::transmute::<*mut {type_name}, *mut {core_ty}>({name}.as_mut_ptr()), \
-                        {name}.len()) }}"
-                );
-            }
+            let collected = format!("{name}.into_iter().map({core_ty}::from).collect::<Vec<_>>()");
+            return if p.is_ref { format!("&{collected}") } else { collected };
+        }
+        if p.optional {
             return format!(
-                "{name}.into_iter().map(|x| unsafe {{ std::mem::transmute::<{type_name}, {core_ty}>(x) }}).collect::<Vec<_>>()"
+                "{name}.map(|v| v.into_iter().map(|x| unsafe {{ std::mem::transmute::<{type_name}, {core_ty}>(x) }}).collect::<Vec<_>>())"
             );
         }
+        if p.is_ref {
+            return format!(
+                "unsafe {{ std::slice::from_raw_parts(\
+                        std::mem::transmute::<*const {type_name}, *const {core_ty}>({name}.as_ptr()), \
+                        {name}.len()) }}"
+            );
+        }
+        if p.is_mut {
+            return format!(
+                "unsafe {{ std::slice::from_raw_parts_mut(\
+                        std::mem::transmute::<*mut {type_name}, *mut {core_ty}>({name}.as_mut_ptr()), \
+                        {name}.len()) }}"
+            );
+        }
+        return format!(
+            "{name}.into_iter().map(|x| unsafe {{ std::mem::transmute::<{type_name}, {core_ty}>(x) }}).collect::<Vec<_>>()"
+        );
     }
 
-    if let TypeRef::Optional(inner) = &p.ty {
-        if matches!(inner.as_ref(), TypeRef::Bytes) && p.is_ref {
-            return format!("{name}.as_deref()");
-        }
+    if let TypeRef::Optional(inner) = &p.ty
+        && matches!(inner.as_ref(), TypeRef::Bytes)
+        && p.is_ref
+    {
+        return format!("{name}.as_deref()");
     }
 
-    if let TypeRef::Optional(inner) = &p.ty {
-        if let TypeRef::Named(type_name) = inner.as_ref() {
-            let core_ty = resolve_core_type(type_name, source_crate_name, type_paths);
-            if types_needing_from_conversion.contains(type_name.as_str()) {
-                return format!("{name}.map({core_ty}::from)");
-            }
-            return format!("{name}.map(|v| unsafe {{ std::mem::transmute::<{type_name}, {core_ty}>(v) }})");
+    if let TypeRef::Optional(inner) = &p.ty
+        && let TypeRef::Named(type_name) = inner.as_ref()
+    {
+        let core_ty = resolve_core_type(type_name, source_crate_name, type_paths);
+        if types_needing_from_conversion.contains(type_name.as_str()) {
+            return format!("{name}.map({core_ty}::from)");
         }
+        return format!("{name}.map(|v| unsafe {{ std::mem::transmute::<{type_name}, {core_ty}>(v) }})");
     }
 
     if matches!(p.ty, TypeRef::Json) {

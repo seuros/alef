@@ -490,10 +490,10 @@ impl RegistrationVariant {
     ///
     /// When no prefix is configured the variant name is returned as-is.
     pub fn method_name_for<'a>(&'a self, language: &str) -> std::borrow::Cow<'a, str> {
-        if let Some(lang_override) = self.language_overrides.get(language) {
-            if let Some(prefix) = &lang_override.method_prefix {
-                return std::borrow::Cow::Owned(format!("{}{}", prefix, self.name));
-            }
+        if let Some(lang_override) = self.language_overrides.get(language)
+            && let Some(prefix) = &lang_override.method_prefix
+        {
+            return std::borrow::Cow::Owned(format!("{}{}", prefix, self.name));
         }
         std::borrow::Cow::Borrowed(&self.name)
     }

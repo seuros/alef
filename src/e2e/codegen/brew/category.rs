@@ -237,12 +237,12 @@ fn build_cli_command(
                 // Check if there is a cli_flags mapping for this field.
                 if let Some(flag) = cli_flags.get(&arg.field) {
                     let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
-                    if let Some(val) = fixture.input.get(field) {
-                        if !val.is_null() {
-                            let val_str = json_value_to_shell_arg(val);
-                            parts.push(flag.clone());
-                            parts.push(val_str);
-                        }
+                    if let Some(val) = fixture.input.get(field)
+                        && !val.is_null()
+                    {
+                        let val_str = json_value_to_shell_arg(val);
+                        parts.push(flag.clone());
+                        parts.push(val_str);
                     }
                 }
             }
@@ -250,13 +250,13 @@ fn build_cli_command(
     }
 
     // Check if fixture has input.config and emit it as --config flag.
-    if let Some(config_val) = fixture.input.get("config") {
-        if !config_val.is_null() {
-            // Minify the JSON config object to a single line for shell argument.
-            let config_json = serde_json::to_string(config_val).unwrap_or_default();
-            parts.push("--config".to_string());
-            parts.push(format!("'{}'", escape_shell(&config_json)));
-        }
+    if let Some(config_val) = fixture.input.get("config")
+        && !config_val.is_null()
+    {
+        // Minify the JSON config object to a single line for shell argument.
+        let config_json = serde_json::to_string(config_val).unwrap_or_default();
+        parts.push("--config".to_string());
+        parts.push(format!("'{}'", escape_shell(&config_json)));
     }
 
     // Append static CLI args last.
@@ -290,10 +290,10 @@ fn json_value_to_shell_arg(value: &serde_json::Value) -> String {
 fn field_to_jq_path(resolved: &str) -> String {
     // Check if the path ends with a length/count/size pseudo-property.
     // E.g., "pages.length" → ".pages | length"
-    if let Some((prefix, suffix)) = resolved.rsplit_once('.') {
-        if suffix == "length" || suffix == "count" || suffix == "size" {
-            return format!(".{prefix} | length");
-        }
+    if let Some((prefix, suffix)) = resolved.rsplit_once('.')
+        && (suffix == "length" || suffix == "count" || suffix == "size")
+    {
+        return format!(".{prefix} | length");
     }
     // Handle bare "length" / "count" / "size" (top-level array).
     if resolved == "length" || resolved == "count" || resolved == "size" {
@@ -336,41 +336,42 @@ fn build_brew_method_call(binary_name: &str, method_name: &str, args: Option<&se
 /// Render a single assertion as shell code.
 fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, field_resolver: &FieldResolver) {
     // Skip assertions on fields not available on the result type.
-    if let Some(f) = &assertion.field {
-        if !f.is_empty() && !field_resolver.is_valid_for_result(f) {
-            let _ = writeln!(out, "  # skipped: field '{f}' not available on result type");
-            return;
-        }
+    if let Some(f) = &assertion.field
+        && !f.is_empty()
+        && !field_resolver.is_valid_for_result(f)
+    {
+        let _ = writeln!(out, "  # skipped: field '{f}' not available on result type");
+        return;
     }
 
     match assertion.assertion_type.as_str() {
         "equals" => {
-            if let Some(field) = &assertion.field {
-                if let Some(expected) = &assertion.value {
-                    let resolved = field_resolver.resolve(field);
-                    let jq_path = field_to_jq_path(resolved);
-                    let expected_str = json_value_to_shell_string(expected);
-                    let safe_field = sanitize_ident(field);
-                    let _ = writeln!(out, "  local val_{safe_field}");
-                    let _ = writeln!(out, "  val_{safe_field}=$(echo \"$output\" | jq -r '{jq_path}')");
-                    let _ = writeln!(out, "  assert_equals \"$val_{safe_field}\" '{expected_str}' '{field}'");
-                }
+            if let Some(field) = &assertion.field
+                && let Some(expected) = &assertion.value
+            {
+                let resolved = field_resolver.resolve(field);
+                let jq_path = field_to_jq_path(resolved);
+                let expected_str = json_value_to_shell_string(expected);
+                let safe_field = sanitize_ident(field);
+                let _ = writeln!(out, "  local val_{safe_field}");
+                let _ = writeln!(out, "  val_{safe_field}=$(echo \"$output\" | jq -r '{jq_path}')");
+                let _ = writeln!(out, "  assert_equals \"$val_{safe_field}\" '{expected_str}' '{field}'");
             }
         }
         "contains" => {
-            if let Some(field) = &assertion.field {
-                if let Some(expected) = &assertion.value {
-                    let resolved = field_resolver.resolve(field);
-                    let jq_path = field_to_jq_path(resolved);
-                    let expected_str = json_value_to_shell_string(expected);
-                    let safe_field = sanitize_ident(field);
-                    let _ = writeln!(out, "  local val_{safe_field}");
-                    let _ = writeln!(out, "  val_{safe_field}=$(echo \"$output\" | jq -r '{jq_path}')");
-                    let _ = writeln!(
-                        out,
-                        "  assert_contains \"$val_{safe_field}\" '{expected_str}' '{field}'"
-                    );
-                }
+            if let Some(field) = &assertion.field
+                && let Some(expected) = &assertion.value
+            {
+                let resolved = field_resolver.resolve(field);
+                let jq_path = field_to_jq_path(resolved);
+                let expected_str = json_value_to_shell_string(expected);
+                let safe_field = sanitize_ident(field);
+                let _ = writeln!(out, "  local val_{safe_field}");
+                let _ = writeln!(out, "  val_{safe_field}=$(echo \"$output\" | jq -r '{jq_path}')");
+                let _ = writeln!(
+                    out,
+                    "  assert_contains \"$val_{safe_field}\" '{expected_str}' '{field}'"
+                );
             }
         }
         "not_empty" | "tree_not_null" => {
@@ -384,69 +385,68 @@ fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, 
             }
         }
         "count_min" | "root_child_count_min" => {
-            if let Some(field) = &assertion.field {
-                if let Some(val) = &assertion.value {
-                    if let Some(min) = val.as_u64() {
-                        let resolved = field_resolver.resolve(field);
-                        let jq_path = field_to_jq_path(resolved);
-                        let safe_field = sanitize_ident(field);
-                        let _ = writeln!(out, "  local count_{safe_field}");
-                        let _ = writeln!(
-                            out,
-                            "  count_{safe_field}=$(echo \"$output\" | jq '{jq_path} | length')"
-                        );
-                        let _ = writeln!(out, "  assert_count_min \"$count_{safe_field}\" {min} '{field}'");
-                    }
-                }
+            if let Some(field) = &assertion.field
+                && let Some(val) = &assertion.value
+                && let Some(min) = val.as_u64()
+            {
+                let resolved = field_resolver.resolve(field);
+                let jq_path = field_to_jq_path(resolved);
+                let safe_field = sanitize_ident(field);
+                let _ = writeln!(out, "  local count_{safe_field}");
+                let _ = writeln!(
+                    out,
+                    "  count_{safe_field}=$(echo \"$output\" | jq '{jq_path} | length')"
+                );
+                let _ = writeln!(out, "  assert_count_min \"$count_{safe_field}\" {min} '{field}'");
             }
         }
         "greater_than" => {
-            if let Some(field) = &assertion.field {
-                if let Some(val) = &assertion.value {
-                    let resolved = field_resolver.resolve(field);
-                    let jq_path = field_to_jq_path(resolved);
-                    let threshold = json_value_to_shell_string(val);
-                    let safe_field = sanitize_ident(field);
-                    let _ = writeln!(out, "  local val_{safe_field}");
-                    let _ = writeln!(out, "  val_{safe_field}=$(echo \"$output\" | jq -r '{jq_path}')");
-                    let _ = writeln!(
-                        out,
-                        "  assert_greater_than \"$val_{safe_field}\" '{threshold}' '{field}'"
-                    );
-                }
+            if let Some(field) = &assertion.field
+                && let Some(val) = &assertion.value
+            {
+                let resolved = field_resolver.resolve(field);
+                let jq_path = field_to_jq_path(resolved);
+                let threshold = json_value_to_shell_string(val);
+                let safe_field = sanitize_ident(field);
+                let _ = writeln!(out, "  local val_{safe_field}");
+                let _ = writeln!(out, "  val_{safe_field}=$(echo \"$output\" | jq -r '{jq_path}')");
+                let _ = writeln!(
+                    out,
+                    "  assert_greater_than \"$val_{safe_field}\" '{threshold}' '{field}'"
+                );
             }
         }
         "greater_than_or_equal" => {
-            if let Some(field) = &assertion.field {
-                if let Some(val) = &assertion.value {
-                    let resolved = field_resolver.resolve(field);
-                    let jq_path = field_to_jq_path(resolved);
-                    let threshold = json_value_to_shell_string(val);
-                    let safe_field = sanitize_ident(field);
-                    let _ = writeln!(out, "  local val_{safe_field}");
-                    let _ = writeln!(out, "  val_{safe_field}=$(echo \"$output\" | jq -r '{jq_path}')");
-                    let _ = writeln!(
-                        out,
-                        "  assert_greater_than_or_equal \"$val_{safe_field}\" '{threshold}' '{field}'"
-                    );
-                }
+            if let Some(field) = &assertion.field
+                && let Some(val) = &assertion.value
+            {
+                let resolved = field_resolver.resolve(field);
+                let jq_path = field_to_jq_path(resolved);
+                let threshold = json_value_to_shell_string(val);
+                let safe_field = sanitize_ident(field);
+                let _ = writeln!(out, "  local val_{safe_field}");
+                let _ = writeln!(out, "  val_{safe_field}=$(echo \"$output\" | jq -r '{jq_path}')");
+                let _ = writeln!(
+                    out,
+                    "  assert_greater_than_or_equal \"$val_{safe_field}\" '{threshold}' '{field}'"
+                );
             }
         }
         "contains_all" => {
-            if let Some(field) = &assertion.field {
-                if let Some(serde_json::Value::Array(items)) = &assertion.value {
-                    let resolved = field_resolver.resolve(field);
-                    let jq_path = field_to_jq_path(resolved);
-                    let safe_field = sanitize_ident(field);
-                    let _ = writeln!(out, "  local val_{safe_field}");
-                    let _ = writeln!(out, "  val_{safe_field}=$(echo \"$output\" | jq -r '{jq_path}')");
-                    for (index, item) in items.iter().enumerate() {
-                        let item_str = json_value_to_shell_string(item);
-                        let _ = writeln!(
-                            out,
-                            "  assert_contains \"$val_{safe_field}\" '{item_str}' '{field}[{index}]'"
-                        );
-                    }
+            if let Some(field) = &assertion.field
+                && let Some(serde_json::Value::Array(items)) = &assertion.value
+            {
+                let resolved = field_resolver.resolve(field);
+                let jq_path = field_to_jq_path(resolved);
+                let safe_field = sanitize_ident(field);
+                let _ = writeln!(out, "  local val_{safe_field}");
+                let _ = writeln!(out, "  val_{safe_field}=$(echo \"$output\" | jq -r '{jq_path}')");
+                for (index, item) in items.iter().enumerate() {
+                    let item_str = json_value_to_shell_string(item);
+                    let _ = writeln!(
+                        out,
+                        "  assert_contains \"$val_{safe_field}\" '{item_str}' '{field}[{index}]'"
+                    );
                 }
             }
         }
@@ -465,49 +465,48 @@ fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, 
             }
         }
         "less_than" => {
-            if let Some(field) = &assertion.field {
-                if let Some(val) = &assertion.value {
-                    let resolved = field_resolver.resolve(field);
-                    let jq_path = field_to_jq_path(resolved);
-                    let threshold = json_value_to_shell_string(val);
-                    let safe_field = sanitize_ident(field);
-                    let _ = writeln!(out, "  local val_{safe_field}");
-                    let _ = writeln!(out, "  val_{safe_field}=$(echo \"$output\" | jq -r '{jq_path}')");
-                    let _ = writeln!(out, "  assert_less_than \"$val_{safe_field}\" '{threshold}' '{field}'");
-                }
+            if let Some(field) = &assertion.field
+                && let Some(val) = &assertion.value
+            {
+                let resolved = field_resolver.resolve(field);
+                let jq_path = field_to_jq_path(resolved);
+                let threshold = json_value_to_shell_string(val);
+                let safe_field = sanitize_ident(field);
+                let _ = writeln!(out, "  local val_{safe_field}");
+                let _ = writeln!(out, "  val_{safe_field}=$(echo \"$output\" | jq -r '{jq_path}')");
+                let _ = writeln!(out, "  assert_less_than \"$val_{safe_field}\" '{threshold}' '{field}'");
             }
         }
         "not_contains" => {
-            if let Some(field) = &assertion.field {
-                if let Some(expected) = &assertion.value {
-                    let resolved = field_resolver.resolve(field);
-                    let jq_path = field_to_jq_path(resolved);
-                    let expected_str = json_value_to_shell_string(expected);
-                    let safe_field = sanitize_ident(field);
-                    let _ = writeln!(out, "  local val_{safe_field}");
-                    let _ = writeln!(out, "  val_{safe_field}=$(echo \"$output\" | jq -r '{jq_path}')");
-                    let _ = writeln!(
-                        out,
-                        "  assert_not_contains \"$val_{safe_field}\" '{expected_str}' '{field}'"
-                    );
-                }
+            if let Some(field) = &assertion.field
+                && let Some(expected) = &assertion.value
+            {
+                let resolved = field_resolver.resolve(field);
+                let jq_path = field_to_jq_path(resolved);
+                let expected_str = json_value_to_shell_string(expected);
+                let safe_field = sanitize_ident(field);
+                let _ = writeln!(out, "  local val_{safe_field}");
+                let _ = writeln!(out, "  val_{safe_field}=$(echo \"$output\" | jq -r '{jq_path}')");
+                let _ = writeln!(
+                    out,
+                    "  assert_not_contains \"$val_{safe_field}\" '{expected_str}' '{field}'"
+                );
             }
         }
         "count_equals" => {
-            if let Some(field) = &assertion.field {
-                if let Some(val) = &assertion.value {
-                    if let Some(n) = val.as_u64() {
-                        let resolved = field_resolver.resolve(field);
-                        let jq_path = field_to_jq_path(resolved);
-                        let safe_field = sanitize_ident(field);
-                        let _ = writeln!(out, "  local count_{safe_field}");
-                        let _ = writeln!(
-                            out,
-                            "  count_{safe_field}=$(echo \"$output\" | jq '{jq_path} | length')"
-                        );
-                        let _ = writeln!(out, "  [ \"$count_{safe_field}\" -eq {n} ] || exit 1");
-                    }
-                }
+            if let Some(field) = &assertion.field
+                && let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let resolved = field_resolver.resolve(field);
+                let jq_path = field_to_jq_path(resolved);
+                let safe_field = sanitize_ident(field);
+                let _ = writeln!(out, "  local count_{safe_field}");
+                let _ = writeln!(
+                    out,
+                    "  count_{safe_field}=$(echo \"$output\" | jq '{jq_path} | length')"
+                );
+                let _ = writeln!(out, "  [ \"$count_{safe_field}\" -eq {n} ] || exit 1");
             }
         }
         "is_true" => {
@@ -531,19 +530,19 @@ fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, 
             }
         }
         "less_than_or_equal" => {
-            if let Some(field) = &assertion.field {
-                if let Some(val) = &assertion.value {
-                    let resolved = field_resolver.resolve(field);
-                    let jq_path = field_to_jq_path(resolved);
-                    let threshold = json_value_to_shell_string(val);
-                    let safe_field = sanitize_ident(field);
-                    let _ = writeln!(out, "  local val_{safe_field}");
-                    let _ = writeln!(out, "  val_{safe_field}=$(echo \"$output\" | jq -r '{jq_path}')");
-                    let _ = writeln!(
-                        out,
-                        "  assert_less_than_or_equal \"$val_{safe_field}\" '{threshold}' '{field}'"
-                    );
-                }
+            if let Some(field) = &assertion.field
+                && let Some(val) = &assertion.value
+            {
+                let resolved = field_resolver.resolve(field);
+                let jq_path = field_to_jq_path(resolved);
+                let threshold = json_value_to_shell_string(val);
+                let safe_field = sanitize_ident(field);
+                let _ = writeln!(out, "  local val_{safe_field}");
+                let _ = writeln!(out, "  val_{safe_field}=$(echo \"$output\" | jq -r '{jq_path}')");
+                let _ = writeln!(
+                    out,
+                    "  assert_less_than_or_equal \"$val_{safe_field}\" '{threshold}' '{field}'"
+                );
             }
         }
         "method_result" => {
@@ -578,21 +577,21 @@ fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, 
                             let _ = writeln!(out, "  [ \"${method_var}\" = \"false\" ] || exit 1");
                         }
                         "greater_than_or_equal" => {
-                            if let Some(val) = &assertion.value {
-                                if let Some(n) = val.as_u64() {
-                                    let _ = writeln!(out, "  [ \"${method_var}\" -ge {n} ] || exit 1");
-                                }
+                            if let Some(val) = &assertion.value
+                                && let Some(n) = val.as_u64()
+                            {
+                                let _ = writeln!(out, "  [ \"${method_var}\" -ge {n} ] || exit 1");
                             }
                         }
                         "count_min" => {
-                            if let Some(val) = &assertion.value {
-                                if let Some(n) = val.as_u64() {
-                                    let _ = writeln!(
-                                        out,
-                                        "  local count_from_method_result=$(echo \"${method_var}\" | jq 'length')"
-                                    );
-                                    let _ = writeln!(out, "  [ \"$count_from_method_result\" -ge {n} ] || exit 1");
-                                }
+                            if let Some(val) = &assertion.value
+                                && let Some(n) = val.as_u64()
+                            {
+                                let _ = writeln!(
+                                    out,
+                                    "  local count_from_method_result=$(echo \"${method_var}\" | jq 'length')"
+                                );
+                                let _ = writeln!(out, "  [ \"$count_from_method_result\" -ge {n} ] || exit 1");
                             }
                         }
                         "contains" => {
@@ -611,70 +610,67 @@ fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, 
             }
         }
         "min_length" => {
-            if let Some(field) = &assertion.field {
-                if let Some(val) = &assertion.value {
-                    if let Some(n) = val.as_u64() {
-                        let resolved = field_resolver.resolve(field);
-                        let jq_path = field_to_jq_path(resolved);
-                        let safe_field = sanitize_ident(field);
-                        let _ = writeln!(out, "  local val_{safe_field}");
-                        let _ = writeln!(out, "  val_{safe_field}=$(echo \"$output\" | jq -r '{jq_path}')");
-                        let _ = writeln!(
-                            out,
-                            "  [ \"${{#val_{safe_field}}}\" -ge {n} ] || {{ echo \"FAIL [{field}]: expected length >= {n}\" >&2; return 1; }}"
-                        );
-                    }
-                }
+            if let Some(field) = &assertion.field
+                && let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let resolved = field_resolver.resolve(field);
+                let jq_path = field_to_jq_path(resolved);
+                let safe_field = sanitize_ident(field);
+                let _ = writeln!(out, "  local val_{safe_field}");
+                let _ = writeln!(out, "  val_{safe_field}=$(echo \"$output\" | jq -r '{jq_path}')");
+                let _ = writeln!(
+                    out,
+                    "  [ \"${{#val_{safe_field}}}\" -ge {n} ] || {{ echo \"FAIL [{field}]: expected length >= {n}\" >&2; return 1; }}"
+                );
             }
         }
         "max_length" => {
-            if let Some(field) = &assertion.field {
-                if let Some(val) = &assertion.value {
-                    if let Some(n) = val.as_u64() {
-                        let resolved = field_resolver.resolve(field);
-                        let jq_path = field_to_jq_path(resolved);
-                        let safe_field = sanitize_ident(field);
-                        let _ = writeln!(out, "  local val_{safe_field}");
-                        let _ = writeln!(out, "  val_{safe_field}=$(echo \"$output\" | jq -r '{jq_path}')");
-                        let _ = writeln!(
-                            out,
-                            "  [ \"${{#val_{safe_field}}}\" -le {n} ] || {{ echo \"FAIL [{field}]: expected length <= {n}\" >&2; return 1; }}"
-                        );
-                    }
-                }
+            if let Some(field) = &assertion.field
+                && let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let resolved = field_resolver.resolve(field);
+                let jq_path = field_to_jq_path(resolved);
+                let safe_field = sanitize_ident(field);
+                let _ = writeln!(out, "  local val_{safe_field}");
+                let _ = writeln!(out, "  val_{safe_field}=$(echo \"$output\" | jq -r '{jq_path}')");
+                let _ = writeln!(
+                    out,
+                    "  [ \"${{#val_{safe_field}}}\" -le {n} ] || {{ echo \"FAIL [{field}]: expected length <= {n}\" >&2; return 1; }}"
+                );
             }
         }
         "ends_with" => {
-            if let Some(field) = &assertion.field {
-                if let Some(expected) = &assertion.value {
-                    let resolved = field_resolver.resolve(field);
-                    let jq_path = field_to_jq_path(resolved);
-                    let expected_str = json_value_to_shell_string(expected);
-                    let safe_field = sanitize_ident(field);
-                    let _ = writeln!(out, "  local val_{safe_field}");
-                    let _ = writeln!(out, "  val_{safe_field}=$(echo \"$output\" | jq -r '{jq_path}')");
-                    let _ = writeln!(
-                        out,
-                        "  [[ \"$val_{safe_field}\" == *'{expected_str}' ]] || {{ echo \"FAIL [{field}]: expected to end with '{expected_str}'\" >&2; return 1; }}"
-                    );
-                }
+            if let Some(field) = &assertion.field
+                && let Some(expected) = &assertion.value
+            {
+                let resolved = field_resolver.resolve(field);
+                let jq_path = field_to_jq_path(resolved);
+                let expected_str = json_value_to_shell_string(expected);
+                let safe_field = sanitize_ident(field);
+                let _ = writeln!(out, "  local val_{safe_field}");
+                let _ = writeln!(out, "  val_{safe_field}=$(echo \"$output\" | jq -r '{jq_path}')");
+                let _ = writeln!(
+                    out,
+                    "  [[ \"$val_{safe_field}\" == *'{expected_str}' ]] || {{ echo \"FAIL [{field}]: expected to end with '{expected_str}'\" >&2; return 1; }}"
+                );
             }
         }
         "matches_regex" => {
-            if let Some(field) = &assertion.field {
-                if let Some(expected) = &assertion.value {
-                    if let Some(pattern) = expected.as_str() {
-                        let resolved = field_resolver.resolve(field);
-                        let jq_path = field_to_jq_path(resolved);
-                        let safe_field = sanitize_ident(field);
-                        let _ = writeln!(out, "  local val_{safe_field}");
-                        let _ = writeln!(out, "  val_{safe_field}=$(echo \"$output\" | jq -r '{jq_path}')");
-                        let _ = writeln!(
-                            out,
-                            "  [[ \"$val_{safe_field}\" =~ {pattern} ]] || {{ echo \"FAIL [{field}]: expected to match /{pattern}/\" >&2; return 1; }}"
-                        );
-                    }
-                }
+            if let Some(field) = &assertion.field
+                && let Some(expected) = &assertion.value
+                && let Some(pattern) = expected.as_str()
+            {
+                let resolved = field_resolver.resolve(field);
+                let jq_path = field_to_jq_path(resolved);
+                let safe_field = sanitize_ident(field);
+                let _ = writeln!(out, "  local val_{safe_field}");
+                let _ = writeln!(out, "  val_{safe_field}=$(echo \"$output\" | jq -r '{jq_path}')");
+                let _ = writeln!(
+                    out,
+                    "  [[ \"$val_{safe_field}\" =~ {pattern} ]] || {{ echo \"FAIL [{field}]: expected to match /{pattern}/\" >&2; return 1; }}"
+                );
             }
         }
         "not_error" => {

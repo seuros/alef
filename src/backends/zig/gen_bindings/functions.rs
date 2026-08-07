@@ -94,11 +94,11 @@ pub(crate) fn emit_function(
     capsule_types: &std::collections::HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
     out: &mut String,
 ) {
-    if let TypeRef::Named(name) = &f.return_type {
-        if let Some(cap) = capsule_types.get(name.as_str()) {
-            emit_capsule_function(f, prefix, struct_names, opaque_creator_map, cap, declared_errors, out);
-            return;
-        }
+    if let TypeRef::Named(name) = &f.return_type
+        && let Some(cap) = capsule_types.get(name.as_str())
+    {
+        emit_capsule_function(f, prefix, struct_names, opaque_creator_map, cap, declared_errors, out);
+        return;
     }
 
     emit_cleaned_zig_doc(out, &f.doc, "");
@@ -534,45 +534,45 @@ fn emit_param_conversion(
         return;
     }
 
-    if let Some(inner_name) = struct_named_inner(&p.ty) {
-        if struct_names.contains(inner_name) {
-            let snake = c_symbol_component(inner_name);
-            let is_optional = p.optional || matches!(p.ty, TypeRef::Optional(_));
-            if is_optional {
-                out.push_str(&crate::backends::zig::template_env::render(
-                    "param_optional_string_alloc.jinja",
-                    minijinja::context! { name => name },
-                ));
-                out.push_str(&crate::backends::zig::template_env::render(
-                    "param_optional_struct_handle.jinja",
-                    minijinja::context! {
-                        name => name,
-                        prefix => prefix,
-                        snake => &snake,
-                        json_error_return => json_error_return,
-                    },
-                ));
-            } else {
-                out.push_str(&crate::backends::zig::template_env::render(
-                    "param_string_line1.jinja",
-                    minijinja::context! { name => name },
-                ));
-                out.push_str(&crate::backends::zig::template_env::render(
-                    "param_string_line2.jinja",
-                    minijinja::context! { name => name },
-                ));
-                out.push_str(&crate::backends::zig::template_env::render(
-                    "param_struct_handle.jinja",
-                    minijinja::context! {
-                        name => name,
-                        prefix => prefix,
-                        snake => &snake,
-                        json_error_return => json_error_return,
-                    },
-                ));
-            }
-            return;
+    if let Some(inner_name) = struct_named_inner(&p.ty)
+        && struct_names.contains(inner_name)
+    {
+        let snake = c_symbol_component(inner_name);
+        let is_optional = p.optional || matches!(p.ty, TypeRef::Optional(_));
+        if is_optional {
+            out.push_str(&crate::backends::zig::template_env::render(
+                "param_optional_string_alloc.jinja",
+                minijinja::context! { name => name },
+            ));
+            out.push_str(&crate::backends::zig::template_env::render(
+                "param_optional_struct_handle.jinja",
+                minijinja::context! {
+                    name => name,
+                    prefix => prefix,
+                    snake => &snake,
+                    json_error_return => json_error_return,
+                },
+            ));
+        } else {
+            out.push_str(&crate::backends::zig::template_env::render(
+                "param_string_line1.jinja",
+                minijinja::context! { name => name },
+            ));
+            out.push_str(&crate::backends::zig::template_env::render(
+                "param_string_line2.jinja",
+                minijinja::context! { name => name },
+            ));
+            out.push_str(&crate::backends::zig::template_env::render(
+                "param_struct_handle.jinja",
+                minijinja::context! {
+                    name => name,
+                    prefix => prefix,
+                    snake => &snake,
+                    json_error_return => json_error_return,
+                },
+            ));
         }
+        return;
     }
     let is_optional_string = p.optional
         || matches!(
@@ -689,10 +689,10 @@ fn emit_param_free(
         return;
     }
 
-    if let Some(inner_name) = struct_named_inner(&p.ty) {
-        if struct_names.contains(inner_name) {
-            let _ = inner_name;
-        }
+    if let Some(inner_name) = struct_named_inner(&p.ty)
+        && struct_names.contains(inner_name)
+    {
+        let _ = inner_name;
     }
 }
 
@@ -738,10 +738,10 @@ fn c_arg_names(
             TypeRef::Primitive(prim) if p.optional => Some(prim),
             _ => None,
         };
-        if let Some(prim) = prim_opt {
-            if let Some(sentinel) = optional_int_sentinel(prim) {
-                return vec![format!("if ({name}) |v| v else {sentinel}", name = p.name)];
-            }
+        if let Some(prim) = prim_opt
+            && let Some(sentinel) = optional_int_sentinel(prim)
+        {
+            return vec![format!("if ({name}) |v| v else {sentinel}", name = p.name)];
         }
     }
     match &p.ty {

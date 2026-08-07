@@ -621,30 +621,30 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
         builder.add_item(&gen_flat_data_enum_from_impls(enum_def, &core_import));
         for variant in &enum_def.variants {
             for field in &variant.fields {
-                if let TypeRef::Named(type_name) = &field.ty {
-                    if let Some(typ) = api.types.iter().find(|t| &t.name == type_name) {
-                        if emitted_binding_to_core.contains(&typ.name) {
-                            continue;
-                        }
-                        if enum_tainted.contains(&typ.name) {
-                            builder.add_item(&gen_enum_tainted_from_binding_to_core(
-                                typ,
-                                &core_import,
-                                enum_names_ref,
-                                &enum_tainted,
-                                &php_conv_config,
-                                &api.enums,
-                                &bridge_type_aliases_set,
-                            ));
-                            emitted_binding_to_core.insert(typ.name.clone());
-                        } else if crate::codegen::conversions::can_generate_conversion(typ, &convertible) {
-                            builder.add_item(&crate::codegen::conversions::gen_from_binding_to_core_cfg(
-                                typ,
-                                &core_import,
-                                &php_conv_config,
-                            ));
-                            emitted_binding_to_core.insert(typ.name.clone());
-                        }
+                if let TypeRef::Named(type_name) = &field.ty
+                    && let Some(typ) = api.types.iter().find(|t| &t.name == type_name)
+                {
+                    if emitted_binding_to_core.contains(&typ.name) {
+                        continue;
+                    }
+                    if enum_tainted.contains(&typ.name) {
+                        builder.add_item(&gen_enum_tainted_from_binding_to_core(
+                            typ,
+                            &core_import,
+                            enum_names_ref,
+                            &enum_tainted,
+                            &php_conv_config,
+                            &api.enums,
+                            &bridge_type_aliases_set,
+                        ));
+                        emitted_binding_to_core.insert(typ.name.clone());
+                    } else if crate::codegen::conversions::can_generate_conversion(typ, &convertible) {
+                        builder.add_item(&crate::codegen::conversions::gen_from_binding_to_core_cfg(
+                            typ,
+                            &core_import,
+                            &php_conv_config,
+                        ));
+                        emitted_binding_to_core.insert(typ.name.clone());
                     }
                 }
             }
@@ -685,10 +685,8 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
     }
 
     // Referenced by #[serde(default = "crate::serde_defaults::...")] on struct fields.
-    if has_serde {
-        if let Some(serde_module) = gen_serde_defaults_module(api) {
-            builder.add_item(&serde_module);
-        }
+    if has_serde && let Some(serde_module) = gen_serde_defaults_module(api) {
+        builder.add_item(&serde_module);
     }
 
     // `#[php_function]`/`#[php_class]` expansions remain to emit `extern "vectorcall"`

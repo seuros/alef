@@ -57,15 +57,13 @@ pub(super) fn render_assertion_dart(
     // Skip assertions on fields that don't exist on the dart result type. This must run
     // BEFORE the array-traversal and standard accessor paths since both emit code that
     // references the field — an unknown field path produces an `isn't defined` error.
-    if !result_is_simple {
-        if let Some(f) = assertion.field.as_deref() {
-            // Use the head segment (before any `[].`) for validation since `is_valid_for_result`
-            // only checks the first path component.
-            let head = f.split("[].").next().unwrap_or(f);
-            if !head.is_empty() && !field_resolver.is_valid_for_result(head) {
-                let _ = writeln!(out, "    // skipped: field '{f}' not available on dart result type");
-                return;
-            }
+    if !result_is_simple && let Some(f) = assertion.field.as_deref() {
+        // Use the head segment (before any `[].`) for validation since `is_valid_for_result`
+        // only checks the first path component.
+        let head = f.split("[].").next().unwrap_or(f);
+        if !head.is_empty() && !field_resolver.is_valid_for_result(head) {
+            let _ = writeln!(out, "    // skipped: field '{f}' not available on dart result type");
+            return;
         }
     }
 
@@ -74,89 +72,90 @@ pub(super) fn render_assertion_dart(
     // accessed via pattern matching (`switch (m) { case FormatMetadata_Excel ... }`)
     // — there is no `.excel?` getter, so the fixture path cannot be expressed as
     // a simple chained accessor without language-specific pattern-matching codegen.
-    if let Some(f) = assertion.field.as_deref() {
-        if !f.is_empty() && field_resolver.tagged_union_split(f).is_some() {
-            let _ = writeln!(
-                out,
-                "    // skipped: field '{f}' crosses a tagged-union variant boundary (not expressible in Dart)"
-            );
-            return;
-        }
+    if let Some(f) = assertion.field.as_deref()
+        && !f.is_empty()
+        && field_resolver.tagged_union_split(f).is_some()
+    {
+        let _ = writeln!(
+            out,
+            "    // skipped: field '{f}' crosses a tagged-union variant boundary (not expressible in Dart)"
+        );
+        return;
     }
 
     // Handle array traversal (e.g. "links[].link_type" → any() expression).
-    if let Some(f) = assertion.field.as_deref() {
-        if let Some(dot) = f.find("[].") {
-            // Apply the alias mapping to the full `xxx[].yyy` path first so renamed
-            // sub-fields (e.g. `assets[].category` → `assets[].asset_category`) resolve
-            // correctly. Split *after* resolving so both the array head and the element
-            // path reflect any alias rewrites.
-            let resolved_full = field_resolver.resolve(f);
-            let (array_part, elem_part) = match resolved_full.find("[].") {
-                Some(rdot) => (&resolved_full[..rdot], &resolved_full[rdot + 3..]),
-                // Resolver mapped the path away from `[].` form — fall back to the original
-                // split, since generated code expects the array/elem structure.
-                None => (&f[..dot], &f[dot + 3..]),
-            };
-            let array_accessor = if array_part.is_empty() {
-                result_var.to_string()
-            } else {
-                field_resolver.accessor(array_part, "dart", result_var)
-            };
-            let elem_accessor = field_to_dart_accessor(elem_part);
-            match assertion.assertion_type.as_str() {
-                "contains" => {
-                    if let Some(expected) = &assertion.value {
-                        let dart_val = dart_format_value(expected);
+    if let Some(f) = assertion.field.as_deref()
+        && let Some(dot) = f.find("[].")
+    {
+        // Apply the alias mapping to the full `xxx[].yyy` path first so renamed
+        // sub-fields (e.g. `assets[].category` → `assets[].asset_category`) resolve
+        // correctly. Split *after* resolving so both the array head and the element
+        // path reflect any alias rewrites.
+        let resolved_full = field_resolver.resolve(f);
+        let (array_part, elem_part) = match resolved_full.find("[].") {
+            Some(rdot) => (&resolved_full[..rdot], &resolved_full[rdot + 3..]),
+            // Resolver mapped the path away from `[].` form — fall back to the original
+            // split, since generated code expects the array/elem structure.
+            None => (&f[..dot], &f[dot + 3..]),
+        };
+        let array_accessor = if array_part.is_empty() {
+            result_var.to_string()
+        } else {
+            field_resolver.accessor(array_part, "dart", result_var)
+        };
+        let elem_accessor = field_to_dart_accessor(elem_part);
+        match assertion.assertion_type.as_str() {
+            "contains" => {
+                if let Some(expected) = &assertion.value {
+                    let dart_val = dart_format_value(expected);
+                    let _ = writeln!(
+                        out,
+                        "    expect({array_accessor}.any((e) => e.{elem_accessor}.toString().contains({dart_val})), isTrue);"
+                    );
+                }
+            }
+            "contains_all" => {
+                if let Some(values) = &assertion.values {
+                    for val in values {
+                        let dart_val = dart_format_value(val);
                         let _ = writeln!(
                             out,
                             "    expect({array_accessor}.any((e) => e.{elem_accessor}.toString().contains({dart_val})), isTrue);"
                         );
                     }
                 }
-                "contains_all" => {
-                    if let Some(values) = &assertion.values {
-                        for val in values {
-                            let dart_val = dart_format_value(val);
-                            let _ = writeln!(
-                                out,
-                                "    expect({array_accessor}.any((e) => e.{elem_accessor}.toString().contains({dart_val})), isTrue);"
-                            );
-                        }
-                    }
-                }
-                "not_contains" => {
-                    if let Some(expected) = &assertion.value {
-                        let dart_val = dart_format_value(expected);
+            }
+            "not_contains" => {
+                if let Some(expected) = &assertion.value {
+                    let dart_val = dart_format_value(expected);
+                    let _ = writeln!(
+                        out,
+                        "    expect({array_accessor}.any((e) => e.{elem_accessor}.toString().contains({dart_val})), isFalse);"
+                    );
+                } else if let Some(values) = &assertion.values {
+                    for val in values {
+                        let dart_val = dart_format_value(val);
                         let _ = writeln!(
                             out,
                             "    expect({array_accessor}.any((e) => e.{elem_accessor}.toString().contains({dart_val})), isFalse);"
                         );
-                    } else if let Some(values) = &assertion.values {
-                        for val in values {
-                            let dart_val = dart_format_value(val);
-                            let _ = writeln!(
-                                out,
-                                "    expect({array_accessor}.any((e) => e.{elem_accessor}.toString().contains({dart_val})), isFalse);"
-                            );
-                        }
                     }
                 }
-                "not_empty" => {
-                    let _ = writeln!(
-                        out,
-                        "    expect({array_accessor}.any((e) => e.{elem_accessor}.toString().isNotEmpty), isTrue);"
-                    );
-                }
-                other => {
-                    let _ = writeln!(
-                        out,
-                        "    // skipped: unsupported traversal assertion '{other}' on '{f}'"
-                    );
-                }
             }
-            return;
+            "not_empty" => {
+                let _ = writeln!(
+                    out,
+                    "    expect({array_accessor}.any((e) => e.{elem_accessor}.toString().isNotEmpty), isTrue);"
+                );
+            }
+            other => {
+                let _ = writeln!(
+                    out,
+                    "    // skipped: unsupported traversal assertion '{other}' on '{f}'"
+                );
+            }
         }
+        return;
     }
 
     let field_accessor = if result_is_simple {
@@ -420,35 +419,35 @@ pub(super) fn render_assertion_dart(
             }
         }
         "min_length" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let length_expr = dart_length_expr(&field_accessor, assertion.field.as_deref(), field_resolver);
-                    let _ = writeln!(out, "    expect({length_expr}, greaterThanOrEqualTo({n}));");
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let length_expr = dart_length_expr(&field_accessor, assertion.field.as_deref(), field_resolver);
+                let _ = writeln!(out, "    expect({length_expr}, greaterThanOrEqualTo({n}));");
             }
         }
         "max_length" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let length_expr = dart_length_expr(&field_accessor, assertion.field.as_deref(), field_resolver);
-                    let _ = writeln!(out, "    expect({length_expr}, lessThanOrEqualTo({n}));");
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let length_expr = dart_length_expr(&field_accessor, assertion.field.as_deref(), field_resolver);
+                let _ = writeln!(out, "    expect({length_expr}, lessThanOrEqualTo({n}));");
             }
         }
         "count_equals" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let length_expr = dart_length_expr(&field_accessor, assertion.field.as_deref(), field_resolver);
-                    let _ = writeln!(out, "    expect({length_expr}, equals({n}));");
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let length_expr = dart_length_expr(&field_accessor, assertion.field.as_deref(), field_resolver);
+                let _ = writeln!(out, "    expect({length_expr}, equals({n}));");
             }
         }
         "count_min" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let length_expr = dart_length_expr(&field_accessor, assertion.field.as_deref(), field_resolver);
-                    let _ = writeln!(out, "    expect({length_expr}, greaterThanOrEqualTo({n}));");
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let length_expr = dart_length_expr(&field_accessor, assertion.field.as_deref(), field_resolver);
+                let _ = writeln!(out, "    expect({length_expr}, greaterThanOrEqualTo({n}));");
             }
         }
         "matches_regex" => {
@@ -526,10 +525,10 @@ pub(super) fn render_assertion_dart(
                         }
                     }
                     "count_min" => {
-                        if let Some(val) = &assertion.value {
-                            if let Some(n) = val.as_u64() {
-                                let _ = writeln!(out, "    expect({method_call}.length, greaterThanOrEqualTo({n}));");
-                            }
+                        if let Some(val) = &assertion.value
+                            && let Some(n) = val.as_u64()
+                        {
+                            let _ = writeln!(out, "    expect({method_call}.length, greaterThanOrEqualTo({n}));");
                         }
                     }
                     _ => {
@@ -685,43 +684,43 @@ pub(super) fn dart_stringy_aggregator_contains_assert(
     // Try the stringy aggregator path: if the element type has multiple
     // text-bearing accessors, emit a proper aggregator instead of a catch-all.
     let root_type = field_resolver.dart_root_type().cloned();
-    if let Some(elem_type) = field_resolver.dart_advance(root_type.as_deref(), resolved) {
-        if let Some(stringy) = field_resolver.dart_stringy_fields(&elem_type) {
-            // Only emit the aggregator if the element type has 2+ stringy fields.
-            // Single-field types are better served by the simpler single-accessor path.
-            if stringy.len() >= 2 {
-                // flutter_rust_bridge renders struct DTOs as plain Dart classes
-                // with `final` fields, so accessors are property reads (no
-                // parens). Dart is statically typed — calling `item.field()` on
-                // a non-callable field, or naming a field the type lacks, is a
-                // compile error, not a runtime miss.
-                let mut texts_lines: Vec<String> = Vec::new();
-                for sf in stringy {
-                    let call = sf.name.to_lower_camel_case();
-                    match sf.kind {
-                        StringyFieldKind::Plain => {
-                            texts_lines.push(format!("            texts.add(item.{call}.toString());"));
-                        }
-                        StringyFieldKind::Optional => {
-                            texts_lines.push(format!(
+    if let Some(elem_type) = field_resolver.dart_advance(root_type.as_deref(), resolved)
+        && let Some(stringy) = field_resolver.dart_stringy_fields(&elem_type)
+    {
+        // Only emit the aggregator if the element type has 2+ stringy fields.
+        // Single-field types are better served by the simpler single-accessor path.
+        if stringy.len() >= 2 {
+            // flutter_rust_bridge renders struct DTOs as plain Dart classes
+            // with `final` fields, so accessors are property reads (no
+            // parens). Dart is statically typed — calling `item.field()` on
+            // a non-callable field, or naming a field the type lacks, is a
+            // compile error, not a runtime miss.
+            let mut texts_lines: Vec<String> = Vec::new();
+            for sf in stringy {
+                let call = sf.name.to_lower_camel_case();
+                match sf.kind {
+                    StringyFieldKind::Plain => {
+                        texts_lines.push(format!("            texts.add(item.{call}.toString());"));
+                    }
+                    StringyFieldKind::Optional => {
+                        texts_lines.push(format!(
                                 "            final v_{call} = item.{call};\n            if (v_{call} != null) texts.add(v_{call}.toString());"
                             ));
-                        }
-                        StringyFieldKind::Vec => {
-                            texts_lines.push(format!(
-                                "            texts.addAll(item.{call}.map((e) => e.toString()));"
-                            ));
-                        }
+                    }
+                    StringyFieldKind::Vec => {
+                        texts_lines.push(format!(
+                            "            texts.addAll(item.{call}.map((e) => e.toString()));"
+                        ));
                     }
                 }
-                let texts_block = texts_lines.join("\n");
-                // Case-insensitive substring match: enum/sealed-class fields
-                // stringify to `EnumName.variant()` (lowerCamelCase variant),
-                // while fixture node-type values are PascalCase (`Function`).
-                return Some(format!(
-                    "    expect({array_accessor}.where((item) {{\n            final texts = <String>[];\n{texts_block}\n            return texts.any((t) => t.toLowerCase().contains(({dart_val}).toString().toLowerCase()));\n          }}).isEmpty, isFalse);"
-                ));
             }
+            let texts_block = texts_lines.join("\n");
+            // Case-insensitive substring match: enum/sealed-class fields
+            // stringify to `EnumName.variant()` (lowerCamelCase variant),
+            // while fixture node-type values are PascalCase (`Function`).
+            return Some(format!(
+                "    expect({array_accessor}.where((item) {{\n            final texts = <String>[];\n{texts_block}\n            return texts.any((t) => t.toLowerCase().contains(({dart_val}).toString().toLowerCase()));\n          }}).isEmpty, isFalse);"
+            ));
         }
     }
 

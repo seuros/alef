@@ -41,10 +41,10 @@ impl ResolvedCrateConfig {
             let mut current = path.parent();
             while let Some(dir) = current {
                 if dir.file_name().is_some_and(|n| n == "src") {
-                    if let Some(crate_dir) = dir.parent() {
-                        if let Some(dir_name) = crate_dir.file_name() {
-                            return dir_name.to_string_lossy().into_owned();
-                        }
+                    if let Some(crate_dir) = dir.parent()
+                        && let Some(dir_name) = crate_dir.file_name()
+                    {
+                        return dir_name.to_string_lossy().into_owned();
                     }
                     break;
                 }
@@ -108,13 +108,13 @@ impl ResolvedCrateConfig {
 
             for source in &self.sources {
                 let source_str = source.to_string_lossy();
-                if let Some(after_crates) = find_after_crates_prefix(&source_str) {
-                    if let Some(slash_pos) = after_crates.find('/') {
-                        let crate_dir = &after_crates[..slash_pos];
-                        let crate_ident = crate_dir.replace('-', "_");
-                        if crate_ident != core_import && !mappings.contains_key(&crate_ident) {
-                            mappings.insert(crate_ident, core_import.clone());
-                        }
+                if let Some(after_crates) = find_after_crates_prefix(&source_str)
+                    && let Some(slash_pos) = after_crates.find('/')
+                {
+                    let crate_dir = &after_crates[..slash_pos];
+                    let crate_ident = crate_dir.replace('-', "_");
+                    if crate_ident != core_import && !mappings.contains_key(&crate_ident) {
+                        mappings.insert(crate_ident, core_import.clone());
                     }
                 }
             }

@@ -204,12 +204,12 @@ fn sealed_class_field_annotation(
                 TypeRef::Optional(i) => i.as_ref(),
                 other => other,
             };
-            if let TypeRef::Named(name) = inner_base {
-                if sealed_class_names.contains(name) {
-                    return Some(format!(
-                        "@field:com.fasterxml.jackson.databind.annotation.JsonSerialize(contentAs = {name}::class)"
-                    ));
-                }
+            if let TypeRef::Named(name) = inner_base
+                && sealed_class_names.contains(name)
+            {
+                return Some(format!(
+                    "@field:com.fasterxml.jackson.databind.annotation.JsonSerialize(contentAs = {name}::class)"
+                ));
             }
             None
         }
@@ -218,12 +218,12 @@ fn sealed_class_field_annotation(
                 TypeRef::Optional(i) => i.as_ref(),
                 other => other,
             };
-            if let TypeRef::Named(name) = value_base {
-                if sealed_class_names.contains(name) {
-                    return Some(format!(
-                        "@field:com.fasterxml.jackson.databind.annotation.JsonSerialize(contentAs = {name}::class)"
-                    ));
-                }
+            if let TypeRef::Named(name) = value_base
+                && sealed_class_names.contains(name)
+            {
+                return Some(format!(
+                    "@field:com.fasterxml.jackson.databind.annotation.JsonSerialize(contentAs = {name}::class)"
+                ));
             }
             None
         }

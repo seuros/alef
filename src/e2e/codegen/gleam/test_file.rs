@@ -113,10 +113,10 @@ pub(super) fn render_test_file(
             if needs_case_expr {
                 needed_modules.insert("option");
             }
-            if let Some(f) = &assertion.field {
-                if field_resolver.is_optional(field_resolver.resolve(f)) {
-                    needed_modules.insert("option");
-                }
+            if let Some(f) = &assertion.field
+                && field_resolver.is_optional(field_resolver.resolve(f))
+            {
+                needed_modules.insert("option");
             }
             match assertion.assertion_type.as_str() {
                 "contains_any" => {
@@ -163,35 +163,33 @@ pub(super) fn render_test_file(
                 "greater_than" | "less_than" | "greater_than_or_equal" | "less_than_or_equal" => {}
                 _ => {}
             }
-            if needs_case_expr {
-                if let Some(f) = &assertion.field {
-                    let resolved = field_resolver.resolve(f);
-                    if field_resolver.is_array(resolved) {
-                        needed_modules.insert("list");
-                    }
-                }
-            }
-            if let Some(f) = &assertion.field {
-                if f.split('.').any(|seg| seg == "length") {
+            if needs_case_expr && let Some(f) = &assertion.field {
+                let resolved = field_resolver.resolve(f);
+                if field_resolver.is_array(resolved) {
                     needed_modules.insert("list");
                 }
             }
-            if let Some(f) = &assertion.field {
-                if !f.is_empty() {
-                    let parts: Vec<&str> = f.split('.').collect();
-                    let has_opt_prefix = (1..parts.len()).any(|i| {
-                        let prefix_path = parts[..i].join(".");
-                        field_resolver.is_optional(&prefix_path)
-                    });
-                    if has_opt_prefix {
-                        needed_modules.insert("option");
-                        if matches!(assertion.assertion_type.as_str(), "not_empty" | "is_empty") {
-                            let resolved = field_resolver.resolve(f);
-                            if field_resolver.is_array(f) || field_resolver.is_array(resolved) {
-                                needed_modules.insert("list");
-                            } else {
-                                needed_modules.insert("string");
-                            }
+            if let Some(f) = &assertion.field
+                && f.split('.').any(|seg| seg == "length")
+            {
+                needed_modules.insert("list");
+            }
+            if let Some(f) = &assertion.field
+                && !f.is_empty()
+            {
+                let parts: Vec<&str> = f.split('.').collect();
+                let has_opt_prefix = (1..parts.len()).any(|i| {
+                    let prefix_path = parts[..i].join(".");
+                    field_resolver.is_optional(&prefix_path)
+                });
+                if has_opt_prefix {
+                    needed_modules.insert("option");
+                    if matches!(assertion.assertion_type.as_str(), "not_empty" | "is_empty") {
+                        let resolved = field_resolver.resolve(f);
+                        if field_resolver.is_array(f) || field_resolver.is_array(resolved) {
+                            needed_modules.insert("list");
+                        } else {
+                            needed_modules.insert("string");
                         }
                     }
                 }

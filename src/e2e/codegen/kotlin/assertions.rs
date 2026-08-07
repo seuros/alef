@@ -25,19 +25,17 @@ pub(super) fn render_assertion(
     // last collected chunk, not from the stream iterator (which has no `usage()` method).
     // Route them through `StreamingFieldResolver::accessor("usage", ...)` + deep-tail
     // rendering, using `chunks.last().usage()` as the base expression.
-    if is_streaming {
-        if let Some(f) = &assertion.field {
-            if f == "usage" || f.starts_with("usage.") {
-                let stream_lang = if kotlin_android_style {
-                    "kotlin_android"
-                } else {
-                    "kotlin"
-                };
-                let base_expr = crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::accessor(
-                    "usage",
-                    stream_lang,
-                    "chunks",
-                )
+    if is_streaming
+        && let Some(f) = &assertion.field
+        && (f == "usage" || f.starts_with("usage."))
+    {
+        let stream_lang = if kotlin_android_style {
+            "kotlin_android"
+        } else {
+            "kotlin"
+        };
+        let base_expr =
+            crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::accessor("usage", stream_lang, "chunks")
                 .unwrap_or_else(|| {
                     if kotlin_android_style {
                         "(if (chunks.isEmpty()) null else chunks.last().usage)".to_string()
@@ -46,48 +44,46 @@ pub(super) fn render_assertion(
                     }
                 });
 
-                // For a deep path like `usage.total_tokens`, render the tail `.total_tokens`
-                // in a language-appropriate accessor style.
-                let expr = if let Some(tail) = f.strip_prefix("usage.") {
-                    if kotlin_android_style {
-                        // kotlin-android: data classes use Kotlin property access (no parens).
-                        tail.split('.')
-                            .fold(base_expr, |acc, seg| format!("{acc}?.{}", seg.to_lower_camel_case()))
-                    } else {
-                        // Kotlin/Java: accessor methods have parens.
-                        tail.split('.')
-                            .fold(base_expr, |acc, seg| format!("{acc}?.{}()", seg.to_lower_camel_case()))
-                    }
-                } else {
-                    base_expr
-                };
-
-                // Determine if the field maps to a 64-bit C type requiring `L` suffix.
-                let field_is_long = fields_c_types
-                    .get(f.as_str())
-                    .is_some_and(|t| matches!(t.as_str(), "uint64_t" | "int64_t"));
-
-                let line = match assertion.assertion_type.as_str() {
-                    "equals" => {
-                        if let Some(expected) = &assertion.value {
-                            let kotlin_val = if field_is_long && expected.is_number() && !expected.is_f64() {
-                                format!("{}L", expected)
-                            } else {
-                                super::values::json_to_kotlin(expected)
-                            };
-                            format!("        assertEquals({kotlin_val}, {expr}!!)\n")
-                        } else {
-                            String::new()
-                        }
-                    }
-                    _ => String::new(),
-                };
-                if !line.is_empty() {
-                    out.push_str(&line);
-                }
-                return;
+        // For a deep path like `usage.total_tokens`, render the tail `.total_tokens`
+        // in a language-appropriate accessor style.
+        let expr = if let Some(tail) = f.strip_prefix("usage.") {
+            if kotlin_android_style {
+                // kotlin-android: data classes use Kotlin property access (no parens).
+                tail.split('.')
+                    .fold(base_expr, |acc, seg| format!("{acc}?.{}", seg.to_lower_camel_case()))
+            } else {
+                // Kotlin/Java: accessor methods have parens.
+                tail.split('.')
+                    .fold(base_expr, |acc, seg| format!("{acc}?.{}()", seg.to_lower_camel_case()))
             }
+        } else {
+            base_expr
+        };
+
+        // Determine if the field maps to a 64-bit C type requiring `L` suffix.
+        let field_is_long = fields_c_types
+            .get(f.as_str())
+            .is_some_and(|t| matches!(t.as_str(), "uint64_t" | "int64_t"));
+
+        let line = match assertion.assertion_type.as_str() {
+            "equals" => {
+                if let Some(expected) = &assertion.value {
+                    let kotlin_val = if field_is_long && expected.is_number() && !expected.is_f64() {
+                        format!("{}L", expected)
+                    } else {
+                        super::values::json_to_kotlin(expected)
+                    };
+                    format!("        assertEquals({kotlin_val}, {expr}!!)\n")
+                } else {
+                    String::new()
+                }
+            }
+            _ => String::new(),
+        };
+        if !line.is_empty() {
+            out.push_str(&line);
         }
+        return;
     }
 
     // Streaming virtual fields resolve against the `chunks` collected-list variable.
@@ -95,97 +91,100 @@ pub(super) fn render_assertion(
     // Gate on `is_streaming` so non-streaming fixtures (e.g. consumers whose real
     // result struct has a literal `chunks` field) don't divert into the virtual
     // accessor path — they should fall through to the normal field resolver.
-    if let Some(f) = &assertion.field {
-        if is_streaming && !f.is_empty() && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(f) {
-            let stream_lang = if kotlin_android_style {
-                "kotlin_android"
-            } else {
-                "kotlin"
-            };
-            if let Some(expr) =
-                crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::accessor(f, stream_lang, "chunks")
-            {
-                let line = match assertion.assertion_type.as_str() {
-                    "count_min" => {
-                        if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                            format!("        assertTrue({expr}.size >= {n}, \"expected >= {n} chunks\")\n")
-                        } else {
-                            String::new()
-                        }
+    if let Some(f) = &assertion.field
+        && is_streaming
+        && !f.is_empty()
+        && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(f)
+    {
+        let stream_lang = if kotlin_android_style {
+            "kotlin_android"
+        } else {
+            "kotlin"
+        };
+        if let Some(expr) =
+            crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::accessor(f, stream_lang, "chunks")
+        {
+            let line = match assertion.assertion_type.as_str() {
+                "count_min" => {
+                    if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
+                        format!("        assertTrue({expr}.size >= {n}, \"expected >= {n} chunks\")\n")
+                    } else {
+                        String::new()
                     }
-                    "count_equals" => {
-                        if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                            format!(
-                                "        assertEquals({n}.toLong(), {expr}.size.toLong(), \"expected exactly {n} elements\")\n"
-                            )
-                        } else {
-                            String::new()
-                        }
-                    }
-                    "equals" => {
-                        if let Some(serde_json::Value::String(s)) = &assertion.value {
-                            let escaped = escape_kotlin(s);
-                            format!("        assertEquals(\"{escaped}\", {expr})\n")
-                        } else if let Some(b) = assertion.value.as_ref().and_then(|v| v.as_bool()) {
-                            format!("        assertEquals({b}, {expr})\n")
-                        } else {
-                            String::new()
-                        }
-                    }
-                    "not_empty" => {
-                        format!("        assertFalse({expr}.isEmpty(), \"expected non-empty\")\n")
-                    }
-                    "is_empty" => {
-                        format!("        assertTrue({expr}.isEmpty(), \"expected empty\")\n")
-                    }
-                    "is_true" => {
-                        format!("        assertTrue({expr} == true, \"expected true\")\n")
-                    }
-                    "is_false" => {
-                        format!("        assertTrue({expr} == false, \"expected false\")\n")
-                    }
-                    "greater_than" => {
-                        if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                            format!("        assertTrue({expr} > {n}, \"expected > {n}\")\n")
-                        } else {
-                            String::new()
-                        }
-                    }
-                    "contains" => {
-                        if let Some(serde_json::Value::String(s)) = &assertion.value {
-                            let escaped = escape_kotlin(s);
-                            // Use `.toString().lowercase().contains(...)` to mirror the Java
-                            // emitter — `(list as List<String>)` is an unchecked cast that
-                            // succeeds at runtime via erasure but `.contains("Module")` then
-                            // compares `StructureItem`s against a `String` and always returns
-                            // `false`. Stringifying the collection lets the assertion match
-                            // both `List<String>` and `List<ComplexType>` cases uniformly.
-                            format!(
-                                "        assertTrue({expr}.toString().lowercase().contains(\"{escaped}\".lowercase()), \"expected to contain: {escaped}\")\n"
-                            )
-                        } else {
-                            String::new()
-                        }
-                    }
-                    _ => format!(
-                        "        // streaming field '{f}': assertion type '{}' not rendered\n",
-                        assertion.assertion_type
-                    ),
-                };
-                if !line.is_empty() {
-                    out.push_str(&line);
                 }
+                "count_equals" => {
+                    if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
+                        format!(
+                            "        assertEquals({n}.toLong(), {expr}.size.toLong(), \"expected exactly {n} elements\")\n"
+                        )
+                    } else {
+                        String::new()
+                    }
+                }
+                "equals" => {
+                    if let Some(serde_json::Value::String(s)) = &assertion.value {
+                        let escaped = escape_kotlin(s);
+                        format!("        assertEquals(\"{escaped}\", {expr})\n")
+                    } else if let Some(b) = assertion.value.as_ref().and_then(|v| v.as_bool()) {
+                        format!("        assertEquals({b}, {expr})\n")
+                    } else {
+                        String::new()
+                    }
+                }
+                "not_empty" => {
+                    format!("        assertFalse({expr}.isEmpty(), \"expected non-empty\")\n")
+                }
+                "is_empty" => {
+                    format!("        assertTrue({expr}.isEmpty(), \"expected empty\")\n")
+                }
+                "is_true" => {
+                    format!("        assertTrue({expr} == true, \"expected true\")\n")
+                }
+                "is_false" => {
+                    format!("        assertTrue({expr} == false, \"expected false\")\n")
+                }
+                "greater_than" => {
+                    if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
+                        format!("        assertTrue({expr} > {n}, \"expected > {n}\")\n")
+                    } else {
+                        String::new()
+                    }
+                }
+                "contains" => {
+                    if let Some(serde_json::Value::String(s)) = &assertion.value {
+                        let escaped = escape_kotlin(s);
+                        // Use `.toString().lowercase().contains(...)` to mirror the Java
+                        // emitter — `(list as List<String>)` is an unchecked cast that
+                        // succeeds at runtime via erasure but `.contains("Module")` then
+                        // compares `StructureItem`s against a `String` and always returns
+                        // `false`. Stringifying the collection lets the assertion match
+                        // both `List<String>` and `List<ComplexType>` cases uniformly.
+                        format!(
+                            "        assertTrue({expr}.toString().lowercase().contains(\"{escaped}\".lowercase()), \"expected to contain: {escaped}\")\n"
+                        )
+                    } else {
+                        String::new()
+                    }
+                }
+                _ => format!(
+                    "        // streaming field '{f}': assertion type '{}' not rendered\n",
+                    assertion.assertion_type
+                ),
+            };
+            if !line.is_empty() {
+                out.push_str(&line);
             }
-            return;
         }
+        return;
     }
 
     // Skip assertions on fields that don't exist on the result type.
-    if let Some(f) = &assertion.field {
-        if !f.is_empty() && !field_resolver.is_valid_for_result(f) {
-            let _ = writeln!(out, "        // skipped: field '{f}' not available on result type");
-            return;
-        }
+    if let Some(f) = &assertion.field
+        && !f.is_empty()
+        && !field_resolver.is_valid_for_result(f)
+    {
+        let _ = writeln!(out, "        // skipped: field '{f}' not available on result type");
+        return;
     }
 
     // Discriminated-union navigation (sealed `FormatMetadata` in Kotlin).
@@ -195,29 +194,28 @@ pub(super) fn render_assertion(
     // variant exposes its payload through a `.metadata` property of the variant
     // type.  Emit an `is`-pattern `when` block that binds the variant, then
     // delegate the leaf assertion to `render_discriminated_union_assertion`.
-    if kotlin_android_style {
-        if let Some(f) = assertion.field.as_deref().filter(|f| !f.is_empty()) {
-            if let Some((variant_pascal, inner_field)) = super::discriminated::parse_discriminated_union_access(f) {
-                let variant_var = format!("format{variant_pascal}");
-                // Resolve the discriminated-union container (`…metadata.format`) through the
-                // field resolver so list-result field paths (`results[0].metadata.format.…`)
-                // index into `.results.first()` like the flat-field assertions do, instead of
-                // hardcoding `{result_var}.metadata.format` (metadata lives on each result,
-                // not the top-level ExtractionResult, so batch results would not compile).
-                let format_path = match f.find(".format") {
-                    Some(idx) => &f[..idx + ".format".len()],
-                    None => f,
-                };
-                let container = field_resolver.accessor(format_path, "kotlin_android", result_var);
-                let _ = writeln!(out, "        when (val {variant_var} = {container}) {{");
-                let _ = writeln!(out, "            is FormatMetadata.{variant_pascal} -> {{");
-                super::discriminated::render_discriminated_union_assertion(out, assertion, &variant_var, &inner_field);
-                let _ = writeln!(out, "            }}");
-                let _ = writeln!(out, "            else -> {{}}");
-                let _ = writeln!(out, "        }}");
-                return;
-            }
-        }
+    if kotlin_android_style
+        && let Some(f) = assertion.field.as_deref().filter(|f| !f.is_empty())
+        && let Some((variant_pascal, inner_field)) = super::discriminated::parse_discriminated_union_access(f)
+    {
+        let variant_var = format!("format{variant_pascal}");
+        // Resolve the discriminated-union container (`…metadata.format`) through the
+        // field resolver so list-result field paths (`results[0].metadata.format.…`)
+        // index into `.results.first()` like the flat-field assertions do, instead of
+        // hardcoding `{result_var}.metadata.format` (metadata lives on each result,
+        // not the top-level ExtractionResult, so batch results would not compile).
+        let format_path = match f.find(".format") {
+            Some(idx) => &f[..idx + ".format".len()],
+            None => f,
+        };
+        let container = field_resolver.accessor(format_path, "kotlin_android", result_var);
+        let _ = writeln!(out, "        when (val {variant_var} = {container}) {{");
+        let _ = writeln!(out, "            is FormatMetadata.{variant_pascal} -> {{");
+        super::discriminated::render_discriminated_union_assertion(out, assertion, &variant_var, &inner_field);
+        let _ = writeln!(out, "            }}");
+        let _ = writeln!(out, "            else -> {{}}");
+        let _ = writeln!(out, "        }}");
+        return;
     }
 
     // Determine if this field is an enum type.
@@ -580,55 +578,55 @@ pub(super) fn render_assertion(
             }
         }
         "min_length" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    // For simple result types (ByteArray), use .size; for String use .length
-                    let length_accessor = if result_is_simple && field_expr == result_var {
-                        "size"
-                    } else {
-                        "length"
-                    };
-                    let _ = writeln!(
-                        out,
-                        "        assertTrue({string_field_expr}.{length_accessor} >= {n}, \"expected {length_accessor} >= {n}\")"
-                    );
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                // For simple result types (ByteArray), use .size; for String use .length
+                let length_accessor = if result_is_simple && field_expr == result_var {
+                    "size"
+                } else {
+                    "length"
+                };
+                let _ = writeln!(
+                    out,
+                    "        assertTrue({string_field_expr}.{length_accessor} >= {n}, \"expected {length_accessor} >= {n}\")"
+                );
             }
         }
         "max_length" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    // For simple result types (ByteArray), use .size; for String use .length
-                    let length_accessor = if result_is_simple && field_expr == result_var {
-                        "size"
-                    } else {
-                        "length"
-                    };
-                    let _ = writeln!(
-                        out,
-                        "        assertTrue({string_field_expr}.{length_accessor} <= {n}, \"expected {length_accessor} <= {n}\")"
-                    );
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                // For simple result types (ByteArray), use .size; for String use .length
+                let length_accessor = if result_is_simple && field_expr == result_var {
+                    "size"
+                } else {
+                    "length"
+                };
+                let _ = writeln!(
+                    out,
+                    "        assertTrue({string_field_expr}.{length_accessor} <= {n}, \"expected {length_accessor} <= {n}\")"
+                );
             }
         }
         "count_min" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(
-                        out,
-                        "        assertTrue({nonnull_field_expr}.size >= {n}, \"expected at least {n} elements\")"
-                    );
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(
+                    out,
+                    "        assertTrue({nonnull_field_expr}.size >= {n}, \"expected at least {n} elements\")"
+                );
             }
         }
         "count_equals" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(
-                        out,
-                        "        assertEquals({n}, {nonnull_field_expr}.size, \"expected exactly {n} elements\")"
-                    );
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(
+                    out,
+                    "        assertEquals({n}, {nonnull_field_expr}.size, \"expected exactly {n} elements\")"
+                );
             }
         }
         "is_true" => {

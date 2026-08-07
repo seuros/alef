@@ -15,14 +15,15 @@ pub(in crate::backends::magnus::gen_bindings::functions) fn magnus_ahash_pre_cal
 ) -> Vec<String> {
     let mut bindings = Vec::new();
     for p in params {
-        if let TypeRef::Map(_, _) = &p.ty {
-            if p.map_is_ahash && p.map_key_is_cow {
-                let bound_name = format!("__{}_ahash", p.name);
-                bindings.push(format!(
+        if let TypeRef::Map(_, _) = &p.ty
+            && p.map_is_ahash
+            && p.map_key_is_cow
+        {
+            let bound_name = format!("__{}_ahash", p.name);
+            bindings.push(format!(
                     "    let {bound_name} = {}.map(|m| m.into_iter().map(|(k, v)| (std::borrow::Cow::Owned(k), serde_json::Value::String(v))).collect::<ahash::AHashMap<std::borrow::Cow<'static, str>, serde_json::Value>>()); ",
                     p.name
                 ));
-            }
         }
     }
     bindings
@@ -46,17 +47,18 @@ pub(in crate::backends::magnus::gen_bindings::functions) fn magnus_call_args_wit
         .into_iter()
         .zip(params.iter())
         .map(|(term, p)| {
-            if let TypeRef::Map(_, _) = &p.ty {
-                if p.map_is_ahash && p.map_key_is_cow {
-                    let bound_name = format!("__{}_ahash", p.name);
-                    return if p.optional && p.is_ref {
-                        format!("{bound_name}.as_ref()")
-                    } else if p.is_ref {
-                        format!("{bound_name}.as_ref().unwrap()")
-                    } else {
-                        bound_name
-                    };
-                }
+            if let TypeRef::Map(_, _) = &p.ty
+                && p.map_is_ahash
+                && p.map_key_is_cow
+            {
+                let bound_name = format!("__{}_ahash", p.name);
+                return if p.optional && p.is_ref {
+                    format!("{bound_name}.as_ref()")
+                } else if p.is_ref {
+                    format!("{bound_name}.as_ref().unwrap()")
+                } else {
+                    bound_name
+                };
             }
             term.to_string()
         })

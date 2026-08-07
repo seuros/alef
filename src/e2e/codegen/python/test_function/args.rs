@@ -51,19 +51,19 @@ pub(super) fn build_args_and_setup(
         }
 
         if arg.arg_type == "test_backend" {
-            if let Some(trait_name) = &arg.trait_name {
-                if let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name) {
-                    let methods: Vec<&crate::core::ir::MethodDef> = type_defs
-                        .iter()
-                        .find(|t| t.name == *trait_name)
-                        .map(|t| t.methods.iter().collect())
-                        .unwrap_or_default();
-                    let emission = super::super::emit_test_backend(trait_bridge, &methods, fixture);
-                    arg_bindings.push(emission.setup_block);
-                    kwarg_exprs.push(emission.arg_expr);
-                    teardown.push_str(&emission.teardown_block);
-                    continue;
-                }
+            if let Some(trait_name) = &arg.trait_name
+                && let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name)
+            {
+                let methods: Vec<&crate::core::ir::MethodDef> = type_defs
+                    .iter()
+                    .find(|t| t.name == *trait_name)
+                    .map(|t| t.methods.iter().collect())
+                    .unwrap_or_default();
+                let emission = super::super::emit_test_backend(trait_bridge, &methods, fixture);
+                arg_bindings.push(emission.setup_block);
+                kwarg_exprs.push(emission.arg_expr);
+                teardown.push_str(&emission.teardown_block);
+                continue;
             }
             // Fall back to unimplemented if trait not found
             let emission = crate::e2e::codegen::TestBackendEmission::unimplemented("python");
@@ -242,28 +242,28 @@ fn build_handle_kwarg_value(
     handle_nested_types: &HashMap<String, String>,
     handle_dict_types: &HashSet<String>,
 ) -> String {
-    if let Some(type_name) = handle_nested_types.get(k) {
-        if let Some(nested_obj) = v.as_object() {
-            if nested_obj.is_empty() {
-                return format!("{type_name}()");
-            }
-            if handle_dict_types.contains(k) {
-                return json_to_python_literal(v);
-            }
-            let nested_kwargs: Vec<String> = nested_obj
-                .iter()
-                .map(|(nk, nv)| {
-                    let nested_snake_key = nk.to_snake_case();
-                    format!("{nested_snake_key}={}", json_to_python_literal(nv))
-                })
-                .collect();
-            return format!("{type_name}({})", nested_kwargs.join(", "));
+    if let Some(type_name) = handle_nested_types.get(k)
+        && let Some(nested_obj) = v.as_object()
+    {
+        if nested_obj.is_empty() {
+            return format!("{type_name}()");
         }
+        if handle_dict_types.contains(k) {
+            return json_to_python_literal(v);
+        }
+        let nested_kwargs: Vec<String> = nested_obj
+            .iter()
+            .map(|(nk, nv)| {
+                let nested_snake_key = nk.to_snake_case();
+                format!("{nested_snake_key}={}", json_to_python_literal(nv))
+            })
+            .collect();
+        return format!("{type_name}({})", nested_kwargs.join(", "));
     }
-    if k == "request_timeout" {
-        if let Some(ms) = v.as_u64() {
-            return format!("{}", ms / 1000);
-        }
+    if k == "request_timeout"
+        && let Some(ms) = v.as_u64()
+    {
+        return format!("{}", ms / 1000);
     }
     json_to_python_literal(v)
 }

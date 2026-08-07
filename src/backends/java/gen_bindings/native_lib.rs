@@ -286,36 +286,37 @@ pub(crate) fn gen_native_lib(
                 }
                 _ => None,
             };
-            if let Some(name) = inner_name {
-                if !opaque_type_names.contains(name.as_str()) && !bridge_type_aliases.contains(name.as_str()) {
-                    let type_snake = name.to_snake_case();
-                    let type_upper = type_snake.to_uppercase();
+            if let Some(name) = inner_name
+                && !opaque_type_names.contains(name.as_str())
+                && !bridge_type_aliases.contains(name.as_str())
+            {
+                let type_snake = name.to_snake_case();
+                let type_upper = type_snake.to_uppercase();
 
-                    let from_json_handle = format!("{}_{}_FROM_JSON", prefix.to_uppercase(), type_upper);
-                    let from_json_ffi = format!("{}_{}_from_json", prefix, type_snake);
-                    if emitted_from_json_handles.insert(from_json_handle.clone()) {
-                        let handle_code = crate::backends::java::template_env::render(
-                            "method_handle_from_json.jinja",
-                            minijinja::context! {
-                                handle_name => from_json_handle,
-                                ffi_name => from_json_ffi,
-                            },
-                        );
-                        accessor_handles.push(handle_code);
-                    }
+                let from_json_handle = format!("{}_{}_FROM_JSON", prefix.to_uppercase(), type_upper);
+                let from_json_ffi = format!("{}_{}_from_json", prefix, type_snake);
+                if emitted_from_json_handles.insert(from_json_handle.clone()) {
+                    let handle_code = crate::backends::java::template_env::render(
+                        "method_handle_from_json.jinja",
+                        minijinja::context! {
+                            handle_name => from_json_handle,
+                            ffi_name => from_json_ffi,
+                        },
+                    );
+                    accessor_handles.push(handle_code);
+                }
 
-                    let free_handle = format!("{}_{}_FREE", prefix.to_uppercase(), type_upper);
-                    let free_ffi = format!("{}_{}_free", prefix, type_snake);
-                    if emitted_free_handles.insert(free_handle.clone()) {
-                        let handle_code = crate::backends::java::template_env::render(
-                            "method_handle_free.jinja",
-                            minijinja::context! {
-                                handle_name => free_handle,
-                                ffi_name => free_ffi,
-                            },
-                        );
-                        accessor_handles.push(handle_code);
-                    }
+                let free_handle = format!("{}_{}_FREE", prefix.to_uppercase(), type_upper);
+                let free_ffi = format!("{}_{}_free", prefix, type_snake);
+                if emitted_free_handles.insert(free_handle.clone()) {
+                    let handle_code = crate::backends::java::template_env::render(
+                        "method_handle_free.jinja",
+                        minijinja::context! {
+                            handle_name => free_handle,
+                            ffi_name => free_ffi,
+                        },
+                    );
+                    accessor_handles.push(handle_code);
                 }
             }
         }
@@ -656,32 +657,33 @@ pub(crate) fn gen_native_lib(
                     },
                     _ => None,
                 };
-                if let Some(name) = param_named {
-                    if !bridge_type_aliases.contains(name.as_str()) && from_json_type_names.contains(name.as_str()) {
-                        let type_snake = name.to_snake_case();
-                        let type_upper = type_snake.to_uppercase();
-                        let from_json_handle = format!("{}_{}_FROM_JSON", prefix.to_uppercase(), type_upper);
-                        let from_json_ffi = format!("{}_{}_from_json", prefix, type_snake);
-                        if emitted_from_json_handles.insert(from_json_handle.clone()) {
-                            accessor_handles.push(crate::backends::java::template_env::render(
-                                "method_handle_from_json.jinja",
-                                minijinja::context! {
-                                    handle_name => from_json_handle,
-                                    ffi_name => from_json_ffi,
-                                },
-                            ));
-                        }
-                        let free_handle = format!("{}_{}_FREE", prefix.to_uppercase(), type_upper);
-                        let free_ffi = format!("{}_{}_free", prefix, type_snake);
-                        if emitted_free_handles.insert(free_handle.clone()) {
-                            accessor_handles.push(crate::backends::java::template_env::render(
-                                "method_handle_free.jinja",
-                                minijinja::context! {
-                                    handle_name => free_handle,
-                                    ffi_name => free_ffi,
-                                },
-                            ));
-                        }
+                if let Some(name) = param_named
+                    && !bridge_type_aliases.contains(name.as_str())
+                    && from_json_type_names.contains(name.as_str())
+                {
+                    let type_snake = name.to_snake_case();
+                    let type_upper = type_snake.to_uppercase();
+                    let from_json_handle = format!("{}_{}_FROM_JSON", prefix.to_uppercase(), type_upper);
+                    let from_json_ffi = format!("{}_{}_from_json", prefix, type_snake);
+                    if emitted_from_json_handles.insert(from_json_handle.clone()) {
+                        accessor_handles.push(crate::backends::java::template_env::render(
+                            "method_handle_from_json.jinja",
+                            minijinja::context! {
+                                handle_name => from_json_handle,
+                                ffi_name => from_json_ffi,
+                            },
+                        ));
+                    }
+                    let free_handle = format!("{}_{}_FREE", prefix.to_uppercase(), type_upper);
+                    let free_ffi = format!("{}_{}_free", prefix, type_snake);
+                    if emitted_free_handles.insert(free_handle.clone()) {
+                        accessor_handles.push(crate::backends::java::template_env::render(
+                            "method_handle_free.jinja",
+                            minijinja::context! {
+                                handle_name => free_handle,
+                                ffi_name => free_ffi,
+                            },
+                        ));
                     }
                 }
             }

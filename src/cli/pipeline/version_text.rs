@@ -229,15 +229,15 @@ pub(super) fn sync_e2e_go_mod(content: &str, module_path_fragment: &str, new_ver
         .lines()
         .map(|line| {
             let trimmed = line.trim();
-            if trimmed.starts_with(module_path_fragment) || line.trim_start().starts_with(module_path_fragment) {
-                if let Some(pos) = trimmed.rfind(" v") {
-                    let current_ver = &trimmed[pos + 2..];
-                    if current_ver != new_version {
-                        changed = true;
-                        let indent = &line[..line.len() - line.trim_start().len()];
-                        let module_path = &trimmed[..pos];
-                        return format!("{indent}{module_path} v{new_version}");
-                    }
+            if (trimmed.starts_with(module_path_fragment) || line.trim_start().starts_with(module_path_fragment))
+                && let Some(pos) = trimmed.rfind(" v")
+            {
+                let current_ver = &trimmed[pos + 2..];
+                if current_ver != new_version {
+                    changed = true;
+                    let indent = &line[..line.len() - line.trim_start().len()];
+                    let module_path = &trimmed[..pos];
+                    return format!("{indent}{module_path} v{new_version}");
                 }
             }
             line.to_string()

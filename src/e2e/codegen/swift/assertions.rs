@@ -114,11 +114,12 @@ pub(super) fn render_assertion(
     }
 
     // Skip assertions on fields that don't exist on the result type.
-    if let Some(f) = &assertion.field {
-        if !f.is_empty() && !field_resolver.is_valid_for_result(f) {
-            let _ = writeln!(out, "        // skipped: field '{f}' not available on result type");
-            return;
-        }
+    if let Some(f) = &assertion.field
+        && !f.is_empty()
+        && !field_resolver.is_valid_for_result(f)
+    {
+        let _ = writeln!(out, "        // skipped: field '{f}' not available on result type");
+        return;
     }
 
     // Skip length/count assertions whose collection leaf is bridged to a scalar
@@ -128,30 +129,30 @@ pub(super) fn render_assertion(
     // emits for a trailing `.length`/`.count`/`.size` segment does not compile.
     // The renderer cannot see the leaf's swift-bridge kind, so guard here and
     // skip, matching the go/csharp/java backends (which also skip these).
-    if let Some(f) = &assertion.field {
-        if let Some(collection) = ["length", "count", "size"]
+    if let Some(f) = &assertion.field
+        && let Some(collection) = ["length", "count", "size"]
             .iter()
             .find_map(|suffix| f.strip_suffix(&format!(".{suffix}")))
-            && !collection.is_empty()
-            && !field_resolver.leaf_is_vec_via_swift_map(field_resolver.resolve(collection))
-        {
-            let _ = writeln!(out, "        // skipped: field '{f}' not available on result type");
-            return;
-        }
+        && !collection.is_empty()
+        && !field_resolver.leaf_is_vec_via_swift_map(field_resolver.resolve(collection))
+    {
+        let _ = writeln!(out, "        // skipped: field '{f}' not available on result type");
+        return;
     }
 
     // Skip assertions that traverse a tagged-union variant boundary.
     // In Swift, FormatMetadata and similar enum-backed opaque types are exposed as
     // plain classes by swift-bridge — variant accessor methods (e.g., `.excel()`)
     // are not generated, so such assertions cannot be expressed.
-    if let Some(f) = &assertion.field {
-        if !f.is_empty() && field_resolver.tagged_union_split(f).is_some() {
-            let _ = writeln!(
-                out,
-                "        // skipped: field '{f}' crosses a tagged-union variant boundary (not expressible in Swift)"
-            );
-            return;
-        }
+    if let Some(f) = &assertion.field
+        && !f.is_empty()
+        && field_resolver.tagged_union_split(f).is_some()
+    {
+        let _ = writeln!(
+            out,
+            "        // skipped: field '{f}' crosses a tagged-union variant boundary (not expressible in Swift)"
+        );
+        return;
     }
 
     // Determine if this field is an enum type.
@@ -820,68 +821,68 @@ pub(super) fn render_assertion(
             }
         }
         "min_length" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    // Use string_expr.count: for RustString fields string_expr already has
-                    // .toString() appended, giving a Swift String whose .count is character count.
-                    let _ = writeln!(out, "        XCTAssertGreaterThanOrEqual({string_expr}.count, {n})");
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                // Use string_expr.count: for RustString fields string_expr already has
+                // .toString() appended, giving a Swift String whose .count is character count.
+                let _ = writeln!(out, "        XCTAssertGreaterThanOrEqual({string_expr}.count, {n})");
             }
         }
         "max_length" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(out, "        XCTAssertLessThanOrEqual({string_expr}.count, {n})");
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(out, "        XCTAssertLessThanOrEqual({string_expr}.count, {n})");
             }
         }
         "count_min" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    // For fields nested inside an optional parent (e.g. document.nodes where
-                    // document is Optional), the accessor generates `result.document().nodes()`
-                    // which doesn't compile in Swift without optional chaining.
-                    if let Some(count_expr) = swift_array_count_expr(
-                        assertion.field.as_deref(),
-                        result_var,
-                        field_resolver,
-                        Some(&field_expr),
-                    ) {
-                        let _ = writeln!(out, "        XCTAssertGreaterThanOrEqual({count_expr}, {n})");
-                    } else {
-                        // swift_array_count_expr returns None when the field is a scalar String
-                        // marked (incorrectly) as an array in fields_array. Such fields don't
-                        // support .count and would produce invalid code.
-                        if let Some(f) = &assertion.field {
-                            let _ = writeln!(
-                                out,
-                                "        // skipped: field '{f}' is a scalar String without meaningful .count"
-                            );
-                        }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                // For fields nested inside an optional parent (e.g. document.nodes where
+                // document is Optional), the accessor generates `result.document().nodes()`
+                // which doesn't compile in Swift without optional chaining.
+                if let Some(count_expr) = swift_array_count_expr(
+                    assertion.field.as_deref(),
+                    result_var,
+                    field_resolver,
+                    Some(&field_expr),
+                ) {
+                    let _ = writeln!(out, "        XCTAssertGreaterThanOrEqual({count_expr}, {n})");
+                } else {
+                    // swift_array_count_expr returns None when the field is a scalar String
+                    // marked (incorrectly) as an array in fields_array. Such fields don't
+                    // support .count and would produce invalid code.
+                    if let Some(f) = &assertion.field {
+                        let _ = writeln!(
+                            out,
+                            "        // skipped: field '{f}' is a scalar String without meaningful .count"
+                        );
                     }
                 }
             }
         }
         "count_equals" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    if let Some(count_expr) = swift_array_count_expr(
-                        assertion.field.as_deref(),
-                        result_var,
-                        field_resolver,
-                        Some(&field_expr),
-                    ) {
-                        let _ = writeln!(out, "        XCTAssertEqual({count_expr}, {n})");
-                    } else {
-                        // swift_array_count_expr returns None when the field is a scalar String
-                        // marked (incorrectly) as an array in fields_array. Such fields don't
-                        // support .count and would produce invalid code.
-                        if let Some(f) = &assertion.field {
-                            let _ = writeln!(
-                                out,
-                                "        // skipped: field '{f}' is a scalar String without meaningful .count"
-                            );
-                        }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                if let Some(count_expr) = swift_array_count_expr(
+                    assertion.field.as_deref(),
+                    result_var,
+                    field_resolver,
+                    Some(&field_expr),
+                ) {
+                    let _ = writeln!(out, "        XCTAssertEqual({count_expr}, {n})");
+                } else {
+                    // swift_array_count_expr returns None when the field is a scalar String
+                    // marked (incorrectly) as an array in fields_array. Such fields don't
+                    // support .count and would produce invalid code.
+                    if let Some(f) = &assertion.field {
+                        let _ = writeln!(
+                            out,
+                            "        // skipped: field '{f}' is a scalar String without meaningful .count"
+                        );
                     }
                 }
             }

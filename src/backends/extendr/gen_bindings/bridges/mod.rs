@@ -366,18 +366,19 @@ pub(super) fn gen_extendr_flat_data_enum_struct(
     ));
 
     for variant in &enum_def.variants {
-        if !variant.fields.is_empty() && variant.is_tuple {
-            if let Some(first_field) = variant.fields.first() {
-                let field_name = heck::AsSnakeCase(variant.name.as_str()).to_string();
-                let inner_ty = mapper.map_type(&first_field.ty);
-                out.push_str(&template_env::render(
-                    "flat_enum_variant_field.jinja",
-                    minijinja::context! {
-                        field_name => &field_name,
-                        inner_ty => &inner_ty,
-                    },
-                ));
-            }
+        if !variant.fields.is_empty()
+            && variant.is_tuple
+            && let Some(first_field) = variant.fields.first()
+        {
+            let field_name = heck::AsSnakeCase(variant.name.as_str()).to_string();
+            let inner_ty = mapper.map_type(&first_field.ty);
+            out.push_str(&template_env::render(
+                "flat_enum_variant_field.jinja",
+                minijinja::context! {
+                    field_name => &field_name,
+                    inner_ty => &inner_ty,
+                },
+            ));
         }
     }
 

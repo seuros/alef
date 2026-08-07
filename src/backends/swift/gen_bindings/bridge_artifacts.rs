@@ -57,10 +57,10 @@ pub(crate) fn emit_swift_bridge_files(
             let sources_rust_bridge_c = package_root.join("Sources").join("RustBridgeC");
             let header_path = sources_rust_bridge_c.join("RustBridgeC.h");
 
-            if let Ok(existing) = std::fs::read_to_string(&header_path) {
-                if existing.contains("__swift_bridge__$") {
-                    return Ok(None);
-                }
+            if let Ok(existing) = std::fs::read_to_string(&header_path)
+                && existing.contains("__swift_bridge__$")
+            {
+                return Ok(None);
             }
             let minimal_header = format!(
                 "#ifndef RUST_BRIDGE_C_H\n\

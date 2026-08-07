@@ -147,10 +147,10 @@ fn find_latest_file(dir: &Path, suffix: &str) -> Result<PathBuf> {
 }
 
 fn publish_lang_config(config: &ResolvedCrateConfig) -> crate::core::config::publish::PublishLanguageConfig {
-    if let Some(publish) = &config.publish {
-        if let Some(cfg) = publish.languages.get("python") {
-            return cfg.clone();
-        }
+    if let Some(publish) = &config.publish
+        && let Some(cfg) = publish.languages.get("python")
+    {
+        return cfg.clone();
     }
     crate::core::config::publish::PublishLanguageConfig::default()
 }

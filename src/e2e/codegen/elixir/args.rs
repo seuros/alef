@@ -163,60 +163,60 @@ pub(super) fn build_args_and_setup(
         }
 
         if arg.arg_type == "test_backend" {
-            if let Some(trait_name) = &arg.trait_name {
-                if let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name) {
-                    // Collect methods from both the main trait and its super-trait (if present).
-                    // The super-trait methods are needed so stubs implement the full interface.
-                    let mut methods: Vec<&crate::core::ir::MethodDef> = type_defs
-                        .iter()
-                        .find(|t| t.name == *trait_name)
-                        .map(|t| t.methods.iter().collect())
-                        .unwrap_or_default();
+            if let Some(trait_name) = &arg.trait_name
+                && let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name)
+            {
+                // Collect methods from both the main trait and its super-trait (if present).
+                // The super-trait methods are needed so stubs implement the full interface.
+                let mut methods: Vec<&crate::core::ir::MethodDef> = type_defs
+                    .iter()
+                    .find(|t| t.name == *trait_name)
+                    .map(|t| t.methods.iter().collect())
+                    .unwrap_or_default();
 
-                    // If there's a super-trait, also collect its methods.
-                    if let Some(super_trait) = &trait_bridge.super_trait {
-                        if let Some(super_type) = type_defs.iter().find(|t| &t.name == super_trait) {
-                            for method in &super_type.methods {
-                                // Only add if not already present (avoid duplicates).
-                                if !methods.iter().any(|m| m.name == method.name) {
-                                    methods.push(method);
-                                }
-                            }
+                // If there's a super-trait, also collect its methods.
+                if let Some(super_trait) = &trait_bridge.super_trait
+                    && let Some(super_type) = type_defs.iter().find(|t| &t.name == super_trait)
+                {
+                    for method in &super_type.methods {
+                        // Only add if not already present (avoid duplicates).
+                        if !methods.iter().any(|m| m.name == method.name) {
+                            methods.push(method);
                         }
                     }
-
-                    // Derive the NIF module from the test module path: the NIF module
-                    // follows the "{AppModule}.Native" convention used by the Elixir scaffold.
-                    let elixir_nif_module = format!("{module_path}.Native");
-                    let emission = emit_test_backend(trait_bridge, &methods, fixture, &elixir_nif_module, module_path);
-                    teardown_block.push_str(&emission.teardown_block);
-
-                    // Extract only the test-level setup part (after the marker).
-                    // Module-level defs are emitted at file level by render_test_file, not here.
-                    if let Some(pos) = emission.setup_block.find("__TRAIT_BRIDGE_MODULE_DEFS_END__") {
-                        let marker_end = emission.setup_block[pos + 32..]
-                            .find('\n')
-                            .map(|i| pos + 32 + i + 1)
-                            .unwrap_or_else(|| emission.setup_block.len());
-                        let test_setup = emission.setup_block[marker_end..].trim_start().to_string();
-                        if !test_setup.is_empty() {
-                            setup_lines.push(test_setup);
-                        }
-                    } else {
-                        // Fallback for non-marker blocks (shouldn't happen for trait bridges)
-                        setup_lines.push(emission.setup_block);
-                    }
-
-                    parts.push(emission.arg_expr);
-
-                    // For register_fn traits (plugin pattern), Rustler requires a second "name" argument.
-                    // Extract the backend name from fixture input (same logic as emit_test_backend).
-                    if trait_bridge.register_fn.is_some() {
-                        let backend_name = extract_backend_name_from_input(&fixture.input, &fixture.id);
-                        parts.push(format!("\"{}\"", escape_elixir(&backend_name)));
-                    }
-                    continue;
                 }
+
+                // Derive the NIF module from the test module path: the NIF module
+                // follows the "{AppModule}.Native" convention used by the Elixir scaffold.
+                let elixir_nif_module = format!("{module_path}.Native");
+                let emission = emit_test_backend(trait_bridge, &methods, fixture, &elixir_nif_module, module_path);
+                teardown_block.push_str(&emission.teardown_block);
+
+                // Extract only the test-level setup part (after the marker).
+                // Module-level defs are emitted at file level by render_test_file, not here.
+                if let Some(pos) = emission.setup_block.find("__TRAIT_BRIDGE_MODULE_DEFS_END__") {
+                    let marker_end = emission.setup_block[pos + 32..]
+                        .find('\n')
+                        .map(|i| pos + 32 + i + 1)
+                        .unwrap_or_else(|| emission.setup_block.len());
+                    let test_setup = emission.setup_block[marker_end..].trim_start().to_string();
+                    if !test_setup.is_empty() {
+                        setup_lines.push(test_setup);
+                    }
+                } else {
+                    // Fallback for non-marker blocks (shouldn't happen for trait bridges)
+                    setup_lines.push(emission.setup_block);
+                }
+
+                parts.push(emission.arg_expr);
+
+                // For register_fn traits (plugin pattern), Rustler requires a second "name" argument.
+                // Extract the backend name from fixture input (same logic as emit_test_backend).
+                if trait_bridge.register_fn.is_some() {
+                    let backend_name = extract_backend_name_from_input(&fixture.input, &fixture.id);
+                    parts.push(format!("\"{}\"", escape_elixir(&backend_name)));
+                }
+                continue;
             }
             let emission = crate::e2e::codegen::TestBackendEmission::unimplemented("elixir");
             setup_lines.push(format!("# {}", emission.arg_expr));
@@ -250,63 +250,63 @@ pub(super) fn build_args_and_setup(
             Some(v) => {
                 // For file_path args, prepend the path to the test_documents directory
                 // relative to the e2e/elixir/ directory where `mix test` runs.
-                if arg.arg_type == "file_path" {
-                    if let Some(path_str) = v.as_str() {
-                        let full_path = format!("{test_documents_path}/{path_str}");
-                        let formatted = format!("\"{}\"", escape_elixir(&full_path));
+                if arg.arg_type == "file_path"
+                    && let Some(path_str) = v.as_str()
+                {
+                    let full_path = format!("{test_documents_path}/{path_str}");
+                    let formatted = format!("\"{}\"", escape_elixir(&full_path));
+                    if arg.optional {
+                        parts.push(format!("{}: {formatted}", arg.name));
+                    } else {
+                        parts.push(formatted);
+                    }
+                    continue;
+                }
+                // For bytes args, use File.read! for file paths and Base.decode64! for base64.
+                // Inline text (starts with '<', '{', '[' or contains spaces) is used as-is (UTF-8 binary).
+                if arg.arg_type == "bytes"
+                    && let Some(raw) = v.as_str()
+                {
+                    let var_name = &arg.name;
+                    if raw.starts_with('<') || raw.starts_with('{') || raw.starts_with('[') || raw.contains(' ') {
+                        // Inline text - use as a binary string.
+                        let formatted = format!("\"{}\"", escape_elixir(raw));
                         if arg.optional {
                             parts.push(format!("{}: {formatted}", arg.name));
                         } else {
                             parts.push(formatted);
                         }
-                        continue;
-                    }
-                }
-                // For bytes args, use File.read! for file paths and Base.decode64! for base64.
-                // Inline text (starts with '<', '{', '[' or contains spaces) is used as-is (UTF-8 binary).
-                if arg.arg_type == "bytes" {
-                    if let Some(raw) = v.as_str() {
-                        let var_name = &arg.name;
-                        if raw.starts_with('<') || raw.starts_with('{') || raw.starts_with('[') || raw.contains(' ') {
-                            // Inline text - use as a binary string.
-                            let formatted = format!("\"{}\"", escape_elixir(raw));
+                    } else {
+                        let first = raw.chars().next().unwrap_or('\0');
+                        let is_file_path = (first.is_ascii_alphanumeric() || first == '_')
+                            && raw
+                                .find('/')
+                                .is_some_and(|slash_pos| slash_pos > 0 && raw[slash_pos + 1..].contains('.'));
+                        if is_file_path {
+                            // Looks like "dir/file.ext" - read from the
+                            // configured test-documents directory.
+                            let full_path = format!("{test_documents_path}/{raw}");
+                            let escaped = escape_elixir(&full_path);
+                            setup_lines.push(format!("{var_name} = File.read!(\"{escaped}\")"));
                             if arg.optional {
-                                parts.push(format!("{}: {formatted}", arg.name));
+                                parts.push(format!("{}: {var_name}", arg.name));
                             } else {
-                                parts.push(formatted);
+                                parts.push(var_name.to_string());
                             }
                         } else {
-                            let first = raw.chars().next().unwrap_or('\0');
-                            let is_file_path = (first.is_ascii_alphanumeric() || first == '_')
-                                && raw
-                                    .find('/')
-                                    .is_some_and(|slash_pos| slash_pos > 0 && raw[slash_pos + 1..].contains('.'));
-                            if is_file_path {
-                                // Looks like "dir/file.ext" - read from the
-                                // configured test-documents directory.
-                                let full_path = format!("{test_documents_path}/{raw}");
-                                let escaped = escape_elixir(&full_path);
-                                setup_lines.push(format!("{var_name} = File.read!(\"{escaped}\")"));
-                                if arg.optional {
-                                    parts.push(format!("{}: {var_name}", arg.name));
-                                } else {
-                                    parts.push(var_name.to_string());
-                                }
+                            // Treat as base64-encoded binary.
+                            setup_lines.push(format!(
+                                "{var_name} = Base.decode64!(\"{}\", padding: false)",
+                                escape_elixir(raw)
+                            ));
+                            if arg.optional {
+                                parts.push(format!("{}: {var_name}", arg.name));
                             } else {
-                                // Treat as base64-encoded binary.
-                                setup_lines.push(format!(
-                                    "{var_name} = Base.decode64!(\"{}\", padding: false)",
-                                    escape_elixir(raw)
-                                ));
-                                if arg.optional {
-                                    parts.push(format!("{}: {var_name}", arg.name));
-                                } else {
-                                    parts.push(var_name.to_string());
-                                }
+                                parts.push(var_name.to_string());
                             }
                         }
-                        continue;
                     }
+                    continue;
                 }
                 // For json_object args with options_type+options_via, build a proper struct.
                 if arg.arg_type == "json_object" && !v.is_null() {
@@ -666,10 +666,10 @@ fn extract_backend_name_from_input(input: &serde_json::Value, fallback: &str) ->
             return s.to_string();
         }
         for v in obj.values() {
-            if let Some(inner) = v.as_object() {
-                if let Some(s) = inner.get("name").and_then(|v| v.as_str()) {
-                    return s.to_string();
-                }
+            if let Some(inner) = v.as_object()
+                && let Some(s) = inner.get("name").and_then(|v| v.as_str())
+            {
+                return s.to_string();
             }
         }
         for v in obj.values() {

@@ -223,10 +223,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     }
                 }
 
-                if let Ok(removed) = pipeline::cleanup_orphaned_files(&current_gen_paths) {
-                    if removed > 0 {
-                        tracing::info!("Removed {removed} stale alef-generated file(s)");
-                    }
+                if let Ok(removed) = pipeline::cleanup_orphaned_files(&current_gen_paths)
+                    && removed > 0
+                {
+                    tracing::info!("Removed {removed} stale alef-generated file(s)");
                 }
 
                 {
@@ -235,10 +235,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             .into_iter()
                             .filter(|d| d.exists())
                             .collect();
-                    if let Ok(removed) = pipeline::sweep_orphans(&roots, &current_gen_paths) {
-                        if removed > 0 {
-                            tracing::info!("Removed {removed} stale alef-generated file(s)");
-                        }
+                    if let Ok(removed) = pipeline::sweep_orphans(&roots, &current_gen_paths)
+                        && removed > 0
+                    {
+                        tracing::info!("Removed {removed} stale alef-generated file(s)");
                     }
                 }
 

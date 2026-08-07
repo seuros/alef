@@ -617,7 +617,12 @@ fn download_libs_dart_uses_package_qualified_native_loader_import() {
     let files = DartBackend.generate_bindings(&api, &make_config()).unwrap();
     let content = files
         .iter()
-        .find(|f| f.path.to_string_lossy().replace('\\', "/").ends_with("bin/download_libs.dart"))
+        .find(|f| {
+            f.path
+                .to_string_lossy()
+                .replace('\\', "/")
+                .ends_with("bin/download_libs.dart")
+        })
         .map(|f| f.content.as_str())
         .expect("missing bin/download_libs.dart");
 
@@ -2205,7 +2210,11 @@ fn build_config_for_frb_emits_carry_frb_cfg_gates_step_with_rust_source_paths() 
         .join("src")
         .join("frb_generated.rs");
 
-    if let PostBuildStep::CarryFrbCfgGates { source_path, target_path } = carry_steps[0] {
+    if let PostBuildStep::CarryFrbCfgGates {
+        source_path,
+        target_path,
+    } = carry_steps[0]
+    {
         assert_eq!(
             source_path, &expected_source,
             "CarryFrbCfgGates must scan the FRB source crate's lib.rs"

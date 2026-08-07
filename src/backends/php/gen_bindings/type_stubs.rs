@@ -110,7 +110,12 @@ pub(super) fn generate_type_stubs(
         .filter(|e| is_untagged_data_enum(e))
         .map(|e| e.name.clone())
         .collect();
-    let opaque_types: AHashSet<String> = api.types.iter().filter(|t| t.is_opaque).map(|t| t.name.clone()).collect();
+    let opaque_types: AHashSet<String> = api
+        .types
+        .iter()
+        .filter(|t| t.is_opaque)
+        .map(|t| t.name.clone())
+        .collect();
 
     for typ in api
         .types
@@ -143,11 +148,10 @@ pub(super) fn generate_type_stubs(
         // struct (whether or not it made the constructor) still gets a getter, per the real
         // extension's `for field in binding_fields(&typ.fields)` getter loop in structs.rs —
         // so a field can be readable via `get<Field>()` while being unreachable from `new(...)`.
-        let is_constructor_param = |f: &FieldDef| {
-            f.cfg.is_none() && php_field_can_be_constructor_param(&f.ty, &enum_names, &opaque_types)
-        };
+        let is_constructor_param =
+            |f: &FieldDef| f.cfg.is_none() && php_field_can_be_constructor_param(&f.ty, &enum_names, &opaque_types);
 
-        for excluded in binding_fields(&typ.fields).filter(|f| !is_constructor_param(*f)) {
+        for excluded in binding_fields(&typ.fields).filter(|f| !is_constructor_param(f)) {
             tracing::warn!(
                 "php backend stub: {}.{} cannot be represented as a #[php(constructor)] parameter \
                  (its mapped type has no ext-php-rs constructor-param support); the PHPStan stub \
@@ -158,8 +162,9 @@ pub(super) fn generate_type_stubs(
             );
         }
 
-        let mut ctor_fields: Vec<&FieldDef> =
-            binding_fields(&typ.fields).filter(|f| is_constructor_param(*f)).collect();
+        let mut ctor_fields: Vec<&FieldDef> = binding_fields(&typ.fields)
+            .filter(|f| is_constructor_param(f))
+            .collect();
         ctor_fields.sort_by_key(|f| f.optional);
 
         let params: Vec<String> = ctor_fields

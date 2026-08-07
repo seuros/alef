@@ -29,30 +29,27 @@ pub(in crate::backends::ffi::gen_bindings) fn should_skip_method_wrapper(
     }
 
     for param in &method.params {
-        if let TypeRef::Named(name) = &param.ty {
-            if !path_map.contains_key(name.as_str()) {
-                return true;
-            }
+        if let TypeRef::Named(name) = &param.ty
+            && !path_map.contains_key(name.as_str())
+        {
+            return true;
         }
     }
 
-    if method.returns_ref {
-        if let TypeRef::Named(name) = &method.return_type {
-            if name == &typ.name {
-                return true;
-            }
-        }
+    if method.returns_ref
+        && let TypeRef::Named(name) = &method.return_type
+        && name == &typ.name
+    {
+        return true;
     }
 
     if typ.is_opaque
         && method.is_static
         && !matches!(method.name.as_str(), "default" | "to_json" | "from_json" | "clone")
+        && let TypeRef::Named(name) = &method.return_type
+        && name == &typ.name
     {
-        if let TypeRef::Named(name) = &method.return_type {
-            if name == &typ.name {
-                return true;
-            }
-        }
+        return true;
     }
 
     false

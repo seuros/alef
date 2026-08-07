@@ -114,40 +114,40 @@ pub(super) fn build_args_and_setup(
         }
 
         if arg.arg_type == "test_backend" {
-            if let Some(trait_name) = &arg.trait_name {
-                if let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name) {
-                    let mut methods: Vec<&crate::core::ir::MethodDef> = type_defs
-                        .iter()
-                        .find(|t| t.name == *trait_name)
-                        .map(|t| t.methods.iter().collect())
-                        .unwrap_or_default();
+            if let Some(trait_name) = &arg.trait_name
+                && let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name)
+            {
+                let mut methods: Vec<&crate::core::ir::MethodDef> = type_defs
+                    .iter()
+                    .find(|t| t.name == *trait_name)
+                    .map(|t| t.methods.iter().collect())
+                    .unwrap_or_default();
 
-                    if let Some(super_trait) = &trait_bridge.super_trait {
-                        if let Some(super_type) = type_defs.iter().find(|t| &t.rust_path == super_trait) {
-                            for method in &super_type.methods {
-                                if !methods.iter().any(|m| m.name == method.name) {
-                                    methods.push(method);
-                                }
-                            }
+                if let Some(super_trait) = &trait_bridge.super_trait
+                    && let Some(super_type) = type_defs.iter().find(|t| &t.rust_path == super_trait)
+                {
+                    for method in &super_type.methods {
+                        if !methods.iter().any(|m| m.name == method.name) {
+                            methods.push(method);
                         }
                     }
-
-                    let excluded_named =
-                        crate::e2e::codegen::recipe::trait_bridge_excluded_type_names(config, type_defs, &methods);
-                    let enum_names: std::collections::HashSet<&str> = enums.iter().map(|e| e.name.as_str()).collect();
-                    let emission = emit_test_backend_with_context(
-                        trait_bridge,
-                        &methods,
-                        fixture,
-                        &excluded_named,
-                        import_alias,
-                        &enum_names,
-                        enums,
-                    );
-                    package_decls.push(emission.setup_block);
-                    parts.push(emission.arg_expr);
-                    continue;
                 }
+
+                let excluded_named =
+                    crate::e2e::codegen::recipe::trait_bridge_excluded_type_names(config, type_defs, &methods);
+                let enum_names: std::collections::HashSet<&str> = enums.iter().map(|e| e.name.as_str()).collect();
+                let emission = emit_test_backend_with_context(
+                    trait_bridge,
+                    &methods,
+                    fixture,
+                    &excluded_named,
+                    import_alias,
+                    &enum_names,
+                    enums,
+                );
+                package_decls.push(emission.setup_block);
+                parts.push(emission.arg_expr);
+                continue;
             }
             let emission = crate::e2e::codegen::TestBackendEmission::unimplemented("go");
             setup_lines.push(format!("// {}", emission.arg_expr));

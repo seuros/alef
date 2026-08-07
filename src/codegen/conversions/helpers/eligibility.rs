@@ -233,15 +233,15 @@ fn field_has_path_mismatch(
     };
 
     if let Some(field_path) = &field.type_rust_path {
-        if let Some(enum_path) = enum_rust_paths.get(name) {
-            if !paths_compatible(field_path, enum_path) {
-                return true;
-            }
+        if let Some(enum_path) = enum_rust_paths.get(name)
+            && !paths_compatible(field_path, enum_path)
+        {
+            return true;
         }
-        if let Some(type_path) = type_rust_paths.get(name) {
-            if !paths_compatible(field_path, type_path) {
-                return true;
-            }
+        if let Some(type_path) = type_rust_paths.get(name)
+            && !paths_compatible(field_path, type_path)
+        {
+            return true;
         }
     }
     false

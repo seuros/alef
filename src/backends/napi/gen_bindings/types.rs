@@ -277,14 +277,14 @@ pub(super) fn gen_opaque_instance_method(
     capsule_types: &std::collections::HashMap<String, crate::core::config::NodeCapsuleTypeConfig>,
 ) -> String {
     let params = function_params(&method.params, &|ty| {
-        if let crate::core::ir::TypeRef::Named(name) = ty {
-            if let Some(capsule_cfg) = capsule_types.get(name) {
-                return format!(
-                    "{}::{}",
-                    capsule_cfg.from_module.replace('-', "_"),
-                    capsule_cfg.type_name
-                );
-            }
+        if let crate::core::ir::TypeRef::Named(name) = ty
+            && let Some(capsule_cfg) = capsule_types.get(name)
+        {
+            return format!(
+                "{}::{}",
+                capsule_cfg.from_module.replace('-', "_"),
+                capsule_cfg.type_name
+            );
         }
         mapper.map_type(ty)
     });

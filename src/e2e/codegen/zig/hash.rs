@@ -84,27 +84,27 @@ pub(super) fn detect_stale_zig_hash(hash: &str, current_version: &str, pkg_name:
 /// Returns `None` when the home / local-app-data environment variable is unset.
 fn zig_hash_cache_path() -> Option<std::path::PathBuf> {
     // XDG_CACHE_HOME takes precedence on Linux.
-    if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
-        if !xdg.is_empty() {
-            return Some(std::path::PathBuf::from(xdg).join("alef").join("zig-hashes.json"));
-        }
+    if let Ok(xdg) = std::env::var("XDG_CACHE_HOME")
+        && !xdg.is_empty()
+    {
+        return Some(std::path::PathBuf::from(xdg).join("alef").join("zig-hashes.json"));
     }
     // macOS and Linux: $HOME/.cache/alef/zig-hashes.json
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.is_empty() {
-            return Some(
-                std::path::PathBuf::from(home)
-                    .join(".cache")
-                    .join("alef")
-                    .join("zig-hashes.json"),
-            );
-        }
+    if let Ok(home) = std::env::var("HOME")
+        && !home.is_empty()
+    {
+        return Some(
+            std::path::PathBuf::from(home)
+                .join(".cache")
+                .join("alef")
+                .join("zig-hashes.json"),
+        );
     }
     // Windows: %LOCALAPPDATA%\alef\zig-hashes.json
-    if let Ok(local_app) = std::env::var("LOCALAPPDATA") {
-        if !local_app.is_empty() {
-            return Some(std::path::PathBuf::from(local_app).join("alef").join("zig-hashes.json"));
-        }
+    if let Ok(local_app) = std::env::var("LOCALAPPDATA")
+        && !local_app.is_empty()
+    {
+        return Some(std::path::PathBuf::from(local_app).join("alef").join("zig-hashes.json"));
     }
     None
 }

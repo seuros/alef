@@ -180,13 +180,12 @@ pub(super) fn render_test_case(
     }
 
     for assertion in &fixture.assertions {
-        if result_is_simple {
-            if let Some(f) = &assertion.field {
-                if !f.is_empty() {
-                    let _ = writeln!(out, "  // skipped: field '{f}' not accessible on simple result type");
-                    continue;
-                }
-            }
+        if result_is_simple
+            && let Some(f) = &assertion.field
+            && !f.is_empty()
+        {
+            let _ = writeln!(out, "  // skipped: field '{f}' not accessible on simple result type");
+            continue;
         }
         render_assertion(
             out,

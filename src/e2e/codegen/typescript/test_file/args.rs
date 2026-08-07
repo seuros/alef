@@ -101,25 +101,25 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
         }
 
         if arg.arg_type == "test_backend" {
-            if let Some(trait_name) = &arg.trait_name {
-                if let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name) {
-                    let methods: Vec<&crate::core::ir::MethodDef> = type_defs
-                        .iter()
-                        .find(|t| t.name == *trait_name)
-                        .map(|t| t.methods.iter().collect())
-                        .unwrap_or_default();
-                    let emission = crate::e2e::codegen::emit_test_backend(lang, trait_bridge, &methods, fixture);
-                    setup_lines.push(emission.setup_block);
-                    // Assign the bridge to a variable for NAPI cleanup
-                    if lang == "node" {
-                        let bridge_var = format!("_bridge_{}", arg.name);
-                        setup_lines.push(format!("const {} = {};", bridge_var, emission.arg_expr));
-                        parts.push(bridge_var);
-                    } else {
-                        parts.push(emission.arg_expr);
-                    }
-                    continue;
+            if let Some(trait_name) = &arg.trait_name
+                && let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name)
+            {
+                let methods: Vec<&crate::core::ir::MethodDef> = type_defs
+                    .iter()
+                    .find(|t| t.name == *trait_name)
+                    .map(|t| t.methods.iter().collect())
+                    .unwrap_or_default();
+                let emission = crate::e2e::codegen::emit_test_backend(lang, trait_bridge, &methods, fixture);
+                setup_lines.push(emission.setup_block);
+                // Assign the bridge to a variable for NAPI cleanup
+                if lang == "node" {
+                    let bridge_var = format!("_bridge_{}", arg.name);
+                    setup_lines.push(format!("const {} = {};", bridge_var, emission.arg_expr));
+                    parts.push(bridge_var);
+                } else {
+                    parts.push(emission.arg_expr);
                 }
+                continue;
             }
             let emission = crate::e2e::codegen::TestBackendEmission::unimplemented(lang);
             setup_lines.push(format!("// {}", emission.arg_expr));

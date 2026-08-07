@@ -118,24 +118,22 @@ impl E2eCodegen for WasmCodegen {
                     // `should_include_fixture` does not inspect `input.language`, so without this
                     // override fixtures like `{ input: { language: "abl" } }` (where "abl" is not
                     // in the wasm bundle) would be emitted normally and fail at runtime.
-                    if base_include {
-                        if let Some(ref wasm_langs) = wasm_languages {
-                            // Look for the target grammar in either of the two shapes
-                            // alef fixtures use: top-level `input.language` (function-call
-                            // shape) or nested `input.config.language` (config-object shape
-                            // used by smoke fixtures and anything taking a typed config DTO).
-                            let fix_lang = fixture.input.get("language").and_then(|v| v.as_str()).or_else(|| {
-                                fixture
-                                    .input
-                                    .get("config")
-                                    .and_then(|c| c.get("language"))
-                                    .and_then(|v| v.as_str())
-                            });
-                            if let Some(fix_lang) = fix_lang {
-                                if !wasm_langs.iter().any(|l| l == fix_lang) {
-                                    base_include = false;
-                                }
-                            }
+                    if base_include && let Some(ref wasm_langs) = wasm_languages {
+                        // Look for the target grammar in either of the two shapes
+                        // alef fixtures use: top-level `input.language` (function-call
+                        // shape) or nested `input.config.language` (config-object shape
+                        // used by smoke fixtures and anything taking a typed config DTO).
+                        let fix_lang = fixture.input.get("language").and_then(|v| v.as_str()).or_else(|| {
+                            fixture
+                                .input
+                                .get("config")
+                                .and_then(|c| c.get("language"))
+                                .and_then(|v| v.as_str())
+                        });
+                        if let Some(fix_lang) = fix_lang
+                            && !wasm_langs.iter().any(|l| l == fix_lang)
+                        {
+                            base_include = false;
                         }
                     }
 

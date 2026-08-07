@@ -137,34 +137,33 @@ fn build_visitor_py_args(method: &MethodDef, bridge_cfg: &TraitBridgeConfig) -> 
         .params
         .iter()
         .map(|p| {
-            if let TypeRef::Named(n) = &p.ty {
-                if Some(n.as_str()) == bridge_cfg.context_type.as_deref() {
-                    return if p.is_ref {
-                        format!("nodecontext_to_py_dict(py, {})", p.name)
-                    } else {
-                        format!("nodecontext_to_py_dict(py, &{})", p.name)
-                    };
-                }
+            if let TypeRef::Named(n) = &p.ty
+                && Some(n.as_str()) == bridge_cfg.context_type.as_deref()
+            {
+                return if p.is_ref {
+                    format!("nodecontext_to_py_dict(py, {})", p.name)
+                } else {
+                    format!("nodecontext_to_py_dict(py, &{})", p.name)
+                };
             }
             if p.optional && matches!(&p.ty, TypeRef::String) && p.is_ref {
                 return p.name.clone();
             }
-            if p.is_ref {
-                if let TypeRef::Vec(inner) = &p.ty {
-                    if matches!(inner.as_ref(), TypeRef::String) {
-                        return p.name.clone();
-                    }
-                }
+            if p.is_ref
+                && let TypeRef::Vec(inner) = &p.ty
+                && matches!(inner.as_ref(), TypeRef::String)
+            {
+                return p.name.clone();
             }
-            if let TypeRef::Vec(inner) = &p.ty {
-                if matches!(inner.as_ref(), TypeRef::String) {
-                    return format!("{}.to_vec()", p.name);
-                }
+            if let TypeRef::Vec(inner) = &p.ty
+                && matches!(inner.as_ref(), TypeRef::String)
+            {
+                return format!("{}.to_vec()", p.name);
             }
-            if let TypeRef::Optional(inner) = &p.ty {
-                if matches!(inner.as_ref(), TypeRef::String) {
-                    return p.name.clone();
-                }
+            if let TypeRef::Optional(inner) = &p.ty
+                && matches!(inner.as_ref(), TypeRef::String)
+            {
+                return p.name.clone();
             }
             if matches!(&p.ty, TypeRef::String) && p.is_ref {
                 return p.name.clone();

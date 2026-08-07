@@ -26,21 +26,20 @@ pub(in crate::backends::wasm::gen_bindings) fn gen_function_with_emitted_dtos(
     let mut input_dto_names: HashMap<String, String> = HashMap::new();
 
     for p in &func.params {
-        if let TypeRef::Named(name) = &p.ty {
-            if !opaque_types.contains(name.as_str())
-                && let Some(type_def) = api.types.iter().find(|t| t.name == *name)
-                && should_have_input_dto(type_def)
-            {
-                if emitted_input_dtos.contains(name) {
-                    input_dto_names.insert(name.clone(), format!("{}Input", name));
-                    continue;
-                }
-                let (dto_code, dto_name) = gen_input_dto_for_type(name, core_import, type_def);
-                if !dto_code.is_empty() {
-                    input_dtos.push_str(&dto_code);
-                    input_dtos.push_str("\n\n");
-                    input_dto_names.insert(name.clone(), dto_name);
-                }
+        if let TypeRef::Named(name) = &p.ty
+            && !opaque_types.contains(name.as_str())
+            && let Some(type_def) = api.types.iter().find(|t| t.name == *name)
+            && should_have_input_dto(type_def)
+        {
+            if emitted_input_dtos.contains(name) {
+                input_dto_names.insert(name.clone(), format!("{}Input", name));
+                continue;
+            }
+            let (dto_code, dto_name) = gen_input_dto_for_type(name, core_import, type_def);
+            if !dto_code.is_empty() {
+                input_dtos.push_str(&dto_code);
+                input_dtos.push_str("\n\n");
+                input_dto_names.insert(name.clone(), dto_name);
             }
         }
     }

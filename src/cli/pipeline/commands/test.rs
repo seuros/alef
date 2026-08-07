@@ -169,17 +169,18 @@ fn compute_pdfium_dir() -> Option<String> {
 
     loop {
         let target_release = current.join("target").join("release");
-        if target_release.exists() {
-            if let Ok(entries) = std::fs::read_dir(&target_release) {
-                for entry in entries.flatten() {
-                    let name = entry.file_name();
-                    let Some(name_str) = name.to_str() else { continue };
-                    if name_str.starts_with(lib_prefix) && name_str.ends_with(lib_ext) {
-                        if let Some(path_str) = target_release.to_str() {
-                            info!("Native library directory: {}", path_str);
-                            return Some(path_str.to_string());
-                        }
-                    }
+        if target_release.exists()
+            && let Ok(entries) = std::fs::read_dir(&target_release)
+        {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let Some(name_str) = name.to_str() else { continue };
+                if name_str.starts_with(lib_prefix)
+                    && name_str.ends_with(lib_ext)
+                    && let Some(path_str) = target_release.to_str()
+                {
+                    info!("Native library directory: {}", path_str);
+                    return Some(path_str.to_string());
                 }
             }
         }

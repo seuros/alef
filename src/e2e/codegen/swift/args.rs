@@ -192,18 +192,18 @@ pub(super) fn build_args_and_setup(
         }
 
         if arg.arg_type == "test_backend" {
-            if let Some(trait_name) = &arg.trait_name {
-                if let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name) {
-                    let methods: Vec<&crate::core::ir::MethodDef> = type_defs
-                        .iter()
-                        .find(|t| t.name == *trait_name)
-                        .map(|t| t.methods.iter().collect())
-                        .unwrap_or_default();
-                    let emission = super::stubs::emit_test_backend(trait_bridge, &methods, fixture, enums);
-                    setup_lines.push(emission.setup_block);
-                    parts.push((idx, emission.arg_expr));
-                    continue;
-                }
+            if let Some(trait_name) = &arg.trait_name
+                && let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name)
+            {
+                let methods: Vec<&crate::core::ir::MethodDef> = type_defs
+                    .iter()
+                    .find(|t| t.name == *trait_name)
+                    .map(|t| t.methods.iter().collect())
+                    .unwrap_or_default();
+                let emission = super::stubs::emit_test_backend(trait_bridge, &methods, fixture, enums);
+                setup_lines.push(emission.setup_block);
+                parts.push((idx, emission.arg_expr));
+                continue;
             }
             let emission = crate::e2e::codegen::TestBackendEmission::unimplemented("swift");
             setup_lines.push(format!("// {}", emission.arg_expr));
@@ -397,35 +397,36 @@ pub(super) fn build_args_and_setup(
         // When arg.field == "input", the entire fixture input IS the request object.
         // When a visitor handle is present, use `{typeCamelCase}FromJsonWithVisitor(json, handle)`
         // instead to attach the visitor to the options in one step.
-        if arg.arg_type == "json_object" && options_via == Some("from_json") {
-            if let Some(type_name) = options_type {
-                let resolved_val = super::super::resolve_field(input, &arg.field);
-                let json_str = match resolved_val {
-                    serde_json::Value::Null => "{}".to_string(),
-                    v => serde_json::to_string(v).unwrap_or_else(|_| "{}".to_string()),
-                };
-                let escaped = escape_swift(&json_str);
-                let var_name = format!("_{}", arg.name.to_lower_camel_case());
-                if let Some(handle_expr) = visitor_handle_expr {
-                    // Use the visitor-aware helper: `{typeCamelCase}FromJsonWithVisitor(json, handle)`.
-                    // The handle expression builds a VisitorHandle from the local class instance.
-                    // The function name mirrors emit_options_field_options_helper: camelCase of
-                    // `{options_snake}_from_json_with_visitor`.
-                    let with_visitor_fn = format!("{}FromJsonWithVisitor", type_name.to_lower_camel_case());
-                    let handle_var = format!("_visitorHandle_{}", var_name.trim_start_matches('_'));
-                    setup_lines.push(format!("let {handle_var} = {handle_expr}"));
-                    setup_lines.push(format!(
-                        "let {var_name} = try {module_name}.{with_visitor_fn}(\"{escaped}\", {handle_var})"
-                    ));
-                } else {
-                    let from_json_fn = format!("{}FromJson", type_name.to_lower_camel_case());
-                    setup_lines.push(format!(
-                        "let {var_name} = try {module_name}.{from_json_fn}(\"{escaped}\")"
-                    ));
-                }
-                parts.push((idx, var_name));
-                continue;
+        if arg.arg_type == "json_object"
+            && options_via == Some("from_json")
+            && let Some(type_name) = options_type
+        {
+            let resolved_val = super::super::resolve_field(input, &arg.field);
+            let json_str = match resolved_val {
+                serde_json::Value::Null => "{}".to_string(),
+                v => serde_json::to_string(v).unwrap_or_else(|_| "{}".to_string()),
+            };
+            let escaped = escape_swift(&json_str);
+            let var_name = format!("_{}", arg.name.to_lower_camel_case());
+            if let Some(handle_expr) = visitor_handle_expr {
+                // Use the visitor-aware helper: `{typeCamelCase}FromJsonWithVisitor(json, handle)`.
+                // The handle expression builds a VisitorHandle from the local class instance.
+                // The function name mirrors emit_options_field_options_helper: camelCase of
+                // `{options_snake}_from_json_with_visitor`.
+                let with_visitor_fn = format!("{}FromJsonWithVisitor", type_name.to_lower_camel_case());
+                let handle_var = format!("_visitorHandle_{}", var_name.trim_start_matches('_'));
+                setup_lines.push(format!("let {handle_var} = {handle_expr}"));
+                setup_lines.push(format!(
+                    "let {var_name} = try {module_name}.{with_visitor_fn}(\"{escaped}\", {handle_var})"
+                ));
+            } else {
+                let from_json_fn = format!("{}FromJson", type_name.to_lower_camel_case());
+                setup_lines.push(format!(
+                    "let {var_name} = try {module_name}.{from_json_fn}(\"{escaped}\")"
+                ));
             }
+            parts.push((idx, var_name));
+            continue;
         }
 
         let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);

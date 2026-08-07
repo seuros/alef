@@ -200,10 +200,10 @@ pub(super) fn replace_constructor_with_serde_rename(
     };
 
     let mut all_assignments = assignments.clone();
-    if let Some((param_name, _)) = bridge_param {
-        if let Some(field_name) = bridge_field_name {
-            all_assignments.push(format!("{}: {}", field_name, param_name));
-        }
+    if let Some((param_name, _)) = bridge_param
+        && let Some(field_name) = bridge_field_name
+    {
+        all_assignments.push(format!("{}: {}", field_name, param_name));
     }
 
     let new_constructor = format!(
@@ -218,32 +218,31 @@ pub(super) fn replace_constructor_with_serde_rename(
         all_assignments.join(", ")
     );
 
-    if let Some(start) = impl_block.find("#[pyo3(signature = (") {
-        if let Some(new_start) = impl_block[..start].rfind("\n") {
-            if let Some(fn_new_pos) = impl_block.find("pub fn new(") {
-                let mut brace_count = 0;
-                let mut in_fn = false;
-                let mut end_pos = None;
+    if let Some(start) = impl_block.find("#[pyo3(signature = (")
+        && let Some(new_start) = impl_block[..start].rfind("\n")
+        && let Some(fn_new_pos) = impl_block.find("pub fn new(")
+    {
+        let mut brace_count = 0;
+        let mut in_fn = false;
+        let mut end_pos = None;
 
-                for (i, c) in impl_block[fn_new_pos..].chars().enumerate() {
-                    if c == '{' {
-                        in_fn = true;
-                        brace_count += 1;
-                    } else if c == '}' && in_fn {
-                        brace_count -= 1;
-                        if brace_count == 0 {
-                            end_pos = Some(fn_new_pos + i + 1);
-                            break;
-                        }
-                    }
-                }
-
-                if let Some(end) = end_pos {
-                    let before = &impl_block[..new_start + 1];
-                    let after = &impl_block[end..];
-                    return format!("{}{}{}", before, new_constructor, after);
+        for (i, c) in impl_block[fn_new_pos..].chars().enumerate() {
+            if c == '{' {
+                in_fn = true;
+                brace_count += 1;
+            } else if c == '}' && in_fn {
+                brace_count -= 1;
+                if brace_count == 0 {
+                    end_pos = Some(fn_new_pos + i + 1);
+                    break;
                 }
             }
+        }
+
+        if let Some(end) = end_pos {
+            let before = &impl_block[..new_start + 1];
+            let after = &impl_block[end..];
+            return format!("{}{}{}", before, new_constructor, after);
         }
     }
 

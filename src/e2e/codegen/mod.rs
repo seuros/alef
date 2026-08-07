@@ -69,10 +69,10 @@ pub(crate) fn should_include_fixture(fixture: &Fixture, language: &str, e2e_conf
     {
         return false;
     }
-    if let Some(skip) = &fixture.skip {
-        if skip.should_skip(language) {
-            return false;
-        }
+    if let Some(skip) = &fixture.skip
+        && skip.should_skip(language)
+    {
+        return false;
     }
     let call_config = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),

@@ -127,10 +127,10 @@ pub fn render_test_file(
                 all_result_enum_classes.insert(v.clone());
             }
             // For WASM, also collect handle_config_type so its nested types are imported
-            if lang == "wasm" {
-                if let Some(handle_type) = &o.handle_config_type {
-                    all_options_types.insert(handle_type.clone());
-                }
+            if lang == "wasm"
+                && let Some(handle_type) = &o.handle_config_type
+            {
+                all_options_types.insert(handle_type.clone());
             }
         }
         if lang == "wasm" {
@@ -152,11 +152,12 @@ pub fn render_test_file(
                 }
             }
         }
-        if lang == "wasm" && fixture.visitor.is_some() {
-            if let Some(binding) = wasm_visitor_binding(config, options_type) {
-                all_options_types.insert(binding.options_type);
-                all_options_types.insert(binding.handle_type);
-            }
+        if lang == "wasm"
+            && fixture.visitor.is_some()
+            && let Some(binding) = wasm_visitor_binding(config, options_type)
+        {
+            all_options_types.insert(binding.options_type);
+            all_options_types.insert(binding.handle_type);
         }
     }
 
@@ -238,14 +239,12 @@ pub fn render_test_file(
         // Collect tree helper function names needed by method_result assertions.
         for fixture in fixtures.iter().filter(|f| !f.is_http_test()) {
             for assertion in &fixture.assertions {
-                if assertion.assertion_type == "method_result" {
-                    if let Some(method_name) = &assertion.method {
-                        if let Some(helper_fn) = ts_method_helper_import(method_name) {
-                            if !imports.contains(&helper_fn) {
-                                imports.push(helper_fn);
-                            }
-                        }
-                    }
+                if assertion.assertion_type == "method_result"
+                    && let Some(method_name) = &assertion.method
+                    && let Some(helper_fn) = ts_method_helper_import(method_name)
+                    && !imports.contains(&helper_fn)
+                {
+                    imports.push(helper_fn);
                 }
             }
         }
@@ -302,17 +301,16 @@ pub fn render_test_file(
                     } else {
                         fixture.input.get(field)
                     };
-                    if val.is_some_and(|v| !v.is_null()) {
-                        if let Some(override_type) = cc
+                    if val.is_some_and(|v| !v.is_null())
+                        && let Some(override_type) = cc
                             .overrides
                             .get("node")
                             .and_then(|o| o.options_type.as_deref())
                             .or(cc.options_type.as_deref())
-                        {
-                            let type_import = format!("type {}", canonical_ts_type_name(lang, override_type, config));
-                            if !imports.contains(&type_import) {
-                                imports.push(type_import);
-                            }
+                    {
+                        let type_import = format!("type {}", canonical_ts_type_name(lang, override_type, config));
+                        if !imports.contains(&type_import) {
+                            imports.push(type_import);
                         }
                     }
                 }
@@ -381,12 +379,11 @@ pub fn render_test_file(
                     &fixture.tags,
                     &fixture.input,
                 );
-                if let Some(o) = cc.overrides.get("wasm") {
-                    if let Some(config_type) = &o.handle_config_type {
-                        if !imports.contains(config_type) {
-                            imports.push(config_type.clone());
-                        }
-                    }
+                if let Some(o) = cc.overrides.get("wasm")
+                    && let Some(config_type) = &o.handle_config_type
+                    && !imports.contains(config_type)
+                {
+                    imports.push(config_type.clone());
                 }
             }
         }

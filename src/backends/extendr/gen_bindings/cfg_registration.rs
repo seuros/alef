@@ -26,11 +26,11 @@ pub(super) fn always_registered(cfg: Option<&str>) -> bool {
     }
     let normalized = strip_cfg_whitespace(pred);
     let inner = normalized.strip_prefix("any(").and_then(|s| s.strip_suffix(')'));
-    if let Some(inner) = inner {
-        if let Some((left, right)) = inner.split_once(',') {
-            let complement = |a: &str, b: &str| format!("not({a})") == b;
-            return complement(left, right) || complement(right, left);
-        }
+    if let Some(inner) = inner
+        && let Some((left, right)) = inner.split_once(',')
+    {
+        let complement = |a: &str, b: &str| format!("not({a})") == b;
+        return complement(left, right) || complement(right, left);
     }
     false
 }

@@ -144,11 +144,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let sweep_roots: Vec<PathBuf> = if lang.is_some() {
                             let mut seen = std::collections::HashSet::new();
                             for path in &output_paths {
-                                if let Ok(rel) = path.strip_prefix(&e2e_output_root) {
-                                    if let Some(top) = rel.components().next() {
-                                        let lang_dir = e2e_output_root.join(top.as_os_str());
-                                        seen.insert(lang_dir);
-                                    }
+                                if let Ok(rel) = path.strip_prefix(&e2e_output_root)
+                                    && let Some(top) = rel.components().next()
+                                {
+                                    let lang_dir = e2e_output_root.join(top.as_os_str());
+                                    seen.insert(lang_dir);
                                 }
                             }
                             seen.into_iter().collect()
@@ -290,10 +290,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                                         .chain(js_lock_files.iter().filter(|_| preserve_js_locks));
                                     for lock_file in lock_files_iter {
                                         let lock_path = lang_dir.join(lock_file);
-                                        if lock_path.exists() {
-                                            if let Ok(content) = std::fs::read(&lock_path) {
-                                                saved_locks.insert(lock_path.clone(), content);
-                                            }
+                                        if lock_path.exists()
+                                            && let Ok(content) = std::fs::read(&lock_path)
+                                        {
+                                            saved_locks.insert(lock_path.clone(), content);
                                         }
                                     }
 
@@ -376,10 +376,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let sweep_roots: Vec<PathBuf> = if lang.is_some() {
                             let mut seen = std::collections::HashSet::new();
                             for path in &output_paths {
-                                if let Ok(rel) = path.strip_prefix(&output_root) {
-                                    if let Some(top) = rel.components().next() {
-                                        seen.insert(output_root.join(top.as_os_str()));
-                                    }
+                                if let Ok(rel) = path.strip_prefix(&output_root)
+                                    && let Some(top) = rel.components().next()
+                                {
+                                    seen.insert(output_root.join(top.as_os_str()));
                                 }
                             }
                             seen.into_iter().collect()

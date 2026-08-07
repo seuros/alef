@@ -310,10 +310,10 @@ impl Backend for NapiBackend {
                         if let Some(ctor) = napi_variant_wrapper_constructor(typ, &mapper, &core_import, &prefix) {
                             builder.add_item(&ctor);
                         }
-                    } else if typ.has_default {
-                        if let Some(ctor) = napi_default_constructor(typ, &mapper, &core_import, &prefix) {
-                            builder.add_item(&ctor);
-                        }
+                    } else if typ.has_default
+                        && let Some(ctor) = napi_default_constructor(typ, &mapper, &core_import, &prefix)
+                    {
+                        builder.add_item(&ctor);
                     }
                 }
                 if typ.has_default
@@ -589,19 +589,19 @@ impl Backend for NapiBackend {
             }
             for variant in &enum_def.variants {
                 for field in &variant.fields {
-                    if let TypeRef::Named(type_name) = &field.ty {
-                        if let Some(typ) = api.types.iter().find(|t| &t.name == type_name) {
-                            if emitted_binding_to_core.contains(&typ.name) {
-                                continue;
-                            }
-                            if crate::codegen::conversions::can_generate_conversion(typ, &binding_to_core) {
-                                builder.add_item(&crate::codegen::conversions::gen_from_binding_to_core_cfg(
-                                    typ,
-                                    &core_import,
-                                    &napi_conv_config,
-                                ));
-                                emitted_binding_to_core.insert(typ.name.clone());
-                            }
+                    if let TypeRef::Named(type_name) = &field.ty
+                        && let Some(typ) = api.types.iter().find(|t| &t.name == type_name)
+                    {
+                        if emitted_binding_to_core.contains(&typ.name) {
+                            continue;
+                        }
+                        if crate::codegen::conversions::can_generate_conversion(typ, &binding_to_core) {
+                            builder.add_item(&crate::codegen::conversions::gen_from_binding_to_core_cfg(
+                                typ,
+                                &core_import,
+                                &napi_conv_config,
+                            ));
+                            emitted_binding_to_core.insert(typ.name.clone());
                         }
                     }
                 }

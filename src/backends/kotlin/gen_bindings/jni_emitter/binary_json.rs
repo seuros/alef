@@ -41,17 +41,16 @@ fn needs_json_deserialize(ty: &TypeRef) -> bool {
 /// Opaque types that are known handles do NOT need JSON deserialization — they return Long.
 /// Data types (structs, enums, maps, etc.) return JSON String and need deserialization.
 fn needs_json_deserialize_for_method(ty: &TypeRef, opaque_type_names: &std::collections::HashSet<&str>) -> bool {
-    if let TypeRef::Named(n) = ty {
-        if opaque_type_names.contains(n.as_str()) {
-            return false;
-        }
+    if let TypeRef::Named(n) = ty
+        && opaque_type_names.contains(n.as_str())
+    {
+        return false;
     }
-    if let TypeRef::Optional(inner) = ty {
-        if let TypeRef::Named(n) = inner.as_ref() {
-            if opaque_type_names.contains(n.as_str()) {
-                return false;
-            }
-        }
+    if let TypeRef::Optional(inner) = ty
+        && let TypeRef::Named(n) = inner.as_ref()
+        && opaque_type_names.contains(n.as_str())
+    {
+        return false;
     }
     needs_json_deserialize(ty)
 }
@@ -102,10 +101,10 @@ fn jni_return_type(ty: &TypeRef) -> &'static str {
 /// Map an IR `TypeRef` to a JNI-compatible Kotlin type string for top-level function
 /// return types, where opaque named types become `Long` (raw handle) instead of `String`.
 fn jni_return_type_for_function(ty: &TypeRef, opaque_type_names: &std::collections::HashSet<&str>) -> &'static str {
-    if let TypeRef::Named(n) = ty {
-        if opaque_type_names.contains(n.as_str()) {
-            return "Long";
-        }
+    if let TypeRef::Named(n) = ty
+        && opaque_type_names.contains(n.as_str())
+    {
+        return "Long";
     }
     jni_return_type(ty)
 }
@@ -118,10 +117,10 @@ fn jni_return_type_for_method(ty: &TypeRef, opaque_type_names: &std::collections
         TypeRef::Optional(inner) => inner.as_ref(),
         other => other,
     };
-    if let TypeRef::Named(n) = base {
-        if opaque_type_names.contains(n.as_str()) {
-            return "Long";
-        }
+    if let TypeRef::Named(n) = base
+        && opaque_type_names.contains(n.as_str())
+    {
+        return "Long";
     }
     jni_return_type(ty)
 }
@@ -154,10 +153,10 @@ fn jni_param_type_for_function(ty: &TypeRef, opaque_type_names: &std::collection
         TypeRef::Optional(inner) => inner.as_ref(),
         other => other,
     };
-    if let TypeRef::Named(n) = base {
-        if opaque_type_names.contains(n.as_str()) {
-            return "Long";
-        }
+    if let TypeRef::Named(n) = base
+        && opaque_type_names.contains(n.as_str())
+    {
+        return "Long";
     }
     jni_param_type(ty)
 }

@@ -310,10 +310,10 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
                 }
                 _ => None,
             };
-            if let Some(name) = return_named {
-                if api.enums.iter().any(|e| e.name == name) {
-                    enum_pointer_return.insert(name);
-                }
+            if let Some(name) = return_named
+                && api.enums.iter().any(|e| e.name == name)
+            {
+                enum_pointer_return.insert(name);
             }
         }
         for typ in api.types.iter().filter(|t| !t.is_trait) {
@@ -329,10 +329,10 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
                     }
                     _ => None,
                 };
-                if let Some(name) = return_named {
-                    if api.enums.iter().any(|e| e.name == name) {
-                        enum_pointer_return.insert(name);
-                    }
+                if let Some(name) = return_named
+                    && api.enums.iter().any(|e| e.name == name)
+                {
+                    enum_pointer_return.insert(name);
                 }
             }
             for field in &typ.fields {
@@ -350,10 +350,10 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
                     }
                     _ => None,
                 };
-                if let Some(name) = field_named {
-                    if api.enums.iter().any(|e| e.name == name) {
-                        enum_pointer_return.insert(name);
-                    }
+                if let Some(name) = field_named
+                    && api.enums.iter().any(|e| e.name == name)
+                {
+                    enum_pointer_return.insert(name);
                 }
             }
         }
@@ -387,10 +387,10 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
                     }
                     _ => None,
                 };
-                if let Some(name) = param_named {
-                    if api.enums.iter().any(|e| e.name == name) {
-                        enum_pointer_param.insert(name);
-                    }
+                if let Some(name) = param_named
+                    && api.enums.iter().any(|e| e.name == name)
+                {
+                    enum_pointer_param.insert(name);
                 }
             }
         }
@@ -454,21 +454,19 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
         if visitor_callbacks_enabled && func.sanitized && has_trait_bridge_param(func, &config.trait_bridges) {
             continue;
         }
-        if has_options_field_bridge {
-            if let Some((options_param, options_type_name)) =
+        if has_options_field_bridge
+            && let Some((options_param, options_type_name)) =
                 options_field_bridge_for_function(func, &config.trait_bridges)
-            {
-                if let Some(wrapper) = crate::backends::ffi::gen_bridge_field::gen_function_with_options_field_bridge(
-                    prefix,
-                    &core_import,
-                    func,
-                    options_param,
-                    options_type_name,
-                ) {
-                    builder.add_item(&wrapper);
-                    continue;
-                }
-            }
+            && let Some(wrapper) = crate::backends::ffi::gen_bridge_field::gen_function_with_options_field_bridge(
+                prefix,
+                &core_import,
+                func,
+                options_param,
+                options_type_name,
+            )
+        {
+            builder.add_item(&wrapper);
+            continue;
         }
         let capsule_cfg = if matches!(func.return_type, crate::core::ir::TypeRef::Named(_)) {
             super::capsule::capsule_return_name(func, &ffi_capsule_types).and_then(|name| ffi_capsule_types.get(name))

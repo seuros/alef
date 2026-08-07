@@ -9,10 +9,10 @@ use crate::core::config::ResolvedCrateConfig;
 pub fn php_autoload_namespace(config: &ResolvedCrateConfig) -> String {
     use heck::ToPascalCase;
 
-    if let Some(php_cfg) = &config.php {
-        if let Some(ns) = &php_cfg.namespace {
-            return ns.clone();
-        }
+    if let Some(php_cfg) = &config.php
+        && let Some(ns) = &php_cfg.namespace
+    {
+        return ns.clone();
     }
 
     let ext = config.php_extension_name();

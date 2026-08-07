@@ -357,10 +357,10 @@ pub(super) fn render_package_swift(
     //
     // Both the Simple form (bare version string, URL comes from the key) and Detailed form
     // (url + version in the table) are supported.
-    if let Some(extra) = extras {
-        if !extra.is_empty() {
-            inject_package_swift_extras(&mut dependencies_block, &mut test_target_dep, extra);
-        }
+    if let Some(extra) = extras
+        && !extra.is_empty()
+    {
+        inject_package_swift_extras(&mut dependencies_block, &mut test_target_dep, extra);
     }
     // SwiftPM platform enums use the major version only (.v13, .v14, ...);
     // strip patch components to match the scaffold's `Package.swift`.

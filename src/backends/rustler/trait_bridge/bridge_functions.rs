@@ -246,15 +246,14 @@ pub fn gen_bridge_function(
             .enumerate()
             .filter(|(idx, _)| *idx != bridge_param_idx)
             .filter_map(|(_, p)| {
-                if let TypeRef::Named(n) = &p.ty {
-                    if default_types.contains(n) {
+                if let TypeRef::Named(n) = &p.ty
+                    && default_types.contains(n) {
                         let core_ty = format!("{core_import}::{n}");
                         return Some(format!(
                             "let {0}_core: Option<{1}> = {0}.map(|s| serde_json::from_str::<{1}>(&s).map_err(|e| e.to_string())).transpose().map_err(|e| e.to_string())?;\n    ",
                             p.name, core_ty
                         ));
                     }
-                }
                 None
             })
             .collect();
@@ -291,10 +290,10 @@ pub fn gen_bridge_function(
             .enumerate()
             .filter(|(idx, _)| *idx != bridge_param_idx)
             .map(|(_, p)| {
-                if let TypeRef::Named(n) = &p.ty {
-                    if default_types.contains(n) {
-                        return format!("let {0}_core = {0}_core;\n    ", p.name);
-                    }
+                if let TypeRef::Named(n) = &p.ty
+                    && default_types.contains(n)
+                {
+                    return format!("let {0}_core = {0}_core;\n    ", p.name);
                 }
                 match &p.ty {
                     TypeRef::String | TypeRef::Char => format!("let {0} = {0}.clone();\n    ", p.name),

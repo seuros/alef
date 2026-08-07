@@ -92,10 +92,10 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_record_type(
             },
             _ => None,
         };
-        if let Some(ref base) = field_base_type {
-            if custom_converter_enums.contains(base) {
-                out.push_str(&render("json_converter_attr.jinja", minijinja::context! { base }));
-            }
+        if let Some(ref base) = field_base_type
+            && custom_converter_enums.contains(base)
+        {
+            out.push_str(&render("json_converter_attr.jinja", minijinja::context! { base }));
         }
 
         // `#[serde(flatten)]` on a `serde_json::Value` field: emit

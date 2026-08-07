@@ -108,69 +108,65 @@ pub(crate) fn emit_type_method_shims(
                         "serde_json::from_str::<serde_json::Value>(&{name}).unwrap_or(serde_json::Value::Null)"
                     );
                 }
-                if let TypeRef::Vec(vec_inner) = &p.ty {
-                    if let TypeRef::Named(n) = vec_inner.as_ref() {
-                        if unit_enum_names.contains(n.as_str()) {
-                            let source_enum_ty = type_paths
-                                .get(n.as_str())
-                                .map(|p| p.replace('-', "_"))
-                                .unwrap_or_else(|| n.clone());
-                            let map_expr = format!(
-                                concat!(
-                                    "{name}.into_iter().map(|s| ",
-                                    "<{source_enum_ty} as ::std::convert::From<String>>::from(s))",
-                                    ".collect::<Vec<_>>()"
-                                ),
-                                name = name,
-                                source_enum_ty = source_enum_ty,
-                            );
-                            if p.is_ref {
-                                return format!("&{map_expr}");
-                            }
-                            if p.optional {
-                                let opt_map = format!(
-                                    concat!(
-                                        "{name}.map(|values| values.into_iter().map(|s| ",
-                                        "<{source_enum_ty} as ::std::convert::From<String>>::from(s))",
-                                        ".collect::<Vec<_>>())"
-                                    ),
-                                    name = name,
-                                    source_enum_ty = source_enum_ty,
-                                );
-                                return opt_map;
-                            }
-                            return map_expr;
-                        }
+                if let TypeRef::Vec(vec_inner) = &p.ty
+                    && let TypeRef::Named(n) = vec_inner.as_ref()
+                    && unit_enum_names.contains(n.as_str())
+                {
+                    let source_enum_ty = type_paths
+                        .get(n.as_str())
+                        .map(|p| p.replace('-', "_"))
+                        .unwrap_or_else(|| n.clone());
+                    let map_expr = format!(
+                        concat!(
+                            "{name}.into_iter().map(|s| ",
+                            "<{source_enum_ty} as ::std::convert::From<String>>::from(s))",
+                            ".collect::<Vec<_>>()"
+                        ),
+                        name = name,
+                        source_enum_ty = source_enum_ty,
+                    );
+                    if p.is_ref {
+                        return format!("&{map_expr}");
                     }
+                    if p.optional {
+                        let opt_map = format!(
+                            concat!(
+                                "{name}.map(|values| values.into_iter().map(|s| ",
+                                "<{source_enum_ty} as ::std::convert::From<String>>::from(s))",
+                                ".collect::<Vec<_>>())"
+                            ),
+                            name = name,
+                            source_enum_ty = source_enum_ty,
+                        );
+                        return opt_map;
+                    }
+                    return map_expr;
                 }
-                if let TypeRef::Named(n) = &p.ty {
-                    if unit_enum_names.contains(n.as_str()) {
-                        let source_enum_ty = type_paths
-                            .get(n.as_str())
-                            .map(|p| p.replace('-', "_"))
-                            .unwrap_or_else(|| n.clone());
-                        let from_expr = format!("<{source_enum_ty} as ::std::convert::From<String>>::from({name})");
-                        if p.optional {
-                            return format!(
-                                "{name}.map(|s| <{source_enum_ty} as ::std::convert::From<String>>::from(s))"
-                            );
-                        }
-                        if p.is_ref {
-                            return format!("&{from_expr}");
-                        }
-                        return from_expr;
+                if let TypeRef::Named(n) = &p.ty
+                    && unit_enum_names.contains(n.as_str())
+                {
+                    let source_enum_ty = type_paths
+                        .get(n.as_str())
+                        .map(|p| p.replace('-', "_"))
+                        .unwrap_or_else(|| n.clone());
+                    let from_expr = format!("<{source_enum_ty} as ::std::convert::From<String>>::from({name})");
+                    if p.optional {
+                        return format!("{name}.map(|s| <{source_enum_ty} as ::std::convert::From<String>>::from(s))");
                     }
+                    if p.is_ref {
+                        return format!("&{from_expr}");
+                    }
+                    return from_expr;
                 }
                 if needs_json_bridge(&p.ty) {
                     let native_ty = swift_bridge_rust_type(&p.ty);
                     return format!("serde_json::from_str::<{native_ty}>(&{name}).expect(\"valid JSON for {name}\")");
                 }
-                if p.optional {
-                    if let TypeRef::Named(n) = &p.ty {
-                        if !unit_enum_names.contains(n.as_str()) {
-                            return format!("{name}.map(|v| v.0)");
-                        }
-                    }
+                if p.optional
+                    && let TypeRef::Named(n) = &p.ty
+                    && !unit_enum_names.contains(n.as_str())
+                {
+                    return format!("{name}.map(|v| v.0)");
                 }
                 match &p.ty {
                     TypeRef::Named(n) if p.is_ref && !unit_enum_names.contains(n.as_str()) => format!("&{name}.0"),

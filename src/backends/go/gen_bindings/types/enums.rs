@@ -240,31 +240,31 @@ fn gen_tuple_tagged_union_type(enum_def: &EnumDef) -> String {
             continue;
         }
 
-        if let Some(field) = variant.fields.iter().find(|f| is_tuple_field(f)) {
-            if let TypeRef::Named(struct_type_name) = &field.ty {
-                let go_struct_type = go_type_name(struct_type_name);
-                let field_name = to_go_name(&variant.name);
-                let json_field_name = apply_serde_rename_all(
-                    &crate::codegen::naming::pascal_to_snake(&variant.name),
-                    enum_def.serde_rename_all.as_deref(),
-                );
+        if let Some(field) = variant.fields.iter().find(|f| is_tuple_field(f))
+            && let TypeRef::Named(struct_type_name) = &field.ty
+        {
+            let go_struct_type = go_type_name(struct_type_name);
+            let field_name = to_go_name(&variant.name);
+            let json_field_name = apply_serde_rename_all(
+                &crate::codegen::naming::pascal_to_snake(&variant.name),
+                enum_def.serde_rename_all.as_deref(),
+            );
 
-                let doc_lines: Vec<&str> = if !variant.doc.is_empty() {
-                    variant.doc.lines().map(|l| l.trim()).collect()
-                } else {
-                    vec![]
-                };
+            let doc_lines: Vec<&str> = if !variant.doc.is_empty() {
+                variant.doc.lines().map(|l| l.trim()).collect()
+            } else {
+                vec![]
+            };
 
-                out.push_str(&crate::backends::go::template_env::render(
-                    "tagged_union_variant_field.jinja",
-                    context! {
-                        doc_lines => doc_lines,
-                        field_name => &field_name,
-                        struct_type => &go_struct_type,
-                        json_field_name => &json_field_name,
-                    },
-                ));
-            }
+            out.push_str(&crate::backends::go::template_env::render(
+                "tagged_union_variant_field.jinja",
+                context! {
+                    doc_lines => doc_lines,
+                    field_name => &field_name,
+                    struct_type => &go_struct_type,
+                    json_field_name => &json_field_name,
+                },
+            ));
         }
     }
 
@@ -299,23 +299,23 @@ fn emit_tagged_union_marshalers(out: &mut String, go_enum_name: &str, enum_def: 
         if variant.fields.is_empty() {
             continue;
         }
-        if let Some(field) = variant.fields.iter().find(|f| is_tuple_field(f)) {
-            if let TypeRef::Named(_) = &field.ty {
-                let variant_go_name = to_go_name(&variant.name);
-                let wire_value = crate::codegen::naming::wire_variant_value(
-                    &variant.name,
-                    variant.serde_rename.as_deref(),
-                    enum_def.serde_rename_all.as_deref(),
-                );
-                out.push_str(&crate::backends::go::template_env::render(
-                    "tagged_union_marshal_variant.jinja",
-                    context! {
-                        wire_value => &wire_value,
-                        variant_go_name => &variant_go_name,
-                        tag_name => tag_name,
-                    },
-                ));
-            }
+        if let Some(field) = variant.fields.iter().find(|f| is_tuple_field(f))
+            && let TypeRef::Named(_) = &field.ty
+        {
+            let variant_go_name = to_go_name(&variant.name);
+            let wire_value = crate::codegen::naming::wire_variant_value(
+                &variant.name,
+                variant.serde_rename.as_deref(),
+                enum_def.serde_rename_all.as_deref(),
+            );
+            out.push_str(&crate::backends::go::template_env::render(
+                "tagged_union_marshal_variant.jinja",
+                context! {
+                    wire_value => &wire_value,
+                    variant_go_name => &variant_go_name,
+                    tag_name => tag_name,
+                },
+            ));
         }
     }
 
@@ -341,24 +341,24 @@ fn emit_tagged_union_marshalers(out: &mut String, go_enum_name: &str, enum_def: 
         if variant.fields.is_empty() {
             continue;
         }
-        if let Some(field) = variant.fields.iter().find(|f| is_tuple_field(f)) {
-            if let TypeRef::Named(struct_type_name) = &field.ty {
-                let go_struct_type = go_type_name(struct_type_name);
-                let variant_go_name = to_go_name(&variant.name);
-                let wire_value = crate::codegen::naming::wire_variant_value(
-                    &variant.name,
-                    variant.serde_rename.as_deref(),
-                    enum_def.serde_rename_all.as_deref(),
-                );
-                out.push_str(&crate::backends::go::template_env::render(
-                    "tagged_union_unmarshal_variant.jinja",
-                    context! {
-                        wire_value => &wire_value,
-                        variant_go_name => &variant_go_name,
-                        go_struct_type => &go_struct_type,
-                    },
-                ));
-            }
+        if let Some(field) = variant.fields.iter().find(|f| is_tuple_field(f))
+            && let TypeRef::Named(struct_type_name) = &field.ty
+        {
+            let go_struct_type = go_type_name(struct_type_name);
+            let variant_go_name = to_go_name(&variant.name);
+            let wire_value = crate::codegen::naming::wire_variant_value(
+                &variant.name,
+                variant.serde_rename.as_deref(),
+                enum_def.serde_rename_all.as_deref(),
+            );
+            out.push_str(&crate::backends::go::template_env::render(
+                "tagged_union_unmarshal_variant.jinja",
+                context! {
+                    wire_value => &wire_value,
+                    variant_go_name => &variant_go_name,
+                    go_struct_type => &go_struct_type,
+                },
+            ));
         }
     }
 

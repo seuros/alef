@@ -24,11 +24,11 @@ pub(crate) fn format_field_default(field: &FieldDef, lang: Language, api: &ApiSu
     if let Some(typed) = &field.typed_default {
         return format_typed_default(typed, &field.ty, lang, api, ffi_prefix, field.optional);
     }
-    if let Some(raw) = &field.default {
-        if !raw.is_empty() {
-            let collapsed = crate::docs::doc_cleaning::collapse_whitespace(raw);
-            return format!("`{collapsed}`");
-        }
+    if let Some(raw) = &field.default
+        && !raw.is_empty()
+    {
+        let collapsed = crate::docs::doc_cleaning::collapse_whitespace(raw);
+        return format!("`{collapsed}`");
     }
     if field.optional {
         return match lang {
@@ -119,20 +119,19 @@ pub(crate) fn format_typed_default(
                 };
             }
 
-            if !optional {
-                if let TypeRef::Named(type_name_str) = field_ty {
-                    if let Some(enum_def) = api.enums.iter().find(|e| &e.name == type_name_str) {
-                        let variant = enum_def
-                            .variants
-                            .iter()
-                            .find(|v| v.is_default)
-                            .or_else(|| enum_def.variants.first());
-                        if let Some(v) = variant {
-                            let etype = type_name(type_name_str, lang, ffi_prefix);
-                            let vname = enum_variant_name(&v.name, lang, ffi_prefix);
-                            return format!("`{}`", format_enum_variant_ref(&etype, &vname, lang, ffi_prefix));
-                        }
-                    }
+            if !optional
+                && let TypeRef::Named(type_name_str) = field_ty
+                && let Some(enum_def) = api.enums.iter().find(|e| &e.name == type_name_str)
+            {
+                let variant = enum_def
+                    .variants
+                    .iter()
+                    .find(|v| v.is_default)
+                    .or_else(|| enum_def.variants.first());
+                if let Some(v) = variant {
+                    let etype = type_name(type_name_str, lang, ffi_prefix);
+                    let vname = enum_variant_name(&v.name, lang, ffi_prefix);
+                    return format!("`{}`", format_enum_variant_ref(&etype, &vname, lang, ffi_prefix));
                 }
             }
             let inner_ty = match field_ty {

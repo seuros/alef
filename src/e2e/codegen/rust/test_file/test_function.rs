@@ -152,41 +152,41 @@ pub fn render_test_function(
         let var_name = &arg.name;
 
         // Handle test_backend args: generate trait stub struct and instance.
-        if arg.arg_type == "test_backend" {
-            if let Some(trait_name) = &arg.trait_name {
-                // Find the matching trait bridge config.
-                if let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name) {
-                    // Resolve methods for this trait bridge by looking up the trait in type_defs.
-                    let methods: Vec<&crate::core::ir::MethodDef> = type_defs
-                        .iter()
-                        .find(|t| t.name == *trait_name)
-                        .map(|t| t.methods.iter().collect())
-                        .unwrap_or_default();
-                    // Emit the test backend stub.
-                    let emission = crate::e2e::codegen::emit_test_backend("rust", trait_bridge, &methods, fixture);
-                    let expr = emission.arg_expr;
-                    // Emit `use module::Symbol;` imports inside the function body so that
-                    // the trait name and any named return/param types are in scope for the
-                    // `impl TraitName for Stub` block that follows.
-                    for symbol in &emission.type_imports {
-                        let _ = writeln!(out, "    #[allow(unused_imports)]");
-                        let _ = writeln!(out, "    use {module}::{symbol};");
-                    }
-                    // Emit the stub struct + impl block, indenting every line so that the
-                    // local struct definition sits inside the test function body.
-                    for line in emission.setup_block.lines() {
-                        if line.is_empty() {
-                            let _ = writeln!(out);
-                        } else {
-                            let _ = writeln!(out, "    {line}");
-                        }
-                    }
-                    arg_exprs.push(expr);
-                    continue;
-                } else {
-                    tracing::warn!("trait_bridge not found for trait: {}", trait_name);
-                    // Fall through to emit empty args if no trait bridge found.
+        if arg.arg_type == "test_backend"
+            && let Some(trait_name) = &arg.trait_name
+        {
+            // Find the matching trait bridge config.
+            if let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name) {
+                // Resolve methods for this trait bridge by looking up the trait in type_defs.
+                let methods: Vec<&crate::core::ir::MethodDef> = type_defs
+                    .iter()
+                    .find(|t| t.name == *trait_name)
+                    .map(|t| t.methods.iter().collect())
+                    .unwrap_or_default();
+                // Emit the test backend stub.
+                let emission = crate::e2e::codegen::emit_test_backend("rust", trait_bridge, &methods, fixture);
+                let expr = emission.arg_expr;
+                // Emit `use module::Symbol;` imports inside the function body so that
+                // the trait name and any named return/param types are in scope for the
+                // `impl TraitName for Stub` block that follows.
+                for symbol in &emission.type_imports {
+                    let _ = writeln!(out, "    #[allow(unused_imports)]");
+                    let _ = writeln!(out, "    use {module}::{symbol};");
                 }
+                // Emit the stub struct + impl block, indenting every line so that the
+                // local struct definition sits inside the test function body.
+                for line in emission.setup_block.lines() {
+                    if line.is_empty() {
+                        let _ = writeln!(out);
+                    } else {
+                        let _ = writeln!(out, "    {line}");
+                    }
+                }
+                arg_exprs.push(expr);
+                continue;
+            } else {
+                tracing::warn!("trait_bridge not found for trait: {}", trait_name);
+                // Fall through to emit empty args if no trait bridge found.
             }
         }
 
@@ -215,21 +215,22 @@ pub fn render_test_function(
         // Skip when the arg has an element_type: render_json_object_arg already emits
         // `serde_json::from_value::<Vec<ElementType>>(…)`, so annotating with options_type
         // would produce a mismatched-types error (e.g. `let actions: CrawlConfig = … Vec<PageAction>`).
-        if arg.arg_type == "json_object" && arg.element_type.is_none() {
-            if let Some(ref opts_type) = options_type {
-                bindings = bindings
-                    .into_iter()
-                    .map(|b| {
-                        // `let {name} = …` → `let {name}: {opts_type} = …`
-                        let prefix = format!("let {var_name} = ");
-                        if b.starts_with(&prefix) {
-                            format!("let {var_name}: {opts_type} = {}", &b[prefix.len()..])
-                        } else {
-                            b
-                        }
-                    })
-                    .collect();
-            }
+        if arg.arg_type == "json_object"
+            && arg.element_type.is_none()
+            && let Some(ref opts_type) = options_type
+        {
+            bindings = bindings
+                .into_iter()
+                .map(|b| {
+                    // `let {name} = …` → `let {name}: {opts_type} = …`
+                    let prefix = format!("let {var_name} = ");
+                    if b.starts_with(&prefix) {
+                        format!("let {var_name}: {opts_type} = {}", &b[prefix.len()..])
+                    } else {
+                        b
+                    }
+                })
+                .collect();
         }
         // When the visitor will be injected via the options field, the options binding
         // must be declared `mut` so we can assign `options.visitor = Some(visitor)`.
@@ -538,16 +539,15 @@ pub fn render_test_function(
     if !is_streaming {
         let mut emitted_array_bindings: std::collections::HashSet<String> = std::collections::HashSet::new();
         for assertion in &fixture.assertions {
-            if let Some(f) = &assertion.field {
-                if !f.is_empty()
-                    && field_resolver.is_array(f)
-                    && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(f)
-                    && !emitted_array_bindings.contains(f.as_str())
-                {
-                    let accessor = field_resolver.accessor(f, "rust", result_var);
-                    let _ = writeln!(out, "    let {f} = &{accessor};");
-                    emitted_array_bindings.insert(f.clone());
-                }
+            if let Some(f) = &assertion.field
+                && !f.is_empty()
+                && field_resolver.is_array(f)
+                && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(f)
+                && !emitted_array_bindings.contains(f.as_str())
+            {
+                let accessor = field_resolver.accessor(f, "rust", result_var);
+                let _ = writeln!(out, "    let {f} = &{accessor};");
+                emitted_array_bindings.insert(f.clone());
             }
         }
     }
@@ -572,21 +572,20 @@ pub fn render_test_function(
     let mut unwrapped_fields: Vec<(String, String)> = Vec::new(); // (fixture_field, local_var)
     if !result_is_vec {
         for assertion in &fixture.assertions {
-            if let Some(f) = &assertion.field {
-                if !f.is_empty()
-                    && string_assertion_types.contains(&assertion.assertion_type.as_str())
-                    && !unwrapped_fields.iter().any(|(ff, _)| ff == f)
-                {
-                    // Only unwrap optional string fields — numeric optionals (u64, usize)
-                    // don't support .as_deref() and should be compared directly.
-                    let is_string_assertion = assertion.value.as_ref().is_none_or(|v| v.is_string());
-                    if !is_string_assertion {
-                        continue;
-                    }
-                    if let Some((binding, local_var)) = field_resolver.rust_unwrap_binding(f, result_var) {
-                        let _ = writeln!(out, "    {binding}");
-                        unwrapped_fields.push((f.clone(), local_var));
-                    }
+            if let Some(f) = &assertion.field
+                && !f.is_empty()
+                && string_assertion_types.contains(&assertion.assertion_type.as_str())
+                && !unwrapped_fields.iter().any(|(ff, _)| ff == f)
+            {
+                // Only unwrap optional string fields — numeric optionals (u64, usize)
+                // don't support .as_deref() and should be compared directly.
+                let is_string_assertion = assertion.value.as_ref().is_none_or(|v| v.is_string());
+                if !is_string_assertion {
+                    continue;
+                }
+                if let Some((binding, local_var)) = field_resolver.rust_unwrap_binding(f, result_var) {
+                    let _ = writeln!(out, "    {binding}");
+                    unwrapped_fields.push((f.clone(), local_var));
                 }
             }
         }

@@ -278,18 +278,18 @@ pub(super) fn gen_function_wrapper(
                     },
                 ));
             }
-            if let TypeRef::Named(name) = &func.return_type {
-                if !opaque_names.contains(name.as_str()) {
-                    let type_snake = name.to_snake_case();
-                    out.push_str(&crate::backends::go::template_env::render(
-                        "free_type.jinja",
-                        minijinja::context! {
-                            ffi_prefix => ffi_prefix,
-                            type_snake => &type_snake,
-                            ptr => "ptr",
-                        },
-                    ));
-                }
+            if let TypeRef::Named(name) = &func.return_type
+                && !opaque_names.contains(name.as_str())
+            {
+                let type_snake = name.to_snake_case();
+                out.push_str(&crate::backends::go::template_env::render(
+                    "free_type.jinja",
+                    minijinja::context! {
+                        ffi_prefix => ffi_prefix,
+                        type_snake => &type_snake,
+                        ptr => "ptr",
+                    },
+                ));
             }
 
             if can_return_error {
@@ -410,18 +410,18 @@ pub(super) fn gen_function_wrapper(
                 },
             ));
         }
-        if let TypeRef::Named(name) = &func.return_type {
-            if !opaque_names.contains(name.as_str()) {
-                let type_snake = name.to_snake_case();
-                out.push_str(&crate::backends::go::template_env::render(
-                    "free_type.jinja",
-                    minijinja::context! {
-                        ffi_prefix => ffi_prefix,
-                        type_snake => &type_snake,
-                        ptr => "ptr",
-                    },
-                ));
-            }
+        if let TypeRef::Named(name) = &func.return_type
+            && !opaque_names.contains(name.as_str())
+        {
+            let type_snake = name.to_snake_case();
+            out.push_str(&crate::backends::go::template_env::render(
+                "free_type.jinja",
+                minijinja::context! {
+                    ffi_prefix => ffi_prefix,
+                    type_snake => &type_snake,
+                    ptr => "ptr",
+                },
+            ));
         }
         let return_expr = go_return_expr(&func.return_type, "ptr", ffi_prefix, opaque_names, value_only_types);
         out.push_str(&crate::backends::go::template_env::render(

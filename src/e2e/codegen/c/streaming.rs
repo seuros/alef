@@ -120,20 +120,20 @@ pub(super) fn render_streaming_test_function(
                 fixture.input.get(field)
             };
 
-            if let Some(val) = json_val {
-                if !val.is_null() {
-                    let normalized = transform_json_keys_for_language(val, "snake_case");
-                    let json_str = serde_json::to_string(&normalized).unwrap_or_default();
-                    let escaped = escape_c(&json_str);
-                    let _ = writeln!(
-                        out,
-                        "    {prefix_upper}{request_type_pascal}* {var_name} = \
+            if let Some(val) = json_val
+                && !val.is_null()
+            {
+                let normalized = transform_json_keys_for_language(val, "snake_case");
+                let json_str = serde_json::to_string(&normalized).unwrap_or_default();
+                let escaped = escape_c(&json_str);
+                let _ = writeln!(
+                    out,
+                    "    {prefix_upper}{request_type_pascal}* {var_name} = \
                          {prefix}_{request_type_snake}_from_json(\"{escaped}\");"
-                    );
-                    let _ = writeln!(out, "    assert({var_name} != NULL && \"failed to build request\");");
-                    request_var = Some(var_name);
-                    break;
-                }
+                );
+                let _ = writeln!(out, "    assert({var_name} != NULL && \"failed to build request\");");
+                request_var = Some(var_name);
+                break;
             }
         }
     }

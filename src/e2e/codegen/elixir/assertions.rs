@@ -205,80 +205,80 @@ pub(super) fn render_assertion(
         }
     }
 
-    if is_streaming {
-        if let Some(f) = &assertion.field {
-            if !f.is_empty() && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(f) {
-                if let Some(expr) =
-                    crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::accessor(f, "elixir", result_var)
-                {
-                    match assertion.assertion_type.as_str() {
-                        "count_min" => {
-                            if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                                let _ = writeln!(out, "      assert length({expr}) >= {n}");
-                            }
-                        }
-                        "count_equals" => {
-                            if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                                let _ = writeln!(out, "      assert length({expr}) == {n}");
-                            }
-                        }
-                        "equals" => {
-                            if let Some(serde_json::Value::String(s)) = &assertion.value {
-                                let escaped = escape_elixir(s);
-                                let _ = writeln!(out, "      assert {expr} == \"{escaped}\"");
-                            } else if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                                let _ = writeln!(out, "      assert {expr} == {n}");
-                            }
-                        }
-                        "not_empty" => {
-                            let _ = writeln!(out, "      assert {expr} != []");
-                        }
-                        "is_empty" => {
-                            let _ = writeln!(out, "      assert {expr} == []");
-                        }
-                        "is_true" => {
-                            let _ = writeln!(out, "      assert {expr}");
-                        }
-                        "is_false" => {
-                            let _ = writeln!(out, "      refute {expr}");
-                        }
-                        "greater_than" => {
-                            if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                                let _ = writeln!(out, "      assert {expr} > {n}");
-                            }
-                        }
-                        "greater_than_or_equal" => {
-                            if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                                let _ = writeln!(out, "      assert {expr} >= {n}");
-                            }
-                        }
-                        "contains" => {
-                            if let Some(serde_json::Value::String(s)) = &assertion.value {
-                                let escaped = escape_elixir(s);
-                                let _ = writeln!(out, "      assert String.contains?({expr}, \"{escaped}\")");
-                            }
-                        }
-                        _ => {
-                            let _ = writeln!(
-                                out,
-                                "      # streaming field '{f}': assertion type '{}' not rendered",
-                                assertion.assertion_type
-                            );
-                        }
+    if is_streaming
+        && let Some(f) = &assertion.field
+        && !f.is_empty()
+        && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(f)
+    {
+        if let Some(expr) =
+            crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::accessor(f, "elixir", result_var)
+        {
+            match assertion.assertion_type.as_str() {
+                "count_min" => {
+                    if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
+                        let _ = writeln!(out, "      assert length({expr}) >= {n}");
                     }
                 }
-                return;
+                "count_equals" => {
+                    if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
+                        let _ = writeln!(out, "      assert length({expr}) == {n}");
+                    }
+                }
+                "equals" => {
+                    if let Some(serde_json::Value::String(s)) = &assertion.value {
+                        let escaped = escape_elixir(s);
+                        let _ = writeln!(out, "      assert {expr} == \"{escaped}\"");
+                    } else if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
+                        let _ = writeln!(out, "      assert {expr} == {n}");
+                    }
+                }
+                "not_empty" => {
+                    let _ = writeln!(out, "      assert {expr} != []");
+                }
+                "is_empty" => {
+                    let _ = writeln!(out, "      assert {expr} == []");
+                }
+                "is_true" => {
+                    let _ = writeln!(out, "      assert {expr}");
+                }
+                "is_false" => {
+                    let _ = writeln!(out, "      refute {expr}");
+                }
+                "greater_than" => {
+                    if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
+                        let _ = writeln!(out, "      assert {expr} > {n}");
+                    }
+                }
+                "greater_than_or_equal" => {
+                    if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
+                        let _ = writeln!(out, "      assert {expr} >= {n}");
+                    }
+                }
+                "contains" => {
+                    if let Some(serde_json::Value::String(s)) = &assertion.value {
+                        let escaped = escape_elixir(s);
+                        let _ = writeln!(out, "      assert String.contains?({expr}, \"{escaped}\")");
+                    }
+                }
+                _ => {
+                    let _ = writeln!(
+                        out,
+                        "      # streaming field '{f}': assertion type '{}' not rendered",
+                        assertion.assertion_type
+                    );
+                }
             }
         }
+        return;
     }
 
-    if !result_is_simple {
-        if let Some(f) = &assertion.field {
-            if !f.is_empty() && !field_resolver.is_valid_for_result(f) {
-                let _ = writeln!(out, "      # skipped: field '{f}' not available on result type");
-                return;
-            }
-        }
+    if !result_is_simple
+        && let Some(f) = &assertion.field
+        && !f.is_empty()
+        && !field_resolver.is_valid_for_result(f)
+    {
+        let _ = writeln!(out, "      # skipped: field '{f}' not available on result type");
+        return;
     }
 
     let field_expr = if result_is_simple {
@@ -460,37 +460,37 @@ pub(super) fn render_assertion(
             }
         }
         "min_length" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(
-                        out,
-                        "      assert (is_binary({field_expr}) && byte_size({field_expr}) >= {n}) || (is_list({field_expr}) && length({field_expr}) >= {n})"
-                    );
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(
+                    out,
+                    "      assert (is_binary({field_expr}) && byte_size({field_expr}) >= {n}) || (is_list({field_expr}) && length({field_expr}) >= {n})"
+                );
             }
         }
         "max_length" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(
-                        out,
-                        "      assert (is_binary({field_expr}) && byte_size({field_expr}) <= {n}) || (is_list({field_expr}) && length({field_expr}) <= {n})"
-                    );
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(
+                    out,
+                    "      assert (is_binary({field_expr}) && byte_size({field_expr}) <= {n}) || (is_list({field_expr}) && length({field_expr}) <= {n})"
+                );
             }
         }
         "count_min" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(out, "      assert length({field_expr}) >= {n}");
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(out, "      assert length({field_expr}) >= {n}");
             }
         }
         "count_equals" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(out, "      assert length({field_expr}) == {n}");
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(out, "      assert length({field_expr}) == {n}");
             }
         }
         "is_true" => {

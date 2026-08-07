@@ -201,33 +201,32 @@ pub(super) fn render_assertion(
     // Skip assertions on fields that don't exist on the result type.
     // Exception: for result_is_simple, "result" is valid because it refers to the
     // result variable directly (which holds the plain string/array value).
-    if let Some(f) = &assertion.field {
-        if !f.is_empty() && !context.field_resolver.is_valid_for_result(f) {
-            // Allow "result" field on simple-type returns
-            if !(context.result_is_simple && f == "result") {
-                let _ = writeln!(out, "  # skipped: field '{f}' not available on result type");
-                return;
-            }
+    if let Some(f) = &assertion.field
+        && !f.is_empty()
+        && !context.field_resolver.is_valid_for_result(f)
+    {
+        // Allow "result" field on simple-type returns
+        if !(context.result_is_simple && f == "result") {
+            let _ = writeln!(out, "  # skipped: field '{f}' not available on result type");
+            return;
         }
     }
 
     // When result_is_simple, skip assertions that reference non-content fields
     // (e.g., metadata, document, structure) since the binding returns a plain value.
-    if context.result_is_simple {
-        if let Some(f) = &assertion.field {
-            let f_lower = f.to_lowercase();
-            if !f.is_empty()
-                && f_lower != "content"
-                && (f_lower.starts_with("metadata")
-                    || f_lower.starts_with("document")
-                    || f_lower.starts_with("structure"))
-            {
-                let _ = writeln!(
-                    out,
-                    "  # skipped: result_is_simple for field '{f}' not available on result type"
-                );
-                return;
-            }
+    if context.result_is_simple
+        && let Some(f) = &assertion.field
+    {
+        let f_lower = f.to_lowercase();
+        if !f.is_empty()
+            && f_lower != "content"
+            && (f_lower.starts_with("metadata") || f_lower.starts_with("document") || f_lower.starts_with("structure"))
+        {
+            let _ = writeln!(
+                out,
+                "  # skipped: result_is_simple for field '{f}' not available on result type"
+            );
+            return;
         }
     }
 
@@ -348,37 +347,37 @@ pub(super) fn render_assertion(
             }
         }
         "min_length" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    // Raw byte returns (`result_is_bytes`) come back as an R
-                    // raw vector; `nchar()` element-wises and breaks the
-                    // expect_true scalar contract. Use `length()` to compare
-                    // the byte count instead.
-                    let size_fn = if context.result_is_bytes { "length" } else { "nchar" };
-                    let _ = writeln!(out, "  expect_true({size_fn}({field_expr}) >= {n})");
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                // Raw byte returns (`result_is_bytes`) come back as an R
+                // raw vector; `nchar()` element-wises and breaks the
+                // expect_true scalar contract. Use `length()` to compare
+                // the byte count instead.
+                let size_fn = if context.result_is_bytes { "length" } else { "nchar" };
+                let _ = writeln!(out, "  expect_true({size_fn}({field_expr}) >= {n})");
             }
         }
         "max_length" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let size_fn = if context.result_is_bytes { "length" } else { "nchar" };
-                    let _ = writeln!(out, "  expect_true({size_fn}({field_expr}) <= {n})");
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let size_fn = if context.result_is_bytes { "length" } else { "nchar" };
+                let _ = writeln!(out, "  expect_true({size_fn}({field_expr}) <= {n})");
             }
         }
         "count_min" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(out, "  expect_true(length({field_expr}) >= {n})");
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(out, "  expect_true(length({field_expr}) >= {n})");
             }
         }
         "count_equals" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(out, "  expect_equal(length({field_expr}), {n})");
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(out, "  expect_equal(length({field_expr}), {n})");
             }
         }
         "is_true" => {

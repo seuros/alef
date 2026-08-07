@@ -39,11 +39,11 @@ fn sync_python_pyproject_versions(
         if !seen_canonical.insert(canonical) {
             continue;
         }
-        if let Ok(content) = std::fs::read_to_string(&python_path) {
-            if let Some(new_content) = replace_version_pattern(&content, r#"version = "[^"]*""#, python_version) {
-                std::fs::write(&python_path, &new_content).with_context(|| format!("failed to write {python_path}"))?;
-                updated.push(python_path);
-            }
+        if let Ok(content) = std::fs::read_to_string(&python_path)
+            && let Some(new_content) = replace_version_pattern(&content, r#"version = "[^"]*""#, python_version)
+        {
+            std::fs::write(&python_path, &new_content).with_context(|| format!("failed to write {python_path}"))?;
+            updated.push(python_path);
         }
     }
 
@@ -56,12 +56,11 @@ fn sync_python_init_versions(version: &str, updated: &mut Vec<String>) -> anyhow
         .flatten()
         .flatten()
     {
-        if let Ok(content) = std::fs::read_to_string(&py_init) {
-            if let Some(new_content) = replace_version_pattern(&content, r#"__version__\s*=\s*"[^"]*""#, version) {
-                std::fs::write(&py_init, &new_content)
-                    .with_context(|| format!("failed to write {}", py_init.display()))?;
-                updated.push(py_init.to_string_lossy().to_string());
-            }
+        if let Ok(content) = std::fs::read_to_string(&py_init)
+            && let Some(new_content) = replace_version_pattern(&content, r#"__version__\s*=\s*"[^"]*""#, version)
+        {
+            std::fs::write(&py_init, &new_content).with_context(|| format!("failed to write {}", py_init.display()))?;
+            updated.push(py_init.to_string_lossy().to_string());
         }
     }
 

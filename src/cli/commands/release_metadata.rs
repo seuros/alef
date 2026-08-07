@@ -167,21 +167,21 @@ pub fn compute(
 }
 
 fn resolve_ref(tag: &str, git_ref: Option<&str>, event: &str) -> String {
-    if let Some(r) = git_ref {
-        if !r.is_empty() {
-            if r == tag {
-                return format!("refs/tags/{tag}");
-            }
-            if r.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) && r.starts_with('v')
-                || r.chars().all(|c| c.is_ascii_hexdigit()) && r.len() == 40
-            {
-                return r.to_string();
-            }
-            if !r.starts_with("refs/") {
-                return format!("refs/heads/{r}");
-            }
+    if let Some(r) = git_ref
+        && !r.is_empty()
+    {
+        if r == tag {
+            return format!("refs/tags/{tag}");
+        }
+        if r.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) && r.starts_with('v')
+            || r.chars().all(|c| c.is_ascii_hexdigit()) && r.len() == 40
+        {
             return r.to_string();
         }
+        if !r.starts_with("refs/") {
+            return format!("refs/heads/{r}");
+        }
+        return r.to_string();
     }
     let _ = event;
     format!("refs/tags/{tag}")

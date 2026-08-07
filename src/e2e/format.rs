@@ -68,10 +68,10 @@ pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) {
     // e2e scripts stay executable after formatting. Paths are relative to the
     // process cwd (the repo root), matching where the writer/poly operate.
     for file in files {
-        if file.content.starts_with("#!") {
-            if let Err(e) = crate::cli::pipeline::apply_shebang_chmod(&file.path, &file.content) {
-                warn!("failed to restore exec bit on {}: {e}", file.path.display());
-            }
+        if file.content.starts_with("#!")
+            && let Err(e) = crate::cli::pipeline::apply_shebang_chmod(&file.path, &file.content)
+        {
+            warn!("failed to restore exec bit on {}: {e}", file.path.display());
         }
     }
 }

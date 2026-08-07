@@ -610,21 +610,21 @@ mod tests {
     /// Construct a fixture with registration variants for testing variant emission.
     fn make_fixture_surface_with_variants() -> ApiSurface {
         let mut surface = make_fixture_surface();
-        if let Some(service) = surface.services.first_mut() {
-            if let Some(reg) = service.registrations.first_mut() {
-                reg.variants.push(crate::core::ir::RegistrationVariant {
-                    name: "get".to_owned(),
-                    overrides: vec![crate::core::ir::RegistrationVariantOverride {
-                        param_name: "path".to_owned(),
-                        value_expr: "\"/api\"".to_owned(),
-                    }],
-                    wrapper_call: None,
-                    signature_params: vec![],
-                    doc: Some("Register a GET handler.".to_owned()),
-                    style: Default::default(),
-                    ..Default::default()
-                });
-            }
+        if let Some(service) = surface.services.first_mut()
+            && let Some(reg) = service.registrations.first_mut()
+        {
+            reg.variants.push(crate::core::ir::RegistrationVariant {
+                name: "get".to_owned(),
+                overrides: vec![crate::core::ir::RegistrationVariantOverride {
+                    param_name: "path".to_owned(),
+                    value_expr: "\"/api\"".to_owned(),
+                }],
+                wrapper_call: None,
+                signature_params: vec![],
+                doc: Some("Register a GET handler.".to_owned()),
+                style: Default::default(),
+                ..Default::default()
+            });
         }
         surface
     }

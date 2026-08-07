@@ -68,10 +68,10 @@ impl Backend for Pyo3Backend {
             .map(|t| t.name.clone())
             .collect();
         for bridge in &config.trait_bridges {
-            if bridge.bind_via == crate::core::config::BridgeBinding::OptionsField {
-                if let Some(alias) = &bridge.type_alias {
-                    trait_type_names.insert(alias.clone());
-                }
+            if bridge.bind_via == crate::core::config::BridgeBinding::OptionsField
+                && let Some(alias) = &bridge.type_alias
+            {
+                trait_type_names.insert(alias.clone());
             }
         }
         let mapper = Pyo3Mapper { trait_type_names };

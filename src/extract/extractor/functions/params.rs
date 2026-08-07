@@ -68,20 +68,20 @@ fn detect_map_metadata(ty: &syn::Type) -> (bool, bool, bool) {
 /// `.into()` / `.map(std::borrow::Cow::Owned)` when passing `String` to a `Cow<str>` parameter.
 fn param_is_cow_str(ty: &syn::Type) -> bool {
     let inner = peel_option_and_ref(ty);
-    if let syn::Type::Path(tp) = inner {
-        if let Some(seg) = tp.path.segments.last() {
-            if seg.ident != "Cow" {
-                return false;
-            }
-            if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
-                return args.args.iter().any(|a| {
-                    if let syn::GenericArgument::Type(syn::Type::Path(p)) = a {
-                        p.path.segments.last().map(|s| s.ident == "str").unwrap_or(false)
-                    } else {
-                        false
-                    }
-                });
-            }
+    if let syn::Type::Path(tp) = inner
+        && let Some(seg) = tp.path.segments.last()
+    {
+        if seg.ident != "Cow" {
+            return false;
+        }
+        if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+            return args.args.iter().any(|a| {
+                if let syn::GenericArgument::Type(syn::Type::Path(p)) = a {
+                    p.path.segments.last().map(|s| s.ident == "str").unwrap_or(false)
+                } else {
+                    false
+                }
+            });
         }
     }
     false
@@ -92,14 +92,13 @@ fn peel_option_and_ref(ty: &syn::Type) -> &syn::Type {
     match ty {
         syn::Type::Reference(r) => r.elem.as_ref(),
         syn::Type::Path(tp) => {
-            if let Some(seg) = tp.path.segments.last() {
-                if seg.ident == "Option" {
-                    if let syn::PathArguments::AngleBracketed(ab) = &seg.arguments {
-                        for arg in &ab.args {
-                            if let syn::GenericArgument::Type(inner) = arg {
-                                return inner;
-                            }
-                        }
+            if let Some(seg) = tp.path.segments.last()
+                && seg.ident == "Option"
+                && let syn::PathArguments::AngleBracketed(ab) = &seg.arguments
+            {
+                for arg in &ab.args {
+                    if let syn::GenericArgument::Type(inner) = arg {
+                        return inner;
                     }
                 }
             }
@@ -141,14 +140,12 @@ fn find_map_segment(ty: &syn::Type) -> Option<&syn::PathSegment> {
 /// Used to set `is_ref = true` on optional params even though `&*pat_type.ty` is not a
 /// reference (the outer type is `Option`, not `&`).
 fn option_inner_is_ref(ty: &syn::Type) -> bool {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(seg) = type_path.path.segments.last() {
-            if seg.ident == "Option" {
-                if let Some(inner) = type_resolver::extract_single_generic_arg_syn(seg) {
-                    return matches!(*inner, syn::Type::Reference(_));
-                }
-            }
-        }
+    if let syn::Type::Path(type_path) = ty
+        && let Some(seg) = type_path.path.segments.last()
+        && seg.ident == "Option"
+        && let Some(inner) = type_resolver::extract_single_generic_arg_syn(seg)
+    {
+        return matches!(*inner, syn::Type::Reference(_));
     }
     false
 }
@@ -158,14 +155,12 @@ fn is_mut_ref(ty: &syn::Type) -> bool {
     match ty {
         syn::Type::Reference(r) => r.mutability.is_some(),
         syn::Type::Path(type_path) => {
-            if let Some(seg) = type_path.path.segments.last() {
-                if seg.ident == "Option" {
-                    if let Some(inner) = type_resolver::extract_single_generic_arg_syn(seg) {
-                        if let syn::Type::Reference(r) = &*inner {
-                            return r.mutability.is_some();
-                        }
-                    }
-                }
+            if let Some(seg) = type_path.path.segments.last()
+                && seg.ident == "Option"
+                && let Some(inner) = type_resolver::extract_single_generic_arg_syn(seg)
+                && let syn::Type::Reference(r) = &*inner
+            {
+                return r.mutability.is_some();
             }
             false
         }

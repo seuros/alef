@@ -40,14 +40,13 @@ pub(super) fn is_file_path(s: &str) -> bool {
     }
 
     let first = s.chars().next().unwrap_or('\0');
-    if first.is_ascii_alphanumeric() || first == '_' {
-        if let Some(slash_pos) = s.find('/') {
-            if slash_pos > 0 {
-                let after_slash = &s[slash_pos + 1..];
-                if after_slash.contains('.') && !after_slash.is_empty() {
-                    return true;
-                }
-            }
+    if (first.is_ascii_alphanumeric() || first == '_')
+        && let Some(slash_pos) = s.find('/')
+        && slash_pos > 0
+    {
+        let after_slash = &s[slash_pos + 1..];
+        if after_slash.contains('.') && !after_slash.is_empty() {
+            return true;
         }
     }
 

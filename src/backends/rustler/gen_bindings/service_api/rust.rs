@@ -178,10 +178,10 @@ fn gen_run_nif(
                 .metadata_params
                 .iter()
                 .map(|p| {
-                    if let TypeRef::Named(n) = &p.ty {
-                        if api.types.iter().any(|t| &t.name == n && !t.is_trait && t.is_opaque) {
-                            return format!("rustler::ResourceArc<super::{}>", n);
-                        }
+                    if let TypeRef::Named(n) = &p.ty
+                        && api.types.iter().any(|t| &t.name == n && !t.is_trait && t.is_opaque)
+                    {
+                        return format!("rustler::ResourceArc<super::{}>", n);
                     }
                     typeref_to_rust_type(&p.ty, core_import)
                 })
@@ -195,18 +195,16 @@ fn gen_run_nif(
                 } else {
                     false
                 };
-                if is_opaque {
-                    if let TypeRef::Named(n) = &meta_param.ty {
-                        opaque_bindings.push_str(&render(
-                            "service_api_opaque_metadata_binding.rs.jinja",
-                            context! {
-                                indent => "                    ",
-                                param_name => meta_param.name,
-                                core_import => core_import,
-                                type_name => n,
-                            },
-                        ));
-                    }
+                if is_opaque && let TypeRef::Named(n) = &meta_param.ty {
+                    opaque_bindings.push_str(&render(
+                        "service_api_opaque_metadata_binding.rs.jinja",
+                        context! {
+                            indent => "                    ",
+                            param_name => meta_param.name,
+                            core_import => core_import,
+                            type_name => n,
+                        },
+                    ));
                 }
             }
             let args_list = metadata_param_names

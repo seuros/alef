@@ -39,10 +39,8 @@ pub(super) fn gen_enum_stub(enum_def: &EnumDef, emit_docstrings: bool, coercible
         gen_data_enum_typeddicts(&mut lines, enum_def, coercible_dtos);
     } else {
         lines.push(format!("class {}:", enum_def.name));
-        if emit_docstrings {
-            if let Some(docstring) = pyi_docstring(&enum_def.doc, "    ") {
-                lines.push(docstring);
-            }
+        if emit_docstrings && let Some(docstring) = pyi_docstring(&enum_def.doc, "    ") {
+            lines.push(docstring);
         }
         for variant in &enum_def.variants {
             // Emit snake_case attribute names to match the #[pyo3(name = "...")] rename
@@ -51,10 +49,8 @@ pub(super) fn gen_enum_stub(enum_def: &EnumDef, emit_docstrings: bool, coercible
                 to_python_enum_variant(&variant.name),
                 enum_def.name
             ));
-            if emit_docstrings {
-                if let Some(docstring) = pyi_docstring(&variant.doc, "    ") {
-                    lines.push(docstring);
-                }
+            if emit_docstrings && let Some(docstring) = pyi_docstring(&variant.doc, "    ") {
+                lines.push(docstring);
             }
         }
         lines.push("    def __init__(self, value: int | str) -> None: ...".to_string());

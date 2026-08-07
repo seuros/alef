@@ -81,22 +81,22 @@ pub(super) fn write_version_to_cargo_toml(cargo_toml_path: &str, new_version: &s
         .and_then(|t| t.get_mut("package"))
         .and_then(|p| p.as_table_like_mut())
         .and_then(|t| t.get_mut("version"))
+        && ws_version.is_str()
+        && ws_version.as_str() != Some(new_version)
     {
-        if ws_version.is_str() && ws_version.as_str() != Some(new_version) {
-            *ws_version = toml_edit::value(new_version);
-            changed = true;
-        }
+        *ws_version = toml_edit::value(new_version);
+        changed = true;
     }
 
     if let Some(pkg_version) = doc
         .get_mut("package")
         .and_then(|p| p.as_table_like_mut())
         .and_then(|t| t.get_mut("version"))
+        && pkg_version.is_str()
+        && pkg_version.as_str() != Some(new_version)
     {
-        if pkg_version.is_str() && pkg_version.as_str() != Some(new_version) {
-            *pkg_version = toml_edit::value(new_version);
-            changed = true;
-        }
+        *pkg_version = toml_edit::value(new_version);
+        changed = true;
     }
 
     if !changed {
@@ -204,50 +204,47 @@ pub(crate) fn patch_workspace_dep_versions(
             if !is_member {
                 continue;
             }
-            if let Some(inline) = item.as_table_like_mut() {
-                if let Some(ver_item) = inline.get_mut("version") {
-                    if ver_item.as_str() != Some(new_version) {
-                        *ver_item = toml_edit::value(new_version);
-                        any = true;
-                    }
-                }
+            if let Some(inline) = item.as_table_like_mut()
+                && let Some(ver_item) = inline.get_mut("version")
+                && ver_item.as_str() != Some(new_version)
+            {
+                *ver_item = toml_edit::value(new_version);
+                any = true;
             }
         }
         any
     }
 
     for table_key in &["dependencies", "dev-dependencies", "build-dependencies"] {
-        if let Some(item) = doc.get_mut(table_key) {
-            if patch_dep_table(item, new_version, workspace_members) {
-                changed = true;
-            }
+        if let Some(item) = doc.get_mut(table_key)
+            && patch_dep_table(item, new_version, workspace_members)
+        {
+            changed = true;
         }
     }
 
-    if let Some(workspace) = doc.get_mut("workspace") {
-        if let Some(ws_table) = workspace.as_table_like_mut() {
-            if let Some(deps) = ws_table.get_mut("dependencies") {
-                if patch_dep_table(deps, new_version, workspace_members) {
-                    changed = true;
-                }
-            }
-        }
+    if let Some(workspace) = doc.get_mut("workspace")
+        && let Some(ws_table) = workspace.as_table_like_mut()
+        && let Some(deps) = ws_table.get_mut("dependencies")
+        && patch_dep_table(deps, new_version, workspace_members)
+    {
+        changed = true;
     }
 
     // Walk [target.'cfg(...)'.{dependencies,dev-dependencies,build-dependencies}].
-    if let Some(target_item) = doc.get_mut("target") {
-        if let Some(target_table) = target_item.as_table_like_mut() {
-            let cfg_keys: Vec<String> = target_table.iter().map(|(k, _)| k.to_string()).collect();
-            for cfg_key in cfg_keys {
-                if let Some(cfg_item) = target_table.get_mut(&cfg_key) {
-                    if let Some(cfg_table) = cfg_item.as_table_like_mut() {
-                        for dep_key in &["dependencies", "dev-dependencies", "build-dependencies"] {
-                            if let Some(dep_item) = cfg_table.get_mut(dep_key) {
-                                if patch_dep_table(dep_item, new_version, workspace_members) {
-                                    changed = true;
-                                }
-                            }
-                        }
+    if let Some(target_item) = doc.get_mut("target")
+        && let Some(target_table) = target_item.as_table_like_mut()
+    {
+        let cfg_keys: Vec<String> = target_table.iter().map(|(k, _)| k.to_string()).collect();
+        for cfg_key in cfg_keys {
+            if let Some(cfg_item) = target_table.get_mut(&cfg_key)
+                && let Some(cfg_table) = cfg_item.as_table_like_mut()
+            {
+                for dep_key in &["dependencies", "dev-dependencies", "build-dependencies"] {
+                    if let Some(dep_item) = cfg_table.get_mut(dep_key)
+                        && patch_dep_table(dep_item, new_version, workspace_members)
+                    {
+                        changed = true;
                     }
                 }
             }
@@ -341,52 +338,50 @@ pub fn verify_versions(config: &ResolvedCrateConfig) -> anyhow::Result<Vec<Strin
         re.captures(&content)?.get(1).map(|m| m.as_str().to_string())
     }
 
-    if let Some(found) = extract_version("packages/python/pyproject.toml", r#"version\s*=\s*"([^"]*)""#) {
-        if found != expected_pep440 {
-            mismatches.push(format!(
-                "packages/python/pyproject.toml: found {found}, expected {expected_pep440}"
-            ));
-        }
+    if let Some(found) = extract_version("packages/python/pyproject.toml", r#"version\s*=\s*"([^"]*)""#)
+        && found != expected_pep440
+    {
+        mismatches.push(format!(
+            "packages/python/pyproject.toml: found {found}, expected {expected_pep440}"
+        ));
     }
 
-    if let Some(found) = extract_version("packages/node/package.json", r#""version"\s*:\s*"([^"]*)""#) {
-        if found != expected {
-            mismatches.push(format!(
-                "packages/node/package.json: found {found}, expected {expected}"
-            ));
-        }
+    if let Some(found) = extract_version("packages/node/package.json", r#""version"\s*:\s*"([^"]*)""#)
+        && found != expected
+    {
+        mismatches.push(format!(
+            "packages/node/package.json: found {found}, expected {expected}"
+        ));
     }
 
-    if let Some(found) = extract_version("packages/java/pom.xml", r"<version>([^<]*)</version>") {
-        if found != expected {
-            mismatches.push(format!("packages/java/pom.xml: found {found}, expected {expected}"));
-        }
+    if let Some(found) = extract_version("packages/java/pom.xml", r"<version>([^<]*)</version>")
+        && found != expected
+    {
+        mismatches.push(format!("packages/java/pom.xml: found {found}, expected {expected}"));
     }
 
     // Elixir — check both `version: "X.Y.Z"` and `@version "X.Y.Z"` patterns
     if let Some(found) = extract_version("packages/elixir/mix.exs", r#"version:\s*"([^"]*)""#)
         .or_else(|| extract_version("packages/elixir/mix.exs", r#"@version\s*"([^"]*)""#))
+        && found != expected
     {
-        if found != expected {
-            mismatches.push(format!("packages/elixir/mix.exs: found {found}, expected {expected}"));
-        }
+        mismatches.push(format!("packages/elixir/mix.exs: found {found}, expected {expected}"));
     }
 
     if let Ok(entries) = std::fs::read_dir("packages/ruby") {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().is_some_and(|e| e == "gemspec") {
-                if let Some(found) = extract_version(
+            if path.extension().is_some_and(|e| e == "gemspec")
+                && let Some(found) = extract_version(
                     &path.to_string_lossy(),
                     r"spec\.version\s*=\s*['\x22]([^'\x22]*)['\x22]",
-                ) {
-                    if found != expected_rubygems {
-                        mismatches.push(format!(
-                            "{}: found {found}, expected {expected_rubygems}",
-                            path.display()
-                        ));
-                    }
-                }
+                )
+                && found != expected_rubygems
+            {
+                mismatches.push(format!(
+                    "{}: found {found}, expected {expected_rubygems}",
+                    path.display()
+                ));
             }
         }
     }
@@ -398,13 +393,13 @@ pub fn verify_versions(config: &ResolvedCrateConfig) -> anyhow::Result<Vec<Strin
     ] {
         if let Ok(entries) = glob::glob(pattern) {
             for entry in entries.flatten() {
-                if let Some(found) = extract_version(&entry.to_string_lossy(), r#"VERSION\s*=\s*["']([^"']*)["']"#) {
-                    if found != expected_rubygems {
-                        mismatches.push(format!(
-                            "{}: found {found}, expected {expected_rubygems}",
-                            entry.display()
-                        ));
-                    }
+                if let Some(found) = extract_version(&entry.to_string_lossy(), r#"VERSION\s*=\s*["']([^"']*)["']"#)
+                    && found != expected_rubygems
+                {
+                    mismatches.push(format!(
+                        "{}: found {found}, expected {expected_rubygems}",
+                        entry.display()
+                    ));
                 }
             }
         }
@@ -413,43 +408,41 @@ pub fn verify_versions(config: &ResolvedCrateConfig) -> anyhow::Result<Vec<Strin
     if let Some(found) = extract_version(
         "packages/csharp/SampleCrawler/SampleCrawler.csproj",
         r"<Version>([^<]*)</Version>",
-    ) {
-        if found != expected {
-            mismatches.push(format!("packages/csharp: found {found}, expected {expected}"));
-        }
+    ) && found != expected
+    {
+        mismatches.push(format!("packages/csharp: found {found}, expected {expected}"));
     }
 
-    if let Some(found) = extract_version("packages/php/composer.json", r#""version"\s*:\s*"([^"]*)""#) {
-        if found != expected {
-            mismatches.push(format!(
-                "packages/php/composer.json: found {found}, expected {expected}"
-            ));
-        }
+    if let Some(found) = extract_version("packages/php/composer.json", r#""version"\s*:\s*"([^"]*)""#)
+        && found != expected
+    {
+        mismatches.push(format!(
+            "packages/php/composer.json: found {found}, expected {expected}"
+        ));
     }
 
-    if let Some(found) = extract_version("packages/dart/pubspec.yaml", r"(?m)^version:\s*([^\s#\n]+)") {
-        if found != expected {
-            mismatches.push(format!(
-                "packages/dart/pubspec.yaml: found {found}, expected {expected}"
-            ));
-        }
+    if let Some(found) = extract_version("packages/dart/pubspec.yaml", r"(?m)^version:\s*([^\s#\n]+)")
+        && found != expected
+    {
+        mismatches.push(format!(
+            "packages/dart/pubspec.yaml: found {found}, expected {expected}"
+        ));
     }
 
-    if let Some(found) = extract_version("packages/zig/build.zig.zon", r#"(?m)^\s*\.version\s*=\s*"([^"]*)""#) {
-        if found != expected {
-            mismatches.push(format!(
-                "packages/zig/build.zig.zon: found {found}, expected {expected}"
-            ));
-        }
+    if let Some(found) = extract_version("packages/zig/build.zig.zon", r#"(?m)^\s*\.version\s*=\s*"([^"]*)""#)
+        && found != expected
+    {
+        mismatches.push(format!(
+            "packages/zig/build.zig.zon: found {found}, expected {expected}"
+        ));
     }
 
     if let Some(found) = extract_version(
         "Package.swift",
         r#"releases/download/v(\d+\.\d+\.\d+(?:-[a-zA-Z0-9._]+)*)/"#,
-    ) {
-        if found != expected {
-            mismatches.push(format!("Package.swift: found {found}, expected {expected}"));
-        }
+    ) && found != expected
+    {
+        mismatches.push(format!("Package.swift: found {found}, expected {expected}"));
     }
 
     Ok(mismatches)

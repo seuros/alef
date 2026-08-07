@@ -75,10 +75,10 @@ pub fn emit(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Ve
     exclude_types.extend(api.types.iter().filter(|t| t.binding_excluded).map(|t| t.name.clone()));
     exclude_types.extend(api.enums.iter().filter(|e| e.binding_excluded).map(|e| e.name.clone()));
     for contract in &api.handler_contracts {
-        if let Some(adapter) = contract.response_adapter.as_deref() {
-            if let Some(short) = adapter.rsplit("::").next() {
-                exclude_functions.insert(short.to_string());
-            }
+        if let Some(adapter) = contract.response_adapter.as_deref()
+            && let Some(short) = adapter.rsplit("::").next()
+        {
+            exclude_functions.insert(short.to_string());
         }
     }
     let exclude_fields: HashSet<String> = config

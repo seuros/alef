@@ -92,11 +92,11 @@ fn collect_workspace_cargo_toml_paths() -> Option<(Vec<String>, HashSet<String>)
 
     let mut cargo_toml_paths: Vec<String> = vec![];
     for pattern_val in members.iter().chain(excludes.iter()) {
-        if let Some(pattern) = pattern_val.as_str() {
-            if let Ok(paths) = glob::glob(&format!("{pattern}/Cargo.toml")) {
-                for entry in paths.flatten() {
-                    cargo_toml_paths.push(entry.to_string_lossy().to_string());
-                }
+        if let Some(pattern) = pattern_val.as_str()
+            && let Ok(paths) = glob::glob(&format!("{pattern}/Cargo.toml"))
+        {
+            for entry in paths.flatten() {
+                cargo_toml_paths.push(entry.to_string_lossy().to_string());
             }
         }
     }

@@ -195,20 +195,19 @@ pub(crate) fn find_crate_source(dep_crate_name: &str, workspace_root: Option<&Pa
     let cargo_toml = std::fs::read_to_string(root.join("Cargo.toml")).ok()?;
     let value: toml::Value = toml::from_str(&cargo_toml).ok()?;
 
-    if let Some(deps) = value.get("dependencies").and_then(|d| d.as_table()) {
-        if let Some(path) = resolve_dep_path(deps, dep_crate_name, root) {
-            return Some(path);
-        }
+    if let Some(deps) = value.get("dependencies").and_then(|d| d.as_table())
+        && let Some(path) = resolve_dep_path(deps, dep_crate_name, root)
+    {
+        return Some(path);
     }
 
     if let Some(deps) = value
         .get("workspace")
         .and_then(|w| w.get("dependencies"))
         .and_then(|d| d.as_table())
+        && let Some(path) = resolve_dep_path(deps, dep_crate_name, root)
     {
-        if let Some(path) = resolve_dep_path(deps, dep_crate_name, root) {
-            return Some(path);
-        }
+        return Some(path);
     }
 
     let heuristic = root.join("crates").join(dep_crate_name).join("src/lib.rs");

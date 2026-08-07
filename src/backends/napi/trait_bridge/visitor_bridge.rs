@@ -290,8 +290,8 @@ pub(super) fn build_napi_args(
                     name = p.name
                 );
             }
-            if let TypeRef::Vec(inner) = &p.ty {
-                if is_napi_encodable(inner) {
+            if let TypeRef::Vec(inner) = &p.ty
+                && is_napi_encodable(inner) {
                     let owned = if p.is_ref { format!("{}.to_vec()", p.name) } else { format!("{}.clone()", p.name) };
                     return format!(
                         "unsafe {{ \
@@ -299,7 +299,6 @@ pub(super) fn build_napi_args(
                          napi::bindgen_prelude::Unknown::from_raw_unchecked(self.env().raw(), r) }}",
                     );
                 }
-            }
 
             format!(
                 "match self.env().create_string(&format!(\"{{:?}}\", {name})) {{ Ok(s) => s.to_unknown(), Err(_) => unsafe {{ \

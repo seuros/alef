@@ -63,26 +63,26 @@ pub(super) fn render_embeddings_assertion(out: &mut String, result_var: &str, as
     let embed_list = result_var.to_string();
     match assertion.assertion_type.as_str() {
         "count_equals" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(
-                        out,
-                        "    assert_eq!({embed_list}.len(), {n}, \"expected exactly {n} elements, got {{}}\", {embed_list}.len());"
-                    );
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(
+                    out,
+                    "    assert_eq!({embed_list}.len(), {n}, \"expected exactly {n} elements, got {{}}\", {embed_list}.len());"
+                );
             }
         }
         "count_min" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    if n <= 1 {
-                        let _ = writeln!(out, "    assert!(!{embed_list}.is_empty(), \"expected >= {n}\");");
-                    } else {
-                        let _ = writeln!(
-                            out,
-                            "    assert!({embed_list}.len() >= {n}, \"expected at least {n} elements, got {{}}\", {embed_list}.len());"
-                        );
-                    }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                if n <= 1 {
+                    let _ = writeln!(out, "    assert!(!{embed_list}.is_empty(), \"expected >= {n}\");");
+                } else {
+                    let _ = writeln!(
+                        out,
+                        "    assert!({embed_list}.len() >= {n}, \"expected at least {n} elements, got {{}}\", {embed_list}.len());"
+                    );
                 }
             }
         }
@@ -238,30 +238,30 @@ pub(super) fn render_keywords_assertion(out: &mut String, result_var: &str, asse
             );
         }
         "count_min" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    if n <= 1 {
-                        let _ = writeln!(
-                            out,
-                            "    assert!({accessor}.as_ref().is_some_and(|v| !v.is_empty()), \"expected >= {n}\");"
-                        );
-                    } else {
-                        let _ = writeln!(
-                            out,
-                            "    assert!({accessor}.as_ref().is_some_and(|v| v.len() >= {n}), \"expected at least {n} keywords\");"
-                        );
-                    }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                if n <= 1 {
+                    let _ = writeln!(
+                        out,
+                        "    assert!({accessor}.as_ref().is_some_and(|v| !v.is_empty()), \"expected >= {n}\");"
+                    );
+                } else {
+                    let _ = writeln!(
+                        out,
+                        "    assert!({accessor}.as_ref().is_some_and(|v| v.len() >= {n}), \"expected at least {n} keywords\");"
+                    );
                 }
             }
         }
         "count_equals" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(
-                        out,
-                        "    assert!({accessor}.as_ref().is_some_and(|v| v.len() == {n}), \"expected exactly {n} keywords\");"
-                    );
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(
+                    out,
+                    "    assert!({accessor}.as_ref().is_some_and(|v| v.len() == {n}), \"expected exactly {n} keywords\");"
+                );
             }
         }
         _ => {

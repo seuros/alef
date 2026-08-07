@@ -88,14 +88,13 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
         ret_type = ret_type.replace("Self", &qualified);
     }
 
-    if typ.has_lifetime_params {
-        if let TypeRef::Named(n) = &method.return_type {
-            if n == type_name {
-                let bare = format!("*mut {qualified}");
-                if ret_type == bare {
-                    ret_type = format!("*mut {qualified}<'static>");
-                }
-            }
+    if typ.has_lifetime_params
+        && let TypeRef::Named(n) = &method.return_type
+        && n == type_name
+    {
+        let bare = format!("*mut {qualified}");
+        if ret_type == bare {
+            ret_type = format!("*mut {qualified}<'static>");
         }
     }
 

@@ -242,50 +242,51 @@ pub(super) fn render_test_file(
                     }
                 }
                 // Collect the config type itself (e.g., ExtractionConfig, EmbeddingConfig)
-                if let Some(opts_type) = constructor_type {
-                    if !value.is_null() && value.is_object() {
-                        // This is a constructor call like ExtractionConfig(...), so import the type
-                        used_config_types.insert(opts_type.to_string());
-                    }
+                if let Some(opts_type) = constructor_type
+                    && !value.is_null()
+                    && value.is_object()
+                {
+                    // This is a constructor call like ExtractionConfig(...), so import the type
+                    used_config_types.insert(opts_type.to_string());
                 }
             }
 
             // For handle args, collect constructor types referenced by element_type
-            if arg.arg_type == "handle" {
-                if let Some(elem_type) = &arg.element_type {
-                    // Only import if it's a named type (not a primitive)
-                    let is_primitive = matches!(
-                        elem_type.as_str(),
-                        "str"
-                            | "int"
-                            | "float"
-                            | "bool"
-                            | "bytes"
-                            | "list"
-                            | "dict"
-                            | "tuple"
-                            | "Any"
-                            | "String"
-                            | "&str"
-                            | "char"
-                            | "u8"
-                            | "u16"
-                            | "u32"
-                            | "u64"
-                            | "u128"
-                            | "usize"
-                            | "i8"
-                            | "i16"
-                            | "i32"
-                            | "i64"
-                            | "i128"
-                            | "isize"
-                            | "f32"
-                            | "f64"
-                    );
-                    if !is_primitive {
-                        used_config_types.insert(elem_type.clone());
-                    }
+            if arg.arg_type == "handle"
+                && let Some(elem_type) = &arg.element_type
+            {
+                // Only import if it's a named type (not a primitive)
+                let is_primitive = matches!(
+                    elem_type.as_str(),
+                    "str"
+                        | "int"
+                        | "float"
+                        | "bool"
+                        | "bytes"
+                        | "list"
+                        | "dict"
+                        | "tuple"
+                        | "Any"
+                        | "String"
+                        | "&str"
+                        | "char"
+                        | "u8"
+                        | "u16"
+                        | "u32"
+                        | "u64"
+                        | "u128"
+                        | "usize"
+                        | "i8"
+                        | "i16"
+                        | "i32"
+                        | "i64"
+                        | "i128"
+                        | "isize"
+                        | "f32"
+                        | "f64"
+                );
+                if !is_primitive {
+                    used_config_types.insert(elem_type.clone());
                 }
             }
         }
@@ -478,12 +479,12 @@ fn build_thirdparty_imports(
             let Some(trait_name) = arg.trait_name.as_deref() else {
                 continue;
             };
-            if let Some(bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == trait_name) {
-                if let Some(unregister_fn) = bridge.unregister_fn.as_deref() {
-                    let unregister_str = unregister_fn.to_string();
-                    if !import_names.contains(&unregister_str) {
-                        import_names.push(unregister_str);
-                    }
+            if let Some(bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == trait_name)
+                && let Some(unregister_fn) = bridge.unregister_fn.as_deref()
+            {
+                let unregister_str = unregister_fn.to_string();
+                if !import_names.contains(&unregister_str) {
+                    import_names.push(unregister_str);
                 }
             }
         }
@@ -553,10 +554,10 @@ fn build_thirdparty_imports(
                     let config_value = resolve_field(&fixture.input, &arg.field);
                     if let Some(obj) = config_value.as_object() {
                         for key in obj.keys() {
-                            if let Some(type_name) = handle_nested_types.get(key) {
-                                if obj[key].is_object() {
-                                    used_nested_types.insert(type_name.clone());
-                                }
+                            if let Some(type_name) = handle_nested_types.get(key)
+                                && obj[key].is_object()
+                            {
+                                used_nested_types.insert(type_name.clone());
                             }
                         }
                     }
@@ -572,14 +573,12 @@ fn build_thirdparty_imports(
 
     for fixture in fixtures.iter() {
         for assertion in &fixture.assertions {
-            if assertion.assertion_type == "method_result" {
-                if let Some(method_name) = &assertion.method {
-                    if let Some(name) = python_method_helper_import(method_name) {
-                        if !import_names.contains(&name) {
-                            import_names.push(name);
-                        }
-                    }
-                }
+            if assertion.assertion_type == "method_result"
+                && let Some(method_name) = &assertion.method
+                && let Some(name) = python_method_helper_import(method_name)
+                && !import_names.contains(&name)
+            {
+                import_names.push(name);
             }
         }
     }
@@ -627,13 +626,12 @@ fn build_thirdparty_imports(
             &fixture.tags,
             &fixture.input,
         );
-        if let Some(py_override) = cc.overrides.get("python") {
-            if py_override.options_via.as_deref() == Some("from_json") {
-                if let Some(opts_type) = &py_override.options_type {
-                    let native_mod = py_override.from_json_module.as_deref().unwrap_or(module);
-                    extra_from_json_types.insert(format!("from {native_mod} import {opts_type}"));
-                }
-            }
+        if let Some(py_override) = cc.overrides.get("python")
+            && py_override.options_via.as_deref() == Some("from_json")
+            && let Some(opts_type) = &py_override.options_type
+        {
+            let native_mod = py_override.from_json_module.as_deref().unwrap_or(module);
+            extra_from_json_types.insert(format!("from {native_mod} import {opts_type}"));
         }
     }
     for imp in extra_from_json_types {

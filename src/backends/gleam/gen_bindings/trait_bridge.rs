@@ -51,19 +51,19 @@ pub(crate) fn emit_trait_bridge_shims(
             trait_name => trait_name,
         },
     ));
-    if let Some(ty) = trait_type {
-        if !ty.doc.is_empty() {
-            out.push_str(&crate::backends::gleam::template_env::render(
-                "trait_type_doc_lines.jinja",
-                minijinja::context! {
-                    doc_lines => ty.doc.lines().collect::<Vec<_>>(),
-                },
-            ));
-            out.push_str(&crate::backends::gleam::template_env::render(
-                "trait_bridge_empty_comment_line.jinja",
-                minijinja::context! {},
-            ));
-        }
+    if let Some(ty) = trait_type
+        && !ty.doc.is_empty()
+    {
+        out.push_str(&crate::backends::gleam::template_env::render(
+            "trait_type_doc_lines.jinja",
+            minijinja::context! {
+                doc_lines => ty.doc.lines().collect::<Vec<_>>(),
+            },
+        ));
+        out.push_str(&crate::backends::gleam::template_env::render(
+            "trait_bridge_empty_comment_line.jinja",
+            minijinja::context! {},
+        ));
     }
     out.push_str(&crate::backends::gleam::template_env::render(
         "trait_scope_cap.jinja",

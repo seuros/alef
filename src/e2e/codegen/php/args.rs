@@ -199,48 +199,48 @@ pub(super) fn build_args_and_setup(
         }
 
         if arg.arg_type == "test_backend" {
-            if let Some(trait_name) = &arg.trait_name {
-                if let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name) {
-                    // Collect methods from both the main trait and its super-trait (if present).
-                    // The super-trait methods are needed so stubs implement the full interface.
-                    let mut methods: Vec<&crate::core::ir::MethodDef> = type_defs
-                        .iter()
-                        .find(|t| t.name == *trait_name)
-                        .map(|t| t.methods.iter().collect())
-                        .unwrap_or_default();
+            if let Some(trait_name) = &arg.trait_name
+                && let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name)
+            {
+                // Collect methods from both the main trait and its super-trait (if present).
+                // The super-trait methods are needed so stubs implement the full interface.
+                let mut methods: Vec<&crate::core::ir::MethodDef> = type_defs
+                    .iter()
+                    .find(|t| t.name == *trait_name)
+                    .map(|t| t.methods.iter().collect())
+                    .unwrap_or_default();
 
-                    // If there's a super-trait, also collect its methods.
-                    // Compare against rust_path (full module path), not just the simple name.
-                    if let Some(super_trait) = &trait_bridge.super_trait {
-                        if let Some(super_type) = type_defs.iter().find(|t| &t.rust_path == super_trait) {
-                            for method in &super_type.methods {
-                                // Only add if not already present (avoid duplicates).
-                                if !methods.iter().any(|m| m.name == method.name) {
-                                    methods.push(method);
-                                }
-                            }
+                // If there's a super-trait, also collect its methods.
+                // Compare against rust_path (full module path), not just the simple name.
+                if let Some(super_trait) = &trait_bridge.super_trait
+                    && let Some(super_type) = type_defs.iter().find(|t| &t.rust_path == super_trait)
+                {
+                    for method in &super_type.methods {
+                        // Only add if not already present (avoid duplicates).
+                        if !methods.iter().any(|m| m.name == method.name) {
+                            methods.push(method);
                         }
                     }
-
-                    let emission = super::stubs::emit_test_backend_with_ns(
-                        trait_bridge,
-                        &methods,
-                        fixture,
-                        namespace,
-                        class_name,
-                        type_defs,
-                    );
-                    // Split multi-line setup_block into individual lines so the
-                    // Jinja template can indent each line uniformly with `        {{ line }}`.
-                    for line in emission.setup_block.lines() {
-                        setup_lines.push(line.to_string());
-                    }
-                    parts.push(emission.arg_expr);
-                    teardown_block.push_str(&emission.teardown_block);
-                    // Collect any function imports needed for trait-bridge teardown
-                    _trait_bridge_imports.extend(emission.type_imports);
-                    continue;
                 }
+
+                let emission = super::stubs::emit_test_backend_with_ns(
+                    trait_bridge,
+                    &methods,
+                    fixture,
+                    namespace,
+                    class_name,
+                    type_defs,
+                );
+                // Split multi-line setup_block into individual lines so the
+                // Jinja template can indent each line uniformly with `        {{ line }}`.
+                for line in emission.setup_block.lines() {
+                    setup_lines.push(line.to_string());
+                }
+                parts.push(emission.arg_expr);
+                teardown_block.push_str(&emission.teardown_block);
+                // Collect any function imports needed for trait-bridge teardown
+                _trait_bridge_imports.extend(emission.type_imports);
+                continue;
             }
             let emission = crate::e2e::codegen::TestBackendEmission::unimplemented("php");
             setup_lines.push(format!("// {}", emission.arg_expr));
@@ -326,37 +326,37 @@ pub(super) fn build_args_and_setup(
                     let json_object_type =
                         crate::e2e::codegen::recipe::json_object_constructor_type(arg, options_type, v);
                     // Check for typed object arrays first.
-                    if let Some(elem_type) = &arg.element_type {
-                        if v.is_array() {
-                            // When element_type is a scalar/primitive and value is an array,
-                            // pass it directly as a PHP array (e.g. ["python"]) rather than
-                            // wrapping in a typed config constructor.
-                            if super::values::is_php_reserved_type(elem_type) {
-                                parts.push(super::values::json_to_php(v));
-                                continue;
-                            }
-                            // Typed object arrays wrap each element in `{ElemType}::from_json('{...}')`.
-                            // PHP's #[php_class] FromZval only
-                            // accepts class instances; raw assoc arrays produce "Failed to convert
-                            // array element to {Type}". Every alef-emitted has_default/has_serde
-                            // struct gets a `from_json` static method, so this is the portable path.
-                            if v.as_array().is_some() {
-                                if crate::e2e::codegen::value_contains_mock_url_placeholder(v) {
-                                    let env_key = crate::e2e::codegen::mock_url_env_key(fixture_id);
-                                    let base_var = format!("{}MockBaseUrl", arg.name);
-                                    setup_lines.push(format!(
+                    if let Some(elem_type) = &arg.element_type
+                        && v.is_array()
+                    {
+                        // When element_type is a scalar/primitive and value is an array,
+                        // pass it directly as a PHP array (e.g. ["python"]) rather than
+                        // wrapping in a typed config constructor.
+                        if super::values::is_php_reserved_type(elem_type) {
+                            parts.push(super::values::json_to_php(v));
+                            continue;
+                        }
+                        // Typed object arrays wrap each element in `{ElemType}::from_json('{...}')`.
+                        // PHP's #[php_class] FromZval only
+                        // accepts class instances; raw assoc arrays produce "Failed to convert
+                        // array element to {Type}". Every alef-emitted has_default/has_serde
+                        // struct gets a `from_json` static method, so this is the portable path.
+                        if v.as_array().is_some() {
+                            if crate::e2e::codegen::value_contains_mock_url_placeholder(v) {
+                                let env_key = crate::e2e::codegen::mock_url_env_key(fixture_id);
+                                let base_var = format!("{}MockBaseUrl", arg.name);
+                                setup_lines.push(format!(
                                         "${base_var} = getenv('{env_key}') ?: getenv('MOCK_SERVER_URL') . '/fixtures/{fixture_id}';"
                                     ));
-                                    parts.push(super::values::emit_php_object_array_with_mock_base(
-                                        v,
-                                        elem_type,
-                                        Some(&base_var),
-                                    ));
-                                } else {
-                                    parts.push(super::values::emit_php_object_array(v, elem_type));
-                                }
-                                continue;
+                                parts.push(super::values::emit_php_object_array_with_mock_base(
+                                    v,
+                                    elem_type,
+                                    Some(&base_var),
+                                ));
+                            } else {
+                                parts.push(super::values::emit_php_object_array(v, elem_type));
                             }
+                            continue;
                         }
                     }
                     match options_via {
@@ -366,11 +366,11 @@ pub(super) fn build_args_and_setup(
                             let filtered_v = super::values::filter_empty_enum_strings(v);
 
                             // If the config is empty after filtering, pass null instead.
-                            if let serde_json::Value::Object(obj) = &filtered_v {
-                                if obj.is_empty() {
-                                    parts.push("null".to_string());
-                                    continue;
-                                }
+                            if let serde_json::Value::Object(obj) = &filtered_v
+                                && obj.is_empty()
+                            {
+                                parts.push("null".to_string());
+                                continue;
                             }
 
                             // The PHP binding deserializes into the binding struct, which is
@@ -403,15 +403,14 @@ pub(super) fn build_args_and_setup(
 
                                 // For empty objects, construct with from_json('{}') to get the
                                 // type's defaults rather than passing null (which fails for non-optional params).
-                                if let serde_json::Value::Object(obj) = &filtered_v {
-                                    if obj.is_empty() {
-                                        let arg_var = format!("${}", arg.name);
-                                        setup_lines.push(format!(
-                                            "{arg_var} = \\{namespace}\\{type_name}::from_json('{{}}');"
-                                        ));
-                                        parts.push(arg_var);
-                                        continue;
-                                    }
+                                if let serde_json::Value::Object(obj) = &filtered_v
+                                    && obj.is_empty()
+                                {
+                                    let arg_var = format!("${}", arg.name);
+                                    setup_lines
+                                        .push(format!("{arg_var} = \\{namespace}\\{type_name}::from_json('{{}}');"));
+                                    parts.push(arg_var);
+                                    continue;
                                 }
 
                                 let arg_var = format!("${}", arg.name);

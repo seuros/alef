@@ -383,16 +383,16 @@ pub fn package(
             .as_ref()
             .unwrap_or(&default_vendor_mode(lang))
             .clone();
-        if matches!(pkg_vendor_mode, VendorMode::Registry) {
-            if let Some(manifest) = resolve_binding_manifest(config, lang) {
-                let manifest_abs = if manifest.is_absolute() {
-                    manifest
-                } else {
-                    ws_root.join(&manifest)
-                };
-                let members = workspace::workspace_member_crates(ws_root)?;
-                assert_no_member_path_deps(&manifest_abs, &members, lang)?;
-            }
+        if matches!(pkg_vendor_mode, VendorMode::Registry)
+            && let Some(manifest) = resolve_binding_manifest(config, lang)
+        {
+            let manifest_abs = if manifest.is_absolute() {
+                manifest
+            } else {
+                ws_root.join(&manifest)
+            };
+            let members = workspace::workspace_member_crates(ws_root)?;
+            assert_no_member_path_deps(&manifest_abs, &members, lang)?;
         }
 
         let result = match lang {
@@ -504,10 +504,10 @@ fn publish_config_for_language(config: &ResolvedCrateConfig, lang: Language) -> 
 
 /// Resolve the core crate directory path.
 fn resolve_core_crate_dir(config: &ResolvedCrateConfig) -> String {
-    if let Some(publish) = &config.publish {
-        if let Some(core_crate) = &publish.core_crate {
-            return core_crate.clone();
-        }
+    if let Some(publish) = &config.publish
+        && let Some(core_crate) = &publish.core_crate
+    {
+        return core_crate.clone();
     }
     let dir = config.core_crate_dir();
     if !config.sources.is_empty() {

@@ -24,13 +24,13 @@ pub(crate) fn extract_method(
 
     let returns_cow = detect_cow_return(&method.sig.output);
 
-    if !is_async {
-        if let Some((inner, future_error_type)) = unwrap_future_return(&method.sig.output, result_wrapping_aliases) {
-            is_async = true;
-            return_type = inner;
-            if future_error_type.is_some() {
-                error_type = future_error_type;
-            }
+    if !is_async
+        && let Some((inner, future_error_type)) = unwrap_future_return(&method.sig.output, result_wrapping_aliases)
+    {
+        is_async = true;
+        return_type = inner;
+        if future_error_type.is_some() {
+            error_type = future_error_type;
         }
     }
 

@@ -416,18 +416,18 @@ pub(super) fn gen_method_wrapper(
                         },
                     ));
                 }
-                if let TypeRef::Named(name) = &method.return_type {
-                    if !opaque_names.contains(name.as_str()) {
-                        let type_snake = name.to_snake_case();
-                        out.push_str(&crate::backends::go::template_env::render(
-                            "free_type.jinja",
-                            minijinja::context! {
-                                ffi_prefix => ffi_prefix,
-                                type_snake => &type_snake,
-                                ptr => "ptr",
-                            },
-                        ));
-                    }
+                if let TypeRef::Named(name) = &method.return_type
+                    && !opaque_names.contains(name.as_str())
+                {
+                    let type_snake = name.to_snake_case();
+                    out.push_str(&crate::backends::go::template_env::render(
+                        "free_type.jinja",
+                        minijinja::context! {
+                            ffi_prefix => ffi_prefix,
+                            type_snake => &type_snake,
+                            ptr => "ptr",
+                        },
+                    ));
                 }
                 if is_builder_return {
                     out.push_str(&crate::backends::go::template_env::render(
@@ -479,18 +479,18 @@ pub(super) fn gen_method_wrapper(
                     },
                 ));
             }
-            if let TypeRef::Named(name) = &method.return_type {
-                if !opaque_names.contains(name.as_str()) {
-                    let type_snake = name.to_snake_case();
-                    out.push_str(&crate::backends::go::template_env::render(
-                        "free_type.jinja",
-                        minijinja::context! {
-                            ffi_prefix => ffi_prefix,
-                            type_snake => &type_snake,
-                            ptr => "ptr",
-                        },
-                    ));
-                }
+            if let TypeRef::Named(name) = &method.return_type
+                && !opaque_names.contains(name.as_str())
+            {
+                let type_snake = name.to_snake_case();
+                out.push_str(&crate::backends::go::template_env::render(
+                    "free_type.jinja",
+                    minijinja::context! {
+                        ffi_prefix => ffi_prefix,
+                        type_snake => &type_snake,
+                        ptr => "ptr",
+                    },
+                ));
             }
             if is_builder_return {
                 out.push_str(&crate::backends::go::template_env::render(

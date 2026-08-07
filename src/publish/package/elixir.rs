@@ -128,14 +128,12 @@ fn nif_extension(target: &RustTarget) -> &'static str {
 }
 
 fn resolve_nif_versions(config: &ResolvedCrateConfig) -> Vec<String> {
-    if let Some(publish) = &config.publish {
-        if let Some(lang_cfg) = publish.languages.get("elixir") {
-            if let Some(versions) = &lang_cfg.nif_versions {
-                if !versions.is_empty() {
-                    return versions.clone();
-                }
-            }
-        }
+    if let Some(publish) = &config.publish
+        && let Some(lang_cfg) = publish.languages.get("elixir")
+        && let Some(versions) = &lang_cfg.nif_versions
+        && !versions.is_empty()
+    {
+        return versions.clone();
     }
     vec!["2.16".to_string(), "2.17".to_string()]
 }

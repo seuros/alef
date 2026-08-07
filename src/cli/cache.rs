@@ -52,10 +52,11 @@ pub fn sources_hash(sources: &[PathBuf]) -> anyhow::Result<String> {
         current.push((path_str, mtime_nanos, size));
     }
 
-    if all_match && current.len() == memo.entries.len() {
-        if let Some(agg) = memo.aggregate {
-            return Ok(agg);
-        }
+    if all_match
+        && current.len() == memo.entries.len()
+        && let Some(agg) = memo.aggregate
+    {
+        return Ok(agg);
     }
 
     let aggregate = crate::core::hash::compute_sources_hash(sources)?;

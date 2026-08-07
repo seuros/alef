@@ -35,10 +35,10 @@ pub(crate) fn param_conversion_is_fallible(
     enum_names: &AHashSet<String>,
 ) -> bool {
     use crate::core::ir::TypeRef;
-    if let TypeRef::Vec(inner) = &p.ty {
-        if let TypeRef::Named(name) = inner.as_ref() {
-            return !opaque_types.contains(name.as_str()) && !enum_names.contains(name.as_str());
-        }
+    if let TypeRef::Vec(inner) = &p.ty
+        && let TypeRef::Named(name) = inner.as_ref()
+    {
+        return !opaque_types.contains(name.as_str()) && !enum_names.contains(name.as_str());
     }
     false
 }
@@ -347,19 +347,20 @@ pub(crate) fn gen_php_named_let_bindings(
     let mut out = String::new();
 
     for p in params {
-        if let TypeRef::Map(_, _) = &p.ty {
-            if p.map_is_ahash && p.map_key_is_cow {
-                let php_name = to_php_name(&p.name);
-                let bound_name = format!("__{}_ahash", p.name);
-                out.push_str(&crate::backends::php::template_env::render(
-                    "php_ahash_cow_value_let_binding.jinja",
-                    context! {
-                        bound_name => &bound_name,
-                        php_name => &php_name,
-                    },
-                ));
-                continue;
-            }
+        if let TypeRef::Map(_, _) = &p.ty
+            && p.map_is_ahash
+            && p.map_key_is_cow
+        {
+            let php_name = to_php_name(&p.name);
+            let bound_name = format!("__{}_ahash", p.name);
+            out.push_str(&crate::backends::php::template_env::render(
+                "php_ahash_cow_value_let_binding.jinja",
+                context! {
+                    bound_name => &bound_name,
+                    php_name => &php_name,
+                },
+            ));
+            continue;
         }
         let php_param_name = to_php_name(&p.name);
         match &p.ty {

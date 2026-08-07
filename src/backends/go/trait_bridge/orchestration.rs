@@ -132,40 +132,39 @@ pub fn gen_trait_bridges_file(
     for bridge_cfg in &config.trait_bridges {
         if !bridge_cfg.exclude_languages.iter().any(|lang| lang == "go")
             && api.types.iter().any(|t| t.name == bridge_cfg.trait_name)
+            && let Some(trait_def) = api.types.iter().find(|t| t.name == bridge_cfg.trait_name)
         {
-            if let Some(trait_def) = api.types.iter().find(|t| t.name == bridge_cfg.trait_name) {
-                let trait_pascal = trait_def.name.to_pascal_case();
-                let trait_snake = heck::AsSnakeCase(&trait_def.name).to_string();
-                let vtable_constructor = format!("{}_{}_vtable_new", ffi_prefix, trait_snake);
-                let crate_normalized = crate_name.replace('-', "_");
-                let crate_upper = crate_normalized.to_uppercase();
-                let crate_pascal = crate_normalized.to_pascal_case();
-                let c_vtable_struct = format!("{}{}{}{}", crate_upper, crate_pascal, trait_pascal, "VTable");
-                let vtable_methods: Vec<_> = trait_def
-                    .methods
-                    .iter()
-                    .filter(|m| !bridge_cfg.ffi_skip_methods.contains(&m.name))
-                    .collect();
-                let method_field_names: Vec<String> = vtable_methods
-                    .iter()
-                    .map(|method| heck::AsSnakeCase(&method.name).to_string())
-                    .collect();
-                let method_pascal_names: Vec<String> = vtable_methods
-                    .iter()
-                    .map(|method| method.name.to_pascal_case())
-                    .collect();
+            let trait_pascal = trait_def.name.to_pascal_case();
+            let trait_snake = heck::AsSnakeCase(&trait_def.name).to_string();
+            let vtable_constructor = format!("{}_{}_vtable_new", ffi_prefix, trait_snake);
+            let crate_normalized = crate_name.replace('-', "_");
+            let crate_upper = crate_normalized.to_uppercase();
+            let crate_pascal = crate_normalized.to_pascal_case();
+            let c_vtable_struct = format!("{}{}{}{}", crate_upper, crate_pascal, trait_pascal, "VTable");
+            let vtable_methods: Vec<_> = trait_def
+                .methods
+                .iter()
+                .filter(|m| !bridge_cfg.ffi_skip_methods.contains(&m.name))
+                .collect();
+            let method_field_names: Vec<String> = vtable_methods
+                .iter()
+                .map(|method| heck::AsSnakeCase(&method.name).to_string())
+                .collect();
+            let method_pascal_names: Vec<String> = vtable_methods
+                .iter()
+                .map(|method| method.name.to_pascal_case())
+                .collect();
 
-                out.push_str(&crate::backends::go::template_env::render(
-                    "vtable_constructor_helper.jinja",
-                    minijinja::context! {
-                        c_vtable_struct => &c_vtable_struct,
-                        method_field_names => method_field_names,
-                        method_pascal_names => method_pascal_names,
-                        trait_pascal => &trait_pascal,
-                        vtable_constructor => &vtable_constructor,
-                    },
-                ));
-            }
+            out.push_str(&crate::backends::go::template_env::render(
+                "vtable_constructor_helper.jinja",
+                minijinja::context! {
+                    c_vtable_struct => &c_vtable_struct,
+                    method_field_names => method_field_names,
+                    method_pascal_names => method_pascal_names,
+                    trait_pascal => &trait_pascal,
+                    vtable_constructor => &vtable_constructor,
+                },
+            ));
         }
     }
 

@@ -122,22 +122,21 @@ pub(in crate::backends::rustler::gen_bindings) fn append_trait_bridge_delegates(
 
         let behaviour_mod = behaviour_module(app_module, &bridge_cfg.trait_name);
 
-        if bridge_cfg.register_fn.is_some() {
-            if let Some(trait_def) = crate::codegen::generators::trait_bridge::find_trait_def(bridge_cfg, api) {
-                if !trait_def.methods.is_empty() {
-                    content.push_str(&template_env::render(
-                        "elixir_trait_behaviour.ex.jinja",
-                        minijinja::context! {
-                            behaviour_module => &behaviour_mod,
-                            trait_name => &bridge_cfg.trait_name,
-                            register_fn => bridge_cfg.register_fn.as_deref().unwrap_or_default().to_snake_case(),
-                            callbacks => callback_rows(&trait_def.methods, opaque_types, default_types),
-                            optional_callbacks => optional_callback_rows(&trait_def.methods),
-                        },
-                    ));
-                    content.push('\n');
-                }
-            }
+        if bridge_cfg.register_fn.is_some()
+            && let Some(trait_def) = crate::codegen::generators::trait_bridge::find_trait_def(bridge_cfg, api)
+            && !trait_def.methods.is_empty()
+        {
+            content.push_str(&template_env::render(
+                "elixir_trait_behaviour.ex.jinja",
+                minijinja::context! {
+                    behaviour_module => &behaviour_mod,
+                    trait_name => &bridge_cfg.trait_name,
+                    register_fn => bridge_cfg.register_fn.as_deref().unwrap_or_default().to_snake_case(),
+                    callbacks => callback_rows(&trait_def.methods, opaque_types, default_types),
+                    optional_callbacks => optional_callback_rows(&trait_def.methods),
+                },
+            ));
+            content.push('\n');
         }
 
         if let Some(register_fn) = bridge_cfg.register_fn.as_deref() {

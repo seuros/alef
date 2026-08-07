@@ -393,188 +393,187 @@ pub(super) fn generate_public_api(
                 })
                 .collect();
 
-            if let Some((opts_idx, ref field_name)) = options_field_bridge {
-                if *arity > opts_idx {
-                    let opts_param = &all_params[opts_idx];
+            if let Some((opts_idx, ref field_name)) = options_field_bridge
+                && *arity > opts_idx
+            {
+                let opts_param = &all_params[opts_idx];
+                content.push_str(&template_env::render(
+                    "elixir_def_with_guard.jinja",
+                    minijinja::context! {
+                        func_name => &public_fn_name,
+                        params => &arity_params.join(", "),
+                        guard_param => opts_param,
+                    },
+                ));
+                content.push_str(&template_env::render(
+                    "elixir_map_pop_unpack.jinja",
+                    minijinja::context! {
+                        opts_param => opts_param,
+                        field_name => field_name,
+                    },
+                ));
+                content.push('\n');
+                content.push_str("    if is_map(visitor) do\n");
+                let mut with_visitor_args: Vec<String> = nif_call_args
+                    .iter()
+                    .enumerate()
+                    .map(|(i, a)| {
+                        if i == opts_idx {
+                            "if(map_size(clean_opts) == 0, do: nil, else: Jason.encode!(clean_opts))".to_string()
+                        } else {
+                            a.clone()
+                        }
+                    })
+                    .collect();
+                with_visitor_args.push("visitor".to_string());
+                let with_visitor_args_str = with_visitor_args.join(", ");
+                let single_line =
+                    format!("      {{:ok, _}} = {native_mod}.{nif_fn_name}_with_visitor({with_visitor_args_str})\n");
+                if single_line.len() > 98 {
                     content.push_str(&template_env::render(
-                        "elixir_def_with_guard.jinja",
-                        minijinja::context! {
-                            func_name => &public_fn_name,
-                            params => &arity_params.join(", "),
-                            guard_param => opts_param,
-                        },
-                    ));
-                    content.push_str(&template_env::render(
-                        "elixir_map_pop_unpack.jinja",
-                        minijinja::context! {
-                            opts_param => opts_param,
-                            field_name => field_name,
-                        },
-                    ));
-                    content.push('\n');
-                    content.push_str("    if is_map(visitor) do\n");
-                    let mut with_visitor_args: Vec<String> = nif_call_args
-                        .iter()
-                        .enumerate()
-                        .map(|(i, a)| {
-                            if i == opts_idx {
-                                "if(map_size(clean_opts) == 0, do: nil, else: Jason.encode!(clean_opts))".to_string()
-                            } else {
-                                a.clone()
-                            }
-                        })
-                        .collect();
-                    with_visitor_args.push("visitor".to_string());
-                    let with_visitor_args_str = with_visitor_args.join(", ");
-                    let single_line = format!(
-                        "      {{:ok, _}} = {native_mod}.{nif_fn_name}_with_visitor({with_visitor_args_str})\n"
-                    );
-                    if single_line.len() > 98 {
-                        content.push_str(&template_env::render(
-                            "elixir_visitor_call_multiline.ex.jinja",
-                            minijinja::context! {
-                                native_mod => &native_mod,
-                                func_name => &nif_fn_name,
-                                args => &with_visitor_args,
-                            },
-                        ));
-                    } else {
-                        content.push_str(&single_line);
-                    }
-                    content.push('\n');
-                    content.push_str(&template_env::render(
-                        "elixir_visitor_receive.jinja",
-                        minijinja::context! {
-                            visitor_param => "visitor",
-                        },
-                    ));
-                    content.push_str("    else\n");
-                    let plain_args: Vec<String> = nif_call_args
-                        .iter()
-                        .enumerate()
-                        .map(|(i, a)| {
-                            if i == opts_idx {
-                                "if(map_size(clean_opts) == 0, do: nil, else: Jason.encode!(clean_opts))".to_string()
-                            } else {
-                                a.clone()
-                            }
-                        })
-                        .collect();
-                    let plain_args_str = plain_args.join(", ");
-                    content.push_str(&template_env::render(
-                        "elixir_visitor_plain_call.ex.jinja",
-                        minijinja::context! {
-                            native_mod => &native_mod,
-                            func_name => &nif_fn_name,
-                            args => &plain_args_str,
-                        },
-                    ));
-                    content.push_str("    end\n");
-                    content.push_str("  end\n\n");
-
-                    let nil_clause_params: Vec<String> = arity_params
-                        .iter()
-                        .enumerate()
-                        .map(|(i, p)| if i == opts_idx { "nil".to_string() } else { p.clone() })
-                        .collect();
-                    let nil_nif_args: Vec<String> = nif_call_args
-                        .iter()
-                        .enumerate()
-                        .map(|(i, a)| if i == opts_idx { "nil".to_string() } else { a.clone() })
-                        .collect();
-                    content.push_str(&template_env::render(
-                        "elixir_def_simple.jinja",
-                        minijinja::context! {
-                            func_name => &public_fn_name,
-                            params => &nil_clause_params.join(", "),
-                        },
-                    ));
-                    content.push_str(&template_env::render(
-                        "elixir_def_nif_call.jinja",
-                        minijinja::context! {
-                            native_mod => &native_mod,
-                            func_name => &nif_fn_name,
-                            args => &nil_nif_args.join(", "),
-                        },
-                    ));
-                    content.push_str("  end\n\n");
-                    continue;
-                }
-            }
-
-            if let Some(vis_idx) = visitor_bridge_param_idx {
-                if *arity > vis_idx {
-                    let vis_param = &all_params[vis_idx];
-                    content.push_str(&template_env::render(
-                        "elixir_def_with_guard.jinja",
-                        minijinja::context! {
-                            func_name => &public_fn_name,
-                            params => &arity_params.join(", "),
-                            guard_param => vis_param,
-                        },
-                    ));
-                    let with_visitor_args = nif_call_args.join(", ");
-                    content.push_str(&template_env::render(
-                        "elixir_visitor_call.jinja",
+                        "elixir_visitor_call_multiline.ex.jinja",
                         minijinja::context! {
                             native_mod => &native_mod,
                             func_name => &nif_fn_name,
                             args => &with_visitor_args,
                         },
                     ));
-                    content.push_str(&template_env::render(
-                        "elixir_visitor_receive.jinja",
-                        minijinja::context! {
-                            visitor_param => vis_param,
-                        },
-                    ));
-                    content.push_str("  end\n\n");
-                    content.push_str(&template_env::render(
-                        "elixir_doc_line.jinja",
-                        minijinja::context! {
-                            doc_line => &doc_line,
-                        },
-                    ));
-                    let spec_inline = format!("  @spec {public_fn_name}({}) :: {return_spec}", arity_types.join(", "));
-                    if spec_inline.len() > 98 {
-                        let spec_broken = format!(
-                            "  @spec {public_fn_name}({}) ::\n          {return_spec}",
-                            arity_types.join(", ")
-                        );
-                        if spec_broken.lines().all(|l| l.len() <= 98) {
-                            content.push_str(&spec_broken);
-                        } else {
-                            content.push_str(&template_env::render(
-                                "elixir_spec_multiline.jinja",
-                                minijinja::context! {
-                                    func_name => &public_fn_name,
-                                    param_types => &arity_types,
-                                    return_spec => &return_spec,
-                                },
-                            ));
-                        }
-                    } else {
-                        content.push_str(&spec_inline);
-                    }
-                    content.push('\n');
-                    content.push_str(&template_env::render(
-                        "elixir_def_simple.jinja",
-                        minijinja::context! {
-                            func_name => &public_fn_name,
-                            params => &arity_params.join(", "),
-                        },
-                    ));
-                    content.push_str(&template_env::render(
-                        "elixir_def_nif_call.jinja",
-                        minijinja::context! {
-                            native_mod => &native_mod,
-                            func_name => &nif_fn_name,
-                            args => &nif_call_args.join(", "),
-                        },
-                    ));
-                    content.push_str("  end\n\n");
-                    continue;
+                } else {
+                    content.push_str(&single_line);
                 }
+                content.push('\n');
+                content.push_str(&template_env::render(
+                    "elixir_visitor_receive.jinja",
+                    minijinja::context! {
+                        visitor_param => "visitor",
+                    },
+                ));
+                content.push_str("    else\n");
+                let plain_args: Vec<String> = nif_call_args
+                    .iter()
+                    .enumerate()
+                    .map(|(i, a)| {
+                        if i == opts_idx {
+                            "if(map_size(clean_opts) == 0, do: nil, else: Jason.encode!(clean_opts))".to_string()
+                        } else {
+                            a.clone()
+                        }
+                    })
+                    .collect();
+                let plain_args_str = plain_args.join(", ");
+                content.push_str(&template_env::render(
+                    "elixir_visitor_plain_call.ex.jinja",
+                    minijinja::context! {
+                        native_mod => &native_mod,
+                        func_name => &nif_fn_name,
+                        args => &plain_args_str,
+                    },
+                ));
+                content.push_str("    end\n");
+                content.push_str("  end\n\n");
+
+                let nil_clause_params: Vec<String> = arity_params
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| if i == opts_idx { "nil".to_string() } else { p.clone() })
+                    .collect();
+                let nil_nif_args: Vec<String> = nif_call_args
+                    .iter()
+                    .enumerate()
+                    .map(|(i, a)| if i == opts_idx { "nil".to_string() } else { a.clone() })
+                    .collect();
+                content.push_str(&template_env::render(
+                    "elixir_def_simple.jinja",
+                    minijinja::context! {
+                        func_name => &public_fn_name,
+                        params => &nil_clause_params.join(", "),
+                    },
+                ));
+                content.push_str(&template_env::render(
+                    "elixir_def_nif_call.jinja",
+                    minijinja::context! {
+                        native_mod => &native_mod,
+                        func_name => &nif_fn_name,
+                        args => &nil_nif_args.join(", "),
+                    },
+                ));
+                content.push_str("  end\n\n");
+                continue;
+            }
+
+            if let Some(vis_idx) = visitor_bridge_param_idx
+                && *arity > vis_idx
+            {
+                let vis_param = &all_params[vis_idx];
+                content.push_str(&template_env::render(
+                    "elixir_def_with_guard.jinja",
+                    minijinja::context! {
+                        func_name => &public_fn_name,
+                        params => &arity_params.join(", "),
+                        guard_param => vis_param,
+                    },
+                ));
+                let with_visitor_args = nif_call_args.join(", ");
+                content.push_str(&template_env::render(
+                    "elixir_visitor_call.jinja",
+                    minijinja::context! {
+                        native_mod => &native_mod,
+                        func_name => &nif_fn_name,
+                        args => &with_visitor_args,
+                    },
+                ));
+                content.push_str(&template_env::render(
+                    "elixir_visitor_receive.jinja",
+                    minijinja::context! {
+                        visitor_param => vis_param,
+                    },
+                ));
+                content.push_str("  end\n\n");
+                content.push_str(&template_env::render(
+                    "elixir_doc_line.jinja",
+                    minijinja::context! {
+                        doc_line => &doc_line,
+                    },
+                ));
+                let spec_inline = format!("  @spec {public_fn_name}({}) :: {return_spec}", arity_types.join(", "));
+                if spec_inline.len() > 98 {
+                    let spec_broken = format!(
+                        "  @spec {public_fn_name}({}) ::\n          {return_spec}",
+                        arity_types.join(", ")
+                    );
+                    if spec_broken.lines().all(|l| l.len() <= 98) {
+                        content.push_str(&spec_broken);
+                    } else {
+                        content.push_str(&template_env::render(
+                            "elixir_spec_multiline.jinja",
+                            minijinja::context! {
+                                func_name => &public_fn_name,
+                                param_types => &arity_types,
+                                return_spec => &return_spec,
+                            },
+                        ));
+                    }
+                } else {
+                    content.push_str(&spec_inline);
+                }
+                content.push('\n');
+                content.push_str(&template_env::render(
+                    "elixir_def_simple.jinja",
+                    minijinja::context! {
+                        func_name => &public_fn_name,
+                        params => &arity_params.join(", "),
+                    },
+                ));
+                content.push_str(&template_env::render(
+                    "elixir_def_nif_call.jinja",
+                    minijinja::context! {
+                        native_mod => &native_mod,
+                        func_name => &nif_fn_name,
+                        args => &nif_call_args.join(", "),
+                    },
+                ));
+                content.push_str("  end\n\n");
+                continue;
             }
 
             if arity_params.is_empty() {

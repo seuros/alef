@@ -642,11 +642,11 @@ fn gen_bridge_file(
                     unmarshal_params.push(format!("boolean {local} = {local}_raw != 0;"));
                 } else if !matches!(param.ty, TypeRef::Primitive(_)) {
                     let segment = format!("{local}_in");
-                    if let TypeRef::Named(name) = &param.ty {
-                        if !visible_type_names.contains(name.as_str()) || excluded_types.contains(name) {
-                            unmarshal_params.push(format_unmarshal_param(&local, &segment, &TypeRef::String, None));
-                            continue;
-                        }
+                    if let TypeRef::Named(name) = &param.ty
+                        && (!visible_type_names.contains(name.as_str()) || excluded_types.contains(name))
+                    {
+                        unmarshal_params.push(format_unmarshal_param(&local, &segment, &TypeRef::String, None));
+                        continue;
                     }
                     let bytes_len = if matches!(param.ty, TypeRef::Bytes) {
                         Some(format!("{local}Len"))

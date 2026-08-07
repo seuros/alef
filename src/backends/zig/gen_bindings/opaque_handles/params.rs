@@ -108,17 +108,17 @@ pub(super) fn emit_static_method_param_conversion(
 ) {
     let name = &p.name;
 
-    if let TypeRef::Named(type_name) = &p.ty {
-        if enum_names.contains(type_name) {
-            out.push_str(&render(
-                "opaque_param_enum_i32.jinja",
-                minijinja::context! {
-                    indent => "    ",
-                    name => name,
-                },
-            ));
-            return;
-        }
+    if let TypeRef::Named(type_name) = &p.ty
+        && enum_names.contains(type_name)
+    {
+        out.push_str(&render(
+            "opaque_param_enum_i32.jinja",
+            minijinja::context! {
+                indent => "    ",
+                name => name,
+            },
+        ));
+        return;
     }
 
     if matches!(&p.ty, TypeRef::String | TypeRef::Path) {
@@ -150,39 +150,38 @@ pub(super) fn emit_static_method_param_conversion(
         return;
     }
 
-    if let TypeRef::Named(n) = &p.ty {
-        if struct_names.contains(n) {
-            let snake = AsSnakeCase(n).to_string();
-            out.push_str(&render(
-                "opaque_param_named_from_json.jinja",
-                minijinja::context! {
-                    indent => "    ",
-                    name => name,
-                    prefix => prefix,
-                    snake => &snake,
-                    json_error_return => "return error.InvalidJson;",
-                },
-            ));
-            return;
-        }
+    if let TypeRef::Named(n) = &p.ty
+        && struct_names.contains(n)
+    {
+        let snake = AsSnakeCase(n).to_string();
+        out.push_str(&render(
+            "opaque_param_named_from_json.jinja",
+            minijinja::context! {
+                indent => "    ",
+                name => name,
+                prefix => prefix,
+                snake => &snake,
+                json_error_return => "return error.InvalidJson;",
+            },
+        ));
+        return;
     }
 
-    if let TypeRef::Optional(inner) = &p.ty {
-        if let TypeRef::Named(n) = inner.as_ref() {
-            if struct_names.contains(n) {
-                let snake = AsSnakeCase(n).to_string();
-                out.push_str(&render(
-                    "opaque_param_optional_named_from_json.jinja",
-                    minijinja::context! {
-                        indent => "    ",
-                        name => name,
-                        prefix => prefix,
-                        snake => &snake,
-                        json_error_return => "return error.InvalidJson;",
-                    },
-                ));
-            }
-        }
+    if let TypeRef::Optional(inner) = &p.ty
+        && let TypeRef::Named(n) = inner.as_ref()
+        && struct_names.contains(n)
+    {
+        let snake = AsSnakeCase(n).to_string();
+        out.push_str(&render(
+            "opaque_param_optional_named_from_json.jinja",
+            minijinja::context! {
+                indent => "    ",
+                name => name,
+                prefix => prefix,
+                snake => &snake,
+                json_error_return => "return error.InvalidJson;",
+            },
+        ));
     }
 }
 
@@ -192,10 +191,10 @@ pub(super) fn static_method_c_arg_names(
     struct_names: &HashSet<String>,
     enum_names: &HashSet<String>,
 ) -> Vec<String> {
-    if let TypeRef::Named(type_name) = &p.ty {
-        if enum_names.contains(type_name) {
-            return vec![format!("{}_i32", p.name)];
-        }
+    if let TypeRef::Named(type_name) = &p.ty
+        && enum_names.contains(type_name)
+    {
+        return vec![format!("{}_i32", p.name)];
     }
 
     let optional_named: Option<&str> = match &p.ty {
@@ -210,10 +209,10 @@ pub(super) fn static_method_c_arg_names(
         return vec![format!("{}_handle", p.name)];
     }
 
-    if let TypeRef::Named(n) = &p.ty {
-        if struct_names.contains(n.as_str()) {
-            return vec![format!("{}_handle", p.name)];
-        }
+    if let TypeRef::Named(n) = &p.ty
+        && struct_names.contains(n.as_str())
+    {
+        return vec![format!("{}_handle", p.name)];
     }
 
     if p.optional
@@ -250,17 +249,17 @@ pub(super) fn emit_method_param_conversion(
 ) {
     let name = &p.name;
 
-    if let TypeRef::Named(type_name) = &p.ty {
-        if enum_names.contains(type_name) {
-            out.push_str(&render(
-                "opaque_param_enum_i32.jinja",
-                minijinja::context! {
-                    indent => "        ",
-                    name => name,
-                },
-            ));
-            return;
-        }
+    if let TypeRef::Named(type_name) = &p.ty
+        && enum_names.contains(type_name)
+    {
+        out.push_str(&render(
+            "opaque_param_enum_i32.jinja",
+            minijinja::context! {
+                indent => "        ",
+                name => name,
+            },
+        ));
+        return;
     }
 
     let is_optional_string = p.optional
@@ -399,10 +398,10 @@ pub(super) fn method_c_arg_names(
     struct_names: &HashSet<String>,
     enum_names: &HashSet<String>,
 ) -> Vec<String> {
-    if let TypeRef::Named(type_name) = &p.ty {
-        if enum_names.contains(type_name) {
-            return vec![format!("{}_i32", p.name)];
-        }
+    if let TypeRef::Named(type_name) = &p.ty
+        && enum_names.contains(type_name)
+    {
+        return vec![format!("{}_i32", p.name)];
     }
 
     let optional_named: Option<&str> = match &p.ty {
@@ -416,10 +415,10 @@ pub(super) fn method_c_arg_names(
     if optional_named.is_some() {
         return vec![format!("{}_handle", p.name)];
     }
-    if let TypeRef::Named(n) = &p.ty {
-        if struct_names.contains(n.as_str()) {
-            return vec![format!("{}_handle", p.name)];
-        }
+    if let TypeRef::Named(n) = &p.ty
+        && struct_names.contains(n.as_str())
+    {
+        return vec![format!("{}_handle", p.name)];
     }
 
     let is_optional_string = p.optional
@@ -451,10 +450,10 @@ pub(super) fn method_c_arg_names(
         TypeRef::Primitive(prim) if p.optional => Some(prim),
         _ => None,
     };
-    if let Some(prim) = prim_opt {
-        if let Some(sentinel) = optional_int_sentinel(prim) {
-            return vec![format!("if ({name}) |v| v else {sentinel}", name = p.name)];
-        }
+    if let Some(prim) = prim_opt
+        && let Some(sentinel) = optional_int_sentinel(prim)
+    {
+        return vec![format!("if ({name}) |v| v else {sentinel}", name = p.name)];
     }
 
     match &p.ty {

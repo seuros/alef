@@ -67,11 +67,11 @@ pub fn write_files(files: &[(Language, Vec<GeneratedFile>)], base_dir: &Path) ->
                 .decode(&file.content)
                 .with_context(|| format!("failed to decode base64 for {}", full_path.display()))?;
 
-            if let Ok(existing) = std::fs::read(&full_path) {
-                if existing == binary_content {
-                    debug!("  unchanged: {}", full_path.display());
-                    return Ok(());
-                }
+            if let Ok(existing) = std::fs::read(&full_path)
+                && existing == binary_content
+            {
+                debug!("  unchanged: {}", full_path.display());
+                return Ok(());
             }
 
             std::fs::write(&full_path, &binary_content)

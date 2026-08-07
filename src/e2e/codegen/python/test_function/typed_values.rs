@@ -73,29 +73,30 @@ pub(super) fn emit_json_object_arg(
         "dict" => {
             // When we have an array of objects and an element_type, emit dict literals (not constructor calls).
             // The bindings expect [{"type": "click", "selector": "#id"}, ...], not [PageAction(...), ...]
-            if let (Some(_elem_type), Some(arr)) = (element_type, value.as_array()) {
-                if !arr.is_empty() && arr.iter().all(|v| v.is_object()) {
-                    let items: Vec<String> = arr
-                        .iter()
-                        .filter_map(|v| v.as_object())
-                        .map(|obj| {
-                            let dict_items: Vec<String> = obj
-                                .iter()
-                                .map(|(k, v)| {
-                                    format!(
-                                        "{}: {}",
-                                        json_to_python_literal(&serde_json::Value::String(k.clone())),
-                                        json_to_python_literal(v)
-                                    )
-                                })
-                                .collect();
-                            format!("{{{}}}", dict_items.join(", "))
-                        })
-                        .collect();
-                    arg_bindings.push(format!("    {var_name} = [{}]", items.join(", ")));
-                    kwarg_exprs.push(var_name.to_string());
-                    return true;
-                }
+            if let (Some(_elem_type), Some(arr)) = (element_type, value.as_array())
+                && !arr.is_empty()
+                && arr.iter().all(|v| v.is_object())
+            {
+                let items: Vec<String> = arr
+                    .iter()
+                    .filter_map(|v| v.as_object())
+                    .map(|obj| {
+                        let dict_items: Vec<String> = obj
+                            .iter()
+                            .map(|(k, v)| {
+                                format!(
+                                    "{}: {}",
+                                    json_to_python_literal(&serde_json::Value::String(k.clone())),
+                                    json_to_python_literal(v)
+                                )
+                            })
+                            .collect();
+                        format!("{{{}}}", dict_items.join(", "))
+                    })
+                    .collect();
+                arg_bindings.push(format!("    {var_name} = [{}]", items.join(", ")));
+                kwarg_exprs.push(var_name.to_string());
+                return true;
             }
             // Fall through to default dict behavior
             let literal = json_to_python_literal(value);
@@ -128,21 +129,19 @@ pub(super) fn emit_json_object_arg(
         }
         _ => {
             // When we have an array with element_type, construct typed instances for Python.
-            if let Some(elem_type) = element_type {
-                if !value.is_null() {
-                    if let Some(arr) = value.as_array() {
-                        if arr.iter().all(|item| item.is_object()) {
-                            let items: Vec<String> = arr
-                                .iter()
-                                .filter_map(|item| item.as_object())
-                                .map(|obj| emit_python_typed_instance(obj, elem_type))
-                                .collect();
-                            arg_bindings.push(format!("    {var_name} = [{}]", items.join(", ")));
-                            kwarg_exprs.push(var_name.to_string());
-                            return true;
-                        }
-                    }
-                }
+            if let Some(elem_type) = element_type
+                && !value.is_null()
+                && let Some(arr) = value.as_array()
+                && arr.iter().all(|item| item.is_object())
+            {
+                let items: Vec<String> = arr
+                    .iter()
+                    .filter_map(|item| item.as_object())
+                    .map(|obj| emit_python_typed_instance(obj, elem_type))
+                    .collect();
+                arg_bindings.push(format!("    {var_name} = [{}]", items.join(", ")));
+                kwarg_exprs.push(var_name.to_string());
+                return true;
             }
             // "kwargs" mode
             if let (Some(opts_type), Some(obj)) = (options_type, value.as_object()) {

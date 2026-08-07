@@ -93,8 +93,8 @@ pub(crate) fn extract_impl_block(
         .items
         .iter()
         .filter_map(|impl_item| {
-            if let syn::ImplItem::Fn(method) = impl_item {
-                if super::super::helpers::is_pub(&method.vis) {
+            if let syn::ImplItem::Fn(method) = impl_item
+                && super::super::helpers::is_pub(&method.vis) {
                     // Skip `#[cfg(test)]` methods (e.g. test-only constructors like
                     if is_test_gated(&method.attrs) {
                         return None;
@@ -114,13 +114,11 @@ pub(crate) fn extract_impl_block(
                     if method_name.starts_with('_') {
                         return None;
                     }
-                    if method_name == "new" && !type_is_opaque {
-                        if let syn::ReturnType::Type(_, ty) = &method.sig.output {
-                            if matches!(&**ty, syn::Type::Path(p) if p.path.is_ident("Self")) {
+                    if method_name == "new" && !type_is_opaque
+                        && let syn::ReturnType::Type(_, ty) = &method.sig.output
+                            && matches!(&**ty, syn::Type::Path(p) if p.path.is_ident("Self")) {
                                 return None;
                             }
-                        }
-                    }
                     return Some(extract_method(
                         method,
                         crate_name,
@@ -129,7 +127,6 @@ pub(crate) fn extract_impl_block(
                         result_wrapping_aliases,
                     ));
                 }
-            }
             None
         })
         .collect();
@@ -221,12 +218,11 @@ fn extract_trait_impl_methods(
     let Some(type_name) = type_name else { return };
 
     let Some(&idx) = type_index.get(&type_name) else {
-        if let Some((path, _)) = &item.trait_ {
-            if path.segments.last().is_some_and(|s| s.ident == "Default") {
-                if let Some(enum_def) = surface.enums.iter_mut().find(|e| e.name == type_name) {
-                    enum_def.has_default = true;
-                }
-            }
+        if let Some((path, _)) = &item.trait_
+            && path.segments.last().is_some_and(|s| s.ident == "Default")
+            && let Some(enum_def) = surface.enums.iter_mut().find(|e| e.name == type_name)
+        {
+            enum_def.has_default = true;
         }
         return;
     };
@@ -288,11 +284,11 @@ fn extract_trait_impl_methods(
 
     let type_def = &mut surface.types[idx];
 
-    if let Some((path, _)) = &item.trait_ {
-        if path.segments.last().is_some_and(|s| s.ident == "Default") {
-            type_def.has_default = true;
-            extract_default_values(item, &mut type_def.fields);
-        }
+    if let Some((path, _)) = &item.trait_
+        && path.segments.last().is_some_and(|s| s.ident == "Default")
+    {
+        type_def.has_default = true;
+        extract_default_values(item, &mut type_def.fields);
     }
 
     let is_conversion_trait = item.trait_.as_ref().is_some_and(|(path, _)| {

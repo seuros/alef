@@ -744,18 +744,18 @@ fn collect_dart_test_stub_classes(
         if arg_def.arg_type != "test_backend" {
             continue;
         }
-        if let Some(trait_name) = &arg_def.trait_name {
-            if let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name) {
-                let methods: Vec<&crate::core::ir::MethodDef> = type_defs
-                    .iter()
-                    .find(|t| t.name == *trait_name)
-                    .map(|t| t.methods.iter().collect())
-                    .unwrap_or_default();
-                let emission = super::stubs::emit_test_backend(trait_bridge, &methods, fixture, enums);
-                // Emit only the class definition at module-level.
-                let _ = writeln!(out, "{}", emission.setup_block);
-                let _ = writeln!(out);
-            }
+        if let Some(trait_name) = &arg_def.trait_name
+            && let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name)
+        {
+            let methods: Vec<&crate::core::ir::MethodDef> = type_defs
+                .iter()
+                .find(|t| t.name == *trait_name)
+                .map(|t| t.methods.iter().collect())
+                .unwrap_or_default();
+            let emission = super::stubs::emit_test_backend(trait_bridge, &methods, fixture, enums);
+            // Emit only the class definition at module-level.
+            let _ = writeln!(out, "{}", emission.setup_block);
+            let _ = writeln!(out);
         }
     }
 }

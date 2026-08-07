@@ -81,34 +81,33 @@ pub fn validate_fixtures_semantic(
         // Fixtures in excluded categories are intentionally excluded at the
         // category level; empty skip.languages with no reason is the correct
         // shape there. Do not warn for them.
-        if !e2e_config.exclude_categories.contains(&fixture.resolved_category()) {
-            if let Some(skip) = &fixture.skip {
-                if skip.languages.is_empty() {
-                    let reason = skip.reason.as_deref().unwrap_or("no reason given");
-                    errors.push(ValidationError {
-                        file: fixture.source.clone(),
-                        message: format!(
-                            "fixture '{}' is skipped for all languages (skip.languages is empty). Reason: {}",
-                            fixture.id, reason
-                        ),
-                        severity: Severity::Warning,
-                    });
-                }
-            }
+        if !e2e_config.exclude_categories.contains(&fixture.resolved_category())
+            && let Some(skip) = &fixture.skip
+            && skip.languages.is_empty()
+        {
+            let reason = skip.reason.as_deref().unwrap_or("no reason given");
+            errors.push(ValidationError {
+                file: fixture.source.clone(),
+                message: format!(
+                    "fixture '{}' is skipped for all languages (skip.languages is empty). Reason: {}",
+                    fixture.id, reason
+                ),
+                severity: Severity::Warning,
+            });
         }
 
         // Check 2: unknown call reference
-        if let Some(call_name) = &fixture.call {
-            if !e2e_config.calls.contains_key(call_name) {
-                errors.push(ValidationError {
-                    file: fixture.source.clone(),
-                    message: format!(
-                        "fixture '{}' references unknown call '{}', will fall back to default [e2e.call]",
-                        fixture.id, call_name
-                    ),
-                    severity: Severity::Error,
-                });
-            }
+        if let Some(call_name) = &fixture.call
+            && !e2e_config.calls.contains_key(call_name)
+        {
+            errors.push(ValidationError {
+                file: fixture.source.clone(),
+                message: format!(
+                    "fixture '{}' references unknown call '{}', will fall back to default [e2e.call]",
+                    fixture.id, call_name
+                ),
+                severity: Severity::Error,
+            });
         }
 
         // Check 4: missing required input fields
@@ -146,24 +145,23 @@ pub fn validate_fixtures_semantic(
                 continue;
             }
             let input_field = arg.field.strip_prefix("input.").expect("starts_with checked above");
-            if !fixture.input.is_null() {
-                if let Some(obj) = fixture.input.as_object() {
-                    if !obj.contains_key(input_field) {
-                        // Skip check for error-type assertions (they may intentionally omit fields)
-                        let is_error_test = fixture.assertions.iter().any(|a| a.assertion_type == "error");
-                        if !is_error_test {
-                            errors.push(ValidationError {
-                                file: fixture.source.clone(),
-                                message: format!(
-                                    "fixture '{}' is missing required input field '{}' for call '{}'",
-                                    fixture.id,
-                                    input_field,
-                                    fixture.call.as_deref().unwrap_or("<default>")
-                                ),
-                                severity: Severity::Warning,
-                            });
-                        }
-                    }
+            if !fixture.input.is_null()
+                && let Some(obj) = fixture.input.as_object()
+                && !obj.contains_key(input_field)
+            {
+                // Skip check for error-type assertions (they may intentionally omit fields)
+                let is_error_test = fixture.assertions.iter().any(|a| a.assertion_type == "error");
+                if !is_error_test {
+                    errors.push(ValidationError {
+                        file: fixture.source.clone(),
+                        message: format!(
+                            "fixture '{}' is missing required input field '{}' for call '{}'",
+                            fixture.id,
+                            input_field,
+                            fixture.call.as_deref().unwrap_or("<default>")
+                        ),
+                        severity: Severity::Warning,
+                    });
                 }
             }
         }

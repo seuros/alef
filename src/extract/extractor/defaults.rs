@@ -10,10 +10,10 @@ use syn;
 /// into a concrete literal (e.g., method calls, complex expressions).
 pub(crate) fn extract_default_values(item: &syn::ItemImpl, fields: &mut [FieldDef]) {
     let default_fn = item.items.iter().find_map(|impl_item| {
-        if let syn::ImplItem::Fn(method) = impl_item {
-            if method.sig.ident == "default" {
-                return Some(method);
-            }
+        if let syn::ImplItem::Fn(method) = impl_item
+            && method.sig.ident == "default"
+        {
+            return Some(method);
         }
         None
     });
@@ -71,10 +71,10 @@ fn find_struct_expr(block: &syn::Block) -> Option<&syn::ExprStruct> {
                 }
             }
             syn::Stmt::Local(local) => {
-                if let Some(init) = &local.init {
-                    if let Some(s) = unwrap_to_struct_expr(&init.expr) {
-                        return Some(s);
-                    }
+                if let Some(init) = &local.init
+                    && let Some(s) = unwrap_to_struct_expr(&init.expr)
+                {
+                    return Some(s);
                 }
             }
             _ => {}
@@ -192,10 +192,10 @@ fn expr_to_default_value(expr: &syn::Expr) -> DefaultValue {
             let method_name = mc.method.to_string();
             match method_name.as_str() {
                 "to_string" | "to_owned" | "into" => {
-                    if let syn::Expr::Lit(lit) = &*mc.receiver {
-                        if let syn::Lit::Str(s) = &lit.lit {
-                            return DefaultValue::StringLiteral(s.value());
-                        }
+                    if let syn::Expr::Lit(lit) = &*mc.receiver
+                        && let syn::Lit::Str(s) = &lit.lit
+                    {
+                        return DefaultValue::StringLiteral(s.value());
                     }
                     DefaultValue::Empty
                 }
@@ -207,17 +207,18 @@ fn expr_to_default_value(expr: &syn::Expr) -> DefaultValue {
             if let syn::Expr::Path(path) = &*call.func {
                 let segments: Vec<String> = path.path.segments.iter().map(|s| s.ident.to_string()).collect();
 
-                if (segments == ["Some"] || segments == ["Option", "Some"]) && call.args.len() == 1 {
-                    if let Some(inner) = call.args.first() {
-                        return expr_to_default_value(inner);
-                    }
+                if (segments == ["Some"] || segments == ["Option", "Some"])
+                    && call.args.len() == 1
+                    && let Some(inner) = call.args.first()
+                {
+                    return expr_to_default_value(inner);
                 }
 
                 if segments == ["String", "from"] && call.args.len() == 1 {
-                    if let Some(syn::Expr::Lit(lit)) = call.args.first() {
-                        if let syn::Lit::Str(s) = &lit.lit {
-                            return DefaultValue::StringLiteral(s.value());
-                        }
+                    if let Some(syn::Expr::Lit(lit)) = call.args.first()
+                        && let syn::Lit::Str(s) = &lit.lit
+                    {
+                        return DefaultValue::StringLiteral(s.value());
                     }
                     return DefaultValue::Empty;
                 }
@@ -237,23 +238,21 @@ fn expr_to_default_value(expr: &syn::Expr) -> DefaultValue {
                 }
 
                 if segments == ["Duration", "from_secs"] && call.args.len() == 1 {
-                    if let Some(syn::Expr::Lit(lit)) = call.args.first() {
-                        if let syn::Lit::Int(i) = &lit.lit {
-                            if let Ok(val) = i.base10_parse::<i64>() {
-                                return DefaultValue::IntLiteral(val * 1000);
-                            }
-                        }
+                    if let Some(syn::Expr::Lit(lit)) = call.args.first()
+                        && let syn::Lit::Int(i) = &lit.lit
+                        && let Ok(val) = i.base10_parse::<i64>()
+                    {
+                        return DefaultValue::IntLiteral(val * 1000);
                     }
                     return DefaultValue::Empty;
                 }
 
                 if segments == ["Duration", "from_millis"] && call.args.len() == 1 {
-                    if let Some(syn::Expr::Lit(lit)) = call.args.first() {
-                        if let syn::Lit::Int(i) = &lit.lit {
-                            if let Ok(val) = i.base10_parse::<i64>() {
-                                return DefaultValue::IntLiteral(val);
-                            }
-                        }
+                    if let Some(syn::Expr::Lit(lit)) = call.args.first()
+                        && let syn::Lit::Int(i) = &lit.lit
+                        && let Ok(val) = i.base10_parse::<i64>()
+                    {
+                        return DefaultValue::IntLiteral(val);
                     }
                     return DefaultValue::Empty;
                 }

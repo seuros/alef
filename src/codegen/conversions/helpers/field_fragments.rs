@@ -8,14 +8,13 @@ use crate::core::ir::TypeRef;
 /// 2-element inner Vecs (the `parse_homogeneous_tuple` shape — see
 /// `core_to_binding::field_conversion_to_binding_cfg`).
 pub(crate) fn sanitized_vec_field_to_core_expr(name: &str, ty: &TypeRef) -> String {
-    if let TypeRef::Vec(outer_inner) = ty {
-        if let TypeRef::Vec(inner) = outer_inner.as_ref() {
-            if matches!(inner.as_ref(), TypeRef::String) {
-                return format!(
-                    "{name}.iter().filter_map(|inner| {{ let mut it = inner.iter().cloned(); Some((it.next()?, it.next()?)) }}).collect()"
-                );
-            }
-        }
+    if let TypeRef::Vec(outer_inner) = ty
+        && let TypeRef::Vec(inner) = outer_inner.as_ref()
+        && matches!(inner.as_ref(), TypeRef::String)
+    {
+        return format!(
+            "{name}.iter().filter_map(|inner| {{ let mut it = inner.iter().cloned(); Some((it.next()?, it.next()?)) }}).collect()"
+        );
     }
     format!("{name}.iter().filter_map(|s| serde_json::from_str(s).ok()).collect()")
 }
@@ -28,12 +27,13 @@ pub(crate) fn sanitized_vec_field_to_core_expr(name: &str, ty: &TypeRef) -> Stri
 /// inverse applies. Returns `None` for any other `ty`, so callers fall back to a form that
 /// always compiles instead of guessing at an inverse this helper does not support.
 pub(crate) fn sanitized_map_field_to_core_expr(access: &str, ty: &TypeRef) -> Option<String> {
-    if let TypeRef::Map(k, v) = ty {
-        if matches!(k.as_ref(), TypeRef::String) && matches!(v.as_ref(), TypeRef::String) {
-            return Some(format!(
-                "{access}.into_iter().map(|(k, v)| (k.into(), v.into())).collect()"
-            ));
-        }
+    if let TypeRef::Map(k, v) = ty
+        && matches!(k.as_ref(), TypeRef::String)
+        && matches!(v.as_ref(), TypeRef::String)
+    {
+        return Some(format!(
+            "{access}.into_iter().map(|(k, v)| (k.into(), v.into())).collect()"
+        ));
     }
     None
 }
@@ -46,21 +46,21 @@ pub(crate) fn sanitized_map_field_to_core_expr(access: &str, ty: &TypeRef) -> Op
 /// every other sanitized shape, so callers can fall back to the pre-#218 `Default::default()`
 /// / `None` output, which always compiles, instead of re-parsing a rendered conversion string.
 pub(crate) fn sanitized_field_to_binding_expr(access: &str, ty: &TypeRef) -> Option<String> {
-    if let TypeRef::Vec(outer_inner) = ty {
-        if let TypeRef::Vec(inner) = outer_inner.as_ref() {
-            if matches!(inner.as_ref(), TypeRef::String) {
-                return Some(format!(
-                    "{access}.iter().map(|(a, b)| vec![a.to_string(), b.to_string()]).collect::<Vec<Vec<String>>>()"
-                ));
-            }
-        }
+    if let TypeRef::Vec(outer_inner) = ty
+        && let TypeRef::Vec(inner) = outer_inner.as_ref()
+        && matches!(inner.as_ref(), TypeRef::String)
+    {
+        return Some(format!(
+            "{access}.iter().map(|(a, b)| vec![a.to_string(), b.to_string()]).collect::<Vec<Vec<String>>>()"
+        ));
     }
-    if let TypeRef::Map(k, v) = ty {
-        if matches!(k.as_ref(), TypeRef::String) && matches!(v.as_ref(), TypeRef::String) {
-            return Some(format!(
-                "{access}.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()"
-            ));
-        }
+    if let TypeRef::Map(k, v) = ty
+        && matches!(k.as_ref(), TypeRef::String)
+        && matches!(v.as_ref(), TypeRef::String)
+    {
+        return Some(format!(
+            "{access}.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()"
+        ));
     }
     None
 }

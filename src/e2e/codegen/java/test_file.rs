@@ -78,10 +78,10 @@ pub(super) fn render_test_file(
     for f in fixtures.iter() {
         let call_cfg =
             e2e_config.resolve_call_for_fixture(f.call.as_deref(), &f.id, &f.resolved_category(), &f.tags, &f.input);
-        if let Some(ov) = call_cfg.overrides.get(lang_for_om) {
-            if let Some(t) = &ov.options_type {
-                all_options_types.insert(t.clone());
-            }
+        if let Some(ov) = call_cfg.overrides.get(lang_for_om)
+            && let Some(t) = &ov.options_type
+        {
+            all_options_types.insert(t.clone());
         }
         // Auto-fallback: when the Java override does not declare an options_type
         // but another non-prefixed binding (csharp/c/go/php/python) does, mirror
@@ -95,19 +95,19 @@ pub(super) fn render_test_file(
             .is_some();
         if !java_has_type {
             for cand in ["csharp", "c", "go", "php", "python"] {
-                if let Some(o) = call_cfg.overrides.get(cand) {
-                    if let Some(t) = &o.options_type {
-                        all_options_types.insert(t.clone());
-                        break;
-                    }
+                if let Some(o) = call_cfg.overrides.get(cand)
+                    && let Some(t) = &o.options_type
+                {
+                    all_options_types.insert(t.clone());
+                    break;
                 }
             }
         }
         let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang_for_om, f, call_cfg, type_defs);
-        if f.visitor.is_some() {
-            if let Some(binding) = java_visitor_binding(config, type_defs, f.visitor.as_ref(), recipe.options_type) {
-                all_options_types.insert(binding.options_type);
-            }
+        if f.visitor.is_some()
+            && let Some(binding) = java_visitor_binding(config, type_defs, f.visitor.as_ref(), recipe.options_type)
+        {
+            all_options_types.insert(binding.options_type);
         }
         for arg in recipe.args.iter().filter(|arg| arg.arg_type == "handle") {
             let value = super::super::resolve_field(&f.input, &arg.field);
@@ -120,13 +120,14 @@ pub(super) fn render_test_file(
         }
         // Detect complex json_object array element types used in this fixture.
         for arg in &call_cfg.args {
-            if let Some(elem_type) = &arg.element_type {
-                if arg.arg_type == "json_object" && !is_numeric_type_hint(elem_type) && !is_java_builtin_type(elem_type)
-                {
-                    // Complex types in json_object arrays need JsonUtil.
-                    // Skip Java built-in types (String, Boolean, Integer, etc.).
-                    all_options_types.insert(elem_type.clone());
-                }
+            if let Some(elem_type) = &arg.element_type
+                && arg.arg_type == "json_object"
+                && !is_numeric_type_hint(elem_type)
+                && !is_java_builtin_type(elem_type)
+            {
+                // Complex types in json_object arrays need JsonUtil.
+                // Skip Java built-in types (String, Boolean, Integer, etc.).
+                all_options_types.insert(elem_type.clone());
             }
         }
     }
@@ -140,12 +141,12 @@ pub(super) fn render_test_file(
         for arg in &call_cfg.args {
             if arg.arg_type == "json_object" {
                 let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
-                if let Some(val) = f.input.get(field) {
-                    if !val.is_null() && !val.is_array() {
-                        if let Some(obj) = val.as_object() {
-                            collect_nested_type_names(obj, nested_types, &mut nested_types_used);
-                        }
-                    }
+                if let Some(val) = f.input.get(field)
+                    && !val.is_null()
+                    && !val.is_array()
+                    && let Some(obj) = val.as_object()
+                {
+                    collect_nested_type_names(obj, nested_types, &mut nested_types_used);
                 }
             }
         }

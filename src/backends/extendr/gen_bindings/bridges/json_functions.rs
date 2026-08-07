@@ -264,31 +264,32 @@ pub fn gen_extendr_json_bridged_function(
                         if !opaque_types.contains(n.as_str())
                             && !enum_names.contains(n.as_str()))))
                     && (param.optional || !cfg.named_non_opaque_params_by_ref || return_type_requires_json));
-        if !needs_json && !needs_json_struct && !needs_json_enum {
-            if let TypeRef::Named(n) = &param.ty {
-                if !opaque_types.contains(n.as_str()) {
-                    if param.optional {
-                        named_let_bindings.push_str(&template_env::render(
-                            "named_let_optional_binding.jinja",
-                            minijinja::context! {
-                                name => &param.name,
-                                ci => core_import,
-                                n => n,
-                            },
-                        ));
-                        named_let_bindings.push_str("    ");
-                    } else {
-                        named_let_bindings.push_str(&template_env::render(
-                            "named_let_required_binding.jinja",
-                            minijinja::context! {
-                                name => &param.name,
-                                ci => core_import,
-                                n => n,
-                            },
-                        ));
-                        named_let_bindings.push_str("    ");
-                    }
-                }
+        if !needs_json
+            && !needs_json_struct
+            && !needs_json_enum
+            && let TypeRef::Named(n) = &param.ty
+            && !opaque_types.contains(n.as_str())
+        {
+            if param.optional {
+                named_let_bindings.push_str(&template_env::render(
+                    "named_let_optional_binding.jinja",
+                    minijinja::context! {
+                        name => &param.name,
+                        ci => core_import,
+                        n => n,
+                    },
+                ));
+                named_let_bindings.push_str("    ");
+            } else {
+                named_let_bindings.push_str(&template_env::render(
+                    "named_let_required_binding.jinja",
+                    minijinja::context! {
+                        name => &param.name,
+                        ci => core_import,
+                        n => n,
+                    },
+                ));
+                named_let_bindings.push_str("    ");
             }
         }
     }

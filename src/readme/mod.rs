@@ -58,17 +58,16 @@ fn generate_readme(
         return Ok(None);
     }
 
-    if let Some(readme_cfg) = &config.readme {
-        if let Some(template_dir) = &readme_cfg.template_dir {
-            let workspace_root = config.workspace_root.clone().unwrap_or_else(|| PathBuf::from("."));
-            let abs_template_dir = workspace_root.join(template_dir);
-            if abs_template_dir.exists() {
-                if let Some(file) =
-                    template::try_template_readme(api, config, lang, readme_cfg, &workspace_root, &abs_template_dir)?
-                {
-                    return Ok(Some(file));
-                }
-            }
+    if let Some(readme_cfg) = &config.readme
+        && let Some(template_dir) = &readme_cfg.template_dir
+    {
+        let workspace_root = config.workspace_root.clone().unwrap_or_else(|| PathBuf::from("."));
+        let abs_template_dir = workspace_root.join(template_dir);
+        if abs_template_dir.exists()
+            && let Some(file) =
+                template::try_template_readme(api, config, lang, readme_cfg, &workspace_root, &abs_template_dir)?
+        {
+            return Ok(Some(file));
         }
     }
 

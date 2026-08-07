@@ -99,10 +99,10 @@ pub fn package_c_ffi(
 }
 
 fn publish_lang_config(config: &ResolvedCrateConfig) -> crate::core::config::publish::PublishLanguageConfig {
-    if let Some(publish) = &config.publish {
-        if let Some(cfg) = publish.languages.get("c_ffi").or_else(|| publish.languages.get("ffi")) {
-            return cfg.clone();
-        }
+    if let Some(publish) = &config.publish
+        && let Some(cfg) = publish.languages.get("c_ffi").or_else(|| publish.languages.get("ffi"))
+    {
+        return cfg.clone();
     }
     crate::core::config::publish::PublishLanguageConfig::default()
 }

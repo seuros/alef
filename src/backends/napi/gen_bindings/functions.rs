@@ -38,22 +38,22 @@ pub(super) fn gen_function(
         .iter()
         .map(|p| {
             let mut p2 = p.clone();
-            if !p2.optional {
-                if let TypeRef::Named(n) = &p2.ty {
-                    if default_types.contains(n.as_str()) && !opaque_types.contains(n.as_str()) {
-                        p2.optional = true;
-                    }
-                }
+            if !p2.optional
+                && let TypeRef::Named(n) = &p2.ty
+                && default_types.contains(n.as_str())
+                && !opaque_types.contains(n.as_str())
+            {
+                p2.optional = true;
             }
             p2
         })
         .collect();
     let params = function_params(&augmented_params, &|ty| {
         if let TypeRef::Named(n) = ty {
-            if capsule_types.contains_key(n.as_str()) {
-                if let Some(capsule_cfg) = capsule_types.get(n.as_str()) {
-                    return capsule_cfg.from_module.clone();
-                }
+            if capsule_types.contains_key(n.as_str())
+                && let Some(capsule_cfg) = capsule_types.get(n.as_str())
+            {
+                return capsule_cfg.from_module.clone();
             }
             if opaque_types.contains(n.as_str()) {
                 return format!("&{prefix}{n}");

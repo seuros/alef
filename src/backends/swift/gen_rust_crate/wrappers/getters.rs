@@ -57,10 +57,10 @@ pub(crate) fn is_unbridgeable_getter(
             TypeRef::Named(n) => Some(n.as_str()),
             _ => None,
         };
-        if let Some(n) = inner_named {
-            if !type_paths.contains_key(n) || no_serde_names.contains(n) {
-                return true;
-            }
+        if let Some(n) = inner_named
+            && (!type_paths.contains_key(n) || no_serde_names.contains(n))
+        {
+            return true;
         }
     }
     if let TypeRef::Vec(inner) = &field.ty {

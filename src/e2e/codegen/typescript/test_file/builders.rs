@@ -82,15 +82,15 @@ pub(in crate::e2e::codegen::typescript::test_file) fn rename_napi_serde_tags_to_
     let mut tag_map: std::collections::HashMap<&str, (std::collections::HashSet<String>, &str)> =
         std::collections::HashMap::new();
     for e in enums {
-        if let Some(tag) = e.serde_tag.as_deref() {
-            if e.variants.iter().any(|v| !v.fields.is_empty()) {
-                let variants: std::collections::HashSet<String> = e
-                    .variants
-                    .iter()
-                    .map(|v| v.serde_rename.as_deref().unwrap_or(&v.name).to_string())
-                    .collect();
-                tag_map.insert(tag, (variants, tag));
-            }
+        if let Some(tag) = e.serde_tag.as_deref()
+            && e.variants.iter().any(|v| !v.fields.is_empty())
+        {
+            let variants: std::collections::HashSet<String> = e
+                .variants
+                .iter()
+                .map(|v| v.serde_rename.as_deref().unwrap_or(&v.name).to_string())
+                .collect();
+            tag_map.insert(tag, (variants, tag));
         }
     }
 
@@ -111,10 +111,10 @@ fn rename_napi_serde_tags_recursive(
                 // The actual tag field name is already correct in the fixture; we only need
                 // to validate and recurse.
                 let new_key = key.clone();
-                if let Some((variants, _)) = tag_map.get(key.as_str()) {
-                    if !val.as_str().is_some_and(|s| variants.contains(s)) {
-                        // Not a valid variant value for this tag; leave as-is and recurse
-                    }
+                if let Some((variants, _)) = tag_map.get(key.as_str())
+                    && !val.as_str().is_some_and(|s| variants.contains(s))
+                {
+                    // Not a valid variant value for this tag; leave as-is and recurse
                 }
                 new_map.insert(new_key, rename_napi_serde_tags_recursive(val, tag_map));
             }
@@ -138,10 +138,11 @@ fn to_bigint_literal(value_expr: &str) -> String {
     if !trimmed.is_empty() && trimmed.chars().all(|c| c.is_ascii_digit()) {
         return format!("{trimmed}n");
     }
-    if let Some(rest) = trimmed.strip_prefix('-') {
-        if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()) {
-            return format!("-{rest}n");
-        }
+    if let Some(rest) = trimmed.strip_prefix('-')
+        && !rest.is_empty()
+        && rest.chars().all(|c| c.is_ascii_digit())
+    {
+        return format!("-{rest}n");
     }
     format!("BigInt({trimmed})")
 }

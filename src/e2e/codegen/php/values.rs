@@ -61,10 +61,10 @@ pub(super) fn filter_empty_enum_strings(value: &serde_json::Value) -> serde_json
                 .iter()
                 .filter_map(|(k, v)| {
                     // Skip empty string values (typically represent missing enum variants)
-                    if let serde_json::Value::String(s) = v {
-                        if s.is_empty() {
-                            return None;
-                        }
+                    if let serde_json::Value::String(s) = v
+                        && s.is_empty()
+                    {
+                        return None;
                     }
                     // Recursively filter nested objects and arrays
                     Some((k.clone(), filter_empty_enum_strings(v)))
@@ -121,10 +121,11 @@ pub(super) fn filter_empty_enum_strings_with_types(
             let filtered: serde_json::Map<String, serde_json::Value> = map
                 .iter()
                 .filter_map(|(k, v)| {
-                    if let serde_json::Value::String(s) = v {
-                        if s.is_empty() && !field_is_string_typed(current_type_name, k, type_defs) {
-                            return None;
-                        }
+                    if let serde_json::Value::String(s) = v
+                        && s.is_empty()
+                        && !field_is_string_typed(current_type_name, k, type_defs)
+                    {
+                        return None;
                     }
                     let nested_type_name = current_type_name.and_then(|tn| get_field_type_name(tn, k, type_defs));
                     Some((

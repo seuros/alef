@@ -42,24 +42,25 @@ fn json_path_expr(result_var: &str, field_path: &str) -> String {
         if let Some(key) = seg.strip_suffix("[]") {
             expr = format!("{expr}.object.get(\"{key}\").?.array.items[0]");
         } else if let Some(bracket_pos) = seg.find('[') {
-            if let Some(end_pos) = seg.find(']') {
-                if end_pos > bracket_pos + 1 && end_pos == seg.len() - 1 {
-                    let key = &seg[..bracket_pos];
-                    let idx = &seg[bracket_pos + 1..end_pos];
-                    if idx.chars().all(|c| c.is_ascii_digit()) {
-                        expr = format!("{expr}.object.get(\"{key}\").?.array.items[{idx}]");
-                        prev_seg = Some(seg);
-                        continue;
-                    }
-                    // Non-numeric bracket: HashMap<String, _> key access. FRB / serde
-                    // serialize maps as JSON objects, so `field[key]` resolves to
-                    // `.object.get("field").?.object.get("key").?`. Used by nested fixture objects.
-                    // `metadata.document.open_graph[title]` alias pattern where
-                    // `open_graph` is a `HashMap<String, String>`.
-                    expr = format!("{expr}.object.get(\"{key}\").?.object.get(\"{idx}\").?");
+            if let Some(end_pos) = seg.find(']')
+                && end_pos > bracket_pos + 1
+                && end_pos == seg.len() - 1
+            {
+                let key = &seg[..bracket_pos];
+                let idx = &seg[bracket_pos + 1..end_pos];
+                if idx.chars().all(|c| c.is_ascii_digit()) {
+                    expr = format!("{expr}.object.get(\"{key}\").?.array.items[{idx}]");
                     prev_seg = Some(seg);
                     continue;
                 }
+                // Non-numeric bracket: HashMap<String, _> key access. FRB / serde
+                // serialize maps as JSON objects, so `field[key]` resolves to
+                // `.object.get("field").?.object.get("key").?`. Used by nested fixture objects.
+                // `metadata.document.open_graph[title]` alias pattern where
+                // `open_graph` is a `HashMap<String, String>`.
+                expr = format!("{expr}.object.get(\"{key}\").?.object.get(\"{idx}\").?");
+                prev_seg = Some(seg);
+                continue;
             }
             expr = format!("{expr}.object.get(\"{seg}\").?");
         } else {
@@ -142,49 +143,51 @@ pub(super) fn render_json_assertion(
     // generating `chunks.items.len` would produce a compile error. Fields like
     // "chunks" that happen to share a streaming-virtual name are regular JSON
     // fields in non-streaming results and must fall through to the JSON path.
-    if let Some(f) = &assertion.field {
-        if uses_streaming && !f.is_empty() && is_streaming_virtual_field(f) {
-            if let Some(expr) = StreamingFieldResolver::accessor(f, "zig", "chunks") {
-                match assertion.assertion_type.as_str() {
-                    "count_min" => {
-                        if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                            let _ = writeln!(out, "    try testing.expect({expr}.len >= {n});");
-                        }
-                    }
-                    "count_equals" => {
-                        if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                            let _ = writeln!(out, "    try testing.expectEqual(@as(usize, {n}), {expr}.len);");
-                        }
-                    }
-                    "equals" => {
-                        if let Some(serde_json::Value::String(s)) = &assertion.value {
-                            let escaped = escape_zig(s);
-                            let _ = writeln!(out, "    try testing.expectEqualStrings(\"{escaped}\", {expr});");
-                        } else if let Some(v) = &assertion.value {
-                            let zig_val = json_to_zig(v);
-                            let _ = writeln!(out, "    try testing.expectEqual({zig_val}, {expr});");
-                        }
-                    }
-                    "not_empty" => {
-                        let _ = writeln!(out, "    try testing.expect({expr}.len > 0);");
-                    }
-                    "is_true" => {
-                        let _ = writeln!(out, "    try testing.expect({expr});");
-                    }
-                    "is_false" => {
-                        let _ = writeln!(out, "    try testing.expect(!{expr});");
-                    }
-                    _ => {
-                        let atype = &assertion.assertion_type;
-                        let _ = writeln!(
-                            out,
-                            "    // streaming virtual field '{f}' assertion '{atype}' not implemented for zig"
-                        );
+    if let Some(f) = &assertion.field
+        && uses_streaming
+        && !f.is_empty()
+        && is_streaming_virtual_field(f)
+    {
+        if let Some(expr) = StreamingFieldResolver::accessor(f, "zig", "chunks") {
+            match assertion.assertion_type.as_str() {
+                "count_min" => {
+                    if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
+                        let _ = writeln!(out, "    try testing.expect({expr}.len >= {n});");
                     }
                 }
+                "count_equals" => {
+                    if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
+                        let _ = writeln!(out, "    try testing.expectEqual(@as(usize, {n}), {expr}.len);");
+                    }
+                }
+                "equals" => {
+                    if let Some(serde_json::Value::String(s)) = &assertion.value {
+                        let escaped = escape_zig(s);
+                        let _ = writeln!(out, "    try testing.expectEqualStrings(\"{escaped}\", {expr});");
+                    } else if let Some(v) = &assertion.value {
+                        let zig_val = json_to_zig(v);
+                        let _ = writeln!(out, "    try testing.expectEqual({zig_val}, {expr});");
+                    }
+                }
+                "not_empty" => {
+                    let _ = writeln!(out, "    try testing.expect({expr}.len > 0);");
+                }
+                "is_true" => {
+                    let _ = writeln!(out, "    try testing.expect({expr});");
+                }
+                "is_false" => {
+                    let _ = writeln!(out, "    try testing.expect(!{expr});");
+                }
+                _ => {
+                    let atype = &assertion.assertion_type;
+                    let _ = writeln!(
+                        out,
+                        "    // streaming virtual field '{f}' assertion '{atype}' not implemented for zig"
+                    );
+                }
             }
-            return;
         }
+        return;
     }
 
     // Synthetic `embeddings` field on a JSON-array result (e.g. embed_texts
@@ -193,37 +196,38 @@ pub(super) fn render_json_assertion(
     // array. Apply the assertion against `result.array.items` directly. The
     // synthetic path is only used when no explicit result_fields configure
     // `embeddings` as a real struct field.
-    if let Some(f) = &assertion.field {
-        if f == "embeddings" && !field_resolver.has_explicit_field("embeddings") {
-            match assertion.assertion_type.as_str() {
-                "count_min" => {
-                    if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                        let _ = writeln!(out, "    try testing.expect({result_var}.array.items.len >= {n});");
-                    }
-                    return;
+    if let Some(f) = &assertion.field
+        && f == "embeddings"
+        && !field_resolver.has_explicit_field("embeddings")
+    {
+        match assertion.assertion_type.as_str() {
+            "count_min" => {
+                if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
+                    let _ = writeln!(out, "    try testing.expect({result_var}.array.items.len >= {n});");
                 }
-                "count_equals" => {
-                    if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                        let _ = writeln!(
-                            out,
-                            "    try testing.expectEqual(@as(usize, {n}), {result_var}.array.items.len);"
-                        );
-                    }
-                    return;
-                }
-                "not_empty" => {
-                    let _ = writeln!(out, "    try testing.expect({result_var}.array.items.len > 0);");
-                    return;
-                }
-                "is_empty" => {
+                return;
+            }
+            "count_equals" => {
+                if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                     let _ = writeln!(
                         out,
-                        "    try testing.expectEqual(@as(usize, 0), {result_var}.array.items.len);"
+                        "    try testing.expectEqual(@as(usize, {n}), {result_var}.array.items.len);"
                     );
-                    return;
                 }
-                _ => {}
+                return;
             }
+            "not_empty" => {
+                let _ = writeln!(out, "    try testing.expect({result_var}.array.items.len > 0);");
+                return;
+            }
+            "is_empty" => {
+                let _ = writeln!(
+                    out,
+                    "    try testing.expectEqual(@as(usize, 0), {result_var}.array.items.len);"
+                );
+                return;
+            }
+            _ => {}
         }
     }
 
@@ -288,11 +292,12 @@ pub(super) fn render_json_assertion(
     }
 
     // Skip assertions on fields that don't exist on the result type.
-    if let Some(f) = &assertion.field {
-        if !f.is_empty() && !field_resolver.is_valid_for_result(f) {
-            let _ = writeln!(out, "    // skipped: field '{f}' not available on result type");
-            return;
-        }
+    if let Some(f) = &assertion.field
+        && !f.is_empty()
+        && !field_resolver.is_valid_for_result(f)
+    {
+        let _ = writeln!(out, "    // skipped: field '{f}' not available on result type");
+        return;
     }
     // error/not_error are handled at the call level, not assertion level.
     if matches!(assertion.assertion_type.as_str(), "not_error" | "error") {
@@ -556,62 +561,59 @@ pub(super) fn render_assertion(
     // which is the common case for these bare-JSON returns and would
     // wrongly route through `result.embeddings.len` direct field access on
     // a `[]u8` slice.
-    if let Some(f) = &assertion.field {
-        if f == "embeddings" && !field_resolver.has_explicit_field(f) {
-            match assertion.assertion_type.as_str() {
-                "count_min" | "count_equals" | "not_empty" | "is_empty" => {
-                    let _ = writeln!(out, "    {{");
-                    let _ = writeln!(
-                        out,
-                        "        var _eparse = try std.json.parseFromSlice(std.json.Value, std.heap.c_allocator, {result_var}, .{{}});"
-                    );
-                    let _ = writeln!(out, "        defer _eparse.deinit();");
-                    let _ = writeln!(out, "        const _embeddings_len = _eparse.value.array.items.len;");
-                    match assertion.assertion_type.as_str() {
-                        "count_min" => {
-                            if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                                let _ = writeln!(out, "        try testing.expect(_embeddings_len >= {n});");
-                            }
+    if let Some(f) = &assertion.field
+        && f == "embeddings"
+        && !field_resolver.has_explicit_field(f)
+    {
+        match assertion.assertion_type.as_str() {
+            "count_min" | "count_equals" | "not_empty" | "is_empty" => {
+                let _ = writeln!(out, "    {{");
+                let _ = writeln!(
+                    out,
+                    "        var _eparse = try std.json.parseFromSlice(std.json.Value, std.heap.c_allocator, {result_var}, .{{}});"
+                );
+                let _ = writeln!(out, "        defer _eparse.deinit();");
+                let _ = writeln!(out, "        const _embeddings_len = _eparse.value.array.items.len;");
+                match assertion.assertion_type.as_str() {
+                    "count_min" => {
+                        if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
+                            let _ = writeln!(out, "        try testing.expect(_embeddings_len >= {n});");
                         }
-                        "count_equals" => {
-                            if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
-                                let _ = writeln!(
-                                    out,
-                                    "        try testing.expectEqual(@as(usize, {n}), _embeddings_len);"
-                                );
-                            }
-                        }
-                        "not_empty" => {
-                            let _ = writeln!(out, "        try testing.expect(_embeddings_len > 0);");
-                        }
-                        "is_empty" => {
-                            let _ = writeln!(out, "        try testing.expectEqual(@as(usize, 0), _embeddings_len);");
-                        }
-                        _ => {}
                     }
-                    let _ = writeln!(out, "    }}");
-                    return;
+                    "count_equals" => {
+                        if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
+                            let _ = writeln!(
+                                out,
+                                "        try testing.expectEqual(@as(usize, {n}), _embeddings_len);"
+                            );
+                        }
+                    }
+                    "not_empty" => {
+                        let _ = writeln!(out, "        try testing.expect(_embeddings_len > 0);");
+                    }
+                    "is_empty" => {
+                        let _ = writeln!(out, "        try testing.expectEqual(@as(usize, 0), _embeddings_len);");
+                    }
+                    _ => {}
                 }
-                _ => {}
+                let _ = writeln!(out, "    }}");
+                return;
             }
+            _ => {}
         }
     }
 
     // When result_is_simple, the Zig binding returns a scalar type like []u8 or ?T.
     // Skip assertions on fields that don't exist on the scalar (e.g., metadata,
     // document, structure fields).
-    if result_is_simple {
-        if let Some(f) = &assertion.field {
-            let f_lower = f.to_lowercase();
-            if !f.is_empty()
-                && f_lower != "content"
-                && (f_lower.starts_with("metadata")
-                    || f_lower.starts_with("document")
-                    || f_lower.starts_with("structure"))
-            {
-                let _ = writeln!(out, "    // skipped: field '{}' not available when result_is_simple", f);
-                return;
-            }
+    if result_is_simple && let Some(f) = &assertion.field {
+        let f_lower = f.to_lowercase();
+        if !f.is_empty()
+            && f_lower != "content"
+            && (f_lower.starts_with("metadata") || f_lower.starts_with("document") || f_lower.starts_with("structure"))
+        {
+            let _ = writeln!(out, "    // skipped: field '{}' not available when result_is_simple", f);
+            return;
         }
     }
 
@@ -620,55 +622,57 @@ pub(super) fn render_assertion(
     // fixture convention is `field: "result", contains: "pdf"` meaning the
     // bare result itself contains the substring. The Zig binding returns
     // `[]u8`, so the substring check applies directly to `result_var`.
-    if let Some(f) = &assertion.field {
-        if f == "result" && !field_resolver.has_explicit_field(f) {
-            match assertion.assertion_type.as_str() {
-                "contains" => {
-                    if let Some(expected) = &assertion.value {
-                        let zig_val = json_to_zig(expected);
-                        let _ = writeln!(
-                            out,
-                            "    try testing.expect(std.mem.indexOf(u8, {result_var}, {zig_val}) != null);"
-                        );
-                        return;
-                    }
-                }
-                "not_contains" => {
-                    if let Some(expected) = &assertion.value {
-                        let zig_val = json_to_zig(expected);
-                        let _ = writeln!(
-                            out,
-                            "    try testing.expect(std.mem.indexOf(u8, {result_var}, {zig_val}) == null);"
-                        );
-                        return;
-                    }
-                }
-                "equals" => {
-                    if let Some(expected) = &assertion.value {
-                        let zig_val = json_to_zig(expected);
-                        let _ = writeln!(out, "    try testing.expectEqualStrings({zig_val}, {result_var});");
-                        return;
-                    }
-                }
-                "not_empty" => {
-                    let _ = writeln!(out, "    try testing.expect({result_var}.len > 0);");
+    if let Some(f) = &assertion.field
+        && f == "result"
+        && !field_resolver.has_explicit_field(f)
+    {
+        match assertion.assertion_type.as_str() {
+            "contains" => {
+                if let Some(expected) = &assertion.value {
+                    let zig_val = json_to_zig(expected);
+                    let _ = writeln!(
+                        out,
+                        "    try testing.expect(std.mem.indexOf(u8, {result_var}, {zig_val}) != null);"
+                    );
                     return;
                 }
-                "is_empty" => {
-                    let _ = writeln!(out, "    try testing.expectEqual(@as(usize, 0), {result_var}.len);");
-                    return;
-                }
-                _ => {}
             }
+            "not_contains" => {
+                if let Some(expected) = &assertion.value {
+                    let zig_val = json_to_zig(expected);
+                    let _ = writeln!(
+                        out,
+                        "    try testing.expect(std.mem.indexOf(u8, {result_var}, {zig_val}) == null);"
+                    );
+                    return;
+                }
+            }
+            "equals" => {
+                if let Some(expected) = &assertion.value {
+                    let zig_val = json_to_zig(expected);
+                    let _ = writeln!(out, "    try testing.expectEqualStrings({zig_val}, {result_var});");
+                    return;
+                }
+            }
+            "not_empty" => {
+                let _ = writeln!(out, "    try testing.expect({result_var}.len > 0);");
+                return;
+            }
+            "is_empty" => {
+                let _ = writeln!(out, "    try testing.expectEqual(@as(usize, 0), {result_var}.len);");
+                return;
+            }
+            _ => {}
         }
     }
 
     // Skip assertions on fields that don't exist on the result type.
-    if let Some(f) = &assertion.field {
-        if !f.is_empty() && !field_resolver.is_valid_for_result(f) {
-            let _ = writeln!(out, "    // skipped: field '{{f}}' not available on result type");
-            return;
-        }
+    if let Some(f) = &assertion.field
+        && !f.is_empty()
+        && !field_resolver.is_valid_for_result(f)
+    {
+        let _ = writeln!(out, "    // skipped: field '{{f}}' not available on result type");
+        return;
     }
 
     // Determine if this field is an enum type.
@@ -758,48 +762,48 @@ pub(super) fn render_assertion(
             }
         }
         "min_length" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(out, "    try testing.expect({field_expr}.len >= {n});");
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(out, "    try testing.expect({field_expr}.len >= {n});");
             }
         }
         "max_length" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(out, "    try testing.expect({field_expr}.len <= {n});");
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(out, "    try testing.expect({field_expr}.len <= {n});");
             }
         }
         "count_min" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(out, "    try testing.expect({field_expr}.len >= {n});");
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(out, "    try testing.expect({field_expr}.len >= {n});");
             }
         }
         "count_equals" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    // When there is no field (field_expr == result_var), the result
-                    // is `[]u8` JSON (e.g. batch functions). Parse the JSON array
-                    // and count its elements; `.len` would give byte count, not item count.
-                    let has_field = assertion.field.as_deref().is_some_and(|f| !f.is_empty());
-                    if has_field {
-                        let _ = writeln!(out, "    try testing.expectEqual(@as(usize, {n}), {field_expr}.len);");
-                    } else {
-                        let _ = writeln!(out, "    {{");
-                        let _ = writeln!(
-                            out,
-                            "        var _cparse = try std.json.parseFromSlice(std.json.Value, std.heap.c_allocator, {field_expr}, .{{}});"
-                        );
-                        let _ = writeln!(out, "        defer _cparse.deinit();");
-                        let _ = writeln!(
-                            out,
-                            "        try testing.expectEqual(@as(usize, {n}), _cparse.value.array.items.len);"
-                        );
-                        let _ = writeln!(out, "    }}");
-                    }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                // When there is no field (field_expr == result_var), the result
+                // is `[]u8` JSON (e.g. batch functions). Parse the JSON array
+                // and count its elements; `.len` would give byte count, not item count.
+                let has_field = assertion.field.as_deref().is_some_and(|f| !f.is_empty());
+                if has_field {
+                    let _ = writeln!(out, "    try testing.expectEqual(@as(usize, {n}), {field_expr}.len);");
+                } else {
+                    let _ = writeln!(out, "    {{");
+                    let _ = writeln!(
+                        out,
+                        "        var _cparse = try std.json.parseFromSlice(std.json.Value, std.heap.c_allocator, {field_expr}, .{{}});"
+                    );
+                    let _ = writeln!(out, "        defer _cparse.deinit();");
+                    let _ = writeln!(
+                        out,
+                        "        try testing.expectEqual(@as(usize, {n}), _cparse.value.array.items.len);"
+                    );
+                    let _ = writeln!(out, "    }}");
                 }
             }
         }

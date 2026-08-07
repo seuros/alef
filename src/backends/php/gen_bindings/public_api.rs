@@ -211,10 +211,9 @@ pub(super) fn generate_public_api(
                 if (p.optional || is_optional_default_constructible_param(p))
                     && is_optional_default_constructible_param(p)
                     && tail_optional[idx]
+                    && let TypeRef::Named(type_name) = &p.ty
                 {
-                    if let TypeRef::Named(type_name) = &p.ty {
-                        return format!("${} ?? new {}()", p.name, type_name);
-                    }
+                    return format!("${} ?? new {}()", p.name, type_name);
                 }
                 format!("${}", p.name)
             })

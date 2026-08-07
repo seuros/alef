@@ -553,10 +553,10 @@ fn gen_visitor_method_wasm(
 
 /// Build a single wasm arg expression for a visitor method parameter.
 fn build_wasm_arg(p: &crate::core::ir::ParamDef, bridge_cfg: &TraitBridgeConfig) -> String {
-    if let TypeRef::Named(n) = &p.ty {
-        if Some(n.as_str()) == bridge_cfg.context_type.as_deref() {
-            return format!("nodecontext_to_js_value({}{})", if p.is_ref { "" } else { "&" }, p.name);
-        }
+    if let TypeRef::Named(n) = &p.ty
+        && Some(n.as_str()) == bridge_cfg.context_type.as_deref()
+    {
+        return format!("nodecontext_to_js_value({}{})", if p.is_ref { "" } else { "&" }, p.name);
     }
     if p.optional && matches!(&p.ty, TypeRef::String) && p.is_ref {
         return format!(

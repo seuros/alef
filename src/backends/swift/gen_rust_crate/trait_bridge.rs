@@ -325,18 +325,18 @@ pub(crate) fn trait_call_arg(
         return format!("std::path::PathBuf::from({name})");
     }
 
-    if let TypeRef::Named(named) = &p.ty {
-        if !visible_type_names.contains(named.as_str()) {
-            let qualified = type_paths
-                .get(named.as_str())
-                .map(|p| p.replace('-', "_"))
-                .unwrap_or_else(|| named.clone());
-            let deser = format!("serde_json::from_str::<{qualified}>(&{name}).expect(\"valid JSON for {name}\")");
-            if p.is_ref {
-                return format!("&{deser}");
-            }
-            return deser;
+    if let TypeRef::Named(named) = &p.ty
+        && !visible_type_names.contains(named.as_str())
+    {
+        let qualified = type_paths
+            .get(named.as_str())
+            .map(|p| p.replace('-', "_"))
+            .unwrap_or_else(|| named.clone());
+        let deser = format!("serde_json::from_str::<{qualified}>(&{name}).expect(\"valid JSON for {name}\")");
+        if p.is_ref {
+            return format!("&{deser}");
         }
+        return deser;
     }
 
     if matches!(p.ty, TypeRef::Named(_)) {

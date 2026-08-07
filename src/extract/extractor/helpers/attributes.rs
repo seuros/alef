@@ -71,16 +71,14 @@ fn cfg_attr_has_derive_path(attr: &syn::Attribute, segments: &[&str]) -> bool {
 fn cfg_attr_walk_derives(attr: &syn::Attribute, mut predicate: impl FnMut(&syn::Path) -> bool) -> bool {
     let mut found = false;
     let mut visit = |meta: &syn::Meta| {
-        if let syn::Meta::List(list) = meta {
-            if list.path.is_ident("derive") {
-                if let Ok(inner_paths) =
-                    list.parse_args_with(syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated)
-                {
-                    for path in &inner_paths {
-                        if predicate(path) {
-                            found = true;
-                        }
-                    }
+        if let syn::Meta::List(list) = meta
+            && list.path.is_ident("derive")
+            && let Ok(inner_paths) =
+                list.parse_args_with(syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated)
+        {
+            for path in &inner_paths {
+                if predicate(path) {
+                    found = true;
                 }
             }
         }
@@ -222,10 +220,10 @@ fn for_each_serde_meta_list(attrs: &[syn::Attribute], mut visit: impl FnMut(&syn
             }
         } else if attr.path().is_ident("cfg_attr") {
             cfg_attr_walk_inner_metas(attr, &mut |meta| {
-                if let syn::Meta::List(list) = meta {
-                    if list.path.is_ident("serde") {
-                        visit(list);
-                    }
+                if let syn::Meta::List(list) = meta
+                    && list.path.is_ident("serde")
+                {
+                    visit(list);
                 }
             });
         }
@@ -241,10 +239,10 @@ fn serde_meta_list_lit_str(list: &syn::MetaList, key: &str) -> Option<String> {
     let mut found: Option<String> = None;
     let _ = list.parse_nested_meta(|meta| {
         if meta.path.is_ident(key) {
-            if let Ok(value) = meta.value() {
-                if let Ok(s) = value.parse::<syn::LitStr>() {
-                    found = Some(s.value());
-                }
+            if let Ok(value) = meta.value()
+                && let Ok(s) = value.parse::<syn::LitStr>()
+            {
+                found = Some(s.value());
             }
         } else if let Ok(value) = meta.value() {
             let _: syn::Expr = value.parse()?;
@@ -472,17 +470,17 @@ pub(crate) fn extract_deprecation(attrs: &[syn::Attribute]) -> Option<crate::cor
         // `#[deprecated]` with no args is valid — treat as deprecated with no metadata.
         let _ = attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("since") {
-                if let Ok(v) = meta.value() {
-                    if let Ok(s) = v.parse::<syn::LitStr>() {
-                        let raw = s.value();
-                        info.since = Some(raw.strip_prefix('v').map(str::to_owned).unwrap_or(raw));
-                    }
+                if let Ok(v) = meta.value()
+                    && let Ok(s) = v.parse::<syn::LitStr>()
+                {
+                    let raw = s.value();
+                    info.since = Some(raw.strip_prefix('v').map(str::to_owned).unwrap_or(raw));
                 }
             } else if meta.path.is_ident("note") {
-                if let Ok(v) = meta.value() {
-                    if let Ok(s) = v.parse::<syn::LitStr>() {
-                        info.note = Some(s.value());
-                    }
+                if let Ok(v) = meta.value()
+                    && let Ok(s) = v.parse::<syn::LitStr>()
+                {
+                    info.note = Some(s.value());
                 }
             } else if let Ok(v) = meta.value() {
                 let _: syn::Expr = v.parse()?;
@@ -500,10 +498,10 @@ pub(crate) fn extract_alef_since(attrs: &[syn::Attribute]) -> Option<String> {
             let mut found = None;
             let _ = attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("since") {
-                    if let Ok(v) = meta.value() {
-                        if let Ok(s) = v.parse::<syn::LitStr>() {
-                            found = Some(s.value());
-                        }
+                    if let Ok(v) = meta.value()
+                        && let Ok(s) = v.parse::<syn::LitStr>()
+                    {
+                        found = Some(s.value());
                     }
                 } else if let Ok(v) = meta.value() {
                     let _: syn::Expr = v.parse()?;
@@ -518,10 +516,10 @@ pub(crate) fn extract_alef_since(attrs: &[syn::Attribute]) -> Option<String> {
                 if meta.path.is_ident("alef") {
                     let _ = meta.parse_nested_meta(|inner| {
                         if inner.path.is_ident("since") {
-                            if let Ok(v) = inner.value() {
-                                if let Ok(s) = v.parse::<syn::LitStr>() {
-                                    found = Some(s.value());
-                                }
+                            if let Ok(v) = inner.value()
+                                && let Ok(s) = v.parse::<syn::LitStr>()
+                            {
+                                found = Some(s.value());
                             }
                         } else if let Ok(v) = inner.value() {
                             let _: syn::Expr = v.parse()?;

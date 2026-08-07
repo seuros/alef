@@ -424,12 +424,14 @@ namespace = "dev.example.sample_stream"
                 in_deps = line.trim() == "[dependencies]";
                 continue;
             }
-            if in_deps && !line.trim().is_empty() && !line.trim_start().starts_with('#') {
-                if let Some(key) = line.split('=').next() {
-                    let key = key.trim();
-                    if !key.is_empty() {
-                        keys.push(key);
-                    }
+            if in_deps
+                && !line.trim().is_empty()
+                && !line.trim_start().starts_with('#')
+                && let Some(key) = line.split('=').next()
+            {
+                let key = key.trim();
+                if !key.is_empty() {
+                    keys.push(key);
                 }
             }
         }

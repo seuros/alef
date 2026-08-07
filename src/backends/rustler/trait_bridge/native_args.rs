@@ -51,13 +51,13 @@ pub(super) fn build_native_args(params: &[ParamDef], struct_param_types: &HashSe
 fn owned_arg_expr(p: &ParamDef, struct_param_types: &HashSet<String>) -> String {
     let name = &p.name;
 
-    if let TypeRef::Named(n) = &p.ty {
-        if struct_param_types.contains(n) {
-            if p.is_ref {
-                return format!("{n}::from((*{name}).clone())");
-            }
-            return format!("{n}::from({name}.clone())");
+    if let TypeRef::Named(n) = &p.ty
+        && struct_param_types.contains(n)
+    {
+        if p.is_ref {
+            return format!("{n}::from((*{name}).clone())");
         }
+        return format!("{n}::from({name}.clone())");
     }
 
     if p.optional && matches!(&p.ty, TypeRef::String) {

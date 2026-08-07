@@ -21,59 +21,59 @@ pub(super) fn render_assertion(
     // field-based assertion targets the result itself — there is no struct to
     // access. Drop length-only assertions onto the result directly and skip
     // anything that requires a real struct sub-field.
-    if result_is_simple {
-        if let Some(f) = &assertion.field {
-            if !f.is_empty() {
-                match assertion.assertion_type.as_str() {
-                    "not_empty" => {
-                        out.push_str(&format!("    expect({result_var}.length).toBeGreaterThan(0);\n"));
-                        return;
-                    }
-                    "is_empty" => {
-                        out.push_str(&format!("    expect({result_var}.length).toBe(0);\n"));
-                        return;
-                    }
-                    "count_equals" => {
-                        if let Some(val) = &assertion.value {
-                            let js_val = json_to_js(val);
-                            out.push_str(&format!("    expect({result_var}.length).toBe({js_val});\n"));
-                        }
-                        return;
-                    }
-                    "count_min" => {
-                        if let Some(val) = &assertion.value {
-                            let js_val = json_to_js(val);
-                            out.push_str(&format!(
-                                "    expect({result_var}.length).toBeGreaterThanOrEqual({js_val});\n"
-                            ));
-                        }
-                        return;
-                    }
-                    _ => {
-                        out.push_str(&format!(
-                            "    // skipped: field '{f}' not applicable for simple result type\n"
-                        ));
-                        return;
-                    }
+    if result_is_simple
+        && let Some(f) = &assertion.field
+        && !f.is_empty()
+    {
+        match assertion.assertion_type.as_str() {
+            "not_empty" => {
+                out.push_str(&format!("    expect({result_var}.length).toBeGreaterThan(0);\n"));
+                return;
+            }
+            "is_empty" => {
+                out.push_str(&format!("    expect({result_var}.length).toBe(0);\n"));
+                return;
+            }
+            "count_equals" => {
+                if let Some(val) = &assertion.value {
+                    let js_val = json_to_js(val);
+                    out.push_str(&format!("    expect({result_var}.length).toBe({js_val});\n"));
                 }
+                return;
+            }
+            "count_min" => {
+                if let Some(val) = &assertion.value {
+                    let js_val = json_to_js(val);
+                    out.push_str(&format!(
+                        "    expect({result_var}.length).toBeGreaterThanOrEqual({js_val});\n"
+                    ));
+                }
+                return;
+            }
+            _ => {
+                out.push_str(&format!(
+                    "    // skipped: field '{f}' not applicable for simple result type\n"
+                ));
+                return;
             }
         }
     }
 
     // Handle synthetic / derived fields before the is_valid_for_result check
     // so they are never treated as struct property accesses on the result.
-    if let Some(f) = &assertion.field {
-        if render_synthetic_field_assertion(out, assertion, result_var, f, is_streaming) {
-            return;
-        }
+    if let Some(f) = &assertion.field
+        && render_synthetic_field_assertion(out, assertion, result_var, f, is_streaming)
+    {
+        return;
     }
 
     // Skip assertions on fields that don't exist on the result type.
-    if let Some(f) = &assertion.field {
-        if !f.is_empty() && !field_resolver.is_valid_for_result(f) {
-            out.push_str(&format!("    // skipped: field '{f}' not available on result type\n"));
-            return;
-        }
+    if let Some(f) = &assertion.field
+        && !f.is_empty()
+        && !field_resolver.is_valid_for_result(f)
+    {
+        out.push_str(&format!("    // skipped: field '{f}' not available on result type\n"));
+        return;
     }
 
     let mut field_expr = match &assertion.field {
@@ -83,15 +83,14 @@ pub(super) fn render_assertion(
 
     // Check if this field is an enum type that needs coercion
     let mut is_enum_field = false;
-    if let Some(f) = assertion.field.as_deref() {
-        if !f.is_empty()
-            && result_enum_fields
-                .get(f)
-                .or_else(|| result_enum_fields.get(field_resolver.resolve(f)))
-                .is_some()
-        {
-            is_enum_field = true;
-        }
+    if let Some(f) = assertion.field.as_deref()
+        && !f.is_empty()
+        && result_enum_fields
+            .get(f)
+            .or_else(|| result_enum_fields.get(field_resolver.resolve(f)))
+            .is_some()
+    {
+        is_enum_field = true;
     }
 
     // Check if this is metadata.format field (FormatMetadata tagged enum)
@@ -105,10 +104,9 @@ pub(super) fn render_assertion(
             result_enum_fields
                 .get(f)
                 .or_else(|| result_enum_fields.get(field_resolver.resolve(f)))
-        }) {
-            if render_wasm_enum_assertion(out, assertion, &field_expr, enum_class) {
-                return;
-            }
+        }) && render_wasm_enum_assertion(out, assertion, &field_expr, enum_class)
+        {
+            return;
         }
 
         // wasm-bindgen maps Rust `u64`/`i64` to JS `BigInt`. Numeric assertions
@@ -567,18 +565,18 @@ fn render_standard_assertion(
             }
         }
         "count_min" | "count_equals" | "min_length" | "max_length" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let rendered = crate::e2e::template_env::render(
-                        "typescript/assertion.jinja",
-                        minijinja::context! {
-                            assertion_type => assertion_type,
-                            field_expr => field_expr,
-                            n => n,
-                        },
-                    );
-                    out.push_str(&rendered);
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let rendered = crate::e2e::template_env::render(
+                    "typescript/assertion.jinja",
+                    minijinja::context! {
+                        assertion_type => assertion_type,
+                        field_expr => field_expr,
+                        n => n,
+                    },
+                );
+                out.push_str(&rendered);
             }
         }
         "is_true" => {
@@ -620,18 +618,18 @@ fn render_standard_assertion(
             }
         }
         "matches_regex" => {
-            if let Some(expected) = &assertion.value {
-                if let Some(pattern) = expected.as_str() {
-                    let rendered = crate::e2e::template_env::render(
-                        "typescript/assertion.jinja",
-                        minijinja::context! {
-                            assertion_type => assertion_type,
-                            field_expr => field_expr,
-                            expected_pattern => pattern,
-                        },
-                    );
-                    out.push_str(&rendered);
-                }
+            if let Some(expected) = &assertion.value
+                && let Some(pattern) = expected.as_str()
+            {
+                let rendered = crate::e2e::template_env::render(
+                    "typescript/assertion.jinja",
+                    minijinja::context! {
+                        assertion_type => assertion_type,
+                        field_expr => field_expr,
+                        expected_pattern => pattern,
+                    },
+                );
+                out.push_str(&rendered);
             }
         }
         "not_error" => {

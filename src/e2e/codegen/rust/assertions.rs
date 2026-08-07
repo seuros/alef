@@ -209,111 +209,112 @@ pub fn render_assertion_with_streaming(
     // literal field whose name collides with a streaming-virtual name (e.g. `chunks`,
     // `imports`, `structure`), `render_test_function` emits `let {f} = &result.{f};`
     // before assertions, so the hardcoded `chunks` identifier used below still resolves.
-    if let Some(f) = &assertion.field {
-        if !f.is_empty() && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(f) {
-            if let Some(expr) =
-                crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::accessor_with_streaming_context(
-                    f,
-                    "rust",
-                    "chunks",
-                    Some(dep_name),
-                    streaming_item_type,
-                )
-            {
-                match assertion.assertion_type.as_str() {
-                    "count_min" => {
-                        if let Some(val) = &assertion.value {
-                            if let Some(n) = val.as_u64() {
-                                let expr_for_len = if field_resolver.is_optional(f) {
-                                    format!("{expr}.as_ref().map_or(0, |v| v.len())")
-                                } else {
-                                    format!("{expr}.len()")
-                                };
-                                let _ = writeln!(
-                                    out,
-                                    "    assert!({expr_for_len} >= {n} as usize, \"expected >= {n} chunks\");"
-                                );
-                            }
-                        }
-                    }
-                    "count_equals" => {
-                        if let Some(val) = &assertion.value {
-                            if let Some(n) = val.as_u64() {
-                                let expr_for_len = if field_resolver.is_optional(f) {
-                                    format!("{expr}.as_ref().map_or(0, |v| v.len())")
-                                } else {
-                                    format!("{expr}.len()")
-                                };
-                                let _ = writeln!(
-                                    out,
-                                    "    assert_eq!({expr_for_len}, {n} as usize, \"expected exactly {n} chunks\");"
-                                );
-                            }
-                        }
-                    }
-                    "equals" => {
-                        if let Some(serde_json::Value::String(s)) = &assertion.value {
-                            let escaped = crate::e2e::escape::escape_rust(s);
-                            let _ = writeln!(out, "    assert_eq!({expr}, \"{escaped}\");");
-                        } else if let Some(val) = &assertion.value {
-                            let lit = super::assertion_synthetic::numeric_literal(val);
-                            let _ = writeln!(out, "    assert_eq!({expr}, {lit});");
-                        }
-                    }
-                    "not_empty" => {
-                        let check_expr = if field_resolver.is_optional(f) {
-                            format!("{expr}.as_ref().is_some_and(|v| !v.is_empty())")
+    if let Some(f) = &assertion.field
+        && !f.is_empty()
+        && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(f)
+    {
+        if let Some(expr) =
+            crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::accessor_with_streaming_context(
+                f,
+                "rust",
+                "chunks",
+                Some(dep_name),
+                streaming_item_type,
+            )
+        {
+            match assertion.assertion_type.as_str() {
+                "count_min" => {
+                    if let Some(val) = &assertion.value
+                        && let Some(n) = val.as_u64()
+                    {
+                        let expr_for_len = if field_resolver.is_optional(f) {
+                            format!("{expr}.as_ref().map_or(0, |v| v.len())")
                         } else {
-                            format!("!{expr}.is_empty()")
+                            format!("{expr}.len()")
                         };
-                        let _ = writeln!(out, "    assert!({check_expr}, \"expected non-empty\");");
-                    }
-                    "is_empty" => {
-                        let check_expr = if field_resolver.is_optional(f) {
-                            format!("{expr}.as_ref().is_none_or(|v| v.is_empty())")
-                        } else {
-                            format!("{expr}.is_empty()")
-                        };
-                        let _ = writeln!(out, "    assert!({check_expr}, \"expected empty\");");
-                    }
-                    "is_true" => {
-                        let _ = writeln!(out, "    assert!({expr}, \"expected true\");");
-                    }
-                    "is_false" => {
-                        let _ = writeln!(out, "    assert!(!{expr}, \"expected false\");");
-                    }
-                    "greater_than" => {
-                        if let Some(val) = &assertion.value {
-                            let lit = super::assertion_synthetic::numeric_literal(val);
-                            let _ = writeln!(out, "    assert!({expr} > {lit}, \"expected > {lit}\");");
-                        }
-                    }
-                    "greater_than_or_equal" => {
-                        if let Some(val) = &assertion.value {
-                            let lit = super::assertion_synthetic::numeric_literal(val);
-                            let _ = writeln!(out, "    assert!({expr} >= {lit}, \"expected >= {lit}\");");
-                        }
-                    }
-                    "contains" => {
-                        if let Some(serde_json::Value::String(s)) = &assertion.value {
-                            let escaped = crate::e2e::escape::escape_rust(s);
-                            let _ = writeln!(
-                                out,
-                                "    assert!({expr}.contains(\"{escaped}\"), \"expected to contain: {escaped}\");"
-                            );
-                        }
-                    }
-                    _ => {
                         let _ = writeln!(
                             out,
-                            "    // streaming field '{f}': assertion type '{}' not rendered",
-                            assertion.assertion_type
+                            "    assert!({expr_for_len} >= {n} as usize, \"expected >= {n} chunks\");"
                         );
                     }
                 }
+                "count_equals" => {
+                    if let Some(val) = &assertion.value
+                        && let Some(n) = val.as_u64()
+                    {
+                        let expr_for_len = if field_resolver.is_optional(f) {
+                            format!("{expr}.as_ref().map_or(0, |v| v.len())")
+                        } else {
+                            format!("{expr}.len()")
+                        };
+                        let _ = writeln!(
+                            out,
+                            "    assert_eq!({expr_for_len}, {n} as usize, \"expected exactly {n} chunks\");"
+                        );
+                    }
+                }
+                "equals" => {
+                    if let Some(serde_json::Value::String(s)) = &assertion.value {
+                        let escaped = crate::e2e::escape::escape_rust(s);
+                        let _ = writeln!(out, "    assert_eq!({expr}, \"{escaped}\");");
+                    } else if let Some(val) = &assertion.value {
+                        let lit = super::assertion_synthetic::numeric_literal(val);
+                        let _ = writeln!(out, "    assert_eq!({expr}, {lit});");
+                    }
+                }
+                "not_empty" => {
+                    let check_expr = if field_resolver.is_optional(f) {
+                        format!("{expr}.as_ref().is_some_and(|v| !v.is_empty())")
+                    } else {
+                        format!("!{expr}.is_empty()")
+                    };
+                    let _ = writeln!(out, "    assert!({check_expr}, \"expected non-empty\");");
+                }
+                "is_empty" => {
+                    let check_expr = if field_resolver.is_optional(f) {
+                        format!("{expr}.as_ref().is_none_or(|v| v.is_empty())")
+                    } else {
+                        format!("{expr}.is_empty()")
+                    };
+                    let _ = writeln!(out, "    assert!({check_expr}, \"expected empty\");");
+                }
+                "is_true" => {
+                    let _ = writeln!(out, "    assert!({expr}, \"expected true\");");
+                }
+                "is_false" => {
+                    let _ = writeln!(out, "    assert!(!{expr}, \"expected false\");");
+                }
+                "greater_than" => {
+                    if let Some(val) = &assertion.value {
+                        let lit = super::assertion_synthetic::numeric_literal(val);
+                        let _ = writeln!(out, "    assert!({expr} > {lit}, \"expected > {lit}\");");
+                    }
+                }
+                "greater_than_or_equal" => {
+                    if let Some(val) = &assertion.value {
+                        let lit = super::assertion_synthetic::numeric_literal(val);
+                        let _ = writeln!(out, "    assert!({expr} >= {lit}, \"expected >= {lit}\");");
+                    }
+                }
+                "contains" => {
+                    if let Some(serde_json::Value::String(s)) = &assertion.value {
+                        let escaped = crate::e2e::escape::escape_rust(s);
+                        let _ = writeln!(
+                            out,
+                            "    assert!({expr}.contains(\"{escaped}\"), \"expected to contain: {escaped}\");"
+                        );
+                    }
+                }
+                _ => {
+                    let _ = writeln!(
+                        out,
+                        "    // streaming field '{f}': assertion type '{}' not rendered",
+                        assertion.assertion_type
+                    );
+                }
             }
-            return;
         }
+        return;
     }
 
     // Skip assertions on fields that don't exist on the result type.
@@ -322,19 +323,19 @@ pub fn render_assertion_with_streaming(
     // not against the success result type, so they must not be skipped here.
     // However, when NOT in error context (i.e. the call site uses .expect() and binds
     // the Ok value), there is no Err to inspect — skip error.* assertions with a comment.
-    if let Some(f) = &assertion.field {
-        if !f.is_empty() {
-            if f.starts_with("error.") && !is_error_context {
-                let _ = writeln!(out, "    // skipped: field '{f}' not available on result type");
-                return;
-            }
-            // When result_is_simple the function returns a plain scalar/string type —
-            // `field_access` uses `effective_result_var` directly regardless of the
-            // field name, so the skip guard must not fire for these calls.
-            if !f.starts_with("error.") && !result_is_simple && !field_resolver.is_valid_for_result(f) {
-                let _ = writeln!(out, "    // skipped: field '{f}' not available on result type");
-                return;
-            }
+    if let Some(f) = &assertion.field
+        && !f.is_empty()
+    {
+        if f.starts_with("error.") && !is_error_context {
+            let _ = writeln!(out, "    // skipped: field '{f}' not available on result type");
+            return;
+        }
+        // When result_is_simple the function returns a plain scalar/string type —
+        // `field_access` uses `effective_result_var` directly regardless of the
+        // field name, so the skip guard must not fire for these calls.
+        if !f.starts_with("error.") && !result_is_simple && !field_resolver.is_valid_for_result(f) {
+            let _ = writeln!(out, "    // skipped: field '{f}' not available on result type");
+            return;
         }
     }
 
@@ -579,31 +580,31 @@ pub fn render_assertion_with_streaming(
             }
         }
         "min_length" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    if n == 1 {
-                        // Clippy prefers !is_empty() over len() >= 1 for collections.
-                        let _ = writeln!(
-                            out,
-                            "    assert!(!{field_access}.is_empty(), \"expected length >= 1, got {{}}\", {field_access}.len());"
-                        );
-                    } else {
-                        let _ = writeln!(
-                            out,
-                            "    assert!({field_access}.len() >= {n}, \"expected length >= {n}, got {{}}\", {field_access}.len());"
-                        );
-                    }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                if n == 1 {
+                    // Clippy prefers !is_empty() over len() >= 1 for collections.
+                    let _ = writeln!(
+                        out,
+                        "    assert!(!{field_access}.is_empty(), \"expected length >= 1, got {{}}\", {field_access}.len());"
+                    );
+                } else {
+                    let _ = writeln!(
+                        out,
+                        "    assert!({field_access}.len() >= {n}, \"expected length >= {n}, got {{}}\", {field_access}.len());"
+                    );
                 }
             }
         }
         "max_length" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(
-                        out,
-                        "    assert!({field_access}.len() <= {n}, \"expected length <= {n}, got {{}}\", {field_access}.len());"
-                    );
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(
+                    out,
+                    "    assert!({field_access}.len() <= {n}, \"expected length <= {n}, got {{}}\", {field_access}.len());"
+                );
             }
         }
         "count_min" => {

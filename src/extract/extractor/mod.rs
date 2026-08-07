@@ -97,12 +97,11 @@ pub fn extract(
     }
 
     // For intra-crate re-exports like `#[cfg(feature = "api")] pub use core::ServerConfig`,
-    if let Some(first_source) = sources.first() {
-        if let Ok(content) = std::fs::read_to_string(first_source) {
-            if let Ok(file) = syn::parse_file(&content) {
-                apply_reexport_cfg_attributes(&mut surface, &file.items);
-            }
-        }
+    if let Some(first_source) = sources.first()
+        && let Ok(content) = std::fs::read_to_string(first_source)
+        && let Ok(file) = syn::parse_file(&content)
+    {
+        apply_reexport_cfg_attributes(&mut surface, &file.items);
     }
 
     // NOTE: Same-named function entries with disjoint cfg gates (e.g. a `pub use real::fn` under
@@ -172,22 +171,22 @@ fn extract_items(
 
     let mut result_error_hints = ahash::AHashMap::new();
     for item in items {
-        if let syn::Item::Type(item_type) = item {
-            if is_pub(&item_type.vis) {
-                let name = item_type.ident.to_string();
-                // A crate-local `Result` alias almost always carries its own generic
-                // parameter (`pub type Result<T> = std::result::Result<T, MyError>;`), so
-                // the hint lookup must not be gated on the alias itself being non-generic. ~keep
-                if name == "Result" {
-                    if let Some(error_type) = type_resolver::extract_result_error_type_from_alias(&item_type.ty) {
-                        result_error_hints.insert(name.clone(), error_type);
-                    }
-                }
-                if !item_type.generics.params.is_empty() {
-                    let rhs = quote::quote!(#item_type).to_string();
-                    if rhs.contains("Result <") || rhs.contains("Result<") {
-                        result_wrapping_aliases.insert(name);
-                    }
+        if let syn::Item::Type(item_type) = item
+            && is_pub(&item_type.vis)
+        {
+            let name = item_type.ident.to_string();
+            // A crate-local `Result` alias almost always carries its own generic
+            // parameter (`pub type Result<T> = std::result::Result<T, MyError>;`), so
+            // the hint lookup must not be gated on the alias itself being non-generic. ~keep
+            if name == "Result"
+                && let Some(error_type) = type_resolver::extract_result_error_type_from_alias(&item_type.ty)
+            {
+                result_error_hints.insert(name.clone(), error_type);
+            }
+            if !item_type.generics.params.is_empty() {
+                let rhs = quote::quote!(#item_type).to_string();
+                if rhs.contains("Result <") || rhs.contains("Result<") {
+                    result_wrapping_aliases.insert(name);
                 }
             }
         }
@@ -335,8 +334,8 @@ fn extract_items(
                             let (mut return_type, mut error_type, returns_ref) =
                                 resolve_return_type(&method.sig.output);
 
-                            if !is_async {
-                                if let Some((inner, future_error_type)) =
+                            if !is_async
+                                && let Some((inner, future_error_type)) =
                                     functions::unwrap_future_return(&method.sig.output, result_wrapping_aliases)
                                 {
                                     is_async = true;
@@ -345,7 +344,6 @@ fn extract_items(
                                         error_type = future_error_type;
                                     }
                                 }
-                            }
 
                             if !method.sig.generics.params.is_empty() {
                                 if method_binding_exclusion_reason.is_none() {

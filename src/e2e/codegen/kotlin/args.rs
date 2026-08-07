@@ -97,60 +97,60 @@ pub(super) fn build_args_and_setup(
         }
 
         if arg.arg_type == "test_backend" {
-            if let Some(trait_name) = &arg.trait_name {
-                if let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name) {
-                    // Collect methods from both the main trait and its super-trait (if present).
-                    // The super-trait methods are needed so stubs implement the full interface.
-                    let mut methods: Vec<&crate::core::ir::MethodDef> = type_defs
-                        .iter()
-                        .find(|t| t.name == *trait_name)
-                        .map(|t| t.methods.iter().collect())
-                        .unwrap_or_default();
+            if let Some(trait_name) = &arg.trait_name
+                && let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name)
+            {
+                // Collect methods from both the main trait and its super-trait (if present).
+                // The super-trait methods are needed so stubs implement the full interface.
+                let mut methods: Vec<&crate::core::ir::MethodDef> = type_defs
+                    .iter()
+                    .find(|t| t.name == *trait_name)
+                    .map(|t| t.methods.iter().collect())
+                    .unwrap_or_default();
 
-                    // If there's a super-trait, also collect its methods.
-                    if let Some(super_trait) = &trait_bridge.super_trait {
-                        // Extract the simple name from the full path (e.g., "Plugin" from "sample_core::plugins::Plugin").
-                        let super_trait_simple = super_trait.rsplit("::").next().unwrap_or(super_trait.as_str());
-                        if let Some(super_type) = type_defs.iter().find(|t| t.name == super_trait_simple) {
-                            for method in &super_type.methods {
-                                // Only add if not already present (avoid duplicates).
-                                if !methods.iter().any(|m| m.name == method.name) {
-                                    methods.push(method);
-                                }
+                // If there's a super-trait, also collect its methods.
+                if let Some(super_trait) = &trait_bridge.super_trait {
+                    // Extract the simple name from the full path (e.g., "Plugin" from "sample_core::plugins::Plugin").
+                    let super_trait_simple = super_trait.rsplit("::").next().unwrap_or(super_trait.as_str());
+                    if let Some(super_type) = type_defs.iter().find(|t| t.name == super_trait_simple) {
+                        for method in &super_type.methods {
+                            // Only add if not already present (avoid duplicates).
+                            if !methods.iter().any(|m| m.name == method.name) {
+                                methods.push(method);
                             }
                         }
                     }
-
-                    // For kotlin_android, filter out methods whose return type or parameters
-                    // reference types in the `exclude_types` list.  The binding generator
-                    // omits those methods from the generated interface, so the test stub
-                    // must not attempt to implement them.
-                    if kotlin_android_style {
-                        let excluded: std::collections::HashSet<&str> = config
-                            .kotlin_android
-                            .as_ref()
-                            .map(|c| c.exclude_types.iter().map(String::as_str).collect())
-                            .unwrap_or_default();
-                        if !excluded.is_empty() {
-                            methods.retain(|m| {
-                                !excluded.iter().any(|ex| m.return_type.references_named(ex))
-                                    && m.params
-                                        .iter()
-                                        .all(|p| !excluded.iter().any(|ex| p.ty.references_named(ex)))
-                            });
-                        }
-                    }
-
-                    let lang = if kotlin_android_style {
-                        "kotlin_android"
-                    } else {
-                        "kotlin"
-                    };
-                    let emission = crate::e2e::codegen::emit_test_backend(lang, trait_bridge, &methods, fixture);
-                    setup_lines.push(emission.setup_block);
-                    parts.push(emission.arg_expr);
-                    continue;
                 }
+
+                // For kotlin_android, filter out methods whose return type or parameters
+                // reference types in the `exclude_types` list.  The binding generator
+                // omits those methods from the generated interface, so the test stub
+                // must not attempt to implement them.
+                if kotlin_android_style {
+                    let excluded: std::collections::HashSet<&str> = config
+                        .kotlin_android
+                        .as_ref()
+                        .map(|c| c.exclude_types.iter().map(String::as_str).collect())
+                        .unwrap_or_default();
+                    if !excluded.is_empty() {
+                        methods.retain(|m| {
+                            !excluded.iter().any(|ex| m.return_type.references_named(ex))
+                                && m.params
+                                    .iter()
+                                    .all(|p| !excluded.iter().any(|ex| p.ty.references_named(ex)))
+                        });
+                    }
+                }
+
+                let lang = if kotlin_android_style {
+                    "kotlin_android"
+                } else {
+                    "kotlin"
+                };
+                let emission = crate::e2e::codegen::emit_test_backend(lang, trait_bridge, &methods, fixture);
+                setup_lines.push(emission.setup_block);
+                parts.push(emission.arg_expr);
+                continue;
             }
             let lang = if kotlin_android_style {
                 "kotlin_android"

@@ -198,86 +198,87 @@ pub(super) fn render_engine_factory_test_function(
     let mut opaque_handle_locals: HashMap<String, String> = HashMap::new();
 
     for assertion in &fixture.assertions {
-        if let Some(f) = &assertion.field {
-            if !f.is_empty() && field_resolver.is_valid_for_result(f) && !accessed_fields.iter().any(|(k, _, _)| k == f)
-            {
-                let resolved_raw = field_resolver.resolve(f);
-                // Strip virtual namespace prefixes (e.g. "interaction.action_results[0].x"
-                // → "action_results[0].x") matching the same logic as FieldResolver::accessor.
-                let resolved = if let Some(stripped) = field_resolver.namespace_stripped_path(resolved_raw) {
-                    let stripped_first = stripped.split('.').next().unwrap_or(stripped);
-                    let stripped_first = stripped_first.split('[').next().unwrap_or(stripped_first);
-                    if field_resolver.is_valid_for_result(stripped_first) {
-                        stripped
-                    } else {
-                        resolved_raw
-                    }
+        if let Some(f) = &assertion.field
+            && !f.is_empty()
+            && field_resolver.is_valid_for_result(f)
+            && !accessed_fields.iter().any(|(k, _, _)| k == f)
+        {
+            let resolved_raw = field_resolver.resolve(f);
+            // Strip virtual namespace prefixes (e.g. "interaction.action_results[0].x"
+            // → "action_results[0].x") matching the same logic as FieldResolver::accessor.
+            let resolved = if let Some(stripped) = field_resolver.namespace_stripped_path(resolved_raw) {
+                let stripped_first = stripped.split('.').next().unwrap_or(stripped);
+                let stripped_first = stripped_first.split('[').next().unwrap_or(stripped_first);
+                if field_resolver.is_valid_for_result(stripped_first) {
+                    stripped
                 } else {
                     resolved_raw
-                };
-                let local_var = f.replace(['.', '['], "_").replace(']', "");
-                let has_map_access = resolved.contains('[');
-                if resolved.contains('.') {
-                    let leaf_result = emit_nested_accessor(
-                        out,
-                        prefix,
-                        resolved,
-                        &local_var,
-                        result_var,
-                        fields_c_types,
-                        fields_enum,
-                        &mut intermediate_handles,
-                        result_type_name,
-                        f,
-                    );
-                    if let Some(returned_type) = leaf_result {
-                        // Could be a primitive type (primitive_locals) or opaque handle type
-                        if is_primitive_c_type(&returned_type) {
-                            primitive_locals.insert(local_var.clone(), returned_type);
-                        } else {
-                            // Opaque handle returned — register for cleanup
-                            opaque_handle_locals.insert(local_var.clone(), returned_type);
-                        }
-                    }
-                } else {
-                    let result_type_snake = result_type_name.to_snake_case();
-                    let accessor_fn = format!("{prefix}_{result_type_snake}_{resolved}");
-                    let lookup_key = format!("{result_type_snake}.{resolved}");
-                    if is_skipped_c_field(fields_c_types, &result_type_snake, resolved) {
-                        // Field marked "skip" — record sentinel so render_assertion skips it.
-                        primitive_locals.insert(local_var.clone(), "__skip__".to_string());
-                    } else if let Some(t) = fields_c_types.get(&lookup_key).filter(|t| is_primitive_c_type(t)) {
-                        let _ = writeln!(out, "    {t} {local_var} = {accessor_fn}({result_var});");
-                        primitive_locals.insert(local_var.clone(), t.clone());
-                    } else if try_emit_enum_accessor(
-                        out,
-                        prefix,
-                        &prefix_upper,
-                        f,
-                        resolved,
-                        &result_type_snake,
-                        &accessor_fn,
-                        result_var,
-                        &local_var,
-                        fields_c_types,
-                        fields_enum,
-                        &mut intermediate_handles,
-                    ) {
-                        // accessor emitted with enum-to-string conversion
-                    } else if let Some(handle_pascal) =
-                        infer_opaque_handle_type(fields_c_types, &result_type_snake, resolved)
-                    {
-                        let _ = writeln!(
-                            out,
-                            "    {prefix_upper}{handle_pascal}* {local_var} = {accessor_fn}({result_var});"
-                        );
-                        opaque_handle_locals.insert(local_var.clone(), handle_pascal.to_snake_case());
+                }
+            } else {
+                resolved_raw
+            };
+            let local_var = f.replace(['.', '['], "_").replace(']', "");
+            let has_map_access = resolved.contains('[');
+            if resolved.contains('.') {
+                let leaf_result = emit_nested_accessor(
+                    out,
+                    prefix,
+                    resolved,
+                    &local_var,
+                    result_var,
+                    fields_c_types,
+                    fields_enum,
+                    &mut intermediate_handles,
+                    result_type_name,
+                    f,
+                );
+                if let Some(returned_type) = leaf_result {
+                    // Could be a primitive type (primitive_locals) or opaque handle type
+                    if is_primitive_c_type(&returned_type) {
+                        primitive_locals.insert(local_var.clone(), returned_type);
                     } else {
-                        let _ = writeln!(out, "    char* {local_var} = {accessor_fn}({result_var});");
+                        // Opaque handle returned — register for cleanup
+                        opaque_handle_locals.insert(local_var.clone(), returned_type);
                     }
                 }
-                accessed_fields.push((f.clone(), local_var, has_map_access));
+            } else {
+                let result_type_snake = result_type_name.to_snake_case();
+                let accessor_fn = format!("{prefix}_{result_type_snake}_{resolved}");
+                let lookup_key = format!("{result_type_snake}.{resolved}");
+                if is_skipped_c_field(fields_c_types, &result_type_snake, resolved) {
+                    // Field marked "skip" — record sentinel so render_assertion skips it.
+                    primitive_locals.insert(local_var.clone(), "__skip__".to_string());
+                } else if let Some(t) = fields_c_types.get(&lookup_key).filter(|t| is_primitive_c_type(t)) {
+                    let _ = writeln!(out, "    {t} {local_var} = {accessor_fn}({result_var});");
+                    primitive_locals.insert(local_var.clone(), t.clone());
+                } else if try_emit_enum_accessor(
+                    out,
+                    prefix,
+                    &prefix_upper,
+                    f,
+                    resolved,
+                    &result_type_snake,
+                    &accessor_fn,
+                    result_var,
+                    &local_var,
+                    fields_c_types,
+                    fields_enum,
+                    &mut intermediate_handles,
+                ) {
+                    // accessor emitted with enum-to-string conversion
+                } else if let Some(handle_pascal) =
+                    infer_opaque_handle_type(fields_c_types, &result_type_snake, resolved)
+                {
+                    let _ = writeln!(
+                        out,
+                        "    {prefix_upper}{handle_pascal}* {local_var} = {accessor_fn}({result_var});"
+                    );
+                    opaque_handle_locals.insert(local_var.clone(), handle_pascal.to_snake_case());
+                } else {
+                    let _ = writeln!(out, "    char* {local_var} = {accessor_fn}({result_var});");
+                }
             }
+            accessed_fields.push((f.clone(), local_var, has_map_access));
         }
     }
 
@@ -385,30 +386,30 @@ pub(super) fn render_bytes_test_function(
                     fixture.input.get(field)
                 };
 
-                if let Some(val) = json_val {
-                    if !val.is_null() {
-                        let normalized = transform_json_keys_for_language(val, "snake_case");
-                        let json_str = serde_json::to_string(&normalized).unwrap_or_default();
-                        let escaped = escape_c(&json_str);
-                        let _ = writeln!(
-                            out,
-                            "    {prefix_upper}{request_type_pascal}* {var_name} = \
+                if let Some(val) = json_val
+                    && !val.is_null()
+                {
+                    let normalized = transform_json_keys_for_language(val, "snake_case");
+                    let json_str = serde_json::to_string(&normalized).unwrap_or_default();
+                    let escaped = escape_c(&json_str);
+                    let _ = writeln!(
+                        out,
+                        "    {prefix_upper}{request_type_pascal}* {var_name} = \
                              {prefix}_{request_type_snake}_from_json(\"{escaped}\");"
-                        );
-                        if expects_error {
-                            // For error fixtures (e.g. invalid enum value rejected by
-                            // serde), `_from_json` may legitimately return NULL — that
-                            // counts as the expected failure. Mirror Java's pattern of
-                            // wrapping setup + call inside `assertThrows(...)` so error
-                            // fixtures pass at *any* failure step. The test returns
-                            // before attempting to create a client, leaving no
-                            // resources to free.
-                            let _ = writeln!(out, "    if ({var_name} == NULL) {{ return; }}");
-                        } else {
-                            let _ = writeln!(out, "    assert({var_name} != NULL && \"failed to build request\");");
-                        }
-                        request_handle_vars.push((arg.name.clone(), var_name));
+                    );
+                    if expects_error {
+                        // For error fixtures (e.g. invalid enum value rejected by
+                        // serde), `_from_json` may legitimately return NULL — that
+                        // counts as the expected failure. Mirror Java's pattern of
+                        // wrapping setup + call inside `assertThrows(...)` so error
+                        // fixtures pass at *any* failure step. The test returns
+                        // before attempting to create a client, leaving no
+                        // resources to free.
+                        let _ = writeln!(out, "    if ({var_name} == NULL) {{ return; }}");
+                    } else {
+                        let _ = writeln!(out, "    assert({var_name} != NULL && \"failed to build request\");");
                     }
+                    request_handle_vars.push((arg.name.clone(), var_name));
                 }
             }
             "string" => {

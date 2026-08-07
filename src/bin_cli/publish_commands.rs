@@ -100,12 +100,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                                 .as_deref()
                                 .context("--php-version is required when packaging --lang php")?;
                             let ts_mode = crate::publish::package::php::TsMode::parse(&php_ts)?;
-                            if let Some(ref rt) = rust_target {
-                                if rt.os == crate::publish::platform::Os::Windows && windows_compiler.is_none() {
-                                    anyhow::bail!(
-                                        "--windows-compiler is required when packaging PHP for a Windows target"
-                                    );
-                                }
+                            if let Some(ref rt) = rust_target
+                                && rt.os == crate::publish::platform::Os::Windows
+                                && windows_compiler.is_none()
+                            {
+                                anyhow::bail!("--windows-compiler is required when packaging PHP for a Windows target");
                             }
                             Some(crate::publish::package::php::PiePackageOptions {
                                 php_version: php_ver,

@@ -157,24 +157,20 @@ pub(crate) fn sync_registry_package_versions(
                     None => continue,
                 };
                 if let Some(new_ver) = render_registry_version(lang, workspace_version, &existing_version) {
-                    if existing_version_opt.is_some() {
-                        if let Some(ver_item) = pkg.get_mut("version") {
-                            *ver_item = toml_edit::value(new_ver.clone());
-                            any = true;
-                        }
+                    if existing_version_opt.is_some()
+                        && let Some(ver_item) = pkg.get_mut("version")
+                    {
+                        *ver_item = toml_edit::value(new_ver.clone());
+                        any = true;
                     }
 
-                    if lang == "zig" {
-                        if let Some(hash_item) = pkg.get_mut("hash") {
-                            if let Some(existing_hash) = hash_item.as_str() {
-                                if let Some(new_hash) =
-                                    update_zig_package_hash(existing_hash, &existing_version, &new_ver)
-                                {
-                                    *hash_item = toml_edit::value(new_hash);
-                                    any = true;
-                                }
-                            }
-                        }
+                    if lang == "zig"
+                        && let Some(hash_item) = pkg.get_mut("hash")
+                        && let Some(existing_hash) = hash_item.as_str()
+                        && let Some(new_hash) = update_zig_package_hash(existing_hash, &existing_version, &new_ver)
+                    {
+                        *hash_item = toml_edit::value(new_hash);
+                        any = true;
                     }
                 }
             }
@@ -187,10 +183,10 @@ pub(crate) fn sync_registry_package_versions(
                     changed = true;
                 }
             }
-        } else if let Item::Table(tbl) = crates_item {
-            if patch_crate_table(tbl as &mut dyn toml_edit::TableLike, workspace_version) {
-                changed = true;
-            }
+        } else if let Item::Table(tbl) = crates_item
+            && patch_crate_table(tbl as &mut dyn toml_edit::TableLike, workspace_version)
+        {
+            changed = true;
         }
     }
 

@@ -268,10 +268,9 @@ pub fn gen_struct_with_rename(
         if has_serde
             && !attrs.iter().any(|a| a.starts_with("serde(rename"))
             && !attrs.iter().any(|a| a == "serde(skip)")
+            && let Some(rename) = &field.serde_rename
         {
-            if let Some(rename) = &field.serde_rename {
-                attrs.push(format!("serde(rename = \"{rename}\")"));
-            }
+            attrs.push(format!("serde(rename = \"{rename}\")"));
         }
         let emit_name = name_override.unwrap_or_else(|| field.name.clone());
         sb.add_field_with_doc(&emit_name, &ty, attrs, &sanitize_field_doc(&field.doc));
@@ -344,10 +343,10 @@ pub fn gen_struct(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingConfi
         };
         let mut attrs: Vec<String> = cfg.field_attrs.iter().map(|a| a.to_string()).collect();
         // Mirror per-field `#[serde(rename = "...")]` from the core type so the binding
-        if let Some(rename) = &field.serde_rename {
-            if !attrs.iter().any(|a| a.starts_with("serde(rename")) {
-                attrs.push(format!("serde(rename = \"{rename}\")"));
-            }
+        if let Some(rename) = &field.serde_rename
+            && !attrs.iter().any(|a| a.starts_with("serde(rename"))
+        {
+            attrs.push(format!("serde(rename = \"{rename}\")"));
         }
         let emit_name = crate::core::keywords::rust_raw_ident(&field.name);
         if emit_name != field.name && !attrs.iter().any(|a| a.starts_with("serde(rename")) {

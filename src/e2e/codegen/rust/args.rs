@@ -78,12 +78,12 @@ pub fn render_rust_arg(
         return (lines, expr);
     }
     // When the arg is a base_url and a mock server is running, use the mock server URL.
-    if arg_type == "base_url" {
-        if let Some(url_expr) = mock_base_url {
-            return (vec![], url_expr.to_string());
-        }
-        // No mock server: fall through to string handling below.
+    if arg_type == "base_url"
+        && let Some(url_expr) = mock_base_url
+    {
+        return (vec![], url_expr.to_string());
     }
+    // No mock server: fall through to string handling below.
     if arg_type == "handle" {
         // Generate a create_engine (or equivalent) call and pass the config.
         // If the fixture has input.config, serialize it as a json_object and pass it;
@@ -181,13 +181,13 @@ pub fn render_rust_arg(
     // file_path args are fixture-relative paths into the repo-root `test_documents/`
     // directory; resolve to a `&'static str` absolute path at compile time so the test
     // can run from any cwd without depending on the current working directory.
-    if arg_type == "file_path" {
-        if let serde_json::Value::String(path_str) = value {
-            let binding = format!(
-                "let {name}: &str = concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../../{test_documents_dir}/\", \"{path_str}\");"
-            );
-            return (vec![binding], name.to_string());
-        }
+    if arg_type == "file_path"
+        && let serde_json::Value::String(path_str) = value
+    {
+        let binding = format!(
+            "let {name}: &str = concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../../{test_documents_dir}/\", \"{path_str}\");"
+        );
+        return (vec![binding], name.to_string());
     }
 
     let literal = json_to_rust_literal(value, arg_type);
@@ -329,10 +329,10 @@ pub fn json_to_rust_literal(value: &serde_json::Value, arg_type: &str) -> String
         serde_json::Value::Null => "None".to_string(),
         serde_json::Value::Bool(b) => format!("{b}"),
         serde_json::Value::Number(n) => {
-            if arg_type.contains("float") || arg_type.contains("f64") || arg_type.contains("f32") {
-                if let Some(f) = n.as_f64() {
-                    return format!("{f}_f64");
-                }
+            if (arg_type.contains("float") || arg_type.contains("f64") || arg_type.contains("f32"))
+                && let Some(f) = n.as_f64()
+            {
+                return format!("{f}_f64");
             }
             n.to_string()
         }

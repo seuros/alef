@@ -49,24 +49,24 @@ pub fn resolve_type(ty: &syn::Type) -> TypeRef {
         }
         syn::Type::Slice(slice) => resolve_slice_type(&slice.elem),
         syn::Type::TraitObject(trait_obj) => {
-            if let Some(syn::TypeParamBound::Trait(trait_bound)) = trait_obj.bounds.first() {
-                if let Some(seg) = trait_bound.path.segments.last() {
-                    return TypeRef::Named(seg.ident.to_string());
-                }
+            if let Some(syn::TypeParamBound::Trait(trait_bound)) = trait_obj.bounds.first()
+                && let Some(seg) = trait_bound.path.segments.last()
+            {
+                return TypeRef::Named(seg.ident.to_string());
             }
             TypeRef::Named("DynObject".to_string())
         }
         syn::Type::ImplTrait(impl_trait) => {
-            if let Some(syn::TypeParamBound::Trait(trait_bound)) = impl_trait.bounds.first() {
-                if let Some(seg) = trait_bound.path.segments.last() {
-                    let trait_name = seg.ident.to_string();
-                    if trait_name == "Into" || trait_name == "AsRef" {
-                        if let Some(inner_ty) = extract_single_generic_arg(seg) {
-                            return inner_ty;
-                        }
-                    }
-                    return TypeRef::Named(trait_name);
+            if let Some(syn::TypeParamBound::Trait(trait_bound)) = impl_trait.bounds.first()
+                && let Some(seg) = trait_bound.path.segments.last()
+            {
+                let trait_name = seg.ident.to_string();
+                if (trait_name == "Into" || trait_name == "AsRef")
+                    && let Some(inner_ty) = extract_single_generic_arg(seg)
+                {
+                    return inner_ty;
                 }
+                return TypeRef::Named(trait_name);
             }
             TypeRef::Named("ImplTrait".to_string())
         }
@@ -301,12 +301,11 @@ fn extract_two_generic_args(segment: &syn::PathSegment) -> (TypeRef, TypeRef) {
 
 /// Check if a `syn::Type` represents `Option<T>`, and if so return the inner type.
 pub fn is_option_type(ty: &syn::Type) -> Option<TypeRef> {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            if segment.ident == "Option" {
-                return extract_single_generic_arg(segment);
-            }
-        }
+    if let syn::Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+        && segment.ident == "Option"
+    {
+        return extract_single_generic_arg(segment);
     }
     None
 }
@@ -314,26 +313,24 @@ pub fn is_option_type(ty: &syn::Type) -> Option<TypeRef> {
 /// Extract the error type from a `pub type Result<T> = std::result::Result<T, E>` alias definition.
 /// Returns the string representation of the error type E.
 pub fn extract_result_error_type_from_alias(ty: &syn::Type) -> Option<String> {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            if segment.ident == "Result" {
-                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                    let type_args: Vec<_> = args
-                        .args
-                        .iter()
-                        .filter_map(|a| {
-                            if let syn::GenericArgument::Type(ty) = a {
-                                Some(ty)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    if type_args.len() == 2 {
-                        return Some(type_to_string(type_args[1]));
-                    }
+    if let syn::Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+        && segment.ident == "Result"
+        && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+    {
+        let type_args: Vec<_> = args
+            .args
+            .iter()
+            .filter_map(|a| {
+                if let syn::GenericArgument::Type(ty) = a {
+                    Some(ty)
+                } else {
+                    None
                 }
-            }
+            })
+            .collect();
+        if type_args.len() == 2 {
+            return Some(type_to_string(type_args[1]));
         }
     }
     None
@@ -341,32 +338,30 @@ pub fn extract_result_error_type_from_alias(ty: &syn::Type) -> Option<String> {
 
 /// Extract the error type string from a `Result<T, E>` return type.
 pub fn extract_result_error_type(ty: &syn::Type) -> Option<String> {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            if segment.ident == "Result" {
-                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                    let type_args: Vec<_> = args
-                        .args
-                        .iter()
-                        .filter_map(|a| {
-                            if let syn::GenericArgument::Type(ty) = a {
-                                Some(ty)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    if type_args.len() >= 2 {
-                        return Some(type_to_string(type_args[1]));
-                    }
-                    if !type_args.is_empty() {
-                        if let Some(hint) = get_result_error_hint("Result") {
-                            return Some(hint);
-                        }
-                        return Some("anyhow::Error".to_string());
-                    }
+    if let syn::Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+        && segment.ident == "Result"
+        && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+    {
+        let type_args: Vec<_> = args
+            .args
+            .iter()
+            .filter_map(|a| {
+                if let syn::GenericArgument::Type(ty) = a {
+                    Some(ty)
+                } else {
+                    None
                 }
+            })
+            .collect();
+        if type_args.len() >= 2 {
+            return Some(type_to_string(type_args[1]));
+        }
+        if !type_args.is_empty() {
+            if let Some(hint) = get_result_error_hint("Result") {
+                return Some(hint);
             }
+            return Some("anyhow::Error".to_string());
         }
     }
     None
@@ -374,16 +369,14 @@ pub fn extract_result_error_type(ty: &syn::Type) -> Option<String> {
 
 /// Check if a return type is `Result<T, E>` and return the inner T type.
 pub fn unwrap_result_type(ty: &syn::Type) -> Option<&syn::Type> {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            if segment.ident == "Result" {
-                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                    for arg in &args.args {
-                        if let syn::GenericArgument::Type(inner_ty) = arg {
-                            return Some(inner_ty);
-                        }
-                    }
-                }
+    if let syn::Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+        && segment.ident == "Result"
+        && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+    {
+        for arg in &args.args {
+            if let syn::GenericArgument::Type(inner_ty) = arg {
+                return Some(inner_ty);
             }
         }
     }

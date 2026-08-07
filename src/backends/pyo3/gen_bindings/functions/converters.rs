@@ -467,48 +467,47 @@ pub(super) fn emit_converters(
                 },
                 _ => None,
             };
-            if let Some((inner, is_optional)) = vec_field {
-                if let TypeRef::Named(enum_name) = inner.as_ref() {
-                    if enum_names.contains(&enum_name.as_str()) {
-                        let accessor = field_access(&field.name);
-                        if data_enum_names.contains(&enum_name.as_str()) {
-                            out.push_str(&crate::backends::pyo3::template_env::render(
-                                "data_enum_vec_coerce.jinja",
-                                minijinja::context! {
-                                    name => &field.name,
-                                    enum_name => enum_name.as_str(),
-                                    accessor => &accessor,
-                                    optional => is_optional,
-                                },
-                            ));
-                        } else {
-                            out.push_str(&crate::backends::pyo3::template_env::render(
-                                "simple_enum_vec_coerce.jinja",
-                                minijinja::context! {
-                                    name => &field.name,
-                                    enum_name => enum_name.as_str(),
-                                    accessor => &accessor,
-                                    optional => is_optional,
-                                },
-                            ));
-                        }
-                        continue;
-                    }
-                }
-            }
-
-            if let Some((kwarg_name, field_name, _)) = bridge_visitor_field {
-                if field.name == field_name {
+            if let Some((inner, is_optional)) = vec_field
+                && let TypeRef::Named(enum_name) = inner.as_ref()
+                && enum_names.contains(&enum_name.as_str())
+            {
+                let accessor = field_access(&field.name);
+                if data_enum_names.contains(&enum_name.as_str()) {
                     out.push_str(&crate::backends::pyo3::template_env::render(
-                        "visitor_override_param.jinja",
+                        "data_enum_vec_coerce.jinja",
                         minijinja::context! {
-                            field_name => field_name,
-                            accessor => field_access(field_name),
+                            name => &field.name,
+                            enum_name => enum_name.as_str(),
+                            accessor => &accessor,
+                            optional => is_optional,
                         },
                     ));
-                    let _ = kwarg_name;
-                    continue;
+                } else {
+                    out.push_str(&crate::backends::pyo3::template_env::render(
+                        "simple_enum_vec_coerce.jinja",
+                        minijinja::context! {
+                            name => &field.name,
+                            enum_name => enum_name.as_str(),
+                            accessor => &accessor,
+                            optional => is_optional,
+                        },
+                    ));
                 }
+                continue;
+            }
+
+            if let Some((kwarg_name, field_name, _)) = bridge_visitor_field
+                && field.name == field_name
+            {
+                out.push_str(&crate::backends::pyo3::template_env::render(
+                    "visitor_override_param.jinja",
+                    minijinja::context! {
+                        field_name => field_name,
+                        accessor => field_access(field_name),
+                    },
+                ));
+                let _ = kwarg_name;
+                continue;
             }
             let accessor = field_access(&field.name);
 

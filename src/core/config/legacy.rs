@@ -259,12 +259,12 @@ fn is_top_level_key_line(line: &str, key: &str) -> bool {
             return true;
         }
     }
-    if let Some(inner) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-        if !inner.starts_with('[') {
-            let first_segment = inner.split('.').next().unwrap_or("").trim();
-            if first_segment == key {
-                return true;
-            }
+    if let Some(inner) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
+        && !inner.starts_with('[')
+    {
+        let first_segment = inner.split('.').next().unwrap_or("").trim();
+        if first_segment == key {
+            return true;
         }
     }
     if let Some(rest) = line.strip_prefix(key) {

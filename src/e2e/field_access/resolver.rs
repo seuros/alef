@@ -274,10 +274,10 @@ impl FieldResolver {
         // Namespace-prefix fallback: paths like `interaction.action_results[0].data`
         // strip the virtual `interaction.` prefix before consulting `optional_fields`,
         // matching the same convention used by `is_valid_for_result`.
-        if let Some(suffix) = self.namespace_stripped_path(field) {
-            if self.is_optional_direct(suffix) {
-                return true;
-            }
+        if let Some(suffix) = self.namespace_stripped_path(field)
+            && self.is_optional_direct(suffix)
+        {
+            return true;
         }
         false
     }
@@ -301,12 +301,12 @@ impl FieldResolver {
             return true;
         }
         for af in &self.array_fields {
-            if let Some(rest) = field.strip_prefix(af.as_str()) {
-                if let Some(rest) = rest.strip_prefix('.') {
-                    let with_bracket = format!("{af}[].{rest}");
-                    if self.optional_fields.contains(with_bracket.as_str()) {
-                        return true;
-                    }
+            if let Some(rest) = field.strip_prefix(af.as_str())
+                && let Some(rest) = rest.strip_prefix('.')
+            {
+                let with_bracket = format!("{af}[].{rest}");
+                if self.optional_fields.contains(with_bracket.as_str()) {
+                    return true;
                 }
             }
         }

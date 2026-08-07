@@ -29,12 +29,11 @@ pub(super) fn emit_result_and_assertions(
         if a.assertion_type == "not_error" || a.assertion_type == "error" {
             return false;
         }
-        if is_streaming {
-            if let Some(f) = &a.field {
-                if crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(f) {
-                    return true;
-                }
-            }
+        if is_streaming
+            && let Some(f) = &a.field
+            && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(f)
+        {
+            return true;
         }
         if result_is_simple {
             if let Some(f) = &a.field {
@@ -88,11 +87,11 @@ pub(super) fn emit_result_and_assertions(
             if assertion.assertion_type == "not_error" || assertion.assertion_type == "error" {
                 continue;
             }
-            if let Some(f) = &assertion.field {
-                if crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(f) {
-                    emit_streaming_virtual_assertion(out, assertion, f, chunks_var);
-                    continue;
-                }
+            if let Some(f) = &assertion.field
+                && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(f)
+            {
+                emit_streaming_virtual_assertion(out, assertion, f, chunks_var);
+                continue;
             }
             // Non-streaming-virtual assertions on streaming fixtures are skipped
             // (the result type doesn't have these fields during iteration).
@@ -151,17 +150,17 @@ fn emit_streaming_virtual_assertion(out: &mut String, assertion: &Assertion, fie
 
     match assertion.assertion_type.as_str() {
         "count_min" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(out, "    assert len({expr}) >= {n}  # noqa: S101");
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(out, "    assert len({expr}) >= {n}  # noqa: S101");
             }
         }
         "count_equals" => {
-            if let Some(val) = &assertion.value {
-                if let Some(n) = val.as_u64() {
-                    let _ = writeln!(out, "    assert len({expr}) == {n}  # noqa: S101");
-                }
+            if let Some(val) = &assertion.value
+                && let Some(n) = val.as_u64()
+            {
+                let _ = writeln!(out, "    assert len({expr}) == {n}  # noqa: S101");
             }
         }
         "equals" => {

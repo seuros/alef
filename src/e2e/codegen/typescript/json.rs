@@ -12,15 +12,15 @@ pub(super) fn json_to_js(value: &serde_json::Value) -> String {
         serde_json::Value::Bool(b) => b.to_string(),
         serde_json::Value::Number(n) => {
             // For integers outside JS safe range, emit as string to avoid precision loss.
-            if let Some(i) = n.as_i64() {
-                if !(-9_007_199_254_740_991..=9_007_199_254_740_991).contains(&i) {
-                    return format!("Number(\"{i}\")");
-                }
+            if let Some(i) = n.as_i64()
+                && !(-9_007_199_254_740_991..=9_007_199_254_740_991).contains(&i)
+            {
+                return format!("Number(\"{i}\")");
             }
-            if let Some(u) = n.as_u64() {
-                if u > 9_007_199_254_740_991 {
-                    return format!("Number(\"{u}\")");
-                }
+            if let Some(u) = n.as_u64()
+                && u > 9_007_199_254_740_991
+            {
+                return format!("Number(\"{u}\")");
             }
             n.to_string()
         }

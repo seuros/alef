@@ -87,18 +87,18 @@ pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool
             } else {
                 build_cmd_cfg.build.as_ref()
             };
-            if let Some(cmd_list) = override_cmds {
-                if config.build_commands.contains_key(&lang.to_string()) {
-                    let mut combined_output = (String::new(), String::new());
-                    for cmd in cmd_list.commands() {
-                        info!("Building {lang}: {cmd}");
-                        let (stdout, stderr) = run_command_captured(cmd)
-                            .with_context(|| format!("failed to build language bindings for {lang}"))?;
-                        combined_output.0.push_str(&stdout);
-                        combined_output.1.push_str(&stderr);
-                    }
-                    return Ok(combined_output);
+            if let Some(cmd_list) = override_cmds
+                && config.build_commands.contains_key(&lang.to_string())
+            {
+                let mut combined_output = (String::new(), String::new());
+                for cmd in cmd_list.commands() {
+                    info!("Building {lang}: {cmd}");
+                    let (stdout, stderr) = run_command_captured(cmd)
+                        .with_context(|| format!("failed to build language bindings for {lang}"))?;
+                    combined_output.0.push_str(&stdout);
+                    combined_output.1.push_str(&stderr);
                 }
+                return Ok(combined_output);
             }
             info!("Building {lang} ({})...", bc.tool);
             let build_cmd = build_command_for(*lang, bc, config, release);
@@ -132,18 +132,18 @@ pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool
             } else {
                 build_cmd_cfg.build.as_ref()
             };
-            if let Some(cmd_list) = override_cmds {
-                if config.build_commands.contains_key(&lang.to_string()) {
-                    let mut combined_output = (String::new(), String::new());
-                    for cmd in cmd_list.commands() {
-                        info!("Building {lang}: {cmd}");
-                        let (stdout, stderr) = run_command_captured(cmd)
-                            .with_context(|| format!("failed to build language bindings for {lang}"))?;
-                        combined_output.0.push_str(&stdout);
-                        combined_output.1.push_str(&stderr);
-                    }
-                    return Ok(combined_output);
+            if let Some(cmd_list) = override_cmds
+                && config.build_commands.contains_key(&lang.to_string())
+            {
+                let mut combined_output = (String::new(), String::new());
+                for cmd in cmd_list.commands() {
+                    info!("Building {lang}: {cmd}");
+                    let (stdout, stderr) = run_command_captured(cmd)
+                        .with_context(|| format!("failed to build language bindings for {lang}"))?;
+                    combined_output.0.push_str(&stdout);
+                    combined_output.1.push_str(&stderr);
                 }
+                return Ok(combined_output);
             }
             info!("Building {lang} ({})...", bc.tool);
             let build_cmd = build_command_for(*lang, bc, config, release);
@@ -246,10 +246,10 @@ fn build_command_for(
                 for _ in 0..3 {
                     let manifest = p.join("Cargo.toml");
                     if manifest.exists() {
-                        if let Ok(contents) = std::fs::read_to_string(&manifest) {
-                            if contents.contains("[workspace]") {
-                                found = Some(p.clone());
-                            }
+                        if let Ok(contents) = std::fs::read_to_string(&manifest)
+                            && contents.contains("[workspace]")
+                        {
+                            found = Some(p.clone());
                         }
                         break;
                     }
@@ -268,18 +268,18 @@ fn build_command_for(
                 for _ in 0..4 {
                     let manifest = p.join("Cargo.toml");
                     if manifest.exists() {
-                        if let Ok(contents) = std::fs::read_to_string(&manifest) {
-                            if contents.contains("[package]") {
-                                for line in contents.lines() {
-                                    let trimmed = line.trim();
-                                    if let Some(rest) = trimmed.strip_prefix("name") {
-                                        let rest = rest.trim_start_matches([' ', '=']).trim();
-                                        let rest = rest.trim_matches(['"', '\'']);
-                                        if !rest.is_empty() {
-                                            package_name = Some(rest.to_string());
-                                            package_dir = Some(p.clone());
-                                            break;
-                                        }
+                        if let Ok(contents) = std::fs::read_to_string(&manifest)
+                            && contents.contains("[package]")
+                        {
+                            for line in contents.lines() {
+                                let trimmed = line.trim();
+                                if let Some(rest) = trimmed.strip_prefix("name") {
+                                    let rest = rest.trim_start_matches([' ', '=']).trim();
+                                    let rest = rest.trim_matches(['"', '\'']);
+                                    if !rest.is_empty() {
+                                        package_name = Some(rest.to_string());
+                                        package_dir = Some(p.clone());
+                                        break;
                                     }
                                 }
                             }
@@ -295,25 +295,24 @@ fn build_command_for(
                     let mut excluded = false;
                     while q.pop() {
                         let manifest = q.join("Cargo.toml");
-                        if manifest.exists() {
-                            if let Ok(contents) = std::fs::read_to_string(&manifest) {
-                                if contents.contains("[workspace]") {
-                                    let rel = pdir.strip_prefix(&q).unwrap_or(pdir).to_string_lossy().into_owned();
-                                    let rel_norm = rel.replace('\\', "/");
-                                    excluded = contents.lines().map(|l| l.trim()).any(|l| {
-                                        l.contains(&format!("\"{rel_norm}\"")) && {
-                                            let needle = format!("\"{rel_norm}\"");
-                                            let exclude_section = contents.split("exclude").nth(1).unwrap_or("");
-                                            let members_section = contents.split("members").nth(1).unwrap_or("");
-                                            let in_exclude = exclude_section.contains(&needle);
-                                            let in_members =
-                                                members_section.contains(&needle) && !exclude_section.contains(&needle);
-                                            in_exclude && !in_members
-                                        }
-                                    });
-                                    break;
+                        if manifest.exists()
+                            && let Ok(contents) = std::fs::read_to_string(&manifest)
+                            && contents.contains("[workspace]")
+                        {
+                            let rel = pdir.strip_prefix(&q).unwrap_or(pdir).to_string_lossy().into_owned();
+                            let rel_norm = rel.replace('\\', "/");
+                            excluded = contents.lines().map(|l| l.trim()).any(|l| {
+                                l.contains(&format!("\"{rel_norm}\"")) && {
+                                    let needle = format!("\"{rel_norm}\"");
+                                    let exclude_section = contents.split("exclude").nth(1).unwrap_or("");
+                                    let members_section = contents.split("members").nth(1).unwrap_or("");
+                                    let in_exclude = exclude_section.contains(&needle);
+                                    let in_members =
+                                        members_section.contains(&needle) && !exclude_section.contains(&needle);
+                                    in_exclude && !in_members
                                 }
-                            }
+                            });
+                            break;
                         }
                     }
                     excluded
@@ -517,7 +516,10 @@ pub fn run_post_build(
                     debug!("PostProcessFile target not found: {}", file_path.display());
                 }
             }
-            PostBuildStep::CarryFrbCfgGates { source_path, target_path } => {
+            PostBuildStep::CarryFrbCfgGates {
+                source_path,
+                target_path,
+            } => {
                 let source_file = base_dir.join(crate_dir).join(source_path);
                 let target_file = base_dir.join(crate_dir).join(target_path);
                 if source_file.exists() && target_file.exists() {
@@ -608,11 +610,11 @@ const RUN_COMMAND_POLL_INTERVAL: std::time::Duration = std::time::Duration::from
 /// installing Flutter via FVM under CI), or simply isn't desired this run.
 /// Each skipped command logs a `warn!` so the omission is visible.
 fn run_run_command(cmd: &str, args: &[&str], base_dir: &Path) -> anyhow::Result<()> {
-    if let Ok(skip_list) = std::env::var("ALEF_SKIP_COMMANDS") {
-        if skip_list.split(',').any(|s| s.trim() == cmd) {
-            warn!("[{cmd}] skipped via ALEF_SKIP_COMMANDS env var");
-            return Ok(());
-        }
+    if let Ok(skip_list) = std::env::var("ALEF_SKIP_COMMANDS")
+        && skip_list.split(',').any(|s| s.trim() == cmd)
+    {
+        warn!("[{cmd}] skipped via ALEF_SKIP_COMMANDS env var");
+        return Ok(());
     }
     let mut child = match std::process::Command::new(cmd)
         .args(args)

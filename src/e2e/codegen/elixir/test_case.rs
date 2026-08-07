@@ -486,14 +486,14 @@ pub(super) fn render_test_case(
     }
 
     // For streaming fixtures, drain the stream into a list before asserting.
-    if is_streaming {
-        if let Some(collect) = crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::collect_snippet(
+    if is_streaming
+        && let Some(collect) = crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::collect_snippet(
             "elixir",
             &result_var,
             chunks_var,
-        ) {
-            let _ = writeln!(out, "      {collect}");
-        }
+        )
+    {
+        let _ = writeln!(out, "      {collect}");
     }
 
     for assertion in &fixture.assertions {

@@ -183,18 +183,19 @@ fn gen_rustler_flat_data_enum(enum_def: &EnumDef, module_prefix: &str) -> String
     ));
 
     for variant in &enum_def.variants {
-        if !variant.fields.is_empty() && variant.is_tuple {
-            if let Some(first_field) = variant.fields.first() {
-                let field_name = crate::codegen::naming::pascal_to_snake(&variant.name);
-                let field_type = field_type_for_rustler(first_field);
-                out.push_str(&template_env::render(
-                    "flat_enum_variant_field.jinja",
-                    minijinja::context! {
-                        field_name => &field_name,
-                        field_type => &field_type,
-                    },
-                ));
-            }
+        if !variant.fields.is_empty()
+            && variant.is_tuple
+            && let Some(first_field) = variant.fields.first()
+        {
+            let field_name = crate::codegen::naming::pascal_to_snake(&variant.name);
+            let field_type = field_type_for_rustler(first_field);
+            out.push_str(&template_env::render(
+                "flat_enum_variant_field.jinja",
+                minijinja::context! {
+                    field_name => &field_name,
+                    field_type => &field_type,
+                },
+            ));
         }
     }
 

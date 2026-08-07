@@ -72,12 +72,11 @@ pub(super) fn extract_raw(config: &ResolvedCrateConfig, _config_path: &Path) -> 
 /// Falls back to the provided default name if the pattern doesn't match.
 fn derive_crate_name_from_path(path: &Path, default: &str) -> String {
     let path_str = path.to_string_lossy();
-    if let Some(after_crates) = path_str.split("crates/").nth(1) {
-        if let Some(name) = after_crates.split('/').next() {
-            if path_str.contains(&format!("crates/{name}/src/")) {
-                return name.replace('-', "_");
-            }
-        }
+    if let Some(after_crates) = path_str.split("crates/").nth(1)
+        && let Some(name) = after_crates.split('/').next()
+        && path_str.contains(&format!("crates/{name}/src/"))
+    {
+        return name.replace('-', "_");
     }
     default.to_string()
 }

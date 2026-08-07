@@ -308,25 +308,25 @@ pub fn gen_stubs(
         .map(|f| f.name.as_str())
         .collect();
     for bridge in trait_bridges {
-        if let Some(register_fn) = bridge.register_fn.as_deref() {
-            if !declared_function_names.contains(register_fn) {
-                let backend_type = if protocol_trait_names.contains(&bridge.trait_name) {
-                    bridge.trait_name.as_str()
-                } else {
-                    "object"
-                };
-                body_lines.push(format!("def {register_fn}(backend: {backend_type}) -> None: ..."));
-            }
+        if let Some(register_fn) = bridge.register_fn.as_deref()
+            && !declared_function_names.contains(register_fn)
+        {
+            let backend_type = if protocol_trait_names.contains(&bridge.trait_name) {
+                bridge.trait_name.as_str()
+            } else {
+                "object"
+            };
+            body_lines.push(format!("def {register_fn}(backend: {backend_type}) -> None: ..."));
         }
-        if let Some(unregister_fn) = bridge.unregister_fn.as_deref() {
-            if !declared_function_names.contains(unregister_fn) {
-                body_lines.push(format!("def {unregister_fn}(name: str) -> None: ..."));
-            }
+        if let Some(unregister_fn) = bridge.unregister_fn.as_deref()
+            && !declared_function_names.contains(unregister_fn)
+        {
+            body_lines.push(format!("def {unregister_fn}(name: str) -> None: ..."));
         }
-        if let Some(clear_fn) = bridge.clear_fn.as_deref() {
-            if !declared_function_names.contains(clear_fn) {
-                body_lines.push(format!("def {clear_fn}() -> None: ..."));
-            }
+        if let Some(clear_fn) = bridge.clear_fn.as_deref()
+            && !declared_function_names.contains(clear_fn)
+        {
+            body_lines.push(format!("def {clear_fn}() -> None: ..."));
         }
     }
 

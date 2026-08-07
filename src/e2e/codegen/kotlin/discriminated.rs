@@ -151,16 +151,16 @@ pub(super) fn render_discriminated_union_assertion(
             }
         }
         "contains" => {
-            if let Some(expected) = &assertion.value {
-                if let Some(s) = expected.as_str() {
-                    let lower = s.to_lowercase();
-                    let _ = writeln!(
-                        out,
-                        "                assertTrue({field_expr}.orEmpty().toString().lowercase().contains(\"{}\".lowercase()), \"expected to contain: {}\")",
-                        escape_kotlin(&lower),
-                        escape_kotlin(s)
-                    );
-                }
+            if let Some(expected) = &assertion.value
+                && let Some(s) = expected.as_str()
+            {
+                let lower = s.to_lowercase();
+                let _ = writeln!(
+                    out,
+                    "                assertTrue({field_expr}.orEmpty().toString().lowercase().contains(\"{}\".lowercase()), \"expected to contain: {}\")",
+                    escape_kotlin(&lower),
+                    escape_kotlin(s)
+                );
             }
         }
         "contains_all" => {

@@ -265,10 +265,10 @@ pub(super) fn render_test_file_inner(
             .or_else(|| options_type.map(|s| s.to_string()))
             .or_else(|| {
                 for cand in ["kotlin", "csharp", "c", "go", "php", "python"] {
-                    if let Some(o) = cc.overrides.get(cand) {
-                        if let Some(t) = &o.options_type {
-                            return Some(t.clone());
-                        }
+                    if let Some(o) = cc.overrides.get(cand)
+                        && let Some(t) = &o.options_type
+                    {
+                        return Some(t.clone());
                     }
                 }
                 None
@@ -309,31 +309,31 @@ pub(super) fn render_test_file_inner(
                 &f.tags,
                 &f.input,
             );
-            if let Some(overrides) = cc.overrides.get("kotlin_android") {
-                if let Some(bridge_class) = &overrides.class {
-                    trait_bridge_classes.insert(bridge_class.clone());
-                    // Map bridge classes to their plugin interfaces
-                    match bridge_class.as_str() {
-                        "DocumentExtractorBridge" => {
-                            plugin_interfaces.insert("IDocumentExtractor".to_string());
-                        }
-                        "EmbeddingBackendBridge" => {
-                            plugin_interfaces.insert("IEmbeddingBackend".to_string());
-                        }
-                        "OcrBackendBridge" => {
-                            plugin_interfaces.insert("IOcrBackend".to_string());
-                        }
-                        "PostProcessorBridge" => {
-                            plugin_interfaces.insert("IPostProcessor".to_string());
-                        }
-                        "RendererBridge" => {
-                            plugin_interfaces.insert("IRenderer".to_string());
-                        }
-                        "ValidatorBridge" => {
-                            plugin_interfaces.insert("IValidator".to_string());
-                        }
-                        _ => {}
+            if let Some(overrides) = cc.overrides.get("kotlin_android")
+                && let Some(bridge_class) = &overrides.class
+            {
+                trait_bridge_classes.insert(bridge_class.clone());
+                // Map bridge classes to their plugin interfaces
+                match bridge_class.as_str() {
+                    "DocumentExtractorBridge" => {
+                        plugin_interfaces.insert("IDocumentExtractor".to_string());
                     }
+                    "EmbeddingBackendBridge" => {
+                        plugin_interfaces.insert("IEmbeddingBackend".to_string());
+                    }
+                    "OcrBackendBridge" => {
+                        plugin_interfaces.insert("IOcrBackend".to_string());
+                    }
+                    "PostProcessorBridge" => {
+                        plugin_interfaces.insert("IPostProcessor".to_string());
+                    }
+                    "RendererBridge" => {
+                        plugin_interfaces.insert("IRenderer".to_string());
+                    }
+                    "ValidatorBridge" => {
+                        plugin_interfaces.insert("IValidator".to_string());
+                    }
+                    _ => {}
                 }
             }
         }
@@ -352,16 +352,16 @@ pub(super) fn render_test_file_inner(
         };
         let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang_for_recipe, f, cc, type_defs);
         for a in recipe.args.iter() {
-            if a.arg_type == "json_object" {
-                if let Some(element_type) = a.element_type.as_deref() {
-                    // Skip Kotlin built-in primitive types — they don't need imports.
-                    const KOTLIN_BUILTINS: &[&str] = &[
-                        "String", "Int", "Long", "Short", "Byte", "Boolean", "Char", "Float", "Double", "Unit", "Any",
-                        "Nothing", "List", "Map", "Set",
-                    ];
-                    if !KOTLIN_BUILTINS.contains(&element_type) {
-                        element_type_classes.insert(element_type.to_string());
-                    }
+            if a.arg_type == "json_object"
+                && let Some(element_type) = a.element_type.as_deref()
+            {
+                // Skip Kotlin built-in primitive types — they don't need imports.
+                const KOTLIN_BUILTINS: &[&str] = &[
+                    "String", "Int", "Long", "Short", "Byte", "Boolean", "Char", "Float", "Double", "Unit", "Any",
+                    "Nothing", "List", "Map", "Set",
+                ];
+                if !KOTLIN_BUILTINS.contains(&element_type) {
+                    element_type_classes.insert(element_type.to_string());
                 }
             }
         }

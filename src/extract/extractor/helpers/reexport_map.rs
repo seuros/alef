@@ -21,10 +21,10 @@ pub(crate) enum ReexportKind {
 pub(crate) fn collect_reexport_map(items: &[syn::Item]) -> AHashMap<String, ReexportKind> {
     let mut map: AHashMap<String, ReexportKind> = AHashMap::new();
     for item in items {
-        if let syn::Item::Use(item_use) = item {
-            if is_pub(&item_use.vis) {
-                collect_reexport_from_tree(&item_use.tree, &mut map);
-            }
+        if let syn::Item::Use(item_use) = item
+            && is_pub(&item_use.vis)
+        {
+            collect_reexport_from_tree(&item_use.tree, &mut map);
         }
     }
     map

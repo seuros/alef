@@ -141,10 +141,10 @@ fn extract_backend_name_from_input(input: &serde_json::Value, fallback: &str) ->
             return s.to_string();
         }
         for v in obj.values() {
-            if let Some(inner) = v.as_object() {
-                if let Some(s) = inner.get("name").and_then(|v| v.as_str()) {
-                    return s.to_string();
-                }
+            if let Some(inner) = v.as_object()
+                && let Some(s) = inner.get("name").and_then(|v| v.as_str())
+            {
+                return s.to_string();
             }
         }
         for v in obj.values() {

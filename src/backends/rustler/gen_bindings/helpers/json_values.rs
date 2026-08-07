@@ -168,18 +168,18 @@ pub(in crate::backends::rustler::gen_bindings) fn elixir_field_name_with_type(
         return stripped.to_snake_case();
     }
 
-    if total_fields == 1 {
-        if let Some(type_name) = field_type_name {
-            if let Some(remainder) = type_name.strip_prefix(variant_name) {
-                let derived = remainder.to_snake_case();
-                if !derived.is_empty() {
-                    return derived;
-                }
+    if total_fields == 1
+        && let Some(type_name) = field_type_name
+    {
+        if let Some(remainder) = type_name.strip_prefix(variant_name) {
+            let derived = remainder.to_snake_case();
+            if !derived.is_empty() {
+                return derived;
             }
+        }
 
-            if is_primitive_type(type_name) {
-                return "value".to_string();
-            }
+        if is_primitive_type(type_name) {
+            return "value".to_string();
         }
     }
 

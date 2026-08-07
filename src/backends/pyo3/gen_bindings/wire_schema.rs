@@ -87,10 +87,10 @@ pub(super) fn gen_wire_schema_consts(api: &ApiSurface, coercible_dto_names: &AHa
         }
         for ctor in collect_variant_constructors(e) {
             for p in &ctor.params {
-                if let Some((dto, _)) = coercible_payload(&p.ty, coercible_dto_names) {
-                    if !seeds.iter().any(|s| s == dto) {
-                        seeds.push(dto.to_string());
-                    }
+                if let Some((dto, _)) = coercible_payload(&p.ty, coercible_dto_names)
+                    && !seeds.iter().any(|s| s == dto)
+                {
+                    seeds.push(dto.to_string());
                 }
             }
         }

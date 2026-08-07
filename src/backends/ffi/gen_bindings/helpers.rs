@@ -291,11 +291,11 @@ pub(super) fn gen_owned_value_to_c(expr: &str, ty: &TypeRef, indent: &str, _enum
         ),
         TypeRef::Optional(inner) => {
             // clippy::manual_unwrap_or.  Bool needs `as i32` and stays with the match form.
-            if let TypeRef::Primitive(prim) = inner.as_ref() {
-                if !matches!(prim, crate::core::ir::PrimitiveType::Bool) {
-                    let null_value = null_return_value(&TypeRef::Optional(inner.clone()));
-                    return format!("{indent}{expr}.unwrap_or({null_value})");
-                }
+            if let TypeRef::Primitive(prim) = inner.as_ref()
+                && !matches!(prim, crate::core::ir::PrimitiveType::Bool)
+            {
+                let null_value = null_return_value(&TypeRef::Optional(inner.clone()));
+                return format!("{indent}{expr}.unwrap_or({null_value})");
             }
             let inner_conversion = gen_owned_value_to_c("val", inner, &format!("{indent}        "), _enum_names);
             let null_value = null_return_value(&TypeRef::Optional(inner.clone()));

@@ -292,10 +292,11 @@ impl Backend for MagnusBackend {
                         crate::codegen::generators::gen_opaque_constructor(ctor, &typ.name, &core_import, "");
                     let ctor_impl = format!("impl {} {{\n{}}}", typ.name, ctor_body);
                     builder.add_item(&ctor_impl);
-                } else if typ.is_variant_wrapper && !config.client_constructors.contains_key(&typ.name) {
-                    if let Some(ctor) = magnus_variant_wrapper_constructor(typ, &mapper, &core_import) {
-                        builder.add_item(&ctor);
-                    }
+                } else if typ.is_variant_wrapper
+                    && !config.client_constructors.contains_key(&typ.name)
+                    && let Some(ctor) = magnus_variant_wrapper_constructor(typ, &mapper, &core_import)
+                {
+                    builder.add_item(&ctor);
                 }
             } else {
                 let generates_default = typ.has_default;
@@ -477,10 +478,11 @@ impl Backend for MagnusBackend {
         for e in &api.enums {
             for variant in &e.variants {
                 for field in &variant.fields {
-                    if let crate::core::ir::TypeRef::Named(name) = &field.ty {
-                        if !known_type_names.contains(name.as_str()) && !absent_named_types.contains(name) {
-                            absent_named_types.push(name.clone());
-                        }
+                    if let crate::core::ir::TypeRef::Named(name) = &field.ty
+                        && !known_type_names.contains(name.as_str())
+                        && !absent_named_types.contains(name)
+                    {
+                        absent_named_types.push(name.clone());
                     }
                 }
             }

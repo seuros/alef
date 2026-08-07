@@ -244,14 +244,14 @@ fn inbound_impl_return_type(
     type_paths: &std::collections::HashMap<String, String>,
     error_type: &str,
 ) -> String {
-    if method.returns_ref {
-        if let TypeRef::Vec(inner) = &method.return_type {
-            let elem = match inner.as_ref() {
-                TypeRef::String => "&'static str".to_string(),
-                other => inbound_native_ty(other, source_crate, type_paths),
-            };
-            return format!("&'static [{elem}]");
-        }
+    if method.returns_ref
+        && let TypeRef::Vec(inner) = &method.return_type
+    {
+        let elem = match inner.as_ref() {
+            TypeRef::String => "&'static str".to_string(),
+            other => inbound_native_ty(other, source_crate, type_paths),
+        };
+        return format!("&'static [{elem}]");
     }
 
     let inner = inbound_native_ty_owned(&method.return_type, source_crate, type_paths);

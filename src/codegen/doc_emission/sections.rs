@@ -78,33 +78,31 @@ pub fn parse_rustdoc_sections(doc: &str) -> RustdocSections {
             buf.push('\n');
             continue;
         }
-        if !in_fence {
-            if let Some(rest) = trimmed.strip_prefix("# ") {
-                let head = rest.trim().to_ascii_lowercase();
-                let target = match head.as_str() {
-                    "arguments" | "args" => Some("arguments"),
-                    "returns" => Some("returns"),
-                    "errors" => Some("errors"),
-                    "panics" => Some("panics"),
-                    "safety" => Some("safety"),
-                    "example" | "examples" => Some("example"),
-                    _ => None,
-                };
-                if target.is_some() {
-                    flush(
-                        current,
-                        &mut buf,
-                        &mut summary,
-                        &mut arguments,
-                        &mut returns,
-                        &mut errors,
-                        &mut panics,
-                        &mut safety,
-                        &mut example,
-                    );
-                    current = target;
-                    continue;
-                }
+        if !in_fence && let Some(rest) = trimmed.strip_prefix("# ") {
+            let head = rest.trim().to_ascii_lowercase();
+            let target = match head.as_str() {
+                "arguments" | "args" => Some("arguments"),
+                "returns" => Some("returns"),
+                "errors" => Some("errors"),
+                "panics" => Some("panics"),
+                "safety" => Some("safety"),
+                "example" | "examples" => Some("example"),
+                _ => None,
+            };
+            if target.is_some() {
+                flush(
+                    current,
+                    &mut buf,
+                    &mut summary,
+                    &mut arguments,
+                    &mut returns,
+                    &mut errors,
+                    &mut panics,
+                    &mut safety,
+                    &mut example,
+                );
+                current = target;
+                continue;
             }
         }
         buf.push_str(line);
@@ -160,13 +158,13 @@ pub fn parse_arguments_bullets(body: &str) -> Vec<(String, String)> {
             };
             let name = name.trim_matches('`').trim_matches('*').to_string();
             out.push((name, desc.to_string()));
-        } else if !trimmed.is_empty() {
-            if let Some(last) = out.last_mut() {
-                if !last.1.is_empty() {
-                    last.1.push(' ');
-                }
-                last.1.push_str(trimmed);
+        } else if !trimmed.is_empty()
+            && let Some(last) = out.last_mut()
+        {
+            if !last.1.is_empty() {
+                last.1.push(' ');
             }
+            last.1.push_str(trimmed);
         }
     }
     out
@@ -322,14 +320,14 @@ pub fn render_jsdoc_sections(sections: &RustdocSections) -> String {
             minijinja::context! { content => err.trim() },
         ));
     }
-    if let Some(example) = sections.example.as_deref() {
-        if let Some(body) = example_for_target(example, "typescript") {
-            if !out.is_empty() {
-                out.push('\n');
-            }
-            out.push_str("@example\n");
-            out.push_str(&body);
+    if let Some(example) = sections.example.as_deref()
+        && let Some(body) = example_for_target(example, "typescript")
+    {
+        if !out.is_empty() {
+            out.push('\n');
         }
+        out.push_str("@example\n");
+        out.push_str(&body);
     }
     out
 }
@@ -506,13 +504,13 @@ pub fn render_phpdoc_sections(sections: &RustdocSections, throws_class: &str) ->
             minijinja::context! { throws_class => throws_class, content => err.trim() },
         ));
     }
-    if let Some(example) = sections.example.as_deref() {
-        if let Some(body) = example_for_target(example, "php") {
-            if !out.is_empty() {
-                out.push('\n');
-            }
-            out.push_str(&body);
+    if let Some(example) = sections.example.as_deref()
+        && let Some(body) = example_for_target(example, "php")
+    {
+        if !out.is_empty() {
+            out.push('\n');
         }
+        out.push_str(&body);
     }
     out
 }

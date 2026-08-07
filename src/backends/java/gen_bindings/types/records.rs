@@ -88,12 +88,12 @@ pub(crate) fn gen_record_type(
             }
             _ => None,
         };
-        if let Some(type_name) = field_type_name {
-            if sealed_unions_with_unwrapped.contains(type_name) {
-                decl.push_str("@JsonDeserialize(using = ");
-                decl.push_str(type_name);
-                decl.push_str("Deserializer.class) ");
-            }
+        if let Some(type_name) = field_type_name
+            && sealed_unions_with_unwrapped.contains(type_name)
+        {
+            decl.push_str("@JsonDeserialize(using = ");
+            decl.push_str(type_name);
+            decl.push_str("Deserializer.class) ");
         }
 
         if is_visitor_field {

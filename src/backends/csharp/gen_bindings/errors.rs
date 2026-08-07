@@ -41,23 +41,21 @@ pub(super) fn compute_handle_returned_types(api: &crate::core::ir::ApiSurface) -
     let mut handle_types = HashSet::new();
 
     for func in &api.functions {
-        if let Some(name) = inner_named(&func.return_type) {
-            if let Some(type_def) = type_def_map.get(name) {
-                if !type_def.has_serde {
-                    handle_types.insert(name.to_string());
-                }
-            }
+        if let Some(name) = inner_named(&func.return_type)
+            && let Some(type_def) = type_def_map.get(name)
+            && !type_def.has_serde
+        {
+            handle_types.insert(name.to_string());
         }
     }
 
     for typ in &api.types {
         for method in &typ.methods {
-            if let Some(name) = inner_named(&method.return_type) {
-                if let Some(type_def) = type_def_map.get(name) {
-                    if !type_def.has_serde {
-                        handle_types.insert(name.to_string());
-                    }
-                }
+            if let Some(name) = inner_named(&method.return_type)
+                && let Some(type_def) = type_def_map.get(name)
+                && !type_def.has_serde
+            {
+                handle_types.insert(name.to_string());
             }
         }
     }

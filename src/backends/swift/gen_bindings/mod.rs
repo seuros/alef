@@ -106,10 +106,11 @@ impl Backend for SwiftBackend {
 
         if let Some(swift_config) = &config.swift {
             for capsule_cfg in swift_config.capsule_types.values() {
-                if let Some(module_name) = capsule_cfg.host_type.split('.').next() {
-                    if !module_name.is_empty() && !module_name.contains(['*', '?', '&']) {
-                        imports.insert(format!("import {module_name}"));
-                    }
+                if let Some(module_name) = capsule_cfg.host_type.split('.').next()
+                    && !module_name.is_empty()
+                    && !module_name.contains(['*', '?', '&'])
+                {
+                    imports.insert(format!("import {module_name}"));
                 }
             }
         }

@@ -195,12 +195,10 @@ fn dep_keys_in_order(cargo_toml: &str) -> Vec<&str> {
             in_deps = line.trim() == "[dependencies]";
             continue;
         }
-        if in_deps {
-            if let Some(key) = line.split('=').next() {
-                let key = key.trim();
-                if !key.is_empty() && !key.starts_with('#') {
-                    keys.push(key);
-                }
+        if in_deps && let Some(key) = line.split('=').next() {
+            let key = key.trim();
+            if !key.is_empty() && !key.starts_with('#') {
+                keys.push(key);
             }
         }
     }

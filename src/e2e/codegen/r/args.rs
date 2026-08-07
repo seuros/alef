@@ -209,28 +209,25 @@ pub(super) fn build_args_string(
             // `readBin(...)` calls so the wrapper receives raw bytes instead
             // of an R character vector. This mirrors the Python emit_bytes_arg
             // helper and is what the extendr binding for Vec<u8> expects.
-            if arg.arg_type == "bytes" {
-                if let Some(raw) = val.as_str() {
+            if arg.arg_type == "bytes"
+                && let Some(raw) = val.as_str() {
                     let r_value = render_bytes_value(raw);
                     return Some(format!("{arg_name} = {r_value}"));
                 }
-            }
             // `file_path` arg type: fixtures encode relative paths that resolve
             // against the repo's `test_documents/` directory. Using a runtime
             // helper that anchors paths to that directory avoids fragility from
             // testthat resetting the working directory between files.
-            if arg.arg_type == "file_path" {
-                if let Some(raw) = val.as_str() {
-                    if !raw.starts_with('/') && !raw.is_empty() {
+            if arg.arg_type == "file_path"
+                && let Some(raw) = val.as_str()
+                    && !raw.starts_with('/') && !raw.is_empty() {
                         let escaped = escape_r(raw);
                         return Some(format!("{arg_name} = .resolve_fixture(\"{escaped}\")"));
                     }
-                }
-            }
             // `test_backend` arg type: emit a test stub for trait implementations.
             if arg.arg_type == "test_backend" {
-                if let Some(trait_name) = &arg.trait_name {
-                    if let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name) {
+                if let Some(trait_name) = &arg.trait_name
+                    && let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name) {
                         let methods: Vec<&crate::core::ir::MethodDef> = type_defs
                             .iter()
                             .find(|t| t.name == *trait_name)
@@ -245,7 +242,6 @@ pub(super) fn build_args_string(
                         teardown_block.push_str(&emission.teardown_block);
                         return Some(format!("{arg_name} = {}", emission.arg_expr));
                     }
-                }
                 let emission = crate::e2e::codegen::TestBackendEmission::unimplemented("r");
                 return Some(format!("{arg_name} = NULL # {}", emission.arg_expr));
             }
@@ -268,17 +264,16 @@ fn render_bytes_value(raw: &str) -> String {
         return format!("charToRaw(\"{escaped}\")");
     }
     let first = raw.chars().next().unwrap_or('\0');
-    if first.is_ascii_alphanumeric() || first == '_' {
-        if let Some(slash) = raw.find('/') {
-            if slash > 0 {
-                let after = &raw[slash + 1..];
-                if after.contains('.') && !after.is_empty() {
-                    let escaped = escape_r(raw);
-                    return format!(
-                        "readBin(.resolve_fixture(\"{escaped}\"), what = \"raw\", n = file.info(.resolve_fixture(\"{escaped}\"))$size)"
-                    );
-                }
-            }
+    if (first.is_ascii_alphanumeric() || first == '_')
+        && let Some(slash) = raw.find('/')
+        && slash > 0
+    {
+        let after = &raw[slash + 1..];
+        if after.contains('.') && !after.is_empty() {
+            let escaped = escape_r(raw);
+            return format!(
+                "readBin(.resolve_fixture(\"{escaped}\"), what = \"raw\", n = file.info(.resolve_fixture(\"{escaped}\"))$size)"
+            );
         }
     }
     // Default to inline text encoding — matches Python's InlineText branch.

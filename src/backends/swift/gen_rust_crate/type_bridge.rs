@@ -144,10 +144,10 @@ pub(crate) fn bridge_type_enum_aware(ty: &TypeRef, enum_names: &HashSet<String>)
     match ty {
         TypeRef::Named(n) if enum_names.contains(n) => "String".to_string(),
         TypeRef::Vec(inner) => {
-            if let TypeRef::Named(n) = inner.as_ref() {
-                if enum_names.contains(n) {
-                    return "Vec<String>".to_string();
-                }
+            if let TypeRef::Named(n) = inner.as_ref()
+                && enum_names.contains(n)
+            {
+                return "Vec<String>".to_string();
             }
             bridge_type(ty)
         }
@@ -165,10 +165,10 @@ pub(crate) fn bridge_type_enum_aware_ref(ty: &TypeRef, enum_names: &HashSet<&str
     match ty {
         TypeRef::Named(n) if enum_names.contains(n.as_str()) => "String".to_string(),
         TypeRef::Vec(inner) => {
-            if let TypeRef::Named(n) = inner.as_ref() {
-                if enum_names.contains(n.as_str()) {
-                    return "Vec<String>".to_string();
-                }
+            if let TypeRef::Named(n) = inner.as_ref()
+                && enum_names.contains(n.as_str())
+            {
+                return "Vec<String>".to_string();
             }
             bridge_type(ty)
         }

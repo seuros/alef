@@ -21,22 +21,22 @@ pub(crate) fn unwrap_future_return(
         syn::ReturnType::Default => return None,
     };
 
-    if let syn::Type::Path(type_path) = ty.as_ref() {
-        if let Some(seg) = type_path.path.segments.last() {
-            let ident = seg.ident.to_string();
-            match ident.as_str() {
-                "BoxFuture" | "BoxStream" => {
-                    let result = extract_future_inner_type(seg)?;
-                    if result.1.is_none() && result_wrapping_aliases.contains(&ident) {
-                        return Some((result.0, Some("Error".to_string())));
-                    }
-                    return Some(result);
+    if let syn::Type::Path(type_path) = ty.as_ref()
+        && let Some(seg) = type_path.path.segments.last()
+    {
+        let ident = seg.ident.to_string();
+        match ident.as_str() {
+            "BoxFuture" | "BoxStream" => {
+                let result = extract_future_inner_type(seg)?;
+                if result.1.is_none() && result_wrapping_aliases.contains(&ident) {
+                    return Some((result.0, Some("Error".to_string())));
                 }
-                "Pin" => {
-                    return extract_pin_future_inner(seg);
-                }
-                _ => {}
+                return Some(result);
             }
+            "Pin" => {
+                return extract_pin_future_inner(seg);
+            }
+            _ => {}
         }
     }
     None
@@ -76,16 +76,14 @@ fn extract_future_inner_type(segment: &syn::PathSegment) -> Option<(TypeRef, Opt
 fn extract_pin_future_inner(segment: &syn::PathSegment) -> Option<(TypeRef, Option<String>)> {
     if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
         for arg in &args.args {
-            if let syn::GenericArgument::Type(syn::Type::Path(inner_path)) = arg {
-                if let Some(inner_seg) = inner_path.path.segments.last() {
-                    if inner_seg.ident == "Box" {
-                        if let syn::PathArguments::AngleBracketed(box_args) = &inner_seg.arguments {
-                            for box_arg in &box_args.args {
-                                if let syn::GenericArgument::Type(syn::Type::TraitObject(trait_obj)) = box_arg {
-                                    return extract_future_output_from_trait_obj(trait_obj);
-                                }
-                            }
-                        }
+            if let syn::GenericArgument::Type(syn::Type::Path(inner_path)) = arg
+                && let Some(inner_seg) = inner_path.path.segments.last()
+                && inner_seg.ident == "Box"
+                && let syn::PathArguments::AngleBracketed(box_args) = &inner_seg.arguments
+            {
+                for box_arg in &box_args.args {
+                    if let syn::GenericArgument::Type(syn::Type::TraitObject(trait_obj)) = box_arg {
+                        return extract_future_output_from_trait_obj(trait_obj);
                     }
                 }
             }
@@ -99,18 +97,16 @@ fn extract_pin_future_inner(segment: &syn::PathSegment) -> Option<(TypeRef, Opti
 /// Returns `(inner_type, error_type)` — `error_type` is `Some` when `Output = Result<T, E>`.
 fn extract_future_output_from_trait_obj(trait_obj: &syn::TypeTraitObject) -> Option<(TypeRef, Option<String>)> {
     for bound in &trait_obj.bounds {
-        if let syn::TypeParamBound::Trait(trait_bound) = bound {
-            if let Some(seg) = trait_bound.path.segments.last() {
-                if seg.ident == "Future" {
-                    if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
-                        for arg in &args.args {
-                            if let syn::GenericArgument::AssocType(assoc) = arg {
-                                if assoc.ident == "Output" {
-                                    return Some(resolve_possibly_result_type(&assoc.ty));
-                                }
-                            }
-                        }
-                    }
+        if let syn::TypeParamBound::Trait(trait_bound) = bound
+            && let Some(seg) = trait_bound.path.segments.last()
+            && seg.ident == "Future"
+            && let syn::PathArguments::AngleBracketed(args) = &seg.arguments
+        {
+            for arg in &args.args {
+                if let syn::GenericArgument::AssocType(assoc) = arg
+                    && assoc.ident == "Output"
+                {
+                    return Some(resolve_possibly_result_type(&assoc.ty));
                 }
             }
         }
@@ -144,16 +140,16 @@ pub(crate) fn resolve_return_type(output: &syn::ReturnType) -> (TypeRef, Option<
 
 /// Unwrap Box<T>, Arc<T>, Rc<T> wrappers to get the inner syn::Type.
 fn unwrap_smart_pointer(ty: &syn::Type) -> &syn::Type {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            let ident = segment.ident.to_string();
-            if matches!(ident.as_str(), "Box" | "Arc" | "Rc") {
-                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                    for arg in &args.args {
-                        if let syn::GenericArgument::Type(inner) = arg {
-                            return inner;
-                        }
-                    }
+    if let syn::Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+    {
+        let ident = segment.ident.to_string();
+        if matches!(ident.as_str(), "Box" | "Arc" | "Rc")
+            && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+        {
+            for arg in &args.args {
+                if let syn::GenericArgument::Type(inner) = arg {
+                    return inner;
                 }
             }
         }
@@ -168,16 +164,16 @@ fn syn_type_contains_ref(ty: &syn::Type) -> bool {
     match ty {
         syn::Type::Reference(_) => true,
         syn::Type::Path(type_path) => {
-            if let Some(segment) = type_path.path.segments.last() {
-                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                    return args.args.iter().any(|arg| {
-                        if let syn::GenericArgument::Type(inner) = arg {
-                            syn_type_contains_ref(inner)
-                        } else {
-                            false
-                        }
-                    });
-                }
+            if let Some(segment) = type_path.path.segments.last()
+                && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+            {
+                return args.args.iter().any(|arg| {
+                    if let syn::GenericArgument::Type(inner) = arg {
+                        syn_type_contains_ref(inner)
+                    } else {
+                        false
+                    }
+                });
             }
             false
         }
@@ -199,23 +195,21 @@ pub(super) fn detect_cow_return(output: &syn::ReturnType) -> bool {
 /// Returns true for `Cow<'_, MyStruct>` but false for `Cow<'_, str>` (→ String)
 /// or `Cow<'_, [u8]>` (→ Bytes). Used so codegen can emit `.into_owned()`.
 fn is_cow_named_return(ty: &syn::Type) -> bool {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            if segment.ident == "Cow" {
-                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                    for arg in &args.args {
-                        if let syn::GenericArgument::Type(inner) = arg {
-                            match inner {
-                                syn::Type::Path(p) => {
-                                    if let Some(seg) = p.path.segments.last() {
-                                        return seg.ident != "str";
-                                    }
-                                }
-                                syn::Type::Slice(_) => return false,
-                                _ => return true,
-                            }
+    if let syn::Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+        && segment.ident == "Cow"
+        && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+    {
+        for arg in &args.args {
+            if let syn::GenericArgument::Type(inner) = arg {
+                match inner {
+                    syn::Type::Path(p) => {
+                        if let Some(seg) = p.path.segments.last() {
+                            return seg.ident != "str";
                         }
                     }
+                    syn::Type::Slice(_) => return false,
+                    _ => return true,
                 }
             }
         }

@@ -294,19 +294,19 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                 continue;
             }
             "test_backend" => {
-                if let Some(trait_name) = &arg_def.trait_name {
-                    if let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name) {
-                        let methods: Vec<&crate::core::ir::MethodDef> = type_defs
-                            .iter()
-                            .find(|t| t.name == *trait_name)
-                            .map(|t| t.methods.iter().collect())
-                            .unwrap_or_default();
-                        let emission = emit_test_backend(trait_bridge, &methods, fixture, enums);
-                        // Dart class definitions are emitted at module-level (before void main)
-                        // in collect_dart_test_stub_classes, so we only push the instantiation here.
-                        args.push(emission.arg_expr);
-                        continue;
-                    }
+                if let Some(trait_name) = &arg_def.trait_name
+                    && let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name)
+                {
+                    let methods: Vec<&crate::core::ir::MethodDef> = type_defs
+                        .iter()
+                        .find(|t| t.name == *trait_name)
+                        .map(|t| t.methods.iter().collect())
+                        .unwrap_or_default();
+                    let emission = emit_test_backend(trait_bridge, &methods, fixture, enums);
+                    // Dart class definitions are emitted at module-level (before void main)
+                    // in collect_dart_test_stub_classes, so we only push the instantiation here.
+                    args.push(emission.arg_expr);
+                    continue;
                 }
                 let emission = crate::e2e::codegen::TestBackendEmission::unimplemented("dart");
                 setup_lines.push(format!("// {}", emission.arg_expr));
@@ -578,19 +578,18 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                     if let Some(opts_type) = call_recipe
                         .json_object_constructor_type(arg_def, arg_value)
                         .or(options_type)
+                        && !arg_value.is_null()
                     {
-                        if !arg_value.is_null() {
-                            let json_str = serde_json::to_string(&arg_value).unwrap_or_default();
-                            // Escape for Dart single-quoted string literal (handles embedded quotes,
-                            // backslashes, and interpolation markers).
-                            let escaped_json = escape_dart(&json_str);
-                            let var_name = format!("_{}", arg_def.name);
-                            let dart_fn = type_name_to_create_from_json_dart(opts_type);
-                            setup_lines.push(format!("final {var_name} = await {dart_fn}(json: '{escaped_json}');"));
-                            // FRB bridge method param name is `req` for all single-request methods.
-                            // Use `req:` as the named argument label.
-                            args.push(format!("req: {var_name}"));
-                        }
+                        let json_str = serde_json::to_string(&arg_value).unwrap_or_default();
+                        // Escape for Dart single-quoted string literal (handles embedded quotes,
+                        // backslashes, and interpolation markers).
+                        let escaped_json = escape_dart(&json_str);
+                        let var_name = format!("_{}", arg_def.name);
+                        let dart_fn = type_name_to_create_from_json_dart(opts_type);
+                        setup_lines.push(format!("final {var_name} = await {dart_fn}(json: '{escaped_json}');"));
+                        // FRB bridge method param name is `req` for all single-request methods.
+                        // Use `req:` as the named argument label.
+                        args.push(format!("req: {var_name}"));
                     }
                 } else if call_recipe.should_materialize_json_object(arg_def, arg_value) && arg_value.is_null() {
                     if let Some(opts_type) = options_type {
@@ -727,28 +726,26 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                     // + `options_field` binding). The `_visitor` variable is materialised
                     // in the visitor block below — its setup line is inserted ahead of
                     // this options call by `build_dart_visitor`.
-                    if !map.is_empty() {
-                        if let Some(opts_type) = call_recipe
+                    if !map.is_empty()
+                        && let Some(opts_type) = call_recipe
                             .json_object_constructor_type(arg_def, arg_value)
                             .or(options_type)
-                        {
-                            let json_str = serde_json::to_string(&arg_value).unwrap_or_default();
-                            let escaped_json = escape_dart(&json_str);
-                            let dart_param_name = snake_to_camel(&arg_def.name);
-                            let var_name = format!("_{}", arg_def.name);
-                            let dart_fn = type_name_to_create_from_json_dart(opts_type);
-                            if fixture.visitor.is_some() {
-                                setup_lines.push(format!(
+                    {
+                        let json_str = serde_json::to_string(&arg_value).unwrap_or_default();
+                        let escaped_json = escape_dart(&json_str);
+                        let dart_param_name = snake_to_camel(&arg_def.name);
+                        let var_name = format!("_{}", arg_def.name);
+                        let dart_fn = type_name_to_create_from_json_dart(opts_type);
+                        if fixture.visitor.is_some() {
+                            setup_lines.push(format!(
                                     "final {var_name} = await {dart_fn}WithVisitor(json: '{escaped_json}', visitor: _visitor);"
                                 ));
-                            } else {
-                                setup_lines
-                                    .push(format!("final {var_name} = await {dart_fn}(json: '{escaped_json}');"));
-                            }
-                            // Dart bridge method declares options as keyword-only parameter.
-                            // Always emit as named argument regardless of optionality.
-                            args.push(format!("{dart_param_name}: {var_name}"));
+                        } else {
+                            setup_lines.push(format!("final {var_name} = await {dart_fn}(json: '{escaped_json}');"));
                         }
+                        // Dart bridge method declares options as keyword-only parameter.
+                        // Always emit as named argument regardless of optionality.
+                        args.push(format!("{dart_param_name}: {var_name}"));
                     }
                 }
             }

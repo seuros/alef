@@ -190,41 +190,41 @@ pub(super) fn build_args_and_setup(
                 parts.push("nil".to_string());
             }
             skipped_optional_count = 0;
-            if let Some(trait_name) = &arg.trait_name {
-                if let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name) {
-                    let methods: Vec<&crate::core::ir::MethodDef> = type_defs
-                        .iter()
-                        .find(|t| t.name == *trait_name)
-                        .map(|t| t.methods.iter().collect())
-                        .unwrap_or_default();
-                    let emission = crate::e2e::codegen::emit_test_backend("ruby", trait_bridge, &methods, fixture);
-                    // Split multi-line setup_block into individual lines so the
-                    // Jinja template can indent each line uniformly with `    {{ line }}`.
-                    for line in emission.setup_block.lines() {
-                        setup_lines.push(line.to_string());
-                    }
-                    parts.push(emission.arg_expr);
-
-                    // For register_fn traits (plugin pattern), Magnus requires a second "name" argument.
-                    // Extract the backend name from fixture input (same logic as emit_test_backend).
-                    if trait_bridge.register_fn.is_some() {
-                        let backend_name = super::stubs::extract_backend_name_from_input(&fixture.input, &fixture.id);
-                        parts.push(ruby_string_literal(&backend_name));
-
-                        // Emit `<module>.<unregister_fn>('<name>')` after the call so
-                        // RSpec's single-process registry is restored between tests.
-                        // Without this, the next trait-using fixture fails because the test
-                        // registry contains only the test stub and the core's `ensure_*_initialized`
-                        // self-heal only triggers when registry is empty.
-                        if let Some(unregister_fn) = trait_bridge.unregister_fn.as_deref() {
-                            teardown_lines.push(format!(
-                                "{call_receiver}.{unregister_fn}({})",
-                                ruby_string_literal(&backend_name)
-                            ));
-                        }
-                    }
-                    continue;
+            if let Some(trait_name) = &arg.trait_name
+                && let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name)
+            {
+                let methods: Vec<&crate::core::ir::MethodDef> = type_defs
+                    .iter()
+                    .find(|t| t.name == *trait_name)
+                    .map(|t| t.methods.iter().collect())
+                    .unwrap_or_default();
+                let emission = crate::e2e::codegen::emit_test_backend("ruby", trait_bridge, &methods, fixture);
+                // Split multi-line setup_block into individual lines so the
+                // Jinja template can indent each line uniformly with `    {{ line }}`.
+                for line in emission.setup_block.lines() {
+                    setup_lines.push(line.to_string());
                 }
+                parts.push(emission.arg_expr);
+
+                // For register_fn traits (plugin pattern), Magnus requires a second "name" argument.
+                // Extract the backend name from fixture input (same logic as emit_test_backend).
+                if trait_bridge.register_fn.is_some() {
+                    let backend_name = super::stubs::extract_backend_name_from_input(&fixture.input, &fixture.id);
+                    parts.push(ruby_string_literal(&backend_name));
+
+                    // Emit `<module>.<unregister_fn>('<name>')` after the call so
+                    // RSpec's single-process registry is restored between tests.
+                    // Without this, the next trait-using fixture fails because the test
+                    // registry contains only the test stub and the core's `ensure_*_initialized`
+                    // self-heal only triggers when registry is empty.
+                    if let Some(unregister_fn) = trait_bridge.unregister_fn.as_deref() {
+                        teardown_lines.push(format!(
+                            "{call_receiver}.{unregister_fn}({})",
+                            ruby_string_literal(&backend_name)
+                        ));
+                    }
+                }
+                continue;
             }
             let emission = crate::e2e::codegen::TestBackendEmission::unimplemented("ruby");
             setup_lines.push(format!("# {}", emission.arg_expr));
@@ -265,29 +265,28 @@ pub(super) fn build_args_and_setup(
                 // When result_is_simple, the binding accepts a plain Hash (no wrapper class).
                 if arg.arg_type == "json_object" && !v.is_null() {
                     // Check for typed object arrays (element_type set)
-                    if let Some(_elem_type) = &arg.element_type {
-                        if v.is_array() {
-                            if let Some(arr) = v.as_array() {
-                                // Only emit as tagged-enum array if all elements are objects.
-                                // Otherwise fall through to json_to_ruby for primitive arrays (e.g., String, Int).
-                                if !arr.is_empty() && arr.iter().all(|item| item.is_object()) {
-                                    let mock_base_var = if crate::e2e::codegen::value_contains_mock_url_placeholder(v) {
-                                        let base_var = format!("{}_mock_base_url", arg.name);
-                                        let env_key = crate::e2e::codegen::mock_url_env_key(fixture_id);
-                                        setup_lines.push(format!(
+                    if let Some(_elem_type) = &arg.element_type
+                        && v.is_array()
+                        && let Some(arr) = v.as_array()
+                    {
+                        // Only emit as tagged-enum array if all elements are objects.
+                        // Otherwise fall through to json_to_ruby for primitive arrays (e.g., String, Int).
+                        if !arr.is_empty() && arr.iter().all(|item| item.is_object()) {
+                            let mock_base_var = if crate::e2e::codegen::value_contains_mock_url_placeholder(v) {
+                                let base_var = format!("{}_mock_base_url", arg.name);
+                                let env_key = crate::e2e::codegen::mock_url_env_key(fixture_id);
+                                setup_lines.push(format!(
                                                 "{base_var} = ENV.fetch('{env_key}', nil) || \"#{{ENV.fetch('MOCK_SERVER_URL')}}/fixtures/{fixture_id}\""
                                             ));
-                                        Some(base_var)
-                                    } else {
-                                        None
-                                    };
-                                    parts.push(emit_ruby_object_array_with_mock_base(v, mock_base_var.as_deref()));
-                                    continue;
-                                }
-                            }
-                            // Fall through if array is empty or contains non-objects (primitives)
+                                Some(base_var)
+                            } else {
+                                None
+                            };
+                            parts.push(emit_ruby_object_array_with_mock_base(v, mock_base_var.as_deref()));
+                            continue;
                         }
                     }
+                    // Fall through if array is empty or contains non-objects (primitives)
                     // Otherwise handle regular typed objects
                     let object_type = crate::e2e::codegen::recipe::json_object_constructor_type(arg, options_type, v);
                     if let (Some(opts_type), Some(obj)) = (object_type, v.as_object()) {

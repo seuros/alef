@@ -218,12 +218,10 @@ pub fn render_test_file(
                 .args
                 .iter()
                 .any(|a| a.arg_type == "json_object" && a.element_type.is_none())
+                && let Some(opts_type) = recipe.options_type
+                && body_references_symbol(&body_buf, opts_type)
             {
-                if let Some(opts_type) = recipe.options_type {
-                    if body_references_symbol(&body_buf, opts_type) {
-                        crate_imports.insert(opts_type.to_string());
-                    }
-                }
+                crate_imports.insert(opts_type.to_string());
             }
         }
     }
@@ -296,10 +294,10 @@ pub fn render_test_file(
                 &fixture.input,
             );
             for arg in fixture.resolved_args(call_config) {
-                if arg.arg_type == "json_object" {
-                    if let Some(ref elem_type) = arg.element_type {
-                        element_types.insert(elem_type.clone());
-                    }
+                if arg.arg_type == "json_object"
+                    && let Some(ref elem_type) = arg.element_type
+                {
+                    element_types.insert(elem_type.clone());
                 }
             }
         }

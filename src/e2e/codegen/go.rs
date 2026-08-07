@@ -383,16 +383,16 @@ fn render_go_mod(
     let _ = writeln!(out, "\tgithub.com/stretchr/testify v1.11.1");
 
     // Inject extras: Go has no dev/runtime distinction, so merge both buckets
-    if let Some(e) = extras {
-        if !e.is_empty() {
-            let mut extra_modules: Vec<(&String, &crate::core::config::manifest_extras::ExtraDepSpec)> =
-                e.dependencies.iter().chain(e.dev_dependencies.iter()).collect();
-            // Sort for deterministic output (BTreeMap already sorted, but we're chaining two maps)
-            extra_modules.sort_by_key(|(k, _)| k.as_str());
-            for (module_path, spec) in extra_modules {
-                if let Some(version_str) = spec.version() {
-                    let _ = writeln!(out, "\t{module_path} {version_str}");
-                }
+    if let Some(e) = extras
+        && !e.is_empty()
+    {
+        let mut extra_modules: Vec<(&String, &crate::core::config::manifest_extras::ExtraDepSpec)> =
+            e.dependencies.iter().chain(e.dev_dependencies.iter()).collect();
+        // Sort for deterministic output (BTreeMap already sorted, but we're chaining two maps)
+        extra_modules.sort_by_key(|(k, _)| k.as_str());
+        for (module_path, spec) in extra_modules {
+            if let Some(version_str) = spec.version() {
+                let _ = writeln!(out, "\t{module_path} {version_str}");
             }
         }
     }

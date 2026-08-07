@@ -685,11 +685,11 @@ fn gen_visitor_method_extendr(
 fn build_extendr_arg(p: &crate::core::ir::ParamDef, context_type: Option<&str>) -> String {
     use crate::core::ir::TypeRef;
 
-    if let TypeRef::Named(n) = &p.ty {
-        if Some(n.as_str()) == context_type {
-            let ref_prefix = if p.is_ref { "" } else { "&" };
-            return format!("extendr_api::Robj::from(nodecontext_to_robj({}{}))", ref_prefix, p.name);
-        }
+    if let TypeRef::Named(n) = &p.ty
+        && Some(n.as_str()) == context_type
+    {
+        let ref_prefix = if p.is_ref { "" } else { "&" };
+        return format!("extendr_api::Robj::from(nodecontext_to_robj({}{}))", ref_prefix, p.name);
     }
 
     if p.optional && matches!(&p.ty, TypeRef::String) && p.is_ref {

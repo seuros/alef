@@ -54,12 +54,11 @@ fn entrypoint_return_representable(
     service: &ServiceDef,
     api: &ApiSurface,
 ) -> bool {
-    if let Some(svc_type) = api.types.iter().find(|t| t.name == service.name) {
-        if let Some(method) = svc_type.methods.iter().find(|m| m.name == ep.method) {
-            if method.sanitized {
-                return false;
-            }
-        }
+    if let Some(svc_type) = api.types.iter().find(|t| t.name == service.name)
+        && let Some(method) = svc_type.methods.iter().find(|m| m.name == ep.method)
+        && method.sanitized
+    {
+        return false;
     }
 
     match &ep.return_type {
