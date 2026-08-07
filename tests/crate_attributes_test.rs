@@ -80,7 +80,10 @@ fn crate_config_parses_crate_attributes_in_configured_order() {
     );
     assert_eq!(
         cfg.crate_attributes,
-        vec!["recursion_limit = \"256\"".to_string(), "feature(async_closure)".to_string()]
+        vec![
+            "recursion_limit = \"256\"".to_string(),
+            "feature(async_closure)".to_string()
+        ]
     );
 }
 
@@ -102,11 +105,17 @@ fn format_crate_attributes_returns_empty_vec_when_unset() {
 
 #[test]
 fn format_crate_attributes_preserves_configured_order() {
-    let attrs = vec!["recursion_limit = \"256\"".to_string(), "feature(async_closure)".to_string()];
+    let attrs = vec![
+        "recursion_limit = \"256\"".to_string(),
+        "feature(async_closure)".to_string(),
+    ];
     let result = alef::codegen::shared::format_crate_attributes(&attrs);
     assert_eq!(
         result,
-        vec!["recursion_limit = \"256\"".to_string(), "feature(async_closure)".to_string()],
+        vec![
+            "recursion_limit = \"256\"".to_string(),
+            "feature(async_closure)".to_string()
+        ],
         "entries must not be merged or reordered, unlike format_extra_clippy_allows"
     );
 }
@@ -127,7 +136,9 @@ fn ffi_backend_emits_crate_attribute_before_any_item() {
         "expected the exact inner attribute line, got:\n{content}"
     );
 
-    let attr_pos = content.find("#![recursion_limit = \"256\"]").expect("attribute present");
+    let attr_pos = content
+        .find("#![recursion_limit = \"256\"]")
+        .expect("attribute present");
     let first_use_pos = content.find("use ").expect("a use import exists");
     assert!(
         attr_pos < first_use_pos,
@@ -148,7 +159,9 @@ fn ffi_backend_emits_multiple_crate_attributes_in_order() {
     let recursion_pos = content
         .find("#![recursion_limit = \"256\"]")
         .expect("recursion_limit attribute present");
-    let feature_pos = content.find("#![feature(async_closure)]").expect("feature attribute present");
+    let feature_pos = content
+        .find("#![feature(async_closure)]")
+        .expect("feature attribute present");
     assert!(
         recursion_pos < feature_pos,
         "attributes must appear in configured order"
@@ -186,7 +199,9 @@ fn jni_backend_emits_crate_attribute() {
         content.contains("#![recursion_limit = \"256\"]\n"),
         "expected the exact inner attribute line, got:\n{content}"
     );
-    let attr_pos = content.find("#![recursion_limit = \"256\"]").expect("attribute present");
+    let attr_pos = content
+        .find("#![recursion_limit = \"256\"]")
+        .expect("attribute present");
     let use_pos = content.find("use ").expect("a use import exists");
     assert!(attr_pos < use_pos, "inner attribute must precede every use/item");
 }

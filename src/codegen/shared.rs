@@ -643,7 +643,10 @@ pub fn format_extra_clippy_allows(extras: &[String], already_emitted: &str) -> O
 /// Returns an empty `Vec` when `attributes` is empty — callers must skip emission
 /// entirely in that case so output is byte-identical to the no-config baseline.
 pub fn format_crate_attributes(attributes: &[String]) -> Vec<String> {
-    attributes.iter().map(|attribute| attribute.trim().to_string()).collect()
+    attributes
+        .iter()
+        .map(|attribute| attribute.trim().to_string())
+        .collect()
 }
 
 /// Collect the `clippy::<lint>` tokens present in already-emitted attribute text,
