@@ -20,8 +20,11 @@ use super::enums::ty_references_untagged_data_enum;
 /// `#[php(prop)]` without needing a manual getter.  Scalar-compatible means the mapped Rust
 /// type implements `IntoZval` + `FromZval` automatically:
 ///   primitives, String, bool, Duration (→ u64), Path (→ String), `Option<scalar>`,
-///   `Vec<primitive>` (the `Vec<T: IntoZval>` blanket impl).
-/// Anything containing a Named struct, Map, nested Vec, Json, or Bytes requires a getter.
+///   `Vec<primitive>` (the `Vec<T: IntoZval>` blanket impl), and — since ext-php-rs 0.15's
+///   `HashMap<K, V>` conversions (`types/array/conversions/hash_map.rs`) — a String-keyed
+///   `Map<String, V>` whose value type `V` is itself prop-scalar (e.g. `HashMap<String, String>`).
+/// Anything containing a Named struct (that isn't an enum), a Map with a non-scalar value
+/// (nested struct or `Json`), nested Vec, Json, or Bytes requires a getter.
 /// Enums are mapped as String in the PHP binding, so they count as scalar.
 ///
 /// This function is public so that `alef-e2e` can determine which fields require
@@ -39,7 +42,12 @@ fn is_php_prop_scalar_with_enums(ty: &TypeRef, enum_names: &AHashSet<String>) ->
                 || matches!(inner.as_ref(), TypeRef::Named(n) if enum_names.contains(n))
         }
         TypeRef::Named(n) if enum_names.contains(n) => true,
-        TypeRef::Named(_) | TypeRef::Map(_, _) | TypeRef::Json | TypeRef::Bytes | TypeRef::Unit => false,
+        // `HashMap<K, V, H>` implements `IntoZval`/`FromZval` for any `K: Into<ArrayKey>` +
+        // `V: IntoZval`/`FromZval` (ext-php-rs 0.15 `hash_map.rs`). All of xberg's maps are
+        // String-keyed, so recurse on the value type; a Map of Json or a non-enum struct is
+        // still not representable and falls through to the `false` arm below.
+        TypeRef::Map(k, v) => matches!(k.as_ref(), TypeRef::String) && is_php_prop_scalar_with_enums(v, enum_names),
+        TypeRef::Named(_) | TypeRef::Json | TypeRef::Bytes | TypeRef::Unit => false,
     }
 }
 
@@ -290,7 +298,30 @@ pub(crate) fn gen_php_struct(
             let php_name = crate::codegen::naming::to_php_name(&field.name);
             vec![format!("php(prop, name = \"{}\")", php_name)]
         } else {
-            vec![]
+            // A Map field only ends up here when its value type is not itself
+            // IntoZval/FromZval-compatible (e.g. `HashMap<String, serde_json::Value>` or a
+            // `HashMap<String, SomeStruct>`) — String-keyed maps of scalars are handled above.
+            // This is a real, permanent gap (PHP can read the field via `get_<name>()` but can
+            // never set it — there is no `#[php(setter)]` for non-prop fields), so surface it
+            // instead of silently dropping the field from the constructor and property list.
+            if matches!(&field.ty, TypeRef::Map(_, _)) {
+                tracing::warn!(
+                    "php backend: {}.{} is a Map whose value type can't cross the ext-php-rs \
+                     FFI boundary as a #[php(prop)] — PHP callers can read it via get_{}() but \
+                     cannot set it (no constructor param, no setter)",
+                    typ.name,
+                    field.name,
+                    field.name,
+                );
+                vec![format!(
+                    "doc = \"PHP: read-only via get_{}() — this field's value type cannot cross \
+                     the ext-php-rs FFI boundary as a settable property, so it is omitted from \
+                     the constructor and has no setter.\"",
+                    field.name
+                )]
+            } else {
+                vec![]
+            }
         };
         if cfg.has_serde && matches!(field.ty, TypeRef::Duration) && !field.optional {
             attrs.push("serde(skip_serializing_if = \"Option::is_none\")".to_string());

@@ -344,6 +344,8 @@ fn make_field_with_doc(name: &str, ty: TypeRef, optional: bool, doc: &str) -> Fi
 mod docs_defaults;
 #[path = "backends_php_gen_bindings/generation.rs"]
 mod generation;
+#[path = "backends_php_gen_bindings/map_prop_fields.rs"]
+mod map_prop_fields;
 #[path = "backends_php_gen_bindings/methods_errors.rs"]
 mod methods_errors;
 #[path = "backends_php_gen_bindings/params_formatting.rs"]

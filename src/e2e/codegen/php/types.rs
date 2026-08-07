@@ -126,6 +126,11 @@ pub(super) fn is_php_scalar(ty: &TypeRef, enum_names: &HashSet<String>) -> bool 
                 || matches!(inner.as_ref(), TypeRef::Named(n) if enum_names.contains(n))
         }
         TypeRef::Named(n) if enum_names.contains(n) => true,
-        TypeRef::Named(_) | TypeRef::Map(_, _) | TypeRef::Json | TypeRef::Bytes | TypeRef::Unit => false,
+        // Kept in sync with `is_php_prop_scalar_with_enums` in
+        // `backends/php/gen_bindings/types/structs.rs` (xberg#392): ext-php-rs 0.15's
+        // `HashMap<K, V>` conversions make a String-keyed map a real `#[php(prop)]` when its
+        // value type is itself scalar-compatible.
+        TypeRef::Map(k, v) => matches!(k.as_ref(), TypeRef::String) && is_php_scalar(v, enum_names),
+        TypeRef::Named(_) | TypeRef::Json | TypeRef::Bytes | TypeRef::Unit => false,
     }
 }
