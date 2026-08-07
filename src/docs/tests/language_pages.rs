@@ -330,6 +330,7 @@ fn test_generate_docs_with_type_renders_fields_and_doc() {
             rust_path: "mylib::ParseOptions".to_string(),
             original_rust_path: String::new(),
             fields: vec![FieldDef {
+                version: Default::default(),
                 name: "max_length".to_string(),
                 ty: TypeRef::Primitive(PrimitiveType::U32),
                 optional: true,

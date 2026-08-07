@@ -4,7 +4,7 @@ use crate::extract::type_resolver;
 
 use super::attributes::{
     extract_cfg_condition, extract_field_binding_exclusion_reason, extract_serde_default_path, extract_serde_flatten,
-    extract_serde_rename, has_serde_default,
+    extract_serde_rename, extract_version_annotation, has_serde_default,
 };
 use super::field_types::{
     detect_core_wrapper, detect_vec_inner_core_wrapper, extract_field_type_rust_path, syn_type_is_boxed,
@@ -34,6 +34,7 @@ pub(crate) fn extract_field(field: &syn::Field, crate_name: Option<&str>) -> Fie
     let serde_rename = extract_serde_rename(&field.attrs);
     let serde_flatten = extract_serde_flatten(&field.attrs);
     let has_serde_default_attr = has_serde_default(&field.attrs);
+    let version = extract_version_annotation(&field.attrs);
 
     // If the field has #[serde(default)], mark it as having a default value.
     // (`#[serde(default = "path")]`), preserve it verbatim so bindings can emit an
@@ -62,6 +63,7 @@ pub(crate) fn extract_field(field: &syn::Field, crate_name: Option<&str>) -> Fie
         binding_excluded,
         binding_exclusion_reason,
         original_type: None,
+        version,
     }
 }
 

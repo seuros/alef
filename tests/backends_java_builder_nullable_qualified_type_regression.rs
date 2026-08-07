@@ -43,6 +43,7 @@ builder = "always"
 
 fn make_field(name: &str, ty: TypeRef, optional: bool, default: Option<&str>) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional,

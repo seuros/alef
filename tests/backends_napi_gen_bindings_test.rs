@@ -10,6 +10,7 @@ fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
 
 fn make_field_with_doc(name: &str, ty: TypeRef, optional: bool, doc: &str) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional,
@@ -1490,6 +1491,7 @@ fn test_tagged_enum_different_named_types_per_variant_uses_into_not_serde_json()
     let make_variant = |name: &str, rename: &str, struct_name: &str| EnumVariant {
         name: name.to_string(),
         fields: vec![FieldDef {
+            version: Default::default(),
             name: "_0".to_string(),
             ty: TypeRef::Named(struct_name.to_string()),
             optional: false,

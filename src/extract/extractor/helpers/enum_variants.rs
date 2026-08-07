@@ -38,6 +38,7 @@ pub(crate) fn extract_enum_variant(v: &syn::Variant) -> EnumVariant {
                     binding_excluded: false,
                     binding_exclusion_reason: None,
                     original_type: None,
+                    version: extract_version_annotation(&f.attrs),
                 }
             })
             .collect(),

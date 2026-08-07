@@ -49,6 +49,7 @@ fn test_gen_elixir_enum_module_data_enum_with_payload_derived_names() {
             EnumVariant {
                 name: "Pdf".into(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "_0".into(),
                     ty: TypeRef::Named("PdfMetadata".into()),
                     optional: false,
@@ -81,6 +82,7 @@ fn test_gen_elixir_enum_module_data_enum_with_payload_derived_names() {
             EnumVariant {
                 name: "Docx".into(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "_0".into(),
                     ty: TypeRef::Named("DocxMetadata".into()),
                     optional: false,
@@ -266,6 +268,7 @@ fn test_gen_elixir_enum_module_resolves_known_payload_types() {
             EnumVariant {
                 name: "Pdf".into(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "_0".into(),
                     ty: TypeRef::Named("PdfMetadata".into()),
                     optional: false,
@@ -298,6 +301,7 @@ fn test_gen_elixir_enum_module_resolves_known_payload_types() {
             EnumVariant {
                 name: "Other".into(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "_0".into(),
                     ty: TypeRef::Named("UnknownType".into()),
                     optional: false,

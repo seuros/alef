@@ -139,3 +139,44 @@ fn test_extract_cfg_attr_feature_gate_since_is_populated() {
     let surface = extract_from_source(source);
     assert_eq!(surface.functions[0].version.since.as_deref(), Some("0.9.0"));
 }
+
+#[test]
+fn test_extract_version_annotation_on_field_flows_through_to_field_ir() {
+    let surface = extract_from_source(
+        r#"
+        pub struct Config {
+            #[cfg_attr(feature = "alef-meta", alef(since = "1.1.0"))]
+            pub providers: Option<u32>,
+        }
+        "#,
+    );
+    assert_eq!(surface.types.len(), 1);
+    let field = surface.types[0]
+        .fields
+        .iter()
+        .find(|f| f.name == "providers")
+        .expect("providers field must be present");
+    assert_eq!(
+        field.version.since.as_deref(),
+        Some("1.1.0"),
+        "since version must be extracted from #[alef(since = ...)] on a struct field"
+    );
+}
+
+#[test]
+fn test_extract_field_without_since_annotation_yields_none() {
+    let surface = extract_from_source(
+        r#"
+        pub struct Config {
+            pub plain: u32,
+        }
+        "#,
+    );
+    assert_eq!(surface.types.len(), 1);
+    let field = surface.types[0]
+        .fields
+        .iter()
+        .find(|f| f.name == "plain")
+        .expect("plain field must be present");
+    assert!(field.version.since.is_none(), "unannotated field must have no since");
+}

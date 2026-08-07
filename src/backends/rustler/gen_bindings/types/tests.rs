@@ -60,6 +60,7 @@ fn data_enum() -> EnumDef {
                 name: "Http".into(),
                 fields: vec![
                     FieldDef {
+                        version: Default::default(),
                         name: "scheme".into(),
                         ty: TypeRef::String,
                         optional: false,
@@ -80,6 +81,7 @@ fn data_enum() -> EnumDef {
                         original_type: None,
                     },
                     FieldDef {
+                        version: Default::default(),
                         name: "bearer_format".into(),
                         ty: TypeRef::Optional(Box::new(TypeRef::String)),
                         optional: false,
@@ -114,6 +116,7 @@ fn data_enum() -> EnumDef {
                 name: "ApiKey".into(),
                 fields: vec![
                     FieldDef {
+                        version: Default::default(),
                         name: "location".into(),
                         ty: TypeRef::String,
                         optional: false,
@@ -134,6 +137,7 @@ fn data_enum() -> EnumDef {
                         original_type: None,
                     },
                     FieldDef {
+                        version: Default::default(),
                         name: "name".into(),
                         ty: TypeRef::String,
                         optional: false,
@@ -238,6 +242,7 @@ fn test_gen_enum_tuple_named_uses_nif_struct() {
             EnumVariant {
                 name: "Excel".into(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "_0".into(),
                     ty: TypeRef::Named("ExcelMetadata".into()),
                     optional: false,
@@ -270,6 +275,7 @@ fn test_gen_enum_tuple_named_uses_nif_struct() {
             EnumVariant {
                 name: "Pdf".into(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "_0".into(),
                     ty: TypeRef::Named("String".into()),
                     optional: false,
@@ -400,6 +406,7 @@ fn test_flat_data_enum_from_core_uses_full_rust_path() {
             EnumVariant {
                 name: "Anchored".into(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "_0".into(),
                     ty: TypeRef::Named("AnchorProperties".into()),
                     optional: false,
@@ -470,6 +477,7 @@ fn test_flat_data_enum_from_core_uses_full_rust_path() {
 #[test]
 fn test_field_type_for_rustler_primitives() {
     let bool_field = FieldDef {
+        version: Default::default(),
         name: "flag".into(),
         ty: TypeRef::Primitive(PrimitiveType::Bool),
         optional: false,

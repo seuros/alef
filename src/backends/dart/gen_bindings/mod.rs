@@ -90,6 +90,7 @@ impl Backend for DartBackend {
             },
         ));
         body.push_str("export 'traits.dart';\n");
+        body.push_str("import 'traits.dart';\n");
 
         let dart_backend_name = "dart";
         let active_bridge_configs: Vec<&TraitBridgeConfig> = config
@@ -126,8 +127,18 @@ impl Backend for DartBackend {
             body.push_str("}\n");
         }
 
-        if body.contains("Int64List(") || body.contains("Uint8List(") || body.contains("Float64List(") {
+        // Whenever a typed-list name shows up anywhere in the body — either as a
+        // default-value literal (`Int64List(0)`) or as a bare type (a function
+        // returning `Int64List` directly) — every reference must resolve to
+        // flutter_rust_bridge's generalized typed-list class, not the SDK's
+        // `dart:typed_data` one; the two classes are not assignable to each
+        // other. `render_type` still adds `dart:typed_data` per-type (needed by
+        // `traits.dart`, which has no FRB import of its own), so drop it here
+        // once the FRB import supersedes it, to avoid an `unused_import` lint
+        // on the now-redundant SDK import.
+        if body.contains("Int64List") || body.contains("Uint8List") || body.contains("Float64List") {
             imports.insert("import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';".to_string());
+            imports.remove("import 'dart:typed_data';");
         }
 
         let mut content = String::new();
@@ -215,11 +226,13 @@ impl Backend for DartBackend {
         let lib_stem = config.name.replace('-', "_");
         let repo_url = config.github_repo();
         let crate_version = api.version.to_string();
+        let package_name = config.dart_pubspec_name();
         let native_loader_ctx = minijinja::context! {
             crate_name => config.name.as_str(),
             lib_stem => lib_stem.as_str(),
             version => &crate_version,
             repo_url => &repo_url,
+            package_name => package_name.as_str(),
         };
 
         let helper_dir = resolve_output_dir(None, &config.name, "packages/dart/lib/src");
@@ -356,6 +369,14 @@ impl DartBackend {
                         processor: PostProcessor::DartStripTrailingWhitespace,
                     });
                 }
+
+                let rust_crate_dir = resolve_output_dir(None, &config.name, "packages/dart/rust");
+                let rust_lib_rs_path = PathBuf::from(format!("{rust_crate_dir}/src/lib.rs"));
+                let rust_frb_generated_path = PathBuf::from(format!("{rust_crate_dir}/src/frb_generated.rs"));
+                post_build_steps.push(PostBuildStep::CarryFrbCfgGates {
+                    source_path: rust_lib_rs_path,
+                    target_path: rust_frb_generated_path,
+                });
 
                 let lib_stem = format!("{}_dart", config.name.replace('-', "_"));
                 post_build_steps.push(PostBuildStep::StageDartNatives { lib_stem });

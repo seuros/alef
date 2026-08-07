@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional,
@@ -188,6 +189,8 @@ mod capsule_types;
 mod enum_options_regressions;
 #[path = "backends_pyo3_gen_bindings/generation.rs"]
 mod generation;
+#[path = "backends_pyo3_gen_bindings/json_field_type_hints.rs"]
+mod json_field_type_hints;
 #[path = "backends_pyo3_gen_bindings/module_api.rs"]
 mod module_api;
 #[path = "backends_pyo3_gen_bindings/option_fields.rs"]

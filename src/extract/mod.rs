@@ -223,6 +223,7 @@ mod tests {
             binding_excluded: false,
             binding_exclusion_reason: None,
             original_type: None,
+            version: Default::default(),
         }
     }
 

@@ -219,6 +219,7 @@ mod tests {
     fn wrapper_constructor_filters_cfg_gated_fields() {
         let fields = vec![
             FieldDef {
+                version: Default::default(),
                 name: "field_a".to_string(),
                 ty: TypeRef::Primitive(crate::core::ir::PrimitiveType::U32),
                 optional: false,
@@ -239,6 +240,7 @@ mod tests {
                 original_type: None,
             },
             FieldDef {
+                version: Default::default(),
                 name: "field_b".to_string(),
                 ty: TypeRef::String,
                 optional: false,

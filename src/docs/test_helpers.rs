@@ -81,6 +81,7 @@ pub(crate) fn make_function(
 
 pub(crate) fn make_field(name: &str, ty: TypeRef, optional: bool, typed_default: Option<DefaultValue>) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional,

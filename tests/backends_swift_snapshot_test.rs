@@ -31,6 +31,7 @@ fn assert_swift_snapshots(prefix: &str, files: &[GeneratedFile]) {
 
 fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional,

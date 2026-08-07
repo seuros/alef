@@ -20,6 +20,7 @@ fn variant(name: &str, fields: Vec<FieldDef>) -> EnumVariant {
 
 fn field(name: &str) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty: TypeRef::String,
         optional: false,

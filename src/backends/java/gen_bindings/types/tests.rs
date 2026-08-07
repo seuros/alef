@@ -12,6 +12,7 @@ fn make_config_type_with_duration_default() -> TypeDef {
         rust_path: "sample_crate::CrawlConfig".to_string(),
         original_rust_path: "sample_crate::CrawlConfig".to_string(),
         fields: vec![FieldDef {
+            version: Default::default(),
             name: "request_timeout".to_string(),
             ty: TypeRef::Duration,
             optional: false,
@@ -60,6 +61,7 @@ fn make_request_type_with_multiword_fields() -> TypeDef {
         original_rust_path: "sample_llm::ChatCompletionRequest".to_string(),
         fields: vec![
             FieldDef {
+                version: Default::default(),
                 name: "model".to_string(),
                 ty: TypeRef::String,
                 optional: false,
@@ -80,6 +82,7 @@ fn make_request_type_with_multiword_fields() -> TypeDef {
                 original_type: None,
             },
             FieldDef {
+                version: Default::default(),
                 name: "max_tokens".to_string(),
                 ty: TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::I64))),
                 optional: true,
@@ -100,6 +103,7 @@ fn make_request_type_with_multiword_fields() -> TypeDef {
                 original_type: None,
             },
             FieldDef {
+                version: Default::default(),
                 name: "top_p".to_string(),
                 ty: TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::F64))),
                 optional: true,
@@ -240,6 +244,7 @@ fn flatten_json_field_forces_builder_emission_below_auto_threshold() {
         original_rust_path: "sample_llm::ResponseTool".to_string(),
         fields: vec![
             FieldDef {
+                version: Default::default(),
                 name: "tool_type".to_string(),
                 ty: TypeRef::String,
                 optional: false,
@@ -260,6 +265,7 @@ fn flatten_json_field_forces_builder_emission_below_auto_threshold() {
                 original_type: None,
             },
             FieldDef {
+                version: Default::default(),
                 name: "config".to_string(),
                 ty: TypeRef::Json,
                 optional: false,

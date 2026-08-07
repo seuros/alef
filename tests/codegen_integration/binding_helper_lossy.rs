@@ -49,6 +49,7 @@ fn test_gen_lossy_binding_to_core_fields_cow_string_field() {
 fn test_gen_lossy_binding_to_core_fields_named_field() {
     let mut typ = simple_type_def();
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "inner".to_string(),
         ty: TypeRef::Named("Config".to_string()),
         optional: false,
@@ -89,6 +90,7 @@ fn test_gen_lossy_binding_to_core_fields_named_field() {
 fn test_gen_lossy_binding_to_core_fields_path_field() {
     let mut typ = simple_type_def();
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "file_path".to_string(),
         ty: TypeRef::Path,
         optional: false,
@@ -129,6 +131,7 @@ fn test_gen_lossy_binding_to_core_fields_path_field() {
 fn test_gen_lossy_binding_to_core_fields_path_optional() {
     let mut typ = simple_type_def();
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "output_path".to_string(),
         ty: TypeRef::Path,
         optional: true,
@@ -169,6 +172,7 @@ fn test_gen_lossy_binding_to_core_fields_path_optional() {
 fn test_gen_lossy_binding_to_core_fields_json_field() {
     let mut typ = simple_type_def();
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "metadata".to_string(),
         ty: TypeRef::Json,
         optional: false,
@@ -209,6 +213,7 @@ fn test_gen_lossy_binding_to_core_fields_json_field() {
 fn test_gen_lossy_binding_to_core_fields_json_optional() {
     let mut typ = simple_type_def();
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "extra".to_string(),
         ty: TypeRef::Json,
         optional: true,
@@ -249,6 +254,7 @@ fn test_gen_lossy_binding_to_core_fields_json_optional() {
 fn test_gen_lossy_binding_to_core_fields_vec_named() {
     let mut typ = simple_type_def();
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "items".to_string(),
         ty: TypeRef::Vec(Box::new(TypeRef::Named("Item".to_string()))),
         optional: false,
@@ -289,6 +295,7 @@ fn test_gen_lossy_binding_to_core_fields_vec_named() {
 fn test_gen_lossy_binding_to_core_fields_vec_named_optional() {
     let mut typ = simple_type_def();
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "entries".to_string(),
         ty: TypeRef::Vec(Box::new(TypeRef::Named("Entry".to_string()))),
         optional: true,
@@ -374,6 +381,7 @@ fn test_gen_lossy_binding_to_core_fields_has_stripped_cfg_fields() {
 fn test_gen_lossy_binding_to_core_fields_char_field() {
     let mut typ = simple_type_def();
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "separator".to_string(),
         ty: TypeRef::Char,
         optional: false,
@@ -414,6 +422,7 @@ fn test_gen_lossy_binding_to_core_fields_char_field() {
 fn test_gen_lossy_binding_to_core_fields_char_optional() {
     let mut typ = simple_type_def();
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "delimiter".to_string(),
         ty: TypeRef::Char,
         optional: true,
@@ -455,6 +464,7 @@ fn test_gen_lossy_binding_to_core_fields_duration_option_on_defaults() {
     let mut typ = simple_type_def();
     typ.has_default = true;
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "timeout".to_string(),
         ty: TypeRef::Duration,
         optional: false,
@@ -606,6 +616,7 @@ fn test_gen_lossy_binding_to_core_fields_binding_excluded_no_default_per_field_f
     let mut typ = simple_type_def();
     typ.has_default = false;
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "cursor".to_string(),
         ty: TypeRef::Named("Cursor".to_string()),
         optional: false,
@@ -653,6 +664,7 @@ fn test_gen_lossy_binding_to_core_fields_binding_excluded_with_default_uses_spre
     let mut typ = simple_type_def();
     typ.has_default = true;
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "policy".to_string(),
         ty: TypeRef::Named("SsrfPolicy".to_string()),
         optional: false,

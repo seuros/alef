@@ -28,6 +28,7 @@ app_name = "{app_name}"
 
 fn make_field(name: &str, ty: TypeRef, optional: bool, doc: &str) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional,
@@ -295,6 +296,7 @@ fn test_data_enum_module_emits_typedoc_on_each_variant_alias() {
             EnumVariant {
                 name: "Error".into(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "msg".into(),
                     ty: TypeRef::String,
                     optional: false,
@@ -327,6 +329,7 @@ fn test_data_enum_module_emits_typedoc_on_each_variant_alias() {
             EnumVariant {
                 name: "Warning".into(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "msg".into(),
                     ty: TypeRef::String,
                     optional: false,

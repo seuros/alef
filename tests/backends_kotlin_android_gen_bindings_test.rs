@@ -1095,6 +1095,7 @@ use alef::core::ir::{CoreWrapper, EnumDef, EnumVariant, FieldDef, PrimitiveType}
 
 fn make_sealed_field(name: &str, ty: TypeRef) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional: false,
@@ -1253,6 +1254,7 @@ fn make_tuple_error_api() -> ApiSurface {
                     name: "ParseError".to_string(),
                     message_template: Some("HTML parsing error: {0}".to_string()),
                     fields: vec![FieldDef {
+                        version: Default::default(),
                         name: "_0".to_string(),
                         ty: TypeRef::String,
                         optional: false,
@@ -1283,6 +1285,7 @@ fn make_tuple_error_api() -> ApiSurface {
                     message_template: Some("Error at {0}:{1}".to_string()),
                     fields: vec![
                         FieldDef {
+                            version: Default::default(),
                             name: "_0".to_string(),
                             ty: TypeRef::String,
                             optional: false,
@@ -1303,6 +1306,7 @@ fn make_tuple_error_api() -> ApiSurface {
                             original_type: None,
                         },
                         FieldDef {
+                            version: Default::default(),
                             name: "_1".to_string(),
                             ty: TypeRef::Primitive(PrimitiveType::U32),
                             optional: false,
@@ -2086,6 +2090,7 @@ fn make_exclude_types_api() -> ApiSurface {
                 name: "Generic".into(),
                 message_template: Some("error".into()),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "msg".into(),
                     ty: TypeRef::String,
                     optional: false,
@@ -2407,6 +2412,7 @@ fn skipped_types_and_enums_are_not_emitted_as_kt_files() {
         rust_path: "demo::IncludedDto".into(),
         original_rust_path: String::new(),
         fields: vec![FieldDef {
+            version: Default::default(),
             name: "value".into(),
             ty: TypeRef::String,
             optional: false,
@@ -2451,6 +2457,7 @@ fn skipped_types_and_enums_are_not_emitted_as_kt_files() {
         rust_path: "demo::SkippedDto".into(),
         original_rust_path: String::new(),
         fields: vec![FieldDef {
+            version: Default::default(),
             name: "value".into(),
             ty: TypeRef::String,
             optional: false,

@@ -186,6 +186,7 @@ fn test_gen_lossy_binding_to_core_fields_non_sanitized() {
 fn test_gen_lossy_binding_to_core_fields_map_named_applies_per_value_into() {
     let mut typ = simple_type_def();
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "patterns".to_string(),
         ty: TypeRef::Map(
             Box::new(TypeRef::String),
@@ -229,6 +230,7 @@ fn test_gen_lossy_binding_to_core_fields_map_named_applies_per_value_into() {
 fn test_gen_lossy_binding_to_core_fields_optional_map_named_applies_per_value_into() {
     let mut typ = simple_type_def();
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "extractions".to_string(),
         ty: TypeRef::Map(
             Box::new(TypeRef::String),
@@ -274,6 +276,7 @@ fn test_gen_lossy_binding_to_core_fields_optional_map_named_applies_per_value_in
 fn test_gen_lossy_binding_to_core_fields_with_duration() {
     let mut typ = simple_type_def();
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "timeout".to_string(),
         ty: TypeRef::Duration,
         optional: false,
@@ -311,6 +314,7 @@ fn test_gen_lossy_binding_to_core_fields_with_duration() {
 fn test_gen_lossy_binding_to_core_fields_with_duration_optional_flag() {
     let mut typ = simple_type_def();
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "request_timeout".to_string(),
         ty: TypeRef::Duration,
         optional: true,
@@ -351,6 +355,7 @@ fn test_gen_lossy_binding_to_core_fields_with_duration_optional_flag() {
 fn test_gen_lossy_binding_to_core_fields_with_optional_duration_type() {
     let mut typ = simple_type_def();
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "request_timeout".to_string(),
         ty: TypeRef::Optional(Box::new(TypeRef::Duration)),
         optional: false,

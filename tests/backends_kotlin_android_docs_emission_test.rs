@@ -40,6 +40,7 @@ license = "MIT"
 
 fn field_with_doc(name: &str, ty: TypeRef, doc: &str) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional: false,

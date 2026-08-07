@@ -76,7 +76,10 @@ pub fn python_type(ty: &TypeRef) -> String {
         }
         TypeRef::Named(name) => name.clone(),
         TypeRef::Path => "str".to_string(),
-        TypeRef::Json => "dict[str, Any]".to_string(),
+        // Kept in sync with `python_field_type` in `gen_bindings/types.rs`:
+        // `Pyo3Mapper::json()` above maps `TypeRef::Json` to the Rust type `String`, so every
+        // Json-typed param and return crosses the boundary as a JSON `str`, not a `dict`.
+        TypeRef::Json => "str".to_string(),
         TypeRef::Unit => "None".to_string(),
         TypeRef::Duration => "int".to_string(),
     }

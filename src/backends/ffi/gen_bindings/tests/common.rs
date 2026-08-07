@@ -64,6 +64,7 @@ pub(super) fn sample_api() -> ApiSurface {
             original_rust_path: String::new(),
             fields: vec![
                 FieldDef {
+                    version: Default::default(),
                     name: "timeout".to_string(),
                     ty: TypeRef::Primitive(PrimitiveType::U64),
                     optional: false,
@@ -84,6 +85,7 @@ pub(super) fn sample_api() -> ApiSurface {
                     binding_exclusion_reason: None,
                 },
                 FieldDef {
+                    version: Default::default(),
                     name: "name".to_string(),
                     ty: TypeRef::String,
                     optional: false,
@@ -104,6 +106,7 @@ pub(super) fn sample_api() -> ApiSurface {
                     binding_exclusion_reason: None,
                 },
                 FieldDef {
+                    version: Default::default(),
                     name: "verbose".to_string(),
                     ty: TypeRef::Primitive(PrimitiveType::Bool),
                     optional: true,
@@ -843,6 +846,7 @@ pub(super) fn visitor_api() -> ApiSurface {
 
 pub(super) fn visitor_result_string_field(name: &str) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty: TypeRef::String,
         optional: false,

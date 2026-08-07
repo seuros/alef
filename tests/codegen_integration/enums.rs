@@ -21,6 +21,7 @@ fn test_enum_has_data_variants_true_when_fields_present() {
         variants: vec![EnumVariant {
             name: "Variant".to_string(),
             fields: vec![FieldDef {
+                version: Default::default(),
                 name: "value".to_string(),
                 ty: TypeRef::String,
                 optional: false,

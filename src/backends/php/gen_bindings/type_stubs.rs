@@ -2,7 +2,10 @@ use crate::backends::php::gen_bindings::enum_helpers::{php_enum_case_value, sani
 use crate::backends::php::gen_bindings::php_types::{
     php_phpdoc_type, php_phpdoc_type_fq, php_property_phpdoc, php_type, php_type_fq,
 };
-use crate::backends::php::gen_bindings::types::is_tagged_data_enum;
+use crate::backends::php::gen_bindings::types::{
+    is_php_prop_scalar, is_tagged_data_enum, is_untagged_data_enum, php_field_can_be_constructor_param,
+    ty_is_or_wraps_json, ty_references_untagged_data_enum,
+};
 use crate::backends::php::naming::php_autoload_namespace;
 use crate::codegen::doc_emission::{DocTarget, sanitize_rust_idioms};
 use crate::codegen::naming::to_php_name;
@@ -10,7 +13,7 @@ use crate::codegen::shared::binding_fields;
 use crate::core::backend::GeneratedFile;
 use crate::core::config::{ResolvedCrateConfig, resolve_output_dir};
 use crate::core::hash::{self, CommentStyle};
-use crate::core::ir::{ApiSurface, TypeRef};
+use crate::core::ir::{ApiSurface, FieldDef, TypeRef};
 use ahash::AHashSet;
 use heck::{ToLowerCamelCase, ToPascalCase};
 use minijinja::context;
@@ -92,6 +95,23 @@ pub(super) fn generate_type_stubs(
     }
     content.push_str("}\n\n");
 
+    // Derived exactly as `rust_bindings.rs` derives them for the real extension, so the stub's
+    // constructor-param filter (`php_field_can_be_constructor_param`) sees the same enum/opaque
+    // universe the extension's own constructor filter sees.
+    let enum_names: AHashSet<String> = api
+        .enums
+        .iter()
+        .filter(|e| !is_tagged_data_enum(e) && !is_untagged_data_enum(e))
+        .map(|e| e.name.clone())
+        .collect();
+    let untagged_data_enum_names: AHashSet<String> = api
+        .enums
+        .iter()
+        .filter(|e| is_untagged_data_enum(e))
+        .map(|e| e.name.clone())
+        .collect();
+    let opaque_types: AHashSet<String> = api.types.iter().filter(|t| t.is_opaque).map(|t| t.name.clone()).collect();
+
     for typ in api
         .types
         .iter()
@@ -117,10 +137,32 @@ pub(super) fn generate_type_stubs(
             context! { class_name => &typ.name },
         ));
 
-        let mut sorted_fields: Vec<&crate::core::ir::FieldDef> = binding_fields(&typ.fields).collect();
-        sorted_fields.sort_by_key(|f| f.optional);
+        // The real extension's `#[php(constructor)]` only accepts fields that pass
+        // `php_field_can_be_constructor_param` (a superset of `is_php_prop_scalar`); a field
+        // that fails it is excluded from the constructor entirely. Every OTHER field on the
+        // struct (whether or not it made the constructor) still gets a getter, per the real
+        // extension's `for field in binding_fields(&typ.fields)` getter loop in structs.rs —
+        // so a field can be readable via `get<Field>()` while being unreachable from `new(...)`.
+        let is_constructor_param = |f: &FieldDef| {
+            f.cfg.is_none() && php_field_can_be_constructor_param(&f.ty, &enum_names, &opaque_types)
+        };
 
-        let params: Vec<String> = sorted_fields
+        for excluded in binding_fields(&typ.fields).filter(|f| !is_constructor_param(*f)) {
+            tracing::warn!(
+                "php backend stub: {}.{} cannot be represented as a #[php(constructor)] parameter \
+                 (its mapped type has no ext-php-rs constructor-param support); the PHPStan stub \
+                 omits it from the constructor and exposes it only via get_{}()",
+                typ.name,
+                excluded.name,
+                excluded.name,
+            );
+        }
+
+        let mut ctor_fields: Vec<&FieldDef> =
+            binding_fields(&typ.fields).filter(|f| is_constructor_param(*f)).collect();
+        ctor_fields.sort_by_key(|f| f.optional);
+
+        let params: Vec<String> = ctor_fields
             .iter()
             .map(|f| {
                 let ptype = php_type(&f.ty);
@@ -131,6 +173,11 @@ pub(super) fn generate_type_stubs(
                 };
                 let default = if f.optional { " = null" } else { "" };
                 let php_name = to_php_name(&f.name);
+                if !is_php_prop_scalar(&f.ty, &enum_names) {
+                    // Constructor-representable but not a real PHP property (no `#[php(prop)]`
+                    // on the extension's struct field) — a plain, non-promoted parameter.
+                    return format!("        {nullable} ${php_name}{default}");
+                }
                 let phpdoc_type = php_phpdoc_type(&f.ty);
                 let var_type = if f.optional && !phpdoc_type.starts_with('?') {
                     format!("?{phpdoc_type}")
@@ -145,6 +192,62 @@ pub(super) fn generate_type_stubs(
             "php_constructor_method.jinja",
             context! { params => &params.join(",\n") },
         ));
+
+        // A getter is declared for EVERY binding field, mirroring the extension exactly: the
+        // generator's own getter loop (gen_bindings/types/structs.rs, `for field in
+        // binding_fields(&typ.fields)`) is unconditional and has no prop filter, so the
+        // extension really does expose `get<Field>()` for a prop-scalar field too.
+        //
+        // Declaring only the non-prop subset was tried and reverted. It looked reasonable --
+        // a prop-scalar field is already readable as a promoted `public readonly` property,
+        // so its getter is redundant to a human -- but a stub that omits a method the
+        // extension has is precisely the drift this file exists to prevent: PHPStan then
+        // reports a false "undefined method" on a call that works at runtime. Fidelity to the
+        // extension wins over avoiding redundancy. ~keep
+        for field in binding_fields(&typ.fields) {
+            let getter_method_name = to_php_name(&format!("get_{}", field.name));
+            let is_json_getter = ty_is_or_wraps_json(&field.ty)
+                || ty_references_untagged_data_enum(&field.ty, &untagged_data_enum_names);
+            let return_type = if is_json_getter {
+                // The real getter always serializes to `Option<String>` for Json/untagged-enum
+                // fields, regardless of the field's own optionality (structs.rs's getter body).
+                "?string".to_string()
+            } else {
+                let ptype = php_type(&field.ty);
+                if field.optional && !ptype.starts_with('?') {
+                    format!("?{ptype}")
+                } else {
+                    ptype
+                }
+            };
+            let return_inner = match &field.ty {
+                TypeRef::Optional(inner) => inner.as_ref(),
+                other => other,
+            };
+            if !is_json_getter && matches!(return_inner, TypeRef::Vec(_) | TypeRef::Map(_, _)) {
+                let return_phpdoc = php_phpdoc_type_fq(&field.ty, &namespace);
+                content.push_str(&format!("    /** @return {return_phpdoc} */\n"));
+            }
+            if !is_constructor_param(field) {
+                content.push_str(
+                    "    /**\n     * @readonly Not settable via the constructor — this field's \
+                     type has no ext-php-rs #[php(prop)]/constructor-param support, so it can \
+                     only be read via this getter.\n     */\n",
+                );
+            }
+            let getter_stub_body =
+                "{ throw new \\RuntimeException('Not implemented — provided by the native extension.'); }";
+            content.push_str(&crate::backends::php::template_env::render(
+                "php_stub_method_definition.jinja",
+                context! {
+                    static_kw => "",
+                    method_name => &getter_method_name,
+                    params => "",
+                    return_type => &return_type,
+                    stub_body => getter_stub_body,
+                },
+            ));
+        }
 
         let non_excluded_methods: Vec<&crate::core::ir::MethodDef> = typ
             .methods

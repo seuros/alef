@@ -33,6 +33,7 @@ fn make_api_surface() -> ApiSurface {
             rust_path: "test_lib::Config".to_string(),
             original_rust_path: String::new(),
             fields: vec![FieldDef {
+                version: Default::default(),
                 name: "timeout".to_string(),
                 ty: TypeRef::Primitive(PrimitiveType::U32),
                 optional: false,

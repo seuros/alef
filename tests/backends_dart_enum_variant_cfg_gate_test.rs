@@ -12,6 +12,7 @@ use alef::core::ir::{ApiSurface, CoreWrapper, EnumDef, EnumVariant, FieldDef, Pr
 
 fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional,

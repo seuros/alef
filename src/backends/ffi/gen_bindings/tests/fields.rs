@@ -16,6 +16,7 @@ fn test_option_option_primitive_getter_returns_primitive_type() {
             rust_path: "my_lib::ConfigUpdate".to_string(),
             original_rust_path: String::new(),
             fields: vec![FieldDef {
+                version: Default::default(),
                 name: "max_depth".to_string(),
                 ty: TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::Usize))),
                 optional: true,
@@ -99,6 +100,7 @@ fn api_with_named_field(field_type: &str, is_clone: bool) -> ApiSurface {
         rust_path: "my_lib::Holder".to_string(),
         original_rust_path: String::new(),
         fields: vec![FieldDef {
+            version: Default::default(),
             name: "inner".to_string(),
             ty: TypeRef::Named(field_type.to_string()),
             optional: false,

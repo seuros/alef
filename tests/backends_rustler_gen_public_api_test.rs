@@ -29,6 +29,7 @@ app_name = "{app_name}"
 /// Build a minimal FieldDef.
 fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional,
@@ -53,6 +54,7 @@ fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
 /// Build a FieldDef with a typed default.
 fn make_field_with_default(name: &str, ty: TypeRef, default: DefaultValue) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional: false,

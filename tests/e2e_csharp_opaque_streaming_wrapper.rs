@@ -18,6 +18,7 @@ fn test_opaque_streaming_static_wrapper() {
                 rust_path: "sample_crate::StreamItem".to_string(),
                 original_rust_path: String::new(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "url".to_string(),
                     ty: TypeRef::String,
                     optional: false,
@@ -102,6 +103,7 @@ fn test_opaque_streaming_static_wrapper() {
                 rust_path: "sample_crate::StreamRequest".to_string(),
                 original_rust_path: String::new(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "url".to_string(),
                     ty: TypeRef::String,
                     optional: false,

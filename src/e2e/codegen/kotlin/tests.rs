@@ -248,6 +248,7 @@ fn auto_detected_enum_fields_from_type_defs_route_through_get_value() {
         original_rust_path: String::new(),
         fields: vec![
             FieldDef {
+                version: Default::default(),
                 name: "id".to_string(),
                 ty: TypeRef::String,
                 optional: false,
@@ -268,6 +269,7 @@ fn auto_detected_enum_fields_from_type_defs_route_through_get_value() {
                 original_type: None,
             },
             FieldDef {
+                version: Default::default(),
                 name: "status".to_string(),
                 ty: TypeRef::Named("BatchStatus".to_string()),
                 optional: false,

@@ -11,6 +11,7 @@ use alef::core::ir::{
 
 fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional,
@@ -2948,6 +2949,7 @@ fn first_class_struct_emits_instance_methods() {
 
     fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
         FieldDef {
+            version: Default::default(),
             name: name.to_string(),
             ty,
             optional,

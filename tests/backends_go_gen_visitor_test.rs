@@ -475,6 +475,7 @@ fn context_type(name: &str, fields: Vec<FieldDef>) -> TypeDef {
 
 fn field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional,

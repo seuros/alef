@@ -5,6 +5,7 @@ use alef::core::ir::{ApiSurface, CoreWrapper, ErrorDef, ErrorVariant, FieldDef, 
 
 fn make_binding_excluded_field(name: &str, ty: TypeRef) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional: false,

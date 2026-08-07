@@ -119,6 +119,7 @@ fn make_func(name: &str, params: Vec<ParamDef>) -> FunctionDef {
 
 fn make_field(name: &str, ty: TypeRef) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional: false,

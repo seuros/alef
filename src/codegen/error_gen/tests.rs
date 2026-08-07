@@ -12,6 +12,7 @@ mod native_methods;
 /// Helper to create a tuple-style field (e.g. `_0: String`).
 fn tuple_field(index: usize) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: format!("_{index}"),
         ty: TypeRef::String,
         optional: false,
@@ -36,6 +37,7 @@ fn tuple_field(index: usize) -> FieldDef {
 /// Helper to create a named struct field.
 fn named_field(name: &str) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty: TypeRef::String,
         optional: false,

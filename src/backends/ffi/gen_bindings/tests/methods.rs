@@ -219,6 +219,7 @@ fn test_field_and_same_named_method_do_not_emit_duplicate_symbol() {
             rust_path: "my_lib::LlmConfig".to_string(),
             original_rust_path: String::new(),
             fields: vec![FieldDef {
+                version: Default::default(),
                 name: "providers".to_string(),
                 ty: TypeRef::Optional(Box::new(TypeRef::String)),
                 optional: true,

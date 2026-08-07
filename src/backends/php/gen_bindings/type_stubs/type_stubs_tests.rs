@@ -3,6 +3,7 @@ use crate::core::ir::{CoreWrapper, EnumDef, EnumVariant, FieldDef, MethodDef, Pr
 
 fn field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional,

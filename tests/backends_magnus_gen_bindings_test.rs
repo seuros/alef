@@ -15,6 +15,7 @@ fn resolved_one(toml: &str) -> ResolvedCrateConfig {
 /// Helper to create a FieldDef with all defaults.
 fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional,
@@ -1347,6 +1348,7 @@ mod trait_bridge {
                 rust_path: "my_lib::NodeContext".to_string(),
                 original_rust_path: String::new(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "depth".to_string(),
                     ty: TypeRef::Primitive(PrimitiveType::U32),
                     optional: false,
@@ -1867,6 +1869,7 @@ fn test_tagged_union_enum_vec_field_serde_marshalling() {
                 EnumVariant {
                     name: "Success".to_string(),
                     fields: vec![FieldDef {
+                        version: Default::default(),
                         name: "items".to_string(),
                         ty: TypeRef::Vec(Box::new(TypeRef::Named("Item".to_string()))),
                         optional: false,
@@ -1899,6 +1902,7 @@ fn test_tagged_union_enum_vec_field_serde_marshalling() {
                 EnumVariant {
                     name: "Error".to_string(),
                     fields: vec![FieldDef {
+                        version: Default::default(),
                         name: "message".to_string(),
                         ty: TypeRef::String,
                         optional: false,
@@ -2019,6 +2023,7 @@ fn test_tuple_variant_vec_primitive_stays_as_vec() {
             variants: vec![EnumVariant {
                 name: "Data".to_string(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "_0".to_string(),
                     ty: TypeRef::Vec(Box::new(TypeRef::Primitive(PrimitiveType::U8))),
                     optional: false,
@@ -2388,6 +2393,7 @@ fn test_tuple_variant_vec_named_stays_as_vec_and_uses_into() {
             variants: vec![EnumVariant {
                 name: "Multi".to_string(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "_0".to_string(),
                     ty: TypeRef::Vec(Box::new(TypeRef::Named("Bar".to_string()))),
                     optional: false,
@@ -2479,6 +2485,7 @@ fn test_field_accessor_no_double_option_when_ty_is_optional() {
             rust_path: "test_lib::UpdateConfig".to_string(),
             original_rust_path: String::new(),
             fields: vec![FieldDef {
+                version: Default::default(),
                 name: "max_depth".to_string(),
                 ty: TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::Usize))),
                 optional: true,
@@ -2643,6 +2650,7 @@ fn test_visitor_bridge_debug_not_duplicated() {
             rust_path: "sample_markdown_rs::visitor::NodeContext".to_string(),
             original_rust_path: String::new(),
             fields: vec![FieldDef {
+                version: Default::default(),
                 name: "depth".to_string(),
                 ty: TypeRef::Primitive(PrimitiveType::U32),
                 optional: false,
@@ -2861,6 +2869,7 @@ fn tagged_enum_public_api_does_not_emit_method_missing() {
                 EnumVariant {
                     name: "System".to_string(),
                     fields: vec![FieldDef {
+                        version: Default::default(),
                         name: "content".to_string(),
                         ty: TypeRef::String,
                         optional: false,
@@ -2893,6 +2902,7 @@ fn tagged_enum_public_api_does_not_emit_method_missing() {
                 EnumVariant {
                     name: "User".to_string(),
                     fields: vec![FieldDef {
+                        version: Default::default(),
                         name: "content".to_string(),
                         ty: TypeRef::String,
                         optional: false,
@@ -2979,6 +2989,7 @@ fn tagged_enum_public_api_emits_sorbet_sig_blocks() {
             variants: vec![EnumVariant {
                 name: "System".to_string(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "content".to_string(),
                     ty: TypeRef::String,
                     optional: false,
@@ -3068,6 +3079,7 @@ fn tagged_enum_dispatcher_emits_rubocop_clean_ruby() {
             variants: vec![EnumVariant {
                 name: "System".to_string(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "content".to_string(),
                     ty: TypeRef::String,
                     optional: false,
@@ -3263,6 +3275,7 @@ fn tagged_enum_public_api_emits_class_hierarchy() {
                 EnumVariant {
                     name: "System".to_string(),
                     fields: vec![FieldDef {
+                        version: Default::default(),
                         name: "content".to_string(),
                         ty: TypeRef::String,
                         optional: false,
@@ -3295,6 +3308,7 @@ fn tagged_enum_public_api_emits_class_hierarchy() {
                 EnumVariant {
                     name: "User".to_string(),
                     fields: vec![FieldDef {
+                        version: Default::default(),
                         name: "content".to_string(),
                         ty: TypeRef::String,
                         optional: false,
@@ -3413,6 +3427,7 @@ fn test_enum_yard_doc_emission() {
                 EnumVariant {
                     name: "Active".to_string(),
                     fields: vec![FieldDef {
+                        version: Default::default(),
                         name: "reason".to_string(),
                         ty: TypeRef::String,
                         optional: false,
@@ -3525,6 +3540,7 @@ fn test_enum_variant_method_yard_docs() {
             variants: vec![EnumVariant {
                 name: "Ok".to_string(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "value".to_string(),
                     ty: TypeRef::String,
                     optional: false,

@@ -147,6 +147,7 @@ fn input_dtos_dedup_flag_skips_generation() {
         rust_path: format!("sample::{name}"),
         original_rust_path: String::new(),
         fields: vec![FieldDef {
+            version: Default::default(),
             name: field_name.to_string(),
             ty: TypeRef::Primitive(PrimitiveType::U32),
             optional: false,
@@ -283,6 +284,7 @@ fn gen_input_dto_excludes_binding_excluded_fields() {
     use crate::core::ir::{CoreWrapper, FieldDef};
 
     let make_field = |name: &str, ty: TypeRef, binding_excluded: bool, sanitized: bool| FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional: true,
@@ -355,6 +357,7 @@ fn feature_gated_fields_get_cfg_guards() {
     use crate::core::ir::{CoreWrapper, FieldDef};
 
     let make_field = |name: &str, ty: TypeRef, cfg: Option<String>| FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional: true,

@@ -517,6 +517,37 @@ pub fn run_post_build(
                     debug!("PostProcessFile target not found: {}", file_path.display());
                 }
             }
+            PostBuildStep::CarryFrbCfgGates { source_path, target_path } => {
+                let source_file = base_dir.join(crate_dir).join(source_path);
+                let target_file = base_dir.join(crate_dir).join(target_path);
+                if source_file.exists() && target_file.exists() {
+                    let source_content = std::fs::read_to_string(&source_file)
+                        .with_context(|| format!("failed to read cfg-gate source {}", source_file.display()))?;
+                    let target_content = std::fs::read_to_string(&target_file)
+                        .with_context(|| format!("failed to read cfg-gate target {}", target_file.display()))?;
+                    let rewritten = crate::backends::dart::carry_lib_rs_cfg_gates_into_frb_generated(
+                        &source_content,
+                        &target_content,
+                    );
+                    if rewritten != target_content {
+                        std::fs::write(&target_file, &rewritten)
+                            .with_context(|| format!("failed to write cfg-gated file {}", target_file.display()))?;
+                        info!(
+                            "Carried #[cfg] gates from {} into {}",
+                            source_file.display(),
+                            target_file.display()
+                        );
+                    } else {
+                        debug!("CarryFrbCfgGates {}: no changes needed", target_file.display());
+                    }
+                } else {
+                    debug!(
+                        "CarryFrbCfgGates source or target not found: {} / {}",
+                        source_file.display(),
+                        target_file.display()
+                    );
+                }
+            }
             PostBuildStep::StageDartNatives { lib_stem } => {
                 let package_root = base_dir.join("packages/dart");
                 crate::publish::dart_native::stage_dart_native_libraries(base_dir, &package_root, lib_stem)

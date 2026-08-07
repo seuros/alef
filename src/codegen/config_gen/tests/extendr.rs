@@ -61,6 +61,7 @@ fn test_gen_extendr_kwargs_constructor_uses_option_for_all_fields() {
 fn test_gen_go_functional_options_skips_tuple_fields() {
     let mut typ = make_test_type();
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "_0".to_string(),
         ty: TypeRef::Primitive(PrimitiveType::U32),
         optional: false,
@@ -91,6 +92,7 @@ fn test_gen_go_functional_options_skips_tuple_fields() {
 fn test_gen_magnus_hash_constructor_generic_type_prefix() {
     let fields: Vec<FieldDef> = (0..16)
         .map(|i| FieldDef {
+            version: Default::default(),
             name: format!("field_{i}"),
             ty: if i == 0 {
                 TypeRef::Vec(Box::new(TypeRef::String))
@@ -150,6 +152,7 @@ fn test_gen_magnus_hash_constructor_generic_type_prefix() {
 #[test]
 fn test_magnus_hash_constructor_no_double_option_when_ty_is_optional() {
     let field = FieldDef {
+        version: Default::default(),
         name: "max_depth".to_string(),
         ty: TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::Usize))),
         optional: true,
@@ -171,6 +174,7 @@ fn test_magnus_hash_constructor_no_double_option_when_ty_is_optional() {
     };
     let mut fields: Vec<FieldDef> = (0..15)
         .map(|i| FieldDef {
+            version: Default::default(),
             name: format!("field_{i}"),
             ty: TypeRef::Primitive(PrimitiveType::U32),
             optional: false,

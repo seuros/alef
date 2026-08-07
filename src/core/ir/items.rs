@@ -155,6 +155,9 @@ pub struct FieldDef {
     /// even when the sanitized `ty` field only carries the simplified type.
     #[serde(default)]
     pub original_type: Option<String>,
+    /// Version annotation (since, deprecated).
+    #[serde(default)]
+    pub version: VersionAnnotation,
 }
 
 /// A method on a public struct.

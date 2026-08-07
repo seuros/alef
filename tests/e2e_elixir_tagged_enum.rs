@@ -131,6 +131,7 @@ fn build_test_enums() -> Vec<EnumDef> {
             EnumVariant {
                 name: "Click".to_string(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "selector".to_string(),
                     ty: TypeRef::String,
                     optional: false,
@@ -163,6 +164,7 @@ fn build_test_enums() -> Vec<EnumDef> {
             EnumVariant {
                 name: "Scroll".to_string(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "direction".to_string(),
                     ty: TypeRef::Named("ScrollDirection".to_string()),
                     optional: false,

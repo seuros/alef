@@ -8,6 +8,7 @@ fn make_test_type() -> TypeDef {
         original_rust_path: String::new(),
         fields: vec![
             FieldDef {
+                version: Default::default(),
                 name: "timeout".to_string(),
                 ty: TypeRef::Primitive(PrimitiveType::U64),
                 optional: false,
@@ -28,6 +29,7 @@ fn make_test_type() -> TypeDef {
                 original_type: None,
             },
             FieldDef {
+                version: Default::default(),
                 name: "enabled".to_string(),
                 ty: TypeRef::Primitive(PrimitiveType::Bool),
                 optional: false,
@@ -48,6 +50,7 @@ fn make_test_type() -> TypeDef {
                 original_type: None,
             },
             FieldDef {
+                version: Default::default(),
                 name: "name".to_string(),
                 ty: TypeRef::String,
                 optional: false,
@@ -92,6 +95,7 @@ fn make_test_type() -> TypeDef {
 
 fn make_field(name: &str, ty: TypeRef) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional: false,

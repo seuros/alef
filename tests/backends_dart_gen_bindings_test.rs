@@ -8,6 +8,7 @@ use alef::core::ir::{
 
 fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional,
@@ -424,6 +425,209 @@ fn simple_sync_function_emits_static_method() {
     assert!(
         content.contains("import 'demo_crate_bridge_generated/lib.dart' as rust_bridge;"),
         "missing rust_bridge lib.dart import: {content}"
+    );
+}
+
+/// `export 'traits.dart';` alone does not bring the trait names into the file's
+/// own scope, so `comment_references` flags every doc comment (`[OcrBackend]`,
+/// etc.) that points at a type declared in traits.dart. The module file must
+/// also `import 'traits.dart';`, mirroring the established pattern for the FRB
+/// bridge library a few lines above (`export ...; import ... as rust_bridge;`).
+#[test]
+fn module_file_imports_traits_dart_in_addition_to_exporting_it() {
+    let api = ApiSurface {
+        crate_name: "demo-crate".into(),
+        version: "0.1.0".into(),
+        types: vec![],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+
+    let files = DartBackend.generate_bindings(&api, &make_config()).unwrap();
+    let content = files
+        .iter()
+        .find(|f| {
+            f.path
+                .to_string_lossy()
+                .replace('\\', "/")
+                .ends_with("/src/demo_crate.dart")
+        })
+        .map(|f| f.content.as_str())
+        .expect("missing src/demo_crate.dart");
+
+    assert!(
+        content.contains("export 'traits.dart';\nimport 'traits.dart';\n"),
+        "export 'traits.dart' must be immediately followed by import 'traits.dart': {content}"
+    );
+}
+
+/// The module file's `Int64List(0)`/`Uint8List(0)`/`Float64List(0)` default
+/// literals — and any bare `Int64List`/`Uint8List`/`Float64List` return or
+/// param type — must resolve through flutter_rust_bridge's generalized
+/// typed-list class, never the SDK's `dart:typed_data` one (the two are not
+/// assignable to each other). When the crate's surface never references a
+/// typed-list type at all, neither import should be emitted.
+#[test]
+fn module_file_omits_typed_data_import_when_no_typed_list_type_is_used() {
+    let api = ApiSurface {
+        crate_name: "demo-crate".into(),
+        version: "0.1.0".into(),
+        types: vec![],
+        functions: vec![FunctionDef {
+            name: "greet_user".into(),
+            rust_path: "demo::greet_user".into(),
+            original_rust_path: String::new(),
+            params: vec![make_param("user_name", TypeRef::String)],
+            return_type: TypeRef::Primitive(PrimitiveType::I32),
+            is_async: false,
+            error_type: None,
+            doc: String::new(),
+            cfg: None,
+            sanitized: false,
+            return_sanitized: false,
+            returns_ref: false,
+            returns_cow: false,
+            return_newtype_wrapper: None,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+
+    let files = DartBackend.generate_bindings(&api, &make_config()).unwrap();
+    let content = files
+        .iter()
+        .find(|f| {
+            f.path
+                .to_string_lossy()
+                .replace('\\', "/")
+                .ends_with("/src/demo_crate.dart")
+        })
+        .map(|f| f.content.as_str())
+        .expect("missing src/demo_crate.dart");
+
+    assert!(
+        !content.contains("import 'dart:typed_data';"),
+        "unused dart:typed_data import must not be emitted: {content}"
+    );
+    assert!(
+        !content.contains("import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';"),
+        "FRB typed-list import must not be emitted when unused: {content}"
+    );
+}
+
+/// A function returning a bare typed-list type (`Int64List`, with no
+/// `Int64List(0)` literal anywhere else) must still route through FRB's
+/// typed-list import rather than `dart:typed_data`, and must not emit
+/// `dart:typed_data` at all — the two `Int64List` classes are not
+/// assignable, so importing both leaves the SDK one dangling and unused.
+#[test]
+fn module_file_routes_bare_typed_list_return_through_frb_import_not_typed_data() {
+    let api = ApiSurface {
+        crate_name: "demo-crate".into(),
+        version: "0.1.0".into(),
+        types: vec![],
+        functions: vec![FunctionDef {
+            name: "token_ids".into(),
+            rust_path: "demo::token_ids".into(),
+            original_rust_path: String::new(),
+            params: vec![],
+            return_type: TypeRef::Vec(Box::new(TypeRef::Primitive(PrimitiveType::I64))),
+            is_async: false,
+            error_type: None,
+            doc: String::new(),
+            cfg: None,
+            sanitized: false,
+            return_sanitized: false,
+            returns_ref: false,
+            returns_cow: false,
+            return_newtype_wrapper: None,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+
+    let files = DartBackend.generate_bindings(&api, &make_config()).unwrap();
+    let content = files
+        .iter()
+        .find(|f| {
+            f.path
+                .to_string_lossy()
+                .replace('\\', "/")
+                .ends_with("/src/demo_crate.dart")
+        })
+        .map(|f| f.content.as_str())
+        .expect("missing src/demo_crate.dart");
+
+    assert!(
+        content.contains("static Future<Int64List> tokenIds() async {"),
+        "missing bare Int64List return type: {content}"
+    );
+    assert!(
+        content.contains("import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';"),
+        "missing FRB typed-list import: {content}"
+    );
+    assert!(
+        !content.contains("import 'dart:typed_data';"),
+        "dart:typed_data must not be emitted once the FRB import supersedes it: {content}"
+    );
+}
+
+/// `bin/download_libs.dart` reaches for `native_loader.dart` from outside
+/// `lib/`, so it must not use a relative `../lib/...` import — that trips
+/// `avoid_relative_lib_imports`. It must use a package-qualified import built
+/// from the resolved Dart pubspec name, not a hardcoded package name.
+#[test]
+fn download_libs_dart_uses_package_qualified_native_loader_import() {
+    let api = ApiSurface {
+        crate_name: "demo-crate".into(),
+        version: "0.1.0".into(),
+        types: vec![],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+
+    let files = DartBackend.generate_bindings(&api, &make_config()).unwrap();
+    let content = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().replace('\\', "/").ends_with("bin/download_libs.dart"))
+        .map(|f| f.content.as_str())
+        .expect("missing bin/download_libs.dart");
+
+    assert!(
+        content.contains("import 'package:demo_crate/src/native_loader.dart';"),
+        "missing package-qualified native_loader import: {content}"
+    );
+    assert!(
+        !content.contains("import '../lib/src/native_loader.dart';"),
+        "must not reach into lib/ with a relative path: {content}"
     );
 }
 
@@ -1811,6 +2015,7 @@ fn build_config_for_frb_run_command_precedes_post_process_file() {
             PostBuildStep::RunCommand { .. } => "RunCommand",
             PostBuildStep::PostProcessFile { .. } => "PostProcessFile",
             PostBuildStep::PatchFile { .. } => "PatchFile",
+            PostBuildStep::CarryFrbCfgGates { .. } => "CarryFrbCfgGates",
             PostBuildStep::StageDartNatives { .. } => "StageDartNatives",
             PostBuildStep::MaterializeSwiftBridge { .. } => "MaterializeSwiftBridge",
         })
@@ -1828,6 +2033,7 @@ fn build_config_for_frb_run_command_precedes_post_process_file() {
             "PostProcessFile",
             "PostProcessFile",
             "PostProcessFile",
+            "CarryFrbCfgGates",
             "StageDartNatives"
         ],
         "RunCommand must come before all PostProcessFile steps in post_build steps"
@@ -1938,6 +2144,7 @@ skip_frb = true
                 PostBuildStep::RunCommand { cmd, .. } => format!("RunCommand({cmd})"),
                 PostBuildStep::PostProcessFile { .. } => "PostProcessFile".to_string(),
                 PostBuildStep::PatchFile { .. } => "PatchFile".to_string(),
+                PostBuildStep::CarryFrbCfgGates { .. } => "CarryFrbCfgGates".to_string(),
                 PostBuildStep::StageDartNatives { lib_stem } => {
                     format!("StageDartNatives({lib_stem})")
                 }
@@ -1963,4 +2170,49 @@ skip_frb = true
 
     let dart_default = DartConfig::default();
     assert!(!dart_default.skip_frb, "DartConfig.skip_frb must default to false");
+}
+
+#[test]
+fn build_config_for_frb_emits_carry_frb_cfg_gates_step_with_rust_source_paths() {
+    use alef::core::backend::PostBuildStep;
+    use std::path::PathBuf;
+
+    let config = make_config();
+    let bc = DartBackend
+        .build_config_for(&config)
+        .expect("FRB style must yield a BuildConfig");
+
+    let carry_steps: Vec<&PostBuildStep> = bc
+        .post_build
+        .iter()
+        .filter(|s| matches!(s, PostBuildStep::CarryFrbCfgGates { .. }))
+        .collect();
+
+    assert_eq!(
+        carry_steps.len(),
+        1,
+        "FRB config must schedule exactly one CarryFrbCfgGates step"
+    );
+
+    let expected_source = PathBuf::from("packages")
+        .join("dart")
+        .join("rust")
+        .join("src")
+        .join("lib.rs");
+    let expected_target = PathBuf::from("packages")
+        .join("dart")
+        .join("rust")
+        .join("src")
+        .join("frb_generated.rs");
+
+    if let PostBuildStep::CarryFrbCfgGates { source_path, target_path } = carry_steps[0] {
+        assert_eq!(
+            source_path, &expected_source,
+            "CarryFrbCfgGates must scan the FRB source crate's lib.rs"
+        );
+        assert_eq!(
+            target_path, &expected_target,
+            "CarryFrbCfgGates must rewrite the generated frb_generated.rs"
+        );
+    }
 }

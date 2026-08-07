@@ -99,6 +99,7 @@ fn test_gen_csharp_record() {
 fn test_gen_magnus_kwargs_constructor_hash_path_for_many_fields() {
     let mut fields: Vec<FieldDef> = (0..16)
         .map(|i| FieldDef {
+            version: Default::default(),
             name: format!("field_{i}"),
             ty: TypeRef::Primitive(PrimitiveType::U32),
             optional: false,
@@ -203,6 +204,7 @@ fn test_gen_php_kwargs_constructor_basic() {
 fn test_gen_php_kwargs_constructor_optional_field_passthrough() {
     let mut typ = make_test_type();
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "tag".to_string(),
         ty: TypeRef::String,
         optional: true,
@@ -234,6 +236,7 @@ fn test_gen_php_kwargs_constructor_optional_field_passthrough() {
 fn test_gen_php_kwargs_constructor_unwrap_or_default_for_primitive() {
     let mut typ = make_test_type();
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "retries".to_string(),
         ty: TypeRef::Primitive(PrimitiveType::U32),
         optional: false,
@@ -284,6 +287,7 @@ fn test_gen_rustler_kwargs_constructor_basic() {
 fn test_gen_rustler_kwargs_constructor_optional_field() {
     let mut typ = make_test_type();
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "extra".to_string(),
         ty: TypeRef::String,
         optional: true,
@@ -314,6 +318,7 @@ fn test_gen_rustler_kwargs_constructor_optional_field() {
 fn test_gen_rustler_kwargs_constructor_skips_binding_excluded_fields() {
     let mut typ = make_test_type();
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "internal_cache".to_string(),
         ty: TypeRef::String,
         optional: false,
@@ -346,6 +351,7 @@ fn test_gen_rustler_kwargs_constructor_skips_binding_excluded_fields() {
 fn test_gen_rustler_kwargs_constructor_named_type_uses_unwrap_or_default() {
     let mut typ = make_test_type();
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "inner".to_string(),
         ty: TypeRef::Named("InnerConfig".to_string()),
         optional: false,
@@ -381,6 +387,7 @@ fn test_gen_rustler_kwargs_constructor_string_field_uses_unwrap_or_default() {
         "String field with quoted default should use unwrap_or_default"
     );
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "label".to_string(),
         ty: TypeRef::String,
         optional: false,

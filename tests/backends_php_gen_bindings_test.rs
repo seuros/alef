@@ -25,6 +25,7 @@ extension_name = "{extension_name}"
 
 fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional,
@@ -319,6 +320,7 @@ fn make_visitor_bridge_cfg_php(trait_name: &str, type_alias: &str) -> alef::core
 
 fn make_field_with_doc(name: &str, ty: TypeRef, optional: bool, doc: &str) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional,
@@ -358,6 +360,8 @@ mod scaffold_composer_requirements;
 mod scaffold_pie_url;
 #[path = "backends_php_gen_bindings/streaming_method_order.rs"]
 mod streaming_method_order;
+#[path = "backends_php_gen_bindings/stub_constructor_matches_extension.rs"]
+mod stub_constructor_matches_extension;
 #[path = "backends_php_gen_bindings/stubs_dtos.rs"]
 mod stubs_dtos;
 #[path = "backends_php_gen_bindings/tagged_enums.rs"]

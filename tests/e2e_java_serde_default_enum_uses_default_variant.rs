@@ -80,6 +80,7 @@ fn java_builder_uses_correct_default_variant_for_serde_default_enum_field() {
         rust_path: "test::ConfigType".to_string(),
         original_rust_path: String::new(),
         fields: vec![FieldDef {
+            version: Default::default(),
             name: "mode".to_string(),
             ty: TypeRef::Named("MyEnumType".to_string()),
             optional: false,

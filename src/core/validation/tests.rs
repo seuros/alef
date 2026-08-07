@@ -30,6 +30,7 @@ fn function_def(name: &str, params: Vec<ParamDef>, return_type: TypeRef) -> Func
 
 fn field_def(name: &str, ty: TypeRef) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional: false,
@@ -80,6 +81,7 @@ fn api_surface_validation_reports_lossy_sanitized_fields() {
         types: vec![TypeDef {
             name: "Request".to_string(),
             fields: vec![FieldDef {
+                version: Default::default(),
                 name: "payload".to_string(),
                 ty: TypeRef::String,
                 optional: false,

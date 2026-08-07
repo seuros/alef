@@ -30,6 +30,7 @@ fn print_generated_java_code() {
                 original_rust_path: String::new(),
                 fields: vec![
                     FieldDef {
+                        version: Default::default(),
                         name: "textBackend".to_string(),
                         ty: TypeRef::String,
                         optional: false,
@@ -50,6 +51,7 @@ fn print_generated_java_code() {
                         original_type: None,
                     },
                     FieldDef {
+                        version: Default::default(),
                         name: "timeout".to_string(),
                         ty: TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::U64))),
                         optional: true,
@@ -96,6 +98,7 @@ fn print_generated_java_code() {
                 original_rust_path: String::new(),
                 fields: vec![
                     FieldDef {
+                        version: Default::default(),
                         name: "text".to_string(),
                         ty: TypeRef::String,
                         optional: false,
@@ -116,6 +119,7 @@ fn print_generated_java_code() {
                         original_type: None,
                     },
                     FieldDef {
+                        version: Default::default(),
                         name: "confidence".to_string(),
                         ty: TypeRef::Primitive(PrimitiveType::F32),
                         optional: false,

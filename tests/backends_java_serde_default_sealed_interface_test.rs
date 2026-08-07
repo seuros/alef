@@ -10,6 +10,7 @@ fn resolved_one(toml: &str) -> alef::core::config::ResolvedCrateConfig {
 
 fn make_field(name: &str, ty: TypeRef, optional: bool, default: Option<String>) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional,
@@ -93,6 +94,7 @@ fn test_java_serde_default_sealed_interface_with_fields_uses_null() {
             EnumVariant {
                 name: "Preset".to_string(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "name".to_string(),
                     ty: TypeRef::String,
                     optional: false,
@@ -126,6 +128,7 @@ fn test_java_serde_default_sealed_interface_with_fields_uses_null() {
                 name: "Custom".to_string(),
                 fields: vec![
                     FieldDef {
+                        version: Default::default(),
                         name: "model_id".to_string(),
                         ty: TypeRef::String,
                         optional: false,
@@ -146,6 +149,7 @@ fn test_java_serde_default_sealed_interface_with_fields_uses_null() {
                         original_type: None,
                     },
                     FieldDef {
+                        version: Default::default(),
                         name: "dimensions".to_string(),
                         ty: TypeRef::Primitive(PrimitiveType::U64),
                         optional: false,

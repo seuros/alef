@@ -652,6 +652,7 @@ fn test_optional_vec_still_uses_as_deref() {
 #[test]
 fn test_optional_bytes_field_accessor_emits_out_len_and_length_writes() {
     let field = FieldDef {
+        version: Default::default(),
         name: "data".to_string(),
         ty: TypeRef::Bytes,
         optional: true,

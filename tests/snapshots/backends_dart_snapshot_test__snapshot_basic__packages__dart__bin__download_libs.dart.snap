@@ -9,7 +9,7 @@ expression: "&file.content"
 
 import 'dart:io';
 
-import '../lib/src/native_loader.dart';
+import 'package:demo/src/native_loader.dart';
 
 void main() async {
   try {

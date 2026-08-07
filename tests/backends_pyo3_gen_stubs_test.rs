@@ -5,6 +5,7 @@ use alef::core::ir::*;
 
 fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional,
@@ -2312,5 +2313,83 @@ fn test_pyi_plugin_protocol_widens_sequence_returns_but_not_params() {
     assert!(
         content.contains("def dimensions(self) -> int: ..."),
         "non-sequence returns must keep their precise type:\n{content}"
+    );
+}
+
+/// Regression test for xberg#362: the `.pyi` stub annotated a `serde_json::Value` field as
+/// `dict[str, Any]` while the `#[pyclass]` field is a `String`.
+///
+/// `Pyo3Mapper::json()` (`src/backends/pyo3/type_map.rs`) maps `TypeRef::Json` to the Rust type
+/// `String`, so `#[pyo3(get)]` returns a `str` holding serialized JSON. The stub said `dict`,
+/// so type checkers accepted `result.value["key"]` on what is really a string at runtime.
+#[test]
+fn test_pyi_annotates_json_fields_as_str_not_dict() {
+    let backend = Pyo3Backend;
+
+    let api = ApiSurface {
+        crate_name: "test_lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "StructuredDataResult".to_string(),
+            rust_path: "test_lib::StructuredDataResult".to_string(),
+            original_rust_path: String::new(),
+            fields: vec![
+                make_field("content", TypeRef::String, false),
+                make_field("value", TypeRef::Optional(Box::new(TypeRef::Json)), true),
+                make_field(
+                    "metadata",
+                    TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String)),
+                    false,
+                ),
+            ],
+            methods: vec![],
+            is_opaque: false,
+            is_clone: true,
+            is_copy: false,
+            is_trait: false,
+            has_default: false,
+            has_stripped_cfg_fields: false,
+            is_return_type: false,
+            serde_rename_all: None,
+            has_serde: true,
+            super_traits: vec![],
+            doc: String::new(),
+            cfg: None,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            is_variant_wrapper: false,
+            has_lifetime_params: false,
+            has_private_fields: false,
+            version: Default::default(),
+        }],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+
+    let files = backend
+        .generate_type_stubs(&api, &make_config_with_stubs())
+        .expect("generate_type_stubs failed");
+    let content = &files[0].content;
+
+    assert!(
+        content.contains("value: str | None"),
+        "Option<Json> must be annotated `str | None` in the .pyi:\n{content}"
+    );
+    assert!(
+        !content.contains("value: dict[str, Any]"),
+        "the .pyi must not claim a Json field is a dict — the runtime returns a JSON str:\n{content}"
+    );
+
+    // Negative control: the fix is scoped to `TypeRef::Json`. A real String-valued map is
+    // untouched and still renders as a dict.
+    assert!(
+        content.contains("metadata: dict[str, str]"),
+        "Map<String, String> must still be annotated `dict[str, str]`:\n{content}"
     );
 }

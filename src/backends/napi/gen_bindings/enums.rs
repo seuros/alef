@@ -480,6 +480,7 @@ mod tests {
                 EnumVariant {
                     name: "FontSize".to_string(),
                     fields: vec![FieldDef {
+                        version: Default::default(),
                         name: "_0".to_string(),
                         ty: TypeRef::String,
                         optional: false,
@@ -546,6 +547,7 @@ mod tests {
             variants: vec![EnumVariant {
                 name: "FontSize".to_string(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "_0".to_string(),
                     ty: TypeRef::String,
                     optional: false,
@@ -611,6 +613,7 @@ mod tests {
             variants: vec![EnumVariant {
                 name: "Custom".to_string(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "reason".to_string(),
                     ty: TypeRef::String,
                     optional: false,

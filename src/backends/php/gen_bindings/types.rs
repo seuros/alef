@@ -7,5 +7,7 @@ pub(crate) use enums::{
     is_tagged_data_enum, is_untagged_data_enum, ty_references_untagged_data_enum,
 };
 #[allow(unused_imports)]
-pub(crate) use structs::{gen_opaque_struct_methods_with_exclude, gen_php_struct, gen_struct_methods};
-pub use structs::{gen_struct_methods_with_exclude, is_php_prop_scalar};
+pub(crate) use structs::{
+    gen_opaque_struct_methods_with_exclude, gen_php_struct, gen_struct_methods, ty_is_or_wraps_json,
+};
+pub use structs::{gen_struct_methods_with_exclude, is_php_prop_scalar, php_field_can_be_constructor_param};

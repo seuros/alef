@@ -8,6 +8,7 @@ use alef::core::template_versions;
 
 fn make_field(name: &str, ty: TypeRef) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional: false,
@@ -1275,6 +1276,7 @@ fn cargo_toml_serde_json_dep_present_when_has_serde_type_with_vec_field() {
         rust_path: "demo::DeviceInfo".to_string(),
         original_rust_path: String::new(),
         fields: vec![FieldDef {
+            version: Default::default(),
             name: "device_id".to_string(),
             ty: TypeRef::Vec(Box::new(TypeRef::Primitive(PrimitiveType::U8))),
             optional: false,
@@ -2509,6 +2511,7 @@ fn make_tagged_enum(name: &str, variants: Vec<(&str, Vec<&str>)>) -> EnumDef {
                 fields: fields
                     .into_iter()
                     .map(|f| FieldDef {
+                        version: Default::default(),
                         name: f.to_string(),
                         ty: TypeRef::String,
                         optional: false,

@@ -3,6 +3,7 @@ use super::*;
 #[test]
 fn test_default_value_bool_true_python() {
     let field = FieldDef {
+        version: Default::default(),
         name: "enabled".to_string(),
         ty: TypeRef::Primitive(PrimitiveType::Bool),
         optional: false,
@@ -28,6 +29,7 @@ fn test_default_value_bool_true_python() {
 #[test]
 fn test_default_value_bool_false_go() {
     let field = FieldDef {
+        version: Default::default(),
         name: "enabled".to_string(),
         ty: TypeRef::Primitive(PrimitiveType::Bool),
         optional: false,
@@ -53,6 +55,7 @@ fn test_default_value_bool_false_go() {
 #[test]
 fn test_default_value_string_literal() {
     let field = FieldDef {
+        version: Default::default(),
         name: "name".to_string(),
         ty: TypeRef::String,
         optional: false,
@@ -79,6 +82,7 @@ fn test_default_value_string_literal() {
 #[test]
 fn test_default_value_int_literal() {
     let field = FieldDef {
+        version: Default::default(),
         name: "timeout".to_string(),
         ty: TypeRef::Primitive(PrimitiveType::U64),
         optional: false,
@@ -105,6 +109,7 @@ fn test_default_value_int_literal() {
 #[test]
 fn test_default_value_none() {
     let field = FieldDef {
+        version: Default::default(),
         name: "maybe".to_string(),
         ty: TypeRef::Optional(Box::new(TypeRef::String)),
         optional: true,
@@ -133,6 +138,7 @@ fn test_default_value_none() {
 #[test]
 fn test_default_value_fallback_string() {
     let field = FieldDef {
+        version: Default::default(),
         name: "name".to_string(),
         ty: TypeRef::String,
         optional: false,
@@ -158,6 +164,7 @@ fn test_default_value_fallback_string() {
 #[test]
 fn test_default_value_float_literal() {
     let field = FieldDef {
+        version: Default::default(),
         name: "ratio".to_string(),
         ty: TypeRef::Primitive(PrimitiveType::F64),
         optional: false,
@@ -184,6 +191,7 @@ fn test_default_value_float_literal() {
 #[test]
 fn test_default_value_no_typed_no_default() {
     let field = FieldDef {
+        version: Default::default(),
         name: "count".to_string(),
         ty: TypeRef::Primitive(PrimitiveType::U32),
         optional: false,
@@ -209,6 +217,7 @@ fn test_default_value_no_typed_no_default() {
 #[test]
 fn test_default_value_bool_literal_ruby() {
     let field = FieldDef {
+        version: Default::default(),
         name: "flag".to_string(),
         ty: TypeRef::Primitive(PrimitiveType::Bool),
         optional: false,
@@ -238,6 +247,7 @@ fn test_default_value_bool_literal_ruby() {
 #[test]
 fn test_default_value_bool_literal_r() {
     let field = FieldDef {
+        version: Default::default(),
         name: "flag".to_string(),
         ty: TypeRef::Primitive(PrimitiveType::Bool),
         optional: false,
@@ -263,6 +273,7 @@ fn test_default_value_bool_literal_r() {
 #[test]
 fn test_default_value_string_literal_rust() {
     let field = FieldDef {
+        version: Default::default(),
         name: "label".to_string(),
         ty: TypeRef::String,
         optional: false,
@@ -288,6 +299,7 @@ fn test_default_value_string_literal_rust() {
 #[test]
 fn test_default_value_string_literal_escapes_quotes() {
     let field = FieldDef {
+        version: Default::default(),
         name: "label".to_string(),
         ty: TypeRef::String,
         optional: false,
@@ -313,6 +325,7 @@ fn test_default_value_string_literal_escapes_quotes() {
 #[test]
 fn test_default_value_float_literal_whole_number() {
     let field = FieldDef {
+        version: Default::default(),
         name: "scale".to_string(),
         ty: TypeRef::Primitive(PrimitiveType::F32),
         optional: false,
@@ -339,6 +352,7 @@ fn test_default_value_float_literal_whole_number() {
 #[test]
 fn test_default_value_enum_variant_per_language() {
     let field = FieldDef {
+        version: Default::default(),
         name: "format".to_string(),
         ty: TypeRef::Named("OutputFormat".to_string()),
         optional: false,
@@ -371,6 +385,7 @@ fn test_default_value_enum_variant_per_language() {
 #[test]
 fn test_default_value_empty_vec_per_language() {
     let field = FieldDef {
+        version: Default::default(),
         name: "items".to_string(),
         ty: TypeRef::Vec(Box::new(TypeRef::String)),
         optional: false,
@@ -403,6 +418,7 @@ fn test_default_value_empty_vec_per_language() {
 #[test]
 fn test_default_value_empty_map_per_language() {
     let field = FieldDef {
+        version: Default::default(),
         name: "meta".to_string(),
         ty: TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String)),
         optional: false,
@@ -431,6 +447,7 @@ fn test_default_value_empty_map_per_language() {
 #[test]
 fn test_default_value_empty_bool_primitive() {
     let field = FieldDef {
+        version: Default::default(),
         name: "flag".to_string(),
         ty: TypeRef::Primitive(PrimitiveType::Bool),
         optional: false,
@@ -458,6 +475,7 @@ fn test_default_value_empty_bool_primitive() {
 #[test]
 fn test_default_value_empty_float_primitive() {
     let field = FieldDef {
+        version: Default::default(),
         name: "ratio".to_string(),
         ty: TypeRef::Primitive(PrimitiveType::F64),
         optional: false,
@@ -483,6 +501,7 @@ fn test_default_value_empty_float_primitive() {
 #[test]
 fn test_default_value_empty_string_type() {
     let field = FieldDef {
+        version: Default::default(),
         name: "label".to_string(),
         ty: TypeRef::String,
         optional: false,
@@ -509,6 +528,7 @@ fn test_default_value_empty_string_type() {
 #[test]
 fn test_default_value_empty_bytes_type() {
     let field = FieldDef {
+        version: Default::default(),
         name: "data".to_string(),
         ty: TypeRef::Bytes,
         optional: false,
@@ -536,6 +556,7 @@ fn test_default_value_empty_bytes_type() {
 #[test]
 fn test_default_value_empty_json_type() {
     let field = FieldDef {
+        version: Default::default(),
         name: "payload".to_string(),
         ty: TypeRef::Json,
         optional: false,
@@ -565,6 +586,7 @@ fn test_default_value_empty_json_type() {
 #[test]
 fn test_default_value_none_ruby_php_r() {
     let field = FieldDef {
+        version: Default::default(),
         name: "maybe".to_string(),
         ty: TypeRef::Optional(Box::new(TypeRef::String)),
         optional: true,

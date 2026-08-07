@@ -391,13 +391,16 @@ fn test_dto_stubs_use_final_class_with_readonly_promoted_params() {
         "Optional field must use `public readonly` promotion with nullable type; content:\n{content}"
     );
 
+    // The real extension's getter loop (`structs.rs`) emits a `get_<field>()` method for
+    // EVERY binding field, including prop-scalar ones — so the stub must too, even though
+    // `$content`/`$name` are also directly readable as promoted properties.
     assert!(
-        !content.contains("getContent()"),
-        "Redundant getter `getContent()` must not be emitted; content:\n{content}"
+        content.contains("getContent()"),
+        "Getter `getContent()` must be emitted (the real extension emits one for every field); content:\n{content}"
     );
     assert!(
-        !content.contains("getName()"),
-        "Redundant getter `getName()` must not be emitted; content:\n{content}"
+        content.contains("getName()"),
+        "Getter `getName()` must be emitted (the real extension emits one for every field); content:\n{content}"
     );
 
     assert!(

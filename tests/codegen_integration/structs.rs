@@ -219,6 +219,7 @@ fn test_gen_struct_default_impl_optional_field_uses_none() {
         rust_path: "my_crate::OptConfig".to_string(),
         original_rust_path: String::new(),
         fields: vec![FieldDef {
+            version: Default::default(),
             name: "value".to_string(),
             ty: TypeRef::Optional(Box::new(TypeRef::String)),
             optional: false,
@@ -284,6 +285,7 @@ fn test_can_generate_default_impl_named_not_in_known_set() {
         rust_path: "my_crate::Compound".to_string(),
         original_rust_path: String::new(),
         fields: vec![FieldDef {
+            version: Default::default(),
             name: "inner".to_string(),
             ty: TypeRef::Named("UnknownType".to_string()),
             optional: false,
@@ -337,6 +339,7 @@ fn test_can_generate_default_impl_named_in_known_set() {
         rust_path: "my_crate::Compound".to_string(),
         original_rust_path: String::new(),
         fields: vec![FieldDef {
+            version: Default::default(),
             name: "inner".to_string(),
             ty: TypeRef::Named("KnownType".to_string()),
             optional: false,
@@ -395,6 +398,7 @@ fn test_gen_struct_with_opaque_field_skips_serde_derives() {
         rust_path: "my_crate::Wrapper".to_string(),
         original_rust_path: String::new(),
         fields: vec![FieldDef {
+            version: Default::default(),
             name: "handle".to_string(),
             ty: TypeRef::Named("OpaqueHandle".to_string()),
             optional: false,
@@ -598,6 +602,7 @@ fn delegating_default_suppressed_when_type_not_in_convertible_set() {
         rust_path: "spikard::ServerConfig".to_string(),
         original_rust_path: String::new(),
         fields: vec![FieldDef {
+            version: Default::default(),
             name: "nested".to_string(),
             ty: TypeRef::Named("ExcludedOpaque".to_string()),
             optional: false,
@@ -668,6 +673,7 @@ fn delegating_default_emitted_when_type_in_convertible_set() {
         rust_path: "my_crate::Config".to_string(),
         original_rust_path: String::new(),
         fields: vec![FieldDef {
+            version: Default::default(),
             name: "value".to_string(),
             ty: TypeRef::String,
             optional: false,
@@ -748,6 +754,7 @@ fn core_to_binding_convertible_excludes_excluded_type_fields() {
         original_rust_path: String::new(),
         fields: vec![
             FieldDef {
+                version: Default::default(),
                 name: "compression".to_string(),
                 ty: TypeRef::String,
                 optional: false,
@@ -768,6 +775,7 @@ fn core_to_binding_convertible_excludes_excluded_type_fields() {
                 original_type: None,
             },
             FieldDef {
+                version: Default::default(),
                 name: "cors".to_string(),
                 ty: TypeRef::Named("CorsConfig".to_string()),
                 optional: false,

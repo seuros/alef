@@ -9,6 +9,7 @@ use alef::core::template_versions::cargo as tv;
 
 fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional,
@@ -2251,6 +2252,7 @@ fn mirror_error_introspection_uses_safe_from_conversion_not_transmute() {
 fn mirror_error_from_impl_handles_optional_string_duration_and_sanitized_fields() {
     use alef::core::ir::CoreWrapper;
     let make_error_field = |name: &str, ty: TypeRef, optional: bool, sanitized: bool| FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional,
@@ -2385,6 +2387,7 @@ fn mirror_error_from_impl_handles_optional_string_duration_and_sanitized_fields(
 #[test]
 fn mirror_error_from_impl_uses_tuple_syntax_for_tuple_variants() {
     let make_positional_field = |idx: usize, ty: TypeRef| FieldDef {
+        version: Default::default(),
         name: format!("_{idx}"),
         ty,
         optional: false,
@@ -2406,6 +2409,7 @@ fn mirror_error_from_impl_uses_tuple_syntax_for_tuple_variants() {
     };
 
     let make_named_field = |name: &str, ty: TypeRef| FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional: false,

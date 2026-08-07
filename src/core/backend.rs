@@ -102,6 +102,18 @@ pub enum PostBuildStep {
         /// workspace base dir.
         package_root: String,
     },
+    /// Scan `source_path` for `#[cfg(...)]`-gated free functions and carry those gates
+    /// into `target_path`'s wire dispatch (both paths relative to the binding crate dir).
+    ///
+    /// Unlike [`PostProcessFile`](Self::PostProcessFile), this reads one file to determine
+    /// what to rewrite in a *different* file, so it cannot be expressed as a single-path
+    /// `PostProcessor`.
+    CarryFrbCfgGates {
+        /// File to scan for `#[cfg(...)]`-gated free functions (the FRB source crate's `lib.rs`).
+        source_path: PathBuf,
+        /// File to rewrite with the gates carried over (the generated `frb_generated.rs`).
+        target_path: PathBuf,
+    },
 }
 
 /// A generated file to write to disk.

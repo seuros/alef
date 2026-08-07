@@ -90,12 +90,11 @@ pub(super) fn gen_options_py(
         let options_types = options_dataclass_type_names(api, reexported_types);
         api.types.iter().any(|t| options_types.contains(&t.name))
     };
-    let needs_any = emits_from_native_converters
-        || api
-            .types
-            .iter()
-            .filter(|t| !t.is_trait && t.has_default)
-            .any(|t| binding_fields(&t.fields).any(|f| type_contains_json(&f.ty)));
+    // Json-typed fields used to render as `dict[str, Any]` and so pulled in `Any`. They now
+    // render as `str`, so a Json field alone no longer references `Any`; keeping the
+    // old clause would emit an unused `from typing import Any` and trip ruff F401 in the
+    // generated stubs. Only the `from_native` converters still need `Any`.
+    let needs_any = emits_from_native_converters;
 
     let mut referenced_types: AHashSet<String> = AHashSet::new();
     for typ in api.types.iter().filter(|typ| !typ.is_trait) {
@@ -538,7 +537,13 @@ pub(super) fn python_field_type(
             _ => "int".to_string(),
         },
         TypeRef::String | TypeRef::Char | TypeRef::Path => "str".to_string(),
-        TypeRef::Json => "dict[str, Any]".to_string(),
+        // `Pyo3Mapper::json()` (backends/pyo3/type_map.rs) maps `TypeRef::Json` to the Rust type
+        // `String`, so a Json-typed field is emitted as `String`/`Option<String>` on the pyclass
+        // and `#[pyo3(get)]` hands Python a `str` holding serialized JSON — never a `dict`.
+        // Annotating it `dict[str, Any]` made every generated `.pyi` lie about the runtime type
+        // PyO3 0.29 has no `IntoPyObject for serde_json::Value` (serde_json is only a
+        // dev-dependency there), so a real dict would require `pythonize` and an API break.
+        TypeRef::Json => "str".to_string(),
         TypeRef::Bytes => "bytes".to_string(),
         TypeRef::Vec(inner) => {
             format!(
@@ -670,17 +675,6 @@ fn python_zero_value(
         TypeRef::Optional(_) => "None".to_string(),
         TypeRef::Unit => "None".to_string(),
         TypeRef::Duration => "None".to_string(),
-    }
-}
-
-/// Check if a TypeRef transitively contains TypeRef::Json (which maps to `Any` in Python).
-fn type_contains_json(ty: &crate::core::ir::TypeRef) -> bool {
-    use crate::core::ir::TypeRef;
-    match ty {
-        TypeRef::Json => true,
-        TypeRef::Optional(inner) | TypeRef::Vec(inner) => type_contains_json(inner),
-        TypeRef::Map(k, v) => type_contains_json(k) || type_contains_json(v),
-        _ => false,
     }
 }
 

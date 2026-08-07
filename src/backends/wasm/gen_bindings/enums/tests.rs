@@ -95,6 +95,7 @@ fn make_tagged_tuple_enum() -> EnumDef {
     let make_tuple_variant = |variant_name: &str, tag: &str| EnumVariant {
         name: variant_name.to_string(),
         fields: vec![FieldDef {
+            version: Default::default(),
             name: "_0".to_string(),
             ty: TypeRef::Named(format!("{variant_name}Message")),
             optional: false,
@@ -292,6 +293,7 @@ fn gen_tagged_enum_core_to_binding_struct_variants_unchanged() {
         variants: vec![EnumVariant {
             name: "Basic".to_string(),
             fields: vec![FieldDef {
+                version: Default::default(),
                 name: "username".to_string(),
                 ty: TypeRef::String,
                 optional: false,
@@ -350,6 +352,7 @@ fn gen_tagged_enum_core_to_binding_struct_variants_unchanged() {
 #[test]
 fn gen_tagged_enum_struct_variant_preserves_optional_fields() {
     let field = |name: &str, ty: TypeRef, optional: bool| FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional,

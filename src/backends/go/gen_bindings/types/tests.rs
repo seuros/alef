@@ -5,6 +5,7 @@ use crate::core::ir::{EnumDef, EnumVariant, FieldDef, PrimitiveType, TypeDef, Ty
 
 fn simple_field(name: &str, ty: TypeRef) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional: false,
@@ -574,6 +575,7 @@ fn make_tuple_variant(name: &str, serde_rename: Option<&str>) -> EnumVariant {
         name: name.to_string(),
         doc: String::new(),
         fields: vec![FieldDef {
+            version: Default::default(),
             name: "_0".to_string(),
             ty: TypeRef::String,
             optional: false,

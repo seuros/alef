@@ -188,6 +188,7 @@ fn test_generate_configuration_doc_renders_referenced_enums_only() {
             rust_path: "mylib::ImageConfig".into(),
             original_rust_path: String::new(),
             fields: vec![FieldDef {
+                version: Default::default(),
                 name: "format".into(),
                 ty: TypeRef::Named("mylib::ImageFormat".into()),
                 optional: false,

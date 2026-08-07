@@ -9,6 +9,7 @@ fn simple_type() -> TypeDef {
         original_rust_path: String::new(),
         fields: vec![
             FieldDef {
+                version: Default::default(),
                 name: "name".into(),
                 ty: TypeRef::String,
                 optional: false,
@@ -29,6 +30,7 @@ fn simple_type() -> TypeDef {
                 original_type: None,
             },
             FieldDef {
+                version: Default::default(),
                 name: "timeout".into(),
                 ty: TypeRef::Primitive(PrimitiveType::U64),
                 optional: true,
@@ -49,6 +51,7 @@ fn simple_type() -> TypeDef {
                 original_type: None,
             },
             FieldDef {
+                version: Default::default(),
                 name: "backend".into(),
                 ty: TypeRef::Named("Backend".into()),
                 optional: true,
@@ -247,6 +250,7 @@ fn test_enum_from_core_to_binding_unit_only_with_struct_variants_no_catchall() {
     enum_def.variants.push(EnumVariant {
         name: "Disconnect".into(),
         fields: vec![FieldDef {
+            version: Default::default(),
             name: "code".into(),
             ty: TypeRef::Primitive(crate::core::ir::PrimitiveType::U16),
             optional: false,
@@ -296,6 +300,7 @@ fn untagged_tuple_enum() -> EnumDef {
             EnumVariant {
                 name: "Text".into(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "_0".into(),
                     ty: TypeRef::String,
                     optional: false,
@@ -328,6 +333,7 @@ fn untagged_tuple_enum() -> EnumDef {
             EnumVariant {
                 name: "Parts".into(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "_0".into(),
                     ty: TypeRef::Vec(Box::new(TypeRef::String)),
                     optional: false,
@@ -455,6 +461,7 @@ fn test_from_binding_to_core_with_cfg_gated_field() {
     let mut typ = simple_type();
     typ.has_stripped_cfg_fields = true;
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "layout".into(),
         ty: TypeRef::String,
         optional: false,
@@ -487,6 +494,7 @@ fn test_from_binding_to_core_with_cfg_gated_field() {
 fn test_from_core_to_binding_with_cfg_gated_field() {
     let mut typ = simple_type();
     typ.fields.push(FieldDef {
+        version: Default::default(),
         name: "layout".into(),
         ty: TypeRef::String,
         optional: false,
@@ -600,6 +608,7 @@ fn test_optionalized_defaultable_struct_uses_core_default_as_base() {
     typ.has_default = true;
     typ.fields = vec![
         FieldDef {
+            version: Default::default(),
             name: "language".into(),
             ty: TypeRef::String,
             optional: false,
@@ -620,6 +629,7 @@ fn test_optionalized_defaultable_struct_uses_core_default_as_base() {
             original_type: None,
         },
         FieldDef {
+            version: Default::default(),
             name: "structure".into(),
             ty: TypeRef::Primitive(PrimitiveType::Bool),
             optional: false,
@@ -684,6 +694,7 @@ fn arc_field_type(field: FieldDef) -> TypeDef {
 
 fn arc_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.into(),
         ty,
         optional,
@@ -843,6 +854,7 @@ fn cache_backend_like_enum() -> EnumDef {
                 name: "OpenDal".into(),
                 fields: vec![
                     FieldDef {
+                        version: Default::default(),
                         name: "scheme".into(),
                         ty: TypeRef::String,
                         optional: false,
@@ -863,6 +875,7 @@ fn cache_backend_like_enum() -> EnumDef {
                         original_type: None,
                     },
                     FieldDef {
+                        version: Default::default(),
                         name: "config".into(),
                         ty: TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String)),
                         optional: false,
@@ -969,6 +982,7 @@ fn test_enum_map_field_without_flatten_flag_keeps_iterator_template() {
 
 fn boxed_named_field_core(name: &str, optional: bool) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty: TypeRef::Named("Inner".to_string()),
         optional,

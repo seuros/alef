@@ -1,5 +1,6 @@
 use crate::codegen::cfg as shared_cfg;
 use crate::core::ir::{ApiSurface, TypeRef};
+use ahash::AHashSet;
 use std::collections::BTreeSet;
 
 /// Check if a TypeRef references a Named type that is in the exclude set.
@@ -13,6 +14,31 @@ pub(super) fn field_references_excluded_type(ty: &TypeRef, exclude_types: &[Stri
             field_references_excluded_type(k, exclude_types) || field_references_excluded_type(v, exclude_types)
         }
         _ => false,
+    }
+}
+
+/// Find the first `Named` type referenced by `ty` (at any depth) whose name is not present in
+/// `known_type_names`.
+///
+/// `WasmMapper::named` (see `type_map.rs`) unconditionally maps any `TypeRef::Named(name)` to
+/// `"{prefix}{name}"`, with no check that a `Wasm{name}` wrapper is actually going to be
+/// generated anywhere. When `name` does not correspond to any `TypeDef`/`EnumDef` in the API
+/// surface (e.g. a foreign type from a dependency crate that alef never source-rooted, or one
+/// whose own module-level `cfg` predicate does not intersect the field's), the emitted struct
+/// or function signature references a Rust type that will never exist — a compile failure the
+/// consumer only discovers by running `wasm-pack build`, not by reading generated source.
+///
+/// Callers use this to detect that case *before* codegen so the field can be excluded loudly
+/// (`tracing::warn!` plus a marker comment in the generated output) instead of emitting a
+/// dangling reference.
+pub(super) fn first_unknown_named_type<'a>(ty: &'a TypeRef, known_type_names: &AHashSet<String>) -> Option<&'a str> {
+    match ty {
+        TypeRef::Named(name) => (!known_type_names.contains(name.as_str())).then_some(name.as_str()),
+        TypeRef::Optional(inner) | TypeRef::Vec(inner) => first_unknown_named_type(inner, known_type_names),
+        TypeRef::Map(k, v) => {
+            first_unknown_named_type(k, known_type_names).or_else(|| first_unknown_named_type(v, known_type_names))
+        }
+        _ => None,
     }
 }
 

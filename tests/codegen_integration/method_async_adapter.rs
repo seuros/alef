@@ -238,6 +238,7 @@ fn test_gen_constructor_more_than_7_fields_gets_clippy_allow() {
     let mut typ = simple_type_def();
     for i in 0..8 {
         typ.fields.push(FieldDef {
+            version: Default::default(),
             name: format!("extra_{i}"),
             ty: TypeRef::Primitive(PrimitiveType::U32),
             optional: false,

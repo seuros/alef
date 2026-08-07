@@ -77,6 +77,7 @@ register_fn = "register_renderer"
 
 fn make_newtype_field(ty: TypeRef) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: "0".to_string(),
         ty,
         optional: false,
@@ -444,6 +445,7 @@ fn named_param_from_json_is_checked_before_primary_call() {
         rust_path: "test_lib::Config".to_string(),
         original_rust_path: String::new(),
         fields: vec![FieldDef {
+            version: Default::default(),
             name: "name".to_string(),
             ty: TypeRef::String,
             optional: false,
@@ -567,6 +569,7 @@ fn test_basic_generation() {
             rust_path: "test_lib::Config".to_string(),
             original_rust_path: String::new(),
             fields: vec![FieldDef {
+                version: Default::default(),
                 name: "timeout".to_string(),
                 ty: TypeRef::Primitive(PrimitiveType::U32),
                 optional: false,
@@ -1013,6 +1016,7 @@ fn test_optional_field_defaults_in_builder() {
             original_rust_path: String::new(),
             fields: vec![
                 FieldDef {
+                    version: Default::default(),
                     name: "list_indent_width".to_string(),
                     ty: TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::I64))),
                     optional: true,
@@ -1033,6 +1037,7 @@ fn test_optional_field_defaults_in_builder() {
                     original_type: None,
                 },
                 FieldDef {
+                    version: Default::default(),
                     name: "bullets".to_string(),
                     ty: TypeRef::Optional(Box::new(TypeRef::String)),
                     optional: true,
@@ -1053,6 +1058,7 @@ fn test_optional_field_defaults_in_builder() {
                     original_type: None,
                 },
                 FieldDef {
+                    version: Default::default(),
                     name: "escape_asterisks".to_string(),
                     ty: TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::Bool))),
                     optional: true,
@@ -1073,6 +1079,7 @@ fn test_optional_field_defaults_in_builder() {
                     original_type: None,
                 },
                 FieldDef {
+                    version: Default::default(),
                     name: "timeout_ms".to_string(),
                     ty: TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::U64))),
                     optional: true,
@@ -1093,6 +1100,7 @@ fn test_optional_field_defaults_in_builder() {
                     original_type: None,
                 },
                 FieldDef {
+                    version: Default::default(),
                     name: "field5".to_string(),
                     ty: TypeRef::Primitive(PrimitiveType::Bool),
                     optional: false,
@@ -1113,6 +1121,7 @@ fn test_optional_field_defaults_in_builder() {
                     original_type: None,
                 },
                 FieldDef {
+                    version: Default::default(),
                     name: "field6".to_string(),
                     ty: TypeRef::Primitive(PrimitiveType::I32),
                     optional: false,
@@ -1133,6 +1142,7 @@ fn test_optional_field_defaults_in_builder() {
                     original_type: None,
                 },
                 FieldDef {
+                    version: Default::default(),
                     name: "field7".to_string(),
                     ty: TypeRef::String,
                     optional: false,
@@ -1153,6 +1163,7 @@ fn test_optional_field_defaults_in_builder() {
                     original_type: None,
                 },
                 FieldDef {
+                    version: Default::default(),
                     name: "field8".to_string(),
                     ty: TypeRef::Primitive(PrimitiveType::F64),
                     optional: false,
@@ -1302,6 +1313,7 @@ fn test_no_standalone_builder_java_file_emitted() {
     let mut fields = vec![];
     for i in 1..=8 {
         fields.push(FieldDef {
+            version: Default::default(),
             name: format!("field{}", i),
             ty: TypeRef::Primitive(PrimitiveType::Bool),
             optional: false,
@@ -1406,6 +1418,7 @@ fn test_serde_default_boxed_boolean_true_restored_in_compact_ctor() {
     let backend = JavaBackend;
 
     let fields = vec![FieldDef {
+        version: Default::default(),
         name: "deny_private".to_string(),
         ty: TypeRef::Primitive(PrimitiveType::Bool),
         optional: false,
@@ -1993,6 +2006,7 @@ fn test_dto_emits_as_record_with_fields_only() {
             original_rust_path: String::new(),
             fields: vec![
                 FieldDef {
+                    version: Default::default(),
                     name: "name".to_string(),
                     ty: TypeRef::String,
                     optional: false,
@@ -2013,6 +2027,7 @@ fn test_dto_emits_as_record_with_fields_only() {
                     original_type: None,
                 },
                 FieldDef {
+                    version: Default::default(),
                     name: "count".to_string(),
                     ty: TypeRef::Primitive(PrimitiveType::I32),
                     optional: false,
@@ -2229,6 +2244,7 @@ fn test_sum_type_sealed_interface_with_record_variants() {
                     name: "Basic".to_string(),
                     fields: vec![
                         FieldDef {
+                            version: Default::default(),
                             name: "username".to_string(),
                             ty: TypeRef::String,
                             optional: false,
@@ -2249,6 +2265,7 @@ fn test_sum_type_sealed_interface_with_record_variants() {
                             original_type: None,
                         },
                         FieldDef {
+                            version: Default::default(),
                             name: "password".to_string(),
                             ty: TypeRef::String,
                             optional: false,
@@ -2282,6 +2299,7 @@ fn test_sum_type_sealed_interface_with_record_variants() {
                 EnumVariant {
                     name: "Bearer".to_string(),
                     fields: vec![FieldDef {
+                        version: Default::default(),
                         name: "token".to_string(),
                         ty: TypeRef::String,
                         optional: false,
@@ -2519,6 +2537,7 @@ fn test_tagged_enum_emits_sealed_interface_with_record_variants() {
     let backend = JavaBackend;
 
     let make_field = |name: &str, ty: TypeRef| FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional: false,
@@ -2649,6 +2668,7 @@ fn test_plain_dto_emits_as_record_not_sealed_class() {
             original_rust_path: String::new(),
             fields: vec![
                 FieldDef {
+                    version: Default::default(),
                     name: "id".to_string(),
                     ty: TypeRef::String,
                     optional: false,
@@ -2669,6 +2689,7 @@ fn test_plain_dto_emits_as_record_not_sealed_class() {
                     original_type: None,
                 },
                 FieldDef {
+                    version: Default::default(),
                     name: "context_length".to_string(),
                     ty: TypeRef::Primitive(PrimitiveType::I64),
                     optional: false,
@@ -2753,6 +2774,7 @@ fn test_option_params_and_returns_emit_nullable_annotations() {
                 rust_path: "test_lib::User".to_string(),
                 original_rust_path: String::new(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "id".to_string(),
                     ty: TypeRef::Primitive(PrimitiveType::U64),
                     optional: false,
@@ -3347,6 +3369,7 @@ fn builder_optional_fields_use_nullable_not_optional_in_setters() {
             original_rust_path: String::new(),
             fields: vec![
                 FieldDef {
+                    version: Default::default(),
                     name: "enabled".to_string(),
                     ty: TypeRef::Primitive(PrimitiveType::Bool),
                     optional: false,
@@ -3367,6 +3390,7 @@ fn builder_optional_fields_use_nullable_not_optional_in_setters() {
                     original_type: None,
                 },
                 FieldDef {
+                    version: Default::default(),
                     name: "description".to_string(),
                     ty: TypeRef::String,
                     optional: true,
@@ -3451,6 +3475,7 @@ fn json_util_centralizes_from_json_deserialization() {
             rust_path: "test::SimpleDto".to_string(),
             original_rust_path: String::new(),
             fields: vec![FieldDef {
+                version: Default::default(),
                 name: "value".to_string(),
                 ty: TypeRef::String,
                 optional: false,
@@ -3773,6 +3798,7 @@ fn options_field_visitor_uses_trait_bridge_config_not_convert_literals() {
     let backend = JavaBackend;
 
     let field = |name: &str, ty: TypeRef| FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional: false,
@@ -4093,6 +4119,7 @@ fn test_facade_no_java_lang_imports() {
             rust_path: "test_lib::Config".to_string(),
             original_rust_path: String::new(),
             fields: vec![FieldDef {
+                version: Default::default(),
                 name: "value".to_string(),
                 ty: TypeRef::String,
                 optional: false,

@@ -12,16 +12,17 @@ mod cargo;
 
 use crate::backends::wasm::type_map::WasmMapper;
 use crate::codegen::builder::RustFileBuilder;
-use crate::codegen::generators;
+use crate::codegen::{generators, shared};
 use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile};
 use crate::core::config::{Language, ResolvedCrateConfig, resolve_output_dir};
 use crate::core::ir::{ApiSurface, TypeRef};
-use ahash::AHashSet;
+use ahash::{AHashMap, AHashSet};
 use std::path::PathBuf;
 
 use cargo::gen_cargo_toml;
 use cfg::{
-    cfg_condition_enabled, collect_cfg_features, field_references_excluded_type, is_gated_behind_disabled_feature,
+    cfg_condition_enabled, collect_cfg_features, field_references_excluded_type, first_unknown_named_type,
+    is_gated_behind_disabled_feature,
 };
 use enums::gen_enum;
 use errors::{gen_error_converter, gen_error_methods};
@@ -36,6 +37,28 @@ fn prepend_cfg(cfg: Option<&str>, item: String) -> String {
         Some(pred) if !pred.is_empty() => format!("#[cfg({pred})]\n{item}"),
         _ => item,
     }
+}
+
+/// Prepend a visible marker comment listing fields dropped from `item` because they reference a
+/// type with no generated wasm binding (see `first_unknown_named_type` in `cfg.rs`).
+///
+/// The comment is emitted directly above the struct so the omission is discoverable by reading
+/// the generated source, not just by grepping build logs for the accompanying `tracing::warn!`
+/// (nothing may be silently omitted from a binding).
+fn prepend_unknown_type_omission_marker(omissions: Option<&Vec<(String, String)>>, item: String) -> String {
+    let Some(omissions) = omissions else {
+        return item;
+    };
+    let mut marker = String::from(
+        "// ALEF-OMITTED: the field(s) below were dropped from this WASM binding\n\
+         // because their Rust type has no generated wasm-bindgen representation.\n",
+    );
+    for (field_name, type_name) in omissions {
+        marker.push_str(&format!(
+            "//   - field `{field_name}`: type `{type_name}` is not part of the bound wasm API surface\n"
+        ));
+    }
+    format!("{marker}{item}")
 }
 
 pub struct WasmBackend;
@@ -104,6 +127,9 @@ impl Backend for WasmBackend {
             }
         }
 
+        // Captured before the move: `known_type_names` below needs the override keys, and
+        // `WasmMapper::new` takes the map by value.
+        let override_type_names: Vec<String> = type_overrides.keys().cloned().collect();
         let mapper = WasmMapper::new(type_overrides, prefix.clone());
         let core_import = config.core_import_for_language(Language::Wasm);
 
@@ -182,6 +208,47 @@ impl Backend for WasmBackend {
         };
         let cfg_filtered_api = filter_cfg_fields_for_features(api, &enabled_features);
         let api = &cfg_filtered_api;
+
+        // Detect fields that reference a type with no generated wasm binding: neither a
+        // `TypeDef`/`EnumDef` present in the (already cfg-filtered) API surface nor an explicit
+        // `type_overrides` entry. `WasmMapper::named` (see `type_map.rs`) maps every
+        // `TypeRef::Named` unconditionally to `"{prefix}{name}"` with no existence check, so
+        // left alone this would silently emit a reference to a `Wasm*` struct that is never
+        // generated — a dangling-type compile failure the consumer only discovers by running
+        // `wasm-pack build`, not by reading the generated source. Route such fields through the
+        // same exclusion machinery as cfg-gated fields, but warn loudly and mark the omission in
+        // the generated source instead of dropping it in silence.
+        let mut known_type_names: AHashSet<String> = api.types.iter().map(|t| t.name.clone()).collect();
+        known_type_names.extend(api.enums.iter().map(|e| e.name.clone()));
+        known_type_names.extend(override_type_names.iter().cloned());
+        let mut unknown_type_omissions: AHashMap<String, Vec<(String, String)>> = AHashMap::default();
+        for typ in api.types.iter().filter(|t| !t.is_opaque && !t.is_trait) {
+            if exclude_types.contains(&typ.name) {
+                continue;
+            }
+            for field in shared::binding_fields(&typ.fields) {
+                if field_references_excluded_type(&field.ty, &exclude_types) {
+                    continue;
+                }
+                let Some(unknown_name) = first_unknown_named_type(&field.ty, &known_type_names) else {
+                    continue;
+                };
+                let unknown_name = unknown_name.to_string();
+                tracing::warn!(
+                    struct_name = %typ.name,
+                    field_name = %field.name,
+                    referenced_type = %unknown_name,
+                    "wasm backend: field references a type with no generated wasm binding; omitting field"
+                );
+                if !exclude_types.contains(&unknown_name) {
+                    exclude_types.push(unknown_name.clone());
+                }
+                unknown_type_omissions
+                    .entry(typ.name.clone())
+                    .or_default()
+                    .push((field.name.clone(), unknown_name));
+            }
+        }
 
         let mut builder = RustFileBuilder::new().with_generated_header();
         builder.add_inner_attribute(
@@ -350,9 +417,15 @@ impl Backend for WasmBackend {
                     builder.add_item(&ctor_impl);
                 }
             } else {
-                let is_core_to_binding_convertible = core_to_binding_convertible_for_structs.contains(&typ.name);
+                // A type that dropped a field is NOT core-to-binding convertible: the
+                // delegating `Default` impl is `<core::T as Default>::default().into()`, which
+                // needs a `From<core::T>` that can carry every field across. The omitted field has
+                // no binding representation to carry it into, so the conversion cannot exist and
+                // the struct must fall back to `#[derive(Default)]` on the fields that remain.
+                let is_core_to_binding_convertible = core_to_binding_convertible_for_structs.contains(&typ.name)
+                    && !unknown_type_omissions.contains_key(&typ.name);
                 // gen_struct gates #[derive(Default)] and the delegating Default impl on
-                builder.add_item(&gen_struct(
+                let struct_code = gen_struct(
                     typ,
                     &mapper,
                     &exclude_types,
@@ -361,6 +434,10 @@ impl Backend for WasmBackend {
                     &tagged_data_enum_names,
                     &source_remaps_borrowed,
                     is_core_to_binding_convertible,
+                );
+                builder.add_item(&prepend_unknown_type_omission_marker(
+                    unknown_type_omissions.get(&typ.name),
+                    struct_code,
                 ));
                 builder.add_item(&gen_struct_methods(
                     typ,

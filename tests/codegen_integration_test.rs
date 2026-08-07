@@ -86,6 +86,7 @@ fn simple_type_def() -> TypeDef {
         original_rust_path: String::new(),
         fields: vec![
             FieldDef {
+                version: Default::default(),
                 name: "name".to_string(),
                 ty: TypeRef::String,
                 optional: false,
@@ -106,6 +107,7 @@ fn simple_type_def() -> TypeDef {
                 original_type: None,
             },
             FieldDef {
+                version: Default::default(),
                 name: "count".to_string(),
                 ty: TypeRef::Primitive(PrimitiveType::U32),
                 optional: true,

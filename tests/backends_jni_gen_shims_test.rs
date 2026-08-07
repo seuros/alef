@@ -14,6 +14,7 @@ fn resolved_one(toml: &str) -> ResolvedCrateConfig {
 
 fn make_field(name: &str, ty: TypeRef) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional: false,

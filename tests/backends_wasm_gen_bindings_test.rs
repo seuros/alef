@@ -9,6 +9,7 @@ use alef::core::ir::{
 /// Helper to create a field definition with all defaults
 fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional,
@@ -3137,6 +3138,7 @@ fn test_vec_of_tagged_data_enum_field_uses_js_value() {
     let make_data_variant = |name: &str, tag: &str| EnumVariant {
         name: name.to_string(),
         fields: vec![FieldDef {
+            version: Default::default(),
             name: "_0".to_string(),
             ty: TypeRef::Named(format!("{name}Msg")),
             optional: false,
@@ -3298,6 +3300,7 @@ fn test_option_and_bare_tagged_data_enum_fields_use_js_value() {
             EnumVariant {
                 name: "Text".to_string(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "_0".to_string(),
                     ty: TypeRef::Named("TextFormat".to_string()),
                     optional: false,
@@ -4107,6 +4110,7 @@ fn test_sanitized_tuple_vec_field_uses_js_value_in_tagged_enum() {
             EnumVariant {
                 name: "Text".to_string(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "content".to_string(),
                     ty: TypeRef::String,
                     optional: false,
@@ -4139,6 +4143,7 @@ fn test_sanitized_tuple_vec_field_uses_js_value_in_tagged_enum() {
             EnumVariant {
                 name: "MetadataBlock".to_string(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "entries".to_string(),
                     ty: TypeRef::Vec(Box::new(TypeRef::String)),
                     optional: false,
@@ -4252,6 +4257,166 @@ fn test_sanitized_tuple_vec_field_uses_js_value_in_tagged_enum() {
     assert!(
         content.contains("serde_wasm_bindgen::to_value(&entries)"),
         "core→binding must encode entries via serde_wasm_bindgen::to_value;\n{content}"
+    );
+}
+
+/// Build a minimal serde-tagged data enum with a single struct-style variant carrying exactly
+/// one field, for exercising the wasm backend's tagged-enum-as-struct field conversion in
+/// isolation (e.g. boxed vs. non-boxed variant fields).
+fn tagged_enum_with_single_field(field: FieldDef) -> EnumDef {
+    EnumDef {
+        name: "ModelSource".to_string(),
+        rust_path: "test_lib::ModelSource".to_string(),
+        original_rust_path: String::new(),
+        variants: vec![EnumVariant {
+            name: "Llm".to_string(),
+            fields: vec![field],
+            doc: String::new(),
+            is_default: true,
+            serde_rename: None,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            is_tuple: false,
+            originally_had_data_fields: false,
+            cfg: None,
+            version: Default::default(),
+        }],
+        methods: vec![],
+        doc: String::new(),
+        cfg: None,
+        is_copy: false,
+        has_serde: true,
+        has_default: false,
+        serde_tag: Some("type".to_string()),
+        serde_untagged: false,
+        serde_rename_all: Some("snake_case".to_string()),
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        excluded_variants: vec![],
+        version: Default::default(),
+    }
+}
+
+/// A function taking `enum_name` by value, so the enum lands in the wasm backend's
+/// `input_types` set and `gen_tagged_enum_binding_to_core` (not just the reverse direction)
+/// is emitted.
+fn visit_fn_for(enum_name: &str) -> FunctionDef {
+    FunctionDef {
+        name: "visit_model_source".to_string(),
+        rust_path: "test_lib::visit_model_source".to_string(),
+        original_rust_path: String::new(),
+        params: vec![ParamDef {
+            name: "source".to_string(),
+            ty: TypeRef::Named(enum_name.to_string()),
+            optional: false,
+            default: None,
+            sanitized: false,
+            typed_default: None,
+            is_ref: false,
+            is_mut: false,
+            newtype_wrapper: None,
+            original_type: None,
+            map_is_ahash: false,
+            map_key_is_cow: false,
+            vec_inner_is_ref: false,
+            map_is_btree: false,
+            core_wrapper: alef::core::ir::CoreWrapper::None,
+        }],
+        return_type: TypeRef::Primitive(PrimitiveType::Bool),
+        is_async: false,
+        error_type: None,
+        doc: String::new(),
+        cfg: None,
+        sanitized: false,
+        return_sanitized: false,
+        returns_ref: false,
+        returns_cow: false,
+        return_newtype_wrapper: None,
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        version: Default::default(),
+    }
+}
+
+fn generate_tagged_enum_lib_content(field: FieldDef) -> String {
+    let backend = WasmBackend;
+    let enum_def = tagged_enum_with_single_field(field);
+    let api = ApiSurface {
+        enums: vec![enum_def],
+        functions: vec![visit_fn_for("ModelSource")],
+        ..Default::default()
+    };
+    let result = backend.generate_bindings(&api, &make_config());
+    assert!(result.is_ok(), "generate_bindings should not fail: {:?}", result.err());
+    let files = result.unwrap();
+    files
+        .iter()
+        .find(|f| f.path.ends_with("lib.rs"))
+        .expect("lib.rs must be generated")
+        .content
+        .clone()
+}
+
+/// A bare `Box<T>` field on a tagged-enum struct-style variant (e.g.
+/// `Llm { llm: Box<LlmConfig> }`) must be boxed on the way into core (`Box::new`) and
+/// dereferenced on the way back out to the binding (`(*local).into()`) — the same handling
+/// already applied to boxed plain-struct fields.
+#[test]
+fn test_boxed_named_field_in_tagged_enum_variant_wraps_and_unwraps_box() {
+    let mut field = make_field("config", TypeRef::Named("InnerConfig".to_string()), false);
+    field.is_boxed = true;
+    let content = generate_tagged_enum_lib_content(field);
+
+    assert!(
+        content.contains("config: val.config.clone().map(Into::into).map(Box::new).unwrap_or_default()"),
+        "binding->core conversion for a bare Box<T> variant field must wrap the converted value \
+         in Box::new before falling back to a default:\n{content}"
+    );
+    assert!(
+        content.contains("config: Some((*config).into())"),
+        "core->binding conversion for a bare Box<T> variant field must deref before .into():\n{content}"
+    );
+}
+
+/// An `Option<Box<T>>` field on a tagged-enum struct-style variant must map `Box::new` over the
+/// `Option` on the way into core, and deref inside the `Option::map` closure on the way back out.
+#[test]
+fn test_optional_boxed_named_field_in_tagged_enum_variant_wraps_and_unwraps_box() {
+    let mut field = make_field("maybe_config", TypeRef::Named("InnerConfig".to_string()), true);
+    field.is_boxed = true;
+    let content = generate_tagged_enum_lib_content(field);
+
+    assert!(
+        content.contains("maybe_config: val.maybe_config.clone().map(Into::into).map(Box::new)"),
+        "binding->core conversion for an Option<Box<T>> variant field must map Box::new over \
+         the Option:\n{content}"
+    );
+    assert!(
+        content.contains("maybe_config: maybe_config.map(|v| (*v).into())"),
+        "core->binding conversion for an Option<Box<T>> variant field must deref inside the \
+         Option::map closure:\n{content}"
+    );
+}
+
+/// Negative control: a variant field that is NOT boxed must still emit the plain, unwrapped
+/// conversion. This proves the box handling above does not blanket-wrap every enum variant
+/// field in `Box::new`/deref regardless of `is_boxed`.
+#[test]
+fn test_non_boxed_named_field_in_tagged_enum_variant_is_not_wrapped_in_box() {
+    let field = make_field("plain", TypeRef::Named("InnerConfig".to_string()), false);
+    let content = generate_tagged_enum_lib_content(field);
+
+    assert!(
+        content.contains("plain: val.plain.clone().map(Into::into).unwrap_or_default()"),
+        "binding->core conversion for a non-boxed variant field must not be Box::new-wrapped:\n{content}"
+    );
+    assert!(
+        content.contains("plain: Some(plain.into())"),
+        "core->binding conversion for a non-boxed variant field must not be deref'd:\n{content}"
+    );
+    assert!(
+        !content.contains("Box::new(") && !content.contains("(*plain)"),
+        "non-boxed field must never trigger Box::new or deref codegen:\n{content}"
     );
 }
 
@@ -4461,5 +4626,129 @@ fn has_default_non_convertible_type_derives_default_not_delegating_impl() {
     assert!(
         struct_section.contains("Default"),
         "non-convertible has_default type must derive Default; struct header:\n{struct_section}"
+    );
+}
+
+/// Regression coverage for xberg#390: a struct field whose type has no corresponding
+/// `TypeDef`/`EnumDef` anywhere in the API surface (a genuinely foreign/unbound Rust type, e.g.
+/// `html_to_markdown_rs::ConversionOptions` referenced by `ExtractionConfig::html_options`) must
+/// not produce a dangling reference to a `Wasm*` wrapper that is never generated.
+///
+/// Before this fix, `WasmMapper::named` mapped *any* `TypeRef::Named(name)` to `"{prefix}{name}"`
+/// unconditionally, so this field would silently become `html_options: Option<WasmConversionOptions>`
+/// even though no `WasmConversionOptions` struct is emitted anywhere — a compile failure only
+/// discoverable by running `wasm-pack build`, not by reading the generated source.
+#[test]
+fn field_referencing_unbound_foreign_type_is_excluded_with_loud_marker() {
+    let backend = WasmBackend;
+
+    let api = ApiSurface {
+        crate_name: "test_lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "ExtractionConfig".to_string(),
+            rust_path: "test_lib::ExtractionConfig".to_string(),
+            fields: vec![
+                make_field("use_cache", TypeRef::Primitive(PrimitiveType::Bool), false),
+                make_field("html_options", TypeRef::Named("ConversionOptions".to_string()), true),
+            ],
+            is_clone: true,
+            has_default: true,
+            ..Default::default()
+        }],
+        // Deliberately no `ConversionOptions` TypeDef/EnumDef anywhere in the surface — it is a
+        // foreign type from a dependency crate alef never source-rooted for this test.
+        ..Default::default()
+    };
+
+    let files = backend
+        .generate_bindings(&api, &make_config())
+        .expect("generate_bindings must succeed even though the field is unbindable");
+    let content = &files[0].content;
+
+    assert!(
+        !content.contains("WasmConversionOptions"),
+        "field referencing an unbound foreign type must not emit a dangling wrapper reference:\n{content}"
+    );
+    // The name is expected to survive in the ALEF-OMITTED marker comment -- naming the dropped
+    // field is the whole point of a loud marker. What must NOT survive is any emitted CODE
+    // referring to it, so assert against the struct field, constructor param, getter and setter
+    // forms rather than the bare substring.
+    for emitted in [
+        "html_options:",
+        "html_options,",
+        "fn html_options",
+        "fn set_html_options",
+        "self.html_options",
+    ] {
+        assert!(
+            !content.contains(emitted),
+            "the unbindable field must be dropped from the struct, constructor, getter and setter \
+             (found `{emitted}`):\n{content}"
+        );
+    }
+    assert!(
+        content.contains("use_cache: bool"),
+        "sibling fields whose types ARE bound must still be emitted normally:\n{content}"
+    );
+    assert!(
+        content.contains("ALEF-OMITTED:"),
+        "the omission must be documented in the generated source, not silent:\n{content}"
+    );
+    assert!(
+        content.contains("field `html_options`: type `ConversionOptions`"),
+        "the marker must name both the dropped field and the unbound type:\n{content}"
+    );
+}
+
+/// Negative control for the above: a field whose type DOES have a corresponding `TypeDef` in the
+/// API surface must be bound normally — no exclusion, no omission marker. This is the
+/// revert-check: if the unknown-type detection in `cfg::first_unknown_named_type` regresses to
+/// treating every `Named` type as unbound, this test fails because `pages` and `PageConfig`
+/// would be wrongly dropped.
+#[test]
+fn field_referencing_a_known_named_type_is_not_treated_as_unbound() {
+    let backend = WasmBackend;
+
+    let api = ApiSurface {
+        crate_name: "test_lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![
+            TypeDef {
+                name: "ExtractionConfig".to_string(),
+                rust_path: "test_lib::ExtractionConfig".to_string(),
+                fields: vec![make_field("pages", TypeRef::Named("PageConfig".to_string()), true)],
+                is_clone: true,
+                has_default: true,
+                ..Default::default()
+            },
+            TypeDef {
+                name: "PageConfig".to_string(),
+                rust_path: "test_lib::PageConfig".to_string(),
+                fields: vec![make_field("include_page_breaks", TypeRef::Primitive(PrimitiveType::Bool), false)],
+                is_clone: true,
+                has_default: true,
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    let files = backend
+        .generate_bindings(&api, &make_config())
+        .expect("generate_bindings failed");
+    let content = &files[0].content;
+
+    assert!(
+        content.contains("pub struct WasmPageConfig"),
+        "the referenced type has its own TypeDef and must be bound normally:\n{content}"
+    );
+    assert!(
+        content.contains("pages: Option<WasmPageConfig>"),
+        "a field referencing a known type must keep its typed wrapper, not be dropped:\n{content}"
+    );
+    assert!(
+        !content.contains("ALEF-OMITTED"),
+        "no omission marker should appear when every referenced type is bound:\n{content}"
     );
 }

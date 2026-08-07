@@ -51,6 +51,50 @@ fn is_php_prop_scalar_with_enums(ty: &TypeRef, enum_names: &AHashSet<String>) ->
     }
 }
 
+/// Returns true if `ty` is representable as a promoted `#[php(constructor)]` parameter.
+///
+/// This is the WIDER predicate the real extension's constructor uses to decide which fields
+/// become constructor params — a superset of [`is_php_prop_scalar`] (every prop-scalar field
+/// can be a param, but some non-prop-scalar fields — e.g. `Vec<Named>` of an opaque/enum type,
+/// or `Bytes` — can be params too even though they are not `#[php(prop)]` properties).
+///
+/// The PHPStan stub generator (`type_stubs.rs`) MUST call this exact function (not reimplement
+/// its own copy) to decide the stub constructor's parameter list, and must separately consult
+/// [`is_php_prop_scalar`] to decide which of those params may be emitted as promoted
+/// `public readonly` properties — a param can exist without a matching PHP property.
+pub fn php_field_can_be_constructor_param(
+    ty: &TypeRef,
+    enum_names: &AHashSet<String>,
+    opaque_types: &AHashSet<String>,
+) -> bool {
+    match ty {
+        TypeRef::Vec(inner) => match inner.as_ref() {
+            TypeRef::Named(name) => opaque_types.contains(name.as_str()) || enum_names.contains(name.as_str()),
+            TypeRef::Json => false,
+            _ => true,
+        },
+        TypeRef::Bytes => true,
+        TypeRef::Optional(inner) => php_field_can_be_constructor_param(inner, enum_names, opaque_types),
+        _ => is_php_prop_scalar_with_enums(ty, enum_names),
+    }
+}
+
+/// True when `ty` is, or transitively wraps, `Json`.
+///
+/// Such fields' generated getters return `Option<String>` (a serialized JSON string) rather than
+/// the mapped field type, because `serde_json::Value` has no `IntoZval`/`FromZval` impl in
+/// ext-php-rs. The PHPStan stub generator (`type_stubs.rs`) MUST call this exact function rather
+/// than keep its own copy, so the stub's declared getter return type cannot drift from the
+/// getter the extension actually emits.
+pub(crate) fn ty_is_or_wraps_json(ty: &TypeRef) -> bool {
+    match ty {
+        TypeRef::Json => true,
+        TypeRef::Optional(inner) | TypeRef::Vec(inner) => ty_is_or_wraps_json(inner),
+        TypeRef::Map(_, v) => matches!(v.as_ref(), TypeRef::Json),
+        _ => false,
+    }
+}
+
 fn serde_default_fn_name(type_name: &str, field_name: &str) -> String {
     format!("{}_{}", pascal_to_snake(type_name), pascal_to_snake(field_name))
 }
@@ -513,30 +557,11 @@ fn gen_struct_methods_impl(
             impl_builder.add_method(&constructor);
 
             // Also generate a #[php(constructor)] for named construction.
-            fn field_can_be_param(
-                ty: &crate::core::ir::TypeRef,
-                enum_names: &AHashSet<String>,
-                opaque_types: &AHashSet<String>,
-            ) -> bool {
-                match ty {
-                    crate::core::ir::TypeRef::Vec(inner) => match inner.as_ref() {
-                        crate::core::ir::TypeRef::Named(name) => {
-                            opaque_types.contains(name.as_str()) || enum_names.contains(name.as_str())
-                        }
-                        crate::core::ir::TypeRef::Json => false,
-                        _ => true,
-                    },
-                    crate::core::ir::TypeRef::Bytes => true,
-                    crate::core::ir::TypeRef::Optional(inner) => field_can_be_param(inner, enum_names, opaque_types),
-                    _ => is_php_prop_scalar_with_enums(ty, enum_names),
-                }
-            }
-
             let has_representable_required = typ
                 .fields
                 .iter()
                 .filter(|f| !f.binding_excluded)
-                .any(|f| !f.optional && field_can_be_param(&f.ty, enum_names, opaque_types));
+                .any(|f| !f.optional && php_field_can_be_constructor_param(&f.ty, enum_names, opaque_types));
 
             if has_representable_required {
                 let param_defs: Vec<crate::core::ir::ParamDef> = typ
@@ -544,7 +569,7 @@ fn gen_struct_methods_impl(
                     .iter()
                     .filter(|f| !f.binding_excluded)
                     .filter(|f| f.cfg.is_none())
-                    .filter(|f| field_can_be_param(&f.ty, enum_names, opaque_types))
+                    .filter(|f| php_field_can_be_constructor_param(&f.ty, enum_names, opaque_types))
                     .map(|f| {
                         let php_param_name = crate::codegen::naming::to_php_name(&f.name);
                         let optional =
@@ -578,7 +603,7 @@ fn gen_struct_methods_impl(
                     .iter()
                     .filter(|f| !f.binding_excluded)
                     .filter(|f| f.cfg.is_none())
-                    .filter(|f| field_can_be_param(&f.ty, enum_names, opaque_types))
+                    .filter(|f| php_field_can_be_constructor_param(&f.ty, enum_names, opaque_types))
                 {
                     if let TypeRef::Vec(inner) = &f.ty {
                         if let TypeRef::Named(name) = inner.as_ref() {
@@ -607,7 +632,7 @@ fn gen_struct_methods_impl(
                         if f.cfg.is_some() {
                             return format!("{}: Default::default()", f.name);
                         }
-                        if field_can_be_param(&f.ty, enum_names, opaque_types) {
+                        if php_field_can_be_constructor_param(&f.ty, enum_names, opaque_types) {
                             if let TypeRef::Vec(inner) = &f.ty {
                                 if let TypeRef::Named(name) = inner.as_ref() {
                                     if !opaque_types.contains(name.as_str()) && !enum_names.contains(name.as_str()) {
@@ -746,14 +771,6 @@ fn gen_struct_methods_impl(
         // Use a snake_case Rust ident — ext-php-rs's `#[php_impl]` macro auto-converts
         let getter_ident = format!("get_{}", field.name);
 
-        fn ty_is_or_wraps_json(t: &TypeRef) -> bool {
-            match t {
-                TypeRef::Json => true,
-                TypeRef::Optional(inner) | TypeRef::Vec(inner) => ty_is_or_wraps_json(inner),
-                TypeRef::Map(_, v) => matches!(v.as_ref(), TypeRef::Json),
-                _ => false,
-            }
-        }
         let is_json_field = ty_is_or_wraps_json(&field.ty);
         if ty_references_untagged_data_enum(&field.ty, &mapper.untagged_data_enum_names) || is_json_field {
             let body = if field.optional {

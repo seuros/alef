@@ -26,6 +26,7 @@ app_name = "{app_name}"
 /// Build a minimal FieldDef.
 fn make_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty,
         optional,

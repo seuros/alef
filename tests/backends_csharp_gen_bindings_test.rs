@@ -22,6 +22,7 @@ fn test_basic_generation() {
             original_rust_path: String::new(),
             fields: vec![
                 FieldDef {
+                    version: Default::default(),
                     name: "timeout".to_string(),
                     ty: TypeRef::Primitive(PrimitiveType::U32),
                     optional: true,
@@ -42,6 +43,7 @@ fn test_basic_generation() {
                     original_type: None,
                 },
                 FieldDef {
+                    version: Default::default(),
                     name: "backend".to_string(),
                     ty: TypeRef::String,
                     optional: true,
@@ -1004,6 +1006,7 @@ fn test_type_mapping() {
             original_rust_path: String::new(),
             fields: vec![
                 FieldDef {
+                    version: Default::default(),
                     name: "u32_val".to_string(),
                     ty: TypeRef::Primitive(PrimitiveType::U32),
                     optional: false,
@@ -1024,6 +1027,7 @@ fn test_type_mapping() {
                     original_type: None,
                 },
                 FieldDef {
+                    version: Default::default(),
                     name: "i64_val".to_string(),
                     ty: TypeRef::Primitive(PrimitiveType::I64),
                     optional: false,
@@ -1044,6 +1048,7 @@ fn test_type_mapping() {
                     original_type: None,
                 },
                 FieldDef {
+                    version: Default::default(),
                     name: "string_val".to_string(),
                     ty: TypeRef::String,
                     optional: true,
@@ -1064,6 +1069,7 @@ fn test_type_mapping() {
                     original_type: None,
                 },
                 FieldDef {
+                    version: Default::default(),
                     name: "list_val".to_string(),
                     ty: TypeRef::Vec(Box::new(TypeRef::String)),
                     optional: false,
@@ -1151,6 +1157,7 @@ fn test_tuple_struct_fields_skipped() {
             original_rust_path: String::new(),
             fields: vec![
                 FieldDef {
+                    version: Default::default(),
                     name: "_0".to_string(),
                     ty: TypeRef::String,
                     optional: false,
@@ -1171,6 +1178,7 @@ fn test_tuple_struct_fields_skipped() {
                     original_type: None,
                 },
                 FieldDef {
+                    version: Default::default(),
                     name: "_1".to_string(),
                     ty: TypeRef::Primitive(PrimitiveType::U32),
                     optional: false,
@@ -1250,6 +1258,7 @@ fn test_mixed_struct_skips_tuple_fields_only() {
             original_rust_path: String::new(),
             fields: vec![
                 FieldDef {
+                    version: Default::default(),
                     name: "_0".to_string(),
                     ty: TypeRef::String,
                     optional: false,
@@ -1270,6 +1279,7 @@ fn test_mixed_struct_skips_tuple_fields_only() {
                     original_type: None,
                 },
                 FieldDef {
+                    version: Default::default(),
                     name: "label".to_string(),
                     ty: TypeRef::String,
                     optional: false,
@@ -1701,6 +1711,7 @@ fn test_duration_field_emits_single_nullable_not_double() {
             original_rust_path: String::new(),
             has_default: true,
             fields: vec![FieldDef {
+                version: Default::default(),
                 name: "timeout".to_string(),
                 ty: TypeRef::Duration,
                 optional: false,
@@ -1785,6 +1796,7 @@ fn test_optional_ulong_field_emits_single_nullable() {
             original_rust_path: String::new(),
             has_default: true,
             fields: vec![FieldDef {
+                version: Default::default(),
                 name: "max_depth".to_string(),
                 ty: TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::U64))),
                 optional: true,
@@ -1870,6 +1882,7 @@ fn test_plain_enum_with_default_emits_single_nullable() {
             original_rust_path: String::new(),
             has_default: true,
             fields: vec![FieldDef {
+                version: Default::default(),
                 name: "mode".to_string(),
                 ty: TypeRef::Named("Mode".to_string()),
                 optional: false,
@@ -2110,6 +2123,7 @@ fn test_non_nullable_string_field_emits_required() {
             rust_path: "test::ServerConfig".to_string(),
             original_rust_path: String::new(),
             fields: vec![FieldDef {
+                version: Default::default(),
                 name: "host".to_string(),
                 ty: TypeRef::String,
                 optional: false,
@@ -2194,6 +2208,7 @@ fn test_nullable_field_does_not_emit_required() {
             rust_path: "test::Config".to_string(),
             original_rust_path: String::new(),
             fields: vec![FieldDef {
+                version: Default::default(),
                 name: "timeout".to_string(),
                 ty: TypeRef::Optional(Box::new(TypeRef::String)),
                 optional: true,
@@ -2278,6 +2293,7 @@ fn test_collection_field_does_not_emit_required() {
             rust_path: "test::Config".to_string(),
             original_rust_path: String::new(),
             fields: vec![FieldDef {
+                version: Default::default(),
                 name: "cors_origins".to_string(),
                 ty: TypeRef::Vec(Box::new(TypeRef::String)),
                 optional: false,
@@ -2362,6 +2378,7 @@ fn test_field_with_default_does_not_emit_required() {
             rust_path: "test::Config".to_string(),
             original_rust_path: String::new(),
             fields: vec![FieldDef {
+                version: Default::default(),
                 name: "host".to_string(),
                 ty: TypeRef::String,
                 optional: false,
@@ -2716,6 +2733,7 @@ fn test_required_config_param_stays_required() {
             name: "Config".to_string(),
             rust_path: "test::Config".to_string(),
             fields: vec![FieldDef {
+                version: Default::default(),
                 name: "mode".to_string(),
                 ty: TypeRef::String,
                 optional: false,
@@ -2824,6 +2842,7 @@ fn test_bytes_field_default_uses_collection_expression() {
             rust_path: "test::BlobPayload".to_string(),
             original_rust_path: String::new(),
             fields: vec![FieldDef {
+                version: Default::default(),
                 name: "data".to_string(),
                 ty: TypeRef::Bytes,
                 optional: false,
@@ -3199,6 +3218,7 @@ fn test_receiver_selfhandle_freed_on_named_param_failure() {
                 rust_path: "test::SomeOther".to_string(),
                 original_rust_path: String::new(),
                 fields: vec![FieldDef {
+                    version: Default::default(),
                     name: "value".to_string(),
                     ty: TypeRef::Primitive(PrimitiveType::I32),
                     optional: false,

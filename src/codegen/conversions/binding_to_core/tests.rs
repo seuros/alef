@@ -35,6 +35,7 @@ fn type_with_field(field: FieldDef) -> TypeDef {
 #[test]
 fn sanitized_cow_string_field_converts_to_core() {
     let field = FieldDef {
+        version: Default::default(),
         name: "language".to_string(),
         ty: TypeRef::String,
         optional: false,
@@ -64,6 +65,7 @@ fn sanitized_cow_string_field_converts_to_core() {
 #[test]
 fn binding_excluded_cfg_field_is_not_emitted_into_core_literal() {
     let field = FieldDef {
+        version: Default::default(),
         name: "di_container".to_string(),
         ty: TypeRef::String,
         optional: true,
@@ -108,6 +110,7 @@ fn trait_bridge_arc_wrapper_field_forwards_value_not_default() {
     opaque_set.insert(opaque_type_name.clone());
 
     let field = FieldDef {
+        version: Default::default(),
         name: "visitor".to_string(),
         ty: TypeRef::Named(opaque_type_name.clone()),
         optional: true,
@@ -159,6 +162,7 @@ fn opaque_no_wrapper_field_without_arc_flag_emits_default() {
     opaque_set.insert(opaque_type_name.clone());
 
     let field = FieldDef {
+        version: Default::default(),
         name: "handle".to_string(),
         ty: TypeRef::Named(opaque_type_name.clone()),
         optional: false,
@@ -212,6 +216,7 @@ fn opaque_no_wrapper_field_without_arc_flag_emits_default() {
 #[test]
 fn binding_excluded_non_cfg_field_falls_through_to_core_default_trailer() {
     let field = FieldDef {
+        version: Default::default(),
         name: "ssrf".to_string(),
         ty: TypeRef::Named("SsrfPolicy".to_string()),
         optional: false,
@@ -260,6 +265,7 @@ fn binding_excluded_non_cfg_field_falls_through_to_core_default_trailer() {
 #[test]
 fn binding_excluded_field_on_type_without_default_uses_per_field_fallback() {
     let field = FieldDef {
+        version: Default::default(),
         name: "cursor".to_string(),
         ty: TypeRef::Named("Cursor".to_string()),
         optional: false,
@@ -299,6 +305,7 @@ fn binding_excluded_field_on_type_without_default_uses_per_field_fallback() {
 
 fn string_field(name: &str) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty: TypeRef::String,
         optional: false,
@@ -422,6 +429,7 @@ fn fully_mirrored_type_without_default_keeps_exhaustive_literal() {
 
 fn boxed_named_field(name: &str, optional: bool, core_wrapper: CoreWrapper) -> FieldDef {
     FieldDef {
+        version: Default::default(),
         name: name.to_string(),
         ty: TypeRef::Named("Inner".to_string()),
         optional,

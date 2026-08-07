@@ -27,6 +27,7 @@ fn make_node_context() -> TypeDef {
         rust_path: "my_lib::SyntaxContext".to_string(),
         original_rust_path: String::new(),
         fields: vec![FieldDef {
+            version: Default::default(),
             name: "node_id".to_string(),
             ty: TypeRef::String,
             optional: false,

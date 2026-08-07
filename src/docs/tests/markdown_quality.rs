@@ -67,6 +67,7 @@ fn test_generate_docs_typescript_optional_field_emits_consistent_table_cells() {
             rust_path: "mylib::InitOptions".into(),
             original_rust_path: String::new(),
             fields: vec![FieldDef {
+                version: Default::default(),
                 name: "cache_dir".into(),
                 ty: TypeRef::String,
                 optional: true,
