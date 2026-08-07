@@ -11,6 +11,7 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
         context! {
             core_crate => core_crate,
             error_class => error_class,
+            crate_attributes => crate::codegen::shared::format_crate_attributes(&config.crate_attributes),
         },
     ));
 

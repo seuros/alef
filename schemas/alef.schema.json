@@ -4946,6 +4946,14 @@
             "null"
           ]
         },
+        "crate_attributes": {
+          "default": [],
+          "description": "Custom inner attributes (`#![...]`) injected into every generated Rust\n`lib.rs` for this crate — across every language backend that emits a\nstandalone Rust crate (ffi, jni, node, python, php, wasm, ruby, elixir, R,\nswift, dart).\n\nEntries are raw attribute *bodies*, not full attribute syntax: write\n`recursion_limit = \"256\"`, not `#![recursion_limit = \"256\"]`. This mirrors\n`extra_clippy_allows`, which likewise takes bare lint names rather than a\nfull `#![allow(...)]` attribute. Each entry is emitted as its own `#![...]`\nline, in configured order, after every backend's built-in default\n`#![allow(...)]` attributes (and after any `extra_clippy_allows` attribute)\nand before any `use` statement or item.\n\nMalformed entries (empty, multi-line, or already wrapped in `#![...]`) are\nrejected at config-resolve time with a descriptive error rather than being\nspliced into generated output, where they would only fail much later at\n`rustc`/`clippy`.\n\nWhen absent or empty (the default) no extra inner attributes are emitted —\noutput is byte-identical to a crate that does not set this field.\n\nExample — unblock an `E0275` recursion-limit overflow reported by rustc\nagainst third-party trait resolution (e.g. `h2`/`slab`) inside a specific\ngenerated crate:\n```toml\n[[crates]]\nname = \"ffi\"\ncrate_attributes = [\"recursion_limit = \\\"256\\\"\"]\n```",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "csharp": {
           "anyOf": [
             {

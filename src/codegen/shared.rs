@@ -625,6 +625,27 @@ pub fn format_extra_clippy_allows(extras: &[String], already_emitted: &str) -> O
     Some(format!("allow({})", normalized.join(", ")))
 }
 
+/// Format per-crate `crate_attributes` config entries for splicing into a generated
+/// crate's `lib.rs`, one inner attribute per entry, in configured order.
+///
+/// Entries are raw attribute *bodies* (e.g. `recursion_limit = "256"`), not full
+/// `#![...]` syntax — the same convention as [`format_extra_clippy_allows`]. Unlike
+/// that function, entries are **not** merged into a single attribute: each one is a
+/// distinct, unrelated attribute (`recursion_limit`, `feature(...)`, `warn(...)`, ...),
+/// so merging them would be meaningless.
+///
+/// Well-formedness (non-empty, single-line, valid leading attribute path, not already
+/// wrapped in `#![...]`) is validated once at config-resolve time — see
+/// `crate::core::config::new_config::NewAlefConfig::resolve`. This function assumes
+/// already-validated input and only trims incidental whitespace, matching the
+/// historical behavior of `format_extra_clippy_allows`.
+///
+/// Returns an empty `Vec` when `attributes` is empty — callers must skip emission
+/// entirely in that case so output is byte-identical to the no-config baseline.
+pub fn format_crate_attributes(attributes: &[String]) -> Vec<String> {
+    attributes.iter().map(|attribute| attribute.trim().to_string()).collect()
+}
+
 /// Collect the `clippy::<lint>` tokens present in already-emitted attribute text,
 /// used to de-duplicate extra clippy allows against a backend's default allow block.
 fn collect_clippy_lints(text: &str) -> HashSet<&str> {

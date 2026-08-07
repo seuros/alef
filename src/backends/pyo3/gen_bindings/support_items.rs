@@ -1,7 +1,11 @@
 use crate::codegen::builder::RustFileBuilder;
-use crate::codegen::shared::format_extra_clippy_allows;
+use crate::codegen::shared::{format_crate_attributes, format_extra_clippy_allows};
 
-pub(super) fn add_generated_module_attributes(builder: &mut RustFileBuilder, extras: &[String]) {
+pub(super) fn add_generated_module_attributes(
+    builder: &mut RustFileBuilder,
+    extras: &[String],
+    crate_attributes: &[String],
+) {
     // docs, and numeric casts are intentional FFI conversions.
     builder.add_inner_attribute("allow(missing_docs)");
     builder.add_inner_attribute("allow(deprecated, dead_code, unused_imports, unused_variables)");
@@ -15,6 +19,9 @@ pub(super) fn add_generated_module_attributes(builder: &mut RustFileBuilder, ext
     builder.add_inner_attribute("allow(unsafe_code)");
     if let Some(extra_attr) = format_extra_clippy_allows(extras, builder.inner_attributes_text()) {
         builder.add_inner_attribute(&extra_attr);
+    }
+    for attribute in format_crate_attributes(crate_attributes) {
+        builder.add_inner_attribute(&attribute);
     }
 }
 

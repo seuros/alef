@@ -215,6 +215,12 @@ impl NewAlefConfig {
             }
         }
 
+        let crate_attributes = krate
+            .crate_attributes
+            .iter()
+            .map(|raw| validate_crate_attribute(&krate.name, raw))
+            .collect::<Result<Vec<String>, ResolveError>>()?;
+
         let source_crates = resolve_source_crates(&krate.source_crates, krate.workspace_root.as_deref())?;
 
         // Per-target toggles: workspace defaults, overridden per key by the crate. ~keep
@@ -307,8 +313,71 @@ impl NewAlefConfig {
             untagged_union_text_types: krate.untagged_union_text_types.clone(),
             poly: ws.poly.clone(),
             extra_clippy_allows: ws.extra_clippy_allows.clone(),
+            crate_attributes,
         })
     }
+}
+
+/// Validate a single `crate_attributes` entry.
+///
+/// Entries are raw Rust attribute *bodies* (the content between `#![` and `]`), not
+/// full attribute syntax — e.g. `recursion_limit = "256"`, not
+/// `#![recursion_limit = "256"]`. This mirrors `extra_clippy_allows`, which likewise
+/// takes bare lint names rather than a full `#![allow(...)]` attribute.
+///
+/// This performs a shallow syntactic check (non-empty, single line, not already
+/// wrapped in `#![...]`, and a valid leading attribute path) — not a full Rust
+/// attribute-grammar parse. Malformed entries are rejected here, at config-resolve
+/// time, rather than being spliced into generated output where they would only fail
+/// much later at `rustc`/`clippy`.
+fn validate_crate_attribute(crate_name: &str, raw: &str) -> Result<String, ResolveError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(ResolveError::InvalidConfig(format!(
+            "crate `{crate_name}`: crate_attributes entry is empty or whitespace-only"
+        )));
+    }
+    if trimmed.contains('\n') {
+        return Err(ResolveError::InvalidConfig(format!(
+            "crate `{crate_name}`: crate_attributes entry `{trimmed}` must not contain a \
+             newline; each entry is a single inner attribute body, e.g. `recursion_limit = \"256\"`"
+        )));
+    }
+    if trimmed.starts_with('#') || trimmed.starts_with('[') {
+        return Err(ResolveError::InvalidConfig(format!(
+            "crate `{crate_name}`: crate_attributes entry `{trimmed}` must not include the \
+             `#![...]` wrapper — pass only the attribute body, e.g. `recursion_limit = \"256\"` \
+             not `#![recursion_limit = \"256\"]`"
+        )));
+    }
+
+    let path_len = trimmed
+        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != ':')
+        .unwrap_or(trimmed.len());
+    let path = &trimmed[..path_len];
+    let valid_path = !path.is_empty()
+        && path.split("::").all(|segment| {
+            let mut chars = segment.chars();
+            matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+                && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        });
+    if !valid_path {
+        return Err(ResolveError::InvalidConfig(format!(
+            "crate `{crate_name}`: crate_attributes entry `{trimmed}` must start with a valid \
+             attribute path (an identifier such as `recursion_limit`)"
+        )));
+    }
+
+    let rest = trimmed[path_len..].trim_start();
+    let well_formed_rest = rest.is_empty() || rest.starts_with('=') || rest.starts_with('(');
+    if !well_formed_rest {
+        return Err(ResolveError::InvalidConfig(format!(
+            "crate `{crate_name}`: crate_attributes entry `{trimmed}` is malformed — expected \
+             `path`, `path = value`, or `path(...)`"
+        )));
+    }
+
+    Ok(trimmed.to_string())
 }
 
 /// Resolve a list of `SourceCrate` entries, rebasing sources for any entry with

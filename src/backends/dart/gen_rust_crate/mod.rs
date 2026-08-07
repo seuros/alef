@@ -113,6 +113,9 @@ fn emit_lib_rs(
     {
         content.push_str(&format!("#![{extra_attr}]\n"));
     }
+    for attribute in crate::codegen::shared::format_crate_attributes(&config.crate_attributes) {
+        content.push_str(&format!("#![{attribute}]\n"));
+    }
     content.push_str("mod frb_generated;\n");
     content.push_str("use flutter_rust_bridge::frb;\n");
     content.push_str("pub use flutter_rust_bridge::DartFnFuture;\n");

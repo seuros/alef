@@ -30,6 +30,9 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
     builder.add_inner_attribute(
         "allow(clippy::missing_safety_doc, clippy::doc_lazy_continuation, clippy::doc_overindented_list_items)",
     );
+    for attribute in crate::codegen::shared::format_crate_attributes(&config.crate_attributes) {
+        builder.add_inner_attribute(&attribute);
+    }
 
     builder.add_import("std::ffi::{c_char, CStr, CString}");
     builder.add_import("std::cell::RefCell");

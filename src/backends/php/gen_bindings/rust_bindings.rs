@@ -175,6 +175,9 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
     {
         builder.add_inner_attribute(&extra_attr);
     }
+    for attribute in crate::codegen::shared::format_crate_attributes(&config.crate_attributes) {
+        builder.add_inner_attribute(&attribute);
+    }
     builder.add_import("ext_php_rs::prelude::*");
 
     if has_serde {

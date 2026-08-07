@@ -160,6 +160,14 @@ pub struct ResolvedCrateConfig {
     /// Extra clippy lints to allow in generated Rust binding files, inherited
     /// from `[workspace] extra_clippy_allows`. Empty by default.
     pub extra_clippy_allows: Vec<String>,
+
+    /// Resolved from [`crate::core::config::raw_crate::RawCrateConfig::crate_attributes`].
+    ///
+    /// Custom inner attribute bodies (e.g. `recursion_limit = "256"`) injected into
+    /// every generated Rust `lib.rs` for this crate, across every Rust-emitting
+    /// backend. Entries are already validated for well-formedness — see
+    /// [`crate::core::config::new_config::NewAlefConfig::resolve`]. Empty by default.
+    pub crate_attributes: Vec<String>,
 }
 
 impl ResolvedCrateConfig {

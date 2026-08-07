@@ -194,6 +194,9 @@ impl Backend for WasmBackend {
         ) {
             builder.add_inner_attribute(&extra_attr);
         }
+        for attribute in crate::codegen::shared::format_crate_attributes(&config.crate_attributes) {
+            builder.add_inner_attribute(&attribute);
+        }
         builder.add_import("wasm_bindgen::prelude::*");
 
         if let Some(modules) = wasm_config.map(|c| c.custom_rust_modules.as_slice()) {

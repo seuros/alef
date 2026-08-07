@@ -264,6 +264,38 @@ pub struct RawCrateConfig {
     /// ```
     #[serde(default)]
     pub untagged_union_text_types: Vec<String>,
+
+    /// Custom inner attributes (`#![...]`) injected into every generated Rust
+    /// `lib.rs` for this crate — across every language backend that emits a
+    /// standalone Rust crate (ffi, jni, node, python, php, wasm, ruby, elixir, R,
+    /// swift, dart).
+    ///
+    /// Entries are raw attribute *bodies*, not full attribute syntax: write
+    /// `recursion_limit = "256"`, not `#![recursion_limit = "256"]`. This mirrors
+    /// `extra_clippy_allows`, which likewise takes bare lint names rather than a
+    /// full `#![allow(...)]` attribute. Each entry is emitted as its own `#![...]`
+    /// line, in configured order, after every backend's built-in default
+    /// `#![allow(...)]` attributes (and after any `extra_clippy_allows` attribute)
+    /// and before any `use` statement or item.
+    ///
+    /// Malformed entries (empty, multi-line, or already wrapped in `#![...]`) are
+    /// rejected at config-resolve time with a descriptive error rather than being
+    /// spliced into generated output, where they would only fail much later at
+    /// `rustc`/`clippy`.
+    ///
+    /// When absent or empty (the default) no extra inner attributes are emitted —
+    /// output is byte-identical to a crate that does not set this field.
+    ///
+    /// Example — unblock an `E0275` recursion-limit overflow reported by rustc
+    /// against third-party trait resolution (e.g. `h2`/`slab`) inside a specific
+    /// generated crate:
+    /// ```toml
+    /// [[crates]]
+    /// name = "ffi"
+    /// crate_attributes = ["recursion_limit = \"256\""]
+    /// ```
+    #[serde(default)]
+    pub crate_attributes: Vec<String>,
 }
 
 #[cfg(test)]

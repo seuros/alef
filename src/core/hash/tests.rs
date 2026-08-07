@@ -437,6 +437,7 @@ fn crate_sources_hash_differs_across_crates_with_disjoint_sources() {
         untagged_union_text_types: vec![],
         poly: Default::default(),
         extra_clippy_allows: vec![],
+        crate_attributes: vec![],
     };
 
     let cfg_a = make_cfg("alpha", vec![a]);
@@ -540,6 +541,7 @@ fn crate_sources_hash_includes_source_crates() {
                 untagged_union_text_types: vec![],
                 poly: Default::default(),
                 extra_clippy_allows: vec![],
+                crate_attributes: vec![],
             }
         };
 
@@ -643,6 +645,7 @@ fn compute_crate_sources_hash_dedupes_overlapping_paths() {
                 untagged_union_text_types: vec![],
                 poly: Default::default(),
                 extra_clippy_allows: vec![],
+                crate_attributes: vec![],
             }
         };
 
@@ -735,6 +738,7 @@ fn compute_crate_sources_hash_is_order_independent() {
             untagged_union_text_types: vec![],
             poly: Default::default(),
             extra_clippy_allows: vec![],
+            crate_attributes: vec![],
         }
     };
 

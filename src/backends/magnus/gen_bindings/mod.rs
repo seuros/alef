@@ -118,6 +118,9 @@ impl Backend for MagnusBackend {
         ) {
             builder.add_inner_attribute(&extra_attr);
         }
+        for attribute in crate::codegen::shared::format_crate_attributes(&config.crate_attributes) {
+            builder.add_inner_attribute(&attribute);
+        }
         builder.add_import(
             "magnus::{function, method, prelude::*, Error, Ruby, IntoValueFromNative, try_convert::TryConvertOwned}",
         );

@@ -204,6 +204,9 @@ fn emit_lib_rs(
     if let Some(extra_attr) = crate::codegen::shared::format_extra_clippy_allows(&config.extra_clippy_allows, &out) {
         out.push_str(&format!("#![{extra_attr}]\n"));
     }
+    for attribute in crate::codegen::shared::format_crate_attributes(&config.crate_attributes) {
+        out.push_str(&format!("#![{attribute}]\n"));
+    }
     out.push('\n');
 
     out.push_str(shims::ALEF_TOKIO_RUNTIME_DEFINITION);

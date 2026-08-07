@@ -85,7 +85,11 @@ impl Backend for Pyo3Backend {
         let adapter_bodies = crate::adapters::build_adapter_bodies(config, Language::Python)?;
 
         let mut builder = RustFileBuilder::new().with_generated_header();
-        support_items::add_generated_module_attributes(&mut builder, &config.extra_clippy_allows);
+        support_items::add_generated_module_attributes(
+            &mut builder,
+            &config.extra_clippy_allows,
+            &config.crate_attributes,
+        );
         builder.add_import("pyo3::prelude::*");
         // import is needed — that would trigger clippy::single_component_path_imports.
 
