@@ -5,6 +5,8 @@
 //! which lives in `.formatter.exs`. Without this file the generated Elixir suite
 //! is never formatted at all and ships with the emitter's unwrapped long lines.
 
+use std::path::Path;
+
 use alef::core::config::NewAlefConfig;
 use alef::e2e::codegen::E2eCodegen;
 use alef::e2e::codegen::elixir::ElixirCodegen;
@@ -74,9 +76,13 @@ fn elixir_e2e_emits_formatter_exs_next_to_mix_exs() {
         .find(|f| f.path.ends_with(".formatter.exs"))
         .expect("Elixir e2e must emit a .formatter.exs");
 
+    // ~keep Compared as a `Path`, not a string: `PathBuf::join` uses the native
+    // separator, so `to_string_lossy()` yields `e2e\elixir\.formatter.exs` on Windows
+    // and never matches a `/`-literal. `Path`'s `PartialEq` compares components, so
+    // this holds on every platform.
     assert_eq!(
-        formatter.path.to_string_lossy(),
-        "e2e/elixir/.formatter.exs",
+        formatter.path,
+        Path::new("e2e/elixir/.formatter.exs"),
         "the .formatter.exs must sit at the mix project root so `mix format` reads it"
     );
 
