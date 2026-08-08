@@ -33,6 +33,17 @@ fn elixir_type_annotation(ty: &TypeRef) -> String {
     }
 }
 
+/// True when `ty` names an opaque type in the surface (i.e. one whose Elixir
+/// representation is a `%__MODULE__{ref: reference()}` wrapper around a
+/// Rustler `ResourceArc`, not a plain value).
+///
+/// Shared by the Rust-side NIF param typing (`rust.rs`, `registration_nif.rs`)
+/// and the Elixir-side metadata tuple construction (`registration.rs`) so both
+/// sides of the FFI boundary agree on which params need unwrapping.
+pub(super) fn is_opaque_metadata_param(ty: &TypeRef, api: &ApiSurface) -> bool {
+    matches!(ty, TypeRef::Named(n) if api.types.iter().any(|t| &t.name == n && !t.is_trait && t.is_opaque))
+}
+
 pub(super) fn push_elixir_param(params: &mut String, name: &str, optional: bool) {
     params.push_str(", ");
     params.push_str(name);

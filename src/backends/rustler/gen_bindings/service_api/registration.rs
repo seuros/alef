@@ -1,6 +1,8 @@
 //! Elixir registration and configurator helper generation.
 
-use crate::backends::rustler::gen_bindings::service_api::helpers::{push_elixir_doc, push_elixir_param};
+use crate::backends::rustler::gen_bindings::service_api::helpers::{
+    is_opaque_metadata_param, push_elixir_doc, push_elixir_param,
+};
 use crate::backends::rustler::template_env::render;
 use crate::core::ir::{ApiSurface, RegistrationDef, RegistrationVariantStyle, ServiceDef};
 use minijinja::context;
@@ -9,7 +11,7 @@ pub(super) fn gen_registration_method(
     out: &mut String,
     reg: &RegistrationDef,
     _service: &ServiceDef,
-    _api: &ApiSurface,
+    api: &ApiSurface,
     module_prefix: &str,
 ) {
     let method_name = &reg.method;
@@ -21,7 +23,20 @@ pub(super) fn gen_registration_method(
     }
     params.push_str(", handler");
 
-    let meta_names: Vec<&str> = reg.metadata_params.iter().map(|p| p.name.as_str()).collect();
+    // Opaque metadata params (e.g. a `RouteBuilder` handle) arrive on the Elixir
+    // side as `%__MODULE__{ref: reference()}` wrappers, but the Rust NIF decodes
+    // `rustler::ResourceArc<T>` directly — unwrap `.ref` here to match. ~keep
+    let meta_names: Vec<String> = reg
+        .metadata_params
+        .iter()
+        .map(|p| {
+            if is_opaque_metadata_param(&p.ty, api) {
+                format!("{}.ref", p.name)
+            } else {
+                p.name.clone()
+            }
+        })
+        .collect();
     let meta_tuple = if meta_names.is_empty() {
         "{}".to_owned()
     } else {

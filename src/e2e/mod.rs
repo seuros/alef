@@ -77,6 +77,17 @@ pub fn generate_e2e(
 
     info!("Loaded {} fixture(s) from {}", fixtures.len(), e2e_config.fixtures);
 
+    // Validate `skip.languages` ids against the full configured target list
+    // (not the possibly `--lang`-filtered set below) so the check is stable
+    // regardless of which subset of languages this particular invocation
+    // generates for.
+    let configured_languages: Vec<String> = if !e2e_config.languages.is_empty() {
+        e2e_config.languages.clone()
+    } else {
+        default_e2e_languages(&config.languages)
+    };
+    fixture::validate_skip_languages(&fixtures, &configured_languages)?;
+
     // Resolution order for which language generators to run:
     //   1. Explicit `--lang` filter from the CLI (highest priority).
     //   2. `[e2e].languages` from alef.toml when set.

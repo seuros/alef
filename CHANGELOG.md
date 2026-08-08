@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.58.1] - 2026-08-08
+
+### Fixed
+
+- **The Rustler backend generated an Elixir binding in which every request reaching a user handler
+  hung forever.** Three defects compounded. (1) Chainable opaque wrapper methods returned the bare
+  NIF `reference()` instead of re-wrapping in `%__MODULE__{ref: ...}`, because `returns_self` was
+  computed as `is_static && returns_self` — excluding every receiver-based (`&mut self -> Self`)
+  builder method, which is the only kind a builder chain uses. A builder therefore degraded from
+  struct to bare reference on the first chained call. (2) An opaque metadata parameter was emitted
+  bare into the registration tuple, passing the Elixir wrapper struct where the NIF decodes
+  `rustler::ResourceArc<T>`. (3) The handler `GenServer` received on `handle_cast/2`, but the Rust
+  bridge dispatches with a raw `send/2`, so `{:trait_call, ...}` fell through to the default
+  `handle_info/2` and was silently discarded. Raw-send + `handle_info` is already the contract used
+  by the scaffold, the e2e stubs and the Gleam trait bridge, so the two service-API templates were
+  the outliers. (`src/backends/rustler`)
+- **The Elixir e2e HTTP client JSON-encoded raw request bodies.** `render_call` unconditionally used
+  Req's `json:` option, so a pre-encoded form or multipart payload was sent as a quoted JSON string
+  and rejected by the server; multipart calls additionally never emitted a `Content-Type` header at
+  all, since `ctx.content_type` was consulted only for the body decision. It now sends raw bodies via
+  `body:` and falls back to `ctx.content_type` for the header. The content-type resolution added for
+  Java in 0.58.0 is now a shared helper (`effective_content_type` / `is_raw_text_content_type` in
+  `src/e2e/codegen/client`) rather than a third inline copy. (`src/e2e/codegen/elixir/http.rs`)
+- **The Elixir e2e client silently dropped either request headers or cookies** when a fixture had
+  both, by emitting two separate `headers:` options in one keyword list. They are now merged into a
+  single option. (`src/e2e/codegen/elixir/http.rs`)
+- **Generated Dart and WASM test files reordered their imports between otherwise identical runs.**
+  Trait-import collection used a `HashSet`, and the transitive WASM nested-type walk returned a
+  field-name-keyed `HashMap` in which two classes sharing a field name collided — which one survived
+  depended on iteration order. Both now use `BTreeSet`, and the WASM walk returns a set of class
+  names, which is all its only consumer needs. Generated `e2e/` output is byte-compared by CI, so
+  this ordering must be deterministic. (`src/e2e/codegen/dart`, `src/e2e/codegen/typescript`)
+
+### Added
+
+- **`skip.languages` ids in fixtures are validated against the configured e2e target list.** An id
+  that matched no real target silently disabled nothing, so the fixture kept running everywhere the
+  author believed it was skipped. (`src/e2e/fixture.rs`)
+
 ## [0.58.0] - 2026-08-08
 
 ### Added

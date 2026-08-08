@@ -1,6 +1,6 @@
 //! Rust registration variant NIF generation.
 
-use crate::backends::rustler::gen_bindings::service_api::helpers::typeref_to_rust_type;
+use crate::backends::rustler::gen_bindings::service_api::helpers::{is_opaque_metadata_param, typeref_to_rust_type};
 use crate::backends::rustler::template_env::render;
 use crate::core::ir::{ApiSurface, RegistrationDef, ServiceDef, TypeRef};
 use heck::ToSnakeCase;
@@ -79,7 +79,7 @@ pub(super) fn gen_registration_variant_nif(
             .iter()
             .map(|p| {
                 if let TypeRef::Named(n) = &p.ty
-                    && api.types.iter().any(|t| &t.name == n && !t.is_trait && t.is_opaque)
+                    && is_opaque_metadata_param(&p.ty, api)
                 {
                     return format!("rustler::ResourceArc<super::{}>", n);
                 }
@@ -91,11 +91,7 @@ pub(super) fn gen_registration_variant_nif(
 
         let mut opaque_bindings = String::new();
         for meta_param in base_reg.metadata_params.iter() {
-            let is_opaque = if let TypeRef::Named(n) = &meta_param.ty {
-                api.types.iter().any(|t| &t.name == n && !t.is_trait && t.is_opaque)
-            } else {
-                false
-            };
+            let is_opaque = is_opaque_metadata_param(&meta_param.ty, api);
             if is_opaque && let TypeRef::Named(n) = &meta_param.ty {
                 opaque_bindings.push_str(&render(
                     "service_api_opaque_metadata_binding.rs.jinja",

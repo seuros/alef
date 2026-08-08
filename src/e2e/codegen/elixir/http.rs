@@ -77,18 +77,43 @@ impl<'a> client::TestClientRenderer for ElixirTestClientRenderer<'a> {
         // "cannot set both :finch and :connect_options" error in 0.5.18+.
         let mut opts: Vec<String> = vec!["finch: AlefE2EFinch".to_string()];
 
+        // Req's `json:` option JSON-encodes the value and sets
+        // `Content-Type: application/json`. For form/multipart bodies the
+        // fixture value is already pre-encoded wire content, so it must go
+        // out as-is via Req's raw `body:` option; otherwise a form/multipart
+        // string body would be sent as a quoted JSON string and rejected.
+        let is_raw_body = ctx.body.is_some_and(|body| {
+            matches!(body, serde_json::Value::String(_))
+                && client::effective_content_type(ctx).is_some_and(client::is_raw_text_content_type)
+        });
+
         if let Some(body) = ctx.body {
-            let elixir_val = json_to_elixir(body);
-            opts.push(format!("json: {elixir_val}"));
+            if is_raw_body {
+                if let serde_json::Value::String(s) = body {
+                    opts.push(format!("body: \"{}\"", escape_elixir(s)));
+                }
+            } else {
+                let elixir_val = json_to_elixir(body);
+                opts.push(format!("json: {elixir_val}"));
+            }
         }
 
-        if !ctx.headers.is_empty() {
-            let header_pairs: Vec<String> = ctx
-                .headers
-                .iter()
-                .map(|(k, v)| format!("{{\"{}\", \"{}\"}}", escape_elixir(k), escape_elixir(v)))
-                .collect();
-            opts.push(format!("headers: [{}]", header_pairs.join(", ")));
+        // A single `headers:` keyword must carry request headers, the
+        // Content-Type fallback (when only `ctx.content_type` carries it),
+        // and cookies — Elixir keyword lists silently let a later duplicate
+        // key win, so a second `headers:` entry (e.g. from cookies) would
+        // drop whichever set was emitted first.
+        let mut header_pairs: Vec<String> = ctx
+            .headers
+            .iter()
+            .map(|(k, v)| format!("{{\"{}\", \"{}\"}}", escape_elixir(k), escape_elixir(v)))
+            .collect();
+
+        if is_raw_body
+            && !ctx.headers.keys().any(|k| k.eq_ignore_ascii_case("content-type"))
+            && let Some(content_type) = ctx.content_type
+        {
+            header_pairs.push(format!("{{\"content-type\", \"{}\"}}", escape_elixir(content_type)));
         }
 
         if !ctx.cookies.is_empty() {
@@ -98,7 +123,11 @@ impl<'a> client::TestClientRenderer for ElixirTestClientRenderer<'a> {
                 .map(|(k, v)| format!("{k}={v}"))
                 .collect::<Vec<_>>()
                 .join("; ");
-            opts.push(format!("headers: [{{\"cookie\", \"{}\"}}]", escape_elixir(&cookie_str)));
+            header_pairs.push(format!("{{\"cookie\", \"{}\"}}", escape_elixir(&cookie_str)));
+        }
+
+        if !header_pairs.is_empty() {
+            opts.push(format!("headers: [{}]", header_pairs.join(", ")));
         }
 
         if !ctx.query_params.is_empty() {
@@ -263,4 +292,143 @@ pub(super) fn render_http_test_case(out: &mut String, fixture: &Fixture, http: &
         expected_status: http.expected_response.status_code,
     };
     client::http_call::render_http_test(out, &renderer, fixture);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::e2e::codegen::client::{CallCtx, TestClientRenderer};
+    use std::collections::BTreeMap;
+
+    fn renderer() -> ElixirTestClientRenderer<'static> {
+        ElixirTestClientRenderer {
+            fixture_id: "fx",
+            expected_status: 200,
+        }
+    }
+
+    #[test]
+    fn render_call_keeps_raw_string_body_when_form_content_type_only_in_header() {
+        let mut headers = BTreeMap::new();
+        headers.insert(
+            "Content-Type".to_string(),
+            "application/x-www-form-urlencoded".to_string(),
+        );
+        let cookies = BTreeMap::new();
+        let query = BTreeMap::new();
+        let body = serde_json::Value::String("username=johndoe&password=secret".to_string());
+        let ctx = CallCtx {
+            method: "POST",
+            path: "/fixtures/x",
+            headers: &headers,
+            query_params: &query,
+            cookies: &cookies,
+            body: Some(&body),
+            content_type: None,
+            response_var: "response",
+        };
+
+        let mut out = String::new();
+        renderer().render_call(&mut out, &ctx);
+
+        assert!(
+            out.contains(r#"body: "username=johndoe&password=secret""#),
+            "expected raw form body, got: {out}"
+        );
+        assert!(
+            !out.contains("json:"),
+            "should not use json: for raw form body, got: {out}"
+        );
+    }
+
+    #[test]
+    fn render_call_emits_content_type_header_for_multipart_body_from_ctx_content_type() {
+        let headers = BTreeMap::new();
+        let cookies = BTreeMap::new();
+        let query = BTreeMap::new();
+        let body = serde_json::Value::String(
+            "--alef-boundary\r\nContent-Disposition: form-data; name=\"test1\"\r\n\r\nvalue\r\n--alef-boundary--"
+                .to_string(),
+        );
+        let ctx = CallCtx {
+            method: "POST",
+            path: "/fixtures/x",
+            headers: &headers,
+            query_params: &query,
+            cookies: &cookies,
+            body: Some(&body),
+            content_type: Some("multipart/form-data; boundary=alef-boundary"),
+            response_var: "response",
+        };
+
+        let mut out = String::new();
+        renderer().render_call(&mut out, &ctx);
+
+        assert!(out.contains("body: \""), "expected raw body option, got: {out}");
+        assert!(
+            out.contains(r#"{"content-type", "multipart/form-data; boundary=alef-boundary"}"#),
+            "expected Content-Type header from ctx.content_type, got: {out}"
+        );
+        assert!(
+            !out.contains("json:"),
+            "should not use json: for multipart body, got: {out}"
+        );
+    }
+
+    #[test]
+    fn render_call_json_encodes_body_for_default_content_type() {
+        let headers = BTreeMap::new();
+        let cookies = BTreeMap::new();
+        let query = BTreeMap::new();
+        let body = serde_json::json!({"key": "value"});
+        let ctx = CallCtx {
+            method: "POST",
+            path: "/fixtures/x",
+            headers: &headers,
+            query_params: &query,
+            cookies: &cookies,
+            body: Some(&body),
+            content_type: None,
+            response_var: "response",
+        };
+
+        let mut out = String::new();
+        renderer().render_call(&mut out, &ctx);
+
+        assert!(out.contains("json:"), "expected json: for JSON body, got: {out}");
+        assert!(
+            !out.contains("body:"),
+            "should not use raw body: for JSON body, got: {out}"
+        );
+    }
+
+    #[test]
+    fn render_call_merges_cookies_and_headers_into_single_headers_option() {
+        let mut headers = BTreeMap::new();
+        headers.insert("X-Custom".to_string(), "abc".to_string());
+        let mut cookies = BTreeMap::new();
+        cookies.insert("session".to_string(), "xyz".to_string());
+        let query = BTreeMap::new();
+        let ctx = CallCtx {
+            method: "GET",
+            path: "/fixtures/x",
+            headers: &headers,
+            query_params: &query,
+            cookies: &cookies,
+            body: None,
+            content_type: None,
+            response_var: "response",
+        };
+
+        let mut out = String::new();
+        renderer().render_call(&mut out, &ctx);
+
+        let headers_count = out.matches("headers: [").count();
+        assert_eq!(headers_count, 1, "expected a single headers: option, got: {out}");
+        assert!(
+            out.contains("X-Custom"),
+            "expected request header preserved, got: {out}"
+        );
+        assert!(out.contains("cookie"), "expected cookie header preserved, got: {out}");
+    }
 }

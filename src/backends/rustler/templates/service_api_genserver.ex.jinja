@@ -10,7 +10,7 @@
       {:ok, state}
     end
 
-    def handle_cast({:trait_call, method, args, reply_id}, registrations) do
+    def handle_info({:trait_call, method, args, reply_id}, registrations) do
       # args arrives as a native Erlang map (no JSON decode); dispatch to the registered handler.
       case decode_args_and_dispatch(method, args, registrations) do
         {:ok, response} ->

@@ -138,21 +138,8 @@ impl client::TestClientRenderer for JavaTestClientRenderer {
             // default), string bodies must be JSON-encoded like any other value — matching
             // the Python (`json.dumps`) and Node (`JSON.stringify`) backends — so a plain
             // string body becomes a quoted JSON string rather than raw, invalid JSON.
-            // The effective Content-Type is the explicit request header when present,
-            // falling back to `ctx.content_type`. Fixtures commonly declare a form
-            // content type only in `request.headers` (leaving `ctx.content_type` unset);
-            // without consulting the header, a form/multipart string body would be
-            // JSON-encoded (quoted) here and the server would reject the malformed body.
-            let effective_content_type = ctx
-                .headers
-                .iter()
-                .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
-                .map(|(_, v)| v.as_str())
-                .or(ctx.content_type);
-            let is_raw_text_content_type = effective_content_type.is_some_and(|ct| {
-                let ct_lower = ct.to_ascii_lowercase();
-                ct_lower.contains("multipart/form-data") || ct_lower.contains("application/x-www-form-urlencoded")
-            });
+            let is_raw_text_content_type =
+                client::effective_content_type(ctx).is_some_and(client::is_raw_text_content_type);
             let body_str = match body {
                 serde_json::Value::String(s) if is_raw_text_content_type => s.clone(),
                 other => serde_json::to_string(other).unwrap_or_default(),

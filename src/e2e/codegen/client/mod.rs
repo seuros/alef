@@ -51,6 +51,30 @@ impl<'a> CallCtx<'a> {
     }
 }
 
+/// The effective Content-Type for a call: the explicit `Content-Type` request
+/// header when present (case-insensitive), falling back to `ctx.content_type`.
+///
+/// Fixtures commonly declare a form/multipart content type only in
+/// `request.headers`, leaving `ctx.content_type` unset; consulting only
+/// `ctx.content_type` misses that case and a raw string body then gets
+/// JSON-encoded (quoted) by a renderer that assumes JSON.
+pub fn effective_content_type<'a>(ctx: &CallCtx<'a>) -> Option<&'a str> {
+    ctx.headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+        .map(|(_, v)| v.as_str())
+        .or(ctx.content_type)
+}
+
+/// Whether a Content-Type indicates a raw (non-JSON-encoded) text body — i.e.
+/// form-urlencoded or multipart, where the fixture body is already
+/// pre-encoded wire content and must be sent byte-for-byte rather than
+/// serialized as JSON.
+pub fn is_raw_text_content_type(content_type: &str) -> bool {
+    let ct_lower = content_type.to_ascii_lowercase();
+    ct_lower.contains("multipart/form-data") || ct_lower.contains("application/x-www-form-urlencoded")
+}
+
 /// Per-language TestClient test renderer.
 ///
 /// Implementations live alongside the per-language codegen module

@@ -173,8 +173,13 @@ pub fn render_test_file(
     // is not defined`. The BFS uses a seen-set to terminate on cycles.
     if lang == "wasm" {
         let derived_all = collect_transitive_nested_types_for_wasm(&all_options_types, type_defs, wasm_type_prefix);
-        for (k, v) in derived_all {
-            all_nested_types.entry(k).or_insert(v);
+        // `derived_all` is a set of class names (not field-name keyed — two
+        // distinct classes can share a field name, see the comment on
+        // `collect_transitive_nested_types_for_wasm`). `all_nested_types` is
+        // only ever read via `.values()` below for the import list, so a
+        // synthetic key (the class name itself) is fine here.
+        for class_name in derived_all {
+            all_nested_types.entry(class_name.clone()).or_insert(class_name);
         }
     }
 

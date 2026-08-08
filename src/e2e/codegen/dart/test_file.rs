@@ -92,7 +92,13 @@ pub(super) fn render_test_file(
 
     // Collect plugin trait types used in test_backend arguments. These types must be imported
     // from the main package so test stubs can extend them.
-    let used_trait_types: std::collections::HashSet<String> = fixtures
+    //
+    // A `BTreeSet` (not `HashSet`) is required here: this set is iterated directly below to
+    // emit one `show`-import line per trait, and `HashSet` iteration order is randomized
+    // per-process, which made the generated `e2e/dart/test/*.dart` files reorder their import
+    // lines on every otherwise-unchanged `alef e2e generate` run. The generated output is
+    // byte-compared by CI (`e2e-freshness`), so iteration order here must be deterministic.
+    let used_trait_types: std::collections::BTreeSet<String> = fixtures
         .iter()
         .flat_map(|f| {
             if f.is_http_test() {

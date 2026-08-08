@@ -27,8 +27,8 @@ pub(in crate::e2e::codegen::typescript::test_file) fn wasm_class_name(ir_type_na
 /// - Everything else (primitives, strings, maps, etc.) → skip.
 ///
 /// BFS over the wasm class graph starting from each `seed_wasm_type` and walking
-/// every struct-typed field. Returns a flat field-name → wasm-class-name map
-/// covering EVERY transitively-reachable nested class.
+/// every struct-typed field. Returns the set of every transitively-reachable
+/// nested wasm class name.
 ///
 /// The single-level [`derive_nested_types_for_wasm`] only inspects the seed
 /// type's immediate fields. That's insufficient for the import block, because
@@ -39,21 +39,34 @@ pub(in crate::e2e::codegen::typescript::test_file) fn wasm_class_name(ir_type_na
 /// `ReferenceError: WasmFunctionDefinition is not defined` at runtime.
 ///
 /// Termination is guaranteed by a `seen` set on wasm class names.
+///
+/// Returns a `BTreeSet<String>` of class names rather than a field-name-keyed
+/// map. Two distinct classes can share a field name (e.g. both
+/// `WasmTesseractConfig` and `WasmConversionOptions` expose a field named
+/// `preprocessing`, with different nested class types); keying by field name
+/// let one collide with and silently drop the other, and which one survived
+/// depended on `HashMap` iteration order, making generated output
+/// non-deterministic across runs. The only consumer of this return value is
+/// the import-statement builder in `render.rs`, which needs the set of class
+/// names to import, not a field-to-class mapping, so collapsing to a set of
+/// class names is both correct and order-independent. Keep this a `BTreeSet`
+/// (not `HashSet`) — the generated `e2e/` output is byte-compared by CI, so
+/// iteration order must be deterministic.
 pub(in crate::e2e::codegen::typescript::test_file) fn collect_transitive_nested_types_for_wasm(
     seed_wasm_types: &std::collections::BTreeSet<String>,
     type_defs: &[TypeDef],
     wasm_type_prefix: &str,
-) -> std::collections::HashMap<String, String> {
-    let mut result: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+) -> std::collections::BTreeSet<String> {
+    let mut result: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut queue: Vec<String> = seed_wasm_types.iter().cloned().collect();
     let mut seen: std::collections::HashSet<String> = queue.iter().cloned().collect();
     while let Some(wasm_type) = queue.pop() {
         let derived = derive_nested_types_for_wasm(&wasm_type, type_defs, wasm_type_prefix);
-        for (k, v) in derived {
+        for v in derived.into_values() {
             if seen.insert(v.clone()) {
                 queue.push(v.clone());
             }
-            result.entry(k).or_insert(v);
+            result.insert(v);
         }
     }
     result

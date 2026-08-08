@@ -693,6 +693,38 @@ fn normalize_fixture_value(mut value: serde_json::Value) -> serde_json::Value {
     value
 }
 
+/// Validate that every id in every fixture's `skip.languages` refers to a
+/// known e2e generator target.
+///
+/// A `skip.languages` id that is not an actual generator target silently
+/// matches nothing in [`SkipDirective::should_skip`], so the fixture keeps
+/// running everywhere the author thought it was disabled. This is checked
+/// once, up front, against the full configured target list — not the
+/// (possibly `--lang`-filtered) set being generated in this invocation — so
+/// the check behaves the same regardless of which subset is being generated.
+///
+/// Returns an error naming the offending fixture, the bad id, and the valid
+/// set as soon as the first unknown id is found.
+pub fn validate_skip_languages(fixtures: &[Fixture], valid_languages: &[String]) -> Result<()> {
+    for fixture in fixtures {
+        let Some(skip) = &fixture.skip else {
+            continue;
+        };
+        for language in &skip.languages {
+            if !valid_languages.iter().any(|valid| valid == language) {
+                bail!(
+                    "fixture '{}' ({}) has unknown skip.languages id '{}'; valid ids are: {}",
+                    fixture.id,
+                    fixture.source,
+                    language,
+                    valid_languages.join(", ")
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Group fixtures by their resolved category.
 pub fn group_fixtures(fixtures: &[Fixture]) -> Vec<FixtureGroup> {
     let mut groups: HashMap<String, Vec<Fixture>> = HashMap::new();
@@ -944,5 +976,43 @@ mod tests {
         }"#;
         let fixture: Fixture = serde_json::from_str(json).unwrap();
         assert!(!fixture.has_host_root_route(), "expected false when no mock_responses");
+    }
+
+    #[test]
+    fn validate_skip_languages_accepts_known_id() {
+        let json = r#"{
+            "id": "known_skip",
+            "description": "Skips a real target",
+            "input": {},
+            "assertions": [],
+            "skip": {"languages": ["python", "node"], "reason": "not applicable"}
+        }"#;
+        let fixture: Fixture = serde_json::from_str(json).unwrap();
+        let valid = vec!["python".to_string(), "node".to_string(), "rust".to_string()];
+        assert!(validate_skip_languages(&[fixture], &valid).is_ok());
+    }
+
+    #[test]
+    fn validate_skip_languages_rejects_unknown_id() {
+        let json = r#"{
+            "id": "bogus_skip",
+            "description": "Skips a nonexistent target",
+            "input": {},
+            "assertions": [],
+            "skip": {"languages": ["typescript"], "reason": "wrong id"}
+        }"#;
+        let fixture: Fixture = serde_json::from_str(json).unwrap();
+        let valid = vec!["python".to_string(), "node".to_string(), "rust".to_string()];
+        let err = validate_skip_languages(&[fixture], &valid).expect_err("unknown id must fail validation");
+        let message = err.to_string();
+        assert!(
+            message.contains("bogus_skip"),
+            "error should name the fixture: {message}"
+        );
+        assert!(
+            message.contains("typescript"),
+            "error should name the bad id: {message}"
+        );
+        assert!(message.contains("python"), "error should list valid ids: {message}");
     }
 }

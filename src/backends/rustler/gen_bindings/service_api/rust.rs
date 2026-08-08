@@ -1,6 +1,8 @@
 //! Rust NIF and handler bridge generation for Rustler service APIs.
 
-use crate::backends::rustler::gen_bindings::service_api::helpers::{find_contract, typeref_to_rust_type};
+use crate::backends::rustler::gen_bindings::service_api::helpers::{
+    find_contract, is_opaque_metadata_param, typeref_to_rust_type,
+};
 use crate::backends::rustler::gen_bindings::service_api::registration_nif::gen_registration_variant_nif;
 use crate::backends::rustler::template_env::render;
 use crate::core::config::ResolvedCrateConfig;
@@ -179,7 +181,7 @@ fn gen_run_nif(
                 .iter()
                 .map(|p| {
                     if let TypeRef::Named(n) = &p.ty
-                        && api.types.iter().any(|t| &t.name == n && !t.is_trait && t.is_opaque)
+                        && is_opaque_metadata_param(&p.ty, api)
                     {
                         return format!("rustler::ResourceArc<super::{}>", n);
                     }
@@ -190,11 +192,7 @@ fn gen_run_nif(
             let tuple_types_with_trailing = format!("{}{}", tuple_types, trailing);
             let mut opaque_bindings = String::new();
             for meta_param in reg.metadata_params.iter() {
-                let is_opaque = if let TypeRef::Named(n) = &meta_param.ty {
-                    api.types.iter().any(|t| &t.name == n && !t.is_trait && t.is_opaque)
-                } else {
-                    false
-                };
+                let is_opaque = is_opaque_metadata_param(&meta_param.ty, api);
                 if is_opaque && let TypeRef::Named(n) = &meta_param.ty {
                     opaque_bindings.push_str(&render(
                         "service_api_opaque_metadata_binding.rs.jinja",

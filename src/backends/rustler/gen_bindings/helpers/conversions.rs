@@ -270,7 +270,12 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_opaque_module(
 
         let doc_first = method.doc.lines().next().unwrap_or("").replace('"', "\\\"");
 
-        let is_static = method.receiver.is_none();
+        // Any method that returns Self — whether a receiver-based chainable
+        // builder method (`&mut self -> Self`) or a static alternate
+        // constructor — must re-wrap the returned NIF ref in
+        // `%__MODULE__{ref: ...}`. Without this, receiver-based builder
+        // methods silently degrade the struct to a bare `reference()` after
+        // the first chained call (the NIF returns a raw ref, not a struct). ~keep
         let returns_self = matches!(&method.return_type, TypeRef::Named(n) if n == &typ.name);
 
         if !doc_first.is_empty() && !out.is_empty() && !out.ends_with("\n\n") {
@@ -283,7 +288,7 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_opaque_module(
                 doc_first => &doc_first,
                 method_name => &method_name,
                 def_args => &def_args.join(", "),
-                returns_self => is_static && returns_self,
+                returns_self => returns_self,
                 nif_fn => &nif_fn,
                 call_args => &call_args.join(", "),
             },

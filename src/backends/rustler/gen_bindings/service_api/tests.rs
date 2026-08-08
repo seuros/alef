@@ -319,15 +319,30 @@ fn generate_returns_empty_for_no_services() {
     assert!(files.is_empty(), "expected no files for surface without services");
 }
 
-/// Elixir GenServer `handle_cast` actually decodes args and calls handler.
+/// Elixir GenServer `handle_info` actually decodes args and calls handler.
+///
+/// Regression test: the Rust bridge sends `{:trait_call, ...}` via raw
+/// `send`/`send_and_clear`, which BEAM delivers to `handle_info/2`, not
+/// `handle_cast/2`. A `handle_cast`-based GenServer silently discards the
+/// message (falls through to the default `handle_info` no-op), hanging the
+/// request forever.
 #[test]
-fn elixir_genserver_handle_cast_decodes_args_and_dispatches() {
+fn elixir_genserver_handle_info_decodes_args_and_dispatches() {
     let surface = make_fixture_surface();
     let output = gen_service_ex(&surface, "");
 
     assert!(
+        output.contains("def handle_info({:trait_call, method, args, reply_id}, registrations) do"),
+        "expected trait_call dispatch on handle_info/2, not handle_cast/2:\n{output}"
+    );
+    assert!(
+        !output.contains("handle_cast({:trait_call,"),
+        "found trait_call dispatch on handle_cast/2 — raw send/2 is delivered to handle_info/2, not handle_cast/2:\n{output}"
+    );
+
+    assert!(
         output.contains("decode_args_and_dispatch(method, args, registrations)"),
-        "expected decode_args_and_dispatch call in handle_cast:\n{output}"
+        "expected decode_args_and_dispatch call in handle_info:\n{output}"
     );
 
     assert!(
@@ -586,6 +601,148 @@ fn rust_codegen_emits_core_import_and_trait_impl() {
     assert!(
         rust_output.contains("pub struct ElixirRequestHandlerBridge"),
         "expected ElixirRequestHandlerBridge struct definition:\n{rust_output}"
+    );
+}
+
+/// Build on [`make_fixture_surface`] with a registration method named `"route"`
+/// (the only name that triggers `HandlerWrapper` emission, see
+/// `registration.rs:40`) whose sole metadata param is an **opaque** type
+/// (`RouteBuilder`) present in `api.types`. `RouteBuilder` also carries one
+/// chainable builder method (`&mut self -> Self`) so the `returns_self`
+/// re-wrap path can be exercised.
+///
+/// Coverage gap this closes: `make_fixture_surface()` names its registration
+/// `"add_handler"` with only string metadata params and an empty `api.types`,
+/// so `service_api_handler_wrapper.ex.jinja` and the opaque-metadata `.ref`
+/// unwrap path were entirely untested before this fixture existed.
+fn make_route_fixture_surface() -> ApiSurface {
+    let mut surface = make_fixture_surface();
+
+    surface.services[0].registrations[0].method = "route".to_owned();
+    surface.services[0].registrations[0].metadata_params = vec![ParamDef {
+        name: "builder".to_owned(),
+        ty: TypeRef::Named("RouteBuilder".to_owned()),
+        optional: false,
+        default: None,
+        ..ParamDef::default()
+    }];
+
+    let chainable_method = MethodDef {
+        name: "request_timeout".to_owned(),
+        params: vec![ParamDef {
+            name: "ms".to_owned(),
+            ty: TypeRef::Primitive(PrimitiveType::U64),
+            optional: false,
+            default: None,
+            ..ParamDef::default()
+        }],
+        return_type: TypeRef::Named("RouteBuilder".to_owned()),
+        is_async: false,
+        is_static: false,
+        error_type: None,
+        doc: "Set the per-route request timeout.".to_owned(),
+        receiver: Some(crate::core::ir::ReceiverKind::RefMut),
+        sanitized: false,
+        trait_source: None,
+        returns_ref: false,
+        returns_cow: false,
+        return_newtype_wrapper: None,
+        has_default_impl: false,
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        version: Default::default(),
+    };
+
+    let route_builder_type = crate::core::ir::TypeDef {
+        name: "RouteBuilder".to_owned(),
+        rust_path: "my_crate::RouteBuilder".to_owned(),
+        is_opaque: true,
+        methods: vec![chainable_method],
+        doc: "Builder for per-route metadata.".to_owned(),
+        ..crate::core::ir::TypeDef::default()
+    };
+    surface.types.push(route_builder_type);
+
+    surface
+}
+
+/// Opaque metadata params must be unwrapped with `.ref` in the registration
+/// method's metadata tuple, matching the `rustler::ResourceArc<T>` the Rust
+/// NIF side decodes (`rust.rs` / `registration_nif.rs`).
+///
+/// Regression test for defect 1: the Elixir side previously emitted the bare
+/// param name (`{builder}`), passing the `%RouteBuilder{ref: ...}` wrapper
+/// struct itself where Rustler expected the resource reference.
+#[test]
+fn elixir_opaque_metadata_param_unwraps_ref_in_registration_tuple() {
+    let surface = make_route_fixture_surface();
+    let output = gen_service_ex(&surface, "");
+
+    assert!(
+        output.contains("entry = {\"route\", {builder.ref}, handler_pid}"),
+        "expected opaque metadata param unwrapped via `.ref` in the registration tuple:\n{output}"
+    );
+    assert!(
+        !output.contains("entry = {\"route\", {builder}, handler_pid}"),
+        "found raw wrapper struct (not `.ref`) passed as opaque metadata:\n{output}"
+    );
+}
+
+/// A registration method named `"route"` emits the `HandlerWrapper` GenServer
+/// and it dispatches `{:trait_call, ...}` on `handle_info/2`, matching the
+/// raw-`send/2` wire contract used by `service_api_handler_bridge.rs.jinja`.
+///
+/// Regression test for defect 3: `HandlerWrapper` previously implemented
+/// `handle_cast/2`, so the Rust bridge's `send_and_clear` message fell
+/// through to the default `handle_info/2` and was silently discarded,
+/// hanging every request that reached a closure-based handler forever.
+#[test]
+fn elixir_handler_wrapper_dispatches_on_handle_info() {
+    let surface = make_route_fixture_surface();
+    let output = gen_service_ex(&surface, "");
+
+    assert!(
+        output.contains("defmodule HandlerWrapper do"),
+        "expected HandlerWrapper module for a `route`-named registration:\n{output}"
+    );
+    assert!(
+        output.contains("def handle_info({:trait_call, _method, args_json, reply_id}, handler_fn) do"),
+        "expected HandlerWrapper to dispatch trait_call on handle_info/2:\n{output}"
+    );
+    assert!(
+        !output.contains("handle_cast({:trait_call,"),
+        "found trait_call dispatch on handle_cast/2 in HandlerWrapper — raw send/2 lands on handle_info/2:\n{output}"
+    );
+}
+
+/// Chainable opaque builder methods (`&mut self -> Self`) must re-wrap the
+/// NIF's returned reference in `%__MODULE__{ref: ...}`, not return the bare
+/// reference.
+///
+/// Regression test for defect 2: `returns_self` was gated on
+/// `is_static && returns_self`, so every receiver-based chainable method
+/// (the only kind builder chains actually use) fell through to the bare
+/// `Native.<nif>(...)` call, degrading the struct to a raw `reference()` as
+/// soon as any option was chained.
+#[test]
+fn elixir_opaque_builder_chain_method_rewraps_ref() {
+    let surface = make_route_fixture_surface();
+    let route_builder = surface.types.iter().find(|t| t.name == "RouteBuilder").unwrap();
+    let config = make_test_config();
+
+    let output = crate::backends::rustler::gen_bindings::helpers::gen_elixir_opaque_module(route_builder, "", &config);
+
+    assert!(
+        output.contains("ref = Native.routebuilder_request_timeout(obj.ref, ms)"),
+        "expected chainable builder method to call the NIF and capture the returned ref:\n{output}"
+    );
+    assert!(
+        output.contains("%__MODULE__{ref: ref}"),
+        "expected chainable builder method to re-wrap the returned ref in the struct:\n{output}"
+    );
+    assert!(
+        !output.contains("Native.routebuilder_request_timeout(obj.ref, ms)\n  end"),
+        "found bare NIF call as the method body — chainable method must return the wrapped struct:\n{output}"
     );
 }
 

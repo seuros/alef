@@ -173,14 +173,17 @@ fn collect_transitive_nested_types_walks_two_levels_deep() {
     seeds.insert("WasmChatRequest".to_string());
     let derived = collect_transitive_nested_types_for_wasm(&seeds, &type_defs, "Wasm");
 
-    let class_names: std::collections::HashSet<&String> = derived.values().collect();
+    // `derived` is a `BTreeSet<String>` of wasm class names (not a field-name
+    // keyed map) — see the doc comment on `collect_transitive_nested_types_for_wasm`
+    // for why keying by field name was dropped (colliding same-named fields on
+    // different classes made the old map non-deterministic).
     assert!(
-        class_names.contains(&"WasmChatTool".to_string()),
+        derived.contains("WasmChatTool"),
         "first-level WasmChatTool missing; got {:?}",
         derived
     );
     assert!(
-        class_names.contains(&"WasmFunctionDefinition".to_string()),
+        derived.contains("WasmFunctionDefinition"),
         "second-level WasmFunctionDefinition missing; got {:?}",
         derived
     );
@@ -258,7 +261,59 @@ fn collect_transitive_nested_types_terminates_on_cycles() {
     let mut seeds = std::collections::BTreeSet::new();
     seeds.insert("WasmRecursive".to_string());
     let derived = collect_transitive_nested_types_for_wasm(&seeds, &[recursive], "Wasm");
-    assert_eq!(derived.get("child"), Some(&"WasmRecursive".to_string()));
+    // `derived` is a set of class names; the self-referential field's class
+    // (WasmRecursive) must appear exactly once despite the cycle.
+    assert_eq!(derived.len(), 1);
+    assert!(derived.contains("WasmRecursive"));
+}
+
+/// Regression for the field-name-collision bug: two distinct classes
+/// (`TesseractConfig` and `ConversionOptions`) each expose a field literally
+/// named `preprocessing`, but with different nested class types
+/// (`ImagePreprocessingConfig` vs `PreprocessingOptions`). The old
+/// `HashMap<field_name, class_name>` shape let one collide with and silently
+/// drop the other depending on non-deterministic `HashMap` iteration order.
+/// The `BTreeSet<class_name>` shape must retain both.
+#[test]
+fn collect_transitive_nested_types_keeps_both_classes_on_field_name_collision() {
+    let image_preprocessing_config = make_type("ImagePreprocessingConfig", vec![]);
+    let preprocessing_options = make_type("PreprocessingOptions", vec![]);
+    let tesseract_config = make_type(
+        "TesseractConfig",
+        vec![make_field(
+            "preprocessing",
+            TypeRef::Optional(Box::new(TypeRef::Named("ImagePreprocessingConfig".to_string()))),
+        )],
+    );
+    let conversion_options = make_type(
+        "ConversionOptions",
+        vec![make_field(
+            "preprocessing",
+            TypeRef::Named("PreprocessingOptions".to_string()),
+        )],
+    );
+    let type_defs = vec![
+        image_preprocessing_config,
+        preprocessing_options,
+        tesseract_config,
+        conversion_options,
+    ];
+
+    let mut seeds = std::collections::BTreeSet::new();
+    seeds.insert("WasmTesseractConfig".to_string());
+    seeds.insert("WasmConversionOptions".to_string());
+    let derived = collect_transitive_nested_types_for_wasm(&seeds, &type_defs, "Wasm");
+
+    assert!(
+        derived.contains("WasmImagePreprocessingConfig"),
+        "colliding field name must not drop WasmImagePreprocessingConfig; got {:?}",
+        derived
+    );
+    assert!(
+        derived.contains("WasmPreprocessingOptions"),
+        "colliding field name must not drop WasmPreprocessingOptions; got {:?}",
+        derived
+    );
 }
 
 #[test]
