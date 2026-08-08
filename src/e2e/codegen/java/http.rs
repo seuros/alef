@@ -3,6 +3,53 @@ use crate::e2e::escape::escape_java;
 use crate::e2e::fixture::{Fixture, HttpFixture};
 use heck::ToUpperCamelCase;
 
+/// Percent-encode characters that `java.net.URI.create` rejects in the query
+/// portion of a URI. Fixtures may embed a raw query directly in `request.path`
+/// (e.g. `?tags=a|b|c`); `URI.create` is RFC-2396-strict and throws on `|` and
+/// other characters that lenient clients (Python, Node) accept verbatim. Only
+/// the segment after the first `?` is rewritten; structural query delimiters
+/// (`& = ; , + $ : @ /`), the fragment marker, and already-encoded `%XX`
+/// triplets are preserved so a legitimately-encoded value is left untouched.
+fn sanitize_uri_query(path: &str) -> String {
+    let Some(query_start) = path.find('?') else {
+        return path.to_string();
+    };
+    // Keep the '?' with the head; only the query bytes after it are rewritten.
+    let (head, query) = path.split_at(query_start + 1);
+    let mut out = String::with_capacity(path.len());
+    out.push_str(head);
+    for byte in query.bytes() {
+        match byte {
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'_'
+            | b'.'
+            | b'!'
+            | b'~'
+            | b'*'
+            | b'\''
+            | b'('
+            | b')'
+            | b';'
+            | b'/'
+            | b'?'
+            | b':'
+            | b'@'
+            | b'&'
+            | b'='
+            | b'+'
+            | b'$'
+            | b','
+            | b'#'
+            | b'%' => out.push(byte as char),
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
 /// Thin renderer that emits JUnit 5 test methods targeting a mock server via
 /// `java.net.http.HttpClient`. Satisfies [`client::TestClientRenderer`] so the
 /// shared [`client::http_call::render_http_test`] driver drives the call sequence.
@@ -63,7 +110,7 @@ impl client::TestClientRenderer for JavaTestClientRenderer {
         // contains `?` produces a malformed double-query (`/p?x=1?x=1`). Only
         // append when the path carries no query component of its own.
         let path = if ctx.query_params.is_empty() || ctx.path.contains('?') {
-            ctx.path.to_string()
+            sanitize_uri_query(ctx.path)
         } else {
             let pairs: Vec<String> = ctx
                 .query_params
@@ -91,7 +138,18 @@ impl client::TestClientRenderer for JavaTestClientRenderer {
             // default), string bodies must be JSON-encoded like any other value — matching
             // the Python (`json.dumps`) and Node (`JSON.stringify`) backends — so a plain
             // string body becomes a quoted JSON string rather than raw, invalid JSON.
-            let is_raw_text_content_type = ctx.content_type.is_some_and(|ct| {
+            // The effective Content-Type is the explicit request header when present,
+            // falling back to `ctx.content_type`. Fixtures commonly declare a form
+            // content type only in `request.headers` (leaving `ctx.content_type` unset);
+            // without consulting the header, a form/multipart string body would be
+            // JSON-encoded (quoted) here and the server would reject the malformed body.
+            let effective_content_type = ctx
+                .headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+                .map(|(_, v)| v.as_str())
+                .or(ctx.content_type);
+            let is_raw_text_content_type = effective_content_type.is_some_and(|ct| {
                 let ct_lower = ct.to_ascii_lowercase();
                 ct_lower.contains("multipart/form-data") || ct_lower.contains("application/x-www-form-urlencoded")
             });
@@ -442,6 +500,61 @@ mod tests {
         assert!(
             out.contains(r#"ofString("a=1&b=2")"#),
             "expected raw form body, got: {out}"
+        );
+    }
+
+    #[test]
+    fn render_call_keeps_raw_string_body_when_form_content_type_only_in_header() {
+        let mut headers = BTreeMap::new();
+        headers.insert(
+            "Content-Type".to_string(),
+            "application/x-www-form-urlencoded".to_string(),
+        );
+        let cookies = BTreeMap::new();
+        let query = BTreeMap::new();
+        let body = serde_json::Value::String("items[0]=first&items[2]=third".to_string());
+        let ctx = CallCtx {
+            method: "POST",
+            path: "/fixtures/x/items",
+            headers: &headers,
+            query_params: &query,
+            cookies: &cookies,
+            body: Some(&body),
+            content_type: None,
+            response_var: "response",
+        };
+
+        let mut out = String::new();
+        JavaTestClientRenderer.render_call(&mut out, &ctx);
+
+        assert!(
+            out.contains(r#"ofString("items[0]=first&items[2]=third")"#),
+            "expected raw form body when content type is header-only, got: {out}"
+        );
+    }
+
+    #[test]
+    fn render_call_percent_encodes_illegal_chars_in_embedded_query() {
+        let headers = BTreeMap::new();
+        let cookies = BTreeMap::new();
+        let query = BTreeMap::new();
+        let ctx = ctx_with(
+            "/fixtures/x/items?tags=python|rust|typescript",
+            &query,
+            &headers,
+            &cookies,
+        );
+
+        let mut out = String::new();
+        JavaTestClientRenderer.render_call(&mut out, &ctx);
+
+        assert!(
+            out.contains("tags=python%7Crust%7Ctypescript"),
+            "expected pipe percent-encoded in embedded query, got: {out}"
+        );
+        assert!(
+            !out.contains("tags=python|rust"),
+            "raw pipe leaked into URI, got: {out}"
         );
     }
 }

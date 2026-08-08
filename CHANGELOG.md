@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.58.0] - 2026-08-08
+
+### Added
+
+- **Kotlin value types bridge their instance methods through JNI shims**, so methods declared on a
+  value type are now callable from Kotlin rather than being dropped at the binding boundary.
+  (`src/backends/kotlin`)
+- **Dart emits the FRB cfg-gate carry helper into `build.rs`**, carrying `cfg` gates through the
+  flutter_rust_bridge codegen so gated items compile consistently. (`src/backends/dart`)
+
+### Fixed
+
+- **The Java e2e HTTP client now percent-encodes reserved characters in an embedded query and
+  honours a form Content-Type declared only in a request header.** `java.net.URI.create` is
+  RFC-2396-strict, so a fixture whose `request.path` embedded a raw query such as
+  `?tags=a|b|c` threw `IllegalArgumentException` (lenient clients like Python and Node accept it).
+  Separately, a fixture that declared `application/x-www-form-urlencoded` only in `request.headers`
+  (leaving the request `content_type` field unset) had its string body JSON-encoded — the quoted
+  body was then rejected by the server. The renderer now sanitizes the query segment and consults
+  the header when deciding whether to send a raw body. (`src/e2e/codegen/java/http.rs`)
+- **Zig e2e assertions stay on the raw JSON navigation path** instead of diverging onto a typed path
+  that did not match the generated harness. (`src/e2e/codegen/zig`)
+- **WebAssembly generation emits compilable conversions for delegating and payload-enum types.**
+  (`src/backends/wasm`)
+
+### Changed
+
+- Updated the `jsonschema` crate to 0.49.7.
+
 ## [0.57.1] - 2026-08-07
 
 ### Fixed
