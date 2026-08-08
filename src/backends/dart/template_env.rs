@@ -441,6 +441,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/rust_loader_patch_fn.rs.jinja"),
     ),
     (
+        "rust_frb_cfg_gates_fn.rs.jinja",
+        include_str!("templates/rust_frb_cfg_gates_fn.rs.jinja"),
+    ),
+    (
         "dart_init_prologue_replacement.jinja",
         include_str!("templates/dart_init_prologue_replacement.jinja"),
     ),

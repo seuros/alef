@@ -46,6 +46,14 @@ fn main() {
             // in e2e flows, which is when this otherwise reverts.
             fix_handler_executor_calls();
 
+            // FRB is not feature-aware: it emits a wire wrapper and a dispatch arm for
+            // every `pub fn` it can see, including ones behind `#[cfg(feature = ...)]`.
+            // Under a reduced feature set (Android: --no-default-features --features
+            // android-target) those functions are configured out and the glue fails with
+            // E0425. alef injects the gates during `alef generate`, but the FRB run above
+            // rewrites the file from scratch and drops them — same reversion the handler
+            // rewrite above exists to survive, so this re-applies for the same reason.
+            carry_frb_cfg_gates();
         }
         Ok(status) => panic!("flutter_rust_bridge_codegen generate failed (exit code: {status})"),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -58,3 +66,4 @@ fn main() {
 }
 
 {{ loader_patch }}
+{{ cfg_gates_fn }}

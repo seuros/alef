@@ -385,10 +385,12 @@ pub(crate) fn emit_cargo_toml(
 
 pub(crate) fn emit_build_rs(rust_dir: &str, package_name: &str, module_name: &str, stem: &str) -> GeneratedFile {
     let loader_patch = render_loader_patch_fn(package_name, module_name, stem);
+    let cfg_gates_fn = render_cfg_gates_fn();
     let content = template_env::render(
         "rust_build_rs.rs.jinja",
         minijinja::context! {
             loader_patch => loader_patch.as_str(),
+            cfg_gates_fn => cfg_gates_fn.as_str(),
         },
     );
     GeneratedFile {
@@ -440,6 +442,22 @@ fn dart_init_prologue_replacement(package_name: &str, module_name: &str, stem: &
             stem => stem,
         },
     )
+}
+
+/// Render the `carry_frb_cfg_gates` helper embedded in the generated dart bridge
+/// crate's `build.rs`.
+///
+/// flutter_rust_bridge is not feature-aware: it bakes a wire wrapper and dispatch
+/// arm for every `pub fn` it sees, gated or not. `alef generate` injects the
+/// `#[cfg(...)]` gates from `lib.rs` into the committed `frb_generated.rs` once
+/// (see `PostBuildStep::CarryFrbCfgGates` / `carry_lib_rs_cfg_gates_into_frb_generated`
+/// in `frb_rewrite::cfg_gates`), but that file is regenerated from scratch whenever
+/// `flutter_rust_bridge_codegen` runs again at consumer build time (e.g. during
+/// `dart pub get`), which drops the injected gates. This embedded copy re-applies
+/// them after every such run, mirroring the alef-side logic exactly since the
+/// generated build.rs is a standalone crate with no dependency on alef itself.
+fn render_cfg_gates_fn() -> String {
+    template_env::render("rust_frb_cfg_gates_fn.rs.jinja", minijinja::context! {})
 }
 
 pub(crate) fn emit_frb_yaml(rust_dir: &str, module_name: &str) -> GeneratedFile {
@@ -891,5 +909,39 @@ mod build_rs_tests {
                 && file.content.contains("return;"),
             "emitted build.rs must handle loader patch write errors"
         );
+    }
+
+    /// `packages/dart/**` is fully alef-owned: `carry_frb_cfg_gates()` must ship in the
+    /// generated build.rs itself, not be hand-restored after every regen (#434). Without
+    /// this, a plain `flutter_rust_bridge_codegen generate` at consumer build time (e.g.
+    /// during `dart pub get`) rewrites `frb_generated.rs` from scratch and silently drops
+    /// every `#[cfg(...)]` gate alef injected during `alef generate`.
+    #[test]
+    fn emitted_build_rs_carries_frb_cfg_gates_after_codegen() {
+        let file = emit_build_rs(
+            "packages/dart/rust",
+            "sample_router",
+            "sample_router",
+            "sample_router_dart",
+        );
+        assert!(
+            file.content.contains("carry_frb_cfg_gates();"),
+            "build.rs must invoke carry_frb_cfg_gates() after FRB codegen"
+        );
+        assert!(
+            file.content.contains("fn carry_frb_cfg_gates()"),
+            "build.rs must define carry_frb_cfg_gates()"
+        );
+        assert!(
+            file.content
+                .contains("fn cfg_gated_free_functions(lib_rs: &str) -> Vec<(String, String)>"),
+            "build.rs must define cfg_gated_free_functions() to scan lib.rs for gated pub fns"
+        );
+        assert!(
+            file.content
+                .contains(r#"const FRB_GENERATED_RUST: &str = "src/frb_generated.rs";"#),
+            "build.rs must target the generated frb rust file"
+        );
+        syn::parse_file(&file.content).expect("generated build.rs must be valid Rust");
     }
 }
