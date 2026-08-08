@@ -1,10 +1,29 @@
 use crate::core::ir::{PrimitiveType, TypeRef};
 use std::cell::RefCell;
 
+/// Which `Result` type alias the module currently being extracted resolves `Result` to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResultAliasScope {
+    /// `Result` names a crate-local alias declared in this module path (`""` = crate root).
+    Crate(String),
+    /// `Result` names a foreign crate's alias (e.g. `anyhow::Result`), so no crate-local
+    /// error type applies.
+    Foreign,
+}
+
 thread_local! {
     /// Thread-local storage for Result type alias error hints.
-    /// Maps alias name (e.g., "Result") to the error type (e.g., "SampleCrateError").
+    ///
+    /// Maps the module path a `Result` alias is *declared* in (`""` = crate root) to the error
+    /// type it carries (e.g. `"SampleCrateError"`). Keying by declaring module — rather than by
+    /// the alias name — is what keeps a module-private `Result` (a format-specific `error.rs`,
+    /// say) from overwriting the crate's canonical alias. ~keep
     static RESULT_ERROR_HINTS: RefCell<ahash::AHashMap<String, String>> = RefCell::new(ahash::AHashMap::new());
+
+    /// The `Result` alias in scope for the module whose items are being extracted right now.
+    /// `None` means the module neither declares nor imports one, so lookup falls back to the
+    /// crate's canonical alias.
+    static RESULT_ALIAS_SCOPE: RefCell<Option<ResultAliasScope>> = const { RefCell::new(None) };
 }
 
 /// Drop every Result error hint collected so far.
@@ -16,22 +35,111 @@ pub fn reset_result_error_hints() {
     RESULT_ERROR_HINTS.with(|h| {
         h.borrow_mut().clear();
     });
+    RESULT_ALIAS_SCOPE.with(|s| {
+        *s.borrow_mut() = None;
+    });
 }
 
-/// Merge additional Result error hints into the current extraction context.
+/// Record the error type of a `Result` alias declared in `module_path`.
 ///
 /// Extraction walks one file at a time, but a crate's `Result` alias is declared in one module
 /// (`error.rs`) and used from others (`convert_api.rs`). Replacing the map per file would drop the
 /// alias before the functions that return it are resolved, so hints must accumulate. ~keep
-pub fn extend_result_error_hints(hints: ahash::AHashMap<String, String>) {
+pub fn record_result_error_hint(module_path: &str, error_type: String) {
     RESULT_ERROR_HINTS.with(|h| {
-        h.borrow_mut().extend(hints);
+        h.borrow_mut().insert(module_path.to_string(), error_type);
     });
 }
 
-/// Get the error type hint for a Result type alias.
-fn get_result_error_hint(name: &str) -> Option<String> {
-    RESULT_ERROR_HINTS.with(|h| h.borrow().get(name).cloned())
+/// Install `scope` as the `Result` alias in scope, returning the value it replaced.
+pub fn set_result_alias_scope(scope: Option<ResultAliasScope>) -> Option<ResultAliasScope> {
+    RESULT_ALIAS_SCOPE.with(|s| s.replace(scope))
+}
+
+/// Number of path segments in a module path (`""` — the crate root — has none).
+fn module_depth(module_path: &str) -> usize {
+    if module_path.is_empty() {
+        0
+    } else {
+        module_path.split("::").count()
+    }
+}
+
+/// The crate's canonical `Result` alias error type: the one declared nearest the crate root.
+///
+/// A crate that exports `Result` declares it at (or one module below) the root and re-exports it
+/// from `lib.rs`; aliases buried deeper are private to a subsystem and are never the type the
+/// crate's public API returns. Ties break lexicographically so codegen stays deterministic. ~keep
+fn canonical_result_error_hint() -> Option<String> {
+    RESULT_ERROR_HINTS.with(|hints| {
+        hints
+            .borrow()
+            .iter()
+            .min_by(|(left, _), (right, _)| {
+                module_depth(left.as_str())
+                    .cmp(&module_depth(right.as_str()))
+                    .then_with(|| left.cmp(right))
+            })
+            .map(|(_, error_type)| error_type.clone())
+    })
+}
+
+/// Get the error type hint for the `Result` alias in scope for the current module.
+fn get_result_error_hint() -> Option<String> {
+    let scope = RESULT_ALIAS_SCOPE.with(|s| s.borrow().clone());
+    match scope {
+        Some(ResultAliasScope::Foreign) => None,
+        // The declaring module may not have been walked yet (module order is source order), so an
+        // unresolved crate-local alias still falls back to the canonical one. ~keep
+        Some(ResultAliasScope::Crate(module_path)) => RESULT_ERROR_HINTS
+            .with(|h| h.borrow().get(&module_path).cloned())
+            .or_else(canonical_result_error_hint),
+        None => canonical_result_error_hint(),
+    }
+}
+
+/// Restores the enclosing `Result` alias scope when extraction leaves a module.
+pub struct ResultAliasScopeGuard(Option<ResultAliasScope>);
+
+impl ResultAliasScopeGuard {
+    /// Enter `scope`, remembering the scope it replaced.
+    pub fn enter(scope: Option<ResultAliasScope>) -> Self {
+        Self(set_result_alias_scope(scope))
+    }
+}
+
+impl Drop for ResultAliasScopeGuard {
+    fn drop(&mut self) {
+        set_result_alias_scope(self.0.take());
+    }
+}
+
+/// Isolates the `Result` alias hints collected so far for the duration of a foreign-crate walk.
+///
+/// Re-exported items from a workspace sibling are extracted inline, and that sibling's own
+/// `Result` alias must neither be resolved against the host crate's hints nor leak back into
+/// them once the walk finishes. ~keep
+pub struct IsolatedResultHintsGuard {
+    hints: ahash::AHashMap<String, String>,
+    scope: Option<ResultAliasScope>,
+}
+
+impl IsolatedResultHintsGuard {
+    /// Swap in an empty hint set, remembering the current one.
+    pub fn enter() -> Self {
+        let hints = RESULT_ERROR_HINTS.with(|h| std::mem::take(&mut *h.borrow_mut()));
+        let scope = set_result_alias_scope(None);
+        Self { hints, scope }
+    }
+}
+
+impl Drop for IsolatedResultHintsGuard {
+    fn drop(&mut self) {
+        RESULT_ERROR_HINTS.with(|h| {
+            *h.borrow_mut() = std::mem::take(&mut self.hints);
+        });
+        set_result_alias_scope(self.scope.take());
+    }
 }
 
 /// Convert a `syn::Type` into our IR `TypeRef`.
@@ -358,7 +466,7 @@ pub fn extract_result_error_type(ty: &syn::Type) -> Option<String> {
             return Some(type_to_string(type_args[1]));
         }
         if !type_args.is_empty() {
-            if let Some(hint) = get_result_error_hint("Result") {
+            if let Some(hint) = get_result_error_hint() {
                 return Some(hint);
             }
             return Some("anyhow::Error".to_string());
@@ -623,13 +731,8 @@ mod tests {
 
     #[test]
     fn test_extract_result_error_with_hint() {
-        let hints = {
-            let mut m = ahash::AHashMap::new();
-            m.insert("Result".to_string(), "SampleCrateError".to_string());
-            m
-        };
         reset_result_error_hints();
-        extend_result_error_hints(hints);
+        record_result_error_hint("error", "SampleCrateError".to_string());
 
         let ty = parse_type("Result<ExtractionResult>");
         assert_eq!(extract_result_error_type(&ty), Some("SampleCrateError".into()));
@@ -641,6 +744,65 @@ mod tests {
 
         let ty = parse_type("Result<ExtractionResult>");
         assert_eq!(extract_result_error_type(&ty), Some("anyhow::Error".into()));
+    }
+
+    #[test]
+    fn test_canonical_hint_wins_over_a_deeper_module_private_alias() {
+        reset_result_error_hints();
+        // Declaration order must not matter: the deeper alias is recorded last on purpose.
+        record_result_error_hint("error", "SampleCrateError".to_string());
+        record_result_error_hint("extraction::binary::error", "BinaryFormatError".to_string());
+
+        let ty = parse_type("Result<ExtractionResult>");
+        assert_eq!(
+            extract_result_error_type(&ty),
+            Some("SampleCrateError".into()),
+            "a module-private alias must never displace the crate's canonical Result alias"
+        );
+    }
+
+    #[test]
+    fn test_module_private_alias_applies_inside_its_own_module() {
+        reset_result_error_hints();
+        record_result_error_hint("error", "SampleCrateError".to_string());
+        record_result_error_hint("extraction::binary::error", "BinaryFormatError".to_string());
+        let _scope =
+            ResultAliasScopeGuard::enter(Some(ResultAliasScope::Crate("extraction::binary::error".to_string())));
+
+        let ty = parse_type("Result<ExtractionResult>");
+        assert_eq!(extract_result_error_type(&ty), Some("BinaryFormatError".into()));
+    }
+
+    #[test]
+    fn test_foreign_result_alias_falls_back_to_anyhow() {
+        reset_result_error_hints();
+        record_result_error_hint("error", "SampleCrateError".to_string());
+        let _scope = ResultAliasScopeGuard::enter(Some(ResultAliasScope::Foreign));
+
+        let ty = parse_type("Result<ExtractionResult>");
+        assert_eq!(
+            extract_result_error_type(&ty),
+            Some("anyhow::Error".into()),
+            "a module using anyhow::Result must not claim the crate's own error type"
+        );
+    }
+
+    #[test]
+    fn test_alias_scope_guard_restores_the_enclosing_scope() {
+        reset_result_error_hints();
+        record_result_error_hint("error", "SampleCrateError".to_string());
+        record_result_error_hint("extraction::binary::error", "BinaryFormatError".to_string());
+
+        let outer = ResultAliasScopeGuard::enter(Some(ResultAliasScope::Crate(String::new())));
+        {
+            let _inner =
+                ResultAliasScopeGuard::enter(Some(ResultAliasScope::Crate("extraction::binary::error".to_string())));
+            let ty = parse_type("Result<ExtractionResult>");
+            assert_eq!(extract_result_error_type(&ty), Some("BinaryFormatError".into()));
+        }
+        let ty = parse_type("Result<ExtractionResult>");
+        assert_eq!(extract_result_error_type(&ty), Some("SampleCrateError".into()));
+        drop(outer);
     }
 
     #[test]

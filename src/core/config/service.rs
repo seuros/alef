@@ -52,6 +52,14 @@ pub struct RegistrationSpec {
     /// registration with the pinned values substituted in.
     #[serde(default)]
     pub variants: Vec<RegistrationVariantSpec>,
+    /// How the handler callable receives the incoming request in generated code
+    /// (`"bare_callable"`, `"context_object"`, `"request_response"`, or
+    /// `"introspect_params"`). Defaults to `"bare_callable"` when absent. Backends
+    /// dispatch on the resolved [`crate::core::ir::HandlerShape`] to select the
+    /// registration's emission template, e.g. the rustler backend only emits the
+    /// `Conn`-wrapping handler adapter for `"context_object"` registrations. ~keep
+    #[serde(default)]
+    pub handler_shape: Option<String>,
 }
 
 /// A named shortcut over a base [`RegistrationSpec`] with one or more pinned

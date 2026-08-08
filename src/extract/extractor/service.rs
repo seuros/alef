@@ -14,7 +14,7 @@
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::config::service::{HandlerContractConfig, RegistrationVariantSpec, ServiceConfig};
 use crate::core::ir::{
-    ApiSurface, EntrypointDef, EntrypointKind, HandlerContractDef, MethodDef, ParamDef, RegistrationDef,
+    ApiSurface, EntrypointDef, EntrypointKind, HandlerContractDef, HandlerShape, MethodDef, ParamDef, RegistrationDef,
     RegistrationVariant, RegistrationVariantOverride, RegistrationVariantStyle, ServiceDef, TypeRef,
     WrapperConstructorArg, WrapperConstructorCall,
 };
@@ -360,7 +360,12 @@ fn build_service_def(surface: &ApiSurface, cfg: &ServiceConfig) -> Result<Servic
             doc: method.doc.clone(),
             variants,
             path_param_constraints: Vec::new(),
-            handler_shape: Default::default(),
+            handler_shape: parse_handler_shape(reg_spec.handler_shape.as_deref()).map_err(|message| {
+                format!(
+                    "service `{}` registration `{}`: {message}",
+                    cfg.owner_type, reg_spec.method
+                )
+            })?,
         });
     }
 
@@ -419,6 +424,20 @@ fn parse_variant_style(s: Option<&str>) -> Result<RegistrationVariantStyle, Stri
         Some("verb_decorator") => Ok(RegistrationVariantStyle::VerbDecorator),
         Some("hybrid") | None => Ok(RegistrationVariantStyle::Hybrid),
         Some(style) => Err(format!("unknown registration variant style `{style}`")),
+    }
+}
+
+/// Resolve a `[[crates.services.registrations]]` entry's `handler_shape` string
+/// (see [`crate::core::config::service::RegistrationSpec::handler_shape`]) into the
+/// IR's [`HandlerShape`] enum. Absent defaults to [`HandlerShape::BareCallable`],
+/// matching the pre-existing codegen behaviour.
+fn parse_handler_shape(s: Option<&str>) -> Result<HandlerShape, String> {
+    match s {
+        None | Some("bare_callable") => Ok(HandlerShape::BareCallable),
+        Some("context_object") => Ok(HandlerShape::ContextObject),
+        Some("request_response") => Ok(HandlerShape::RequestResponse),
+        Some("introspect_params") => Ok(HandlerShape::IntrospectParams),
+        Some(shape) => Err(format!("unknown registration handler_shape `{shape}`")),
     }
 }
 

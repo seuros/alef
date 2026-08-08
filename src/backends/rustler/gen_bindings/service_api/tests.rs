@@ -619,6 +619,9 @@ fn make_route_fixture_surface() -> ApiSurface {
     let mut surface = make_fixture_surface();
 
     surface.services[0].registrations[0].method = "route".to_owned();
+    // The wrapper gate dispatches on `handler_shape`, not the method name — set it
+    // explicitly so this fixture keeps exercising `HandlerWrapper` emission. ~keep
+    surface.services[0].registrations[0].handler_shape = crate::core::ir::HandlerShape::ContextObject;
     surface.services[0].registrations[0].metadata_params = vec![ParamDef {
         name: "builder".to_owned(),
         ty: TypeRef::Named("RouteBuilder".to_owned()),
@@ -743,6 +746,47 @@ fn elixir_opaque_builder_chain_method_rewraps_ref() {
     assert!(
         !output.contains("Native.routebuilder_request_timeout(obj.ref, ms)\n  end"),
         "found bare NIF call as the method body — chainable method must return the wrapped struct:\n{output}"
+    );
+}
+
+/// The `HandlerWrapper` gate dispatches on `handler_shape`, not on the registration
+/// method being literally named `"route"`. `make_fixture_surface()` names its
+/// registration `"add_handler"` (matching alef's own dogfood config) — proving the
+/// wrapper still renders here demonstrates the gate is decoupled from that
+/// product-specific method name.
+#[test]
+fn elixir_handler_wrapper_emits_for_context_object_registration_named_add_handler() {
+    let mut surface = make_fixture_surface();
+    assert_eq!(surface.services[0].registrations[0].method, "add_handler");
+    surface.services[0].registrations[0].handler_shape = crate::core::ir::HandlerShape::ContextObject;
+
+    let output = gen_service_ex(&surface, "");
+
+    assert!(
+        output.contains("defmodule HandlerWrapper do"),
+        "expected HandlerWrapper module for a context_object-shaped `add_handler` registration:\n{output}"
+    );
+    assert!(
+        output.contains("def handle_info({:trait_call, _method, args_json, reply_id}, handler_fn) do"),
+        "expected HandlerWrapper to dispatch trait_call on handle_info/2:\n{output}"
+    );
+}
+
+/// A `bare_callable` registration (the default) must NOT emit `HandlerWrapper` —
+/// only `context_object`-shaped registrations need the `Conn`-building adapter.
+#[test]
+fn elixir_handler_wrapper_absent_for_bare_callable_registration() {
+    let surface = make_fixture_surface();
+    assert_eq!(
+        surface.services[0].registrations[0].handler_shape,
+        crate::core::ir::HandlerShape::BareCallable
+    );
+
+    let output = gen_service_ex(&surface, "");
+
+    assert!(
+        !output.contains("defmodule HandlerWrapper do"),
+        "bare_callable registration should not emit HandlerWrapper:\n{output}"
     );
 }
 

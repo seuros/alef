@@ -22,7 +22,7 @@ use self::functions::{
 };
 use self::helpers::{
     build_rust_path, collect_reexport_map, extract_binding_exclusion_reason, extract_doc_comments,
-    extract_version_annotation, is_pub, is_test_gated, is_thiserror_enum,
+    extract_version_annotation, is_pub, is_test_gated, is_thiserror_enum, resolve_result_alias_scope,
 };
 use self::paths::{apply_parent_reexport_shortening, derive_module_path};
 use self::postprocess::{resolve_newtypes, resolve_trait_sources};
@@ -169,7 +169,7 @@ fn extract_items(
 ) -> Result<()> {
     let reexport_map = collect_reexport_map(items);
 
-    let mut result_error_hints = ahash::AHashMap::new();
+    let mut declares_result_alias = false;
     for item in items {
         if let syn::Item::Type(item_type) = item
             && is_pub(&item_type.vis)
@@ -181,7 +181,11 @@ fn extract_items(
             if name == "Result"
                 && let Some(error_type) = type_resolver::extract_result_error_type_from_alias(&item_type.ty)
             {
-                result_error_hints.insert(name.clone(), error_type);
+                // Keyed by the declaring module: a crate may declare several private `Result`
+                // aliases, and a name-keyed hint would let whichever module happens to be walked
+                // last decide the error type for the whole crate. ~keep
+                type_resolver::record_result_error_hint(module_path, error_type);
+                declares_result_alias = true;
             }
             if !item_type.generics.params.is_empty() {
                 let rhs = quote::quote!(#item_type).to_string();
@@ -191,7 +195,16 @@ fn extract_items(
             }
         }
     }
-    type_resolver::extend_result_error_hints(result_error_hints);
+
+    // A module resolves `Result` through its own declaration first, then through whatever its
+    // `use` statements import, and only then through the crate's canonical alias. The guard
+    // restores the enclosing module's scope when this module's items are done. ~keep
+    let alias_scope = if declares_result_alias {
+        Some(type_resolver::ResultAliasScope::Crate(module_path.to_string()))
+    } else {
+        resolve_result_alias_scope(items, module_path)
+    };
+    let _result_alias_scope = type_resolver::ResultAliasScopeGuard::enter(alias_scope);
 
     for item in items {
         // `#[cfg(test)]` items do not exist in normal builds; skip them so the

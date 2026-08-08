@@ -78,6 +78,10 @@ fn resolve_external_use(
         crate_name: crate_name.to_string(),
         ..ApiSurface::default()
     };
+    // The sibling crate declares its own `Result` alias at its own crate root; resolving it
+    // against the host crate's hints (or leaving it behind in them) would let one crate's error
+    // type surface in the other's signatures. ~keep
+    let _isolated_result_hints = crate::extract::type_resolver::IsolatedResultHintsGuard::enter();
     let mut rwa = ahash::AHashSet::new();
     super::extract_items(
         &file.items,

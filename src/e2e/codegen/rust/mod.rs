@@ -792,4 +792,86 @@ result_var = "result"
             emission.arg_expr
         );
     }
+
+    /// The stub's `Result<_, E>` and its `use` import both come from the method's own
+    /// `error_type`. Emitting any other `*Error` the crate happens to declare produces an
+    /// unresolvable import (E0432) because module-private error types are not re-exported.
+    #[test]
+    fn emit_test_backend_rust_pins_error_type_to_the_method_signature() {
+        use crate::core::config::TraitBridgeConfig;
+        use crate::core::ir::TypeRef;
+
+        let bridge = TraitBridgeConfig {
+            trait_name: "TestTrait".to_string(),
+            super_trait: Some("Plugin".to_string()),
+            ..Default::default()
+        };
+
+        let method = test_method(
+            "embed",
+            TypeRef::Vec(Box::new(TypeRef::String)),
+            true,
+            Some("SampleCrateError"),
+        );
+        let methods = [&method];
+
+        let fixture = make_fixture("error_type_fixture", serde_json::json!({ "name": "backend" }));
+        let emission = emit_test_backend(&bridge, &methods, &fixture);
+
+        assert!(
+            emission
+                .setup_block
+                .contains("async fn embed(&self) -> Result<Vec<String>, SampleCrateError>"),
+            "stub signature must use the method's declared error type, got: {}",
+            emission.setup_block
+        );
+        assert!(
+            emission.type_imports.contains(&"SampleCrateError".to_string()),
+            "the declared error type must be imported, got: {:?}",
+            emission.type_imports
+        );
+        assert_eq!(
+            emission
+                .type_imports
+                .iter()
+                .filter(|import| import.ends_with("Error"))
+                .collect::<Vec<_>>(),
+            vec![&"SampleCrateError".to_string()],
+            "no error type other than the declared one may be imported, got: {:?}",
+            emission.type_imports
+        );
+    }
+
+    /// A single-argument `Result<T>` alias reaches the emitter as the `anyhow::Error` sentinel and
+    /// must render as the crate's own `Result` alias, never as a bare `anyhow::Error` import.
+    #[test]
+    fn emit_test_backend_rust_renders_alias_result_through_the_crate_module() {
+        use crate::core::config::TraitBridgeConfig;
+        use crate::core::ir::TypeRef;
+
+        let bridge = TraitBridgeConfig {
+            trait_name: "TestTrait".to_string(),
+            super_trait: Some("sample_core::plugins::Plugin".to_string()),
+            ..Default::default()
+        };
+
+        let method = test_method("validate", TypeRef::Unit, true, Some("anyhow::Error"));
+        let methods = [&method];
+
+        let fixture = make_fixture("alias_result_fixture", serde_json::json!({ "name": "backend" }));
+        let emission = emit_test_backend(&bridge, &methods, &fixture);
+
+        assert!(
+            emission
+                .setup_block
+                .contains("async fn validate(&self) -> sample_core::Result<()>"),
+            "single-arg Result alias must render through the crate module, got: {}",
+            emission.setup_block
+        );
+        assert!(
+            !emission.type_imports.iter().any(|import| import.contains("Error")),
+            "the alias sentinel must not become an error-type import, got: {:?}",
+            emission.type_imports
+        );
+    }
 }

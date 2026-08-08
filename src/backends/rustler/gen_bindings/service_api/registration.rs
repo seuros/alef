@@ -4,7 +4,7 @@ use crate::backends::rustler::gen_bindings::service_api::helpers::{
     is_opaque_metadata_param, push_elixir_doc, push_elixir_param,
 };
 use crate::backends::rustler::template_env::render;
-use crate::core::ir::{ApiSurface, RegistrationDef, RegistrationVariantStyle, ServiceDef};
+use crate::core::ir::{ApiSurface, HandlerShape, RegistrationDef, RegistrationVariantStyle, ServiceDef};
 use minijinja::context;
 
 pub(super) fn gen_registration_method(
@@ -52,7 +52,11 @@ pub(super) fn gen_registration_method(
         },
     ));
 
-    if method_name == "route" {
+    // Only registrations whose handler receives a bundled request/response context object
+    // (e.g. HTTP route handlers taking a `Conn`) need the GenServer wrapper that builds
+    // that context from the trait-call args; bare-callable registrations pass the decoded
+    // args straight to the handler and have no `Conn`-shaped type to construct. ~keep
+    if reg.handler_shape == HandlerShape::ContextObject {
         let conn_module = prefixed_module(module_prefix, "Conn");
         out.push_str(&render(
             "service_api_handler_wrapper.ex.jinja",

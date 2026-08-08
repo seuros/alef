@@ -3,6 +3,7 @@ mod enum_variants;
 mod field_types;
 mod fields;
 mod reexport_map;
+mod result_alias_scope;
 mod rustdoc;
 
 #[cfg(test)]
@@ -20,6 +21,7 @@ pub(crate) use field_types::{
 };
 pub(crate) use fields::extract_field;
 pub(crate) use reexport_map::{ReexportKind, collect_reexport_map};
+pub(crate) use result_alias_scope::resolve_result_alias_scope;
 pub(crate) use rustdoc::extract_doc_comments;
 
 #[cfg(test)]

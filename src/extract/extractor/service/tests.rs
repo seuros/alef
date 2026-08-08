@@ -88,6 +88,7 @@ fn make_resolved_config_with_service() -> crate::core::config::ResolvedCrateConf
                 callback_bound: "IntoHandler".to_string(),
                 callback_contract: "Handler".to_string(),
                 variants: vec![],
+                handler_shape: None,
             }],
             entrypoints: vec![
                 EntrypointSpec {

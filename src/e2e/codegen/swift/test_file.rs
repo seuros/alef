@@ -61,6 +61,13 @@ pub(super) fn render_test_file(
     let _ = writeln!(out, "/// E2e tests for category: {category}.");
     let _ = writeln!(out, "final class {class_name}: XCTestCase {{");
 
+    if has_http_fixtures {
+        // Holds the spawned harness subprocess (if any) so tearDown can terminate it
+        // deterministically instead of leaving it orphaned when the suite exits.
+        let _ = writeln!(out, "    private static var _harnessProcess: Process?");
+        let _ = writeln!(out);
+    }
+
     // Always emit a setUp that spawns the harness and optionally chdirs.
     let _ = writeln!(out, "    override class func setUp() {{");
     let _ = writeln!(out, "        super.setUp()");
@@ -101,9 +108,15 @@ pub(super) fn render_test_file(
         let _ = writeln!(out, "                .appendingPathComponent(\".build/debug/Harness\")");
         let _ = writeln!(out, "            let proc = Process()");
         let _ = writeln!(out, "            proc.executableURL = _harness");
-        let _ = writeln!(out, "            let stdoutPipe = Pipe()");
-        let _ = writeln!(out, "            proc.standardOutput = stdoutPipe");
+        // Discard the harness's stdout/stderr via /dev/null rather than a Pipe: an
+        // undrained pipe blocks the child once its 64KB kernel buffer fills, and if the
+        // pipe's write end (inherited fd) survives an orphaned/zombie child, `swift-test`
+        // can block forever reading from it. /dev/null never fills and is never inherited
+        // in a way that keeps the parent's read blocked.
+        let _ = writeln!(out, "            proc.standardOutput = FileHandle.nullDevice");
+        let _ = writeln!(out, "            proc.standardError = FileHandle.nullDevice");
         let _ = writeln!(out, "            proc.standardInput = Pipe()");
+        let _ = writeln!(out, "            Self._harnessProcess = proc");
         let _ = writeln!(out, "            do {{");
         let _ = writeln!(out, "                try proc.run()");
         let _ = writeln!(out, "            }} catch {{");
@@ -217,6 +230,20 @@ pub(super) fn render_test_file(
 
     let _ = writeln!(out, "    }}");
     let _ = writeln!(out);
+
+    if has_http_fixtures {
+        // Terminate the harness deterministically so it is never left running as an
+        // orphan (e.g. if a test crashes) — mirrors the setUp above, one process per class.
+        let _ = writeln!(out, "    override class func tearDown() {{");
+        let _ = writeln!(out, "        if let proc = _harnessProcess, proc.isRunning {{");
+        let _ = writeln!(out, "            proc.terminate()");
+        let _ = writeln!(out, "            proc.waitUntilExit()");
+        let _ = writeln!(out, "        }}");
+        let _ = writeln!(out, "        _harnessProcess = nil");
+        let _ = writeln!(out, "        super.tearDown()");
+        let _ = writeln!(out, "    }}");
+        let _ = writeln!(out);
+    }
 
     for fixture in fixtures {
         if fixture.is_http_test() {

@@ -4,6 +4,9 @@ use crate::core::ir::{PrimitiveType, ReceiverKind, TypeRef};
 
 /// Helper: parse source and extract into an ApiSurface.
 fn extract_from_source(source: &str) -> ApiSurface {
+    // `Result` alias hints live in thread-local state, so a single-threaded test run would
+    // otherwise carry one test's aliases into the next. ~keep
+    type_resolver::reset_result_error_hints();
     let file = syn::parse_str::<syn::File>(source).expect("failed to parse test source");
     let mut surface = ApiSurface {
         crate_name: "test_crate".into(),
