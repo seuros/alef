@@ -63,7 +63,7 @@ pub(super) fn render_test_file(
 
     if has_http_fixtures {
         // Holds the spawned harness subprocess (if any) so tearDown can terminate it
-        // deterministically instead of leaving it orphaned when the suite exits.
+        // deterministically instead of leaving it orphaned when the suite exits. ~keep
         let _ = writeln!(out, "    private static var _harnessProcess: Process?");
         let _ = writeln!(out);
     }
@@ -112,7 +112,7 @@ pub(super) fn render_test_file(
         // undrained pipe blocks the child once its 64KB kernel buffer fills, and if the
         // pipe's write end (inherited fd) survives an orphaned/zombie child, `swift-test`
         // can block forever reading from it. /dev/null never fills and is never inherited
-        // in a way that keeps the parent's read blocked.
+        // in a way that keeps the parent's read blocked. ~keep
         let _ = writeln!(out, "            proc.standardOutput = FileHandle.nullDevice");
         let _ = writeln!(out, "            proc.standardError = FileHandle.nullDevice");
         let _ = writeln!(out, "            proc.standardInput = Pipe()");
@@ -232,12 +232,20 @@ pub(super) fn render_test_file(
     let _ = writeln!(out);
 
     if has_http_fixtures {
-        // Terminate the harness deterministically so it is never left running as an
-        // orphan (e.g. if a test crashes) — mirrors the setUp above, one process per class.
+        // Reap the harness so it is never left listening as an orphan. `swift test` runs
+        // every class in one process, and setUp only spawns when SUT_URL is unset — so the
+        // class that spawned must also clear SUT_URL, or the next class would skip spawning
+        // and issue its requests against the server this tearDown just killed. Clearing it
+        // only when we own `_harnessProcess` preserves an externally supplied SUT_URL. ~keep
         let _ = writeln!(out, "    override class func tearDown() {{");
-        let _ = writeln!(out, "        if let proc = _harnessProcess, proc.isRunning {{");
-        let _ = writeln!(out, "            proc.terminate()");
-        let _ = writeln!(out, "            proc.waitUntilExit()");
+        let _ = writeln!(out, "        if let proc = _harnessProcess {{");
+        let _ = writeln!(out, "            if proc.isRunning {{");
+        let _ = writeln!(out, "                proc.terminate()");
+        let _ = writeln!(out, "                proc.waitUntilExit()");
+        let _ = writeln!(out, "            }}");
+        let _ = writeln!(out, "            _ = \"SUT_URL\".withCString {{ key in");
+        let _ = writeln!(out, "                unsetenv(key)");
+        let _ = writeln!(out, "            }}");
         let _ = writeln!(out, "        }}");
         let _ = writeln!(out, "        _harnessProcess = nil");
         let _ = writeln!(out, "        super.tearDown()");

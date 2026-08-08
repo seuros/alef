@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Generated Swift e2e suites could leave the harness running as an orphan, hanging `swift test` and
+  corrupting later runs.** `setUp` piped the harness's `standardOutput` without ever draining it — an
+  undrained pipe blocks the child once the kernel buffer fills — and never assigned `standardError`
+  at all, so the child inherited the test runner's stderr descriptor and could keep it open
+  indefinitely. There was no `tearDown` anywhere, so nothing reaped the process. Both streams now go
+  to `FileHandle.nullDevice`, and a new `tearDown` terminates and waits on the harness it spawned.
+  Because `swift test` runs every class in one process and `setUp` only spawns when `SUT_URL` is
+  unset, the spawning class also clears `SUT_URL` on teardown so the next class spawns its own
+  harness rather than addressing the one just killed; an externally supplied `SUT_URL` is left
+  untouched. An orphan surviving on the fixed port also silently redirected *other* languages' e2e
+  suites at the wrong server, since every generated suite probes the port without verifying
+  ownership. (`src/e2e/codegen/swift/test_file.rs`)
+
+### Changed
+
+- **The Rustler backend selected its handler-wrapper template by matching the registration method
+  name against the literal `"route"`**, a product-specific string in generator core. It now
+  dispatches structurally on the existing `HandlerShape` IR enum, emitting the context-object wrapper
+  only for `HandlerShape::ContextObject`. That field existed but was never populated from
+  configuration; `[[crates.services.registrations]]` entries now accept `handler_shape`
+  (`"bare_callable"` — the default — `"context_object"`, `"request_response"` or
+  `"introspect_params"`), resolved in the service extractor. Consumers relying on the old behaviour
+  must set `handler_shape = "context_object"` on the affected registration. The wrapper template was
+  previously unreachable in tests, because the fixture's registration was named `add_handler` and so
+  never satisfied the name gate; it is now covered by a positive and a negative case.
+  (`src/backends/rustler/gen_bindings/service_api`, `src/core/config/service.rs`,
+  `src/extract/extractor/service.rs`)
+
 ## [0.58.1] - 2026-08-08
 
 ### Fixed
