@@ -132,6 +132,8 @@ pub fn emit_jni_bridge_object(api: &ApiSurface, config: &ResolvedCrateConfig) ->
         }
     }
 
+    emit_value_method_jni_external_funs(&mut body, api, &exception_class);
+
     emit_streaming_jni_external_funs(&mut body, config, &exception_class);
 
     emit_constructor_jni_external_funs(&mut body, api, config, &exception_class);

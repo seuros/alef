@@ -47,6 +47,14 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/method_client_handle.rs.jinja"),
     ),
     (
+        "value_method_shim_open.rs.jinja",
+        include_str!("templates/value_method_shim_open.rs.jinja"),
+    ),
+    (
+        "value_method_receiver.rs.jinja",
+        include_str!("templates/value_method_receiver.rs.jinja"),
+    ),
+    (
         "streaming_shims.rs.jinja",
         include_str!("templates/streaming_shims.rs.jinja"),
     ),

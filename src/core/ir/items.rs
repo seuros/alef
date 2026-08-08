@@ -520,3 +520,265 @@ pub struct ErrorVariant {
     pub is_tuple: bool,
     pub doc: String,
 }
+
+// Compile-time witnesses guarding against a field being added to a core IR struct and
+// silently ignored by every backend.
+//
+// THE HAZARD: backends consume IR structs (like `FieldDef`) by dot-access —
+// `field.name`, `field.ty`, `field.optional` — not by destructuring. Adding a field to
+// a struct like `FieldDef` therefore does not break any backend; the new field is
+// simply never read. Two fields shipped exactly this way in the past and were only
+// caught by a human reading generated output.
+//
+// Contrast that with *construction*: `FieldDef` gaining its `version` field broke
+// ~300 exhaustive struct literals with E0063, forcing every construction site to be
+// revisited. That is the property this module recreates for the read side.
+//
+// THE MECHANISM: each function below takes one IR struct by value and destructures it
+// with a TOTAL pattern — every field named, no `..` rest. Total destructuring is
+// compiler-checked: rustc rejects a pattern that omits a field with E0027, and rejects
+// a pattern that names a field the struct no longer has with E0026. So adding (or
+// removing) a field on a covered struct is a compile error at this exact spot — no
+// other change anywhere in the codebase is needed for the guard to fire.
+//
+// The functions are never called, and don't need to be: rustc type-checks a function
+// body whether or not anything invokes it, so the guard fires the moment `cargo test`
+// or `cargo clippy --all-targets` type-checks this module. No dummy data, no `Default`
+// requirement, no parallel copy of the IR to maintain.
+//
+// WHAT TO DO WHEN ONE OF THESE FAILS TO COMPILE: the compiler error names the field
+// that is missing from (or no longer exists on) the pattern.
+//   1. Grep `src/backends/` for how the struct's *other* fields are consumed (e.g.
+//      `.optional`, `.core_wrapper`) to find the codegen sites that build the binding
+//      surface for this IR item.
+//   2. For each backend, decide whether the new field should change what it emits.
+//      Some fields are legitimately diagnostics-only (see `binding_exclusion_reason`
+//      below) — that is a considered decision, not an oversight, and must be recorded
+//      as one.
+//   3. Add the field to the pattern with a one-line trailing comment stating that
+//      decision, following the existing entries as a template. Never add `..` back —
+//      the whole point is that the *next* field addition fails here too.
+//
+// SCOPE — why these nine structs and nothing else:
+// This covers every struct in this file (`items.rs`) that a codegen backend walks to
+// build a binding surface: `TypeDef`, `FieldDef`, `MethodDef`, `FunctionDef`,
+// `ParamDef`, `EnumDef`, `EnumVariant`, `ErrorDef`, `ErrorVariant`.
+//
+// Deliberately NOT covered:
+// - `ReceiverKind` (this file) and `CoreWrapper` / `DefaultValue` (`metadata.rs`) are
+//   plain enums, not structs with dot-accessed fields. Consuming an enum means
+//   matching it, and an exhaustive `match` with no wildcard arm already gets this exact
+//   protection from the compiler for free — a new variant is E0004 at every real match
+//   site. That guarantee only breaks down if a match grows a wildcard `_` arm, which is
+//   a lint concern (`clippy::wildcard_enum_match_arm`), not a silent-IR-drop concern,
+//   and is out of scope here.
+// - `ApiSurface` and the `service.rs` types (`ServiceDef`, `RegistrationDef`, and
+//   friends) model a narrower, opt-in slice of the IR (HTTP-style service
+//   registration) that only a subset of backends touch at all, unlike
+//   `TypeDef` / `FieldDef` / `MethodDef`, which every backend must walk to emit
+//   anything. The same witness pattern applies there unchanged; it is left as
+//   follow-up work to keep this change scoped to the struct family the motivating
+//   incidents actually involved.
+#[cfg(test)]
+mod tests {
+    use super::{EnumDef, EnumVariant, ErrorDef, ErrorVariant, FieldDef, FunctionDef, MethodDef, ParamDef, TypeDef};
+
+    // See the module-level comment above for the contract this pattern enforces.
+    #[allow(dead_code)]
+    fn type_def_field_coverage_witness(value: TypeDef) {
+        let TypeDef {
+            name: _,                     // identifier; every backend reads it directly
+            rust_path: _,                // import / qualified-path emission
+            original_rust_path: _,       // From-impl target when core_import re-exports
+            fields: _,                   // drives the whole struct-field codegen loop
+            methods: _,                  // drives the whole method codegen loop
+            is_opaque: _,                // opaque-handle vs. value-type binding strategy
+            is_clone: _,                 // gates `.clone()` emission
+            is_copy: _,                  // gates Copy-vs-clone (avoids clippy::clone_on_copy)
+            doc: _,                      // doc-comment emission
+            cfg: _,                      // conditional `#[cfg]` propagation
+            is_trait: _,                 // `dyn` keyword for opaque inner types
+            has_default: _,              // NAPI-style all-fields-optional-with-defaults
+            has_stripped_cfg_fields: _,  // `..Default::default()` in struct literals
+            is_return_type: _,           // output DTO style (e.g. Python TypedDict)
+            serde_rename_all: _,         // Go/Java/C# JSON tag casing
+            has_serde: _,                // gates FFI from_json/to_json generation
+            super_traits: _,             // trait bridge super-trait impl selection
+            binding_excluded: _,         // excludes the type from generated surfaces
+            binding_exclusion_reason: _, // diagnostics only; deliberately not codegen input
+            is_variant_wrapper: _,       // opts static `new` into host constructor emission
+            has_lifetime_params: _,      // From<T<'_>> vs From<T> / opaque wrapper choice
+            has_private_fields: _,       // non-literal construction strategy in conversions
+            version: _,                  // since/deprecated annotation emission
+        } = value;
+    }
+
+    // See the module-level comment above for the contract this pattern enforces.
+    #[allow(dead_code)]
+    fn field_def_field_coverage_witness(value: FieldDef) {
+        let FieldDef {
+            name: _,                     // identifier; every backend reads it directly
+            ty: _,                       // determines the emitted binding type
+            optional: _,                 // nullability across every backend
+            default: _,                  // literal default expression
+            doc: _,                      // doc-comment emission
+            sanitized: _,                // gates auto-generated From/Into conversions
+            is_boxed: _,                 // FFI deref-before-clone on Box<T> fields
+            type_rust_path: _,           // disambiguates same-named types across modules
+            cfg: _,                      // conditional inclusion in struct literals
+            typed_default: _,            // language-native default emission
+            core_wrapper: _,             // Cow/Arc/Bytes/Box From/Into codegen
+            vec_inner_core_wrapper: _,   // Vec<Wrapper<T>> element codegen
+            newtype_wrapper: _,          // wrap/unwrap newtype at the binding boundary
+            serde_rename: _,             // wire-name parity with core serde
+            serde_flatten: _,            // language-native flatten support (e.g. Jackson)
+            binding_excluded: _,         // drops the field from the generated surface
+            binding_exclusion_reason: _, // diagnostics only; deliberately not codegen input
+            original_type: _,            // reconstructs pre-sanitize (de)serialization
+            version: _,                  // since/deprecated annotation emission
+        } = value;
+    }
+
+    // See the module-level comment above for the contract this pattern enforces.
+    #[allow(dead_code)]
+    fn method_def_field_coverage_witness(value: MethodDef) {
+        let MethodDef {
+            name: _,                     // identifier; every backend reads it directly
+            params: _,                   // drives parameter-list codegen
+            return_type: _,              // drives return-type codegen
+            is_async: _,                 // selects sync vs. async call-site codegen
+            is_static: _,                // selects associated-function vs. instance-method form
+            error_type: _,               // fallible-call error-mapping codegen
+            doc: _,                      // doc-comment emission
+            receiver: _,                 // `&self` / `&mut self` / owned call-site codegen
+            sanitized: _,                // methods with sanitized signatures can't auto-delegate
+            trait_source: _,             // trait bridge impl selection
+            returns_ref: _,              // inserts `.clone()` before type conversion
+            returns_cow: _,              // inserts `.into_owned()` before type conversion
+            return_newtype_wrapper: _,   // unwraps the returned newtype value
+            has_default_impl: _,         // optional-impl opt-in in trait bridge codegen
+            binding_excluded: _,         // excludes the method from generated surfaces
+            binding_exclusion_reason: _, // diagnostics only; deliberately not codegen input
+            version: _,                  // since/deprecated annotation emission
+        } = value;
+    }
+
+    // See the module-level comment above for the contract this pattern enforces.
+    #[allow(dead_code)]
+    fn function_def_field_coverage_witness(value: FunctionDef) {
+        let FunctionDef {
+            name: _,                     // identifier; every backend reads it directly
+            rust_path: _,                // qualified call-site path
+            original_rust_path: _,       // From-impl target when core_import re-exports
+            params: _,                   // drives parameter-list codegen
+            return_type: _,              // drives return-type codegen
+            is_async: _,                 // selects sync vs. async call-site codegen
+            error_type: _,               // fallible-call error-mapping codegen
+            doc: _,                      // doc-comment emission
+            cfg: _,                      // conditional `#[cfg]` propagation
+            sanitized: _,                // functions with sanitized signatures can't auto-delegate
+            return_sanitized: _,         // widens the binding return type; forces JSON round-trip
+            returns_ref: _,              // inserts `.clone()` before type conversion
+            returns_cow: _,              // inserts `.into_owned()` before type conversion
+            return_newtype_wrapper: _,   // unwraps the returned newtype value
+            binding_excluded: _,         // excludes the function from generated surfaces
+            binding_exclusion_reason: _, // diagnostics only; deliberately not codegen input
+            version: _,                  // since/deprecated annotation emission
+        } = value;
+    }
+
+    // See the module-level comment above for the contract this pattern enforces.
+    #[allow(dead_code)]
+    fn param_def_field_coverage_witness(value: ParamDef) {
+        let ParamDef {
+            name: _,             // identifier; every backend reads it directly
+            ty: _,               // determines the emitted binding type
+            optional: _,         // nullability across every backend
+            default: _,          // literal default expression
+            sanitized: _,        // allows reconstructing proper deserialization logic
+            typed_default: _,    // language-native default emission
+            is_ref: _,           // generates owned intermediates for `&T` params
+            is_mut: _,           // generates `&mut` refs when calling core functions
+            newtype_wrapper: _,  // wraps the raw value back into the newtype at the call site
+            original_type: _,    // reconstructs pre-sanitize deserialization
+            map_is_ahash: _,     // selects AHashMap vs. HashMap deserialization target
+            map_key_is_cow: _,   // inserts `Cow::Owned(k)` when building the AHashMap
+            vec_inner_is_ref: _, // inserts a `Vec<&T>` intermediate at the call site
+            map_is_btree: _,     // converts binding HashMap into core BTreeMap at the call site
+            core_wrapper: _,     // Cow/etc. conversion at the call site
+        } = value;
+    }
+
+    // See the module-level comment above for the contract this pattern enforces.
+    #[allow(dead_code)]
+    fn enum_def_field_coverage_witness(value: EnumDef) {
+        let EnumDef {
+            name: _,                     // identifier; every backend reads it directly
+            rust_path: _,                // qualified path for From/Into codegen
+            original_rust_path: _,       // From-impl target when core_import re-exports
+            variants: _,                 // drives the whole variant codegen loop
+            methods: _,                  // static factory method codegen
+            doc: _,                      // doc-comment emission
+            cfg: _,                      // conditional `#[cfg]` propagation
+            is_copy: _,                  // gates Copy-vs-clone (avoids clippy::clone_on_copy)
+            has_serde: _,                // gates Codable/serde-bridge conformance emission
+            has_default: _,              // gates delegating `impl Default` emission
+            serde_tag: _,                // internally-tagged enum property name
+            serde_untagged: _,           // untagged-enum handling
+            serde_rename_all: _,         // variant renaming strategy
+            binding_excluded: _,         // excludes the enum from generated surfaces
+            binding_exclusion_reason: _, // diagnostics only; deliberately not codegen input
+            excluded_variants: _,        // retained so exhaustive Rust matches emit unreachable!()
+            version: _,                  // since/deprecated annotation emission
+        } = value;
+    }
+
+    // See the module-level comment above for the contract this pattern enforces.
+    #[allow(dead_code)]
+    fn enum_variant_field_coverage_witness(value: EnumVariant) {
+        let EnumVariant {
+            name: _,                       // identifier; every backend reads it directly
+            fields: _,                     // drives struct/tuple-variant field codegen
+            doc: _,                        // doc-comment emission
+            is_default: _,                 // selects the `#[derive(Default)]` variant
+            serde_rename: _,               // wire-name parity with core serde
+            is_tuple: _,                   // selects struct- vs. tuple- vs. unit-pattern shape
+            binding_excluded: _,           // excludes the variant from generated surfaces
+            binding_exclusion_reason: _,   // diagnostics only; deliberately not codegen input
+            originally_had_data_fields: _, // selects wildcard vs. bare-unit pattern emission
+            cfg: _,                        // matching `#[cfg]` attribute emission requirement
+            version: _,                    // since/deprecated annotation emission
+        } = value;
+    }
+
+    // See the module-level comment above for the contract this pattern enforces.
+    #[allow(dead_code)]
+    fn error_def_field_coverage_witness(value: ErrorDef) {
+        let ErrorDef {
+            name: _,                     // identifier; every backend reads it directly
+            rust_path: _,                // qualified path for From/Into codegen
+            original_rust_path: _,       // From-impl target when core_import re-exports
+            variants: _,                 // drives the whole error-variant codegen loop
+            doc: _,                      // doc-comment emission
+            methods: _,                  // whitelisted introspection method codegen
+            binding_excluded: _,         // excludes the error type from generated surfaces
+            binding_exclusion_reason: _, // diagnostics only; deliberately not codegen input
+            version: _,                  // since/deprecated annotation emission
+        } = value;
+    }
+
+    // See the module-level comment above for the contract this pattern enforces.
+    #[allow(dead_code)]
+    fn error_variant_field_coverage_witness(value: ErrorVariant) {
+        let ErrorVariant {
+            name: _,             // identifier; every backend reads it directly
+            message_template: _, // `#[error("...")]` message template emission
+            fields: _,           // drives struct/tuple field codegen
+            has_source: _,       // detects `#[source]`/`#[from]` for chained-error codegen
+            has_from: _,         // gates auto `From` conversion emission
+            is_unit: _,          // selects the unit-variant pattern shape
+            is_tuple: _,         // selects the tuple-variant wildcard pattern `(..)`
+            doc: _,              // doc-comment emission
+        } = value;
+    }
+}

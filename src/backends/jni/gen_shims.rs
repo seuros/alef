@@ -23,9 +23,11 @@ use crate::codegen::naming::to_class_name;
 use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile};
 use crate::core::config::workspace::ClientConstructorConfig;
 use crate::core::config::{AdapterPattern, Language, ResolvedCrateConfig};
-use crate::core::ir::{ApiSurface, ParamDef, PrimitiveType, TypeDef, TypeRef};
+use crate::core::ir::{ApiSurface, MethodDef, ParamDef, PrimitiveType, TypeDef, TypeRef};
 use crate::core::jni::{
-    bridge_class_name, bridge_method_name, destructor_method_name, jni_symbol, streaming_method_names,
+    bridge_class_name, bridge_method_name, bridgeable_value_methods, destructor_method_name,
+    is_functional_ref_mut_value_method, jni_symbol, streaming_method_names, value_bridge_serde_type_names,
+    value_method_return_type,
 };
 
 include!("gen_shims/backend.rs");
@@ -36,6 +38,7 @@ include!("gen_shims/client_shims.rs");
 include!("gen_shims/marshalling.rs");
 include!("gen_shims/function_shims.rs");
 include!("gen_shims/method_shims.rs");
+include!("gen_shims/value_method_shims.rs");
 include!("gen_shims/constructor_shims.rs");
 include!("gen_shims/streaming_shims.rs");
 include!("gen_shims/type_helpers.rs");

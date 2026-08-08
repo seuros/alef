@@ -5,6 +5,21 @@
 use crate::codegen::naming::{PublicIdentifierKind, public_host_identifier};
 use crate::core::config::Language;
 
+/// Everything a data-class emitter needs to bridge value-type instance methods
+/// through JNI.
+///
+/// Present only for the JNI targets (Kotlin/Android). When absent, a data class
+/// omits its instance methods entirely rather than shipping a body that throws
+/// at runtime — the same choice the Java backend makes.
+#[derive(Clone, Copy)]
+pub struct ValueMethodBridge<'a> {
+    /// Simple name of the generated `object` holding the `external fun`s.
+    pub bridge_class: &'a str,
+    /// Types that can cross the boundary as JSON; see
+    /// [`crate::core::jni::value_bridge_serde_type_names`].
+    pub serde_type_names: &'a std::collections::HashSet<&'a str>,
+}
+
 /// Convert a `snake_case` or `kebab-case` name to `PascalCase`.
 pub fn kotlin_pascal_case(name: &str) -> String {
     public_host_identifier(Language::Kotlin, PublicIdentifierKind::Type, name)

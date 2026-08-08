@@ -216,6 +216,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/data_class_close.jinja"),
     ),
     (
+        "value_method_mapper.jinja",
+        include_str!("templates/value_method_mapper.jinja"),
+    ),
+    (
         "json_property_annotation.jinja",
         include_str!("templates/json_property_annotation.jinja"),
     ),

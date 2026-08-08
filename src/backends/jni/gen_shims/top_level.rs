@@ -119,6 +119,17 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
         );
     }
 
+    // Instance methods on value (data-class) types. These carry no handle, so the
+    // shim rebuilds the receiver from JSON — see `value_method_shims.rs`.
+    let serde_type_names = value_bridge_serde_type_names(api);
+    for ty in api
+        .types
+        .iter()
+        .filter(|t| !t.is_opaque && !t.is_trait && !t.binding_excluded && !exclude_types.contains(t.name.as_str()))
+    {
+        emit_value_type_shims(&mut out, ty, &package, &bridge, &serde_type_names);
+    }
+
     let top_level_opaque_returns: std::collections::HashSet<&str> = visible_functions
         .iter()
         .filter_map(|f| {

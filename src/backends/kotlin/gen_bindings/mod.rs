@@ -21,7 +21,7 @@ use crate::core::ir::{ApiSurface, EnumDef, ErrorDef, FunctionDef, MethodDef, Par
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-pub use shared::{kotlin_field_name, to_lower_camel, to_pascal_case, to_screaming_snake};
+pub use shared::{ValueMethodBridge, kotlin_field_name, to_lower_camel, to_pascal_case, to_screaming_snake};
 
 pub fn emit_type_pub(ty: &TypeDef, out: &mut String, imports: &mut BTreeSet<String>) {
     object_wrapper::emit_type_with_imports(
@@ -31,6 +31,7 @@ pub fn emit_type_pub(ty: &TypeDef, out: &mut String, imports: &mut BTreeSet<Stri
         &std::collections::HashMap::new(),
         &std::collections::HashSet::new(),
         &std::collections::HashSet::new(),
+        None,
     )
 }
 
@@ -54,6 +55,7 @@ pub fn emit_type_pub_with_enum_defaults(
         enum_defaults,
         &std::collections::HashSet::new(),
         &std::collections::HashSet::new(),
+        None,
     )
 }
 
@@ -78,6 +80,7 @@ pub fn emit_type_pub_with_enum_defaults_and_sealed_classes(
         enum_defaults,
         sealed_class_names,
         &std::collections::HashSet::new(),
+        None,
     )
 }
 
@@ -88,6 +91,10 @@ pub fn emit_type_pub_with_enum_defaults_and_sealed_classes(
 /// default like `= PreprocessingOptions()` — preventing Jackson's Kotlin module
 /// from raising `MissingKotlinParameterException` when the wire JSON omits the
 /// nested struct.
+///
+/// `value_method_bridge` carries the JNI Bridge object that backs data-class
+/// instance methods. Pass `None` for targets without one: the methods are then
+/// omitted from the data class rather than emitted with a body that throws.
 pub fn emit_type_pub_with_defaults_sealed_and_constructible(
     ty: &TypeDef,
     out: &mut String,
@@ -95,6 +102,7 @@ pub fn emit_type_pub_with_defaults_sealed_and_constructible(
     enum_defaults: &std::collections::HashMap<String, String>,
     sealed_class_names: &std::collections::HashSet<String>,
     default_constructible_types: &std::collections::HashSet<String>,
+    value_method_bridge: Option<ValueMethodBridge<'_>>,
 ) {
     object_wrapper::emit_type_with_imports(
         ty,
@@ -103,6 +111,7 @@ pub fn emit_type_pub_with_defaults_sealed_and_constructible(
         enum_defaults,
         sealed_class_names,
         default_constructible_types,
+        value_method_bridge,
     )
 }
 

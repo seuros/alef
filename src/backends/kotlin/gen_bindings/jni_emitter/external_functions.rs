@@ -141,6 +141,46 @@ fn emit_method_jni_external_funs(
     }
 }
 
+/// Emit `external fun native{Owner}{Method}(selfJson: String[, requestJson: String])`
+/// declarations for every bridgeable instance method on a *value* (data-class) type.
+///
+/// Value types carry no handle: the Kotlin object serialises `this` and the Rust
+/// shim rebuilds the core receiver from that JSON. Selection goes through
+/// [`bridgeable_value_methods`] so this list, the data-class bodies, and the
+/// `Java_*` symbols the JNI shim crate exports cannot drift apart.
+pub fn emit_value_method_jni_external_funs(out: &mut String, api: &ApiSurface, exception_class: &str) {
+    let serde_type_names = value_bridge_serde_type_names(api);
+    let value_types: Vec<_> = api
+        .types
+        .iter()
+        .filter(|t| !t.is_opaque && !t.is_trait && !t.binding_excluded)
+        .filter(|t| !bridgeable_value_methods(t, &serde_type_names).is_empty())
+        .collect();
+    if value_types.is_empty() {
+        return;
+    }
+
+    out.push_str("\n    // JNI external funs for data-class instance methods.\n");
+    for ty in &value_types {
+        for method in bridgeable_value_methods(ty, &serde_type_names) {
+            let native_name = bridge_method_name(&ty.name, &method.name);
+            let return_type = value_method_return_type(&ty.name, method);
+            let params = if method.params.is_empty() {
+                "selfJson: String".to_string()
+            } else {
+                "selfJson: String, requestJson: String".to_string()
+            };
+            push_jni_external_fun(
+                out,
+                &native_name,
+                &params,
+                non_unit_return_type(&return_type, jni_return_type(&return_type)),
+                Some(exception_class),
+            );
+        }
+    }
+}
+
 /// Returns true when this function returns a configured host-native capsule type.
 pub(in crate::backends::kotlin::gen_bindings::jni_emitter) fn is_capsule_function(
     func: &crate::core::ir::FunctionDef,

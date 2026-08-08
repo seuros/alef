@@ -517,7 +517,17 @@ pub(super) fn gen_build_rs(
             let to_root = "../".repeat(depth);
             let dest_dir = format!("{to_root}{go_dir}/include");
             format!(
-                "\n    let go_include_dir = std::path::Path::new(\"{dest_dir}\");\n    \
+                "\n    // Go is the ONLY binding that compiles against the C header: `binding.go`\n    \
+                 // carries `#include \"{header_name}\"` under cgo, so the header has to be\n    \
+                 // vendored next to the Go sources to build at all. Every other binding\n    \
+                 // (Panama/JNI, P/Invoke, PyO3, NAPI, Magnus, ...) resolves the cdylib's\n    \
+                 // symbols at run time and never sees a header.\n    \
+                 //\n    \
+                 // So this is deliberately a single destination, NOT an incomplete fan-out\n    \
+                 // list. Do not add package directories here just because they ship the\n    \
+                 // cdylib: a vendored copy of a generated header that nothing compiles is a\n    \
+                 // drift generator, and it silently rots into a false record of the ABI.\n    \
+                 let go_include_dir = std::path::Path::new(\"{dest_dir}\");\n    \
                  std::fs::create_dir_all(go_include_dir).expect(\"Unable to create Go include directory\");\n    \
                  std::fs::copy(\"include/{header_name}\", go_include_dir.join(\"{header_name}\"))\n        \
                  .expect(\"Unable to copy header to Go include directory\");\n"

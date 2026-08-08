@@ -1,10 +1,15 @@
-use crate::core::ir::{TypeDef, TypeRef};
+use crate::core::ir::{MethodDef, TypeDef, TypeRef};
 use std::collections::BTreeSet;
 
 use super::types::{escape_kotlin_string, fits_single_line, kotlin_field_default, kotlin_type_with_string_imports};
 use crate::backends::kotlin::gen_bindings::helpers::emit_cleaned_kdoc;
-use crate::backends::kotlin::gen_bindings::shared::kotlin_field_name;
+use crate::backends::kotlin::gen_bindings::shared::{ValueMethodBridge, kotlin_field_name};
+use crate::core::jni::{bridge_method_name, bridgeable_value_methods, is_functional_ref_mut_value_method};
 use heck::ToLowerCamelCase;
+
+/// File-private Jackson mapper used to marshal `this` and the parameter object
+/// across the JNI boundary for value-type instance methods.
+const VALUE_METHOD_MAPPER: &str = "VALUE_METHOD_MAPPER";
 
 pub(crate) fn emit_type_with_imports(
     ty: &TypeDef,
@@ -13,6 +18,7 @@ pub(crate) fn emit_type_with_imports(
     enum_defaults: &std::collections::HashMap<String, String>,
     sealed_class_names: &std::collections::HashSet<String>,
     default_constructible_types: &std::collections::HashSet<String>,
+    value_method_bridge: Option<ValueMethodBridge<'_>>,
 ) {
     emit_cleaned_kdoc(out, &ty.doc, "");
     if ty.fields.is_empty() {
@@ -76,10 +82,13 @@ pub(crate) fn emit_type_with_imports(
         field_strings.push(format!("val {name}: {effective_ty_str}{default_suffix}"));
     }
 
-    use crate::codegen::shared::partition_methods;
-    let (instance_methods, _) = partition_methods(&ty.methods);
-    let instance_methods: Vec<_> = instance_methods.into_iter().filter(|m| !m.sanitized).collect();
-    let has_instance_methods = !instance_methods.is_empty();
+    // Instance methods are only emitted when a JNI bridge is available to back them.
+    // Without one they are dropped rather than stubbed out, so no method that compiles
+    // can fail at runtime.
+    let bridged_methods: Vec<&MethodDef> = value_method_bridge
+        .map(|bridge| bridgeable_value_methods(ty, bridge.serde_type_names))
+        .unwrap_or_default();
+    let has_instance_methods = !bridged_methods.is_empty();
 
     let prefix = format!("data class {}", ty.name);
     let use_single_line = !has_field_docs
@@ -141,37 +150,115 @@ pub(crate) fn emit_type_with_imports(
         ));
     }
 
-    for method in &instance_methods {
-        let method_name = heck::AsLowerCamelCase(method.name.as_str()).to_string();
-        let return_type_str = kotlin_type_with_string_imports(&method.return_type, false, imports);
-
-        let params_sig: Vec<String> = method
-            .params
-            .iter()
-            .map(|p| {
-                let ptype = kotlin_type_with_string_imports(&p.ty, p.optional, imports);
-                let pname = p.name.to_lower_camel_case();
-                format!("{pname}: {ptype}")
-            })
-            .collect();
-
-        out.push_str("\n    fun ");
-        out.push_str(&method_name);
-        out.push('(');
-        out.push_str(&params_sig.join(", "));
-        out.push_str("): ");
-        out.push_str(&return_type_str);
-        out.push_str(" {\n");
-        out.push_str("        throw UnsupportedOperationException(\n");
-        out.push_str("            \"");
-        out.push_str(&method_name);
-        out.push_str(" is not yet bridged via JNI; reconstruct via Builder.\"\n");
-        out.push_str("        )\n");
-        out.push_str("    }\n");
+    if let Some(bridge) = value_method_bridge {
+        for &method in &bridged_methods {
+            emit_value_method(out, ty, method, imports, bridge);
+        }
     }
 
     if has_instance_methods {
         out.push_str("}\n");
+        emit_value_method_mapper(out);
+    }
+}
+
+/// Emit one data-class instance method backed by a JNI value-method shim.
+///
+/// The receiver is marshalled as JSON (`this`), parameters as a JSON object
+/// keyed by the Rust parameter name, and the result comes back as either a JNI
+/// primitive or a JSON string that Jackson reads into the declared Kotlin type.
+/// Delegating rather than reimplementing keeps behaviour the Kotlin side cannot
+/// see — argument clamping, validation messages — identical to the core library.
+fn emit_value_method(
+    out: &mut String,
+    ty: &TypeDef,
+    method: &MethodDef,
+    imports: &mut BTreeSet<String>,
+    bridge: ValueMethodBridge<'_>,
+) {
+    let method_name = heck::AsLowerCamelCase(method.name.as_str()).to_string();
+    let returns_receiver = is_functional_ref_mut_value_method(method);
+    let return_type = if returns_receiver {
+        TypeRef::Named(ty.name.clone())
+    } else {
+        method.return_type.clone()
+    };
+    let return_type_str = kotlin_type_with_string_imports(&return_type, false, imports);
+
+    let params_sig: Vec<String> = method
+        .params
+        .iter()
+        .map(|p| {
+            let ptype = kotlin_type_with_string_imports(&p.ty, p.optional, imports);
+            let pname = p.name.to_lower_camel_case();
+            format!("{pname}: {ptype}")
+        })
+        .collect();
+
+    out.push('\n');
+    emit_cleaned_kdoc(out, &method.doc, "    ");
+    out.push_str("    fun ");
+    out.push_str(&method_name);
+    out.push('(');
+    out.push_str(&params_sig.join(", "));
+    out.push_str("): ");
+    out.push_str(&return_type_str);
+    out.push_str(" {\n");
+    out.push_str(&format!(
+        "        val selfJson = {VALUE_METHOD_MAPPER}.writeValueAsString(this)\n"
+    ));
+
+    let mut call_args = vec!["selfJson".to_string()];
+    if !method.params.is_empty() {
+        out.push_str(&format!(
+            "        val requestJson = {VALUE_METHOD_MAPPER}.writeValueAsString(\n            mapOf(\n"
+        ));
+        for param in &method.params {
+            let key = escape_kotlin_string(&param.name.replace('-', "_"));
+            let value = param.name.to_lower_camel_case();
+            out.push_str(&format!("                \"{key}\" to {value},\n"));
+        }
+        out.push_str("            ),\n        )\n");
+        call_args.push("requestJson".to_string());
+    }
+
+    let native_call = format!(
+        "{}.{}({})",
+        bridge.bridge_class,
+        bridge_method_name(&ty.name, &method.name),
+        call_args.join(", ")
+    );
+
+    match &return_type {
+        TypeRef::Unit => out.push_str(&format!("        {native_call}\n")),
+        TypeRef::Primitive(_) | TypeRef::String => out.push_str(&format!("        return {native_call}\n")),
+        _ => {
+            out.push_str(&format!("        val resultJson = {native_call}\n"));
+            out.push_str(&format!("        return {VALUE_METHOD_MAPPER}.readValue(\n"));
+            out.push_str("            resultJson,\n");
+            out.push_str(&format!(
+                "            object : com.fasterxml.jackson.core.type.TypeReference<{return_type_str}>() {{}},\n"
+            ));
+            out.push_str("        )\n");
+        }
+    }
+    out.push_str("    }\n");
+}
+
+/// Emit the file-private Jackson mapper backing value-method marshalling.
+///
+/// Emitted at most once per file; the Kotlin visibility keeps it from colliding
+/// with the mapper any other generated file declares.
+fn emit_value_method_mapper(out: &mut String) {
+    let declaration = crate::backends::kotlin::template_env::render(
+        "value_method_mapper.jinja",
+        minijinja::context! {
+            name => VALUE_METHOD_MAPPER,
+        },
+    );
+    if !out.contains(&declaration) {
+        out.push('\n');
+        out.push_str(&declaration);
     }
 }
 

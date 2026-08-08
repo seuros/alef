@@ -737,6 +737,7 @@ fn binding_excluded_field_is_omitted_from_dto() {
         &std::collections::HashMap::new(),
         &std::collections::HashSet::new(),
         &std::collections::HashSet::new(),
+        None,
     );
 
     assert!(

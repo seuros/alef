@@ -1,0 +1,10 @@
+    // Value types have no native handle: the Kotlin data class owns its fields, so the
+    // receiver is rebuilt here from the JSON the caller serialised out of `this`.
+    let self_str = match jstring_to_string(env, self_json) {
+        Ok(s) => s,
+        Err(e) => { throw_jni_error(env, &format!("invalid self_json: {e}")); return {{ ret_null }}; }
+    };
+    let mut client: core_crate::{{ type_name }} = match serde_json::from_str(&self_str) {
+        Ok(v) => v,
+        Err(e) => { throw_jni_error(env, &format!("{{ type_name }} deserialize: {e}")); return {{ ret_null }}; }
+    };
