@@ -204,22 +204,6 @@ pub(super) fn emit_visitor_test_body(
     }
 }
 
-// ---------------------------------------------------------------------------
-// JSON-struct assertion rendering (for result_is_json_struct = true)
-// ---------------------------------------------------------------------------
-
-/// Convert a dot-separated field path into a chain of `std.json.Value` lookups.
-///
-/// Each segment uses `.object.get("key").?` to traverse the JSON object tree.
-/// The final segment stops before the leaf-type accessor so callers can append
-/// the appropriate accessor (`.string`, `.integer`, `.array.items`, etc.).
-///
-/// Returns `(base_expr, last_key)` where `base_expr` already includes all
-/// intermediate `.object.get("…").?` dereferences up to (but not including)
-/// the leaf, and `last_key` is the last path segment.
-/// Variant names of `FormatMetadata` (snake_case, from `#[serde(rename_all = "snake_case")]`).
-/// These appear as typed accessors in fixture paths (e.g. `format.excel.sheet_count`)
-/// but are NOT JSON keys — `FormatMetadata` is internally tagged so variant fields are
 #[cfg(test)]
 mod zig_visitor_tests {
     use super::{emit_visitor_test_body, resolve_zig_visitor_call_symbols};

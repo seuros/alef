@@ -1,5 +1,12 @@
 use super::*;
 
+/// Variant names of `FormatMetadata` (snake_case, from `#[serde(rename_all = "snake_case")]`).
+///
+/// These appear as typed accessors in fixture paths (e.g. `format.excel.sheet_count`) but are
+/// NOT JSON keys: `FormatMetadata` is internally tagged (`#[serde(tag = "format_type")]`), so
+/// the variant's fields are flattened into the `format` object alongside the discriminator.
+/// Zig asserts over the raw serde JSON, so these segments must be skipped when building a
+/// `std.json.Value` lookup chain.
 const FORMAT_METADATA_VARIANTS: &[&str] = &[
     "pdf",
     "docx",
@@ -20,6 +27,7 @@ const FORMAT_METADATA_VARIANTS: &[&str] = &[
     "jats",
     "epub",
     "pst",
+    "audio",
     "code",
 ];
 
