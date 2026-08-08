@@ -15,8 +15,9 @@ use crate::codegen::builder::RustFileBuilder;
 use crate::codegen::{generators, shared};
 use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile};
 use crate::core::config::{Language, ResolvedCrateConfig, resolve_output_dir};
-use crate::core::ir::{ApiSurface, TypeRef};
+use crate::core::ir::{ApiSurface, ReceiverKind, TypeRef};
 use ahash::{AHashMap, AHashSet};
+use regex::Regex;
 use std::path::PathBuf;
 
 use cargo::gen_cargo_toml;
@@ -59,6 +60,98 @@ fn prepend_unknown_type_omission_marker(omissions: Option<&Vec<(String, String)>
         ));
     }
     format!("{marker}{item}")
+}
+
+/// Types for which `methods::gen_method` emits a self-delegating
+/// `{core_import}::{type_name}::from(self.clone()).{method}(..)` call for at least one method.
+///
+/// That delegation form is a hard requirement on `impl From<Wasm{Type}> for {core}::{Type}`
+/// existing (see `methods.rs`). The reverse (`binding -> core`) conversion is otherwise only
+/// emitted for types in `input_type_names(api)` — types reachable as a function/method
+/// parameter, directly or transitively through struct fields. A struct that is only ever
+/// *returned* (never taken as a parameter, directly or transitively) but that also has an
+/// auto-delegated instance method — e.g. `PageRange::page_count(&self)` — falls through that
+/// gap: `input_type_names` has no reason to include it, yet `gen_method` still needs the
+/// reverse impl to compile the delegation. Mirrors the exact branching `gen_method` uses to
+/// decide between self-delegation and the opaque mutex-lock path, so the two stay in sync.
+fn types_needing_self_delegation_reverse_impl(api: &ApiSurface, opaque_types: &AHashSet<String>) -> AHashSet<String> {
+    let mut needed = AHashSet::default();
+    for typ in api.types.iter().filter(|t| !t.is_trait) {
+        let has_mut_methods = typ
+            .methods
+            .iter()
+            .any(|m| matches!(m.receiver.as_ref(), Some(ReceiverKind::RefMut)));
+        let is_opaque_type = opaque_types.contains(&typ.name);
+
+        for method in &typ.methods {
+            if method.is_static {
+                continue;
+            }
+            let is_ref_mut_receiver = matches!(method.receiver.as_ref(), Some(ReceiverKind::RefMut));
+            // Mirrors gen_method: this path calls `self.inner.lock().unwrap().{method}(..)`
+            // directly on the core value held by the opaque wrapper — no `From` impl needed.
+            if is_opaque_type && has_mut_methods && !is_ref_mut_receiver {
+                continue;
+            }
+
+            let delegates_via_self_conversion = if method.is_async {
+                // gen_method's async branch always builds `core_call` via self-delegation
+                // (or the mutex path excluded above), regardless of `can_delegate`.
+                true
+            } else if is_ref_mut_receiver && has_mut_methods {
+                !method.sanitized
+                    && method
+                        .params
+                        .iter()
+                        .all(|p| !p.sanitized && shared::is_delegatable_param(&p.ty, opaque_types))
+                    && shared::is_opaque_delegatable_type(&method.return_type)
+            } else {
+                shared::can_auto_delegate(method, opaque_types)
+            };
+
+            if delegates_via_self_conversion {
+                needed.insert(typ.name.clone());
+                break;
+            }
+        }
+    }
+    needed
+}
+
+/// Fix up `<field>: Default::default().map(Box::new),` lines left behind by the shared
+/// binding->core `From` conversion generator (`crate::codegen::conversions`, shared with every
+/// other backend) when a field's type is a payload-carrying enum (a `#[serde(tag = "type")]`
+/// enum with struct variants).
+///
+/// wasm_bindgen only supports fieldless, C-style enums, so `gen_struct` (this backend, see
+/// `types.rs`) drops any field referencing such an enum from the generated Wasm struct entirely.
+/// The shared conversion generator does not know the field was dropped: it still emits a value
+/// for it and falls back to `Default::default()`. For an `Option<Box<T>>` field the generic
+/// Option<Box<_>> wrapper then unconditionally appends `.map(Box::new)`, producing
+/// `Default::default().map(Box::new)` -- a value that is always `None` (`Option::default()` is
+/// `None` for every `T`, and `None.map(Box::new)` is `None`), but whose type `T` rustc cannot
+/// infer (E0282), since nothing in the expression pins it down.
+///
+/// Replacing the whole expression with the equivalent literal `None` is behavior-preserving and
+/// compiles; the comment documents *why* the field is always `None` on wasm for anyone reading
+/// the generated binding.
+fn fix_dropped_payload_enum_option_fields(content: String) -> String {
+    let Ok(dropped_boxed_option_field) =
+        Regex::new(r"(?m)^(?P<indent>[ \t]*)(?P<field>\w+): Default::default\(\)\.map\(Box::new\),$")
+    else {
+        return content;
+    };
+    dropped_boxed_option_field
+        .replace_all(&content, |caps: &regex::Captures<'_>| {
+            format!(
+                "{indent}// ALEF-OMITTED: `{field}` is always None on wasm -- its Rust type is a \
+                 payload-carrying enum, which wasm_bindgen cannot represent.\n\
+                 {indent}{field}: None,",
+                indent = &caps["indent"],
+                field = &caps["field"],
+            )
+        })
+        .into_owned()
 }
 
 pub struct WasmBackend;
@@ -637,6 +730,7 @@ impl Backend for WasmBackend {
         let core_to_binding_convertible =
             crate::codegen::conversions::core_to_binding_convertible_types(api, &exclude_types);
         let input_types = crate::codegen::conversions::input_type_names(api);
+        let self_delegating_types = types_needing_self_delegation_reverse_impl(api, &opaque_types);
         for typ in api.types.iter().filter(|typ| !typ.is_trait) {
             if exclude_types.contains(&typ.name) {
                 continue;
@@ -644,7 +738,7 @@ impl Backend for WasmBackend {
             let is_strict = crate::codegen::conversions::can_generate_conversion(typ, &convertible);
             let is_relaxed = crate::codegen::conversions::can_generate_conversion(typ, &core_to_binding_convertible);
             if is_strict {
-                if input_types.contains(&typ.name) {
+                if input_types.contains(&typ.name) || self_delegating_types.contains(&typ.name) {
                     builder.add_item(&crate::codegen::conversions::gen_from_binding_to_core_cfg(
                         typ,
                         &core_import,
@@ -704,6 +798,7 @@ impl Backend for WasmBackend {
         }
 
         let mut content = builder.build();
+        content = fix_dropped_payload_enum_option_fields(content);
 
         for bridge in &config.trait_bridges {
             if let Some(field_name) = bridge.resolved_options_field() {

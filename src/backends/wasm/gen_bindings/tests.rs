@@ -1,7 +1,26 @@
-use super::{WasmBackend, cargo::gen_cargo_toml};
+use super::{
+    WasmBackend, cargo::gen_cargo_toml, fix_dropped_payload_enum_option_fields,
+    types_needing_self_delegation_reverse_impl,
+};
 use crate::core::backend::Backend;
 use crate::core::config::{NewAlefConfig, ResolvedCrateConfig};
-use crate::core::ir::ApiSurface;
+use crate::core::ir::{ApiSurface, FieldDef, MethodDef, PrimitiveType, ReceiverKind, TypeDef, TypeRef};
+
+fn empty_api() -> ApiSurface {
+    ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    }
+}
 
 fn make_config() -> ResolvedCrateConfig {
     let cfg: NewAlefConfig = toml::from_str(
@@ -424,4 +443,175 @@ wasm-bindgen-test = "0.3"
         "the [target.*] block must precede [dev-dependencies]; got:\n{cargo_toml}"
     );
     toml::from_str::<toml::Value>(&cargo_toml).expect("generated Cargo.toml must be valid TOML");
+}
+
+/// Regression test for a wasm-only E0308: a type that is never a function/method *parameter*
+/// (directly or transitively) has no reason to appear in `input_type_names`, so the
+/// binding->core `From` impl is normally skipped for it. But if that same type has an
+/// auto-delegated instance method (e.g. `PageRange::page_count(&self) -> u32`, only ever
+/// *returned*, never taken as input), `gen_method` still emits
+/// `{core}::{Type}::from(self.clone()).{method}(..)`, which requires exactly that impl to exist.
+/// `types_needing_self_delegation_reverse_impl` must flag such types so the reverse impl gets
+/// generated regardless of `input_type_names`.
+#[test]
+fn types_needing_self_delegation_reverse_impl_flags_return_only_delegating_type() {
+    let mut api = empty_api();
+    api.types = vec![TypeDef {
+        name: "PageRange".to_string(),
+        rust_path: "test_lib::PageRange".to_string(),
+        fields: vec![
+            FieldDef {
+                name: "start".to_string(),
+                ty: TypeRef::Primitive(PrimitiveType::U32),
+                ..Default::default()
+            },
+            FieldDef {
+                name: "end".to_string(),
+                ty: TypeRef::Primitive(PrimitiveType::U32),
+                ..Default::default()
+            },
+        ],
+        methods: vec![MethodDef {
+            name: "page_count".to_string(),
+            return_type: TypeRef::Primitive(PrimitiveType::U32),
+            receiver: Some(ReceiverKind::Ref),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+
+    let needed = types_needing_self_delegation_reverse_impl(&api, &ahash::AHashSet::default());
+    assert!(
+        needed.contains("PageRange"),
+        "a type with a self-delegating instance method must require the binding->core reverse \
+         impl even though it is never used as an input, got {needed:?}"
+    );
+}
+
+/// A type none of whose methods reach the self-delegation branch must NOT be flagged — doing so
+/// would only add dead, unused `From` impls.
+///
+/// Note the `&mut self` method has to be non-delegatable for this to hold. `gen_method` routes an
+/// opaque type's *non*-mut methods through the mutex-lock path
+/// (`self.inner.lock().unwrap().{method}(..)`, methods.rs:156), but its `&mut self` methods fall
+/// through to the `self.clone()` self-delegation form — so an opaque type with any delegatable
+/// `&mut self` method genuinely does need the reverse impl. `sanitized` is what makes `resize`
+/// non-delegatable here.
+#[test]
+fn types_needing_self_delegation_reverse_impl_ignores_opaque_mutex_delegated_type() {
+    let mut api = empty_api();
+    api.types = vec![TypeDef {
+        name: "Pool".to_string(),
+        rust_path: "test_lib::Pool".to_string(),
+        is_opaque: true,
+        methods: vec![
+            MethodDef {
+                name: "resize".to_string(),
+                return_type: TypeRef::Primitive(PrimitiveType::Bool),
+                receiver: Some(ReceiverKind::RefMut),
+                sanitized: true,
+                ..Default::default()
+            },
+            MethodDef {
+                name: "len".to_string(),
+                return_type: TypeRef::Primitive(PrimitiveType::Usize),
+                receiver: Some(ReceiverKind::Ref),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    }];
+    let opaque_types: ahash::AHashSet<String> = ["Pool".to_string()].into_iter().collect();
+
+    let needed = types_needing_self_delegation_reverse_impl(&api, &opaque_types);
+    assert!(
+        !needed.contains("Pool"),
+        "an opaque type whose non-mut methods route through the mutex-lock path needs no \
+         binding->core reverse impl, got {needed:?}"
+    );
+}
+
+/// End-to-end coverage: a type that is only ever returned (never an input) but has an
+/// auto-delegated instance method must get a real `impl From<Wasm{T}> for {core}::{T}` in the
+/// actual generated `lib.rs`, and `gen_method`'s self-delegation call must reference that exact
+/// core type -- a real downstream wasm crate failed to compile with E0308 before this fix.
+#[test]
+fn generated_lib_rs_has_reverse_impl_for_return_only_delegating_type() {
+    let mut api = empty_api();
+    api.types = vec![TypeDef {
+        name: "PageRange".to_string(),
+        rust_path: "test_lib::PageRange".to_string(),
+        fields: vec![
+            FieldDef {
+                name: "start".to_string(),
+                ty: TypeRef::Primitive(PrimitiveType::U32),
+                ..Default::default()
+            },
+            FieldDef {
+                name: "end".to_string(),
+                ty: TypeRef::Primitive(PrimitiveType::U32),
+                ..Default::default()
+            },
+        ],
+        methods: vec![MethodDef {
+            name: "page_count".to_string(),
+            return_type: TypeRef::Primitive(PrimitiveType::U32),
+            receiver: Some(ReceiverKind::Ref),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+
+    let config = make_config();
+    let files = WasmBackend.generate_bindings(&api, &config).unwrap();
+    let lib_rs = &files
+        .iter()
+        .find(|f| f.path.to_string_lossy().ends_with("lib.rs"))
+        .expect("lib.rs must be generated")
+        .content;
+
+    assert!(
+        lib_rs.contains("impl From<WasmPageRange> for test_lib::PageRange {"),
+        "expected a binding->core reverse impl for PageRange:\n{lib_rs}"
+    );
+    assert!(
+        lib_rs.contains("test_lib::PageRange::from(self.clone()).page_count()"),
+        "expected the self-delegation call the reverse impl above exists to support:\n{lib_rs}"
+    );
+}
+
+/// Regression test for a wasm-only E0282: a field whose Rust type is a payload-carrying enum
+/// (`#[serde(tag = "type")]` with struct variants) has no wasm-bindgen representation, so
+/// `gen_struct` drops it from the generated Wasm struct. The shared binding->core `From`
+/// conversion generator does not know that, and for an `Option<Box<T>>` field falls back to
+/// `Default::default().map(Box::new)` -- untypeable, since nothing pins down `T`. The post-process
+/// fixup must replace it with a self-documenting `None`.
+#[test]
+fn fix_dropped_payload_enum_option_fields_replaces_untypeable_default_with_documented_none() {
+    let content = "impl From<test_lib::LlmConfig> for WasmLlmConfig {\n    fn from(val: test_lib::LlmConfig) -> Self {\n        Self {\n            model: val.model,\n        }\n    }\n}\nimpl From<WasmLlmConfig> for test_lib::LlmConfig {\n    fn from(val: WasmLlmConfig) -> Self {\n        Self {\n            model: val.model,\n            credential_provider: Default::default().map(Box::new),\n        }\n    }\n}\n".to_string();
+
+    let fixed = fix_dropped_payload_enum_option_fields(content);
+
+    assert!(
+        !fixed.contains("Default::default().map(Box::new)"),
+        "untypeable expression must be fully replaced:\n{fixed}"
+    );
+    assert!(
+        fixed.contains("credential_provider: None,"),
+        "field must fall back to a literal `None`:\n{fixed}"
+    );
+    assert!(
+        fixed.contains("// ALEF-OMITTED: `credential_provider` is always None on wasm"),
+        "the omission must be documented in the generated source so a reader learns why the \
+         field is always None:\n{fixed}"
+    );
+}
+
+/// The fixup must be a no-op on content that never had the buggy pattern -- it must not, for
+/// example, touch ordinary `field: Default::default(),` lines that don't end in `.map(Box::new)`.
+#[test]
+fn fix_dropped_payload_enum_option_fields_is_noop_without_the_pattern() {
+    let content = "Self {\n    reason: ChunkingReason::default(),\n    other: Default::default(),\n}\n".to_string();
+    let fixed = fix_dropped_payload_enum_option_fields(content.clone());
+    assert_eq!(fixed, content, "content without the buggy pattern must be unchanged");
 }
