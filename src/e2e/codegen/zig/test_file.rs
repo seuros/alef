@@ -647,21 +647,17 @@ pub(super) fn render_snippet_body(
             fixture.id
         );
     }
-    if fixture
+    let expects_error = fixture
         .assertions
         .iter()
-        .any(|assertion| assertion.assertion_type == "error")
-    {
-        anyhow::bail!(
-            "zig snippet `{}` cannot represent an expected-error fixture",
-            fixture.id
-        );
-    }
+        .any(|assertion| assertion.assertion_type == "error");
     if call.args.iter().any(|argument| argument.arg_type == "test_backend") {
         anyhow::bail!("zig snippet `{}` requires test-backend lifecycle teardown", fixture.id);
     }
     let mut call_fixture = fixture.clone();
-    call_fixture.assertions.clear();
+    if !expects_error {
+        call_fixture.assertions.clear();
+    }
     let mut test = String::new();
     render_test_fn(
         &mut test,
@@ -680,8 +676,16 @@ pub(super) fn render_snippet_body(
         .skip(2)
         .take_while(|line| line.trim() != "}")
         .filter(|line| !line.trim_start().starts_with("suppress_abort()"))
+        .filter(|line| !line.trim_start().starts_with("allow_private_network()"))
         .filter(|line| !line.trim_start().starts_with("defer "))
         .map(|line| line.strip_prefix("    ").unwrap_or(line))
+        .map(|line| line.replace(" catch {", " catch |err| {"))
+        .map(|line| {
+            line.replace(
+                "try testing.expect(true); // Error occurred as expected",
+                "std.debug.print(\"call failed as expected: {s}\\n\", .{@errorName(err)});",
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n");
     Ok(crate::e2e::template_env::render(
@@ -709,5 +713,26 @@ mod snippet_tests {
         assert!(rendered.contains("_ = try sample.count()"));
         assert!(!rendered.contains("test \""));
         assert!(!rendered.contains("defer "));
+        assert!(rendered.contains("pub fn main() !void"));
+    }
+
+    #[test]
+    fn expected_error_snippet_uses_error_union_catch() {
+        let mut fixture = Fixture {
+            id: "invalid".into(),
+            description: "Invalid".into(),
+            ..Fixture::default()
+        };
+        fixture.assertions.push(crate::e2e::fixture::Assertion {
+            assertion_type: "error".into(),
+            ..Default::default()
+        });
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "parse".into();
+        let rendered = render_snippet_body(&fixture, &e2e, "sample", "sample", &ResolvedCrateConfig::default(), &[])
+            .expect("snippet renders");
+        assert!(rendered.contains("catch |err|"));
+        assert!(rendered.contains("call failed as expected"));
+        assert!(!rendered.contains("testing.expect"));
     }
 }

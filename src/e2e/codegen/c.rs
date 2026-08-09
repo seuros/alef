@@ -665,7 +665,32 @@ mod snippet_tests {
             .expect("snippet renders");
         assert!(rendered.contains("#include \""));
         assert!(rendered.contains("sample_count("));
+        assert!(rendered.contains("int main(void)"));
         assert!(!rendered.contains("void test_"));
+        assert!(!rendered.contains("assert("));
+    }
+
+    #[test]
+    fn expected_error_snippet_checks_the_native_null_result() {
+        let mut fixture = Fixture {
+            id: "invalid".into(),
+            description: "Invalid".into(),
+            ..Fixture::default()
+        };
+        fixture.assertions.push(crate::e2e::fixture::Assertion {
+            assertion_type: "error".into(),
+            ..Default::default()
+        });
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "sample_parse".into();
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+        let rendered = CCodegen
+            .render_snippet_body(&fixture, &e2e, &config, &[], &[])
+            .expect("snippet renders");
+        assert!(rendered.contains("!= NULL) { return EXIT_FAILURE; }"), "{rendered}");
         assert!(!rendered.contains("assert("));
     }
 }

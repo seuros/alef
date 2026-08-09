@@ -51,13 +51,10 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
             fixture.id
         );
     }
-    if fixture
+    let expects_error = fixture
         .assertions
         .iter()
-        .any(|assertion| assertion.assertion_type == "error")
-    {
-        anyhow::bail!("c snippet `{}` cannot represent an expected-error fixture", fixture.id);
-    }
+        .any(|assertion| assertion.assertion_type == "error");
     if info.c_engine_factory.is_some() || info.result_is_bytes {
         anyhow::bail!(
             "c snippet `{}` requires an unsupported engine-factory or byte-buffer call pattern",
@@ -65,7 +62,9 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         );
     }
     let mut call_fixture = fixture.clone();
-    call_fixture.assertions.clear();
+    if !expects_error {
+        call_fixture.assertions.clear();
+    }
     let mut function = String::new();
     render_test_function(
         &mut function,
@@ -90,17 +89,26 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         config,
         type_defs,
     );
+    let failure_check = format!("if ({} != NULL) {{ return EXIT_FAILURE; }}", call.result_var);
+    let body_line_count = function.lines().count().saturating_sub(3);
     let body = function
         .lines()
         .skip(2)
-        .take_while(|line| {
+        .take(body_line_count)
+        .filter(|line| {
             let trimmed = line.trim_start();
-            !trimmed.starts_with("assert(")
+            (expects_error || !trimmed.starts_with("assert("))
                 && !trimmed.contains("_free(")
                 && !trimmed.starts_with("free(")
-                && line.trim() != "}"
         })
         .map(|line| line.strip_prefix("    ").unwrap_or(line))
+        .map(|line| {
+            if expects_error && line.trim_start().starts_with("assert(") {
+                failure_check.clone()
+            } else {
+                line.to_string()
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n");
     Ok(crate::e2e::template_env::render(

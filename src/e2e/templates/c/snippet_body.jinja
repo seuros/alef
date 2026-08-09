@@ -4,4 +4,7 @@
 #include <string.h>
 #include "{{ header }}"
 
-{{ body }}
+int main(void) {
+{{ body | indent(4, true) }}
+    return EXIT_SUCCESS;
+}

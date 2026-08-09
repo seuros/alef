@@ -25,16 +25,10 @@ pub(super) fn render(
             fixture.id
         );
     }
-    if fixture
+    let expects_error = fixture
         .assertions
         .iter()
-        .any(|assertion| assertion.assertion_type == "error")
-    {
-        bail!(
-            "swift snippet `{}` cannot represent an expected-error fixture",
-            fixture.id
-        );
-    }
+        .any(|assertion| assertion.assertion_type == "error");
     if call.args.iter().any(|argument| argument.arg_type == "test_backend") {
         bail!(
             "swift snippet `{}` requires test-backend lifecycle teardown",
@@ -50,7 +44,9 @@ pub(super) fn render(
     let first_class_map = values::build_swift_first_class_map(type_defs, enums, e2e_config, call);
     let override_config = call.overrides.get("swift");
     let mut call_fixture = fixture.clone();
-    call_fixture.assertions.clear();
+    if !expects_error {
+        call_fixture.assertions.clear();
+    }
     let mut method = String::new();
     test_method::render_test_method(
         &mut method,
@@ -67,12 +63,20 @@ pub(super) fn render(
         type_defs,
         enums,
     );
+    let body_line_count = method.lines().count().saturating_sub(3);
     let body = method
         .lines()
         .skip(2)
-        .take_while(|line| line.trim() != "}")
+        .take(body_line_count)
         .map(|line| line.strip_prefix("        ").unwrap_or(line))
         .map(|line| line.replacen("let  =", "_ =", 1))
+        .map(|line| {
+            line.replace(
+                "XCTFail(\"expected to throw\")",
+                "fatalError(\"expected call to fail\")",
+            )
+        })
+        .map(|line| line.replace("// success", "print(\"Call failed as expected: \\(error)\")"))
         .collect::<Vec<_>>()
         .join("\n");
     Ok(crate::e2e::template_env::render(
@@ -103,5 +107,25 @@ mod tests {
         assert!(rendered.contains("_ = try "));
         assert!(rendered.contains(".countItems()"));
         assert!(!rendered.contains("XCTest"));
+    }
+
+    #[test]
+    fn expected_error_snippet_uses_native_do_catch() {
+        let mut fixture = Fixture {
+            id: "invalid".into(),
+            description: "Invalid".into(),
+            ..Fixture::default()
+        };
+        fixture.assertions.push(crate::e2e::fixture::Assertion {
+            assertion_type: "error".into(),
+            ..Default::default()
+        });
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "parse".into();
+        let rendered = render(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[]).expect("snippet renders");
+        assert!(rendered.contains("do {"));
+        assert!(rendered.contains("catch {"));
+        assert!(rendered.contains("Call failed as expected"));
+        assert!(!rendered.contains("XCTFail"));
     }
 }

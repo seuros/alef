@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generate standalone C and Zig documentation programs and render native expected-error handling for C, Swift, and Zig.
+
 - Fix generated documentation snippets for Go, Dart, Java, Kotlin, C#, and PHP to include standalone runtime wrappers,
   required imports, and non-test error handling.
 

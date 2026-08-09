@@ -1,4 +1,6 @@
 const std = @import("std");
 const {{ module }} = @import("{{ module }}");
 
-{{ body }}
+pub fn main() !void {
+{{ body | indent(4, true) }}
+}
