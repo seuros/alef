@@ -28,6 +28,8 @@ pub struct FixtureDocs {
     #[serde(default)]
     pub stem: Option<String>,
     #[serde(default)]
+    pub paths: BTreeMap<String, String>,
+    #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
@@ -57,7 +59,7 @@ pub enum SideEffectClass {
 
 #[cfg(test)]
 mod tests {
-    use super::SideEffectClass;
+    use super::{FixtureDocs, SideEffectClass};
 
     #[test]
     fn side_effects_round_trip_without_collapsing_classes() {
@@ -71,6 +73,21 @@ mod tests {
             let encoded = serde_json::to_string(&class).unwrap();
             assert_eq!(serde_json::from_str::<SideEffectClass>(&encoded).unwrap(), class);
         }
+    }
+
+    #[test]
+    fn docs_paths_deserialize_as_target_specific_relative_paths() {
+        let docs: FixtureDocs = serde_json::from_value(serde_json::json!({
+            "topic": "fallback",
+            "paths": {
+                "node": "config/example.md",
+                "wasm": "browser/example.md"
+            }
+        }))
+        .expect("fixture docs deserialize");
+
+        assert_eq!(docs.paths["node"], "config/example.md");
+        assert_eq!(docs.paths["wasm"], "browser/example.md");
     }
 
     #[test]

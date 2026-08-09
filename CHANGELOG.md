@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixture documentation can now select a safe relative snippet output path per configured target while retaining the
+  shared topic/stem fallback.
+
 - Snippet compile sessions now wire configured Rust crates, TypeScript packages, C headers, Swift packages, and Zig
   modules into isolated validator projects instead of using their manifests only for cache fingerprints.
 

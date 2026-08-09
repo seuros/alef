@@ -159,6 +159,7 @@ fn generate_snippet_report_with_extensions(
     for fixture in fixtures {
         validate_requirements(fixture)?;
         validate_coverage_exceptions(fixture)?;
+        validate_docs_paths(fixture, languages)?;
         for (language, generator) in &generators {
             let key = SnippetCoverageKey {
                 fixture_id: fixture.id.clone(),
@@ -414,6 +415,16 @@ fn snippet_path(
     target_language: &str,
     language: DocumentationLanguage,
 ) -> Result<PathBuf> {
+    if let Some(relative) = docs.paths.get(target_language) {
+        let relative = Path::new(relative);
+        validate_relative_path(relative, "fixture docs target path")?;
+        if relative.extension().and_then(|value| value.to_str()) != Some("md") {
+            bail!("fixture docs target path must end in .md: {}", relative.display());
+        }
+        return Ok(Path::new(output)
+            .join(snippet_output_slug(target_language, language))
+            .join(relative));
+    }
     validate_component(&docs.topic, "snippet topic")?;
     let stem = docs.stem.as_deref().unwrap_or(fixture_id);
     validate_component(stem, "snippet stem")?;
@@ -444,9 +455,24 @@ fn validate_component(value: &str, label: &str) -> Result<()> {
 fn validate_relative_path(path: &Path, label: &str) -> Result<()> {
     if path.as_os_str().is_empty()
         || path.is_absolute()
-        || path.components().any(|part| matches!(part, Component::ParentDir))
+        || path.components().any(|part| !matches!(part, Component::Normal(_)))
     {
         bail!("{label} must be a safe relative path: {}", path.display());
+    }
+    Ok(())
+}
+
+fn validate_docs_paths(fixture: &Fixture, languages: &[String]) -> Result<()> {
+    let Some(docs) = &fixture.docs else {
+        return Ok(());
+    };
+    for target in docs.paths.keys() {
+        if !languages.iter().any(|language| language == target) {
+            bail!(
+                "fixture `{}` docs path targets unconfigured language `{target}`",
+                fixture.id
+            );
+        }
     }
     Ok(())
 }
@@ -520,6 +546,7 @@ mod tests {
             docs: Some(FixtureDocs {
                 topic: "api".into(),
                 stem: None,
+                paths: BTreeMap::new(),
                 title: None,
                 description: None,
                 side_effects: SideEffectClass::Safe,
@@ -546,9 +573,10 @@ mod tests {
 
     #[test]
     fn snippet_paths_reject_traversal() {
-        let docs = FixtureDocs {
+        let mut docs = FixtureDocs {
             topic: "..".into(),
             stem: None,
+            paths: BTreeMap::new(),
             title: None,
             description: None,
             side_effects: Default::default(),
@@ -564,6 +592,57 @@ mod tests {
             )
             .is_err()
         );
+        docs.topic = "fallback".into();
+        docs.paths.insert("python".into(), "../escape.md".into());
+        assert!(
+            snippet_path(
+                "docs/snippets",
+                &docs,
+                "basic",
+                "python",
+                DocumentationLanguage::Binding(Language::Python)
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn target_path_override_precedes_topic_and_stem() {
+        let docs = FixtureDocs {
+            topic: "fallback".into(),
+            stem: Some("fallback".into()),
+            paths: BTreeMap::from([("node".into(), "config/basic_usage.md".into())]),
+            title: None,
+            description: None,
+            side_effects: Default::default(),
+            coverage_exceptions: BTreeMap::new(),
+        };
+
+        assert_eq!(
+            snippet_path(
+                "docs/snippets",
+                &docs,
+                "fixture",
+                "node",
+                DocumentationLanguage::Binding(Language::Node)
+            )
+            .expect("safe target path"),
+            Path::new("docs/snippets/typescript/config/basic_usage.md")
+        );
+    }
+
+    #[test]
+    fn docs_path_target_must_be_configured() {
+        let mut fixture = documented_fixture();
+        fixture
+            .docs
+            .as_mut()
+            .expect("fixture docs")
+            .paths
+            .insert("wasm".into(), "browser/basic.md".into());
+
+        assert!(validate_docs_paths(&fixture, &["node".into()]).is_err());
+        assert!(validate_docs_paths(&fixture, &["node".into(), "wasm".into()]).is_ok());
     }
 
     #[test]
@@ -584,6 +663,7 @@ mod tests {
         let docs = FixtureDocs {
             topic: "api".into(),
             stem: None,
+            paths: BTreeMap::new(),
             title: None,
             description: None,
             side_effects: SideEffectClass::Safe,
@@ -649,6 +729,7 @@ mod tests {
         let docs = FixtureDocs {
             topic: "api".into(),
             stem: None,
+            paths: BTreeMap::new(),
             title: Some("Example".into()),
             description: None,
             side_effects: SideEffectClass::Network,
