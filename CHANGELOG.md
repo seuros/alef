@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Python documentation snippets now retain their binding imports, and Java snippets declare typed JSON arguments while
   preserving explicitly qualified service class names.
 
+- Documentation snippets now omit unused Go, TypeScript/WASM, C#, and Swift imports, keep Go imports formatter-ordered,
+  and release native C results before exit.
+
 - Swift optional-vector fields now use the JSON bridge instead of emitting `Option<Vec<T>>`, which swift-bridge
   0.1.59 cannot parse.
 

@@ -79,9 +79,12 @@ pub(super) fn render(
         .map(|line| line.replace("// success", "print(\"Call failed as expected: \\(error)\")"))
         .collect::<Vec<_>>()
         .join("\n");
+    let needs_foundation = ["Data(", "URL(", "JSONDecoder", "JSONEncoder"]
+        .iter()
+        .any(|symbol| body.contains(symbol));
     Ok(crate::e2e::template_env::render(
         "swift/snippet_body.jinja",
-        minijinja::context! { module => module, body => body },
+        minijinja::context! { module => module, body => body, needs_foundation => needs_foundation },
     ))
 }
 
@@ -103,7 +106,8 @@ mod tests {
             ..ResolvedCrateConfig::default()
         };
         let rendered = render(&fixture, &e2e, &config, &[], &[]).expect("snippet renders");
-        assert!(rendered.contains("import RustBridge"));
+        assert!(!rendered.contains("import RustBridge"));
+        assert!(!rendered.contains("import Foundation"));
         assert!(rendered.contains("_ = try "));
         assert!(rendered.contains(".countItems()"));
         assert!(!rendered.contains("XCTest"));

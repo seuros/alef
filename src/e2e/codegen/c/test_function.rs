@@ -97,9 +97,7 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         .take(body_line_count)
         .filter(|line| {
             let trimmed = line.trim_start();
-            (expects_error || !trimmed.starts_with("assert("))
-                && !trimmed.contains("_free(")
-                && !trimmed.starts_with("free(")
+            expects_error || !trimmed.starts_with("assert(")
         })
         .map(|line| line.strip_prefix("    ").unwrap_or(line))
         .map(|line| {

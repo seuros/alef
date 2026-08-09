@@ -128,6 +128,9 @@ pub(super) fn render_snippet_body(
     if joined_setup.contains("strings.") {
         standard_imports.insert("strings");
     }
+    if !call.returns_void || joined_setup.contains("fmt.") {
+        standard_imports.insert("fmt");
+    }
 
     crate::e2e::template_env::render(
         "go/snippet_body.jinja",
@@ -198,6 +201,9 @@ mod tests {
         let body = render_snippet_body(&fixture(), &e2e, &ResolvedCrateConfig::default(), &[], &[]);
 
         assert!(body.contains("pkg \"github.com/example/library\""));
+        let fmt_position = body.find("\"fmt\"").expect("fmt import");
+        let package_position = body.find("pkg \"").expect("binding import");
+        assert!(fmt_position < package_position, "{body}");
         assert!(body.contains("document, err := pkg.LoadDocument()"));
         assert!(!body.contains("testing"));
         assert!(!body.contains("assert."));
@@ -209,5 +215,17 @@ mod tests {
             snippet_setup_line("if err != nil {\n\tt.Fatalf(\"decode: %v\", err)\n}".into()),
             "if err != nil {\n\tpanic(fmt.Sprintf(\"decode: %v\", err))\n}"
         );
+    }
+
+    #[test]
+    fn void_snippet_does_not_import_fmt_when_it_is_unused() {
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "reset".into();
+        e2e.call.module = "github.com/example/library".into();
+        e2e.call.returns_void = true;
+
+        let body = render_snippet_body(&fixture(), &e2e, &ResolvedCrateConfig::default(), &[], &[]);
+
+        assert!(!body.contains("\"fmt\""), "{body}");
     }
 }

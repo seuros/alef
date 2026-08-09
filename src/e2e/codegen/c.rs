@@ -656,6 +656,7 @@ mod snippet_tests {
         };
         let mut e2e = E2eConfig::default();
         e2e.call.function = "sample_count".into();
+        e2e.call.result_var = "result".into();
         let config = ResolvedCrateConfig {
             name: "sample".into(),
             ..ResolvedCrateConfig::default()
@@ -668,6 +669,7 @@ mod snippet_tests {
         assert!(rendered.contains("int main(void)"));
         assert!(!rendered.contains("void test_"));
         assert!(!rendered.contains("assert("));
+        assert!(rendered.contains("_free(result)"), "{rendered}");
     }
 
     #[test]

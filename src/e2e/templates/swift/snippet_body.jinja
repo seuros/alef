@@ -1,5 +1,5 @@
-import Foundation
+{% if needs_foundation %}import Foundation
+{% endif %}
 import {{ module }}
-import RustBridge
 
 {{ body }}

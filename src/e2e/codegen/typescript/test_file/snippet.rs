@@ -103,18 +103,27 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
         .any(|assertion| assertion.assertion_type == "error");
     let mut imports = std::collections::BTreeSet::new();
     imports.insert(effective_factory.unwrap_or(&function_name).to_string());
-    if let Some(name) = options_type {
+    let referenced_code = format!("{}\n{args}\n{client_setup}", setup_lines.join("\n"));
+    if let Some(name) = options_type
+        && referenced_code.contains(&name)
+    {
         imports.insert(name);
     }
-    imports.extend(nested_types.into_values());
-    imports.extend(enum_fields.into_values());
+    imports.extend(
+        nested_types
+            .into_values()
+            .chain(enum_fields.into_values())
+            .filter(|name| referenced_code.contains(name)),
+    );
     for arg in recipe.args {
         if arg.arg_type == "handle" {
             imports.insert(format!("create{}", arg.name.to_upper_camel_case()));
         }
     }
     if let Some(name) = handle_config_type {
-        imports.insert(name.to_string());
+        if referenced_code.contains(name) {
+            imports.insert(name.to_string());
+        }
     }
 
     crate::e2e::template_env::render(
@@ -160,7 +169,7 @@ mod tests {
 
     #[test]
     fn async_snippet_reuses_the_test_call_shape_without_test_harness() {
-        let e2e = E2eConfig {
+        let mut e2e = E2eConfig {
             call: CallConfig {
                 function: "load_document".to_string(),
                 module: "@example/library".to_string(),
@@ -170,6 +179,12 @@ mod tests {
             },
             ..E2eConfig::default()
         };
+        e2e.call
+            .overrides
+            .entry("node".into())
+            .or_default()
+            .enum_fields
+            .insert("mode".into(), "UnusedMode".into());
         let fixture = fixture();
         let config = crate::core::config::ResolvedCrateConfig::default();
         let body = render_snippet_body(SnippetContext {
@@ -188,6 +203,7 @@ mod tests {
         assert!(body.contains("const document = await loadDocument();"));
         assert!(!body.contains("vitest"));
         assert!(!body.contains("expect("));
+        assert!(!body.contains("UnusedMode"));
     }
 
     #[test]

@@ -1,5 +1,7 @@
-using System;
-using System.Collections.Generic;
+{% if needs_system %}using System;
+{% endif %}
+{% if needs_collections %}using System.Collections.Generic;
+{% endif %}
 {% if needs_json %}using System.Text.Json;
 {% endif %}
 using {{ namespace }};
@@ -8,11 +10,12 @@ using {{ namespace }};
 {% endif %}
 {% for line in setup_lines %}{{ line }}
 {% endfor %}
-{% if client_factory %}var baseUrl = (Environment.GetEnvironmentVariable("MOCK_SERVER_URL") ?? string.Empty) + "/fixtures/{{ fixture_id }}";
-var client = {{ class_name }}.{{ client_factory }}("test-key", baseUrl, null, null, null);
-{% if returns_void %}{% if is_async %}await {% endif %}client.{{ function_name }}({{ args }});
-{% else %}var {{ result_var }} = {% if is_async %}await {% endif %}client.{{ function_name }}({{ args }});
-{% endif %}
+{% if client_factory %}var baseUrl = (Environment.GetEnvironmentVariable("MOCK_SERVER_URL") ?? string.Empty) +
+  "/fixtures/{{ fixture_id }}"; var client = {{ class_name }}.{{ client_factory }}("test-key", baseUrl, null, null,
+  null);
+  {% if returns_void %}{% if is_async %}await {% endif %}client.{{ function_name }}({{ args }});
+  {% else %}var {{ result_var }} = {% if is_async %}await {% endif %}client.{{ function_name }}({{ args }});
+  {% endif %}
 {% elif returns_void %}{% if is_async %}await {% endif %}{{ class_name }}.{{ function_name }}({{ args }});
 {% else %}var {{ result_var }} = {% if is_async %}await {% endif %}{{ class_name }}.{{ function_name }}({{ args }});
 {% endif %}
