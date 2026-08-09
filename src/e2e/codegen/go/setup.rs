@@ -30,7 +30,10 @@ fn native_go_dto_literal(
         .iter()
         .filter_map(|field| {
             let value = object.get(&field.name)?;
-            let optional = matches!(field.ty, crate::core::ir::TypeRef::Optional(_)) || field.optional;
+            let optional = matches!(field.ty, crate::core::ir::TypeRef::Optional(_))
+                || field.optional
+                || field.default.is_some()
+                || field.typed_default.is_some();
             let inner = match &field.ty {
                 crate::core::ir::TypeRef::Optional(inner) => inner.as_ref(),
                 other => other,

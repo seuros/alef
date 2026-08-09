@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Go native DTO snippets now pass defaulted fields through pointers to match generated binding struct types.
+
 - Go documentation snippets now inherit configured options DTO types when fixture recipes omit an inline type.
 
 - Go documentation snippets now materialize absent typed DTO arguments as values and align native struct fields canonically.

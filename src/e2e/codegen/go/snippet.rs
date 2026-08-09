@@ -296,7 +296,7 @@ mod tests {
     #[test]
     fn snippet_constructs_known_dto_without_json_round_trip() {
         let mut fixture = fixture();
-        fixture.input = serde_json::json!({"payload": {"label": "sample"}});
+        fixture.input = serde_json::json!({"payload": {"kind": "active", "label": "sample"}});
         let mut e2e = E2eConfig::default();
         e2e.call.module = "example.com/sample".into();
         e2e.call.function = "process".into();
@@ -333,11 +333,19 @@ mod tests {
             &[
                 TypeDef {
                     name: "SampleInput".into(),
-                    fields: vec![crate::core::ir::FieldDef {
-                        name: "label".into(),
-                        ty: crate::core::ir::TypeRef::String,
-                        ..Default::default()
-                    }],
+                    fields: vec![
+                        crate::core::ir::FieldDef {
+                            name: "kind".into(),
+                            ty: crate::core::ir::TypeRef::Named("SampleKind".into()),
+                            default: Some("active".into()),
+                            ..Default::default()
+                        },
+                        crate::core::ir::FieldDef {
+                            name: "label".into(),
+                            ty: crate::core::ir::TypeRef::String,
+                            ..Default::default()
+                        },
+                    ],
                     ..TypeDef::default()
                 },
                 TypeDef {
@@ -349,7 +357,9 @@ mod tests {
         );
 
         assert!(
-            body.contains("payload := pkg.SampleInput{\n\t\tLabel: `sample`,"),
+            body.contains(
+                "payload := pkg.SampleInput{\n\t\tKind:  ptr(pkg.SampleKind(`active`)),\n\t\tLabel: `sample`,"
+            ),
             "{body}"
         );
         assert!(body.contains("config := pkg.SampleConfig{}"), "{body}");
