@@ -130,7 +130,7 @@ fn generate_snippet_report_with_extensions(
     let generators = snippet_generators(languages)?;
     let mut generated = BTreeMap::<PathBuf, GeneratedSnippet>::new();
     let mut coverage = SnippetCoverageLedger::default();
-    for fixture in fixtures.iter().filter(|fixture| fixture.docs.is_some()) {
+    for fixture in fixtures {
         validate_requirements(fixture)?;
         validate_coverage_exceptions(fixture)?;
         for (language, generator) in &generators {
@@ -139,7 +139,13 @@ fn generate_snippet_report_with_extensions(
                 language: language.to_string(),
             };
             coverage.expected.push(key.clone());
-            let docs = fixture.docs.as_ref().expect("filtered docs fixtures have metadata");
+            let Some(docs) = fixture.docs.as_ref() else {
+                coverage.missing.push(MissingSnippet {
+                    key,
+                    reason: "fixture has no documentation metadata".to_string(),
+                });
+                continue;
+            };
             let fixture_decision = fixture_inclusion(fixture, language, context.e2e);
             let capabilities = capabilities(language, snippets, context.crate_config);
             let capability_decision = snippet_inclusion(fixture, &capabilities);
@@ -618,6 +624,37 @@ mod tests {
         assert!(report.snippets.is_empty());
         assert_eq!(report.coverage.missing.len(), 1);
         assert!(report.coverage.missing[0].reason.contains("empty snippet body"));
+    }
+
+    #[test]
+    fn fixture_without_docs_is_expected_and_recorded_as_missing() {
+        let fixture = Fixture {
+            id: "undocumented".into(),
+            ..Fixture::default()
+        };
+        let e2e = E2eConfig::default();
+        let snippet_config = SnippetConfig {
+            output: "docs/snippets".into(),
+            ..SnippetConfig::default()
+        };
+        let crate_config = ResolvedCrateConfig::default();
+        let context = SnippetRenderContext {
+            e2e: &e2e,
+            crate_config: &crate_config,
+            type_defs: &[],
+            enums: &[],
+        };
+
+        let report =
+            generate_snippet_report_with_extensions(&[fixture], &["rust".into()], &snippet_config, &context, &[])
+                .expect("undocumented fixture belongs in coverage report");
+
+        assert_eq!(report.coverage.expected.len(), 1);
+        assert_eq!(report.coverage.missing.len(), 1);
+        assert_eq!(
+            report.coverage.missing[0].reason,
+            "fixture has no documentation metadata"
+        );
     }
 
     #[test]
