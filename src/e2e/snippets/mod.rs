@@ -76,10 +76,6 @@ enum DocumentationLanguage {
 }
 
 impl DocumentationLanguage {
-    fn slug(self) -> &'static str {
-        self.canonical_name()
-    }
-
     fn code_fence(self) -> &'static str {
         match self {
             Self::Binding(language) => crate::docs::naming::lang_code_fence(language),
@@ -176,7 +172,11 @@ fn generate_snippet_report_with_extensions(
                 });
                 continue;
             };
-            let fixture_decision = fixture_inclusion(fixture, language, context.e2e);
+            let fixture_decision = if docs.include_when_e2e_skipped.iter().any(|value| value == language) {
+                crate::e2e::codegen::InclusionDecision::Include
+            } else {
+                fixture_inclusion(fixture, language, context.e2e)
+            };
             let capabilities = capabilities(language, snippets, context.crate_config);
             let capability_decision = snippet_inclusion(fixture, &capabilities);
             let exclusion_reason = match (&fixture_decision, &capability_decision) {
@@ -204,7 +204,7 @@ fn generate_snippet_report_with_extensions(
                     generator.language_name()
                 )
             })?;
-            let path = snippet_path(&snippets.output, docs, &fixture.id, lang)?;
+            let path = snippet_path(&snippets.output, docs, &fixture.id, language, lang)?;
             let body = match render_snippet_body(extensions, generator.as_ref(), fixture, language, context) {
                 Ok(body) => body,
                 Err(error) => {
@@ -415,15 +415,27 @@ fn snippet_path(
     output: &str,
     docs: &FixtureDocs,
     fixture_id: &str,
+    target_language: &str,
     language: DocumentationLanguage,
 ) -> Result<PathBuf> {
     validate_component(&docs.topic, "snippet topic")?;
     let stem = docs.stem.as_deref().unwrap_or(fixture_id);
     validate_component(stem, "snippet stem")?;
     Ok(Path::new(output)
-        .join(language.slug())
+        .join(snippet_output_slug(target_language, language))
         .join(&docs.topic)
         .join(format!("{stem}.md")))
+}
+
+fn snippet_output_slug(target_language: &str, language: DocumentationLanguage) -> &'static str {
+    match target_language {
+        "node" => "typescript",
+        "wasm" => "wasm",
+        "kotlin_android" => "kotlin-android",
+        "brew" => "brew",
+        "homebrew" => "homebrew",
+        _ => language.canonical_name(),
+    }
 }
 
 fn validate_component(value: &str, label: &str) -> Result<()> {
@@ -516,6 +528,7 @@ mod tests {
                 description: None,
                 side_effects: SideEffectClass::Safe,
                 coverage_exceptions: BTreeMap::new(),
+                include_when_e2e_skipped: Vec::new(),
             }),
             ..Fixture::default()
         }
@@ -545,12 +558,14 @@ mod tests {
             description: None,
             side_effects: Default::default(),
             coverage_exceptions: BTreeMap::new(),
+            include_when_e2e_skipped: Vec::new(),
         };
         assert!(
             snippet_path(
                 "docs/snippets",
                 &docs,
                 "basic",
+                "python",
                 DocumentationLanguage::Binding(Language::Python)
             )
             .is_err()
@@ -579,24 +594,26 @@ mod tests {
             description: None,
             side_effects: SideEffectClass::Safe,
             coverage_exceptions: BTreeMap::new(),
+            include_when_e2e_skipped: Vec::new(),
         };
         let fixture = documented_fixture();
         let cases = [
-            (Language::Node, "typescript"),
-            (Language::Wasm, "typescript"),
-            (Language::KotlinAndroid, "kotlin"),
+            ("node", Language::Node, "typescript", "typescript"),
+            ("wasm", Language::Wasm, "typescript", "wasm"),
+            ("kotlin_android", Language::KotlinAndroid, "kotlin", "kotlin-android"),
         ];
 
-        for (binding_language, canonical_name) in cases {
+        for (target_language, binding_language, canonical_name, output_slug) in cases {
             let language = DocumentationLanguage::Binding(binding_language);
             let rendered = render_snippet_markdown("example()", &fixture, &docs, language);
-            let path = snippet_path("docs/snippets", &docs, "example", language).expect("snippet path is valid");
+            let path = snippet_path("docs/snippets", &docs, "example", target_language, language)
+                .expect("snippet path is valid");
 
             assert!(rendered.contains(&format!("language: {canonical_name}\n")));
             assert!(rendered.contains(&format!("```{canonical_name} ")));
             assert_eq!(
                 path,
-                Path::new("docs/snippets").join(canonical_name).join("api/example.md")
+                Path::new("docs/snippets").join(output_slug).join("api/example.md")
             );
             assert_ne!(
                 crate::snippets::types::Language::from_fence_tag(canonical_name),
@@ -642,6 +659,7 @@ mod tests {
             description: None,
             side_effects: SideEffectClass::Network,
             coverage_exceptions: BTreeMap::new(),
+            include_when_e2e_skipped: Vec::new(),
         };
 
         let rendered = render_snippet_markdown(
@@ -689,6 +707,109 @@ mod tests {
         assert_eq!(report.coverage.generated, report.coverage.expected);
         assert!(report.coverage.missing.is_empty());
         assert!(report.snippets[0].file.content.contains("extension_call()"));
+    }
+
+    #[test]
+    fn explicit_docs_policy_can_render_a_fixture_skipped_by_the_test_harness() {
+        let mut fixture = documented_fixture();
+        fixture.skip = Some(crate::e2e::fixture::SkipDirective {
+            languages: vec!["ruby".into()],
+            reason: Some("The test harness cannot exercise this protocol operation".into()),
+        });
+        fixture
+            .docs
+            .as_mut()
+            .expect("fixture is documented")
+            .include_when_e2e_skipped = vec!["ruby".into()];
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "built_in_would_fail".into();
+        let snippet_config = SnippetConfig {
+            output: "docs/snippets".into(),
+            ..SnippetConfig::default()
+        };
+        let extensions: Vec<Box<dyn crate::Extension>> = vec![Box::new(FixtureExtension {
+            body: "extension_call()",
+        })];
+        let crate_config = ResolvedCrateConfig::default();
+        let context = SnippetRenderContext {
+            e2e: &e2e,
+            crate_config: &crate_config,
+            type_defs: &[],
+            enums: &[],
+        };
+
+        let report = generate_snippet_report_with_extensions(
+            &[fixture],
+            &["ruby".into()],
+            &snippet_config,
+            &context,
+            &extensions,
+        )
+        .expect("documentation policy allows the extension-owned recipe");
+
+        assert_eq!(report.coverage.generated, report.coverage.expected);
+        assert!(report.coverage.missing.is_empty());
+    }
+
+    #[test]
+    fn shared_validation_identities_keep_distinct_target_output_paths() {
+        let fixture = documented_fixture();
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "call".into();
+        let snippet_config = SnippetConfig {
+            output: "docs/snippets".into(),
+            ..SnippetConfig::default()
+        };
+        let extensions: Vec<Box<dyn crate::Extension>> = vec![Box::new(FixtureExtension {
+            body: "extension_call()",
+        })];
+        let crate_config = ResolvedCrateConfig::default();
+        let context = SnippetRenderContext {
+            e2e: &e2e,
+            crate_config: &crate_config,
+            type_defs: &[],
+            enums: &[],
+        };
+
+        let report = generate_snippet_report_with_extensions(
+            &[fixture],
+            &["node".into(), "wasm".into(), "kotlin".into(), "kotlin_android".into()],
+            &snippet_config,
+            &context,
+            &extensions,
+        )
+        .expect("shared validation languages use distinct target output routes");
+
+        let paths: BTreeSet<_> = report
+            .snippets
+            .iter()
+            .map(|snippet| snippet.file.path.as_path())
+            .collect();
+        assert!(
+            paths.contains(Path::new("docs/snippets/typescript/api/extension_owned.md")),
+            "paths: {paths:?}"
+        );
+        assert!(
+            paths.contains(Path::new("docs/snippets/wasm/api/extension_owned.md")),
+            "paths: {paths:?}"
+        );
+        assert!(
+            paths.contains(Path::new("docs/snippets/kotlin/api/extension_owned.md")),
+            "paths: {paths:?}"
+        );
+        assert!(
+            paths.contains(Path::new("docs/snippets/kotlin-android/api/extension_owned.md")),
+            "paths: {paths:?}"
+        );
+        assert_eq!(report.coverage.generated, report.coverage.expected);
+        for snippet in &report.snippets {
+            let canonical = match snippet.language.as_str() {
+                "node" | "wasm" => "typescript",
+                "kotlin" | "kotlin_android" => "kotlin",
+                other => panic!("unexpected target: {other}"),
+            };
+            assert!(snippet.file.content.contains(&format!("language: {canonical}")));
+        }
     }
 
     #[test]

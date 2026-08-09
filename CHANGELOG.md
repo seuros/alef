@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Fixed Swift generation for optional vector fields by using the JSON bridge instead of emitting `Option<Vec<T>>`, which swift-bridge 0.1.59 cannot parse.
+
 ### Fixed
+
+- Node/WASM and Kotlin/Kotlin Android snippets now keep distinct target output directories while sharing their canonical
+  TypeScript or Kotlin frontmatter and fence validation, preventing cross-target fixture path collisions.
 
 - Targeted E2E orphan cleanup now requires a current artifact inside a language subdirectory before sweeping it, so
   top-level scaffolding and documentation snippets cannot delete an otherwise ungenerated test suite.
