@@ -58,10 +58,22 @@ pub fn targeted_e2e_sweep_roots(
         if snippet_output_root.is_some_and(|snippet_root| path.starts_with(snippet_root)) {
             continue;
         }
-        if let Ok(relative) = path.strip_prefix(e2e_output_root)
-            && let Some(language) = relative.components().next()
-        {
-            roots.insert(e2e_output_root.join(language.as_os_str()));
+        if let Ok(relative) = path.strip_prefix(e2e_output_root) {
+            let mut components = relative.components();
+            let Some(language) = components.next() else {
+                continue;
+            };
+            let Some(owned_subtree) = components.next() else {
+                continue;
+            };
+            if components.next().is_none() {
+                continue;
+            }
+            roots.insert(
+                e2e_output_root
+                    .join(language.as_os_str())
+                    .join(owned_subtree.as_os_str()),
+            );
         }
     }
     roots.into_iter().collect()
