@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.58.3] - 2026-08-09
+
 ### Fixed
 
 - **The publish workflow now uses GitHub-hosted runners for release orchestration jobs.** This
