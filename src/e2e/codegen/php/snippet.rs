@@ -77,6 +77,7 @@ pub(super) fn render_snippet_body(
         &config.serde_rename_all_for_language(crate::core::config::Language::Php),
         config,
         &mut imports,
+        true,
     );
     if let Some(visitor) = &fixture.visitor {
         super::visitor::build_php_visitor(&mut setup_lines, visitor);

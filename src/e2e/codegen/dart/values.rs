@@ -1,9 +1,65 @@
 //! Dart value- and type-mapping helpers for e2e generation.
 
-//! Infer a MIME type from a file path extension.
-//!
-//! Returns `None` when the extension is unknown so the caller can supply a fallback.
-//! Used in dart e2e tests when a fixture omits `mime_type` but uses a `file_path` arg.
+use crate::core::ir::TypeRef;
+
+pub(super) fn render_native_dart_dto(
+    type_name: &str,
+    value: &serde_json::Value,
+    type_defs: &[crate::core::ir::TypeDef],
+) -> Option<String> {
+    let object = value.as_object()?;
+    let type_def = type_defs.iter().find(|candidate| candidate.name == type_name)?;
+    let fields = type_def
+        .fields
+        .iter()
+        .filter(|field| !field.binding_excluded && field.cfg.is_none())
+        .map(|field| {
+            let field_value = match object.get(&field.name) {
+                Some(value) => value,
+                None if field.optional || matches!(field.ty, TypeRef::Optional(_)) => &serde_json::Value::Null,
+                None => return None,
+            };
+            let name =
+                crate::codegen::naming::public_field_name(crate::core::config::Language::Dart, &field.name, None);
+            let value = render_native_dart_value(field_value, &field.ty, type_defs)?;
+            Some(minijinja::context! { name => name, value => value })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(
+        crate::e2e::template_env::render(
+            "dart/typed_dto.jinja",
+            minijinja::context! { type_name => type_name, fields => fields },
+        )
+        .trim_end()
+        .to_string(),
+    )
+}
+
+fn render_native_dart_value(
+    value: &serde_json::Value,
+    ty: &TypeRef,
+    type_defs: &[crate::core::ir::TypeDef],
+) -> Option<String> {
+    match (value, ty) {
+        (serde_json::Value::Null, _) => Some("null".into()),
+        (value, TypeRef::Optional(inner)) => render_native_dart_value(value, inner, type_defs),
+        (value, TypeRef::Named(name)) => render_native_dart_dto(name, value, type_defs),
+        (serde_json::Value::Array(values), TypeRef::Vec(inner)) => values
+            .iter()
+            .map(|value| render_native_dart_value(value, inner, type_defs))
+            .collect::<Option<Vec<_>>>()
+            .map(|items| format!("[{}]", items.join(", "))),
+        (serde_json::Value::String(value), TypeRef::String | TypeRef::Char | TypeRef::Path) => {
+            Some(format!("'{}'", escape_dart(value)))
+        }
+        (serde_json::Value::Bool(value), TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool)) => {
+            Some(value.to_string())
+        }
+        (serde_json::Value::Number(value), TypeRef::Primitive(_)) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
 pub(super) fn mime_from_extension(path: &str) -> Option<&'static str> {
     let ext = path.rsplit('.').next()?;
     match ext.to_lowercase().as_str() {
@@ -195,5 +251,27 @@ pub(super) fn build_dart_first_class_map(
         field_types,
         root_type,
         stringy_fields_by_type,
+    }
+}
+
+#[cfg(test)]
+mod native_dto_tests {
+    use super::*;
+    use crate::core::ir::{FieldDef, TypeDef};
+
+    #[test]
+    fn renders_known_struct_as_native_dart_constructor() {
+        let type_defs = [TypeDef {
+            name: "SampleRequest".into(),
+            fields: vec![FieldDef {
+                name: "display_name".into(),
+                ty: TypeRef::String,
+                ..FieldDef::default()
+            }],
+            ..TypeDef::default()
+        }];
+        let rendered = render_native_dart_dto("SampleRequest", &serde_json::json!({"display_name": "Ada"}), &type_defs);
+
+        assert_eq!(rendered.as_deref(), Some("SampleRequest(displayName: 'Ada')"));
     }
 }

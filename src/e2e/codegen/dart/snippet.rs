@@ -31,6 +31,7 @@ pub(super) fn render_snippet_body(
             config,
             type_defs,
             enums,
+            native_typed_dtos: true,
         },
     );
     let statements = extract_test_statements(&test_case)

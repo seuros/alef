@@ -23,6 +23,7 @@ pub(super) struct DartTestCaseContext<'a> {
     pub(super) config: &'a ResolvedCrateConfig,
     pub(super) type_defs: &'a [crate::core::ir::TypeDef],
     pub(super) enums: &'a [crate::core::ir::EnumDef],
+    pub(super) native_typed_dtos: bool,
 }
 
 pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: DartTestCaseContext<'_>) {
@@ -35,6 +36,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
         config,
         type_defs,
         enums,
+        native_typed_dtos,
     } = context;
     // HTTP fixtures: hit the mock server.
     if let Some(http) = &fixture.http {
@@ -580,6 +582,15 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                         .or(options_type)
                         && !arg_value.is_null()
                     {
+                        if native_typed_dtos
+                            && let Some(expression) =
+                                super::values::render_native_dart_dto(opts_type, arg_value, type_defs)
+                        {
+                            let var_name = format!("_{}", arg_def.name);
+                            setup_lines.push(format!("final {var_name} = {expression};"));
+                            args.push(format!("req: {var_name}"));
+                            continue;
+                        }
                         let json_str = serde_json::to_string(&arg_value).unwrap_or_default();
                         // Escape for Dart single-quoted string literal (handles embedded quotes,
                         // backslashes, and interpolation markers).

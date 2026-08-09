@@ -125,6 +125,7 @@ pub(super) fn render_test_method(
         php_lang_rename_all,
         config,
         trait_bridge_imports,
+        false,
     );
 
     // Check for skip_languages early

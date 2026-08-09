@@ -135,6 +135,7 @@ static TEMPLATES: &[(&str, &str)] = &[
         "php/snippet_body.jinja",
         include_str!("templates/php/snippet_body.jinja"),
     ),
+    ("php/typed_dto.jinja", include_str!("templates/php/typed_dto.jinja")),
     ("php/test_method.jinja", include_str!("templates/php/test_method.jinja")),
     (
         "php/visitor_method.jinja",
@@ -377,6 +378,7 @@ static TEMPLATES: &[(&str, &str)] = &[
         "dart/snippet_body.jinja",
         include_str!("templates/dart/snippet_body.jinja"),
     ),
+    ("dart/typed_dto.jinja", include_str!("templates/dart/typed_dto.jinja")),
     (
         "dart/http_snippet.jinja",
         include_str!("templates/dart/http_snippet.jinja"),

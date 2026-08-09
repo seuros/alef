@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Dart and PHP documentation snippets now construct known DTO arguments with native typed constructors instead of
+  JSON round trips.
+
 - Rust and TypeScript documentation snippets now render display values, typed DTO inputs, and optional first-result
   collections using idiomatic, strict-mode-safe syntax.
 

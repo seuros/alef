@@ -4,6 +4,84 @@ use crate::core::ir::TypeRef;
 use crate::e2e::escape::escape_php;
 use heck::ToLowerCamelCase;
 
+pub(super) fn render_native_php_dto(
+    namespace: &str,
+    type_name: &str,
+    value: &serde_json::Value,
+    type_defs: &[crate::core::ir::TypeDef],
+) -> Option<String> {
+    let object = value.as_object()?;
+    let type_def = type_defs.iter().find(|candidate| candidate.name == type_name)?;
+    let constructor_fields = type_def
+        .fields
+        .iter()
+        .filter(|field| !field.binding_excluded && field.cfg.is_none())
+        .collect::<Vec<_>>();
+    if !constructor_fields
+        .iter()
+        .any(|field| !field.optional && php_native_constructor_type(&field.ty))
+        || constructor_fields
+            .iter()
+            .any(|field| object.contains_key(&field.name) && !php_native_constructor_type(&field.ty))
+        || constructor_fields.iter().any(|field| {
+            !field.optional && !matches!(field.ty, TypeRef::Optional(_)) && !object.contains_key(&field.name)
+        })
+    {
+        return None;
+    }
+    let fields = constructor_fields
+        .into_iter()
+        .filter_map(|field| object.get(&field.name).map(|value| (field, value)))
+        .map(|(field, value)| {
+            let name = crate::codegen::naming::public_field_name(crate::core::config::Language::Php, &field.name, None);
+            let value = render_native_php_value(namespace, value, &field.ty, type_defs)?;
+            Some(minijinja::context! { name => name, value => value })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(
+        crate::e2e::template_env::render(
+            "php/typed_dto.jinja",
+            minijinja::context! { namespace => namespace, type_name => type_name, fields => fields },
+        )
+        .trim_end()
+        .to_string(),
+    )
+}
+
+fn php_native_constructor_type(ty: &TypeRef) -> bool {
+    match ty {
+        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Char | TypeRef::Path => true,
+        TypeRef::Optional(inner) | TypeRef::Vec(inner) => php_native_constructor_type(inner),
+        _ => false,
+    }
+}
+
+fn render_native_php_value(
+    namespace: &str,
+    value: &serde_json::Value,
+    ty: &TypeRef,
+    type_defs: &[crate::core::ir::TypeDef],
+) -> Option<String> {
+    match (value, ty) {
+        (serde_json::Value::Null, _) => Some("null".into()),
+        (value, TypeRef::Optional(inner)) => render_native_php_value(namespace, value, inner, type_defs),
+        (value, TypeRef::Named(name)) => render_native_php_dto(namespace, name, value, type_defs),
+        (serde_json::Value::Array(values), TypeRef::Vec(inner)) => values
+            .iter()
+            .map(|value| render_native_php_value(namespace, value, inner, type_defs))
+            .collect::<Option<Vec<_>>>()
+            .map(|items| format!("[{}]", items.join(", "))),
+        (serde_json::Value::String(value), TypeRef::String | TypeRef::Char | TypeRef::Path) => {
+            Some(format!("\"{}\"", escape_php(value)))
+        }
+        (serde_json::Value::Bool(value), TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool)) => {
+            Some(value.to_string())
+        }
+        (serde_json::Value::Number(value), TypeRef::Primitive(_)) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
 /// Render a PHP object-array for typed array args.
 ///
 /// Emit PHP object array elements for a typed `json_object` array.
@@ -271,4 +349,34 @@ pub(super) fn is_php_reserved_type(name: &str) -> bool {
             | "false"
             | "mixed"
     )
+}
+
+#[cfg(test)]
+mod native_dto_tests {
+    use super::*;
+    use crate::core::ir::{FieldDef, TypeDef};
+
+    #[test]
+    fn renders_known_struct_as_native_php_constructor() {
+        let type_defs = [TypeDef {
+            name: "SampleRequest".into(),
+            fields: vec![FieldDef {
+                name: "display_name".into(),
+                ty: TypeRef::String,
+                ..FieldDef::default()
+            }],
+            ..TypeDef::default()
+        }];
+        let rendered = render_native_php_dto(
+            "Sample",
+            "SampleRequest",
+            &serde_json::json!({"display_name": "Ada"}),
+            &type_defs,
+        );
+
+        assert_eq!(
+            rendered.as_deref(),
+            Some("new \\Sample\\SampleRequest(displayName: \"Ada\")")
+        );
+    }
 }
