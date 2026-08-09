@@ -101,6 +101,7 @@ pub fn discover_includes(docs_dirs: &[PathBuf], include_base_paths: &[PathBuf]) 
         for path in markdown_files(docs_dir) {
             let content = std::fs::read_to_string(&path)?;
             references.extend(parse_includes(&content, &path, docs_dir, include_base_paths));
+            references.extend(parse_mdx_content_imports(&content, &path));
         }
     }
     references.sort_by(|left, right| left.source.cmp(&right.source).then(left.line.cmp(&right.line)));
@@ -150,6 +151,82 @@ pub fn parse_include_target(line: &str) -> Option<&str> {
     Some(&quoted[..end])
 }
 
+/// Discover Astro/MDX `import { Content as X } from "..."` snippet references.
+///
+/// The consumer docs site (an Astro Starlight project) does not use MkDocs'
+/// `--8<--` include syntax at all — every `.mdx` guide pulls a snippet's
+/// rendered content in via a named import of the snippet file, e.g.:
+///
+/// ```text
+/// import { Content as Snip_cli_install_cargo } from "../../../snippets/cli/install_cargo.md";
+/// ```
+///
+/// Unlike a MkDocs include target (resolved against `docs_dir` /
+/// `include_base_paths`), an ES module import path is always resolved
+/// relative to the importing file's own directory, so this function
+/// deliberately does not take `include_base_paths`.
+#[must_use]
+pub fn parse_mdx_content_imports(content: &str, source: &Path) -> Vec<SnippetReference> {
+    let Some(source_dir) = source.parent() else {
+        return Vec::new();
+    };
+    content
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| parse_mdx_content_import_target(line).map(|target| (index, target)))
+        .map(|(index, target)| SnippetReference {
+            source: source.to_path_buf(),
+            target: normalize_path(&source_dir.join(target)),
+            line: index + 1,
+        })
+        .collect()
+}
+
+/// Extract the import path from a single `import { Content as X } from "...";`
+/// line, or `None` if the line does not match that shape.
+///
+/// Recognizes both the specific `Content as <ident>` alias form actually used
+/// by the docs site and the bare `import { Content } from "...";` form (no
+/// alias), single- or double-quoted, with or without a trailing semicolon.
+pub fn parse_mdx_content_import_target(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    let after_import = trimmed.strip_prefix("import")?.trim_start();
+    let after_brace = after_import.strip_prefix('{')?;
+    let close_brace = after_brace.find('}')?;
+    let binding = after_brace[..close_brace].trim();
+    let is_content_import = binding == "Content" || binding.starts_with("Content ") && binding.contains(" as ");
+    if !is_content_import {
+        return None;
+    }
+    let after_close = after_brace[close_brace + 1..].trim_start();
+    let after_from = after_close.strip_prefix("from")?.trim_start();
+    let quote = after_from.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let rest = &after_from[1..];
+    let end = rest.find(quote)?;
+    Some(&rest[..end])
+}
+
+/// Collapse `.`/`..` path components produced by joining a relative import
+/// target onto its importing file's directory, without touching the
+/// filesystem (the target may not exist yet, which is exactly the case
+/// `missing_references` needs to detect).
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
 fn markdown_files(base: &Path) -> Vec<PathBuf> {
     if !base.exists() {
         return Vec::new();
@@ -164,7 +241,7 @@ fn markdown_files(base: &Path) -> Vec<PathBuf> {
         .filter(|path| {
             path.extension()
                 .and_then(|extension| extension.to_str())
-                .map(|extension| matches!(extension.to_lowercase().as_str(), "md" | "markdown"))
+                .map(|extension| matches!(extension.to_lowercase().as_str(), "md" | "markdown" | "mdx"))
                 .unwrap_or(false)
         })
         .collect();
@@ -350,5 +427,100 @@ mod tests {
             "expected no missing references, got: {:?}",
             report.missing_references
         );
+    }
+
+    #[test]
+    fn parses_mdx_content_import() {
+        let target = parse_mdx_content_import_target(
+            r#"import { Content as Snip_cli_install_cargo } from "../../../snippets/cli/install_cargo.md";"#,
+        );
+        assert_eq!(target, Some("../../../snippets/cli/install_cargo.md"));
+    }
+
+    #[test]
+    fn parses_bare_content_import_without_alias() {
+        let target = parse_mdx_content_import_target(r#"import { Content } from "../snippets/x.md";"#);
+        assert_eq!(target, Some("../snippets/x.md"));
+    }
+
+    #[test]
+    fn ignores_non_content_imports() {
+        assert_eq!(
+            parse_mdx_content_import_target(r#"import { Card } from "@astrojs/starlight/components";"#),
+            None
+        );
+        assert_eq!(
+            parse_mdx_content_import_target(r#"import Layout from "../Layout.astro";"#),
+            None
+        );
+    }
+
+    #[test]
+    fn parses_multiple_mdx_content_imports_in_one_file() {
+        let content = concat!(
+            "---\ntitle: Usage\n---\n",
+            "import { Content as Snip_a } from \"../../../snippets/cli/a.md\";\n",
+            "import { Content as Snip_b } from \"../../../snippets/cli/b.md\";\n",
+        );
+        let refs = parse_mdx_content_imports(content, Path::new("/repo/a/b/c/usage.mdx"));
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0].target, PathBuf::from("/repo/snippets/cli/a.md"));
+        assert_eq!(refs[0].line, 4);
+        assert_eq!(refs[1].target, PathBuf::from("/repo/snippets/cli/b.md"));
+        assert_eq!(refs[1].line, 5);
+    }
+
+    #[test]
+    fn mdx_import_path_is_relative_to_importing_file_not_docs_dir() {
+        // The importing file lives three directories below `docs_dir` (mirroring
+        // the real `docs/<section>/<page>.mdx` -> `../../../snippets/...` shape),
+        // so resolving against `docs_dir` directly (the MkDocs behavior) would
+        // produce the wrong path. Resolution must instead be relative to the
+        // importing file's own directory.
+        let refs = parse_mdx_content_imports(
+            r#"import { Content as Snip_x } from "../../../snippets/cli/install_cargo.md";"#,
+            Path::new("/repo/docs-site/src/content/docs/cli/usage.mdx"),
+        );
+        assert_eq!(refs.len(), 1);
+        assert_eq!(
+            refs[0].target,
+            PathBuf::from("/repo/docs-site/src/snippets/cli/install_cargo.md")
+        );
+    }
+
+    #[test]
+    fn walks_mdx_files_for_references() {
+        let dir = tempfile::tempdir().unwrap();
+        let docs = dir.path().join("content").join("docs");
+        let snippets = dir.path().join("content").join("snippets");
+        std::fs::create_dir_all(docs.join("cli")).unwrap();
+        std::fs::create_dir_all(snippets.join("cli")).unwrap();
+        std::fs::write(
+            docs.join("cli").join("usage.mdx"),
+            "import { Content as Snip_x } from \"../../snippets/cli/install_cargo.md\";\n",
+        )
+        .unwrap();
+        std::fs::write(
+            snippets.join("cli").join("install_cargo.md"),
+            "```bash\ncargo install alef\n```\n",
+        )
+        .unwrap();
+        std::fs::write(snippets.join("cli").join("orphan.md"), "```bash\necho orphan\n```\n").unwrap();
+
+        let report = detect_gaps(&GapConfig {
+            docs_dirs: vec![docs],
+            snippet_dirs: vec![snippets],
+            required_languages: vec![],
+            include_base_paths: vec![],
+        })
+        .unwrap();
+
+        assert_eq!(
+            report.unreferenced_snippets.len(),
+            1,
+            "expected only orphan.md to be unreferenced, got: {:?}",
+            report.unreferenced_snippets
+        );
+        assert!(report.unreferenced_snippets[0].ends_with("orphan.md"));
     }
 }

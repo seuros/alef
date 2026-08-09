@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Snippet audits and coverage reports now recognize Astro MDX imports and `.mdx` documentation files.**
+  MDX `Content` imports resolve relative to the importing page, and both audit and gap detection
+  include `.mdx` alongside Markdown when checking references and fenced languages.
+  (`src/snippets/audit.rs`, `src/snippets/gaps.rs`)
 - **Generated Elixir e2e suites could leave the harness running as an orphan, hanging `mix test`
   after every test had already passed.** `test_helper.exs` spawned the harness with
   `Port.open({:spawn_executable, ...})` and never reaped it. Closing an Erlang port only closes the

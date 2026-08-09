@@ -240,7 +240,7 @@ fn markdown_files(base: &Path) -> Vec<PathBuf> {
         .filter(|path| {
             path.extension()
                 .and_then(|extension| extension.to_str())
-                .map(|extension| matches!(extension.to_lowercase().as_str(), "md" | "markdown"))
+                .map(|extension| matches!(extension.to_lowercase().as_str(), "md" | "markdown" | "mdx"))
                 .unwrap_or(false)
         })
         .collect();
@@ -376,5 +376,26 @@ mod tests {
                 .iter()
                 .any(|issue| issue.kind == AuditIssueKind::MissingInclude)
         );
+    }
+
+    #[test]
+    fn audits_fences_in_mdx_docs_pages() {
+        // The consumer docs site is Astro Starlight, whose pages are `.mdx`, not
+        // `.md`. `gaps::markdown_files` walks `.mdx` for snippet-reference
+        // discovery, so `audit_docs` must walk the same extensions for the same
+        // `docs_dirs` or it silently skips every real docs page.
+        let dir = tempfile::tempdir().unwrap();
+        let docs = dir.path().join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(docs.join("usage.mdx"), "```python\nprint('ok')\n").unwrap();
+
+        let report = audit(&AuditConfig {
+            docs_dirs: vec![docs],
+            snippet_dirs: Vec::new(),
+            require_frontmatter: false,
+        });
+
+        assert_eq!(report.issues.len(), 1);
+        assert_eq!(report.issues[0].kind, AuditIssueKind::BrokenFence);
     }
 }
