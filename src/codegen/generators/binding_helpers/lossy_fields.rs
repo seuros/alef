@@ -57,30 +57,6 @@ pub fn gen_lossy_binding_to_core_fields_mut(
     )
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::ir::FieldDef;
-
-    #[test]
-    fn optional_boxed_named_field_boxes_after_conversion() {
-        let typ = TypeDef {
-            name: "Container".into(),
-            rust_path: "sample::Container".into(),
-            fields: vec![FieldDef {
-                name: "child".into(),
-                ty: TypeRef::Optional(Box::new(TypeRef::Named("Child".into()))),
-                optional: false,
-                is_boxed: true,
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        let output = gen_lossy_binding_to_core_fields(&typ, "sample", false, &AHashSet::new(), false, false, &[]);
-        assert!(output.contains("child: self.child.clone().map(|v| Box::new(v.into()))"));
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn gen_lossy_binding_to_core_fields_inner(
     typ: &TypeDef,
@@ -393,4 +369,28 @@ fn gen_lossy_binding_to_core_fields_inner(
     }
     out.push_str("        };\n        ");
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::ir::FieldDef;
+
+    #[test]
+    fn optional_boxed_named_field_boxes_after_conversion() {
+        let typ = TypeDef {
+            name: "Container".into(),
+            rust_path: "sample::Container".into(),
+            fields: vec![FieldDef {
+                name: "child".into(),
+                ty: TypeRef::Optional(Box::new(TypeRef::Named("Child".into()))),
+                optional: false,
+                is_boxed: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let output = gen_lossy_binding_to_core_fields(&typ, "sample", false, &AHashSet::new(), false, false, &[]);
+        assert!(output.contains("child: self.child.clone().map(|v| Box::new(v.into()))"));
+    }
 }

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Shared binding conversion regressions now keep test modules after production items for strict Clippy compatibility.
+
 - Coverage-ledger side-effect metadata now uses its typed serialized representation without retaining an obsolete
   Markdown frontmatter renderer.
 
