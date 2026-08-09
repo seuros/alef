@@ -848,3 +848,39 @@ fn multipart_synthesized_body_emits_boundary_content_type() {
         "a synthesized multipart body must be sent as raw bytes via Buffer.from; got:\n{out}"
     );
 }
+
+/// Two IR types extracted from different modules can share a bare `name`
+/// (e.g. two distinct `Config` structs). `derive_nested_types_for_wasm` must
+/// resolve such a collision the same way regardless of where each same-named
+/// entry sits in the `type_defs` slice, otherwise the generated wasm import
+/// line silently swaps one imported class for another across regen runs
+/// whenever the upstream type registry's order shifts (see the doc comment
+/// on `derive_nested_types_for_wasm`).
+fn make_type_at_path(name: &str, rust_path: &str, fields: Vec<FieldDef>) -> TypeDef {
+    let mut type_def = make_type(name, fields);
+    type_def.rust_path = rust_path.to_string();
+    type_def
+}
+
+#[test]
+fn derive_nested_types_resolves_duplicate_names_deterministically_by_rust_path() {
+    let field = make_field("nested", TypeRef::Named("Config".to_string()));
+    let request_type = make_type("Request", vec![field]);
+
+    let config_a = make_type_at_path("Config", "crate::module_a::Config", vec![]);
+    let config_b = make_type_at_path("Config", "crate::module_b::Config", vec![]);
+
+    let forward_order = vec![request_type.clone(), config_a.clone(), config_b.clone()];
+    let reverse_order = vec![request_type, config_b, config_a];
+
+    let derived_forward = derive_nested_types_for_wasm("WasmRequest", &forward_order, "Wasm");
+    let derived_reverse = derive_nested_types_for_wasm("WasmRequest", &reverse_order, "Wasm");
+
+    assert_eq!(
+        derived_forward, derived_reverse,
+        "duplicate-name resolution must not depend on type_defs slice order"
+    );
+    // `crate::module_a::Config` sorts before `crate::module_b::Config`, so the
+    // tie always breaks toward module_a regardless of input order.
+    assert_eq!(derived_forward.get("nested"), Some(&"WasmConfig".to_string()));
+}

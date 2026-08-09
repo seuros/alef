@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **TypeScript e2e nested-type discovery is deterministic when distinct Rust types share a short
+  name.** Candidate resolution now uses the full Rust path as a stable tie-breaker, preventing
+  generated WASM tests from changing with input order. (`src/e2e/codegen/typescript/test_file`)
 - **PHP bindings now generate working setters for optional named-struct fields.** Setter signatures,
   native conversions, and generated type stubs consistently accept nullable wrapped structs instead
   of dropping or mis-typing the assignment path. (`src/backends/php/gen_bindings`)

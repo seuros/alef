@@ -79,7 +79,21 @@ pub(in crate::e2e::codegen::typescript::test_file) fn derive_nested_types_for_wa
 ) -> std::collections::HashMap<String, String> {
     // Strip the prefix to get the IR type name.
     let ir_name = wasm_type_name.strip_prefix(wasm_type_prefix).unwrap_or(wasm_type_name);
-    let Some(type_def) = type_defs.iter().find(|t| t.name == ir_name) else {
+    // Two types extracted from different modules can share a bare `name`
+    // (e.g. two distinct `Config` structs). `type_defs` is the IR type
+    // registry built upstream of e2e codegen; its slice order is not a
+    // contract this code should depend on. A plain `.find()` would return
+    // whichever same-named entry happens to come first in that slice,
+    // which silently swaps one imported wasm class for another between
+    // otherwise-identical `alef e2e generate` runs if the upstream order
+    // ever shifts. Break ties deterministically on `rust_path` (the fully
+    // qualified module path, guaranteed unique) so the result is stable
+    // regardless of `type_defs` ordering.
+    let Some(type_def) = type_defs
+        .iter()
+        .filter(|t| t.name == ir_name)
+        .min_by(|a, b| a.rust_path.cmp(&b.rust_path))
+    else {
         return std::collections::HashMap::new();
     };
     let mut map = std::collections::HashMap::new();
