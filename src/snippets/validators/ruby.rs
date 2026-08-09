@@ -1,8 +1,7 @@
 use crate::snippets::error::Result;
+use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
-use crate::snippets::validators::{SnippetValidator, run_command};
-use std::io::Write;
-use tempfile::NamedTempFile;
+use crate::snippets::validators::{SnippetValidator, run_script};
 
 pub struct RubyValidator;
 
@@ -25,30 +24,20 @@ impl SnippetValidator for RubyValidator {
             return Ok((SnippetStatus::Pass, None));
         }
 
-        let mut temp_file = NamedTempFile::with_suffix(".rb")?;
-        temp_file.write_all(snippet.code.as_bytes())?;
-        temp_file.flush()?;
+        run_script(snippet, level, timeout_secs, None, ".rb", "ruby", &["-c"])
+    }
 
-        let path = temp_file.path().to_string_lossy().to_string();
-        let mut command = match level {
-            ValidationLevel::Syntax | ValidationLevel::Compile | ValidationLevel::TypeCheck => {
-                let mut command = std::process::Command::new("ruby");
-                command.args(["-c", &path]);
-                command
-            }
-            ValidationLevel::Run => {
-                let mut command = std::process::Command::new("ruby");
-                command.arg(&path);
-                command
-            }
-        };
-
-        let (success, output) = run_command(&mut command, timeout_secs)?;
-        if success {
-            Ok((SnippetStatus::Pass, None))
-        } else {
-            Ok((SnippetStatus::Fail, Some(output)))
+    fn validate_in_session(
+        &self,
+        snippet: &Snippet,
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Result<(SnippetStatus, Option<String>)> {
+        if is_api_signature(snippet.code.trim()) {
+            return Ok((SnippetStatus::Pass, None));
         }
+        run_script(snippet, level, timeout_secs, session, ".rb", "ruby", &["-c"])
     }
 
     fn max_level(&self) -> ValidationLevel {

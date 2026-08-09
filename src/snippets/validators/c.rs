@@ -1,4 +1,5 @@
 use crate::snippets::error::Result;
+use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
 use crate::snippets::validators::{SnippetValidator, run_command};
 use std::io::Write;
@@ -81,6 +82,57 @@ impl SnippetValidator for CValidator {
 
     fn max_level(&self) -> ValidationLevel {
         ValidationLevel::Run
+    }
+
+    fn validate_in_session(
+        &self,
+        snippet: &Snippet,
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Result<(SnippetStatus, Option<String>)> {
+        let Some(session) = session else {
+            return self.validate(snippet, level, timeout_secs);
+        };
+        let Some(cc) = compiler() else {
+            return Ok((SnippetStatus::Unavailable, Some("no C compiler on PATH".into())));
+        };
+        let mut source = tempfile::Builder::new()
+            .suffix(".c")
+            .tempfile_in(&session.working_directory)?;
+        source.write_all(snippet.code.as_bytes())?;
+        source.flush()?;
+        let output = session.working_directory.join(".alef-snippet-output");
+        let mut command = std::process::Command::new(cc);
+        command.arg("-I").arg(&session.working_directory);
+        if level == ValidationLevel::Syntax {
+            command.arg("-fsyntax-only");
+        }
+        if level == ValidationLevel::TypeCheck {
+            command.args(["-fsyntax-only", "-Wall", "-Werror"]);
+        }
+        if matches!(level, ValidationLevel::Compile | ValidationLevel::Run) {
+            command.arg("-o").arg(&output);
+        }
+        command.arg(source.path());
+        session.apply(&mut command);
+        let (success, message) = run_command(&mut command, timeout_secs)?;
+        if !success {
+            return Ok((SnippetStatus::Fail, Some(message)));
+        }
+        if level != ValidationLevel::Run {
+            let _ = std::fs::remove_file(&output);
+            return Ok((SnippetStatus::Pass, None));
+        }
+        let mut run = std::process::Command::new(&output);
+        session.apply(&mut run);
+        let (success, message) = run_command(&mut run, timeout_secs)?;
+        let _ = std::fs::remove_file(&output);
+        Ok(if success {
+            (SnippetStatus::Pass, None)
+        } else {
+            (SnippetStatus::Fail, Some(message))
+        })
     }
 
     fn is_dependency_error(&self, output: &str) -> bool {

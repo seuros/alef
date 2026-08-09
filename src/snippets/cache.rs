@@ -3,7 +3,7 @@ use crate::snippets::types::{Snippet, ValidationLevel, ValidationResult};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-const CACHE_SCHEMA_VERSION: u32 = 1;
+const CACHE_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CacheEntry {
@@ -22,17 +22,25 @@ impl ValidationCache {
     }
 
     #[must_use]
-    pub fn key(snippet: &Snippet, level: ValidationLevel) -> String {
+    pub fn key(snippet: &Snippet, level: ValidationLevel, session_fingerprint: Option<&str>) -> String {
         let mut hasher = blake3::Hasher::new();
         hasher.update(snippet.language.to_string().as_bytes());
         hasher.update(level.to_string().as_bytes());
         hasher.update(snippet.code.as_bytes());
         hasher.update(format!("{:?}", snippet.metadata).as_bytes());
+        if let Some(fingerprint) = session_fingerprint {
+            hasher.update(fingerprint.as_bytes());
+        }
         hasher.finalize().to_hex().to_string()
     }
 
-    pub fn load(&self, snippet: &Snippet, level: ValidationLevel) -> Option<ValidationResult> {
-        let path = self.path_for(snippet, level);
+    pub fn load(
+        &self,
+        snippet: &Snippet,
+        level: ValidationLevel,
+        session_fingerprint: Option<&str>,
+    ) -> Option<ValidationResult> {
+        let path = self.path_for(snippet, level, session_fingerprint);
         let content = std::fs::read_to_string(path).ok()?;
         let entry: CacheEntry = serde_json::from_str(&content).ok()?;
         (entry.schema_version == CACHE_SCHEMA_VERSION).then_some(entry.result)
@@ -41,18 +49,28 @@ impl ValidationCache {
     /// # Errors
     ///
     /// Returns an error when the cache directory or entry cannot be written.
-    pub fn store(&self, snippet: &Snippet, level: ValidationLevel, result: &ValidationResult) -> Result<()> {
+    pub fn store(
+        &self,
+        snippet: &Snippet,
+        level: ValidationLevel,
+        session_fingerprint: Option<&str>,
+        result: &ValidationResult,
+    ) -> Result<()> {
         std::fs::create_dir_all(&self.directory)?;
         let entry = CacheEntry {
             schema_version: CACHE_SCHEMA_VERSION,
             result: result.clone(),
         };
-        std::fs::write(self.path_for(snippet, level), serde_json::to_vec_pretty(&entry)?)?;
+        std::fs::write(
+            self.path_for(snippet, level, session_fingerprint),
+            serde_json::to_vec_pretty(&entry)?,
+        )?;
         Ok(())
     }
 
-    fn path_for(&self, snippet: &Snippet, level: ValidationLevel) -> PathBuf {
-        self.directory.join(format!("{}.json", Self::key(snippet, level)))
+    fn path_for(&self, snippet: &Snippet, level: ValidationLevel, session_fingerprint: Option<&str>) -> PathBuf {
+        self.directory
+            .join(format!("{}.json", Self::key(snippet, level, session_fingerprint)))
     }
 }
 
@@ -91,12 +109,16 @@ mod tests {
         let first = snippet("fn main() {}");
         let second = snippet("fn main() { panic!() }");
         assert_ne!(
-            ValidationCache::key(&first, ValidationLevel::Syntax),
-            ValidationCache::key(&second, ValidationLevel::Syntax)
+            ValidationCache::key(&first, ValidationLevel::Syntax, None),
+            ValidationCache::key(&second, ValidationLevel::Syntax, None)
         );
         assert_ne!(
-            ValidationCache::key(&first, ValidationLevel::Syntax),
-            ValidationCache::key(&first, ValidationLevel::Run)
+            ValidationCache::key(&first, ValidationLevel::Syntax, None),
+            ValidationCache::key(&first, ValidationLevel::Run, None)
+        );
+        assert_ne!(
+            ValidationCache::key(&first, ValidationLevel::Run, Some("binding-a")),
+            ValidationCache::key(&first, ValidationLevel::Run, Some("binding-b"))
         );
     }
 }

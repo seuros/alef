@@ -70,6 +70,9 @@ impl TypeScriptValidator {
     ) -> std::process::Command {
         let mut command = if level == ValidationLevel::Run {
             let mut command = std::process::Command::new("tsx");
+            if let Some(project) = project {
+                command.args(["--tsconfig", project.to_string_lossy().as_ref()]);
+            }
             command.arg(file_path);
             command
         } else {

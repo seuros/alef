@@ -1,4 +1,5 @@
 use crate::snippets::error::Result;
+use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
 use crate::snippets::validators::{SnippetValidator, run_command};
 use tempfile::TempDir;
@@ -6,6 +7,51 @@ use tempfile::TempDir;
 pub struct JavaValidator;
 
 impl JavaValidator {
+    fn validate_with_context(
+        snippet: &Snippet,
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Result<(SnippetStatus, Option<String>)> {
+        let dir = match session {
+            Some(value) => value.temp_dir()?,
+            None => TempDir::new()?,
+        };
+        let wrapped = Self::wrap_if_fragment(&snippet.code);
+        let class_name = Self::extract_class_name(&wrapped);
+        let file = dir.path().join(format!("{class_name}.java"));
+        std::fs::write(&file, &wrapped)?;
+        let mut command = if level == ValidationLevel::Run {
+            let mut value = std::process::Command::new("java");
+            value.arg(&file);
+            value
+        } else {
+            let mut value = std::process::Command::new("javac");
+            value.arg(if level == ValidationLevel::TypeCheck {
+                "-Xlint:all"
+            } else {
+                "-Xlint:none"
+            });
+            if level == ValidationLevel::TypeCheck {
+                value.arg("-Werror");
+            }
+            value.args(["-d"]).arg(dir.path()).arg(&file);
+            value
+        };
+        if let Some(value) = session {
+            value.apply(&mut command);
+            if let Some(manifest) = &value.manifest {
+                command.args(["--class-path", manifest.to_string_lossy().as_ref()]);
+            }
+        }
+        let (success, output) = run_command(&mut command, timeout_secs)?;
+        Ok(if success {
+            (SnippetStatus::Pass, None)
+        } else {
+            (SnippetStatus::Fail, Some(output))
+        })
+    }
+
     fn extract_class_name(code: &str) -> String {
         for line in code.lines() {
             let trimmed = line.trim();
@@ -102,39 +148,17 @@ impl SnippetValidator for JavaValidator {
         level: ValidationLevel,
         timeout_secs: u64,
     ) -> Result<(SnippetStatus, Option<String>)> {
-        let dir = TempDir::new()?;
-        let wrapped = Self::wrap_if_fragment(&snippet.code);
-        let class_name = Self::extract_class_name(&wrapped);
-        let file = dir.path().join(format!("{class_name}.java"));
-        std::fs::write(&file, &wrapped)?;
+        Self::validate_with_context(snippet, level, timeout_secs, None)
+    }
 
-        let mut command = match level {
-            ValidationLevel::Syntax | ValidationLevel::Compile => {
-                let mut command = std::process::Command::new("javac");
-                command
-                    .args(["-Xlint:none", "-nowarn", "-d"])
-                    .arg(dir.path())
-                    .arg(&file);
-                command
-            }
-            ValidationLevel::TypeCheck => {
-                let mut command = std::process::Command::new("javac");
-                command.args(["-Xlint:all", "-Werror", "-d"]).arg(dir.path()).arg(&file);
-                command
-            }
-            ValidationLevel::Run => {
-                let mut command = std::process::Command::new("java");
-                command.arg(&file);
-                command
-            }
-        };
-
-        let (success, output) = run_command(&mut command, timeout_secs)?;
-        if success {
-            Ok((SnippetStatus::Pass, None))
-        } else {
-            Ok((SnippetStatus::Fail, Some(output)))
-        }
+    fn validate_in_session(
+        &self,
+        snippet: &Snippet,
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Result<(SnippetStatus, Option<String>)> {
+        Self::validate_with_context(snippet, level, timeout_secs, session)
     }
 
     fn max_level(&self) -> ValidationLevel {

@@ -1,8 +1,7 @@
 use crate::snippets::error::Result;
+use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
-use crate::snippets::validators::{SnippetValidator, run_command};
-use std::io::Write;
-use tempfile::NamedTempFile;
+use crate::snippets::validators::{SnippetValidator, run_script};
 
 pub struct BashValidator;
 
@@ -21,30 +20,17 @@ impl SnippetValidator for BashValidator {
         level: ValidationLevel,
         timeout_secs: u64,
     ) -> Result<(SnippetStatus, Option<String>)> {
-        let mut temp_file = NamedTempFile::with_suffix(".sh")?;
-        temp_file.write_all(snippet.code.as_bytes())?;
-        temp_file.flush()?;
+        run_script(snippet, level, timeout_secs, None, ".sh", "bash", &["-n"])
+    }
 
-        let path = temp_file.path().to_string_lossy().to_string();
-        let mut command = match level {
-            ValidationLevel::Syntax | ValidationLevel::Compile | ValidationLevel::TypeCheck => {
-                let mut command = std::process::Command::new("bash");
-                command.args(["-n", &path]);
-                command
-            }
-            ValidationLevel::Run => {
-                let mut command = std::process::Command::new("bash");
-                command.arg(&path);
-                command
-            }
-        };
-
-        let (success, output) = run_command(&mut command, timeout_secs)?;
-        if success {
-            Ok((SnippetStatus::Pass, None))
-        } else {
-            Ok((SnippetStatus::Fail, Some(output)))
-        }
+    fn validate_in_session(
+        &self,
+        snippet: &Snippet,
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Result<(SnippetStatus, Option<String>)> {
+        run_script(snippet, level, timeout_secs, session, ".sh", "bash", &["-n"])
     }
 
     fn max_level(&self) -> ValidationLevel {

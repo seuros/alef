@@ -31,6 +31,7 @@ impl PythonValidator {
         let mut command = Self::command(level, dir.path(), python, &path)?;
         if let Some(session) = session {
             command.current_dir(&session.working_directory);
+            command.env("PYTHONPATH", &session.working_directory);
         }
         let (success, output) = run_command(&mut command, timeout_secs)?;
         if success {
@@ -256,6 +257,7 @@ impl SnippetValidator for PythonValidator {
 #[cfg(test)]
 mod tests {
     use super::PythonValidator;
+    use crate::snippets::session::ValidationSession;
     use crate::snippets::types::{Language, Snippet, SnippetMetadata, SnippetStatus, SourceOrigin, ValidationLevel};
     use crate::snippets::validators::SnippetValidator;
     use std::path::PathBuf;
@@ -299,5 +301,42 @@ mod tests {
             .validate(&snippet, ValidationLevel::Syntax, 10)
             .expect("syntax validator runs");
         assert_eq!(status, SnippetStatus::Fail);
+    }
+
+    #[test]
+    fn run_session_resolves_local_binding_from_working_directory() {
+        if !PythonValidator.is_available() {
+            return;
+        }
+        let directory = tempfile::tempdir().expect("temp directory");
+        std::fs::write(directory.path().join("local_binding.py"), "VALUE = 42\n").expect("local binding");
+        let path = PathBuf::from("local.py");
+        let snippet = Snippet {
+            id: None,
+            path: path.clone(),
+            language: Language::Python,
+            title: None,
+            code: "import local_binding\nassert local_binding.VALUE == 42\n".into(),
+            start_line: 1,
+            block_index: 0,
+            annotation: None,
+            metadata: SnippetMetadata::default(),
+            source_origin: SourceOrigin {
+                path,
+                line: 1,
+                block_index: 0,
+            },
+        };
+        let session = ValidationSession {
+            working_directory: directory.path().to_path_buf(),
+            manifest: None,
+            fingerprint: "test-binding".into(),
+        };
+
+        let (status, message) = PythonValidator
+            .validate_in_session(&snippet, ValidationLevel::Run, 10, Some(&session))
+            .expect("session validation runs");
+
+        assert_eq!(status, SnippetStatus::Pass, "{message:?}");
     }
 }

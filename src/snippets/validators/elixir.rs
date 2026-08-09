@@ -1,4 +1,5 @@
 use crate::snippets::error::Result;
+use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
 use crate::snippets::validators::{SnippetValidator, run_command};
 use tempfile::TempDir;
@@ -66,5 +67,39 @@ end"#,
 
     fn max_level(&self) -> ValidationLevel {
         ValidationLevel::Run
+    }
+
+    fn validate_in_session(
+        &self,
+        snippet: &Snippet,
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Result<(SnippetStatus, Option<String>)> {
+        let Some(session) = session else {
+            return self.validate(snippet, level, timeout_secs);
+        };
+        let dir = session.temp_dir()?;
+        let file = dir.path().join("snippet.exs");
+        std::fs::write(&file, &snippet.code)?;
+        let mut command = if level == ValidationLevel::Run {
+            let mut value = std::process::Command::new("elixir");
+            value.arg(&file);
+            value
+        } else {
+            let mut value = std::process::Command::new("elixir");
+            value.args([
+                "-e",
+                &format!("Code.string_to_quoted!(File.read!({:?}))", file.to_string_lossy()),
+            ]);
+            value
+        };
+        session.apply(&mut command);
+        let (success, output) = run_command(&mut command, timeout_secs)?;
+        Ok(if success {
+            (SnippetStatus::Pass, None)
+        } else {
+            (SnippetStatus::Fail, Some(output))
+        })
     }
 }

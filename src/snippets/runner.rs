@@ -83,7 +83,7 @@ fn validate_one(
     config: &RunnerConfig,
     session: Option<&crate::snippets::session::ValidationSession>,
 ) -> ValidationResult {
-    if let Some(result) = cached_result(snippet, config) {
+    if let Some(result) = cached_result(snippet, config, session) {
         return result;
     }
 
@@ -193,19 +193,28 @@ fn validate_one(
     };
     let result = result(snippet, status, config.level, effective_level, message, duration_ms);
     if let Some(cache) = config.cache_dir.clone().map(ValidationCache::new)
-        && let Err(error) = cache.store(snippet, config.level, &result)
+        && let Err(error) = cache.store(
+            snippet,
+            config.level,
+            session.map(|value| value.fingerprint.as_str()),
+            &result,
+        )
     {
         tracing::warn!("writing snippet validation cache: {error}");
     }
     result
 }
 
-fn cached_result(snippet: &Snippet, config: &RunnerConfig) -> Option<ValidationResult> {
+fn cached_result(
+    snippet: &Snippet,
+    config: &RunnerConfig,
+    session: Option<&crate::snippets::session::ValidationSession>,
+) -> Option<ValidationResult> {
     if !config.changed_only {
         return None;
     }
     let cache = config.cache_dir.clone().map(ValidationCache::new)?;
-    let mut result = cache.load(snippet, config.level)?;
+    let mut result = cache.load(snippet, config.level, session.map(|value| value.fingerprint.as_str()))?;
     result.snippet = snippet.clone();
     result.duration_ms = 0;
     result.message = result.message.or_else(|| Some("cached".to_string()));

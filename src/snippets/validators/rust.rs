@@ -1,4 +1,5 @@
 use crate::snippets::error::Result;
+use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
 use crate::snippets::validators::{SnippetValidator, run_command};
 use std::io::Write;
@@ -7,6 +8,69 @@ use tempfile::TempDir;
 pub struct RustValidator;
 
 impl RustValidator {
+    fn validate_with_context(
+        snippet: &Snippet,
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Result<(SnippetStatus, Option<String>)> {
+        let dir = match session {
+            Some(session) => session.temp_dir()?,
+            None => TempDir::new()?,
+        };
+        let source_dir = dir.path().join("src");
+        std::fs::create_dir_all(&source_dir)?;
+        std::fs::write(dir.path().join("Cargo.toml"), Self::cargo_manifest(session)?)?;
+        let code = Self::wrap_if_fragment(&snippet.code);
+        let mut source_file = std::fs::File::create(source_dir.join("main.rs"))?;
+        source_file.write_all(code.as_bytes())?;
+        let args: &[&str] = match level {
+            ValidationLevel::Syntax | ValidationLevel::Compile | ValidationLevel::TypeCheck => &["check", "--quiet"],
+            ValidationLevel::Run => &["run", "--quiet"],
+        };
+        let mut command = std::process::Command::new("cargo");
+        command.args(args).current_dir(dir.path());
+        let (success, output) = run_command(&mut command, timeout_secs)?;
+        Ok(if success {
+            (SnippetStatus::Pass, None)
+        } else {
+            (SnippetStatus::Fail, Some(output))
+        })
+    }
+
+    fn cargo_manifest(session: Option<&ValidationSession>) -> Result<String> {
+        let dependency = session.map(Self::path_dependency).transpose()?.unwrap_or_default();
+        Ok(format!(
+            "[package]\nname = \"snippet-check\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\n{dependency}"
+        ))
+    }
+
+    fn path_dependency(session: &ValidationSession) -> Result<String> {
+        let manifest = session
+            .manifest
+            .clone()
+            .unwrap_or_else(|| session.working_directory.join("Cargo.toml"));
+        let content = std::fs::read_to_string(&manifest)?;
+        let value: toml::Value = toml::from_str(&content).map_err(|error| {
+            crate::snippets::error::Error::Other(format!("parsing {}: {error}", manifest.display()))
+        })?;
+        let package = value
+            .get("package")
+            .and_then(|value| value.get("name"))
+            .and_then(toml::Value::as_str)
+            .ok_or_else(|| {
+                crate::snippets::error::Error::Other(format!("no package.name in {}", manifest.display()))
+            })?;
+        let crate_name = package.replace('-', "_");
+        Ok(format!(
+            "{crate_name} = {{ package = {package:?}, path = {:?} }}\n",
+            manifest
+                .parent()
+                .unwrap_or(&session.working_directory)
+                .to_string_lossy()
+        ))
+    }
+
     fn is_bare_signature(code: &str) -> bool {
         let trimmed = code.trim();
         trimmed.contains("fn ") && !trimmed.contains('{')
@@ -121,39 +185,17 @@ impl SnippetValidator for RustValidator {
         level: ValidationLevel,
         timeout_secs: u64,
     ) -> Result<(SnippetStatus, Option<String>)> {
-        let dir = TempDir::new()?;
-        let source_dir = dir.path().join("src");
-        std::fs::create_dir_all(&source_dir)?;
+        Self::validate_with_context(snippet, level, timeout_secs, None)
+    }
 
-        let cargo_toml = r#"[package]
-name = "snippet-check"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-"#;
-        std::fs::write(dir.path().join("Cargo.toml"), cargo_toml)?;
-
-        let code = Self::wrap_if_fragment(&snippet.code);
-        let mut source_file = std::fs::File::create(source_dir.join("main.rs"))?;
-        source_file.write_all(code.as_bytes())?;
-
-        let (program, args): (&str, &[&str]) = match level {
-            ValidationLevel::Syntax | ValidationLevel::Compile | ValidationLevel::TypeCheck => {
-                ("cargo", &["check", "--quiet"])
-            }
-            ValidationLevel::Run => ("cargo", &["run", "--quiet"]),
-        };
-
-        let mut command = std::process::Command::new(program);
-        command.args(args).current_dir(dir.path());
-
-        let (success, output) = run_command(&mut command, timeout_secs)?;
-        if success {
-            Ok((SnippetStatus::Pass, None))
-        } else {
-            Ok((SnippetStatus::Fail, Some(output)))
-        }
+    fn validate_in_session(
+        &self,
+        snippet: &Snippet,
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Result<(SnippetStatus, Option<String>)> {
+        Self::validate_with_context(snippet, level, timeout_secs, session)
     }
 
     fn max_level(&self) -> ValidationLevel {

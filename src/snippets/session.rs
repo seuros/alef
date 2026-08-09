@@ -15,6 +15,20 @@ pub struct SessionSpec {
 pub struct ValidationSession {
     pub working_directory: PathBuf,
     pub manifest: Option<PathBuf>,
+    pub fingerprint: String,
+}
+
+impl ValidationSession {
+    pub fn temp_dir(&self) -> Result<tempfile::TempDir> {
+        tempfile::Builder::new()
+            .prefix(".alef-snippet-")
+            .tempdir_in(&self.working_directory)
+            .map_err(Into::into)
+    }
+
+    pub fn apply(&self, command: &mut std::process::Command) {
+        command.current_dir(&self.working_directory);
+    }
 }
 
 pub fn prepare_sessions(
@@ -44,7 +58,40 @@ fn prepare_session(language: Language, spec: &SessionSpec, timeout_secs: u64) ->
     Ok(ValidationSession {
         working_directory: spec.working_directory.clone(),
         manifest: spec.manifest.clone(),
+        fingerprint: session_fingerprint(spec)?,
     })
+}
+
+fn session_fingerprint(spec: &SessionSpec) -> Result<String> {
+    const IGNORED_DIRECTORIES: &[&str] = &[".git", ".alef", "target", "node_modules", ".venv", "build"];
+    let mut paths = walkdir::WalkDir::new(&spec.working_directory)
+        .into_iter()
+        .filter_entry(|entry| {
+            !entry.file_type().is_dir() || !IGNORED_DIRECTORIES.contains(&entry.file_name().to_string_lossy().as_ref())
+        })
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .map(|entry| entry.into_path())
+        .collect::<Vec<_>>();
+    paths.sort();
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(spec.working_directory.to_string_lossy().as_bytes());
+    if let Some(manifest) = &spec.manifest {
+        hasher.update(manifest.to_string_lossy().as_bytes());
+    }
+    for command in &spec.before {
+        hasher.update(command.as_bytes());
+    }
+    for path in paths {
+        hasher.update(
+            path.strip_prefix(&spec.working_directory)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .as_bytes(),
+        );
+        hasher.update(&std::fs::read(&path)?);
+    }
+    Ok(hasher.finalize().to_hex().to_string())
 }
 
 fn ensure_directory(path: &Path, language: Language) -> Result<()> {

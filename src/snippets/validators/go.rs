@@ -1,4 +1,5 @@
 use crate::snippets::error::Result;
+use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
 use crate::snippets::validators::{SnippetValidator, run_command};
 use tempfile::TempDir;
@@ -6,6 +7,52 @@ use tempfile::TempDir;
 pub struct GoValidator;
 
 impl GoValidator {
+    fn validate_with_context(
+        snippet: &Snippet,
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Result<(SnippetStatus, Option<String>)> {
+        let dir = match session {
+            Some(session) => session.temp_dir()?,
+            None => TempDir::new()?,
+        };
+        let file = dir.path().join("snippet.go");
+        std::fs::write(&file, Self::wrap_if_fragment(&snippet.code))?;
+        if session.is_none() && level != ValidationLevel::Syntax {
+            std::fs::write(dir.path().join("go.mod"), "module snippet\n\ngo 1.21\n")?;
+        }
+        let mut command = match level {
+            ValidationLevel::Syntax => {
+                let mut command = std::process::Command::new("gofmt");
+                command.args(["-e", "-l"]).arg(&file);
+                command
+            }
+            ValidationLevel::Compile => {
+                let mut command = std::process::Command::new("go");
+                command.args(["build", "-o", "/dev/null"]).arg(&file);
+                command
+            }
+            ValidationLevel::TypeCheck => {
+                let mut command = std::process::Command::new("go");
+                command.arg("vet").arg(&file);
+                command
+            }
+            ValidationLevel::Run => {
+                let mut command = std::process::Command::new("go");
+                command.arg("run").arg(&file);
+                command
+            }
+        };
+        command.current_dir(session.map_or(dir.path(), |value| &value.working_directory));
+        let (success, output) = run_command(&mut command, timeout_secs)?;
+        Ok(if success {
+            (SnippetStatus::Pass, None)
+        } else {
+            (SnippetStatus::Fail, Some(output))
+        })
+    }
+
     fn wrap_if_fragment(code: &str) -> String {
         let trimmed = code.trim();
         if trimmed.starts_with("package ") {
@@ -89,45 +136,17 @@ impl SnippetValidator for GoValidator {
         level: ValidationLevel,
         timeout_secs: u64,
     ) -> Result<(SnippetStatus, Option<String>)> {
-        let dir = TempDir::new()?;
-        let file = dir.path().join("snippet.go");
-        let wrapped = Self::wrap_if_fragment(&snippet.code);
-        std::fs::write(&file, wrapped)?;
+        Self::validate_with_context(snippet, level, timeout_secs, None)
+    }
 
-        let mut command = match level {
-            ValidationLevel::Syntax => {
-                let mut command = std::process::Command::new("gofmt");
-                command.args(["-e", "-l"]).arg(&file);
-                command
-            }
-            ValidationLevel::Compile => {
-                std::fs::write(dir.path().join("go.mod"), "module snippet\n\ngo 1.21\n")?;
-                let mut command = std::process::Command::new("go");
-                command
-                    .args(["build", "-o", "/dev/null", "./..."])
-                    .current_dir(dir.path());
-                command
-            }
-            ValidationLevel::TypeCheck => {
-                std::fs::write(dir.path().join("go.mod"), "module snippet\n\ngo 1.21\n")?;
-                let mut command = std::process::Command::new("go");
-                command.args(["vet", "./..."]).current_dir(dir.path());
-                command
-            }
-            ValidationLevel::Run => {
-                std::fs::write(dir.path().join("go.mod"), "module snippet\n\ngo 1.21\n")?;
-                let mut command = std::process::Command::new("go");
-                command.arg("run").arg(&file);
-                command
-            }
-        };
-
-        let (success, output) = run_command(&mut command, timeout_secs)?;
-        if success {
-            Ok((SnippetStatus::Pass, None))
-        } else {
-            Ok((SnippetStatus::Fail, Some(output)))
-        }
+    fn validate_in_session(
+        &self,
+        snippet: &Snippet,
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Result<(SnippetStatus, Option<String>)> {
+        Self::validate_with_context(snippet, level, timeout_secs, session)
     }
 
     fn max_level(&self) -> ValidationLevel {

@@ -24,6 +24,7 @@ use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
 use std::collections::HashMap;
 use std::io::Read;
+use std::io::Write;
 
 pub trait SnippetValidator: Send + Sync {
     fn language(&self) -> Language;
@@ -47,8 +48,14 @@ pub trait SnippetValidator: Send + Sync {
         snippet: &Snippet,
         level: ValidationLevel,
         timeout_secs: u64,
-        _session: Option<&ValidationSession>,
+        session: Option<&ValidationSession>,
     ) -> Result<(SnippetStatus, Option<String>)> {
+        if session.is_some() {
+            return Err(crate::snippets::error::Error::Other(format!(
+                "{} validator does not support binding-aware sessions",
+                self.language()
+            )));
+        }
         self.validate(snippet, level, timeout_secs)
     }
     fn max_level(&self) -> ValidationLevel;
@@ -111,6 +118,42 @@ impl Default for ValidatorRegistry {
     fn default() -> Self {
         Self::new()
     }
+}
+
+pub fn run_script(
+    snippet: &Snippet,
+    level: ValidationLevel,
+    timeout_secs: u64,
+    session: Option<&ValidationSession>,
+    suffix: &str,
+    program: &str,
+    syntax_arguments: &[&str],
+) -> Result<(SnippetStatus, Option<String>)> {
+    let mut source = match session {
+        Some(value) => tempfile::Builder::new()
+            .suffix(suffix)
+            .tempfile_in(&value.working_directory)?,
+        None => tempfile::Builder::new().suffix(suffix).tempfile()?,
+    };
+    source.write_all(snippet.code.as_bytes())?;
+    source.flush()?;
+    let mut command = std::process::Command::new(program);
+    if level == ValidationLevel::Run {
+        command.arg(source.path());
+    } else {
+        command.args(syntax_arguments).arg(source.path());
+    }
+    if let Some(value) = session {
+        value.apply(&mut command);
+        command.env("RUBYLIB", &value.working_directory);
+        command.env("R_LIBS_USER", &value.working_directory);
+    }
+    let (success, output) = run_command(&mut command, timeout_secs)?;
+    Ok(if success {
+        (SnippetStatus::Pass, None)
+    } else {
+        (SnippetStatus::Fail, Some(output))
+    })
 }
 
 fn strip_ansi_codes(input: &str) -> String {
@@ -190,8 +233,13 @@ fn sanitize_environment(command: &mut std::process::Command) {
         .iter()
         .filter_map(|key| std::env::var_os(key).map(|value| (*key, value)))
         .collect();
+    let explicit_values = command
+        .get_envs()
+        .filter_map(|(key, value)| value.map(|value| (key.to_os_string(), value.to_os_string())))
+        .collect::<Vec<_>>();
     command.env_clear();
     command.envs(values);
+    command.envs(explicit_values);
     command.env("NO_COLOR", "1");
 }
 
