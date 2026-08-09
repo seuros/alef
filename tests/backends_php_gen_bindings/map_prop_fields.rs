@@ -186,3 +186,115 @@ fn map_of_structs_field_stays_getter_only_and_documents_the_omission() {
         "the omission from #[php(prop)]/constructor must be documented in the generated source, not silent:\n{content}"
     );
 }
+
+/// Regression test for GH#461: `Option<Named-struct>` fields (e.g.
+/// `ExtractionConfig.security_limits: Option<SecurityLimits>`) got a getter but had no way
+/// whatsoever to be set from PHP — not via the constructor (the type isn't
+/// `php_field_can_be_constructor_param`-eligible), not via `#[php(prop)]` (the type isn't
+/// `is_php_prop_scalar`), and not via any setter. A PHP caller who assigned
+/// `$config->securityLimits = new SecurityLimits(...)` silently created a disconnected
+/// dynamic property instead of ever reaching the underlying Rust config.
+///
+/// The field must now also get a plain `set_<field>(&mut self, value: Option<Wrapper>)`
+/// method — a real method (not `#[php(setter)]`) so it goes through the normal method
+/// case-rename to `setSecurityLimits(...)`, matching the existing `getSecurityLimits()`.
+#[test]
+fn optional_named_struct_field_gets_a_working_setter_method() {
+    let backend = PhpBackend;
+
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![
+            TypeDef {
+                name: "SecurityLimits".to_string(),
+                rust_path: "test_lib::SecurityLimits".to_string(),
+                original_rust_path: String::new(),
+                fields: vec![make_field(
+                    "max_archive_size",
+                    TypeRef::Primitive(PrimitiveType::I64),
+                    false,
+                )],
+                methods: vec![],
+                is_opaque: false,
+                is_clone: true,
+                is_copy: false,
+                is_trait: false,
+                has_default: true,
+                has_stripped_cfg_fields: false,
+                is_return_type: false,
+                serde_rename_all: None,
+                has_serde: true,
+                super_traits: vec![],
+                doc: String::new(),
+                cfg: None,
+                binding_excluded: false,
+                binding_exclusion_reason: None,
+                is_variant_wrapper: false,
+                has_lifetime_params: false,
+                has_private_fields: false,
+                version: Default::default(),
+            },
+            TypeDef {
+                name: "ExtractionConfig".to_string(),
+                rust_path: "test_lib::ExtractionConfig".to_string(),
+                original_rust_path: String::new(),
+                fields: vec![make_field(
+                    "security_limits",
+                    TypeRef::Optional(Box::new(TypeRef::Named("SecurityLimits".to_string()))),
+                    true,
+                )],
+                methods: vec![],
+                is_opaque: false,
+                is_clone: true,
+                is_copy: false,
+                is_trait: false,
+                has_default: true,
+                has_stripped_cfg_fields: false,
+                is_return_type: false,
+                serde_rename_all: None,
+                has_serde: true,
+                super_traits: vec![],
+                doc: String::new(),
+                cfg: None,
+                binding_excluded: false,
+                binding_exclusion_reason: None,
+                is_variant_wrapper: false,
+                has_lifetime_params: false,
+                has_private_fields: false,
+                version: Default::default(),
+            },
+        ],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+
+    let files = backend.generate_bindings(&api, &make_config()).unwrap();
+    let lib = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().ends_with("lib.rs"))
+        .expect("lib.rs generated");
+    let content = &lib.content;
+
+    assert!(
+        content.contains("pub fn get_security_limits(&self) -> Option<SecurityLimits>"),
+        "the existing getter must be unchanged:\n{content}"
+    );
+
+    assert!(
+        content.contains("pub fn set_security_limits(&mut self, value: Option<SecurityLimits>)"),
+        "an Option<Named-struct> field must now get a real setter method so PHP can actually \
+         configure it:\n{content}"
+    );
+
+    assert!(
+        content.contains("self.security_limits = value.map(Into::into);"),
+        "the setter must write through to the real backing field, not a detached clone:\n{content}"
+    );
+}

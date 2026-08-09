@@ -1,5 +1,5 @@
-use super::gen_data_enum_variant_constructor_stubs;
-use crate::core::ir::{CoreWrapper, EnumDef, EnumVariant, FieldDef, MethodDef, PrimitiveType, TypeRef};
+use super::{gen_data_enum_variant_constructor_stubs, struct_needs_from_json_stub};
+use crate::core::ir::{CoreWrapper, EnumDef, EnumVariant, FieldDef, MethodDef, PrimitiveType, TypeDef, TypeRef};
 
 fn field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
     FieldDef {
@@ -220,4 +220,73 @@ fn yields_to_hand_written_method_of_same_name() {
         stubs.contains("public static function rect(int $width, int $height): Shape"),
         "{stubs}"
     );
+}
+
+/// Regression: the real extension (`gen_bindings/types/structs.rs`'s `use_from_json` gate)
+/// emits `#[php(name = "from_json")]` for a serde struct with a non-scalar (named/complex)
+/// field, since `#[php(constructor)]` can't represent that field. The PHPStan stub must declare
+/// the same static constructor or the method is invisible to editors and static analysis even
+/// though it's the only way to build the type's nested config from PHP.
+#[test]
+fn needs_from_json_stub_for_struct_with_named_field() {
+    let typ = TypeDef {
+        name: "Wrapper".to_string(),
+        has_serde: true,
+        fields: vec![field("inner", TypeRef::Named("Nested".to_string()), false)],
+        ..Default::default()
+    };
+
+    assert!(struct_needs_from_json_stub(&typ, &ahash::AHashSet::new()));
+}
+
+/// A struct with only scalar fields, no `Default` impl, and no field defaults is fully
+/// constructible via `#[php(constructor)]` alone — the extension does not emit `from_json`
+/// for it, so the stub must not claim one exists either.
+#[test]
+fn does_not_need_from_json_stub_for_plain_scalar_struct() {
+    let typ = TypeDef {
+        name: "Point".to_string(),
+        has_serde: true,
+        fields: vec![
+            field("x", TypeRef::Primitive(PrimitiveType::F64), false),
+            field("y", TypeRef::Primitive(PrimitiveType::F64), false),
+        ],
+        ..Default::default()
+    };
+
+    assert!(!struct_needs_from_json_stub(&typ, &ahash::AHashSet::new()));
+}
+
+/// A struct with an explicit hand-written static `new` constructor keeps its own constructor
+/// and must not additionally get a generated `from_json` stub.
+#[test]
+fn does_not_need_from_json_stub_when_explicit_static_new_exists() {
+    let typ = TypeDef {
+        name: "Custom".to_string(),
+        has_serde: true,
+        fields: vec![field("inner", TypeRef::Named("Nested".to_string()), false)],
+        methods: vec![MethodDef {
+            name: "new".to_string(),
+            is_static: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    assert!(!struct_needs_from_json_stub(&typ, &ahash::AHashSet::new()));
+}
+
+/// A `#[derive(Default)]` struct needs `from_json` even if every field is scalar, because the
+/// extension's gate treats `has_default` as sufficient on its own (matching `structs.rs`).
+#[test]
+fn needs_from_json_stub_when_struct_has_default_impl() {
+    let typ = TypeDef {
+        name: "Config".to_string(),
+        has_serde: true,
+        has_default: true,
+        fields: vec![field("timeout", TypeRef::Primitive(PrimitiveType::U32), true)],
+        ..Default::default()
+    };
+
+    assert!(struct_needs_from_json_stub(&typ, &ahash::AHashSet::new()));
 }

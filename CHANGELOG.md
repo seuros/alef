@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **PHP bindings now generate working setters for optional named-struct fields.** Setter signatures,
+  native conversions, and generated type stubs consistently accept nullable wrapped structs instead
+  of dropping or mis-typing the assignment path. (`src/backends/php/gen_bindings`)
 - **PyO3 trait bridges now preserve mutable callback updates and deserialize unit-enum returns correctly.**
   Async callbacks with `&mut` named parameters write an optional host-returned replacement back to
   Rust, protocol stubs expose that contract, and unit-only enums accept natural bare variant names

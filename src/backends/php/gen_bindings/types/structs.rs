@@ -791,11 +791,17 @@ fn gen_struct_methods_impl(
             map_fn(&field.ty)
         };
 
+        // `bridge_type_aliases` fields are excluded here too: those already get a
+        // `with_{field}(&self, &mut Opaque) -> Self` wither method (see the opaque-field
+        // loop below), so this branch must not also emit a conflicting `set_{field}`.
         let is_optional_named = match &field.ty {
-            TypeRef::Optional(inner) => {
-                matches!(inner.as_ref(), TypeRef::Named(n) if !opaque_types.contains(n.as_str()))
+            TypeRef::Optional(inner) => matches!(
+                inner.as_ref(),
+                TypeRef::Named(n) if !opaque_types.contains(n.as_str()) && !bridge_type_aliases.contains(n.as_str())
+            ),
+            TypeRef::Named(n) if field.optional && !already_optional => {
+                !opaque_types.contains(n.as_str()) && !bridge_type_aliases.contains(n.as_str())
             }
-            TypeRef::Named(n) if field.optional && !already_optional => !opaque_types.contains(n.as_str()),
             _ => false,
         };
         let body = if is_optional_named {
@@ -811,7 +817,33 @@ fn gen_struct_methods_impl(
         );
         impl_builder.add_method(&getter_method);
 
-        // ext-php-rs doesn't support &T: FromZval for #[php(setter)] parameters.
+        // GH#461: `is_optional_named` fields (e.g. `ExtractionConfig.security_limits`) had a
+        // getter but no way whatsoever to set them — not via the constructor (excluded, see
+        // `php_field_can_be_constructor_param`), not via `#[php(prop)]` (excluded, see
+        // `is_php_prop_scalar`), and not via a virtual `#[php(setter)]` property either: the
+        // ext-php-rs derive macro names method-backed properties by stripping the literal
+        // `set_`/`get_` prefix off the raw (snake_case) Rust ident with no `change_case`/`name`
+        // override, so a `#[php(setter)] fn set_security_limits` would register as PHP
+        // `$config->security_limits`, breaking this binding's camelCase property convention
+        // (`useCache`, `forceOcr`, ...) and silently diverging from `getSecurityLimits()`.
+        // A plain method sidesteps that: `pub fn set_x` goes through the normal method
+        // rename rule and PHP calls it as `setSecurityLimits(...)`, matching `getSecurityLimits()`.
+        // Assigning the property directly (`$config->securityLimits = ...`) still creates a
+        // disconnected dynamic property instead of erroring — tracked separately, not fixed here.
+        //
+        // Guard against `Option<Named(enum)>` fields: those ARE `is_php_prop_scalar` (enums map
+        // to PHP `String`), so they already get a real `#[php(prop)]` promoted `readonly`
+        // constructor param. Emitting a mutator for them here would let PHP silently bypass
+        // that `readonly` guarantee through a back door, so only non-prop fields qualify.
+        if is_optional_named && !is_php_prop_scalar_with_enums(&field.ty, enum_names) {
+            let setter_ident = format!("set_{}", field.name);
+            let setter_method = format!(
+                "pub fn {setter_ident}(&mut self, value: {ret}) {{\n    self.{name} = value.map(Into::into);\n}}",
+                name = field.name,
+                ret = rust_return_type,
+            );
+            impl_builder.add_method(&setter_method);
+        }
     }
 
     // emitted here — a `serde_json::Value`-taking helper inside `#[php_impl]` would fail ext-php-rs's

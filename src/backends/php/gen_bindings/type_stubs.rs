@@ -198,6 +198,29 @@ pub(super) fn generate_type_stubs(
             context! { params => &params.join(",\n") },
         ));
 
+        // The real extension additionally emits a `#[php(name = "from_json")]` static
+        // constructor (structs.rs's `use_from_json` gate) whenever the struct has a field the
+        // `#[php(constructor)]` can't represent (a named/complex param), a `#[derive(Default)]`,
+        // or a field with a default. That is the ONLY way to build such a type's nested/complex
+        // fields from PHP — ext-php-rs exposes them read-only — so the stub must declare it or
+        // the method is invisible to editors and PHPStan. Mirror the exact same gate here.
+        if struct_needs_from_json_stub(typ, &enum_names) {
+            content.push_str(
+                "    /**\n     * Construct from a JSON string — the only way to build this \
+                 type's nested/complex fields from PHP, since ext-php-rs exposes them read-only.\n     */\n",
+            );
+            content.push_str(&crate::backends::php::template_env::render(
+                "php_stub_method_definition.jinja",
+                context! {
+                    static_kw => "static ",
+                    method_name => "from_json",
+                    params => "string $json",
+                    return_type => "self",
+                    stub_body => "{ throw new \\RuntimeException('Not implemented — provided by the native extension.'); }",
+                },
+            ));
+        }
+
         // A getter is declared for EVERY binding field, mirroring the extension exactly: the
         // generator's own getter loop (gen_bindings/types/structs.rs, `for field in
         // binding_fields(&typ.fields)`) is unconditional and has no prop filter, so the
@@ -503,6 +526,26 @@ pub(super) fn generate_type_stubs(
         content,
         generated_header: false,
     }])
+}
+
+/// True when the PHPStan stub for `typ` must declare the `from_json(string $json): self` static
+/// constructor, mirroring the exact gate the real extension uses to decide whether to emit
+/// `#[php(name = "from_json")]` (see `gen_bindings/types/structs.rs`'s `use_from_json`).
+///
+/// `from_json` is the only way to build a type's nested/complex fields from PHP — ext-php-rs
+/// exposes such fields read-only — so a stub that omits it hides a real, callable method from
+/// editors and static analysis (PHPStan reports a false "undefined method").
+pub(super) fn struct_needs_from_json_stub(typ: &crate::core::ir::TypeDef, enum_names: &AHashSet<String>) -> bool {
+    let has_explicit_static_new = typ.methods.iter().any(|m| m.is_static && m.name == "new");
+    if has_explicit_static_new || typ.fields.is_empty() || !typ.has_serde {
+        return false;
+    }
+    let has_named_params = typ.fields.iter().any(|f| !is_php_prop_scalar(&f.ty, enum_names));
+    let has_field_defaults = typ
+        .fields
+        .iter()
+        .any(|f| f.default.is_some() || f.typed_default.is_some());
+    has_named_params || typ.has_default || has_field_defaults
 }
 
 /// Emit a static-factory stub for each per-variant constructor the flat PHP enum class exposes.
