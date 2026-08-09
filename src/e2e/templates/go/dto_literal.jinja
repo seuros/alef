@@ -1,0 +1,5 @@
+{{ type_name }}{
+{% for field in fields %}
+  {{- "\t" }}{{ field.name }}: {{ field.expression }},
+{% endfor %}
+}

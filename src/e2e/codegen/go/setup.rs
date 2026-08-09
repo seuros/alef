@@ -17,6 +17,83 @@ fn qualified_go_type(import_alias: &str, type_name: &str) -> String {
     }
 }
 
+fn native_go_dto_literal(
+    value: &serde_json::Value,
+    type_name: &str,
+    import_alias: &str,
+    type_defs: &[crate::core::ir::TypeDef],
+) -> Option<String> {
+    let object = value.as_object()?;
+    let definition = type_defs.iter().find(|definition| definition.name == type_name)?;
+    let fields = definition
+        .fields
+        .iter()
+        .filter_map(|field| {
+            let value = object.get(&field.name)?;
+            let optional = matches!(field.ty, crate::core::ir::TypeRef::Optional(_)) || field.optional;
+            let inner = match &field.ty {
+                crate::core::ir::TypeRef::Optional(inner) => inner.as_ref(),
+                other => other,
+            };
+            let expression = match inner {
+                crate::core::ir::TypeRef::String | crate::core::ir::TypeRef::Path => {
+                    let literal = value.as_str().map(go_string_literal)?;
+                    if optional { format!("ptr({literal})") } else { literal }
+                }
+                crate::core::ir::TypeRef::Bytes => {
+                    let items = value
+                        .as_array()?
+                        .iter()
+                        .filter_map(serde_json::Value::as_u64)
+                        .collect::<Vec<_>>();
+                    format!(
+                        "[]byte{{{}}}",
+                        items.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+                    )
+                }
+                crate::core::ir::TypeRef::Named(name) => {
+                    if let Some(nested) = native_go_dto_literal(value, name, import_alias, type_defs) {
+                        if optional { format!("&{nested}") } else { nested }
+                    } else {
+                        let literal = format!(
+                            "{}.{}({})",
+                            import_alias,
+                            crate::codegen::naming::go_type_name(name),
+                            json_to_go(value)
+                        );
+                        if optional { format!("ptr({literal})") } else { literal }
+                    }
+                }
+                crate::core::ir::TypeRef::Primitive(_) => json_to_go(value),
+                _ => return None,
+            };
+            Some(minijinja::context! {
+                name => crate::codegen::naming::to_go_name(&field.name), expression => expression,
+            })
+        })
+        .collect::<Vec<_>>();
+    if fields.is_empty() {
+        return Some(
+            crate::e2e::template_env::render(
+                "go/empty_dto_literal.jinja",
+                minijinja::context! { type_name => qualified_go_type(import_alias, type_name) },
+            )
+            .trim_end()
+            .to_string(),
+        );
+    }
+    Some(
+        crate::e2e::template_env::render(
+            "go/dto_literal.jinja",
+            minijinja::context! {
+                type_name => qualified_go_type(import_alias, type_name), fields => fields,
+            },
+        )
+        .trim_end()
+        .to_string(),
+    )
+}
+
 pub(super) fn resolve_handle_config_type(
     arg: &crate::e2e::config::ArgMapping,
     options_type: Option<&str>,
@@ -58,6 +135,7 @@ pub(super) fn build_args_and_setup(
     config: &crate::core::config::ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
+    native_dtos: bool,
 ) -> (Vec<String>, Vec<String>, String) {
     let fixture_id = &fixture.id;
     use heck::ToUpperCamelCase;
@@ -264,6 +342,22 @@ pub(super) fn build_args_and_setup(
                 "json_object" => {
                     let is_array = v.is_array();
                     let is_empty_obj = !is_array && v.is_object() && v.as_object().is_some_and(|o| o.is_empty());
+                    if native_dtos
+                        && !is_array
+                        && let Some(opts_type) = json_object_go_type(arg, options_type)
+                        && let Some(literal) = native_go_dto_literal(v, opts_type, import_alias, type_defs)
+                    {
+                        if literal.contains("ptr(")
+                            && !package_decls
+                                .iter()
+                                .any(|declaration| declaration.starts_with("func ptr["))
+                        {
+                            package_decls.push("func ptr[T any](value T) *T { return &value }".to_string());
+                        }
+                        setup_lines.push(format!("{} := {}", arg.name, literal.replace('\n', "\n\t")));
+                        parts.push(arg.name.clone());
+                        continue;
+                    }
                     if is_empty_obj {
                         if options_ptr {
                             parts.push("nil".to_string());

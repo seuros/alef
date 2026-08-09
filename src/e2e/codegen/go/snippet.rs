@@ -78,6 +78,7 @@ pub(super) fn render_snippet_body(
         config,
         type_defs,
         enums,
+        true,
     );
     if !recipe.extra_args.is_empty() {
         let extras = recipe.extra_args.join(", ");
@@ -171,7 +172,7 @@ fn snippet_setup_line(line: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::e2e::config::CallConfig;
+    use crate::e2e::config::{CallConfig, CallOverride};
 
     fn fixture() -> Fixture {
         Fixture {
@@ -283,5 +284,70 @@ mod tests {
                 .trim_end(),
             body
         );
+    }
+
+    #[test]
+    fn snippet_constructs_known_dto_without_json_round_trip() {
+        let mut fixture = fixture();
+        fixture.input = serde_json::json!({"payload": {"label": "sample"}, "config": {}});
+        let mut e2e = E2eConfig::default();
+        e2e.call.module = "example.com/sample".into();
+        e2e.call.function = "process".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.args = [
+            ("payload", "input.payload", "SampleInput"),
+            ("config", "input.config", "SampleConfig"),
+        ]
+        .into_iter()
+        .map(|(name, field, element_type)| crate::e2e::config::ArgMapping {
+            name: name.into(),
+            field: field.into(),
+            arg_type: "json_object".into(),
+            optional: false,
+            owned: false,
+            element_type: Some(element_type.into()),
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        })
+        .collect();
+        e2e.call.overrides.insert(
+            "go".into(),
+            CallOverride {
+                options_ptr: true,
+                ..CallOverride::default()
+            },
+        );
+        let body = render_snippet_body(
+            &fixture,
+            &e2e,
+            &ResolvedCrateConfig::default(),
+            &[
+                TypeDef {
+                    name: "SampleInput".into(),
+                    fields: vec![crate::core::ir::FieldDef {
+                        name: "label".into(),
+                        ty: crate::core::ir::TypeRef::String,
+                        ..Default::default()
+                    }],
+                    ..TypeDef::default()
+                },
+                TypeDef {
+                    name: "SampleConfig".into(),
+                    ..TypeDef::default()
+                },
+            ],
+            &[],
+        );
+
+        assert!(
+            body.contains("payload := pkg.SampleInput{\n\t\tLabel: `sample`,"),
+            "{body}"
+        );
+        assert!(body.contains("config := pkg.SampleConfig{}"), "{body}");
+        assert!(body.contains("pkg.Process(payload, config)"), "{body}");
+        assert!(!body.contains("pkg.Process(payload, nil)"), "{body}");
+        assert!(!body.contains("json.Unmarshal"), "{body}");
+        assert!(!body.contains("encoding/json"), "{body}");
     }
 }

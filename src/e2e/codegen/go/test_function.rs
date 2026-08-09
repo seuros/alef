@@ -203,6 +203,7 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
         config,
         type_defs,
         enums,
+        false,
     );
 
     for decl in &package_decls {

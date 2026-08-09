@@ -338,6 +338,11 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/typescript/globalSetup_server.ts.jinja"),
     ),
     ("go/snippet_body.jinja", include_str!("templates/go/snippet_body.jinja")),
+    ("go/dto_literal.jinja", include_str!("templates/go/dto_literal.jinja")),
+    (
+        "go/empty_dto_literal.jinja",
+        include_str!("templates/go/empty_dto_literal.jinja"),
+    ),
     (
         "python/http_test.jinja",
         include_str!("templates/python/http_test.jinja"),

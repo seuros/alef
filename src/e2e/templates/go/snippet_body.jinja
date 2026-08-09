@@ -5,7 +5,7 @@ package main{{ "\n\n" }}import (
 )
 
 {% for declaration in package_decls %}
-  {{- "\t" }}{{ declaration }}
+{{ declaration }}
 {% endfor %}
 func main() {
 {% for line in setup_lines %}

@@ -135,6 +135,7 @@ fn handle_config_deserialization_uses_resolved_options_type() {
         &crate::core::config::ResolvedCrateConfig::default(),
         &[],
         &[],
+        false,
     );
 
     let rendered = setup.join("\n");
