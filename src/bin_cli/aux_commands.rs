@@ -163,6 +163,44 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     tracing::info!("Generated {grand_count} e2e files");
                     Ok(None)
                 }
+                E2eAction::SnippetsMigrate {
+                    existing_root,
+                    lang,
+                    json,
+                } => {
+                    let snippet_config = e2e_config
+                        .snippets
+                        .as_ref()
+                        .context("no [e2e.snippets] section in alef.toml")?;
+                    let fixtures_dir = std::path::Path::new(&e2e_config.fixtures);
+                    let fixtures = crate::e2e::fixture::load_fixtures(fixtures_dir)
+                        .with_context(|| format!("failed to load fixtures from {}", fixtures_dir.display()))?;
+                    let api = pipeline::extract(resolved_cfg, config_path, false)?;
+                    let fallback_languages = if e2e_config.languages.is_empty() {
+                        crate::e2e::default_e2e_languages(&resolved_cfg.languages)
+                    } else {
+                        e2e_config.languages.clone()
+                    };
+                    let languages = lang
+                        .as_deref()
+                        .unwrap_or_else(|| snippet_config.languages_or(&fallback_languages));
+                    let generated = crate::e2e::snippets::generate_snippets(
+                        &fixtures,
+                        languages,
+                        e2e_config,
+                        snippet_config,
+                        resolved_cfg,
+                        &api.types,
+                        &api.enums,
+                    )?;
+                    let entries = crate::e2e::snippets::migration::compare_root(
+                        &existing_root,
+                        std::path::Path::new(&snippet_config.output),
+                        &generated,
+                    )?;
+                    write_snippet_migration_report(&entries, json)?;
+                    Ok(None)
+                }
                 E2eAction::Init => {
                     tracing::info!("Initializing e2e fixtures directory...");
                     let created = crate::e2e::scaffold::init_fixtures(e2e_config, resolved_cfg)?;
@@ -423,4 +461,24 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
         }
         other => Ok(Some(other)),
     }
+}
+
+fn write_snippet_migration_report(
+    entries: &[crate::e2e::snippets::migration::MigrationEntry],
+    json: bool,
+) -> Result<()> {
+    if json {
+        crate::bin_cli::output::payload(serde_json::to_string_pretty(entries)?);
+        return Ok(());
+    }
+    for entry in entries {
+        use crate::e2e::snippets::migration::MigrationStatus;
+        let status = match entry.status {
+            MigrationStatus::Identical => "identical",
+            MigrationStatus::Different => "different",
+            MigrationStatus::NoGeneratedEquivalent => "no_generated_equivalent",
+        };
+        crate::bin_cli::output::line(format_args!("{status}\t{}", entry.path.display()));
+    }
+    Ok(())
 }

@@ -31,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The CLI can compare handwritten snippets with fixture-generated equivalents without writing files.**
+  `alef e2e snippets-migrate <existing-root>` reports identical, different, and unmatched files in stable text or JSON.
+
 - **Fixture snippet generation can target an explicit subset of E2E languages.** Set
   `[crates.e2e.snippets].languages` to stage generated documentation alongside languages that
   remain handwritten; an empty list continues to inherit the E2E target list.

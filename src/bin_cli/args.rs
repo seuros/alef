@@ -427,6 +427,18 @@ pub(crate) enum E2eAction {
         #[arg(long)]
         registry: bool,
     },
+    /// Compare handwritten snippets with fixture-generated equivalents.
+    SnippetsMigrate {
+        /// Root directory containing the existing handwritten snippets.
+        #[arg(value_name = "EXISTING_ROOT")]
+        existing_root: PathBuf,
+        /// Comma-separated list of snippet languages (default: snippet or e2e config).
+        #[arg(long, value_delimiter = ',')]
+        lang: Option<Vec<String>>,
+        /// Output machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Initialize fixture directory with schema and example.
     Init,
     /// Scaffold a new fixture file.
@@ -490,4 +502,38 @@ pub(crate) enum ValidateAction {
         #[arg(long)]
         exit_code: bool,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_e2e_snippets_migrate_options() {
+        let cli = Cli::try_parse_from([
+            "alef",
+            "e2e",
+            "snippets-migrate",
+            "docs/handwritten",
+            "--lang",
+            "python,rust",
+            "--json",
+        ])
+        .expect("parse snippets migration command");
+
+        let Commands::E2e {
+            action:
+                E2eAction::SnippetsMigrate {
+                    existing_root,
+                    lang,
+                    json,
+                },
+        } = cli.command
+        else {
+            panic!("expected snippets migration command");
+        };
+        assert_eq!(existing_root, PathBuf::from("docs/handwritten"));
+        assert_eq!(lang, Some(vec!["python".into(), "rust".into()]));
+        assert!(json);
+    }
 }
