@@ -49,8 +49,8 @@ pub(crate) fn has_alef_self_referential_header(path: &Path) -> bool {
 /// when callers (e.g. `alef generate`) emit only a subset of categories: scaffold
 /// dirs that the current run did not touch are never visited, so untouched files
 /// in those dirs (e.g. user-customized package manifests) are preserved.
-pub fn cleanup_orphaned_files(current_gen_paths: &HashSet<PathBuf>) -> anyhow::Result<usize> {
-    if current_gen_paths.is_empty() {
+pub fn cleanup_orphaned_files(current_gen_paths: &HashSet<PathBuf>, owned_roots: &[PathBuf]) -> anyhow::Result<usize> {
+    if current_gen_paths.is_empty() || owned_roots.is_empty() {
         return Ok(0);
     }
 
@@ -63,6 +63,10 @@ pub fn cleanup_orphaned_files(current_gen_paths: &HashSet<PathBuf>) -> anyhow::R
         .iter()
         .filter_map(|p| p.parent().map(|d| d.canonicalize().unwrap_or_else(|_| d.to_path_buf())))
         .collect();
+    let normalized_roots: Vec<PathBuf> = owned_roots
+        .iter()
+        .map(|root| root.canonicalize().unwrap_or_else(|_| root.clone()))
+        .collect();
 
     let mut removed_count = 0;
     let mut visited_dirs: HashSet<PathBuf> = HashSet::new();
@@ -72,13 +76,19 @@ pub fn cleanup_orphaned_files(current_gen_paths: &HashSet<PathBuf>) -> anyhow::R
             continue;
         }
         let canonical_dir = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+        if !normalized_roots
+            .iter()
+            .any(|root| canonical_dir.starts_with(root) || root.starts_with(&canonical_dir))
+        {
+            continue;
+        }
         if !visited_dirs.insert(canonical_dir.clone()) {
             continue;
         }
         if has_dependency_cache_ancestor(&canonical_dir) {
             continue;
         }
-        removed_count += cleanup_dir_recursive(&canonical_dir, &normalized, &touched_dirs)?;
+        removed_count += cleanup_dir_recursive(&canonical_dir, &normalized, &touched_dirs, &normalized_roots)?;
     }
 
     Ok(removed_count)
@@ -137,6 +147,7 @@ fn cleanup_dir_recursive(
     dir: &Path,
     normalized_gen_paths: &HashSet<PathBuf>,
     touched_dirs: &BTreeSet<PathBuf>,
+    owned_roots: &[PathBuf],
 ) -> anyhow::Result<usize> {
     let mut removed_count = 0;
     for entry in fs::read_dir(dir)? {
@@ -148,11 +159,17 @@ fn cleanup_dir_recursive(
                 continue;
             }
             let canonical_sub = path.canonicalize().unwrap_or_else(|_| path.clone());
+            if !owned_roots
+                .iter()
+                .any(|root| canonical_sub.starts_with(root) || root.starts_with(&canonical_sub))
+            {
+                continue;
+            }
             let descend = touched_dirs
                 .iter()
                 .any(|td| td == &canonical_sub || td.starts_with(&canonical_sub) || canonical_sub.starts_with(td));
             if descend {
-                removed_count += cleanup_dir_recursive(&path, normalized_gen_paths, touched_dirs)?;
+                removed_count += cleanup_dir_recursive(&path, normalized_gen_paths, touched_dirs, owned_roots)?;
             }
             continue;
         }
@@ -163,6 +180,9 @@ fn cleanup_dir_recursive(
         }
 
         let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+        if !owned_roots.iter().any(|root| canonical_path.starts_with(root)) {
+            continue;
+        }
         if !normalized_gen_paths.contains(&canonical_path) {
             info!("Removing stale alef-generated file: {}", path.display());
             fs::remove_file(&path)?;
@@ -198,7 +218,7 @@ mod tests {
 
         let current_gen_paths = HashSet::from([current_file.clone()]);
 
-        let removed = cleanup_orphaned_files(&current_gen_paths).expect("cleanup");
+        let removed = cleanup_orphaned_files(&current_gen_paths, &[tempdir.path().to_path_buf()]).expect("cleanup");
 
         assert_eq!(removed, 1);
         assert!(current_file.exists());
@@ -225,7 +245,7 @@ mod tests {
         fs::write(&alef_file, format!("// alef:hash:{TEST_HASH}\npackage main\n")).expect("write alef file");
 
         let current_gen_paths = HashSet::from([alef_file.clone()]);
-        let removed = cleanup_orphaned_files(&current_gen_paths).expect("cleanup");
+        let removed = cleanup_orphaned_files(&current_gen_paths, &[tempdir.path().to_path_buf()]).expect("cleanup");
 
         assert_eq!(removed, 0, "vendored file without alef:hash must not be deleted");
         assert!(vendored.exists(), "vendored cgo header must survive");
@@ -285,7 +305,7 @@ mod tests {
         ));
 
         let current_gen_paths = HashSet::from([fresh.clone()]);
-        let removed = cleanup_orphaned_files(&current_gen_paths).expect("cleanup");
+        let removed = cleanup_orphaned_files(&current_gen_paths, &[tempdir.path().to_path_buf()]).expect("cleanup");
 
         assert_eq!(removed, 1, "stale file with alef header must be removed");
         assert!(!stale.exists(), "stale java file should be deleted");
@@ -319,7 +339,7 @@ mod tests {
         );
 
         let current_gen_paths = HashSet::from([alef_file.clone()]);
-        let removed = cleanup_orphaned_files(&current_gen_paths).expect("cleanup");
+        let removed = cleanup_orphaned_files(&current_gen_paths, &[tempdir.path().to_path_buf()]).expect("cleanup");
 
         assert_eq!(removed, 0, "cgo header must survive");
         assert!(cgo.exists(), "cgo header preserved");
@@ -363,7 +383,7 @@ mod tests {
         );
 
         let current_gen_paths = HashSet::from([alef_file.clone()]);
-        let removed = cleanup_orphaned_files(&current_gen_paths).expect("cleanup");
+        let removed = cleanup_orphaned_files(&current_gen_paths, &[tempdir.path().to_path_buf()]).expect("cleanup");
 
         assert_eq!(removed, 0, "descriptive yaml file must survive");
         assert!(descriptive.exists(), "descriptive file preserved");
@@ -401,7 +421,7 @@ mod tests {
         fs::write(&user_java, "// hand-written\npublic class UserCode {}\n").expect("write user java");
 
         let current_gen_paths = HashSet::from([build_gradle.clone(), bridge_kt.clone()]);
-        let removed = cleanup_orphaned_files(&current_gen_paths).expect("cleanup");
+        let removed = cleanup_orphaned_files(&current_gen_paths, &[tempdir.path().to_path_buf()]).expect("cleanup");
 
         assert_eq!(removed, 1, "exactly the alef-marked orphan must be removed");
         assert!(build_gradle.exists(), "current build.gradle.kts must survive");
@@ -431,7 +451,7 @@ mod tests {
         fs::write(&stale_sibling, format!("{alef_header}def test_legacy(): pass\n")).expect("write stale sibling");
 
         let current_gen_paths = HashSet::from([regen_test.clone()]);
-        let removed = cleanup_orphaned_files(&current_gen_paths).expect("cleanup");
+        let removed = cleanup_orphaned_files(&current_gen_paths, &[tempdir.path().to_path_buf()]).expect("cleanup");
 
         assert_eq!(removed, 0, "test_apps subtree must be skipped by the walker");
         assert!(regen_test.exists(), "regen test survives");
@@ -465,10 +485,38 @@ mod tests {
         fs::write(&new_name, new_content).expect("write new file");
 
         let current_gen_paths = HashSet::from([new_name.clone()]);
-        let removed = cleanup_orphaned_files(&current_gen_paths).expect("cleanup");
+        let removed = cleanup_orphaned_files(&current_gen_paths, &[tempdir.path().to_path_buf()]).expect("cleanup");
 
         assert_eq!(removed, 1, "exactly the old file must be removed");
         assert!(!old_name.exists(), "old SwiftPluginHelpers.swift must be removed");
         assert!(new_name.exists(), "new ZSwiftPluginHelpers.swift must survive");
+    }
+
+    #[test]
+    fn targeted_cleanup_preserves_other_language_outputs() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let swift_root = tempdir.path().join("packages/swift");
+        let java_root = tempdir.path().join("packages/java");
+        fs::create_dir_all(&swift_root).expect("create Swift root");
+        fs::create_dir_all(&java_root).expect("create Java root");
+
+        let alef_header = format!("// alef:hash:{TEST_HASH}\n");
+        let current_swift = swift_root.join("Bindings.swift");
+        let stale_swift = swift_root.join("OldBindings.swift");
+        let current_java = java_root.join("Bindings.java");
+        fs::write(&current_swift, format!("{alef_header}enum Bindings {{}}\n")).expect("write current Swift");
+        fs::write(&stale_swift, format!("{alef_header}enum OldBindings {{}}\n")).expect("write stale Swift");
+        fs::write(&current_java, format!("{alef_header}class Bindings {{}}\n")).expect("write current Java");
+
+        let root_generated_file = tempdir.path().join("README.md");
+        fs::write(&root_generated_file, format!("<!-- alef:hash:{TEST_HASH} -->\n")).expect("write root output");
+        let current_gen_paths = HashSet::from([current_swift.clone(), root_generated_file]);
+
+        let removed = cleanup_orphaned_files(&current_gen_paths, std::slice::from_ref(&swift_root)).expect("cleanup");
+
+        assert_eq!(removed, 1, "only the selected language orphan is removed");
+        assert!(current_swift.exists());
+        assert!(!stale_swift.exists());
+        assert!(current_java.exists(), "unselected language output must survive");
     }
 }

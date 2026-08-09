@@ -352,7 +352,8 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     current_gen_paths.insert(path);
                 }
 
-                if let Ok(removed) = pipeline::cleanup_orphaned_files(&current_gen_paths)
+                let cleanup_roots = pipeline::generate_sweep_roots(&languages, false, resolved_cfg, &base_dir);
+                if let Ok(removed) = pipeline::cleanup_orphaned_files(&current_gen_paths, &cleanup_roots)
                     && removed > 0
                 {
                     tracing::info!("Removed {removed} stale alef-generated file(s)");
@@ -362,11 +363,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     // `alef all` always processes the full language set (no `--lang` ~keep
                     // filter), so the sweep is unfiltered and reclaims orphans across the ~keep
                     // whole binding tree, including the conventional wasm/typescript roots. ~keep
-                    let roots: Vec<std::path::PathBuf> =
-                        pipeline::generate_sweep_roots(&languages, false, resolved_cfg, &base_dir)
-                            .into_iter()
-                            .filter(|d| d.exists())
-                            .collect();
+                    let roots: Vec<std::path::PathBuf> = cleanup_roots.into_iter().filter(|d| d.exists()).collect();
                     if let Ok(removed) = pipeline::sweep_orphans(&roots, &current_gen_paths)
                         && removed > 0
                     {
