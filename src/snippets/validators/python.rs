@@ -223,13 +223,19 @@ except SyntaxError as e:
     }
 
     fn is_dependency_error(&self, output: &str) -> bool {
-        output.contains("unexpected indent") || output.contains("was never closed")
+        let _ = output;
+        false
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::PythonValidator;
+    use crate::snippets::types::{
+        Language, Snippet, SnippetMetadata, SnippetStatus, SourceOrigin, ValidationLevel,
+    };
+    use crate::snippets::validators::SnippetValidator;
+    use std::path::PathBuf;
 
     #[test]
     fn preserves_multiline_async_signature_lines() {
@@ -244,5 +250,31 @@ mod tests {
         let patched = PythonValidator::patch_code(code);
         assert!(patched.contains(") -> CreateUsersResponse:"));
         assert!(patched.contains("created_users = []"));
+    }
+
+    #[test]
+    fn syntax_validation_rejects_malformed_imports_and_indentation() {
+        let path = PathBuf::from("broken.py");
+        let snippet = Snippet {
+            id: None,
+            path: path.clone(),
+            language: Language::Python,
+            title: None,
+            code: "from sample import call    from sample.types import Request\n  result = call()".into(),
+            start_line: 1,
+            block_index: 0,
+            annotation: None,
+            metadata: SnippetMetadata::default(),
+            source_origin: SourceOrigin {
+                path,
+                line: 1,
+                block_index: 0,
+            },
+        };
+
+        let (status, _) = PythonValidator
+            .validate(&snippet, ValidationLevel::Syntax, 10)
+            .expect("syntax validator runs");
+        assert_eq!(status, SnippetStatus::Fail);
     }
 }

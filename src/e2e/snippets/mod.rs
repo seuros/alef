@@ -364,7 +364,9 @@ fn render_snippet(model: &FixtureCallModel, fixture: &Fixture, docs: &FixtureDoc
 }
 
 fn should_render_argument(argument: &FixtureCallArgument) -> bool {
-    !argument.optional || !argument.value.is_null()
+    matches!(argument.arg_type.as_str(), "mock_url" | "mock_url_list")
+        || !argument.optional
+        || !argument.value.is_null()
 }
 
 fn render_argument(
@@ -482,11 +484,17 @@ fn render_options(
             if language != Language::Python {
                 return format!("{key}={}", render_literal(value, language));
             }
-            let enum_type = enum_fields.get(key);
+            let python_name = crate::codegen::naming::to_python_name(key);
+            let enum_type = enum_fields.get(key).or_else(|| {
+                enum_fields
+                    .iter()
+                    .find(|(configured, _)| crate::codegen::naming::to_python_name(configured) == python_name)
+                    .map(|(_, enum_type)| enum_type)
+            });
             crate::e2e::template_env::render(
                 "snippets/python_option_field.jinja",
                 minijinja::context! {
-                    name => crate::codegen::naming::to_python_name(key),
+                    name => python_name,
                     value => render_literal(value, language), enum_type => enum_type,
                 },
             )
@@ -778,8 +786,8 @@ mod tests {
                 FixtureCallArgument {
                     name: "url".into(),
                     arg_type: "mock_url".into(),
-                    optional: false,
-                    value: fixture.input["url"].clone(),
+                    optional: true,
+                    value: serde_json::Value::Null,
                 },
             ],
             module: "sample".into(),

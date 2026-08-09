@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated Python snippets now preserve top-level indentation and import boundaries, retain
+  synthetic optional mock-server URL arguments, and fail syntax validation instead of treating
+  indentation/parser errors as missing dependencies.
+
 - Render fixture-driven documentation snippets with setup calls, imports, recipe-aware options and enum constructors,
   omitted absent optionals, client factories, mock-server URLs, Python handle constructors, valid Python/Ruby/Rust JSON
   literals, Rust async calls, side-effect frontmatter, whole-input arguments, and Rust/C language aliases.
