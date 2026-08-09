@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Poly scaffolding now merges Alef defaults into an existing `poly.toml`, preserving custom tables, rules, excludes,
+  and comments across clean regeneration while keeping repeated scaffold passes idempotent.
+
 - Fixture documentation now supports typed input and argument overrides plus structured result presentation, allowing
   backend-owned snippets to render idiomatic field display and collection iteration without embedding language code.
 

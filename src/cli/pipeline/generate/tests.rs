@@ -62,6 +62,81 @@ mod write_scaffold_normalize_tests {
         assert!(written.ends_with('\n'));
     }
 
+    #[test]
+    fn poly_scaffold_merges_generated_defaults_without_deleting_user_policy() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let existing = r#"# Project policy. ~keep
+[lint.python.ruff]
+ignore = ["PT027", "S105"]
+
+[per-file-ignores]
+"tools/**" = ["S105"]
+
+[hooks.builtin]
+file_safety = { exclude = ["bindings/manual.rs"] }
+
+[project-policy]
+owner = "maintainers"
+"#;
+        std::fs::write(base.join("poly.toml"), existing).expect("write existing config");
+        let generated = GeneratedFile {
+            path: PathBuf::from("poly.toml"),
+            content: r#"[lint.python.ruff]
+ignore = ["F401"]
+
+[per-file-ignores]
+"tests/**" = ["S101"]
+
+[hooks.builtin]
+file_safety = { exclude = ["target/**"] }
+"#
+            .into(),
+            generated_header: true,
+        };
+
+        write_scaffold_files_with_overwrite(&[generated], base, true).expect("merge poly config");
+        let merged = std::fs::read_to_string(base.join("poly.toml")).expect("read merged config");
+        let parsed = merged.parse::<toml_edit::DocumentMut>().expect("merged TOML parses");
+
+        assert!(merged.contains("# Project policy. ~keep"), "{merged}");
+        assert_eq!(parsed["project-policy"]["owner"].as_str(), Some("maintainers"));
+        assert!(parsed["per-file-ignores"]["tools/**"].is_value());
+        assert!(parsed["per-file-ignores"]["tests/**"].is_value());
+        let ruff_ignores = parsed["lint"]["python"]["ruff"]["ignore"]
+            .as_array()
+            .expect("ruff ignore array");
+        assert!(ruff_ignores.iter().any(|value| value.as_str() == Some("PT027")));
+        assert!(ruff_ignores.iter().any(|value| value.as_str() == Some("S105")));
+        assert!(ruff_ignores.iter().any(|value| value.as_str() == Some("F401")));
+        let file_safety = parsed["hooks"]["builtin"]["file_safety"]["exclude"]
+            .as_array()
+            .expect("file safety excludes");
+        assert!(
+            file_safety
+                .iter()
+                .any(|value| value.as_str() == Some("bindings/manual.rs"))
+        );
+        assert!(file_safety.iter().any(|value| value.as_str() == Some("target/**")));
+
+        let generated_again = GeneratedFile {
+            path: PathBuf::from("poly.toml"),
+            content: r#"[lint.python.ruff]
+ignore = ["F401"]
+
+[per-file-ignores]
+"tests/**" = ["S101"]
+
+[hooks.builtin]
+file_safety = { exclude = ["target/**"] }
+"#
+            .into(),
+            generated_header: true,
+        };
+        let count = write_scaffold_files_with_overwrite(&[generated_again], base, true).expect("repeat merge");
+        assert_eq!(count, 0, "merged poly config must converge on a second scaffold pass");
+    }
+
     /// `normalize_content` must strip trailing whitespace from `.rs` files even
     /// when rustfmt rejects them — e.g. cextendr `lib.rs` files use the
     /// `name: T = "default"` parameter-default syntax that rustfmt cannot

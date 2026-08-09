@@ -114,7 +114,15 @@ pub fn write_scaffold_files_with_overwrite(
             debug!("  wrote (binary): {}", full_path.display());
             continue;
         }
-        let normalized = normalize_content(&full_path, &file.content);
+        let content = if file.path == Path::new(POLY_CONFIG) && full_path.exists() {
+            let existing = std::fs::read_to_string(&full_path)
+                .with_context(|| format!("failed to read existing {}", full_path.display()))?;
+            merge_poly_config(&existing, &file.content)
+                .with_context(|| format!("failed to merge existing {}", full_path.display()))?
+        } else {
+            file.content.clone()
+        };
+        let normalized = normalize_content(&full_path, &content);
         if let Ok(existing) = std::fs::read_to_string(&full_path) {
             let existing_body = crate::core::hash::strip_hash_line(&existing);
             let normalized_body = crate::core::hash::strip_hash_line(&normalized);
@@ -138,6 +146,89 @@ pub fn write_scaffold_files_with_overwrite(
 
 /// Repo-root poly config, emitted by the scaffold pass.
 const POLY_CONFIG: &str = "poly.toml";
+
+fn merge_poly_config(existing: &str, generated: &str) -> anyhow::Result<String> {
+    let mut existing_doc = existing.parse::<toml_edit::DocumentMut>()?;
+    let generated_doc = generated.parse::<toml_edit::DocumentMut>()?;
+    merge_tables(existing_doc.as_table_mut(), generated_doc.as_table());
+    Ok(existing_doc.to_string())
+}
+
+fn merge_tables(existing: &mut toml_edit::Table, generated: &toml_edit::Table) {
+    for (key, generated_item) in generated {
+        match existing.get_mut(key) {
+            Some(existing_item) => merge_items(existing_item, generated_item),
+            None => {
+                existing.insert(key, detached_item(generated_item.clone()));
+            }
+        }
+    }
+}
+
+fn merge_items(existing: &mut toml_edit::Item, generated: &toml_edit::Item) {
+    match (existing, generated) {
+        (toml_edit::Item::Table(existing), toml_edit::Item::Table(generated)) => {
+            merge_tables(existing, generated);
+        }
+        (toml_edit::Item::Value(existing), toml_edit::Item::Value(generated)) => {
+            merge_values(existing, generated);
+        }
+        (existing, generated) => *existing = detached_item(generated.clone()),
+    }
+}
+
+fn merge_values(existing: &mut toml_edit::Value, generated: &toml_edit::Value) {
+    match (existing, generated) {
+        (toml_edit::Value::Array(existing), toml_edit::Value::Array(generated)) => {
+            for value in generated.iter() {
+                let generated_value = value.to_string();
+                if !existing
+                    .iter()
+                    .any(|candidate| candidate.to_string().trim() == generated_value.trim())
+                {
+                    existing.push(value.clone());
+                }
+            }
+        }
+        (toml_edit::Value::InlineTable(existing), toml_edit::Value::InlineTable(generated)) => {
+            for (key, generated_value) in generated.iter() {
+                match existing.get_mut(key) {
+                    Some(existing_value) => merge_values(existing_value, generated_value),
+                    None => {
+                        existing.insert(key, generated_value.clone());
+                    }
+                }
+            }
+        }
+        (existing, generated) => {
+            let decor = existing.decor().clone();
+            *existing = generated.clone();
+            *existing.decor_mut() = decor;
+        }
+    }
+}
+
+fn detached_item(mut item: toml_edit::Item) -> toml_edit::Item {
+    match &mut item {
+        toml_edit::Item::Value(value) => value.decor_mut().clear(),
+        toml_edit::Item::Table(table) => {
+            table.set_position(None);
+            let keys = table.iter().map(|(key, _)| key.to_string()).collect::<Vec<_>>();
+            for key in keys {
+                if let Some(child) = table.remove(&key) {
+                    table.insert(&key, detached_item(child));
+                }
+            }
+        }
+        toml_edit::Item::ArrayOfTables(tables) => {
+            for table in tables.iter_mut() {
+                table.set_position(None);
+            }
+        }
+        toml_edit::Item::None => {}
+    }
+    item
+}
 
 /// Hand `poly.toml` to poly immediately after writing it.
 ///
