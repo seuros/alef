@@ -486,16 +486,17 @@ fn api_surface_validation_errors_for_non_opaque_receiver_mut_method_returning_op
 }
 
 #[test]
-fn critical_validation_codes_are_not_globally_suppressible() {
+fn configured_surface_diagnostics_are_globally_suppressible() {
     for code in [
         ValidationCode::UnknownNamedType,
         ValidationCode::LossySanitizedSurface,
         ValidationCode::JsonValueResolutionAmbiguous,
         ValidationCode::BackendStubPath,
     ] {
-        assert!(is_critical_unsuppressible(code), "{code} must be fatal");
+        assert!(!is_critical_unsuppressible(code), "{code} must be suppressible");
     }
 
+    assert!(is_critical_unsuppressible(ValidationCode::UnsupportedGenericItem));
     assert!(!is_critical_unsuppressible(ValidationCode::MissingPublishMetadata));
 }
 

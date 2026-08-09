@@ -1,6 +1,8 @@
 <?php
 
 use {{ namespace }}\{{ class_name }};
+{% for type_name in imported_types %}use {{ namespace }}\{{ type_name }};
+{% endfor %}
 {% for line in setup_lines %}
 {{ line }}
 {% endfor %}

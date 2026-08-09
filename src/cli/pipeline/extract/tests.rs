@@ -241,6 +241,32 @@ fn validate_extracted_api_does_not_suppress_critical_codes() {
     );
 }
 
+#[test]
+fn validate_extracted_api_honors_configured_surface_suppressions() {
+    let api = ApiSurface {
+        crate_name: "sample-lib".to_string(),
+        functions: vec![crate::core::ir::FunctionDef {
+            name: "render".to_string(),
+            rust_path: "sample_lib::render".to_string(),
+            original_rust_path: String::new(),
+            params: vec![crate::core::ir::ParamDef {
+                name: "payload".to_string(),
+                ty: TypeRef::Named("MissingPayload".to_string()),
+                ..crate::core::ir::ParamDef::default()
+            }],
+            return_type: TypeRef::String,
+            ..crate::core::ir::FunctionDef::default()
+        }],
+        ..ApiSurface::default()
+    };
+    let config = ResolvedCrateConfig {
+        suppress_validation_codes: vec!["unknown_named_type".to_string()],
+        ..ResolvedCrateConfig::default()
+    };
+
+    validate_extracted_api(&api, &config).expect("configured diagnostic should be suppressed");
+}
+
 /// Plain (no-`::`) entries match by short name only.
 #[test]
 fn is_type_excluded_plain_entry_matches_by_name() {

@@ -117,6 +117,7 @@ pub(super) fn render_snippet_body(
             .any(|arg| matches!(arg.arg_type.as_str(), "json_object" | "bytes"))
         || client_factory.is_some();
     let mut standard_imports = std::collections::BTreeSet::new();
+    let setup_lines: Vec<String> = setup_lines.into_iter().map(snippet_setup_line).collect();
     let joined_setup = setup_lines.join("\n");
     if joined_setup.contains("os.") {
         standard_imports.insert("os");
@@ -137,6 +138,19 @@ pub(super) fn render_snippet_body(
             returns_void => call.returns_void,
         },
     )
+}
+
+fn snippet_setup_line(line: String) -> String {
+    line.lines()
+        .map(|part| {
+            if part.contains("t.Fatalf(") {
+                format!("{})", part.replace("t.Fatalf(", "panic(fmt.Sprintf("))
+            } else {
+                part.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
@@ -185,5 +199,13 @@ mod tests {
         assert!(body.contains("document, err := pkg.LoadDocument()"));
         assert!(!body.contains("testing"));
         assert!(!body.contains("assert."));
+    }
+
+    #[test]
+    fn snippet_replaces_testing_failures_in_typed_setup() {
+        assert_eq!(
+            snippet_setup_line("if err != nil {\n\tt.Fatalf(\"decode: %v\", err)\n}".into()),
+            "if err != nil {\n\tpanic(fmt.Sprintf(\"decode: %v\", err))\n}"
+        );
     }
 }

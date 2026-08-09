@@ -1,4 +1,8 @@
+{% if needs_json %}import 'dart:convert';
+{% endif %}
 import 'package:{{ package }}/{{ module }}.dart';
+Future<void> main() async {
 {% for statement in statements %}
-{{ statement }}
+  {{ statement }}
 {% endfor %}
+}

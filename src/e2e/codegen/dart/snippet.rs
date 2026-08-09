@@ -43,10 +43,13 @@ pub(super) fn render_snippet_body(
         .and_then(|value| value.name)
         .unwrap_or_else(|| config.dart_pubspec_name());
     let module = config.name.replace('-', "_");
+    let needs_json = statements
+        .iter()
+        .any(|statement| statement.contains("jsonDecode(") || statement.contains("jsonEncode("));
     Ok(crate::e2e::template_env::render(
         "dart/snippet_body.jinja",
         minijinja::context! {
-            package => package, module => module, statements => statements,
+            package => package, module => module, statements => statements, needs_json => needs_json,
         },
     ))
 }
@@ -87,6 +90,7 @@ mod tests {
         e2e.call.function = "load_document".into();
         let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[]).unwrap();
         assert!(body.contains("loadDocument()"));
+        assert!(body.contains("Future<void> main() async"));
         assert!(!body.contains("test("));
         assert!(!body.contains("expect("));
     }

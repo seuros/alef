@@ -85,6 +85,7 @@ pub(super) fn render_snippet_body(
         || ["register_", "unregister_", "clear_"]
             .iter()
             .any(|prefix| call.function.starts_with(prefix));
+    let needs_json = setup_lines.iter().any(|line| line.contains("JsonSerializer")) || args.contains("JsonSerializer");
 
     crate::e2e::template_env::render(
         "csharp/snippet_body.jinja",
@@ -98,6 +99,7 @@ pub(super) fn render_snippet_body(
             result_var => call.result_var,
             returns_void => returns_void,
             is_async => is_async,
+            needs_json => needs_json,
             fixture_id => fixture.id,
         },
     )
@@ -139,6 +141,7 @@ mod tests {
         );
 
         assert!(body.contains("await SampleCoreConverter.LoadDocumentAsync()"));
+        assert!(body.contains("using System.Collections.Generic;"));
         assert!(!body.contains("[Fact]"));
         assert!(!body.contains("Assert."));
     }

@@ -124,6 +124,7 @@ mod tests {
         );
 
         assert!(body.contains("DocumentApi.loadDocument()"));
+        assert!(body.contains("public static void main(String[] args) throws Exception"));
         assert!(!body.contains("@Test"));
         assert!(!body.contains("assert"));
     }

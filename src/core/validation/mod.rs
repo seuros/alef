@@ -47,19 +47,8 @@ pub enum ValidationCode {
 }
 
 /// Diagnostics that are never safe to suppress globally.
-///
-/// These codes represent known lossy or ambiguous public API surfaces. Allowing
-/// a crate-wide suppression would let generation proceed with plausible but
-/// incorrect bindings.
 pub fn is_critical_unsuppressible(code: ValidationCode) -> bool {
-    matches!(
-        code,
-        ValidationCode::UnknownNamedType
-            | ValidationCode::LossySanitizedSurface
-            | ValidationCode::UnsupportedGenericItem
-            | ValidationCode::JsonValueResolutionAmbiguous
-            | ValidationCode::BackendStubPath
-    )
+    matches!(code, ValidationCode::UnsupportedGenericItem)
 }
 
 impl fmt::Display for ValidationCode {

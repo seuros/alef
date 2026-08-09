@@ -128,12 +128,22 @@ pub(super) fn render_snippet_body(
     let is_streaming =
         crate::e2e::codegen::streaming_assertions::resolve_is_streaming(fixture, call.streaming_enabled());
     let client_factory = override_config.and_then(|value| value.client_factory.as_deref());
+    let mut imported_types = type_defs
+        .iter()
+        .filter(|type_def| {
+            let name = &type_def.name;
+            name != &class_name && (setup_lines.iter().any(|line| line.contains(name)) || args.contains(name))
+        })
+        .map(|type_def| type_def.name.as_str())
+        .collect::<Vec<_>>();
+    imported_types.sort_unstable();
+    imported_types.dedup();
     Ok(crate::e2e::template_env::render(
         "php/snippet_body.jinja",
         minijinja::context! {
             namespace => namespace, class_name => class_name, setup_lines => setup_lines,
             client_factory => client_factory, call_expr => call_expr, result_var => call.result_var,
-            returns_void => call.returns_void, is_streaming => is_streaming,
+            returns_void => call.returns_void, is_streaming => is_streaming, imported_types => imported_types,
         },
     ))
 }

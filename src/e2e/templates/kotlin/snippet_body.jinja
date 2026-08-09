@@ -1,15 +1,18 @@
-import {{ package_name }}.{{ class_name }}
+import {{ package_name }}.*
 {% if needs_mapper %}import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+{% endif %}
 
-val MAPPER = jacksonObjectMapper()
-{% endif %}{% if is_async %}kotlinx.coroutines.runBlocking {
-{% endif %}{% for line in setup_lines %}    {{ line }}
-{% endfor %}{% if client_factory %}    val baseUrl = (System.getenv("MOCK_SERVER_URL") ?: "") + "/fixtures/{{ fixture_id }}"
+fun main() {% if is_async %}= kotlinx.coroutines.runBlocking {% endif %}{
+{% if needs_mapper %}    val MAPPER = jacksonObjectMapper()
+{% endif %}
+{% for line in setup_lines %}    {{ line }}
+{% endfor %}
+{% if client_factory %}    val baseUrl = (System.getenv("MOCK_SERVER_URL") ?: "") + "/fixtures/{{ fixture_id }}"
     val client = {{ class_name }}.{{ client_factory }}(apiKey = "test-key", baseUrl = baseUrl)
 {% if returns_void %}    client.{{ function_name }}({{ args }})
 {% else %}    val {{ result_var }} = client.{{ function_name }}({{ args }})
 {% endif %}    client.close()
 {% elif returns_void %}    {{ class_name }}.{{ function_name }}({{ args }})
 {% else %}    val {{ result_var }} = {{ class_name }}.{{ function_name }}({{ args }})
-{% endif %}{% if is_async %}}
 {% endif %}
+}
