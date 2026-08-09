@@ -10,7 +10,7 @@
 use crate::backends::swift::gen_rust_crate::default_construction::{
     emit_default_construction_body, emit_direct_field_inits,
 };
-use crate::backends::swift::gen_rust_crate::extern_block::constructor_fields;
+use crate::backends::swift::gen_rust_crate::extern_block::{constructor_fields, has_constructor_extern};
 use crate::backends::swift::gen_rust_crate::type_bridge::{bridge_type, needs_json_bridge};
 use crate::codegen::generators::type_paths::resolve_type_path;
 use crate::core::ir::{TypeDef, TypeRef};
@@ -89,7 +89,7 @@ pub(crate) fn emit_type_wrapper(
                     .iter()
                     .any(|f| needs_json_bridge(&f.ty) || matches!(f.ty, TypeRef::Named(_))));
 
-        if needs_default_construction && !ty.has_default {
+        if !has_constructor_extern(ty, exclude_fields, configured_features) {
         } else {
             if !needs_default_construction && ty.has_default {
                 out.push_str("    #[allow(clippy::needless_update)]\n");

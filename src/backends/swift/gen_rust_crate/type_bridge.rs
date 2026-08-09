@@ -96,6 +96,10 @@ pub(crate) fn needs_json_bridge(ty: &TypeRef) -> bool {
     }
 }
 
+pub(crate) fn field_needs_json_bridge(ty: &TypeRef, optional: bool) -> bool {
+    needs_json_bridge(ty) || optional && matches!(ty, TypeRef::Vec(_))
+}
+
 /// Returns true when `ty` produces a token-stream representation with no angle brackets,
 /// i.e. it is safe as the inner type of a `Vec<T>` in a swift-bridge extern block.
 pub(crate) fn is_bridge_leaf(ty: &TypeRef) -> bool {

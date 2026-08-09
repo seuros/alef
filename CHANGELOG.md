@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Swift optional-vector fields now use the JSON bridge instead of emitting `Option<Vec<T>>`, which swift-bridge
+  0.1.59 cannot parse.
+
 - Fixture extensions can now render protocol documentation recipes from typed AsyncAPI operations and WebSocket
   sessions. Documentation generation no longer inherits E2E harness skip directives.
 

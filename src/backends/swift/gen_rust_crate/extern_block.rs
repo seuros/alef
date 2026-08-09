@@ -49,6 +49,12 @@ pub(crate) fn has_constructor_extern(
     if fields.is_empty() {
         return false;
     }
+    if fields
+        .iter()
+        .any(|field| super::type_bridge::field_needs_json_bridge(&field.ty, field.optional))
+    {
+        return false;
+    }
     let all_primitive_fields = fields.iter().all(|f| matches!(f.ty, TypeRef::Primitive(_)));
     if all_primitive_fields {
         return true;
@@ -133,7 +139,9 @@ pub(crate) fn emit_extern_block_for_type(
         let enum_set: HashSet<&str> = enum_names.iter().map(|s| s.as_str()).collect();
         let bridge_ty =
             bridge_type_enum_and_serde_struct_aware(&field.ty, &enum_set, no_serde_names, parent_first_class);
-        let bridge_ty = if field.optional && !needs_json_bridge(&field.ty) {
+        let bridge_ty = if super::type_bridge::field_needs_json_bridge(&field.ty, field.optional) {
+            "String".to_string()
+        } else if field.optional {
             if is_vec_of_enum(&field.ty, &enum_set)
                 || (parent_first_class
                     && matches!(&field.ty, TypeRef::Vec(inner) if matches!(inner.as_ref(), TypeRef::Named(n) if !no_serde_names.contains(n.as_str())))

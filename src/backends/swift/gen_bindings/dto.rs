@@ -218,6 +218,13 @@ pub(super) fn emit_first_class_struct(
                 let swift_ty = mapper.map_type(&field.ty);
                 format!("try JSONDecoder().decode({swift_ty}.self, from: Data(\"null\".utf8))")
             }
+        } else if field.optional && matches!(field.ty, TypeRef::Vec(_)) {
+            let swift_ty = mapper.map_type(&field.ty);
+            let accessor_with_chain = format!("rb.{rust_accessor}().toString()");
+            format!(
+                "try JSONDecoder().decode({swift_ty}?.self, from: \
+                 (({accessor_with_chain}).data(using: .utf8) ?? Data(\"null\".utf8)))"
+            )
         } else if is_vec_of_serde_struct(&field.ty, serde_struct_names) {
             let swift_ty = mapper.map_type(&field.ty);
             let swift_ty_with_opt = if is_optional && !matches!(&field.ty, TypeRef::Optional(_)) {

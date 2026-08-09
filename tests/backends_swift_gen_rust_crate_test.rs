@@ -836,13 +836,9 @@ fn lib_rs_struct_with_tagged_enum_field_serializes_to_json() {
     );
 }
 
-/// Regression: an `Option<Vec<serde-struct>>` getter on an OPAQUE (non-first-class) parent must ~keep
-/// return a real `Option<Vec<Elem>>`, matching the constructor param and the opaque element ~keep
-/// accessors — not collapse the whole vec to a JSON `String`. The JSON degradation is correct only ~keep
-/// for first-class Codable parents; here `Article` is opaque (a `Map` field forces it), so ~keep
-/// `sections()` must expose the vec. ~keep
+/// swift-bridge 0.1.59 cannot parse `Option<Vec<T>>`, so optional vectors use JSON at the boundary. ~keep
 #[test]
-fn optional_vec_of_serde_struct_getter_on_opaque_parent_returns_vec_not_string() {
+fn optional_vec_of_serde_struct_getter_on_opaque_parent_uses_json_bridge() {
     let section = {
         let mut t = make_type("Section", vec![make_field("text", TypeRef::String)]);
         t.has_serde = true;
@@ -883,13 +879,13 @@ fn optional_vec_of_serde_struct_getter_on_opaque_parent_returns_vec_not_string()
     let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
 
     assert!(
-        lib.content.contains("fn sections(&self) -> Option<Vec<Section>>;"),
-        "opaque-parent optional vec-of-serde-struct getter must declare Option<Vec<Section>>: {}",
+        lib.content.contains("fn sections(&self) -> String;"),
+        "optional vec getter must use the parseable JSON bridge: {}",
         lib.content
     );
     assert!(
-        !lib.content.contains("fn sections(&self) -> String;"),
-        "opaque-parent getter must not JSON-degrade the vec to String: {}",
+        !lib.content.contains("Option<Vec<Section>>"),
+        "swift-bridge cannot parse nested optional vectors: {}",
         lib.content
     );
 }

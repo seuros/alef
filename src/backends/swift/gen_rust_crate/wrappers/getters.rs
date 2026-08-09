@@ -8,7 +8,7 @@
 //! Enum wrappers live in `enums.rs`.
 
 use crate::backends::swift::gen_rust_crate::type_bridge::{
-    bridge_type_enum_aware_ref, is_enum_named, is_vec_of_enum, needs_json_bridge,
+    bridge_type_enum_aware_ref, field_needs_json_bridge, is_enum_named, is_vec_of_enum, needs_json_bridge,
 };
 use crate::core::ir::{CoreWrapper, FieldDef, TypeDef, TypeRef};
 use crate::core::keywords::swift_ident;
@@ -97,7 +97,9 @@ pub(super) fn emit_getters(
     let parent_first_class = first_class_names.contains(ty.name.as_str());
     for field in &ty.fields {
         let bridge_ty = bridge_type_enum_aware_ref(&field.ty, enum_names);
-        let bridge_ty_owned = if field.optional && !needs_json_bridge(&field.ty) {
+        let bridge_ty_owned = if field_needs_json_bridge(&field.ty, field.optional) {
+            "String".to_string()
+        } else if field.optional {
             if is_vec_of_enum(&field.ty, enum_names) {
                 "String".to_string()
             } else {
@@ -132,7 +134,7 @@ pub(super) fn emit_getters(
             getter_name,
             bridge_ty_owned,
         };
-        if needs_json_bridge(&field.ty) {
+        if field_needs_json_bridge(&field.ty, field.optional) {
             out.push_str(&crate::backends::swift::template_env::render(
                 "getter_json_bridge.jinja",
                 minijinja::context! {
