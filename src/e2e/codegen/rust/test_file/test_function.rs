@@ -479,7 +479,7 @@ pub fn render_test_function(
     // collected list in `chunks`.  Non-streaming fixtures use result_var / `_`.
     let result_binding = if is_streaming {
         stream_var.to_string()
-    } else if has_usable_assertion {
+    } else if has_usable_assertion || fixture.has_docs_presentation() {
         result_var.to_string()
     } else {
         "_".to_string()

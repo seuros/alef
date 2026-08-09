@@ -8,7 +8,10 @@ use std::path::Path;
 
 mod metadata;
 mod protocol;
-pub use metadata::{FixtureDocs, FixtureEnv, SetupCall, SideEffectClass, SnippetCoverageException, TemplateReturnForm};
+pub use metadata::{
+    FixtureDocs, FixtureDocsOperation, FixtureDocsPresentation, FixtureEnv, SetupCall, SideEffectClass,
+    SnippetCoverageException, TemplateReturnForm,
+};
 pub use protocol::{
     AsyncApiFixture, WebSocketFixture, WebSocketFrameType, WebSocketHandler, WebSocketMessage,
     WebSocketMessageDirection, WebSocketSession,
@@ -388,6 +391,26 @@ impl Default for Fixture {
 }
 
 impl Fixture {
+    pub fn docs_call_fixture(&self) -> Self {
+        let mut fixture = self.clone();
+        if let Some(presentation) = self.docs.as_ref().and_then(|docs| docs.presentation.as_ref()) {
+            if let Some(input) = &presentation.input {
+                fixture.input = input.clone();
+            }
+            if let Some(args) = &presentation.args {
+                fixture.args = args.clone();
+            }
+        }
+        fixture
+    }
+
+    pub fn has_docs_presentation(&self) -> bool {
+        self.docs
+            .as_ref()
+            .and_then(|docs| docs.presentation.as_ref())
+            .is_some_and(|presentation| !presentation.operations.is_empty())
+    }
+
     /// Resolve the effective args for this fixture, preferring fixture-level args when present.
     ///
     /// When `self.args` is non-empty, returns a reference to it. Otherwise, returns

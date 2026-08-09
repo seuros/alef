@@ -195,7 +195,7 @@ impl E2eCodegen for RustE2eCodegen {
         _enums: &[crate::core::ir::EnumDef],
     ) -> Result<String> {
         let dep_name = resolve_crate_name(e2e_config, config).replace('-', "_");
-        let mut call_fixture = fixture.clone();
+        let mut call_fixture = fixture.docs_call_fixture();
         call_fixture.assertions.clear();
         let test_file = render_test_file(
             &fixture.resolved_category(),
@@ -207,9 +207,12 @@ impl E2eCodegen for RustE2eCodegen {
             fixture.needs_mock_server(),
         );
         let (imports, body, is_async) = extract_rust_snippet(&test_file)?;
+        let presentation = super::presentation::resolve(&call_fixture, e2e_config, "rust");
         Ok(crate::e2e::template_env::render(
             "rust/snippet_body.rs.jinja",
-            minijinja::context! { imports => imports, body => body, is_async => is_async },
+            minijinja::context! {
+                imports => imports, body => body, is_async => is_async, presentation => presentation,
+            },
         ))
     }
 

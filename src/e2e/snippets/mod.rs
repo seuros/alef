@@ -563,6 +563,7 @@ mod tests {
                 paths: BTreeMap::new(),
                 title: None,
                 description: None,
+                presentation: None,
                 side_effects: SideEffectClass::Safe,
                 coverage_exceptions: BTreeMap::new(),
             }),
@@ -593,6 +594,7 @@ mod tests {
             paths: BTreeMap::new(),
             title: None,
             description: None,
+            presentation: None,
             side_effects: Default::default(),
             coverage_exceptions: BTreeMap::new(),
         };
@@ -628,6 +630,7 @@ mod tests {
             paths: BTreeMap::from([("node".into(), "config/basic_usage.md".into())]),
             title: None,
             description: None,
+            presentation: None,
             side_effects: Default::default(),
             coverage_exceptions: BTreeMap::new(),
         };
@@ -680,6 +683,7 @@ mod tests {
             paths: BTreeMap::new(),
             title: None,
             description: None,
+            presentation: None,
             side_effects: SideEffectClass::Safe,
             coverage_exceptions: BTreeMap::new(),
         };
@@ -746,6 +750,7 @@ mod tests {
             paths: BTreeMap::new(),
             title: Some("Example".into()),
             description: None,
+            presentation: None,
             side_effects: SideEffectClass::Network,
             coverage_exceptions: BTreeMap::new(),
         };

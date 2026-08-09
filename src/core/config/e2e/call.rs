@@ -240,7 +240,7 @@ pub struct StreamingRecipe {
 }
 
 /// Maps a fixture input field to a function argument.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ArgMapping {
     /// Argument name in the function signature.
     pub name: String,

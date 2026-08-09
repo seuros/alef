@@ -142,7 +142,7 @@ impl super::E2eCodegen for PythonE2eCodegen {
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
     ) -> Result<String> {
-        let mut call_fixture = fixture.clone();
+        let mut call_fixture = fixture.docs_call_fixture();
         call_fixture.assertions.clear();
         let test_file = render_test_file(
             &fixture.resolved_category(),
@@ -153,9 +153,12 @@ impl super::E2eCodegen for PythonE2eCodegen {
             enums,
         );
         let (imports, body, is_async) = extract_python_snippet(&test_file)?;
+        let presentation = super::presentation::resolve(&call_fixture, e2e_config, "python");
         Ok(crate::e2e::template_env::render(
             "python/snippet_body.py.jinja",
-            minijinja::context! { imports => imports, body => body, is_async => is_async },
+            minijinja::context! {
+                imports => imports, body => body, is_async => is_async, presentation => presentation,
+            },
         ))
     }
 

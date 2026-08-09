@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+use crate::core::config::e2e::ArgMapping;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TemplateReturnForm {
@@ -34,9 +36,37 @@ pub struct FixtureDocs {
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
+    pub presentation: Option<FixtureDocsPresentation>,
+    #[serde(default)]
     pub side_effects: SideEffectClass,
     #[serde(default)]
     pub coverage_exceptions: BTreeMap<String, SnippetCoverageException>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FixtureDocsPresentation {
+    #[serde(default)]
+    pub input: Option<serde_json::Value>,
+    #[serde(default)]
+    pub args: Option<Vec<ArgMapping>>,
+    #[serde(default)]
+    pub operations: Vec<FixtureDocsOperation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum FixtureDocsOperation {
+    Show {
+        path: String,
+    },
+    Iterate {
+        path: String,
+        item: String,
+        #[serde(default)]
+        fields: Vec<String>,
+        #[serde(default)]
+        optional: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -59,7 +89,7 @@ pub enum SideEffectClass {
 
 #[cfg(test)]
 mod tests {
-    use super::{FixtureDocs, SideEffectClass};
+    use super::{FixtureDocs, FixtureDocsOperation, SideEffectClass};
 
     #[test]
     fn side_effects_round_trip_without_collapsing_classes() {
@@ -101,5 +131,29 @@ mod tests {
             SideEffectClass::Safe
         );
         assert!(serde_json::from_str::<SideEffectClass>(r#""external_mutation""#).is_err());
+    }
+
+    #[test]
+    fn structured_presentation_deserializes_without_language_code() {
+        let docs: FixtureDocs = serde_json::from_value(serde_json::json!({
+            "topic": "configuration",
+            "presentation": {
+                "input": {"source": "guide.txt"},
+                "args": [{"name": "source", "field": "source", "type": "string"}],
+                "operations": [
+                    {"op": "show", "path": "summary"},
+                    {"op": "iterate", "path": "items", "item": "item", "fields": ["text"], "optional": true}
+                ]
+            }
+        }))
+        .expect("fixture docs presentation deserialize");
+
+        let presentation = docs.presentation.expect("presentation");
+        assert_eq!(presentation.input, Some(serde_json::json!({"source": "guide.txt"})));
+        assert!(matches!(presentation.operations[0], FixtureDocsOperation::Show { .. }));
+        assert!(matches!(
+            presentation.operations[1],
+            FixtureDocsOperation::Iterate { optional: true, .. }
+        ));
     }
 }

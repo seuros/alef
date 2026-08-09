@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixture documentation now supports typed input and argument overrides plus structured result presentation, allowing
+  backend-owned snippets to render idiomatic field display and collection iteration without embedding language code.
+
 - Fixture documentation can now select a safe relative snippet output path per configured target while retaining the
   shared topic/stem fallback.
 

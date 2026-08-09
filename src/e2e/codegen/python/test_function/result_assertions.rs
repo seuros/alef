@@ -128,7 +128,7 @@ pub(super) fn emit_result_and_assertions(
             !trimmed.starts_with('#') && trimmed.contains(result_var)
         });
 
-        let py_result_var = if result_var_used {
+        let py_result_var = if result_var_used || fixture.has_docs_presentation() {
             result_var.to_string()
         } else {
             "_".to_string()

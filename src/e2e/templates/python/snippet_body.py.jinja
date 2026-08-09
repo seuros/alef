@@ -8,6 +8,12 @@
 {% endif %}
 {% for line in body %}    {{ line }}
 {% endfor %}
+{% for operation in presentation %}
+{% if operation.kind == "show" %}    print({{ operation.expression }})
+{% else %}    for {{ operation.item }} in {{ operation.expression }}{% if operation.optional %} or []{% endif %}:
+{% for field in operation.fields %}        print({{ field }})
+{% endfor %}{% endif %}
+{% endfor %}
 
 {% if is_async %}asyncio.run(main())
 {% else %}main()

@@ -24,6 +24,8 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
         wasm_type_prefix,
         config,
     } = context;
+    let docs_fixture = fixture.docs_call_fixture();
+    let fixture = &docs_fixture;
     let mut call = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
         &fixture.id,
@@ -146,6 +148,7 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
             setup_lines => setup_lines, client_setup => client_setup, call_expr => call_expr,
             result_var => call.result_var, is_async => override_config.and_then(|value| value.r#async).unwrap_or(call.r#async),
             expects_error => expects_error,
+            presentation => crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang),
         },
     )
 }
