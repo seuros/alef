@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Coverage-ledger side-effect metadata now uses its typed serialized representation without retaining an obsolete
+  Markdown frontmatter renderer.
+
 - Generated fixture snippets now keep validation metadata in the authoritative coverage ledger while rendering clean
   Astro-facing fenced Markdown with language titles and only explicitly configured user prose.
 

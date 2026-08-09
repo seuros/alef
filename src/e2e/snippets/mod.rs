@@ -507,16 +507,6 @@ fn validate_docs_paths(fixture: &Fixture, languages: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn side_effect_name(value: SideEffectClass) -> &'static str {
-    match value {
-        SideEffectClass::Safe => "safe",
-        SideEffectClass::Network => "network",
-        SideEffectClass::Process => "process",
-        SideEffectClass::Install => "install",
-        SideEffectClass::Server => "server",
-    }
-}
-
 fn parse_language(value: &str) -> Option<DocumentationLanguage> {
     let language = match value {
         "python" => Language::Python,
@@ -1050,19 +1040,5 @@ mod tests {
             report.coverage.missing[0].reason,
             "fixture has no documentation metadata"
         );
-    }
-
-    #[test]
-    fn side_effect_names_preserve_every_class() {
-        let cases = [
-            (SideEffectClass::Safe, "safe"),
-            (SideEffectClass::Network, "network"),
-            (SideEffectClass::Process, "process"),
-            (SideEffectClass::Install, "install"),
-            (SideEffectClass::Server, "server"),
-        ];
-        for (class, expected) in cases {
-            assert_eq!(side_effect_name(class), expected);
-        }
     }
 }
