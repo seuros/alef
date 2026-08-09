@@ -760,6 +760,8 @@ mod tests {
                     validation_errors: None,
                 },
             }),
+            asyncapi: None,
+            websocket: None,
         };
 
         let groups = vec![FixtureGroup {
@@ -843,6 +845,8 @@ mod tests {
                     validation_errors: None,
                 },
             }),
+            asyncapi: None,
+            websocket: None,
         };
 
         let groups = vec![FixtureGroup {

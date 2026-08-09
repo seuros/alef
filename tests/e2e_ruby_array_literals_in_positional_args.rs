@@ -75,6 +75,8 @@ fn string_array_fixture_group() -> FixtureGroup {
             }],
             source: "embeddings/embed_strings_happy.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }
 }

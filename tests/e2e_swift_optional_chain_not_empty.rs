@@ -47,6 +47,8 @@ fn make_fixture(id: &str, assertion_type: &str, field: &str) -> Fixture {
         }],
         source: "smoke.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 

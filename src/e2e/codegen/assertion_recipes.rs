@@ -179,6 +179,8 @@ mod tests {
             assertions,
             source: "fixtures/example.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }
     }
 

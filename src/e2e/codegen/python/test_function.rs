@@ -324,6 +324,8 @@ mod tests {
             description: "A skipped test".to_string(),
             input: serde_json::Value::Null,
             http: None,
+            asyncapi: None,
+            websocket: None,
             assertions: Vec::new(),
             call: None,
             skip: Some(SkipDirective {

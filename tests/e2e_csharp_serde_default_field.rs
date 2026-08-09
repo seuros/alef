@@ -57,6 +57,8 @@ fn make_fixture(id: &str) -> Fixture {
         ],
         source: "test_fixture.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 

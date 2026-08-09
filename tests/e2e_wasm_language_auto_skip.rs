@@ -58,6 +58,8 @@ fn fixture(id: &str, language: &str) -> Fixture {
         assertions: Vec::new(),
         source: format!("smoke/{id}.json"),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 

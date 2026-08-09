@@ -107,6 +107,8 @@ fn build_validation_fixture() -> FixtureGroup {
             }],
             source: "validation.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }
 }

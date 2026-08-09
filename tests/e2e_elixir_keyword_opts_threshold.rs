@@ -72,6 +72,8 @@ fn fixture_with_input(input: serde_json::Value) -> FixtureGroup {
             }],
             source: "test/test_fixture.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }
 }

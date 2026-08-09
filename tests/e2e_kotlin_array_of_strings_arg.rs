@@ -48,6 +48,8 @@ fn make_fixture_with_string_array() -> FixtureGroup {
             assertions: vec![],
             source: "embed_texts.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }
 }

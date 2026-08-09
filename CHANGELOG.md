@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixture extensions can now render protocol documentation recipes from typed AsyncAPI operations and WebSocket
+  sessions. Documentation generation no longer inherits E2E harness skip directives.
+
 - Node/WASM and Kotlin/Kotlin Android snippets now keep distinct target output directories while sharing their canonical
   TypeScript or Kotlin frontmatter and fence validation, preventing cross-target fixture path collisions.
 

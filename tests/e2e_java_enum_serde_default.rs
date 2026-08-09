@@ -50,6 +50,8 @@ fn make_keyword_fixture() -> Fixture {
         }],
         source: "contract.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 

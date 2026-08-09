@@ -340,6 +340,8 @@ mod tests {
             assertions: Vec::new(),
             source: "fixture.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }
     }
 

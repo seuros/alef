@@ -73,6 +73,8 @@ fn fixture_for(category: &str, id: &str) -> Fixture {
         }],
         source: format!("{category}.json"),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 

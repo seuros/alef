@@ -63,6 +63,8 @@ fn test_fixture(input: serde_json::Value) -> Fixture {
         assertion_recipes: Vec::new(),
         source: String::new(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 

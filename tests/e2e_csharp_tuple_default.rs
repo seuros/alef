@@ -45,6 +45,8 @@ fn make_fixture(id: &str) -> Fixture {
         }],
         source: "config_keywords.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 

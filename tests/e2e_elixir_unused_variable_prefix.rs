@@ -61,6 +61,8 @@ fn fixture_with_no_assertions() -> FixtureGroup {
             assertions: vec![],
             source: "smoke/smoke_no_assertions.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }
 }
@@ -96,6 +98,8 @@ fn fixture_with_assertions() -> FixtureGroup {
             }],
             source: "smoke/smoke_with_assertions.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }
 }

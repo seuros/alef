@@ -102,6 +102,8 @@ fn greater_than_negative_one_is_skipped() {
         }],
         source: "error_handling.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     };
 
     let rendered = render_with_fixture(fixture);
@@ -156,6 +158,8 @@ fn greater_than_or_equal_negative_one_is_skipped() {
         }],
         source: "error_handling.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     };
 
     let rendered = render_with_fixture(fixture);
@@ -214,6 +218,8 @@ fn greater_than_positive_value_is_emitted() {
         }],
         source: "error_handling.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     };
 
     let rendered = render_with_fixture(fixture);
@@ -265,6 +271,8 @@ fn less_than_negative_value_is_emitted() {
         }],
         source: "error_handling.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     };
 
     let rendered = render_with_fixture(fixture);

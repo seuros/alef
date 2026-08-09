@@ -134,6 +134,8 @@ fn make_fixture(id: &str, assertion: Assertion) -> Fixture {
         assertions: vec![assertion],
         source: "smoke.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 

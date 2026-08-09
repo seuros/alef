@@ -565,6 +565,8 @@ mod visitor_tests {
             }],
             source: String::new(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }
     }
 

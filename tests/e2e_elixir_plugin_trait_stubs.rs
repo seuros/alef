@@ -54,6 +54,8 @@ fn make_fixture(id: &str, input: serde_json::Value) -> Fixture {
         mock_response: None,
         source: String::new(),
         http: None,
+        asyncapi: None,
+        websocket: None,
         assertions: vec![],
         visitor: None,
         args: vec![],

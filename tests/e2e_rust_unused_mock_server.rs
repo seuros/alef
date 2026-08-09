@@ -60,6 +60,8 @@ fn error_fixture_with_mock() -> FixtureGroup {
             }],
             source: "error.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }
 }

@@ -47,6 +47,8 @@ fn fixture_without_config(id: &str) -> Fixture {
         }],
         source: "encoding.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 

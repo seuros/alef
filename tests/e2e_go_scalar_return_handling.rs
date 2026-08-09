@@ -91,6 +91,8 @@ fn make_bool_fixture() -> FixtureGroup {
             }],
             source: "test/test_has_language_bool.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }
 }
@@ -126,6 +128,8 @@ fn make_uint_fixture() -> FixtureGroup {
             }],
             source: "test/test_language_count.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }
 }

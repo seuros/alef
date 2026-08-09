@@ -51,6 +51,8 @@ fn make_chat_fixture(id: &str) -> Fixture {
         }],
         source: "chat.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 
@@ -91,6 +93,8 @@ fn make_chat_fixture_with_field_assertion(id: &str, field: &str, expected: &str)
         }],
         source: "chat.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 
@@ -299,6 +303,8 @@ fn make_streaming_fixture(id: &str) -> Fixture {
         ],
         source: "chat.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 

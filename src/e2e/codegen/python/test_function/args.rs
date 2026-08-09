@@ -282,6 +282,8 @@ mod tests {
             description: "d".to_string(),
             input: serde_json::Value::Null,
             http: None,
+            asyncapi: None,
+            websocket: None,
             assertions: Vec::new(),
             call: None,
             skip: None,

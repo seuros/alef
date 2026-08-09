@@ -28,6 +28,8 @@ fn make_fixture(id: &str, description: &str, assertions: Vec<Assertion>) -> Fixt
         assertions,
         source: "language_detection.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 

@@ -77,6 +77,8 @@ fn make_mock_server_fixture() -> FixtureGroup {
             }],
             source: "test/mock_response.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }
 }

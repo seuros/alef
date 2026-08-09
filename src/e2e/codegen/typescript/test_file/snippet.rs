@@ -149,6 +149,8 @@ mod tests {
             mock_response: None,
             source: String::new(),
             http: None,
+            asyncapi: None,
+            websocket: None,
             assertions: Vec::new(),
             visitor: None,
             args: Vec::new(),

@@ -325,6 +325,8 @@ mod tests_trait_bridge {
             mock_response: None,
             source: String::new(),
             http: None,
+            asyncapi: None,
+            websocket: None,
             assertions: vec![],
             visitor: None,
             args: vec![],

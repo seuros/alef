@@ -74,6 +74,8 @@ fn group() -> FixtureGroup {
             }],
             source: "smoke.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }
 }

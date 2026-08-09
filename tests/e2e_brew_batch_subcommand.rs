@@ -107,6 +107,8 @@ fn build_batch_scrape_fixture() -> FixtureGroup {
             }],
             source: "test.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }
 }
@@ -145,6 +147,8 @@ fn build_batch_crawl_fixture() -> FixtureGroup {
             }],
             source: "test.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }
 }

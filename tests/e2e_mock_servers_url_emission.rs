@@ -53,6 +53,8 @@ fn make_host_root_fixture(id: &str) -> Fixture {
         }],
         source: "smoke.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 
@@ -85,6 +87,8 @@ fn make_plain_fixture(id: &str) -> Fixture {
         }],
         source: "smoke.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 
@@ -123,6 +127,8 @@ fn make_typed_url_fixture(id: &str) -> Fixture {
         }],
         source: "url.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 

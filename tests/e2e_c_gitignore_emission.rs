@@ -74,6 +74,8 @@ fn build_fixture() -> FixtureGroup {
             }],
             source: "test.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }
 }

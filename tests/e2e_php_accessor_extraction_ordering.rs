@@ -100,6 +100,8 @@ fn build_fixture_group() -> FixtureGroup {
             ],
             source: "smoke/smoke_two_arrays.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }
 }

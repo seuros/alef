@@ -82,6 +82,8 @@ fn build_fixture_with_assertions(id: &str, assertions: Vec<Assertion>) -> Fixtur
             assertions,
             source: "test.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }
 }
@@ -169,6 +171,8 @@ fn build_fixture() -> FixtureGroup {
             }],
             source: "test.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }
 }

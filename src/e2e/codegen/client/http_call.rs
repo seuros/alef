@@ -365,6 +365,8 @@ mod tests {
                 },
                 expected_response: expected,
             }),
+            asyncapi: None,
+            websocket: None,
         }
     }
 

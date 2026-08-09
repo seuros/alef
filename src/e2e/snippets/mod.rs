@@ -2,7 +2,7 @@ use crate::core::backend::GeneratedFile;
 use crate::core::config::e2e::{E2eConfig, SnippetConfig};
 use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::{EnumDef, TypeDef};
-use crate::e2e::codegen::{E2eCodegen, all_generators, fixture_inclusion};
+use crate::e2e::codegen::{E2eCodegen, all_generators};
 use crate::e2e::fixture::{Fixture, FixtureDocs, SideEffectClass};
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
@@ -172,19 +172,13 @@ fn generate_snippet_report_with_extensions(
                 });
                 continue;
             };
-            let fixture_decision = if docs.include_when_e2e_skipped.iter().any(|value| value == language) {
-                crate::e2e::codegen::InclusionDecision::Include
-            } else {
-                fixture_inclusion(fixture, language, context.e2e)
-            };
             let capabilities = capabilities(language, snippets, context.crate_config);
             let capability_decision = snippet_inclusion(fixture, &capabilities);
-            let exclusion_reason = match (&fixture_decision, &capability_decision) {
-                (crate::e2e::codegen::InclusionDecision::Exclude(reason), _) => Some((*reason).to_string()),
-                (_, SnippetInclusion::Exclude { missing_requirements }) => {
+            let exclusion_reason = match &capability_decision {
+                SnippetInclusion::Exclude { missing_requirements } => {
                     Some(format!("missing requirements: {}", missing_requirements.join(", ")))
                 }
-                _ => None,
+                SnippetInclusion::Include => None,
             };
             if let Some(reason) = exclusion_reason {
                 if let Some(exception) = docs.coverage_exceptions.get(*language) {
@@ -528,7 +522,6 @@ mod tests {
                 description: None,
                 side_effects: SideEffectClass::Safe,
                 coverage_exceptions: BTreeMap::new(),
-                include_when_e2e_skipped: Vec::new(),
             }),
             ..Fixture::default()
         }
@@ -558,7 +551,6 @@ mod tests {
             description: None,
             side_effects: Default::default(),
             coverage_exceptions: BTreeMap::new(),
-            include_when_e2e_skipped: Vec::new(),
         };
         assert!(
             snippet_path(
@@ -594,7 +586,6 @@ mod tests {
             description: None,
             side_effects: SideEffectClass::Safe,
             coverage_exceptions: BTreeMap::new(),
-            include_when_e2e_skipped: Vec::new(),
         };
         let fixture = documented_fixture();
         let cases = [
@@ -659,7 +650,6 @@ mod tests {
             description: None,
             side_effects: SideEffectClass::Network,
             coverage_exceptions: BTreeMap::new(),
-            include_when_e2e_skipped: Vec::new(),
         };
 
         let rendered = render_snippet_markdown(
@@ -710,17 +700,12 @@ mod tests {
     }
 
     #[test]
-    fn explicit_docs_policy_can_render_a_fixture_skipped_by_the_test_harness() {
+    fn documentation_rendering_is_independent_of_test_harness_skips() {
         let mut fixture = documented_fixture();
         fixture.skip = Some(crate::e2e::fixture::SkipDirective {
             languages: vec!["ruby".into()],
             reason: Some("The test harness cannot exercise this protocol operation".into()),
         });
-        fixture
-            .docs
-            .as_mut()
-            .expect("fixture is documented")
-            .include_when_e2e_skipped = vec!["ruby".into()];
         let mut e2e = E2eConfig::default();
         e2e.call.function = "built_in_would_fail".into();
         let snippet_config = SnippetConfig {
@@ -745,7 +730,7 @@ mod tests {
             &context,
             &extensions,
         )
-        .expect("documentation policy allows the extension-owned recipe");
+        .expect("test harness skip does not suppress the extension-owned recipe");
 
         assert_eq!(report.coverage.generated, report.coverage.expected);
         assert!(report.coverage.missing.is_empty());

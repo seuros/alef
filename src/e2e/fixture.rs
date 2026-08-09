@@ -7,7 +7,12 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 mod metadata;
+mod protocol;
 pub use metadata::{FixtureDocs, FixtureEnv, SetupCall, SideEffectClass, SnippetCoverageException, TemplateReturnForm};
+pub use protocol::{
+    AsyncApiFixture, WebSocketFixture, WebSocketFrameType, WebSocketHandler, WebSocketMessage,
+    WebSocketMessageDirection, WebSocketSession,
+};
 
 /// Mock HTTP response for testing HTTP clients.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,16 +84,13 @@ pub struct Fixture {
     pub category: Option<String>,
     /// Human-readable description.
     pub description: String,
-    /// Optional documentation-snippet placement metadata.
     #[serde(default)]
     pub docs: Option<FixtureDocs>,
     /// Declarative capabilities required to publish this fixture as a snippet.
     #[serde(default)]
     pub requirements: Vec<String>,
-    /// Optional tags for filtering.
     #[serde(default)]
     pub tags: Vec<String>,
-    /// Skip directive.
     #[serde(default)]
     pub skip: Option<SkipDirective>,
     /// Environment variable requirements (used by smoke/live tests).
@@ -132,6 +134,10 @@ pub struct Fixture {
     /// an HTTP handler rather than a function call.
     #[serde(default)]
     pub http: Option<HttpFixture>,
+    #[serde(default)]
+    pub asyncapi: Option<AsyncApiFixture>,
+    #[serde(default)]
+    pub websocket: Option<WebSocketFixture>,
 }
 
 /// HTTP server test specification.
@@ -375,6 +381,8 @@ impl Default for Fixture {
             assertions: Vec::new(),
             source: String::new(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }
     }
 }

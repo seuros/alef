@@ -78,6 +78,8 @@ fn trait_bridge_tests_are_async_and_await_calls() {
         }],
         assertion_recipes: vec![],
         http: None,
+        asyncapi: None,
+        websocket: None,
         assertions: vec![Assertion {
             assertion_type: "not_error".to_string(),
             field: None,

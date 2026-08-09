@@ -315,6 +315,8 @@ mod tests {
             source: String::new(),
             category: None,
             tags: Vec::new(),
+            asyncapi: None,
+            websocket: None,
         }
     }
 
@@ -327,6 +329,8 @@ mod tests {
             description: "A test".to_string(),
             input: serde_json::Value::Null,
             http: None,
+            asyncapi: None,
+            websocket: None,
             assertions: Vec::new(),
             call: None,
             skip: None,

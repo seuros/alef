@@ -71,6 +71,8 @@ fn not_error_only_fixture_group() -> FixtureGroup {
             }],
             source: "smoke/smoke_not_error_only.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }
 }

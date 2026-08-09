@@ -51,6 +51,8 @@ fn make_smoke_fixture(id: &str) -> Fixture {
         }],
         source: "smoke.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 

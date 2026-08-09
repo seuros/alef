@@ -94,6 +94,8 @@ fn handle_config_deserialization_uses_resolved_options_type() {
         assertions: vec![],
         source: String::new(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     };
 
     let (setup, args_str) = build_args_and_setup(
@@ -430,6 +432,8 @@ fn kotlin_android_streaming_fixture_emits_flow_to_list_import() {
         assertions: vec![],
         source: String::new(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     };
 
     let e2e_config = E2eConfig {
@@ -537,6 +541,8 @@ fn kotlin_android_object_mapper_emits_register_kotlin_module() {
                 validation_errors: None,
             },
         }),
+        asyncapi: None,
+        websocket: None,
     };
 
     let e2e_config = E2eConfig {
@@ -685,6 +691,8 @@ fn kotlin_android_bytes_arg_emits_files_read_all_bytes() {
         assertions: vec![],
         source: String::new(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     };
 
     // JVM style: should emit plain string
@@ -764,6 +772,8 @@ fn kotlin_android_batch_bytes_item_wraps_paths() {
         assertions: vec![],
         source: String::new(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     };
 
     let (_, args_android) = build_args_and_setup(
@@ -829,6 +839,8 @@ fn kotlin_android_test_file_loads_resolved_jni_lib_name_not_crate_name() {
         assertions: vec![],
         source: String::new(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     };
     let e2e_config = E2eConfig {
         call: CallConfig::default(),

@@ -148,6 +148,8 @@ fn make_contains_fixture(id: &str, field: &str, value: &str) -> Fixture {
         }],
         source: "smoke.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 

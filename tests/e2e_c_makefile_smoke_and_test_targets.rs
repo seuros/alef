@@ -122,6 +122,8 @@ fn build_fixture_with_http() -> FixtureGroup {
                     validation_errors: None,
                 },
             }),
+            asyncapi: None,
+            websocket: None,
         }],
     }
 }
@@ -256,6 +258,8 @@ prefix = "htm"
             }],
             source: "test.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }];
 

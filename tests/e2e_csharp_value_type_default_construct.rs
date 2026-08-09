@@ -48,6 +48,8 @@ fn make_fixture_omit_config(id: &str) -> Fixture {
         }],
         source: "process_items_async_happy.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 

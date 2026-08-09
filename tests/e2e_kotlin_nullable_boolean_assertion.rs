@@ -37,6 +37,8 @@ fn make_fixture(id: &str, description: &str, assertions: Vec<Assertion>) -> Fixt
         assertions,
         source: "markdown.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 

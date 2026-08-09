@@ -58,6 +58,8 @@ fn make_simple_fixture() -> FixtureGroup {
             input: serde_json::json!({}),
             mock_response: None,
             http: None,
+            asyncapi: None,
+            websocket: None,
             visitor: None,
             args: vec![],
             assertion_recipes: vec![],

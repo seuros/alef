@@ -80,6 +80,8 @@ mod tests {
             assertions: vec![],
             source: String::new(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         };
         let mut out = String::new();
         let emitted = render_ws_test(&mut out, &StubRenderer, &fixture);

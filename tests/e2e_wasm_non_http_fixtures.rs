@@ -78,6 +78,8 @@ fn smoke_fixture() -> FixtureGroup {
             }],
             source: "smoke/smoke_basic.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }
 }

@@ -79,6 +79,8 @@ fn make_fixture_with_contains_on_string() -> FixtureGroup {
             ],
             source: "transcribe.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }
 }
@@ -231,6 +233,8 @@ type = "json_object"
             }],
             source: "tags.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }];
 

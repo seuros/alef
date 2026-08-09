@@ -78,6 +78,8 @@ fn fields_array_binding_emitted_before_count_min_assertion_for_non_streaming_fix
         }],
         source: String::new(),
         http: None,
+        asyncapi: None,
+        websocket: None,
         category: None,
     };
 
@@ -170,6 +172,8 @@ fn result_is_simple_count_assertion_binds_to_result_variable() {
         ],
         source: String::new(),
         http: None,
+        asyncapi: None,
+        websocket: None,
         category: None,
     };
 
@@ -250,6 +254,8 @@ fn handle_config_import_uses_resolved_options_type() {
         assertions: vec![],
         source: String::new(),
         http: None,
+        asyncapi: None,
+        websocket: None,
         category: Some("sessions".to_string()),
     };
     let cfg: crate::core::config::NewAlefConfig = toml::from_str(

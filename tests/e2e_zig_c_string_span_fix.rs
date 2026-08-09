@@ -37,6 +37,8 @@ fn make_fixture_with_assertions(id: &str, assertions: Vec<Assertion>) -> Fixture
         assertions,
         source: "smoke.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 

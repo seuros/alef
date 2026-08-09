@@ -91,6 +91,8 @@ fn build_interact_fixture() -> FixtureGroup {
             }],
             source: "test.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }
 }

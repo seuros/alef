@@ -32,6 +32,8 @@ fn make_fixture(id: &str, category: Option<&str>, source: &str) -> Fixture {
         assertions: Vec::new(),
         source: source.to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 

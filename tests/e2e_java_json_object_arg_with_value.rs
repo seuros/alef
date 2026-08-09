@@ -51,6 +51,8 @@ fn make_extract_fixture() -> Fixture {
         }],
         source: "contract.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 

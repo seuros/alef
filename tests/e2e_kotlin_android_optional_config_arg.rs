@@ -49,6 +49,8 @@ fn make_extract_bytes_fixture(id: &str, has_config: bool) -> Fixture {
         }],
         source: "async.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 

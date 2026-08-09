@@ -58,6 +58,8 @@ fn smoke_fixture(input: serde_json::Value) -> Fixture {
         assertions: Vec::new(),
         source: "smoke/smoke_case.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 

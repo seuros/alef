@@ -417,6 +417,8 @@ mod tests {
             assertions: vec![],
             source: source.to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }
     }
 
@@ -606,6 +608,8 @@ mod tests {
             assertions: vec![],
             source: "test.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         };
         let call = CallConfig {
             function: "extract_bytes".to_string(),
@@ -679,6 +683,8 @@ mod tests {
             assertions: vec![],
             source: "smoke/basic_chat.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         };
         let call = CallConfig {
             function: "chat".to_string(),
@@ -740,6 +746,8 @@ mod tests {
             assertions: vec![],
             source: "url/url_batch.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         };
         let call = CallConfig {
             function: "extract_batch".to_string(),
@@ -797,6 +805,8 @@ mod tests {
             // resolved_category() derives "budget" from this path
             source: "budget/budget_enforced.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         };
         let mut config = make_e2e_config(vec![]);
         config.exclude_categories = HashSet::from(["budget".to_string()]);

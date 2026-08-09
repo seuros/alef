@@ -78,6 +78,8 @@ fn swift_emits_labelled_arguments_on_free_function_calls() {
         visitor: None,
         source: "smoke/test_process_basic.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     };
 
     let groups = vec![FixtureGroup {
@@ -165,6 +167,8 @@ name = "SampleLanguagePack"
         visitor: None,
         source: "registry/test_language_count.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     };
 
     let groups = vec![FixtureGroup {

@@ -113,6 +113,8 @@ fn not_error_alone_does_not_emit_not_null_check() {
         assertions: vec![not_error_assertion()],
         source: "error_handling.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     };
 
     let rendered = render(fixture);
@@ -151,6 +153,8 @@ fn not_error_with_is_empty_does_not_contradict() {
         assertions: vec![not_error_assertion(), is_empty_assertion()],
         source: "error_handling.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     };
 
     let rendered = render(fixture);

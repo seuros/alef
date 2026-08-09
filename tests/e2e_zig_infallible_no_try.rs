@@ -40,6 +40,8 @@ fn make_fixture(id: &str) -> Fixture {
         }],
         source: "registry.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 
@@ -174,6 +176,8 @@ args = [{ name = "name", field = "language", type = "string" }]
         }],
         source: "registry.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     };
 
     let groups = vec![FixtureGroup {

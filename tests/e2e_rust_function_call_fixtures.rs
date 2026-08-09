@@ -107,6 +107,8 @@ fn build_function_call_fixture(id: &str) -> FixtureGroup {
             }],
             source: "test.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }
 }
@@ -200,6 +202,8 @@ result_is_simple = true
             }],
             source: "test.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }];
     let files = RustE2eCodegen
@@ -290,6 +294,8 @@ result_is_simple = true
             }],
             source: "test.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }];
     let files = RustE2eCodegen
@@ -378,6 +384,8 @@ result_is_simple = true
             }],
             source: "test.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     }];
     let files = RustE2eCodegen
@@ -501,6 +509,8 @@ function = "process"
             }],
             source: "test.json".to_string(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         }],
     };
 

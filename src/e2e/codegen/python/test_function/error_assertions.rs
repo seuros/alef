@@ -84,6 +84,8 @@ mod tests {
             description: "streaming error".to_string(),
             input: serde_json::Value::Null,
             http: None,
+            asyncapi: None,
+            websocket: None,
             assertions: vec![crate::e2e::fixture::Assertion {
                 assertion_type: "error".to_string(),
                 field: None,

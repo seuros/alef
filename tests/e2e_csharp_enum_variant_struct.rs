@@ -39,6 +39,8 @@ fn make_fixture(id: &str) -> Fixture {
         }],
         source: "code_shebang_detection.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 

@@ -38,6 +38,8 @@ fn make_fixture(id: &str, input: serde_json::Value) -> Fixture {
         }],
         source: "embed.json".to_string(),
         http: None,
+        asyncapi: None,
+        websocket: None,
     }
 }
 

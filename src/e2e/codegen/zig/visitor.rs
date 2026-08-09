@@ -250,6 +250,8 @@ mod zig_visitor_tests {
             assertions: vec![],
             source: String::new(),
             http: None,
+            asyncapi: None,
+            websocket: None,
         };
         let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve("zig", &fixture, &call, &[]);
         let symbols = resolve_zig_visitor_call_symbols(&call, &recipe, "abc");
@@ -371,6 +373,8 @@ mod tests_trait_bridge {
             mock_response: None,
             source: String::new(),
             http: None,
+            asyncapi: None,
+            websocket: None,
             assertions: vec![],
             visitor: None,
             args: vec![],
