@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Linux CLI release archives now build on available GitHub-hosted x86_64 and arm64 runners.**
+  (`.github/workflows/publish.yaml`)
 - **The publish workflow now uses GitHub-hosted runners for release orchestration jobs.** This
   removes the unavailable `runner-medium` dependency from preparation, validation, release checks,
   asset upload, package publishing, and finalization so published releases can produce their
