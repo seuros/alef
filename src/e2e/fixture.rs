@@ -307,7 +307,13 @@ pub struct StaticFilesConfig {
 }
 
 /// Middleware configuration for HTTP handler tests.
+///
+/// Unknown keys are rejected rather than ignored: a middleware category that no
+/// field covers would otherwise be dropped at deserialization and never reach any
+/// backend, producing a silently weaker test suite. A hard parse error surfaces the
+/// gap at fixture-load time instead. ~keep
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpMiddleware {
     #[serde(default)]
     pub jwt_auth: Option<serde_json::Value>,
@@ -336,6 +342,29 @@ pub struct HttpMiddleware {
     /// than the generic route+handler pattern used by the other middleware fields.
     #[serde(default)]
     pub graphql: Option<serde_json::Value>,
+    /// Request/response lifecycle hooks, keyed by phase (e.g.
+    /// `{"on_request": [{"name": "...", "handler": "..."}]}`). Passed through
+    /// opaquely: phase names and per-hook fields are defined by the target
+    /// runtime, not by this model.
+    #[serde(default)]
+    pub lifecycle_hooks: Option<serde_json::Value>,
+    /// JSON-RPC service configuration carrying an OpenRPC document (e.g.
+    /// `{"enabled": true, "spec": {...}}`). Passed through opaquely so backends
+    /// can hand the document to their own OpenRPC support.
+    #[serde(default)]
+    pub openrpc: Option<serde_json::Value>,
+    /// Deferred/background work configuration (e.g. `{"enabled": true, "max_concurrent": 5}`).
+    /// Passed through opaquely because the tuning knobs differ per runtime.
+    #[serde(default)]
+    pub background_tasks: Option<serde_json::Value>,
+    /// WebSocket endpoint configuration (e.g. `{"enabled": true}`). Passed through
+    /// opaquely so backends can decide how to expose an upgrade route.
+    #[serde(default)]
+    pub websocket: Option<serde_json::Value>,
+    /// Authorization policy applied after authentication (e.g. `{"required_role": "admin"}`).
+    /// Passed through opaquely because the policy vocabulary is application-defined.
+    #[serde(default)]
+    pub authorization: Option<serde_json::Value>,
 }
 
 const ORIGIN_ROOT_ROUTE_PREFIXES: [&str; 2] = ["/robots", "/sitemap"];
@@ -813,6 +842,96 @@ mod tests {
         let fixture: Fixture = serde_json::from_str(json).unwrap();
         assert!(!fixture.needs_mock_server());
         assert!(!fixture.is_streaming_mock());
+    }
+
+    #[test]
+    fn http_middleware_deserializes_lifecycle_hooks_keyed_by_phase() {
+        let json = r#"{
+            "lifecycle_hooks": {
+                "on_request": [{"name": "request_logger", "handler": "log_request"}],
+                "pre_validation": [
+                    {"name": "rate_limiter", "handler": "check_rate_limit",
+                     "config": {"max_requests": 10, "window_seconds": 60}}
+                ]
+            }
+        }"#;
+        let middleware: HttpMiddleware = serde_json::from_str(json).unwrap();
+        let hooks = middleware
+            .lifecycle_hooks
+            .expect("lifecycle_hooks must survive deserialization");
+        assert_eq!(hooks["on_request"][0]["handler"], serde_json::json!("log_request"));
+        assert_eq!(
+            hooks["pre_validation"][0]["config"]["max_requests"],
+            serde_json::json!(10)
+        );
+    }
+
+    #[test]
+    fn http_middleware_deserializes_openrpc_spec_document() {
+        let json = r#"{
+            "openrpc": {
+                "enabled": true,
+                "spec": {
+                    "openrpc": "1.3.2",
+                    "info": {"title": "Math API", "version": "1.0.0"},
+                    "methods": [{"name": "add"}]
+                }
+            }
+        }"#;
+        let middleware: HttpMiddleware = serde_json::from_str(json).unwrap();
+        let openrpc = middleware.openrpc.expect("openrpc must survive deserialization");
+        assert_eq!(openrpc["enabled"], serde_json::json!(true));
+        assert_eq!(openrpc["spec"]["methods"][0]["name"], serde_json::json!("add"));
+    }
+
+    #[test]
+    fn http_middleware_deserializes_background_tasks_config() {
+        let json = r#"{"background_tasks": {"enabled": true, "max_concurrent": 5}}"#;
+        let middleware: HttpMiddleware = serde_json::from_str(json).unwrap();
+        let tasks = middleware
+            .background_tasks
+            .expect("background_tasks must survive deserialization");
+        assert_eq!(tasks["max_concurrent"], serde_json::json!(5));
+    }
+
+    #[test]
+    fn http_middleware_deserializes_websocket_config() {
+        let json = r#"{"websocket": {"enabled": true}}"#;
+        let middleware: HttpMiddleware = serde_json::from_str(json).unwrap();
+        let websocket = middleware.websocket.expect("websocket must survive deserialization");
+        assert_eq!(websocket["enabled"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn http_middleware_deserializes_authorization_policy() {
+        let json = r#"{"authorization": {"required_role": "admin"}}"#;
+        let middleware: HttpMiddleware = serde_json::from_str(json).unwrap();
+        let authorization = middleware
+            .authorization
+            .expect("authorization must survive deserialization");
+        assert_eq!(authorization["required_role"], serde_json::json!("admin"));
+    }
+
+    #[test]
+    fn http_middleware_defaults_every_field_to_none() {
+        let middleware: HttpMiddleware = serde_json::from_str("{}").unwrap();
+        assert!(middleware.lifecycle_hooks.is_none());
+        assert!(middleware.openrpc.is_none());
+        assert!(middleware.background_tasks.is_none());
+        assert!(middleware.websocket.is_none());
+        assert!(middleware.authorization.is_none());
+    }
+
+    /// An unrecognised middleware category must fail loudly instead of being dropped —
+    /// a silently ignored key produces a test suite that is weaker than it looks.
+    #[test]
+    fn http_middleware_rejects_unknown_key() {
+        let error = serde_json::from_str::<HttpMiddleware>(r#"{"telemetry": {"enabled": true}}"#)
+            .expect_err("unknown middleware keys must be rejected");
+        assert!(
+            error.to_string().contains("telemetry"),
+            "error should name the offending key, got: {error}"
+        );
     }
 
     #[test]
