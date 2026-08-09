@@ -7,11 +7,10 @@
     "fixture": {
       "type": "object",
       "required": ["id", "description"],
-      "additionalProperties": false,
       "properties": {
         "id": {
           "type": "string",
-          "pattern": "^[a-z][a-z0-9_]*$",
+          "pattern": "^[a-z0-9][a-z0-9_]*$",
           "description": "Unique snake_case identifier used as the test function name"
         },
         "category": {

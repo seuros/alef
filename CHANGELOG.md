@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Generated snippet paths, fences, and frontmatter now share the validator's canonical documentation language identity,
   including TypeScript for Node and WASM and Kotlin for Kotlin Android, while coverage retains the configured target.
 
+- Crate-level validation suppressions now downgrade configured lossy surface, unknown type, ambiguous JSON value, and
+  backend stub path diagnostics during extraction and generation while unsupported public generics remain fatal.
+
+- E2E fixture schema validation now validates each element of top-level JSON arrays independently, accepts numeric
+  identifier prefixes and project-specific fixture payloads, and reports the failing fixture index.
+
 - Brew and Homebrew fixture snippet targets now use shell documentation metadata and report unsupported recipes through
   exact per-language coverage exceptions instead of aborting snippet generation with a language-mapping error.
 

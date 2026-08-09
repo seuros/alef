@@ -48,12 +48,28 @@ impl fmt::Display for ValidationError {
 ///
 /// Returns a list of validation errors. An empty list means all fixtures are valid.
 pub fn validate_fixtures(fixtures_dir: &Path) -> Result<Vec<ValidationError>> {
-    let schema_value: serde_json::Value =
+    let mut schema_value: serde_json::Value =
         serde_json::from_str(FIXTURE_SCHEMA).context("failed to parse embedded fixture schema")?;
-    let validator = jsonschema::validator_for(&schema_value).context("failed to compile fixture schema")?;
+    let document_validator = jsonschema::validator_for(&schema_value).context("failed to compile fixture schema")?;
+    schema_value
+        .as_object_mut()
+        .context("embedded fixture schema root must be an object")?
+        .insert("$ref".to_string(), serde_json::json!("#/$defs/fixture"));
+    schema_value
+        .as_object_mut()
+        .context("embedded fixture schema root must be an object")?
+        .remove("oneOf");
+    let fixture_validator =
+        jsonschema::validator_for(&schema_value).context("failed to compile fixture element schema")?;
 
     let mut errors = Vec::new();
-    validate_recursive(fixtures_dir, fixtures_dir, &validator, &mut errors)?;
+    validate_recursive(
+        fixtures_dir,
+        fixtures_dir,
+        &document_validator,
+        &fixture_validator,
+        &mut errors,
+    )?;
     Ok(errors)
 }
 
@@ -253,7 +269,8 @@ fn validate_unsupported_in_languages(e2e_config: &E2eConfig, languages: &[String
 fn validate_recursive(
     base: &Path,
     dir: &Path,
-    validator: &jsonschema::Validator,
+    document_validator: &jsonschema::Validator,
+    fixture_validator: &jsonschema::Validator,
     errors: &mut Vec<ValidationError>,
 ) -> Result<()> {
     let entries = std::fs::read_dir(dir).with_context(|| format!("failed to read directory: {}", dir.display()))?;
@@ -263,7 +280,7 @@ fn validate_recursive(
 
     for path in paths {
         if path.is_dir() {
-            validate_recursive(base, &path, validator, errors)?;
+            validate_recursive(base, &path, document_validator, fixture_validator, errors)?;
         } else if path.extension().is_some_and(|ext| ext == "json") {
             let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             // Skip schema files and files starting with _
@@ -297,22 +314,86 @@ fn validate_recursive(
                 }
             };
 
-            for error in validator.iter_errors(&value) {
-                errors.push(ValidationError {
-                    file: relative.clone(),
-                    message: format!("{} at {}", error, error.instance_path()),
-                    severity: Severity::Error,
-                });
-            }
+            validate_json_value(&relative, &value, document_validator, fixture_validator, errors);
         }
     }
     Ok(())
+}
+
+fn validate_json_value(
+    relative: &str,
+    value: &serde_json::Value,
+    document_validator: &jsonschema::Validator,
+    fixture_validator: &jsonschema::Validator,
+    errors: &mut Vec<ValidationError>,
+) {
+    if let Some(fixtures) = value.as_array() {
+        for (index, fixture) in fixtures.iter().enumerate() {
+            validate_fixture_value(&format!("{relative}[{index}]"), fixture, fixture_validator, errors);
+        }
+        return;
+    }
+    validate_fixture_value(relative, value, document_validator, errors);
+}
+
+fn validate_fixture_value(
+    relative: &str,
+    fixture: &serde_json::Value,
+    validator: &jsonschema::Validator,
+    errors: &mut Vec<ValidationError>,
+) {
+    for error in validator.iter_errors(fixture) {
+        errors.push(ValidationError {
+            file: relative.to_string(),
+            message: format!("{} at {}", error, error.instance_path()),
+            severity: Severity::Error,
+        });
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::config::e2e::{ArgMapping, CallConfig, CallOverride};
+
+    #[test]
+    fn validates_each_fixture_in_top_level_array() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("fixtures.json"),
+            r#"[
+                {"id": "first_fixture", "description": "first"},
+                {
+                    "id": "02_second_fixture",
+                    "description": "second",
+                    "custom_protocol": {"expected": true}
+                }
+            ]"#,
+        )
+        .unwrap();
+
+        let errors = validate_fixtures(directory.path()).unwrap();
+
+        assert!(errors.is_empty(), "unexpected validation errors: {errors:?}");
+    }
+
+    #[test]
+    fn array_validation_identifies_invalid_fixture_index() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("fixtures.json"),
+            r#"[
+                {"id": "valid_fixture", "description": "valid"},
+                {"id": "invalid_fixture"}
+            ]"#,
+        )
+        .unwrap();
+
+        let errors = validate_fixtures(directory.path()).unwrap();
+
+        assert!(!errors.is_empty());
+        assert!(errors.iter().all(|error| error.file == "fixtures.json[1]"));
+    }
     use crate::e2e::codegen::assertion_recipes::{EMBEDDINGS_RECIPE, KEYWORDS_RECIPE};
     use crate::e2e::fixture::{Assertion, SkipDirective};
 
