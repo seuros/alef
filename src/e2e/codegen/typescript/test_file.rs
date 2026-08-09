@@ -18,6 +18,7 @@ mod cache;
 mod helpers;
 mod http;
 mod render;
+mod snippet;
 mod test_case;
 #[cfg(test)]
 mod tests;
@@ -25,6 +26,7 @@ mod visitor;
 mod wasm;
 
 pub use render::render_test_file;
+pub(crate) use snippet::render_snippet_body;
 
 pub(in crate::e2e::codegen::typescript::test_file) use args::build_args_and_setup;
 pub(in crate::e2e::codegen::typescript::test_file) use builders::{

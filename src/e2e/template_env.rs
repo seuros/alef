@@ -5,27 +5,6 @@ static TEMPLATES: &[(&str, &str)] = &[
         "snippets/file.md.jinja",
         include_str!("templates/snippets/file.md.jinja"),
     ),
-    ("snippets/call.jinja", include_str!("templates/snippets/call.jinja")),
-    (
-        "snippets/python_option_field.jinja",
-        include_str!("templates/snippets/python_option_field.jinja"),
-    ),
-    (
-        "snippets/rust_json_argument.jinja",
-        include_str!("templates/snippets/rust_json_argument.jinja"),
-    ),
-    (
-        "snippets/handle_config_setup.jinja",
-        include_str!("templates/snippets/handle_config_setup.jinja"),
-    ),
-    (
-        "snippets/handle_create_setup.jinja",
-        include_str!("templates/snippets/handle_create_setup.jinja"),
-    ),
-    (
-        "snippets/setup_call.jinja",
-        include_str!("templates/snippets/setup_call.jinja"),
-    ),
     (
         "python/pyproject.toml.jinja",
         include_str!("templates/python/pyproject.toml.jinja"),
@@ -284,6 +263,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/typescript/test_function.jinja"),
     ),
     (
+        "typescript/snippet_body.jinja",
+        include_str!("templates/typescript/snippet_body.jinja"),
+    ),
+    (
         "typescript/helpers.jinja",
         include_str!("templates/typescript/helpers.jinja"),
     ),
@@ -307,6 +290,7 @@ static TEMPLATES: &[(&str, &str)] = &[
         "typescript/globalSetup_server.ts.jinja",
         include_str!("templates/typescript/globalSetup_server.ts.jinja"),
     ),
+    ("go/snippet_body.jinja", include_str!("templates/go/snippet_body.jinja")),
     (
         "python/http_test.jinja",
         include_str!("templates/python/http_test.jinja"),

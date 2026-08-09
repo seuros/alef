@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Node, WASM, and Go documentation snippets now reuse backend argument builders for typed setup,
+  imports, client factories, async calls, and binding-native function names without test assertions or harness code.
+
+- Python and Rust documentation snippets now reuse their backend test renderers, preserving typed options,
+  enum values, optional arguments, client factories, JSON request objects, async calls, and mock-server setup.
+
 - Generated Python snippets now preserve top-level indentation and import boundaries, retain
   synthetic optional mock-server URL arguments, and fail syntax validation instead of treating
   indentation/parser errors as missing dependencies.
@@ -18,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   literals, Rust async calls, side-effect frontmatter, whole-input arguments, and Rust/C language aliases.
 
 ### Added
+
+- **E2E backends now own documentation snippet bodies.** Snippet orchestration resolves the registered
+  language generator, passes the extracted type and enum registries through, wraps backend output in
+  shared Markdown metadata, and reports unsupported or unknown languages explicitly.
 
 - **Snippet checks now produce versioned, source-aware reports and enforce explicit validation policy.**
   Results distinguish requested from effective validation levels, report downgraded probes, classify

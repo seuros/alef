@@ -415,6 +415,32 @@ impl E2eCodegen for WasmCodegen {
         Ok(files)
     }
 
+    fn render_snippet_body(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+    ) -> Result<String> {
+        let overrides = e2e_config.call.overrides.get("wasm");
+        let module = e2e_config
+            .resolve_package("wasm")
+            .and_then(|package| package.name)
+            .unwrap_or_else(|| config.wasm_package_name());
+        Ok(super::typescript::test_file::render_snippet_body(
+            "wasm",
+            fixture,
+            &module,
+            overrides.and_then(|value| value.client_factory.as_deref()),
+            e2e_config,
+            type_defs,
+            enums,
+            &config.wasm_type_prefix(),
+            config,
+        ))
+    }
+
     fn language_name(&self) -> &'static str {
         "wasm"
     }

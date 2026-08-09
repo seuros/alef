@@ -3,7 +3,7 @@
 mod assertions;
 pub(crate) mod config;
 mod json;
-mod test_file;
+pub(crate) mod test_file;
 mod visitors;
 
 use crate::e2e::config::E2eConfig;
@@ -269,6 +269,33 @@ impl E2eCodegen for TypeScriptCodegen {
         }
 
         Ok(files)
+    }
+
+    fn render_snippet_body(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+    ) -> Result<String> {
+        let overrides = e2e_config.call.overrides.get("node");
+        let module = e2e_config
+            .resolve_package("node")
+            .and_then(|package| package.name)
+            .or_else(|| overrides.and_then(|value| value.module.clone()))
+            .unwrap_or_else(|| e2e_config.call.module.clone());
+        Ok(test_file::render_snippet_body(
+            "node",
+            fixture,
+            &module,
+            overrides.and_then(|value| value.client_factory.as_deref()),
+            e2e_config,
+            type_defs,
+            enums,
+            "",
+            config,
+        ))
     }
 
     fn language_name(&self) -> &'static str {

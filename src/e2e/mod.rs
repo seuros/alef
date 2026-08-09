@@ -197,6 +197,8 @@ pub fn generate_e2e(
             e2e_config,
             snippet_config,
             config,
+            type_defs,
+            enums,
         )?);
     }
 

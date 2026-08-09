@@ -49,7 +49,7 @@ mod zig_visitors;
 
 use crate::core::backend::GeneratedFile;
 use crate::core::config::ResolvedCrateConfig;
-use crate::core::ir::{MethodDef, TypeDef};
+use crate::core::ir::{EnumDef, MethodDef, TypeDef};
 use crate::e2e::config::E2eConfig;
 use crate::e2e::fixture::{Fixture, FixtureGroup};
 use anyhow::Result;
@@ -210,6 +210,21 @@ pub trait E2eCodegen: Send + Sync {
         type_defs: &[TypeDef],
         enums: &[crate::core::ir::EnumDef],
     ) -> Result<Vec<GeneratedFile>>;
+
+    /// Render the target-language source inside a generated documentation snippet.
+    fn render_snippet_body(
+        &self,
+        _fixture: &Fixture,
+        _e2e_config: &E2eConfig,
+        _config: &ResolvedCrateConfig,
+        _type_defs: &[TypeDef],
+        _enums: &[EnumDef],
+    ) -> Result<String> {
+        anyhow::bail!(
+            "e2e code generator `{}` does not support documentation snippets",
+            self.language_name()
+        )
+    }
 
     /// Language name for display and directory naming.
     fn language_name(&self) -> &'static str;

@@ -23,7 +23,6 @@ use anyhow::Result;
 
 use self::config::{render_conftest, render_pyproject};
 use self::test_file::render_test_file;
-pub(crate) use self::test_function::build_handle_kwarg_value;
 
 /// Python e2e test code generator.
 pub struct PythonE2eCodegen;
@@ -133,6 +132,24 @@ impl super::E2eCodegen for PythonE2eCodegen {
         }
 
         Ok(files)
+    }
+
+    fn render_snippet_body(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+    ) -> Result<String> {
+        Ok(render_test_file(
+            &fixture.resolved_category(),
+            &[fixture],
+            e2e_config,
+            config,
+            type_defs,
+            enums,
+        ))
     }
 
     fn language_name(&self) -> &'static str {
@@ -401,6 +418,54 @@ mod tests {
     fn language_name_is_python() {
         let codegen = PythonE2eCodegen;
         assert_eq!(codegen.language_name(), "python");
+    }
+
+    #[test]
+    fn snippet_body_matches_python_test_argument_and_call_rendering() {
+        use crate::core::config::NewAlefConfig;
+
+        let cfg: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["python"]
+[[crates]]
+name = "example-core"
+sources = ["src/lib.rs"]
+[crates.e2e]
+fixtures = "fixtures"
+[crates.e2e.call]
+function = "convert"
+module = "example_api"
+args = [
+  { name = "html", field = "html", type = "string" },
+  { name = "options", field = "options", type = "json_object", optional = true },
+  { name = "label", field = "label", type = "string", optional = true },
+]
+[crates.e2e.call.overrides.python]
+options_type = "ConversionOptions"
+enum_module = "example_api.options"
+[crates.e2e.call.overrides.python.enum_fields]
+headingStyle = "HeadingStyle"
+"#,
+        )
+        .expect("snippet config must parse");
+        let e2e = cfg.crates[0].e2e.clone().expect("e2e config");
+        let resolved = cfg.resolve().expect("config resolves").remove(0);
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "enum_options",
+            "description": "convert markup",
+            "input": {"html": "<h1>Hello</h1>", "options": {"headingStyle": "atx"}},
+            "assertions": [{"type": "not_error"}]
+        }))
+        .expect("fixture must parse");
+
+        let rendered = PythonE2eCodegen
+            .render_snippet_body(&fixture, &e2e, &resolved, &[], &[])
+            .expect("snippet renders");
+
+        assert!(rendered.contains("HeadingStyle(\"atx\")"), "{rendered}");
+        assert!(rendered.contains("ConversionOptions("), "{rendered}");
+        assert!(rendered.contains("convert(html, options, None)"), "{rendered}");
     }
 
     #[test]

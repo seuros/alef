@@ -1,1 +1,0 @@
-{% if language == "rust" %}{{ function }}({{ arguments }});{% else %}{{ function }}({{ arguments }}){% if language == "node" or language == "wasm" or language == "php" or language == "java" or language == "csharp" %};{% endif %}{% endif %}

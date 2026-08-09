@@ -186,6 +186,26 @@ impl E2eCodegen for RustE2eCodegen {
         Ok(files)
     }
 
+    fn render_snippet_body(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        _enums: &[crate::core::ir::EnumDef],
+    ) -> Result<String> {
+        let dep_name = resolve_crate_name(e2e_config, config).replace('-', "_");
+        Ok(render_test_file(
+            &fixture.resolved_category(),
+            &[fixture],
+            e2e_config,
+            config,
+            type_defs,
+            &dep_name,
+            fixture.needs_mock_server(),
+        ))
+    }
+
     fn language_name(&self) -> &'static str {
         "rust"
     }
@@ -664,6 +684,50 @@ result_var = "result"
         let resolved = cfg.resolve().unwrap().remove(0);
         let name = resolve_crate_name(&e2e, &resolved);
         assert_eq!(name, "my-lib");
+    }
+
+    #[test]
+    fn snippet_body_matches_rust_client_json_and_async_rendering() {
+        use crate::core::config::NewAlefConfig;
+        use crate::e2e::codegen::E2eCodegen;
+
+        let cfg: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["rust"]
+[[crates]]
+name = "example-core"
+sources = ["src/lib.rs"]
+[crates.e2e]
+fixtures = "fixtures"
+[crates.e2e.call]
+function = "chat"
+module = "example_core"
+async = true
+args = [{ name = "request", field = "input", type = "json_object", owned = true }]
+[crates.e2e.call.overrides.rust]
+client_factory = "create_client"
+options_type = "ChatRequest"
+"#,
+        )
+        .expect("snippet config must parse");
+        let e2e = cfg.crates[0].e2e.clone().expect("e2e config");
+        let resolved = cfg.resolve().expect("config resolves").remove(0);
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "client_chat",
+            "description": "send a request",
+            "input": {"model": "example-model", "messages": []},
+            "assertions": [{"type": "not_error"}]
+        }))
+        .expect("fixture must parse");
+
+        let rendered = RustE2eCodegen
+            .render_snippet_body(&fixture, &e2e, &resolved, &[], &[])
+            .expect("snippet renders");
+
+        assert!(rendered.contains("let request: ChatRequest"), "{rendered}");
+        assert!(rendered.contains("example_core::create_client"), "{rendered}");
+        assert!(rendered.contains("client.chat(request).await"), "{rendered}");
     }
 
     #[test]
