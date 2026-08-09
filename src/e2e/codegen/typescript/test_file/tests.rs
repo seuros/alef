@@ -630,12 +630,12 @@ fn http_only_test_file_with_json_body_emits_decompress_helper() {
                 body: Some(serde_json::json!({"id": 1, "name": "Alice"})),
                 body_partial: None,
                 headers: Default::default(),
-            validation_errors: None,
-        },
-    }),
-    asyncapi: None,
-    websocket: None,
-};
+                validation_errors: None,
+            },
+        }),
+        asyncapi: None,
+        websocket: None,
+    };
 
     let fixtures = vec![&fixture];
     let e2e_config = E2eConfig::default();
@@ -768,12 +768,12 @@ fn multipart_param_with_json_object_body_does_not_emit_boundary_content_type() {
                 body: Some(serde_json::json!({"filename": "a.txt"})),
                 body_partial: None,
                 headers: Default::default(),
-            validation_errors: None,
-        },
-    }),
-    asyncapi: None,
-    websocket: None,
-};
+                validation_errors: None,
+            },
+        }),
+        asyncapi: None,
+        websocket: None,
+    };
 
     let mut out = String::new();
     super::http::render_http_test_case(&mut out, &fixture);
@@ -843,12 +843,12 @@ fn multipart_synthesized_body_emits_boundary_content_type() {
                 body: None,
                 body_partial: None,
                 headers: Default::default(),
-            validation_errors: None,
-        },
-    }),
-    asyncapi: None,
-    websocket: None,
-};
+                validation_errors: None,
+            },
+        }),
+        asyncapi: None,
+        websocket: None,
+    };
 
     let mut out = String::new();
     super::http::render_http_test_case(&mut out, &fixture);
