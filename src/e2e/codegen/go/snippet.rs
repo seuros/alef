@@ -66,11 +66,18 @@ pub(super) fn render_snippet_body(
         .map(|value| value.name.as_str())
         .collect();
     let options_ptr = override_config.map(|value| value.options_ptr).unwrap_or(false);
+    let options_type = recipe.options_type.or_else(|| {
+        e2e_config
+            .call
+            .overrides
+            .get(lang)
+            .and_then(|value| value.options_type.as_deref())
+    });
     let (package_decls, setup_lines, mut args) = build_args_and_setup(
         &fixture.input,
         recipe.args,
         import_alias,
-        recipe.options_type,
+        options_type,
         fixture,
         options_ptr,
         false,
@@ -295,8 +302,8 @@ mod tests {
         e2e.call.function = "process".into();
         e2e.call.result_var = "result".into();
         e2e.call.args = [
-            ("payload", "input.payload", "SampleInput"),
-            ("config", "input.config", "SampleConfig"),
+            ("payload", "input.payload", Some("SampleInput")),
+            ("config", "input.config", None),
         ]
         .into_iter()
         .map(|(name, field, element_type)| crate::e2e::config::ArgMapping {
@@ -305,7 +312,7 @@ mod tests {
             arg_type: "json_object".into(),
             optional: false,
             owned: false,
-            element_type: Some(element_type.into()),
+            element_type: element_type.map(str::to_string),
             go_type: None,
             vec_inner_is_ref: false,
             trait_name: None,
@@ -315,6 +322,7 @@ mod tests {
             "go".into(),
             CallOverride {
                 options_ptr: true,
+                options_type: Some("SampleConfig".into()),
                 ..CallOverride::default()
             },
         );
