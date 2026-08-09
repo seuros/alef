@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.59.0] - 2026-08-09
+
+### Added
+
+- **The HTTP e2e fixture model now carries every middleware category a fixture can declare.**
+  `HttpMiddleware` gained `lifecycle_hooks`, `openrpc`, `background_tasks`, `websocket`, and
+  `authorization`, and the struct is now `deny_unknown_fields`. Previously an undeclared category
+  was silently discarded at parse time, so no generator in any language could ever see it; an
+  unmodelled category is now a hard parse error rather than an invisible omission.
+  (`src/e2e/fixture.rs`)
+- **Generated Rust HTTP e2e tests assert the response body and headers, not only the status code.**
+  Header checks skip values the transport or a response-encoding layer computes for itself.
+  (`src/e2e/codegen/rust/http.rs`)
+
+### Fixed
+
+- **Generated Rust HTTP e2e tests sent string request bodies wrapped in quotes.** A string body was
+  emitted through `serde_json::to_string`, so the payload reached the server with a leading and
+  trailing `"`. Form-urlencoded bodies gained two characters that shifted every field index,
+  multipart bodies received the two-character sequence `\r\n` instead of CRLF, and deliberately
+  malformed JSON payloads arrived as valid JSON strings — silently defeating the fixtures that
+  tested them. String bodies are now emitted verbatim, escaped into a regular string literal so
+  control characters survive; structured bodies are unchanged. (`src/e2e/codegen/rust/http.rs`)
+
 ## [0.58.3] - 2026-08-09
 
 ### Fixed
