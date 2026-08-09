@@ -151,15 +151,17 @@ pub(super) fn generate_type_stubs(
         let is_constructor_param =
             |f: &FieldDef| f.cfg.is_none() && php_field_can_be_constructor_param(&f.ty, &enum_names, &opaque_types);
 
-        for excluded in binding_fields(&typ.fields).filter(|f| !is_constructor_param(f)) {
-            tracing::warn!(
-                "php backend stub: {}.{} cannot be represented as a #[php(constructor)] parameter \
-                 (its mapped type has no ext-php-rs constructor-param support); the PHPStan stub \
-                 omits it from the constructor and exposes it only via get_{}()",
-                typ.name,
-                excluded.name,
-                excluded.name,
-            );
+        if !typ.has_serde {
+            for excluded in binding_fields(&typ.fields).filter(|f| !is_constructor_param(f)) {
+                tracing::warn!(
+                    "php backend stub: {}.{} cannot be represented as a #[php(constructor)] parameter \
+                     (its mapped type has no ext-php-rs constructor-param support); the PHPStan stub \
+                     omits it from the constructor and exposes it only via get_{}()",
+                    typ.name,
+                    excluded.name,
+                    excluded.name,
+                );
+            }
         }
 
         let mut ctor_fields: Vec<&FieldDef> = binding_fields(&typ.fields)

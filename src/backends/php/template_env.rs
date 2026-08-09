@@ -2,6 +2,10 @@ use minijinja::Environment;
 
 static TEMPLATES: &[(&str, &str)] = &[
     (
+        "php_json_map_field_doc.jinja",
+        include_str!("templates/php_json_map_field_doc.jinja"),
+    ),
+    (
         "visitor_nodecontext_helper.jinja",
         include_str!("templates/visitor_nodecontext_helper.jinja"),
     ),

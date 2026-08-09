@@ -347,20 +347,31 @@ pub(crate) fn gen_php_struct(
             // never set it — there is no `#[php(setter)]` for non-prop fields), so surface it
             // instead of silently dropping the field from the constructor and property list. ~keep
             if matches!(&field.ty, TypeRef::Map(_, _)) {
-                tracing::warn!(
-                    "php backend: {}.{} is a Map whose value type can't cross the ext-php-rs \
-                     FFI boundary as a #[php(prop)] — PHP callers can read it via get_{}() but \
-                     cannot set it (no constructor param, no setter)",
-                    typ.name,
-                    field.name,
-                    field.name,
-                );
-                vec![format!(
-                    "doc = \"PHP: read-only via get_{}() — this field's value type cannot cross \
-                     the ext-php-rs FFI boundary as a settable property, so it is omitted from \
-                     the constructor and has no setter.\"",
-                    field.name
-                )]
+                if cfg.has_serde {
+                    vec![
+                        crate::backends::php::template_env::render(
+                            "php_json_map_field_doc.jinja",
+                            minijinja::context! { field_name => &field.name },
+                        )
+                        .trim_end()
+                        .to_owned(),
+                    ]
+                } else {
+                    tracing::warn!(
+                        "php backend: {}.{} is a Map whose value type can't cross the ext-php-rs \
+                         FFI boundary as a #[php(prop)] — PHP callers can read it via get_{}() but \
+                         cannot set it (no constructor param, no setter)",
+                        typ.name,
+                        field.name,
+                        field.name,
+                    );
+                    vec![format!(
+                        "doc = \"PHP: read-only via get_{}() — this field's value type cannot cross \
+                         the ext-php-rs FFI boundary as a settable property, so it is omitted from \
+                         the constructor and has no setter.\"",
+                        field.name
+                    )]
+                }
             } else {
                 vec![]
             }
