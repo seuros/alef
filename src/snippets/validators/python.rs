@@ -1,4 +1,5 @@
 use crate::snippets::error::Result;
+use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
 use crate::snippets::validators::{SnippetValidator, run_command};
 use tempfile::TempDir;
@@ -6,6 +7,76 @@ use tempfile::TempDir;
 pub struct PythonValidator;
 
 impl PythonValidator {
+    fn validate_with_context(
+        snippet: &Snippet,
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Result<(SnippetStatus, Option<String>)> {
+        let dir = match session {
+            Some(session) => tempfile::Builder::new()
+                .prefix(".alef-snippet-")
+                .tempdir_in(&session.working_directory)?,
+            None => TempDir::new()?,
+        };
+        let code = Self::patch_code(&snippet.code);
+        let snippet_path = dir.path().join("snippet.py");
+        std::fs::write(&snippet_path, &code)?;
+        let python = if which::which("python3").is_ok() {
+            "python3"
+        } else {
+            "python"
+        };
+        let path = snippet_path.to_string_lossy().to_string();
+        let mut command = Self::command(level, dir.path(), python, &path)?;
+        if let Some(session) = session {
+            command.current_dir(&session.working_directory);
+        }
+        let (success, output) = run_command(&mut command, timeout_secs)?;
+        if success {
+            Ok((SnippetStatus::Pass, None))
+        } else if level == ValidationLevel::TypeCheck
+            && (output.contains("No module named mypy") || output.contains("No module named \"mypy\""))
+        {
+            Ok((SnippetStatus::Unavailable, Some("mypy not installed".to_string())))
+        } else {
+            Ok((SnippetStatus::Fail, Some(output)))
+        }
+    }
+
+    fn command(
+        level: ValidationLevel,
+        directory: &std::path::Path,
+        python: &str,
+        path: &str,
+    ) -> Result<std::process::Command> {
+        let command = match level {
+            ValidationLevel::Syntax => {
+                let checker_path = directory.join("check.py");
+                std::fs::write(&checker_path, "import ast, sys\nast.parse(open(sys.argv[1]).read())\n")?;
+                let mut command = std::process::Command::new(python);
+                command.args([checker_path.to_string_lossy().as_ref(), path]);
+                command
+            }
+            ValidationLevel::Compile => {
+                let mut command = std::process::Command::new(python);
+                command.args(["-m", "py_compile", path]);
+                command
+            }
+            ValidationLevel::TypeCheck => {
+                let mut command = std::process::Command::new(python);
+                command.args(["-m", "mypy", "--no-error-summary", "--no-color-output", path]);
+                command
+            }
+            ValidationLevel::Run => {
+                let mut command = std::process::Command::new(python);
+                command.arg(path);
+                command
+            }
+        };
+        Ok(command)
+    }
+
     fn patch_code(code: &str) -> String {
         let trimmed = code.trim();
 
@@ -159,63 +230,17 @@ impl SnippetValidator for PythonValidator {
         level: ValidationLevel,
         timeout_secs: u64,
     ) -> Result<(SnippetStatus, Option<String>)> {
-        let dir = TempDir::new()?;
-        let code = Self::patch_code(&snippet.code);
-        let snippet_path = dir.path().join("snippet.py");
-        std::fs::write(&snippet_path, &code)?;
+        Self::validate_with_context(snippet, level, timeout_secs, None)
+    }
 
-        let python = if which::which("python3").is_ok() {
-            "python3"
-        } else {
-            "python"
-        };
-        let path = snippet_path.to_string_lossy().to_string();
-
-        let mut command = match level {
-            ValidationLevel::Syntax => {
-                let checker_path = dir.path().join("check.py");
-                let checker = "\
-import ast, sys
-try:
-    with open(sys.argv[1]) as f:
-        ast.parse(f.read())
-except SyntaxError as e:
-    print(f\"{e}\", file=sys.stderr)
-    sys.exit(1)
-";
-                std::fs::write(&checker_path, checker)?;
-
-                let mut command = std::process::Command::new(python);
-                command.args([checker_path.to_string_lossy().as_ref(), &path]);
-                command
-            }
-            ValidationLevel::Compile => {
-                let mut command = std::process::Command::new(python);
-                command.args(["-m", "py_compile", &path]);
-                command
-            }
-            ValidationLevel::TypeCheck => {
-                let mut command = std::process::Command::new(python);
-                command.args(["-m", "mypy", "--no-error-summary", "--no-color-output", &path]);
-                command
-            }
-            ValidationLevel::Run => {
-                let mut command = std::process::Command::new(python);
-                command.arg(&path);
-                command
-            }
-        };
-
-        let (success, output) = run_command(&mut command, timeout_secs)?;
-        if success {
-            Ok((SnippetStatus::Pass, None))
-        } else if level == ValidationLevel::TypeCheck
-            && (output.contains("No module named mypy") || output.contains("No module named \"mypy\""))
-        {
-            Ok((SnippetStatus::Unavailable, Some("mypy not installed".to_string())))
-        } else {
-            Ok((SnippetStatus::Fail, Some(output)))
-        }
+    fn validate_in_session(
+        &self,
+        snippet: &Snippet,
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Result<(SnippetStatus, Option<String>)> {
+        Self::validate_with_context(snippet, level, timeout_secs, session)
     }
 
     fn max_level(&self) -> ValidationLevel {
@@ -231,9 +256,7 @@ except SyntaxError as e:
 #[cfg(test)]
 mod tests {
     use super::PythonValidator;
-    use crate::snippets::types::{
-        Language, Snippet, SnippetMetadata, SnippetStatus, SourceOrigin, ValidationLevel,
-    };
+    use crate::snippets::types::{Language, Snippet, SnippetMetadata, SnippetStatus, SourceOrigin, ValidationLevel};
     use crate::snippets::validators::SnippetValidator;
     use std::path::PathBuf;
 

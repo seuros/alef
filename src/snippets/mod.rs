@@ -6,5 +6,6 @@ pub mod gaps;
 pub mod output;
 pub mod parser;
 pub mod runner;
+pub mod session;
 pub mod types;
 pub mod validators;

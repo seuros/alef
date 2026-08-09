@@ -5,6 +5,7 @@ use crate::snippets::discovery;
 use crate::snippets::gaps::{GapConfig, detect_gaps};
 use crate::snippets::output;
 use crate::snippets::runner::{RunnerConfig, run_validation};
+use crate::snippets::session::SessionSpec;
 use crate::snippets::types::{Language, SideEffectClass, SnippetStatus, ValidationLevel};
 use crate::snippets::validators::ValidatorRegistry;
 use clap::Subcommand;
@@ -221,6 +222,7 @@ fn run_validate(
         allowed_side_effects: Vec::new(),
         cache_dir: Some(PathBuf::from(".alef/snippets")),
         changed_only,
+        sessions: Default::default(),
     };
 
     match run_validation(&found, &registry, &config) {
@@ -306,6 +308,23 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool) -> ExitCod
         allowed_side_effects,
         cache_dir: use_cache.then(|| root.join(config.cache_dir())),
         changed_only: use_cache,
+        sessions: config
+            .sessions
+            .iter()
+            .filter_map(|(name, session)| {
+                let language = Language::from_fence_tag(name);
+                (language != Language::Unknown).then(|| {
+                    (
+                        language,
+                        SessionSpec {
+                            working_directory: root.join(&session.cwd),
+                            manifest: session.manifest.as_ref().map(|path| root.join(path)),
+                            before: session.before.clone(),
+                        },
+                    )
+                })
+            })
+            .collect(),
     };
     let summary = match run_validation(&found, &ValidatorRegistry::new(), &runner) {
         Ok(summary) => summary,
@@ -322,11 +341,43 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool) -> ExitCod
         return ExitCode::FAILURE;
     }
     let strict_failure = strict && has_incomplete_coverage(&summary);
-    if summary.has_failures() || strict_failure {
+    let missing_generated = match missing_generated_snippets(&directories) {
+        Ok(missing) => missing,
+        Err(error) => {
+            tracing::error!("reading generated snippet coverage: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    for missing in &missing_generated {
+        tracing::warn!(
+            "generated snippet missing for fixture `{}` language `{}`: {}",
+            missing.key.fixture_id,
+            missing.key.language,
+            missing.reason
+        );
+    }
+    if summary.has_failures() || strict_failure || strict && !missing_generated.is_empty() {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
     }
+}
+
+fn missing_generated_snippets(directories: &[PathBuf]) -> anyhow::Result<Vec<crate::e2e::snippets::MissingSnippet>> {
+    let mut missing = Vec::new();
+    for directory in directories {
+        let path = directory.join(crate::e2e::snippets::COVERAGE_MANIFEST);
+        if !path.is_file() {
+            continue;
+        }
+        let content = std::fs::read_to_string(&path)
+            .map_err(|error| anyhow::anyhow!("failed to read {}: {error}", path.display()))?;
+        let ledger: crate::e2e::snippets::SnippetCoverageLedger = serde_json::from_str(&content)
+            .map_err(|error| anyhow::anyhow!("failed to parse {}: {error}", path.display()))?;
+        missing.extend(ledger.missing);
+    }
+    missing.sort_by(|left, right| left.key.cmp(&right.key));
+    Ok(missing)
 }
 
 fn has_incomplete_coverage(summary: &crate::snippets::types::RunSummary) -> bool {
@@ -386,6 +437,7 @@ fn run_audit(snippet_dirs: &[PathBuf], docs_dirs: &[PathBuf], require_frontmatte
         snippet_dirs: snippet_dirs.to_vec(),
         require_frontmatter,
         include_base_paths: docs_dirs.to_vec(),
+        configured_references: Vec::new(),
         exclude: Vec::new(),
     };
     let report = audit(&config);
@@ -439,6 +491,7 @@ fn run_gaps(
         snippet_dirs: snippet_dirs.to_vec(),
         required_languages: required,
         include_base_paths: resolved_base_paths,
+        configured_references: Vec::new(),
         exclude: Vec::new(),
     };
     let report = match detect_gaps(&config) {
@@ -519,5 +572,32 @@ mod tests {
         assert!(is_incomplete_status(SnippetStatus::Unavailable));
         assert!(is_incomplete_status(SnippetStatus::Downgraded));
         assert!(!is_incomplete_status(SnippetStatus::Pass));
+    }
+
+    #[test]
+    fn generated_coverage_manifest_exposes_missing_cells() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let ledger = crate::e2e::snippets::SnippetCoverageLedger {
+            expected: vec![crate::e2e::snippets::SnippetCoverageKey {
+                fixture_id: "extension_only".into(),
+                language: "python".into(),
+            }],
+            missing: vec![crate::e2e::snippets::MissingSnippet {
+                key: crate::e2e::snippets::SnippetCoverageKey {
+                    fixture_id: "extension_only".into(),
+                    language: "python".into(),
+                },
+                reason: "no compatible recipe".into(),
+            }],
+            ..Default::default()
+        };
+        std::fs::write(
+            directory.path().join(crate::e2e::snippets::COVERAGE_MANIFEST),
+            serde_json::to_vec(&ledger).expect("serialize ledger"),
+        )
+        .expect("write ledger");
+
+        let missing = missing_generated_snippets(&[directory.path().to_path_buf()]).expect("read ledger");
+        assert_eq!(missing, ledger.missing);
     }
 }

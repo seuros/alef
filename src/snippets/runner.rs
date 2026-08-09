@@ -1,10 +1,12 @@
 use crate::snippets::cache::ValidationCache;
 use crate::snippets::error::Result;
+use crate::snippets::session::{SessionSpec, prepare_sessions};
 use crate::snippets::types::{
     RunSummary, SideEffectClass, Snippet, SnippetAnnotationKind, SnippetStatus, ValidationLevel, ValidationResult,
 };
 use crate::snippets::validators::ValidatorRegistry;
 use rayon::prelude::*;
+use std::collections::HashMap;
 use std::time::Instant;
 
 pub struct RunnerConfig {
@@ -16,6 +18,7 @@ pub struct RunnerConfig {
     pub allowed_side_effects: Vec<SideEffectClass>,
     pub cache_dir: Option<std::path::PathBuf>,
     pub changed_only: bool,
+    pub sessions: HashMap<crate::snippets::types::Language, SessionSpec>,
 }
 
 impl Default for RunnerConfig {
@@ -29,6 +32,7 @@ impl Default for RunnerConfig {
             allowed_side_effects: Vec::new(),
             cache_dir: Some(std::path::PathBuf::from(".alef/snippets")),
             changed_only: false,
+            sessions: HashMap::new(),
         }
     }
 }
@@ -43,6 +47,7 @@ fn available_parallelism() -> usize {
 ///
 /// Returns an error when the validation thread pool cannot be created.
 pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config: &RunnerConfig) -> Result<RunSummary> {
+    let sessions = prepare_sessions(&config.sessions, config.timeout_secs)?;
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(config.parallelism)
         .build()
@@ -53,7 +58,7 @@ pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config
         if fail_fast {
             let mut results = Vec::with_capacity(snippets.len());
             for snippet in snippets {
-                let result = validate_one(snippet, registry, config);
+                let result = validate_one(snippet, registry, config, sessions.get(&snippet.language));
                 let should_stop = matches!(result.status, SnippetStatus::Fail | SnippetStatus::Error);
                 results.push(result);
                 if should_stop {
@@ -64,7 +69,7 @@ pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config
         } else {
             snippets
                 .par_iter()
-                .map(|snippet| validate_one(snippet, registry, config))
+                .map(|snippet| validate_one(snippet, registry, config, sessions.get(&snippet.language)))
                 .collect()
         }
     });
@@ -72,7 +77,12 @@ pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config
     Ok(RunSummary::from_results(results))
 }
 
-fn validate_one(snippet: &Snippet, registry: &ValidatorRegistry, config: &RunnerConfig) -> ValidationResult {
+fn validate_one(
+    snippet: &Snippet,
+    registry: &ValidatorRegistry,
+    config: &RunnerConfig,
+    session: Option<&crate::snippets::session::ValidationSession>,
+) -> ValidationResult {
     if let Some(result) = cached_result(snippet, config) {
         return result;
     }
@@ -158,10 +168,11 @@ fn validate_one(snippet: &Snippet, registry: &ValidatorRegistry, config: &Runner
     }
 
     let start = Instant::now();
-    let (mut status, message) = match validator.validate(snippet, effective_level, config.timeout_secs) {
-        Ok((status, message)) => (status, message),
-        Err(err) => (SnippetStatus::Error, Some(err.to_string())),
-    };
+    let (mut status, message) =
+        match validator.validate_in_session(snippet, effective_level, config.timeout_secs, session) {
+            Ok((status, message)) => (status, message),
+            Err(err) => (SnippetStatus::Error, Some(err.to_string())),
+        };
     let duration_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
     if status == SnippetStatus::Fail

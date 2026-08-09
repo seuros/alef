@@ -341,12 +341,15 @@ fn validate_snippets(
         .iter()
         .map(|path| workspace_root.join(path))
         .collect::<Vec<_>>();
+    let configured_references =
+        crate::snippets::gaps::readme_snippet_references(workspace_root, config.readme.as_ref());
 
     if !docs_dirs.is_empty() {
         let audit_report = crate::snippets::audit::audit(&crate::snippets::audit::AuditConfig {
             docs_dirs: docs_dirs.clone(),
             snippet_dirs: absolute_snippet_dirs.to_vec(),
             include_base_paths: include_base_paths.clone(),
+            configured_references: configured_references.clone(),
             exclude: exclude.clone(),
             require_frontmatter: snippet_cfg.require_frontmatter,
         });
@@ -375,6 +378,7 @@ fn validate_snippets(
             snippet_dirs: absolute_snippet_dirs.to_vec(),
             required_languages,
             include_base_paths,
+            configured_references,
             exclude,
         })?;
         if !report.unreferenced_snippets.is_empty() && snippet_cfg.strict {
@@ -409,6 +413,23 @@ fn validate_snippets(
             deny_unclassified: snippet_cfg.deny_unclassified,
             allowed_side_effects: parse_allowed_side_effects(&snippet_cfg.allowed_side_effects)?,
             cache_dir: Some(workspace_root.join(snippet_cfg.cache_dir())),
+            sessions: snippet_cfg
+                .sessions
+                .iter()
+                .filter_map(|(name, session)| {
+                    let language = crate::snippets::types::Language::from_fence_tag(name);
+                    (language != crate::snippets::types::Language::Unknown).then(|| {
+                        (
+                            language,
+                            crate::snippets::session::SessionSpec {
+                                working_directory: workspace_root.join(&session.cwd),
+                                manifest: session.manifest.as_ref().map(|path| workspace_root.join(path)),
+                                before: session.before.clone(),
+                            },
+                        )
+                    })
+                })
+                .collect(),
             ..crate::snippets::runner::RunnerConfig::default()
         };
         if let Some(timeout_secs) = snippet_cfg.timeout_secs {

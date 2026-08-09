@@ -20,6 +20,7 @@ pub mod yaml_validator;
 pub mod zig;
 
 use crate::snippets::error::Result;
+use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
 use std::collections::HashMap;
 use std::io::Read;
@@ -41,6 +42,15 @@ pub trait SnippetValidator: Send + Sync {
         level: ValidationLevel,
         timeout_secs: u64,
     ) -> Result<(SnippetStatus, Option<String>)>;
+    fn validate_in_session(
+        &self,
+        snippet: &Snippet,
+        level: ValidationLevel,
+        timeout_secs: u64,
+        _session: Option<&ValidationSession>,
+    ) -> Result<(SnippetStatus, Option<String>)> {
+        self.validate(snippet, level, timeout_secs)
+    }
     fn max_level(&self) -> ValidationLevel;
 
     fn is_dependency_error(&self, _error_output: &str) -> bool {

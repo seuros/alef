@@ -1,7 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 mod citation;
@@ -449,6 +449,21 @@ pub struct DocsSnippetsConfig {
     /// Optional path for the machine-readable validation report.
     #[serde(default)]
     pub report_output: Option<PathBuf>,
+    /// Binding-aware validation sessions keyed by language name.
+    #[serde(default)]
+    pub sessions: BTreeMap<String, DocsSnippetSessionConfig>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct DocsSnippetSessionConfig {
+    /// Working directory used to resolve the generated local package.
+    pub cwd: PathBuf,
+    /// Optional local package manifest, resolved relative to the repository root.
+    #[serde(default)]
+    pub manifest: Option<PathBuf>,
+    /// Setup commands run once before validating this language.
+    #[serde(default)]
+    pub before: Vec<String>,
 }
 
 impl DocsSnippetsConfig {
@@ -498,6 +513,7 @@ impl DocsSnippetsConfig {
             report_output: krate
                 .and_then(|cfg| cfg.report_output.clone())
                 .or_else(|| workspace.and_then(|cfg| cfg.report_output.clone())),
+            sessions: merge_btree_map(workspace.map(|cfg| &cfg.sessions), krate.map(|cfg| &cfg.sessions)),
         })
     }
 
@@ -515,6 +531,17 @@ fn merge_vec<T: Clone>(workspace: Option<&Vec<T>>, krate: Option<&Vec<T>>) -> Ve
         .cloned()
         .or_else(|| workspace.filter(|items| !items.is_empty()).cloned())
         .unwrap_or_default()
+}
+
+fn merge_btree_map<K: Clone + Ord, V: Clone>(
+    workspace: Option<&BTreeMap<K, V>>,
+    krate: Option<&BTreeMap<K, V>>,
+) -> BTreeMap<K, V> {
+    let mut merged = workspace.cloned().unwrap_or_default();
+    if let Some(values) = krate {
+        merged.extend(values.clone());
+    }
+    merged
 }
 
 /// A value that can be either a single string or a list of strings.

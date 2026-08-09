@@ -1,0 +1,127 @@
+use crate::snippets::error::{Error, Result};
+use crate::snippets::types::Language;
+use crate::snippets::validators::run_command;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, Default)]
+pub struct SessionSpec {
+    pub working_directory: PathBuf,
+    pub manifest: Option<PathBuf>,
+    pub before: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidationSession {
+    pub working_directory: PathBuf,
+    pub manifest: Option<PathBuf>,
+}
+
+pub fn prepare_sessions(
+    specs: &HashMap<Language, SessionSpec>,
+    timeout_secs: u64,
+) -> Result<HashMap<Language, ValidationSession>> {
+    specs
+        .iter()
+        .map(|(language, spec)| prepare_session(*language, spec, timeout_secs).map(|session| (*language, session)))
+        .collect()
+}
+
+fn prepare_session(language: Language, spec: &SessionSpec, timeout_secs: u64) -> Result<ValidationSession> {
+    ensure_directory(&spec.working_directory, language)?;
+    if let Some(manifest) = &spec.manifest
+        && !manifest.is_file()
+    {
+        return Err(Error::Other(format!(
+            "configured {language} snippet manifest does not exist: {}",
+            manifest.display()
+        )));
+    }
+    for command in &spec.before {
+        run_before(command, &spec.working_directory, timeout_secs)
+            .map_err(|error| Error::Other(format!("preparing {language} snippet validation session: {error}")))?;
+    }
+    Ok(ValidationSession {
+        working_directory: spec.working_directory.clone(),
+        manifest: spec.manifest.clone(),
+    })
+}
+
+fn ensure_directory(path: &Path, language: Language) -> Result<()> {
+    if path.is_dir() {
+        Ok(())
+    } else {
+        Err(Error::Other(format!(
+            "configured {language} snippet working directory does not exist: {}",
+            path.display()
+        )))
+    }
+}
+
+fn run_before(source: &str, working_directory: &Path, timeout_secs: u64) -> Result<()> {
+    let mut command = shell_command(source);
+    command.current_dir(working_directory);
+    let (success, output) = run_command(&mut command, timeout_secs)?;
+    if success {
+        Ok(())
+    } else {
+        Err(Error::Other(format!("before command failed: {output}")))
+    }
+}
+
+#[cfg(unix)]
+fn shell_command(source: &str) -> std::process::Command {
+    let mut command = std::process::Command::new("sh");
+    command.args(["-c", source]);
+    command
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prepares_before_command_once_per_language() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let marker = directory.path().join("prepared");
+        let mut specs = HashMap::new();
+        specs.insert(
+            Language::Python,
+            SessionSpec {
+                working_directory: directory.path().to_path_buf(),
+                manifest: None,
+                before: vec![format!("test ! -e prepared && touch {}", marker.display())],
+            },
+        );
+
+        let sessions = prepare_sessions(&specs, 5).expect("session preparation succeeds");
+
+        assert!(marker.exists());
+        assert_eq!(sessions.len(), 1);
+    }
+
+    #[test]
+    fn rejects_missing_configured_manifest() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let mut specs = HashMap::new();
+        specs.insert(
+            Language::TypeScript,
+            SessionSpec {
+                working_directory: directory.path().to_path_buf(),
+                manifest: Some(directory.path().join("missing.json")),
+                before: Vec::new(),
+            },
+        );
+
+        let error = prepare_sessions(&specs, 5).expect_err("missing manifest is rejected");
+
+        assert!(error.to_string().contains("manifest does not exist"));
+    }
+}
+
+#[cfg(windows)]
+fn shell_command(source: &str) -> std::process::Command {
+    let mut command = std::process::Command::new("cmd");
+    command.args(["/C", source]);
+    command
+}
