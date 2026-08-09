@@ -62,6 +62,13 @@ pub struct SnippetGenerationReport {
     pub coverage: SnippetCoverageLedger,
 }
 
+struct SnippetRenderContext<'a> {
+    e2e: &'a E2eConfig,
+    crate_config: &'a ResolvedCrateConfig,
+    type_defs: &'a [TypeDef],
+    enums: &'a [EnumDef],
+}
+
 pub fn generate_snippets(
     fixtures: &[Fixture],
     languages: &[String],
@@ -102,27 +109,21 @@ pub fn generate_snippet_report(
     enums: &[EnumDef],
 ) -> Result<SnippetGenerationReport> {
     crate::with_extensions(|extensions| {
-        generate_snippet_report_with_extensions(
-            fixtures,
-            languages,
+        let context = SnippetRenderContext {
             e2e,
-            snippets,
             crate_config,
             type_defs,
             enums,
-            extensions,
-        )
+        };
+        generate_snippet_report_with_extensions(fixtures, languages, snippets, &context, extensions)
     })
 }
 
 fn generate_snippet_report_with_extensions(
     fixtures: &[Fixture],
     languages: &[String],
-    e2e: &E2eConfig,
     snippets: &SnippetConfig,
-    crate_config: &ResolvedCrateConfig,
-    type_defs: &[TypeDef],
-    enums: &[EnumDef],
+    context: &SnippetRenderContext<'_>,
     extensions: &[Box<dyn crate::Extension>],
 ) -> Result<SnippetGenerationReport> {
     validate_relative_path(Path::new(&snippets.output), "snippet output")?;
@@ -139,8 +140,8 @@ fn generate_snippet_report_with_extensions(
             };
             coverage.expected.push(key.clone());
             let docs = fixture.docs.as_ref().expect("filtered docs fixtures have metadata");
-            let fixture_decision = fixture_inclusion(fixture, language, e2e);
-            let capabilities = capabilities(language, snippets, crate_config);
+            let fixture_decision = fixture_inclusion(fixture, language, context.e2e);
+            let capabilities = capabilities(language, snippets, context.crate_config);
             let capability_decision = snippet_inclusion(fixture, &capabilities);
             let exclusion_reason = match (&fixture_decision, &capability_decision) {
                 (crate::e2e::codegen::InclusionDecision::Exclude(reason), _) => Some((*reason).to_string()),
@@ -168,16 +169,7 @@ fn generate_snippet_report_with_extensions(
                 )
             })?;
             let path = snippet_path(&snippets.output, docs, &fixture.id, lang)?;
-            let body = match render_snippet_body(
-                extensions,
-                generator.as_ref(),
-                fixture,
-                e2e,
-                crate_config,
-                language,
-                type_defs,
-                enums,
-            ) {
+            let body = match render_snippet_body(extensions, generator.as_ref(), fixture, language, context) {
                 Ok(body) => body,
                 Err(error) => {
                     coverage.missing.push(MissingSnippet {
@@ -257,15 +249,19 @@ fn render_snippet_body(
     extensions: &[Box<dyn crate::Extension>],
     generator: &dyn E2eCodegen,
     fixture: &Fixture,
-    e2e: &E2eConfig,
-    crate_config: &ResolvedCrateConfig,
     language: &str,
-    type_defs: &[TypeDef],
-    enums: &[EnumDef],
+    context: &SnippetRenderContext<'_>,
 ) -> Result<String> {
     for extension in extensions {
         if let Some(body) = extension
-            .render_e2e_snippet(fixture, e2e, crate_config, language, type_defs, enums)
+            .render_e2e_snippet(
+                fixture,
+                context.e2e,
+                context.crate_config,
+                language,
+                context.type_defs,
+                context.enums,
+            )
             .map_err(|error| anyhow::anyhow!("extension `{}` could not render snippet: {error:#}", extension.name()))?
         {
             if body.trim().is_empty() {
@@ -275,7 +271,13 @@ fn render_snippet_body(
         }
     }
     let body = generator
-        .render_snippet_body(fixture, e2e, crate_config, type_defs, enums)
+        .render_snippet_body(
+            fixture,
+            context.e2e,
+            context.crate_config,
+            context.type_defs,
+            context.enums,
+        )
         .map_err(|error| anyhow::anyhow!("built-in `{language}` snippet recipe is incompatible: {error:#}"))?;
     if body.trim().is_empty() {
         bail!("built-in `{language}` snippet recipe returned an empty body");
@@ -563,15 +565,19 @@ mod tests {
         let extensions: Vec<Box<dyn crate::Extension>> = vec![Box::new(FixtureExtension {
             body: "extension_call()",
         })];
+        let crate_config = ResolvedCrateConfig::default();
+        let context = SnippetRenderContext {
+            e2e: &e2e,
+            crate_config: &crate_config,
+            type_defs: &[],
+            enums: &[],
+        };
 
         let report = generate_snippet_report_with_extensions(
             &[fixture],
             &["rust".into()],
-            &e2e,
             &snippet_config,
-            &ResolvedCrateConfig::default(),
-            &[],
-            &[],
+            &context,
             &extensions,
         )
         .expect("extension snippet report renders");
@@ -592,15 +598,19 @@ mod tests {
             ..SnippetConfig::default()
         };
         let extensions: Vec<Box<dyn crate::Extension>> = vec![Box::new(FixtureExtension { body: "  " })];
+        let crate_config = ResolvedCrateConfig::default();
+        let context = SnippetRenderContext {
+            e2e: &e2e,
+            crate_config: &crate_config,
+            type_defs: &[],
+            enums: &[],
+        };
 
         let report = generate_snippet_report_with_extensions(
             &[fixture],
             &["rust".into()],
-            &e2e,
             &snippet_config,
-            &ResolvedCrateConfig::default(),
-            &[],
-            &[],
+            &context,
             &extensions,
         )
         .expect("empty recipe belongs in coverage report");
