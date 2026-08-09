@@ -16,6 +16,7 @@ use crate::e2e::fixture::Fixture;
 use super::helpers::{is_skipped, resolve_client_factory, resolve_function_name_for_call};
 use super::visitors::emit_python_visitor_method;
 use args::build_args_and_setup;
+pub(crate) use args::build_handle_kwarg_value;
 use error_assertions::emit_error_assertion;
 use result_assertions::emit_result_and_assertions;
 pub(super) use typed_values::resolve_field_enum_type;

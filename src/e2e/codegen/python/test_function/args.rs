@@ -236,7 +236,7 @@ fn emit_handle_arg(
     kwarg_exprs.push(var_name.to_string());
 }
 
-fn build_handle_kwarg_value(
+pub(crate) fn build_handle_kwarg_value(
     k: &str,
     v: &serde_json::Value,
     handle_nested_types: &HashMap<String, String>,

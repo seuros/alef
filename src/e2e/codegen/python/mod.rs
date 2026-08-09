@@ -23,6 +23,7 @@ use anyhow::Result;
 
 use self::config::{render_conftest, render_pyproject};
 use self::test_file::render_test_file;
+pub(crate) use self::test_function::build_handle_kwarg_value;
 
 /// Python e2e test code generator.
 pub struct PythonE2eCodegen;

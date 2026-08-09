@@ -9,9 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Render fixture-driven documentation snippets with setup calls, imports, options constructors, client factories,
-  mock-server URLs, valid Python/Ruby object literals, side-effect frontmatter, whole-input arguments, and Rust/C
-  language aliases.
+- Render fixture-driven documentation snippets with setup calls, imports, recipe-aware options and enum constructors,
+  omitted absent optionals, client factories, mock-server URLs, Python handle constructors, valid Python/Ruby/Rust JSON
+  literals, Rust async calls, side-effect frontmatter, whole-input arguments, and Rust/C language aliases.
 
 ### Added
 

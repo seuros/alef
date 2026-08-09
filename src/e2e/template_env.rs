@@ -7,6 +7,22 @@ static TEMPLATES: &[(&str, &str)] = &[
     ),
     ("snippets/call.jinja", include_str!("templates/snippets/call.jinja")),
     (
+        "snippets/python_option_field.jinja",
+        include_str!("templates/snippets/python_option_field.jinja"),
+    ),
+    (
+        "snippets/rust_json_argument.jinja",
+        include_str!("templates/snippets/rust_json_argument.jinja"),
+    ),
+    (
+        "snippets/handle_config_setup.jinja",
+        include_str!("templates/snippets/handle_config_setup.jinja"),
+    ),
+    (
+        "snippets/handle_create_setup.jinja",
+        include_str!("templates/snippets/handle_create_setup.jinja"),
+    ),
+    (
         "snippets/setup_call.jinja",
         include_str!("templates/snippets/setup_call.jinja"),
     ),
