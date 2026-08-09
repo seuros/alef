@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Brew and Homebrew fixture snippet targets now use shell documentation metadata and report unsupported recipes through
+  exact per-language coverage exceptions instead of aborting snippet generation with a language-mapping error.
+
 - Multipart fixture requests now share one request plan across the generic and Rust e2e clients. Schema-only
   uploads synthesize a real multipart body and boundary, while explicitly empty form data emits neither.
 

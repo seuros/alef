@@ -69,6 +69,35 @@ struct SnippetRenderContext<'a> {
     enums: &'a [EnumDef],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DocumentationLanguage {
+    Binding(Language),
+    Shell,
+}
+
+impl DocumentationLanguage {
+    fn slug(self) -> &'static str {
+        match self {
+            Self::Binding(language) => crate::docs::naming::lang_slug(language),
+            Self::Shell => "shell",
+        }
+    }
+
+    fn code_fence(self) -> &'static str {
+        match self {
+            Self::Binding(language) => crate::docs::naming::lang_code_fence(language),
+            Self::Shell => "bash",
+        }
+    }
+
+    fn display_name(self) -> &'static str {
+        match self {
+            Self::Binding(language) => crate::docs::naming::lang_display_name(language),
+            Self::Shell => "Shell",
+        }
+    }
+}
+
 pub fn generate_snippets(
     fixtures: &[Fixture],
     languages: &[String],
@@ -178,10 +207,18 @@ fn generate_snippet_report_with_extensions(
             let body = match render_snippet_body(extensions, generator.as_ref(), fixture, language, context) {
                 Ok(body) => body,
                 Err(error) => {
-                    coverage.missing.push(MissingSnippet {
-                        key,
-                        reason: format!("{error:#}"),
-                    });
+                    if let Some(exception) = docs.coverage_exceptions.get(*language) {
+                        coverage.documented_exceptions.push(DocumentedSnippetException {
+                            key,
+                            reason: exception.reason.clone(),
+                            reference: exception.documentation.clone(),
+                        });
+                    } else {
+                        coverage.missing.push(MissingSnippet {
+                            key,
+                            reason: format!("{error:#}"),
+                        });
+                    }
                     continue;
                 }
             };
@@ -327,15 +364,15 @@ fn render_snippet_markdown(
     body: &str,
     fixture: &Fixture,
     docs: &FixtureDocs,
-    language: Language,
+    language: DocumentationLanguage,
     language_name: &str,
 ) -> String {
     crate::e2e::template_env::render(
         "snippets/file.md.jinja",
         minijinja::context! {
             description => docs.description.as_deref().unwrap_or(&fixture.description),
-            fence => crate::docs::naming::lang_code_fence(language),
-            title => docs.title.as_deref().unwrap_or(crate::docs::naming::lang_display_name(language)), body => body,
+            fence => language.code_fence(),
+            title => docs.title.as_deref().unwrap_or(language.display_name()), body => body,
             fixture_id => fixture.id, language => language_name, requirements => fixture.requirements,
             side_effect => side_effect_name(docs.side_effects),
         },
@@ -374,12 +411,17 @@ fn capabilities(language: &str, snippets: &SnippetConfig, crate_config: &Resolve
     values
 }
 
-fn snippet_path(output: &str, docs: &FixtureDocs, fixture_id: &str, language: Language) -> Result<PathBuf> {
+fn snippet_path(
+    output: &str,
+    docs: &FixtureDocs,
+    fixture_id: &str,
+    language: DocumentationLanguage,
+) -> Result<PathBuf> {
     validate_component(&docs.topic, "snippet topic")?;
     let stem = docs.stem.as_deref().unwrap_or(fixture_id);
     validate_component(stem, "snippet stem")?;
     Ok(Path::new(output)
-        .join(crate::docs::naming::lang_slug(language))
+        .join(language.slug())
         .join(&docs.topic)
         .join(format!("{stem}.md")))
 }
@@ -411,8 +453,8 @@ fn side_effect_name(value: SideEffectClass) -> &'static str {
     }
 }
 
-fn parse_language(value: &str) -> Option<Language> {
-    Some(match value {
+fn parse_language(value: &str) -> Option<DocumentationLanguage> {
+    let language = match value {
         "python" => Language::Python,
         "node" => Language::Node,
         "wasm" => Language::Wasm,
@@ -431,8 +473,10 @@ fn parse_language(value: &str) -> Option<Language> {
         "gleam" => Language::Gleam,
         "zig" => Language::Zig,
         "c" | "ffi" | "c_ffi" => Language::C,
+        "brew" | "homebrew" => return Some(DocumentationLanguage::Shell),
         _ => return None,
-    })
+    };
+    Some(DocumentationLanguage::Binding(language))
 }
 
 #[cfg(test)]
@@ -502,13 +546,26 @@ mod tests {
             side_effects: Default::default(),
             coverage_exceptions: BTreeMap::new(),
         };
-        assert!(snippet_path("docs/snippets", &docs, "basic", Language::Python).is_err());
+        assert!(
+            snippet_path(
+                "docs/snippets",
+                &docs,
+                "basic",
+                DocumentationLanguage::Binding(Language::Python)
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn language_aliases_include_core_and_ffi_targets() {
-        assert_eq!(parse_language("rust_core"), Some(Language::Rust));
-        assert_eq!(parse_language("ffi"), Some(Language::C));
+        assert_eq!(
+            parse_language("rust_core"),
+            Some(DocumentationLanguage::Binding(Language::Rust))
+        );
+        assert_eq!(parse_language("ffi"), Some(DocumentationLanguage::Binding(Language::C)));
+        assert_eq!(parse_language("brew"), Some(DocumentationLanguage::Shell));
+        assert_eq!(parse_language("homebrew"), Some(DocumentationLanguage::Shell));
         assert_eq!(generator_name("rust_core"), "rust");
         assert_eq!(generator_name("ffi"), "c");
     }
@@ -552,7 +609,13 @@ mod tests {
             coverage_exceptions: BTreeMap::new(),
         };
 
-        let rendered = render_snippet_markdown("backend_call()", &fixture, &docs, Language::Python, "python");
+        let rendered = render_snippet_markdown(
+            "backend_call()",
+            &fixture,
+            &docs,
+            DocumentationLanguage::Binding(Language::Python),
+            "python",
+        );
 
         assert!(rendered.contains("language: python"));
         assert!(rendered.contains("side_effect: network"));
@@ -624,6 +687,74 @@ mod tests {
         assert!(report.snippets.is_empty());
         assert_eq!(report.coverage.missing.len(), 1);
         assert!(report.coverage.missing[0].reason.contains("empty snippet body"));
+    }
+
+    #[test]
+    fn unsupported_brew_recipe_uses_exact_coverage_exception() {
+        let mut fixture = documented_fixture();
+        let docs = fixture.docs.as_mut().expect("fixture has documentation metadata");
+        docs.coverage_exceptions.insert(
+            "brew".into(),
+            crate::e2e::fixture::SnippetCoverageException {
+                reason: "The package installation flow is documented separately".into(),
+                documentation: "docs/install/homebrew.md".into(),
+            },
+        );
+        let e2e = E2eConfig::default();
+        let snippet_config = SnippetConfig {
+            output: "docs/snippets".into(),
+            ..SnippetConfig::default()
+        };
+        let crate_config = ResolvedCrateConfig::default();
+        let context = SnippetRenderContext {
+            e2e: &e2e,
+            crate_config: &crate_config,
+            type_defs: &[],
+            enums: &[],
+        };
+
+        let report =
+            generate_snippet_report_with_extensions(&[fixture], &["brew".into()], &snippet_config, &context, &[])
+                .expect("unsupported brew recipe belongs in coverage report");
+
+        assert!(report.snippets.is_empty());
+        assert!(report.coverage.missing.is_empty());
+        assert_eq!(report.coverage.expected.len(), 1);
+        assert_eq!(report.coverage.documented_exceptions.len(), 1);
+        assert_eq!(report.coverage.documented_exceptions[0].key.language, "brew");
+    }
+
+    #[test]
+    fn unsupported_shell_targets_are_recorded_without_mapping_failures() {
+        let e2e = E2eConfig::default();
+        let snippet_config = SnippetConfig {
+            output: "docs/snippets".into(),
+            ..SnippetConfig::default()
+        };
+        let crate_config = ResolvedCrateConfig::default();
+        let context = SnippetRenderContext {
+            e2e: &e2e,
+            crate_config: &crate_config,
+            type_defs: &[],
+            enums: &[],
+        };
+
+        for language in ["brew", "homebrew"] {
+            let report = generate_snippet_report_with_extensions(
+                &[documented_fixture()],
+                &[language.into()],
+                &snippet_config,
+                &context,
+                &[],
+            )
+            .expect("unsupported shell target belongs in coverage report");
+
+            assert_eq!(report.coverage.expected.len(), 1);
+            assert_eq!(report.coverage.missing.len(), 1);
+            assert_eq!(report.coverage.missing[0].key.language, language);
+            assert!(!report.coverage.missing[0].reason.is_empty());
+            assert!(!report.coverage.missing[0].reason.contains("language mapping"));
+        }
     }
 
     #[test]
