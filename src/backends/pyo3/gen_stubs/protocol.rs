@@ -88,10 +88,31 @@ pub(super) fn gen_visitor_protocol_stub(
         }
         // Return position: the host produces this value and the bridge extracts it, so it takes
         // the widest annotation the extraction accepts. Parameters above stay on `python_type`.
-        let return_type = substitute_capsule_type(
-            &python_callback_return_type(&substitute_excluded_types(&method.return_type, &excluded)),
-            capsule_names,
-        );
+        //
+        // A `&mut Named` parameter with a `Unit` return (e.g. `PostProcessor.process`) is the
+        // in-place-mutation pattern: Python can't mutate the frozen native object, so the bridge
+        // treats the callback's return value as the (optionally) updated value and writes it
+        // back — `None` means "left unchanged". Document that contract in the return type
+        // instead of the misleading `None` a `Unit` return would otherwise suggest.
+        let mut_param_type = method
+            .params
+            .iter()
+            .find(|p| p.is_mut)
+            .filter(|_| matches!(method.return_type, crate::core::ir::TypeRef::Unit))
+            .map(|p| {
+                substitute_capsule_type(
+                    &python_type(&substitute_excluded_types(&p.ty, &excluded)),
+                    capsule_names,
+                )
+            });
+        let return_type = if let Some(mut_ty) = mut_param_type {
+            format!("{mut_ty} | None")
+        } else {
+            substitute_capsule_type(
+                &python_callback_return_type(&substitute_excluded_types(&method.return_type, &excluded)),
+                capsule_names,
+            )
+        };
         let safe_name = python_safe_name(&method.name);
         let signature = format!("    def {}({}) -> {}: ...", safe_name, params.join(", "), return_type);
         lines.push(signature);

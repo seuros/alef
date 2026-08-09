@@ -138,6 +138,7 @@ fn make_bridge_generator(core_import: &str) -> Pyo3BridgeGenerator {
         struct_return_types: std::collections::HashSet::new(),
         forwardable_defaulted: std::collections::HashSet::new(),
         options_dataclass_types: std::collections::HashSet::new(),
+        unit_enum_return_types: std::collections::HashSet::new(),
     }
 }
 

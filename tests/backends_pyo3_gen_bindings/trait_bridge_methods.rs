@@ -247,6 +247,7 @@ fn make_struct_aware_generator(core_import: &str, struct_params: &[&str]) -> Pyo
         struct_return_types: std::collections::HashSet::new(),
         forwardable_defaulted: std::collections::HashSet::new(),
         options_dataclass_types: std::collections::HashSet::new(),
+        unit_enum_return_types: std::collections::HashSet::new(),
     }
 }
 

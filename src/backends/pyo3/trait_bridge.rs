@@ -76,6 +76,12 @@ pub fn gen_trait_bridge(
             crate::codegen::generators::trait_bridge::forwardable_defaulted_method_names(trait_type, api);
         let options_dataclass_types =
             crate::backends::pyo3::gen_bindings::options_dataclass_type_names(api, reexported_types);
+        let unit_enum_return_types: HashSet<String> = api
+            .enums
+            .iter()
+            .filter(|e| e.variants.iter().all(|v| v.fields.is_empty()))
+            .map(|e| e.name.clone())
+            .collect();
         let generator = Pyo3BridgeGenerator {
             core_import: core_import.to_string(),
             type_paths: type_paths.clone(),
@@ -84,6 +90,7 @@ pub fn gen_trait_bridge(
             struct_return_types,
             forwardable_defaulted,
             options_dataclass_types,
+            unit_enum_return_types,
         };
         let lifetime_type_names: HashSet<String> = api
             .types
@@ -149,6 +156,7 @@ mod tests {
             struct_return_types: HashSet::new(),
             forwardable_defaulted: HashSet::new(),
             options_dataclass_types: HashSet::new(),
+            unit_enum_return_types: HashSet::new(),
         };
 
         let make_method = |is_async: bool| MethodDef {
@@ -229,6 +237,7 @@ mod tests {
             struct_return_types: HashSet::new(),
             forwardable_defaulted: HashSet::new(),
             options_dataclass_types: HashSet::new(),
+            unit_enum_return_types: HashSet::new(),
         };
 
         let make_method = |is_async: bool| MethodDef {
@@ -299,6 +308,7 @@ mod tests {
             struct_return_types: HashSet::from(["Doc".to_owned()]),
             forwardable_defaulted: HashSet::new(),
             options_dataclass_types: HashSet::new(),
+            unit_enum_return_types: HashSet::new(),
         };
 
         let make_method = |is_async: bool| MethodDef {
@@ -375,6 +385,7 @@ mod tests {
             struct_return_types: HashSet::new(),
             forwardable_defaulted: HashSet::new(),
             options_dataclass_types: HashSet::new(),
+            unit_enum_return_types: HashSet::new(),
         };
 
         let make_method = |is_async: bool| MethodDef {
@@ -407,6 +418,232 @@ mod tests {
                 "owned native-struct param must not be handed to the host raw (is_async={is_async}):\n{body}"
             );
         }
+    }
+
+    /// Regression: a sync (infallible) callback returning a unit-only enum (e.g.
+    /// `ProcessingStage`) must accept the bare variant name (`"Early"`) that a host naturally
+    /// returns from a plain Python string, in addition to the JSON-quoted form the generic
+    /// mapping path required (`"\"Early\""`). Previously the bridge only tried
+    /// `serde_json::from_str`, which rejects a bare/unquoted variant name as invalid JSON and
+    /// silently substitutes the default via `unwrap_or_else` — turning a real host return value
+    /// into a wrong-but-plausible default. The error message for this shape must also stop
+    /// claiming the value "must be a mapping", since unit enums have no fields to map.
+    #[test]
+    fn sync_unit_enum_return_accepts_bare_variant_name() {
+        use crate::codegen::generators::trait_bridge::{TraitBridgeGenerator, TraitBridgeSpec};
+        use crate::core::config::TraitBridgeConfig;
+        use crate::core::ir::{MethodDef, ReceiverKind, TypeDef, TypeRef};
+        use std::collections::{HashMap, HashSet};
+
+        let trait_def = TypeDef {
+            name: "SamplePostProcessor".to_owned(),
+            rust_path: "sample_core::SamplePostProcessor".to_owned(),
+            is_trait: true,
+            is_opaque: true,
+            ..TypeDef::default()
+        };
+        let bridge_cfg = TraitBridgeConfig {
+            trait_name: "SamplePostProcessor".to_owned(),
+            register_fn: Some("register_sample".to_owned()),
+            registry_getter: Some("sample_core::registry::get".to_owned()),
+            ..TraitBridgeConfig::default()
+        };
+        let spec = TraitBridgeSpec {
+            trait_def: &trait_def,
+            bridge_config: &bridge_cfg,
+            core_import: "sample_core",
+            wrapper_prefix: "Py",
+            type_paths: HashMap::new(),
+            lifetime_type_names: HashSet::new(),
+            error_type: "SampleError".to_owned(),
+            error_constructor: "SampleError::Message { message: {msg} }".to_owned(),
+        };
+        let generator = super::Pyo3BridgeGenerator {
+            core_import: "sample_core".to_owned(),
+            type_paths: HashMap::new(),
+            error_type: "SampleError".to_owned(),
+            struct_param_types: HashSet::new(),
+            struct_return_types: HashSet::new(),
+            forwardable_defaulted: HashSet::new(),
+            options_dataclass_types: HashSet::new(),
+            unit_enum_return_types: HashSet::from(["ProcessingStage".to_owned()]),
+        };
+
+        let method = MethodDef {
+            name: "processing_stage".to_owned(),
+            params: vec![],
+            return_type: TypeRef::Named("ProcessingStage".to_owned()),
+            is_async: false,
+            error_type: None,
+            receiver: Some(ReceiverKind::Ref),
+            ..MethodDef::default()
+        };
+
+        let body = generator.gen_sync_method_body(&method, &spec);
+        assert!(
+            body.contains("serde_json::from_value(serde_json::Value::String"),
+            "unit-enum return must fall back to treating the string as a bare variant name:\n{body}"
+        );
+        assert!(
+            !body.contains("must be a mapping"),
+            "unit-enum deserialize error must not claim the value must be a mapping:\n{body}"
+        );
+        assert!(
+            body.contains("variant names"),
+            "unit-enum deserialize error should mention variant names:\n{body}"
+        );
+    }
+
+    /// Regression: a struct return (as opposed to a unit-only enum) must keep the strict
+    /// mapping-only deserialization and error wording — a bare string can't represent a
+    /// struct's fields, so the fallback added for unit enums must not apply here.
+    #[test]
+    fn sync_struct_return_keeps_strict_mapping_error() {
+        use crate::codegen::generators::trait_bridge::{TraitBridgeGenerator, TraitBridgeSpec};
+        use crate::core::config::TraitBridgeConfig;
+        use crate::core::ir::{MethodDef, ReceiverKind, TypeDef, TypeRef};
+        use std::collections::{HashMap, HashSet};
+
+        let trait_def = TypeDef {
+            name: "SampleService".to_owned(),
+            rust_path: "sample_core::SampleService".to_owned(),
+            is_trait: true,
+            is_opaque: true,
+            ..TypeDef::default()
+        };
+        let bridge_cfg = TraitBridgeConfig {
+            trait_name: "SampleService".to_owned(),
+            register_fn: Some("register_sample".to_owned()),
+            registry_getter: Some("sample_core::registry::get".to_owned()),
+            ..TraitBridgeConfig::default()
+        };
+        let spec = TraitBridgeSpec {
+            trait_def: &trait_def,
+            bridge_config: &bridge_cfg,
+            core_import: "sample_core",
+            wrapper_prefix: "Py",
+            type_paths: HashMap::new(),
+            lifetime_type_names: HashSet::new(),
+            error_type: "SampleError".to_owned(),
+            error_constructor: "SampleError::Message { message: {msg} }".to_owned(),
+        };
+        let generator = super::Pyo3BridgeGenerator {
+            core_import: "sample_core".to_owned(),
+            type_paths: HashMap::new(),
+            error_type: "SampleError".to_owned(),
+            struct_param_types: HashSet::new(),
+            struct_return_types: HashSet::new(),
+            forwardable_defaulted: HashSet::new(),
+            options_dataclass_types: HashSet::new(),
+            unit_enum_return_types: HashSet::new(),
+        };
+
+        let method = MethodDef {
+            name: "build".to_owned(),
+            params: vec![],
+            return_type: TypeRef::Named("Doc".to_owned()),
+            is_async: false,
+            error_type: Some("SampleError".to_owned()),
+            receiver: Some(ReceiverKind::Ref),
+            ..MethodDef::default()
+        };
+
+        let body = generator.gen_sync_method_body(&method, &spec);
+        assert!(
+            body.contains("must be a mapping"),
+            "struct deserialize error must keep the mapping-fields wording:\n{body}"
+        );
+        assert!(
+            !body.contains("serde_json::from_value(serde_json::Value::String"),
+            "struct return must not gain the unit-enum bare-string fallback:\n{body}"
+        );
+    }
+
+    /// Regression: `PostProcessor::process(&self, result: &mut ExtractedDocument, ..)` cannot be
+    /// implemented from Python at all under the naive bridge — it cloned `result`, handed the
+    /// clone to the host, and discarded whatever the host returned via `.map(|_| ())`, so the
+    /// `&mut` parameter was unfulfillable no matter what the Python plugin did. The bridge must
+    /// instead treat the callback's return value as the (optionally) updated document and write
+    /// it back into `*result` after the call, so Python `PostProcessor` plugins can actually
+    /// modify the extraction result.
+    #[test]
+    fn async_mut_param_writes_back_host_return_value() {
+        use crate::codegen::generators::trait_bridge::{TraitBridgeGenerator, TraitBridgeSpec};
+        use crate::core::config::TraitBridgeConfig;
+        use crate::core::ir::{MethodDef, ParamDef, ReceiverKind, TypeDef, TypeRef};
+        use std::collections::{HashMap, HashSet};
+
+        let trait_def = TypeDef {
+            name: "SamplePostProcessor".to_owned(),
+            rust_path: "sample_core::SamplePostProcessor".to_owned(),
+            is_trait: true,
+            is_opaque: true,
+            ..TypeDef::default()
+        };
+        let bridge_cfg = TraitBridgeConfig {
+            trait_name: "SamplePostProcessor".to_owned(),
+            register_fn: Some("register_sample".to_owned()),
+            registry_getter: Some("sample_core::registry::get".to_owned()),
+            ..TraitBridgeConfig::default()
+        };
+        let spec = TraitBridgeSpec {
+            trait_def: &trait_def,
+            bridge_config: &bridge_cfg,
+            core_import: "sample_core",
+            wrapper_prefix: "Py",
+            type_paths: HashMap::from([("Doc".to_owned(), "sample_core::Doc".to_owned())]),
+            lifetime_type_names: HashSet::new(),
+            error_type: "SampleError".to_owned(),
+            error_constructor: "SampleError::Message { message: {msg} }".to_owned(),
+        };
+        let generator = super::Pyo3BridgeGenerator {
+            core_import: "sample_core".to_owned(),
+            type_paths: HashMap::from([("Doc".to_owned(), "sample_core::Doc".to_owned())]),
+            error_type: "SampleError".to_owned(),
+            struct_param_types: HashSet::from(["Doc".to_owned()]),
+            struct_return_types: HashSet::new(),
+            forwardable_defaulted: HashSet::new(),
+            options_dataclass_types: HashSet::new(),
+            unit_enum_return_types: HashSet::new(),
+        };
+
+        let method = MethodDef {
+            name: "process".to_owned(),
+            params: vec![
+                ParamDef {
+                    name: "result".to_owned(),
+                    ty: TypeRef::Named("Doc".to_owned()),
+                    is_ref: true,
+                    is_mut: true,
+                    ..ParamDef::default()
+                },
+                ParamDef {
+                    name: "config".to_owned(),
+                    ty: TypeRef::String,
+                    is_ref: true,
+                    ..ParamDef::default()
+                },
+            ],
+            return_type: TypeRef::Unit,
+            is_async: true,
+            error_type: Some("SampleError".to_owned()),
+            receiver: Some(ReceiverKind::Ref),
+            ..MethodDef::default()
+        };
+
+        let body = generator.gen_async_method_body(&method, &spec);
+        assert!(
+            body.contains("*result = "),
+            "the host's return value must be written back into the &mut param:\n{body}"
+        );
+        assert!(
+            !body.contains(".map(|_| ())"),
+            "the old discard-everything bridge shape must be gone for this method:\n{body}"
+        );
+        assert!(
+            body.contains("py_result.is_none()"),
+            "the host must be allowed to return None to mean \"unchanged\":\n{body}"
+        );
     }
 
     #[test]

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **PyO3 trait bridges now preserve mutable callback updates and deserialize unit-enum returns correctly.**
+  Async callbacks with `&mut` named parameters write an optional host-returned replacement back to
+  Rust, protocol stubs expose that contract, and unit-only enums accept natural bare variant names
+  without weakening struct-return validation. (`src/backends/pyo3`)
 - **Snippet audits and coverage reports now recognize Astro MDX imports and `.mdx` documentation files.**
   MDX `Content` imports resolve relative to the importing page, and both audit and gap detection
   include `.mdx` alongside Markdown when checking references and fenced languages.

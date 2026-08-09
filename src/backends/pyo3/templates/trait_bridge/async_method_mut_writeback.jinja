@@ -1,0 +1,46 @@
+let python_obj = Python::attach(|py| self.inner.clone_ref(py));
+let caller_ctx = Python::attach(|py| {
+    py.import("contextvars")
+        .and_then(|m| m.call_method0("copy_context"))
+        .map(|c| c.unbind())
+});
+let cached_name = self.cached_name.clone();
+
+{{ param_cloning }}
+
+let __alef_updated: Option<{{ mut_core_ty }}> = tokio::task::spawn_blocking(move || {
+    Python::attach(|py| {
+        let obj = python_obj.bind(py);
+        let ctx = caller_ctx.map_err(|e| {{ error_expr }})?.into_bound(py);
+
+        let bound_method = obj.getattr("{{ method_name }}").map_err(|e| {{ error_expr }})?;
+        let py_result = ctx.call_method1("run", ({{ run_args }}))
+            .map_err(|e| {{ error_expr }})?;
+
+        // `None` means the host left the value unchanged — nothing to write back.
+        if py_result.is_none() {
+            return Ok(None);
+        }
+        // Native fast-path: the host returned the (possibly modified) binding object directly.
+        if let Ok(native) = py_result.extract::<{{ mut_native_ty }}>() {
+            return Ok(Some(<{{ mut_core_ty }}>::from(native)));
+        }
+        // Fallback: the host returned a plain mapping — round-trip through JSON.
+        let json_val: String = py
+            .import("json")
+            .and_then(|m| m.call_method1("dumps", (py_result,)))
+            .and_then(|v| v.extract())
+            .map_err(|e| {{ json_error_expr }})?;
+        serde_json::from_str::<{{ mut_core_ty }}>(&json_val)
+            .map(Some)
+            .map_err(|e| {{ deserialize_error_expr }})
+    })
+})
+.await
+.map_err(|e| {{ spawn_error_expr }})
+.flatten()?;
+
+if let Some(__alef_value) = __alef_updated {
+    *{{ mut_param_name }} = __alef_value;
+}
+Ok(())

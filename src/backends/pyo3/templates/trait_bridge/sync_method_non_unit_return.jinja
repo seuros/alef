@@ -17,6 +17,15 @@ Python::attach(|py| {
             let s = v.extract::<String>()?;
             serde_json::from_str::<{{ extract_ty }}>(&s).map_err(|e| {{ deserialize_error_expr }})
         })
+{% elif is_unit_enum %}
+        .and_then(|v| v.extract::<String>())
+        .and_then(|s| {
+            // Accept either the bare variant name (e.g. "Early", the natural thing for a host
+            // to return from a plain Python string) or the JSON-quoted form (e.g. "\"Early\"").
+            serde_json::from_str::<{{ extract_ty }}>(&s)
+                .or_else(|_| serde_json::from_value(serde_json::Value::String(s.clone())))
+                .map_err(|e| {{ deserialize_error_expr }})
+        })
 {% elif is_named %}
         .and_then(|v| v.extract::<String>())
         .and_then(|s| serde_json::from_str::<{{ extract_ty }}>(&s).map_err(|e| {{ deserialize_error_expr }}))
