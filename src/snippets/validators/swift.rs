@@ -68,6 +68,7 @@ impl SnippetValidator for SwiftValidator {
         let dir = session.temp_dir()?;
         let file = dir.path().join("snippet.swift");
         std::fs::write(&file, snippet.code.trim())?;
+        let module_directory = swift_module_directory(session)?;
         let mut command = std::process::Command::new("swiftc");
         match level {
             ValidationLevel::Syntax => {
@@ -76,16 +77,23 @@ impl SnippetValidator for SwiftValidator {
             ValidationLevel::TypeCheck => {
                 command.args(["-typecheck", "-warnings-as-errors"]);
             }
-            ValidationLevel::Compile | ValidationLevel::Run => {
+            ValidationLevel::Compile => {
+                command.arg("-typecheck");
+            }
+            ValidationLevel::Run => {
                 command.arg("-o").arg(dir.path().join("snippet"));
             }
         }
         command
             .args([
                 "-I",
-                session.working_directory.to_string_lossy().as_ref(),
+                module_directory.to_string_lossy().as_ref(),
                 "-L",
-                session.working_directory.to_string_lossy().as_ref(),
+                module_directory
+                    .parent()
+                    .unwrap_or(&module_directory)
+                    .to_string_lossy()
+                    .as_ref(),
             ])
             .arg(&file);
         session.apply(&mut command);
@@ -100,4 +108,18 @@ impl SnippetValidator for SwiftValidator {
     fn is_dependency_error(&self, output: &str) -> bool {
         output.contains("no such module") || output.contains("cannot find") && output.contains("in scope")
     }
+}
+
+fn swift_module_directory(session: &ValidationSession) -> Result<std::path::PathBuf> {
+    let mut command = std::process::Command::new("swift");
+    command.args(["build", "--show-bin-path"]);
+    session.apply(&mut command);
+    let output = command.output()?;
+    if !output.status.success() {
+        return Err(crate::snippets::error::Error::Other(
+            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        ));
+    }
+    let binary_directory = std::path::PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+    Ok(binary_directory.join("Modules"))
 }

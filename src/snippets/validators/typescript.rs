@@ -51,7 +51,38 @@ impl TypeScriptValidator {
 
     fn write_overlay_config(directory: &std::path::Path, manifest: &std::path::Path) -> Result<std::path::PathBuf> {
         let path = directory.join("tsconfig.json");
-        let content = serde_json::json!({ "extends": manifest, "files": ["snippet.ts"] });
+        let manifest_value: serde_json::Value = serde_json::from_slice(&std::fs::read(manifest)?).map_err(|error| {
+            crate::snippets::error::Error::Other(format!(
+                "parsing TypeScript package manifest {}: {error}",
+                manifest.display()
+            ))
+        })?;
+        let package_name = manifest_value
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                crate::snippets::error::Error::Other(format!("no package name in {}", manifest.display()))
+            })?;
+        let package_root = manifest.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let declaration = manifest_value
+            .get("types")
+            .or_else(|| manifest_value.get("typings"))
+            .and_then(serde_json::Value::as_str)
+            .map(|entry| package_root.join(entry))
+            .unwrap_or_else(|| package_root.to_path_buf());
+        let content = serde_json::json!({
+            "compilerOptions": {
+                "strict": true,
+                "noEmit": true,
+                "target": "ES2022",
+                "module": "ES2022",
+                "moduleResolution": "bundler",
+                "skipLibCheck": true,
+                "baseUrl": directory,
+                "paths": { package_name: [declaration] }
+            },
+            "files": ["snippet.ts"]
+        });
         std::fs::write(
             &path,
             serde_json::to_vec_pretty(&content).map_err(|error| {
@@ -182,5 +213,24 @@ impl SnippetValidator for TypeScriptValidator {
         error_lines
             .iter()
             .all(|line| patterns.iter().any(|pattern| line.contains(pattern)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn package_manifest_maps_local_declarations() {
+        let package = tempfile::tempdir().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let manifest = package.path().join("package.json");
+        std::fs::write(&manifest, r#"{"name":"sample-binding","types":"index.d.ts"}"#).unwrap();
+        let config = TypeScriptValidator::write_overlay_config(scratch.path(), &manifest).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&std::fs::read(config).unwrap()).unwrap();
+        assert_eq!(
+            value["compilerOptions"]["paths"]["sample-binding"][0],
+            package.path().join("index.d.ts").to_string_lossy().as_ref()
+        );
     }
 }

@@ -66,7 +66,17 @@ impl SnippetValidator for ZigValidator {
         } else {
             command.args(["build-exe", "-fno-emit-bin"]);
         }
-        command.arg(&file);
+        if level == ValidationLevel::Syntax {
+            command.arg(&file);
+        } else if let Some(manifest) = session.manifest.as_deref() {
+            let (module_name, module_source) = zig_package_module(manifest)?;
+            command
+                .args(["--dep", &module_name])
+                .arg(format!("-Mroot={}", file.display()))
+                .arg(format!("-M{module_name}={}", module_source.display()));
+        } else {
+            command.arg(&file);
+        }
         session.apply(&mut command);
         let (success, output) = run_command(&mut command, timeout_secs)?;
         Ok(if success {
@@ -78,5 +88,48 @@ impl SnippetValidator for ZigValidator {
 
     fn is_dependency_error(&self, output: &str) -> bool {
         output.contains("unable to find") || output.contains("@import")
+    }
+}
+
+fn zig_package_module(manifest: &std::path::Path) -> Result<(String, std::path::PathBuf)> {
+    let source = std::fs::read_to_string(manifest)?;
+    let module_marker = "addModule(\"";
+    let module_start = source.find(module_marker).ok_or_else(|| {
+        crate::snippets::error::Error::Other(format!("no addModule declaration in {}", manifest.display()))
+    })? + module_marker.len();
+    let module_end = source[module_start..].find('"').ok_or_else(|| {
+        crate::snippets::error::Error::Other(format!("invalid addModule declaration in {}", manifest.display()))
+    })? + module_start;
+    let root_marker = "root_source_file = b.path(\"";
+    let root_start = source[module_end..].find(root_marker).ok_or_else(|| {
+        crate::snippets::error::Error::Other(format!("no module root source in {}", manifest.display()))
+    })? + module_end
+        + root_marker.len();
+    let root_end = source[root_start..].find('"').ok_or_else(|| {
+        crate::snippets::error::Error::Other(format!("invalid module root source in {}", manifest.display()))
+    })? + root_start;
+    let root = manifest
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join(&source[root_start..root_end]);
+    Ok((source[module_start..module_end].to_owned(), root))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_declared_package_module() {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = directory.path().join("build.zig");
+        std::fs::write(
+            &manifest,
+            "const module = b.addModule(\"sample_binding\", .{\n    .root_source_file = b.path(\"src/root.zig\"),\n});\n",
+        )
+        .unwrap();
+        let (name, source) = zig_package_module(&manifest).unwrap();
+        assert_eq!(name, "sample_binding");
+        assert_eq!(source, directory.path().join("src/root.zig"));
     }
 }

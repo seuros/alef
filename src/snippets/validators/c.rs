@@ -104,14 +104,21 @@ impl SnippetValidator for CValidator {
         source.flush()?;
         let output = session.working_directory.join(".alef-snippet-output");
         let mut command = std::process::Command::new(cc);
-        command.arg("-I").arg(&session.working_directory);
+        let include_directory = session
+            .manifest
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .unwrap_or(&session.working_directory);
+        command.arg("-I").arg(include_directory);
         if level == ValidationLevel::Syntax {
             command.arg("-fsyntax-only");
         }
         if level == ValidationLevel::TypeCheck {
             command.args(["-fsyntax-only", "-Wall", "-Werror"]);
         }
-        if matches!(level, ValidationLevel::Compile | ValidationLevel::Run) {
+        if level == ValidationLevel::Compile {
+            command.arg("-c").arg("-o").arg(&output);
+        } else if level == ValidationLevel::Run {
             command.arg("-o").arg(&output);
         }
         command.arg(source.path());

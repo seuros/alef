@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Snippet compile sessions now wire configured Rust crates, TypeScript packages, C headers, Swift packages, and Zig
+  modules into isolated validator projects instead of using their manifests only for cache fingerprints.
+
+- Binding-aware snippet sessions now resolve Go and Dart package manifests from their actual project roots, with
+  regression coverage for local Go, C#, Dart, Java, and Kotlin dependencies.
+
 - Go mock-server integration fixtures now initialize the complete protocol fixture surface.
 
 - Generated snippets now retain their binding target independently of the canonical fence language, allowing Node and
