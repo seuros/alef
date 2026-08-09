@@ -131,11 +131,21 @@ pub(super) fn render_snippet_body(
     if !call.returns_void || joined_setup.contains("fmt.") {
         standard_imports.insert("fmt");
     }
+    let mut imports = standard_imports
+        .into_iter()
+        .map(|path| (path.to_string(), String::new()))
+        .collect::<Vec<_>>();
+    imports.push((module.to_string(), import_alias.to_string()));
+    imports.sort_by(|left, right| left.0.cmp(&right.0));
+    let imports = imports
+        .into_iter()
+        .map(|(path, alias)| minijinja::context! { path => path, alias => alias })
+        .collect::<Vec<_>>();
 
     crate::e2e::template_env::render(
         "go/snippet_body.jinja",
         minijinja::context! {
-            module => module, import_alias => import_alias, standard_imports => standard_imports,
+            imports => imports,
             package_decls => package_decls, setup_lines => setup_lines, client_setup => client_setup,
             call_expr => call_expr, result_var => call.result_var, returns_error => returns_error,
             returns_void => call.returns_void,
@@ -238,5 +248,33 @@ mod tests {
 
         assert!(body.starts_with("package main\n\nimport (\n"), "{body}");
         assert!(!body.contains("package main import"), "{body}");
+    }
+
+    #[test]
+    fn snippet_matches_gofmt_when_available() {
+        let mut e2e = E2eConfig::default();
+        e2e.call.module = "example.com/sample".into();
+        e2e.call.function = "process".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.returns_result = true;
+        let body = render_snippet_body(&fixture(), &e2e, &ResolvedCrateConfig::default(), &[], &[]);
+        let Ok(mut child) = std::process::Command::new("gofmt")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+        else {
+            assert!(body.contains("\tresult, err := pkg.Process()"), "{body}");
+            return;
+        };
+        use std::io::Write as _;
+        child
+            .stdin
+            .take()
+            .expect("gofmt stdin")
+            .write_all(body.as_bytes())
+            .expect("write Go snippet");
+        let output = child.wait_with_output().expect("wait for gofmt");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(String::from_utf8(output.stdout).expect("gofmt output is UTF-8"), body);
     }
 }

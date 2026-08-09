@@ -1,30 +1,30 @@
 package main{{ "\n\n" }}import (
-{% for import in standard_imports %}
-  "{{ import }}"
+{% for import in imports %}
+  {{- "\t" }}{% if import.alias %}{{ import.alias }} {% endif %}"{{ import.path }}"
 {% endfor %}
-{{ import_alias }} "{{ module }}" )
+)
 
 {% for declaration in package_decls %}
-  {{ declaration }}
+  {{- "\t" }}{{ declaration }}
 {% endfor %}
 func main() {
 {% for line in setup_lines %}
-  {{ line }}
+  {{- "\t" }}{{ line }}
 {% endfor %}
 {% if client_setup %}
-  {{ client_setup }}
+  {{- "\t" }}{{ client_setup }}
 {% endif %}
 {% if returns_void %}
-  err := {{ call_expr }}
+  {{- "\t" }}err := {{ call_expr }}
 {% elif returns_error %}
-  {{ result_var }}, err := {{ call_expr }}
+  {{- "\t" }}{{ result_var }}, err := {{ call_expr }}
 {% else %}
-  {{ result_var }} := {{ call_expr }}
+  {{- "\t" }}{{ result_var }} := {{ call_expr }}
 {% endif %}
 {% if returns_error or returns_void %}
-  if err != nil { panic(err) }
+  {{- "\tif err != nil {\n\t\tpanic(err)\n\t}" }}
 {% endif %}
 {% if not returns_void %}
-  fmt.Println({{ result_var }})
+  {{- "\t" }}fmt.Println({{ result_var }})
 {% endif %}
 }

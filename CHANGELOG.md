@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated Go documentation snippets now match canonical `gofmt` layout, including imports and error blocks.
+
 - C# documentation snippets now construct known DTO arguments with native object initializers instead of JSON round trips.
 
 - Shared binding conversion regressions now keep test modules after production items for strict Clippy compatibility.
