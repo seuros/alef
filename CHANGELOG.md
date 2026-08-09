@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Go mock-server integration fixtures now initialize the complete protocol fixture surface.
+
 - Generated snippets now retain their binding target independently of the canonical fence language, allowing Node and
   WASM or Kotlin and Kotlin Android examples to resolve distinct validation sessions.
 

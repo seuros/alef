@@ -58,6 +58,8 @@ fn make_http_fixture(id: &str, description: &str) -> Fixture {
                 validation_errors: Some(Vec::new()),
             },
         }),
+        asyncapi: None,
+        websocket: None,
     }
 }
 

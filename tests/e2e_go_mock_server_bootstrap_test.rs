@@ -186,6 +186,8 @@ fn test_go_main_test_fixture_has_http_fixtures_not_mock_server() {
                     validation_errors: None,
                 },
             }),
+            asyncapi: None,
+            websocket: None,
         }],
     }];
 

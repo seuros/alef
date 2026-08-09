@@ -76,6 +76,8 @@ fn make_http_fixture(id: &str) -> Fixture {
                 validation_errors: None,
             },
         }),
+        asyncapi: None,
+        websocket: None,
     }
 }
 
