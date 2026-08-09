@@ -187,7 +187,11 @@ pub(crate) fn gen_php_lossy_binding_to_core_fields(
                     }
                     TypeRef::Named(_) => {
                         if field.optional {
-                            format!("self.{name}.clone().map(Into::into)")
+                            if field.is_boxed {
+                                format!("self.{name}.clone().map(|v| Box::new(v.into()))")
+                            } else {
+                                format!("self.{name}.clone().map(Into::into)")
+                            }
                         } else {
                             format!("self.{name}.clone().into()")
                         }
@@ -219,7 +223,11 @@ pub(crate) fn gen_php_lossy_binding_to_core_fields(
                             format!("self.{name}.map(|v| std::time::Duration::from_millis(v as u64))")
                         }
                         TypeRef::Named(_) => {
-                            format!("self.{name}.clone().map(Into::into)")
+                            if field.is_boxed {
+                                format!("self.{name}.clone().map(|v| Box::new(v.into()))")
+                            } else {
+                                format!("self.{name}.clone().map(Into::into)")
+                            }
                         }
                         TypeRef::Vec(vi) if matches!(vi.as_ref(), TypeRef::Named(_)) => {
                             format!("self.{name}.clone().map(|v| v.into_iter().map(Into::into).collect())")
@@ -371,5 +379,15 @@ mod tests {
             !out.contains("..Default::default()"),
             "spread must NOT be emitted when has_default is false even with stripped cfg fields; got:\n{out}"
         );
+    }
+
+    #[test]
+    fn optional_boxed_named_field_boxes_after_conversion() {
+        let mut child = field("child", false);
+        child.ty = TypeRef::Optional(Box::new(TypeRef::Named("Child".into())));
+        child.is_boxed = true;
+        let typ = typ("Container", false, vec![child]);
+        let output = gen_php_lossy_binding_to_core_fields(&typ, "crate", &AHashSet::new(), &AHashSet::new(), &[]);
+        assert!(output.contains("child: self.child.clone().map(|v| Box::new(v.into()))"));
     }
 }

@@ -57,6 +57,30 @@ pub fn gen_lossy_binding_to_core_fields_mut(
     )
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::ir::FieldDef;
+
+    #[test]
+    fn optional_boxed_named_field_boxes_after_conversion() {
+        let typ = TypeDef {
+            name: "Container".into(),
+            rust_path: "sample::Container".into(),
+            fields: vec![FieldDef {
+                name: "child".into(),
+                ty: TypeRef::Optional(Box::new(TypeRef::Named("Child".into()))),
+                optional: false,
+                is_boxed: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let output = gen_lossy_binding_to_core_fields(&typ, "sample", false, &AHashSet::new(), false, false, &[]);
+        assert!(output.contains("child: self.child.clone().map(|v| Box::new(v.into()))"));
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn gen_lossy_binding_to_core_fields_inner(
     typ: &TypeDef,
@@ -205,7 +229,11 @@ fn gen_lossy_binding_to_core_fields_inner(
             }
             TypeRef::Named(_) => {
                 if field.optional {
-                    format!("self.{name}.clone().map(Into::into)")
+                    if field.is_boxed {
+                        format!("self.{name}.clone().map(|v| Box::new(v.into()))")
+                    } else {
+                        format!("self.{name}.clone().map(Into::into)")
+                    }
                 } else {
                     format!("self.{name}.clone().into()")
                 }
@@ -239,7 +267,11 @@ fn gen_lossy_binding_to_core_fields_inner(
             TypeRef::Optional(inner) => {
                 let base = match inner.as_ref() {
                     TypeRef::Named(_) => {
-                        format!("self.{name}.clone().map(Into::into)")
+                        if field.is_boxed {
+                            format!("self.{name}.clone().map(|v| Box::new(v.into()))")
+                        } else {
+                            format!("self.{name}.clone().map(Into::into)")
+                        }
                     }
                     TypeRef::Duration => {
                         format!("self.{name}.map(|v| std::time::Duration::from_millis(v as u64))")
@@ -339,7 +371,7 @@ fn gen_lossy_binding_to_core_fields_inner(
         // ~keep Convert the binding value before boxing because Box<Core> cannot convert from Binding.
         let expr = if field.is_boxed && matches!(&field.ty, TypeRef::Named(_)) {
             if field.optional {
-                format!("{expr}.map(Box::new)")
+                expr
             } else {
                 format!("Box::new({expr})")
             }

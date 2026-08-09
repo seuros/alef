@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- PHP and Ruby now box converted values when binding DTO fields map to core `Option<Box<T>>` fields.
+
 - Poly scaffolding now merges Alef defaults into an existing `poly.toml`, preserving custom tables, rules, excludes,
   and comments across clean regeneration while keeping repeated scaffold passes idempotent.
 
