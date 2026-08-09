@@ -15,6 +15,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
     enums: &[EnumDef],
     wasm_type_prefix: &str,
     config: &crate::core::config::ResolvedCrateConfig,
+    bind_typed_json_objects: bool,
 ) -> (Vec<String>, String) {
     let fixture_id = &fixture.id;
     if args.is_empty() {
@@ -358,7 +359,17 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
                                 enums,
                                 wasm_type_prefix,
                             );
-                            parts.push(ts_code);
+                            if bind_typed_json_objects {
+                                let suffix = format!(" as {opts_type}");
+                                let expression = ts_code.strip_suffix(&suffix).unwrap_or(&ts_code);
+                                setup_lines.push(crate::e2e::template_env::render(
+                                    "typescript/typed_binding.jinja",
+                                    minijinja::context! { name => arg.name, type_name => opts_type, expression => expression },
+                                ).trim_end().to_string());
+                                parts.push(arg.name.clone());
+                            } else {
+                                parts.push(ts_code);
+                            }
                         } else {
                             parts.push(format!("{} as {opts_type}", json_to_js_camel(v)));
                         }

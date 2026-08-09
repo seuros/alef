@@ -9,6 +9,9 @@ pub(crate) struct PresentationOperation {
     pub(crate) item: String,
     pub(crate) fields: Vec<String>,
     pub(crate) optional: bool,
+    pub(crate) display: bool,
+    pub(crate) destructure_source: String,
+    pub(crate) destructure_item: String,
 }
 
 pub(crate) fn resolve(fixture: &Fixture, e2e_config: &E2eConfig, language: &str) -> Vec<PresentationOperation> {
@@ -39,24 +42,54 @@ pub(crate) fn resolve(fixture: &Fixture, e2e_config: &E2eConfig, language: &str)
                 item: String::new(),
                 fields: Vec::new(),
                 optional: false,
+                display: false,
+                destructure_source: String::new(),
+                destructure_item: String::new(),
             },
             FixtureDocsOperation::Iterate {
                 path,
                 item,
                 fields,
+                display,
                 optional,
-            } => PresentationOperation {
-                kind: "iterate",
-                expression: resolver.accessor(path, language, &call.result_var),
-                item: item.clone(),
-                fields: fields
-                    .iter()
-                    .map(|field| resolver.accessor(field, language, item))
-                    .collect(),
-                optional: *optional,
-            },
+            } => {
+                let (destructure_source, destructure_item, expression) =
+                    typescript_first_item(path, language, &resolver, &call.result_var);
+                PresentationOperation {
+                    kind: "iterate",
+                    expression,
+                    item: item.clone(),
+                    fields: fields
+                        .iter()
+                        .map(|field| resolver.accessor(field, language, item))
+                        .collect(),
+                    optional: *optional,
+                    display: *display,
+                    destructure_source,
+                    destructure_item,
+                }
+            }
         })
         .collect()
+}
+
+fn typescript_first_item(
+    path: &str,
+    language: &str,
+    resolver: &FieldResolver,
+    result_var: &str,
+) -> (String, String, String) {
+    if matches!(language, "node" | "wasm")
+        && let Some((source, tail)) = path.split_once("[0].")
+    {
+        let source = resolver.accessor(source, language, result_var);
+        return (source, "first".into(), format!("first?.{tail}"));
+    }
+    (
+        String::new(),
+        String::new(),
+        resolver.accessor(path, language, result_var),
+    )
 }
 
 #[cfg(test)]
@@ -94,6 +127,7 @@ mod tests {
                         path: "items".into(),
                         item: "item".into(),
                         fields: vec!["text".into(), "metadata.heading".into()],
+                        display: true,
                         optional: true,
                     }],
                 }),
@@ -130,7 +164,20 @@ mod tests {
         let config = config();
         let python = resolve(&fixture, &config, "python");
         let rust = resolve(&fixture, &config, "rust");
-        let typescript = resolve(&fixture, &config, "node");
+        let mut typescript_fixture = fixture.clone();
+        typescript_fixture
+            .docs
+            .as_mut()
+            .and_then(|docs| docs.presentation.as_mut())
+            .expect("presentation")
+            .operations = vec![FixtureDocsOperation::Iterate {
+            path: "results[0].chunks".into(),
+            item: "chunk".into(),
+            fields: vec!["content".into()],
+            display: true,
+            optional: true,
+        }];
+        let typescript = resolve(&typescript_fixture, &config, "node");
 
         let python_output = crate::e2e::template_env::render(
             "python/snippet_body.py.jinja",
@@ -163,15 +210,19 @@ mod tests {
             "{rust_output}"
         );
         assert!(
-            rust_output.contains("println!(\"{:?}\", item.metadata.heading);"),
+            rust_output.contains("println!(\"{}\", item.metadata.heading);"),
             "{rust_output}"
         );
         assert!(
-            typescript_output.contains("for (const item of result.items ?? [])"),
+            typescript_output.contains("const [first] = result.results;"),
             "{typescript_output}"
         );
         assert!(
-            typescript_output.contains("console.log(item.metadata.heading);"),
+            typescript_output.contains("for (const chunk of first?.chunks ?? [])"),
+            "{typescript_output}"
+        );
+        assert!(
+            typescript_output.contains("console.log(chunk.content);"),
             "{typescript_output}"
         );
     }

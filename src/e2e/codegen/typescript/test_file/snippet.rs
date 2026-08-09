@@ -77,6 +77,7 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
         enums,
         wasm_type_prefix,
         config,
+        true,
     );
     if !recipe.extra_args.is_empty() {
         let extras = recipe.extra_args.join(", ");
@@ -282,7 +283,8 @@ mod tests {
         });
 
         assert!(body.contains("import { DocumentInput, loadDocument }"), "{body}");
-        assert!(body.contains("as DocumentInput"), "{body}");
+        assert!(body.contains("const source: DocumentInput ="), "{body}");
+        assert!(!body.contains("as DocumentInput"), "{body}");
     }
 
     #[test]

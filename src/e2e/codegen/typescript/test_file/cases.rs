@@ -127,6 +127,7 @@ pub(super) fn render_test_case(
         enums,
         wasm_type_prefix,
         config,
+        false,
     );
 
     if !extra_args.is_empty() {

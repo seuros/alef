@@ -65,6 +65,8 @@ pub enum FixtureDocsOperation {
         #[serde(default)]
         fields: Vec<String>,
         #[serde(default)]
+        display: bool,
+        #[serde(default)]
         optional: bool,
     },
 }

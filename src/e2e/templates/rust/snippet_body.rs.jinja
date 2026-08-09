@@ -10,7 +10,7 @@ async fn main() {
 {% for operation in presentation %}
 {% if operation.kind == "show" %}    println!("{:?}", {{ operation.expression }});
 {% else %}    for {{ operation.item }} in {{ operation.expression }}{% if operation.optional %}.iter().flatten(){% endif %} {
-{% for field in operation.fields %}        println!("{:?}", {{ field }});
+{% for field in operation.fields %}        println!("{% if operation.display %}{}{% else %}{:?}{% endif %}", {{ field }});
 {% endfor %}    }
 {% endif %}
 {% endfor %}

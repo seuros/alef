@@ -762,7 +762,7 @@ options_type = "ChatRequest"
         assert!(rendered.contains("let request: ChatRequest"), "{rendered}");
         assert!(rendered.contains("example_core::create_client"), "{rendered}");
         assert!(rendered.contains("client.chat(request).await"), "{rendered}");
-        assert!(rendered.contains(".await.expect(\"should succeed\")"), "{rendered}");
+        assert!(rendered.contains(".await.expect(\"call failed\")"), "{rendered}");
         assert!(rendered.contains("println!(\"{:?}\", result.message);"), "{rendered}");
         assert!(rendered.contains("#[tokio::main]"), "{rendered}");
         assert!(!rendered.contains("#[tokio::test]"), "{rendered}");

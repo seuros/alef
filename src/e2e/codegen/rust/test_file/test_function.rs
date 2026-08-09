@@ -500,11 +500,7 @@ pub fn render_test_function(
             )
         });
 
-    let unwrap_suffix = if returns_result {
-        ".expect(\"should succeed\")"
-    } else {
-        ""
-    };
+    let unwrap_suffix = if returns_result { ".expect(\"call failed\")" } else { "" };
     if is_streaming {
         // Streaming: bind the raw stream, then drain it into a Vec.
         let _ = writeln!(out, "    let {stream_var} = {call_expr}{await_suffix}{unwrap_suffix};");

@@ -10,6 +10,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/rust/snippet_body.rs.jinja"),
     ),
     (
+        "typescript/typed_binding.jinja",
+        include_str!("templates/typescript/typed_binding.jinja"),
+    ),
+    (
         "snippets/file.md.jinja",
         include_str!("templates/snippets/file.md.jinja"),
     ),

@@ -117,6 +117,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
         enums,
         wasm_type_prefix,
         config,
+        false,
     );
 
     if !extra_args.is_empty() {
