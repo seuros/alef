@@ -28,7 +28,19 @@
             "stem": { "type": "string" },
             "title": { "type": "string" },
             "description": { "type": "string" },
-            "side_effects": { "enum": ["none", "local", "network", "external_mutation"] }
+            "coverage_exceptions": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "required": ["reason", "documentation"],
+                "additionalProperties": false,
+                "properties": {
+                  "reason": { "type": "string", "minLength": 1 },
+                  "documentation": { "type": "string", "minLength": 1 }
+                }
+              }
+            },
+            "side_effects": { "enum": ["safe", "network", "process", "install", "server"] }
           }
         },
         "requirements": {

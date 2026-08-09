@@ -11,6 +11,7 @@ pub struct AuditConfig {
     pub snippet_dirs: Vec<PathBuf>,
     pub require_frontmatter: bool,
     pub include_base_paths: Vec<PathBuf>,
+    pub configured_references: Vec<PathBuf>,
     pub exclude: Vec<PathBuf>,
 }
 
@@ -66,6 +67,16 @@ pub fn audit(config: &AuditConfig) -> AuditReport {
     }
     for docs_dir in &config.docs_dirs {
         issues.extend(audit_docs(docs_dir, &config.include_base_paths, &config.exclude));
+    }
+    for path in &config.configured_references {
+        if !path.exists() {
+            issues.push(issue(
+                AuditIssueKind::MissingInclude,
+                path,
+                1,
+                format!("configured README snippet does not exist: {}", path.display()),
+            ));
+        }
     }
     issues.sort_by(|left, right| {
         left.path

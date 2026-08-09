@@ -233,6 +233,7 @@ pub struct SnippetMetadata {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SideEffectClass {
+    #[serde(alias = "none", alias = "local")]
     Safe,
     Network,
     Process,
@@ -346,7 +347,7 @@ impl RunSummary {
 
 #[cfg(test)]
 mod tests {
-    use super::{SnippetAnnotationKind, ValidationLevel};
+    use super::{SideEffectClass, SnippetAnnotationKind, ValidationLevel};
 
     #[test]
     fn validation_level_parses_typecheck_aliases() {
@@ -365,5 +366,28 @@ mod tests {
     #[test]
     fn typecheck_only_annotation_kind_is_distinct() {
         assert_ne!(SnippetAnnotationKind::TypeCheckOnly, SnippetAnnotationKind::CompileOnly);
+    }
+
+    #[test]
+    fn side_effects_round_trip_and_accept_legacy_safe_aliases() {
+        for class in [
+            SideEffectClass::Safe,
+            SideEffectClass::Network,
+            SideEffectClass::Process,
+            SideEffectClass::Install,
+            SideEffectClass::Server,
+        ] {
+            let encoded = serde_json::to_string(&class).unwrap();
+            assert_eq!(serde_json::from_str::<SideEffectClass>(&encoded).unwrap(), class);
+        }
+        assert_eq!(
+            serde_json::from_str::<SideEffectClass>(r#""none""#).unwrap(),
+            SideEffectClass::Safe
+        );
+        assert_eq!(
+            serde_json::from_str::<SideEffectClass>(r#""local""#).unwrap(),
+            SideEffectClass::Safe
+        );
+        assert!(serde_json::from_str::<SideEffectClass>(r#""external_mutation""#).is_err());
     }
 }

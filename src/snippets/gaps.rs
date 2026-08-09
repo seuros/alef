@@ -18,6 +18,7 @@ pub struct GapConfig {
     /// against these paths in order; the first match wins. Falls back to
     /// `docs_dir.join(target)` when the list is empty or no path matches.
     pub include_base_paths: Vec<PathBuf>,
+    pub configured_references: Vec<PathBuf>,
     pub exclude: Vec<PathBuf>,
 }
 
@@ -78,10 +79,15 @@ pub fn detect_gaps(config: &GapConfig) -> Result<GapReport> {
         .into_iter()
         .filter(|snippet| !is_excluded(&snippet.path, &config.exclude))
         .collect();
-    let references: Vec<_> = discover_includes(&config.docs_dirs, &config.include_base_paths)?
+    let mut references: Vec<_> = discover_includes(&config.docs_dirs, &config.include_base_paths)?
         .into_iter()
         .filter(|reference| !is_excluded(&reference.source, &config.exclude))
         .collect();
+    references.extend(config.configured_references.iter().map(|target| SnippetReference {
+        source: target.clone(),
+        target: target.clone(),
+        line: 1,
+    }));
     let snippet_files = snippet_files(&snippets);
 
     Ok(GapReport {
@@ -94,6 +100,68 @@ pub fn detect_gaps(config: &GapConfig) -> Result<GapReport> {
             .filter(|unknown| !is_excluded(&unknown.path, &config.exclude))
             .collect(),
     })
+}
+
+/// Resolve snippet paths named by `[crates.readme.languages.*].snippets`.
+#[must_use]
+pub fn readme_snippet_references(
+    workspace_root: &Path,
+    readme: Option<&crate::core::config::ReadmeConfig>,
+) -> Vec<PathBuf> {
+    let Some(readme) = readme else {
+        return Vec::new();
+    };
+    let Some(snippets_dir) = &readme.snippets_dir else {
+        return Vec::new();
+    };
+    let mut references = Vec::new();
+    for (language, entry) in &readme.languages {
+        let source_language = entry
+            .get("snippet_language")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(language);
+        if let Some(snippets) = entry.get("snippets") {
+            collect_readme_snippet_paths(snippets, &mut |path| {
+                let path = normalize_readme_snippet_path(path, language, source_language);
+                references.push(normalize_path(&workspace_root.join(snippets_dir).join(path)));
+            });
+        }
+    }
+    references.sort();
+    references.dedup();
+    references
+}
+
+fn collect_readme_snippet_paths(value: &serde_json::Value, collect: &mut impl FnMut(&str)) {
+    match value {
+        serde_json::Value::String(path) => collect(path),
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_readme_snippet_paths(value, collect);
+            }
+        }
+        serde_json::Value::Object(values) => {
+            for value in values.values() {
+                collect_readme_snippet_paths(value, collect);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn normalize_readme_snippet_path(path: &str, language: &str, source_language: &str) -> PathBuf {
+    let path = Path::new(path);
+    let mut components = path.components();
+    let first = components.next();
+    let has_language_prefix = first
+        .and_then(|component| component.as_os_str().to_str())
+        .is_some_and(|component| component == language || Language::from_dir_name(component) != Language::Unknown);
+    let remainder = if has_language_prefix {
+        components.as_path()
+    } else {
+        path
+    };
+    Path::new(source_language).join(remainder)
 }
 
 fn is_excluded(path: &Path, exclude: &[PathBuf]) -> bool {
@@ -408,6 +476,7 @@ mod tests {
             snippet_dirs: vec![snippets],
             required_languages: vec![Language::Python, Language::Rust],
             include_base_paths: vec![],
+            configured_references: vec![],
             exclude: vec![],
         })
         .unwrap();
@@ -434,6 +503,7 @@ mod tests {
             snippet_dirs: vec![snippets],
             required_languages: vec![],
             include_base_paths: vec![root.to_path_buf()],
+            configured_references: vec![],
             exclude: vec![],
         })
         .unwrap();
@@ -528,6 +598,7 @@ mod tests {
             snippet_dirs: vec![snippets],
             required_languages: vec![],
             include_base_paths: vec![],
+            configured_references: vec![],
             exclude: vec![],
         })
         .unwrap();
@@ -539,5 +610,41 @@ mod tests {
             report.unreferenced_snippets
         );
         assert!(report.unreferenced_snippets[0].ends_with("orphan.md"));
+    }
+
+    #[test]
+    fn readme_only_references_honor_language_redirects_and_prefixes() {
+        let dir = tempfile::tempdir().unwrap();
+        let snippets = dir.path().join("docs-site/src/snippets");
+        std::fs::create_dir_all(snippets.join("c/api")).unwrap();
+        let snippet = snippets.join("c/api/client.md");
+        std::fs::write(&snippet, "```c\nint client(void);\n```\n").unwrap();
+        let readme: crate::core::config::ReadmeConfig = serde_json::from_value(serde_json::json!({
+            "template_dir": null,
+            "snippets_dir": "docs-site/src/snippets",
+            "config": null,
+            "output_pattern": null,
+            "discord_url": null,
+            "banner_url": null,
+            "languages": {
+                "ffi": {
+                    "snippet_language": "c",
+                    "snippets": { "client": "ffi/api/client.md" }
+                }
+            },
+            "targets": {}
+        }))
+        .unwrap();
+        let references = readme_snippet_references(dir.path(), Some(&readme));
+        assert_eq!(references, vec![snippet.clone()]);
+
+        let report = detect_gaps(&GapConfig {
+            snippet_dirs: vec![snippets],
+            configured_references: references,
+            ..GapConfig::default()
+        })
+        .unwrap();
+        assert!(report.unreferenced_snippets.is_empty());
+        assert!(report.missing_references.is_empty());
     }
 }
