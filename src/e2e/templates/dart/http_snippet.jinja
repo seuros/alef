@@ -1,0 +1,20 @@
+import 'dart:convert';
+import 'dart:io';
+
+Future<void> main() async {
+  final baseUrl = Platform.environment['MOCK_SERVER_URL'] ?? 'http://localhost:8000';
+  final client = HttpClient();
+  try {
+    final request = await client.openUrl('{{ method }}', Uri.parse('$baseUrl{{ path }}'));
+{% for header in headers %}
+    request.headers.set('{{ header.key }}', '{{ header.value }}');
+{% endfor %}
+{% if body_json %}
+    request.write({% if raw_body %}jsonDecode(r'''{{ body_json }}'''){% else %}jsonEncode(jsonDecode(r'''{{ body_json }}''')){% endif %});
+{% endif %}
+    final response = await request.close();
+    await response.drain();
+  } finally {
+    client.close();
+  }
+}

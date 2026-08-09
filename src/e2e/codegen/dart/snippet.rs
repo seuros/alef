@@ -2,7 +2,7 @@ use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::{EnumDef, TypeDef};
 use crate::e2e::config::E2eConfig;
 use crate::e2e::fixture::Fixture;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 pub(super) fn render_snippet_body(
     fixture: &Fixture,
@@ -12,10 +12,7 @@ pub(super) fn render_snippet_body(
     enums: &[EnumDef],
 ) -> Result<String> {
     if fixture.is_http_test() {
-        bail!(
-            "Dart documentation snippets do not support HTTP harness fixture `{}`",
-            fixture.id
-        );
+        return render_http_snippet(fixture);
     }
     let mut fixture_without_assertions = fixture.clone();
     fixture_without_assertions.assertions.clear();
@@ -50,6 +47,47 @@ pub(super) fn render_snippet_body(
         "dart/snippet_body.jinja",
         minijinja::context! {
             package => package, module => module, statements => statements, needs_json => needs_json,
+        },
+    ))
+}
+
+fn render_http_snippet(fixture: &Fixture) -> Result<String> {
+    let http = fixture.http.as_ref().expect("HTTP fixture checked by caller");
+    let plan = crate::e2e::codegen::client::http_call::plan_request(http);
+    let mut headers = plan.headers;
+    if let Some(content_type) = &plan.content_type
+        && !headers.keys().any(|name| name.eq_ignore_ascii_case("content-type"))
+    {
+        headers.insert("content-type".into(), content_type.clone());
+    }
+    if !http.request.cookies.is_empty() {
+        headers.insert(
+            "cookie".into(),
+            http.request
+                .cookies
+                .iter()
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect::<Vec<_>>()
+                .join("; "),
+        );
+    }
+    let raw_body = plan.body.as_ref().is_some_and(|body| {
+        matches!(body, serde_json::Value::String(_))
+            && plan
+                .content_type
+                .as_deref()
+                .is_some_and(crate::e2e::codegen::client::is_raw_text_content_type)
+    });
+    Ok(crate::e2e::template_env::render(
+        "dart/http_snippet.jinja",
+        minijinja::context! {
+            method => http.request.method.to_uppercase(),
+            path => format!("/fixtures/{}{}", fixture.id, http.request.path),
+            headers => headers.iter().map(|(key, value)| minijinja::context! {
+                key => super::values::escape_dart(key), value => super::values::escape_dart(value),
+            }).collect::<Vec<_>>(),
+            body_json => plan.body.as_ref().map(serde_json::to_string).transpose()?,
+            raw_body => raw_body,
         },
     ))
 }
@@ -92,6 +130,31 @@ mod tests {
         assert!(body.contains("loadDocument()"));
         assert!(body.contains("Future<void> main() async"));
         assert!(!body.contains("test("));
+        assert!(!body.contains("expect("));
+    }
+
+    #[test]
+    fn renders_http_request_without_test_harness_assertions() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "create_item", "description": "Create item", "input": null,
+            "http": {
+                "handler": {"route": "/items", "method": "POST"},
+                "request": {"method": "POST", "path": "/items", "body": {"name": "sample"}},
+                "expected_response": {"status_code": 201}
+            }
+        }))
+        .unwrap();
+        let body = render_snippet_body(
+            &fixture,
+            &E2eConfig::default(),
+            &ResolvedCrateConfig::default(),
+            &[],
+            &[],
+        )
+        .unwrap();
+        assert!(body.contains("HttpClient"));
+        assert!(body.contains("/fixtures/create_item/items"));
+        assert!(body.contains("request.write(jsonEncode(jsonDecode"));
         assert!(!body.contains("expect("));
     }
 }

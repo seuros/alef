@@ -1,0 +1,16 @@
+require "json"
+require "net/http"
+require "uri"
+
+base_url = ENV.fetch("MOCK_SERVER_URL", "http://localhost:8000")
+uri = URI.parse("#{base_url}{{ path }}")
+request = Net::HTTP::{{ method_class }}.new(uri.request_uri)
+{% for header in headers %}
+request[{{ header.key }}] = {{ header.value }}
+{% endfor %}
+{% if body %}
+request.body = {{ body }}{% if not raw_body %}.to_json{% endif %}
+{% endif %}{{ "\n" }}
+response = Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == "https") do |http|
+  http.request(request)
+end

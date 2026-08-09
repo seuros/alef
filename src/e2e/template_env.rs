@@ -48,6 +48,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/ruby/snippet_body.jinja"),
     ),
     (
+        "ruby/http_snippet.jinja",
+        include_str!("templates/ruby/http_snippet.jinja"),
+    ),
+    (
         "ruby/rubocop.yml.jinja",
         include_str!("templates/ruby/rubocop.yml.jinja"),
     ),
@@ -112,6 +116,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/php/composer.json.jinja"),
     ),
     ("php/phpunit.xml.jinja", include_str!("templates/php/phpunit.xml.jinja")),
+    (
+        "php/http_snippet.jinja",
+        include_str!("templates/php/http_snippet.jinja"),
+    ),
     (
         "php/bootstrap.php.jinja",
         include_str!("templates/php/bootstrap.php.jinja"),
@@ -341,6 +349,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/elixir/snippet_body.jinja"),
     ),
     (
+        "elixir/http_snippet.jinja",
+        include_str!("templates/elixir/http_snippet.jinja"),
+    ),
+    (
         "elixir/test_helper_server.exs.jinja",
         include_str!("templates/elixir/test_helper_server.exs.jinja"),
     ),
@@ -355,6 +367,10 @@ static TEMPLATES: &[(&str, &str)] = &[
     (
         "dart/snippet_body.jinja",
         include_str!("templates/dart/snippet_body.jinja"),
+    ),
+    (
+        "dart/http_snippet.jinja",
+        include_str!("templates/dart/http_snippet.jinja"),
     ),
     (
         "swift/app_harness.swift.jinja",

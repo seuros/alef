@@ -1,0 +1,17 @@
+<?php
+
+use GuzzleHttp\Client;
+
+$client = new Client(['base_uri' => getenv('MOCK_SERVER_URL') ?: 'http://localhost:8000']);
+$response = $client->request('{{ method }}', '{{ path }}', [
+{% if headers %}
+    'headers' => [
+{% for header in headers %}
+        '{{ header.key }}' => '{{ header.value }}',
+{% endfor %}
+    ],
+{% endif %}
+{% if body %}
+    '{{ "body" if raw_body else "json" }}' => {{ body }},
+{% endif %}
+]);
