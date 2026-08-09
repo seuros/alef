@@ -236,13 +236,7 @@ fn run_validate(
                 }
             }
 
-            if summary.has_failures()
-                || strict
-                    && summary
-                        .results
-                        .iter()
-                        .any(|result| matches!(result.status, SnippetStatus::Unavailable | SnippetStatus::Downgraded))
-            {
+            if summary.has_failures() || strict && has_incomplete_coverage(&summary) {
                 ExitCode::FAILURE
             } else {
                 ExitCode::SUCCESS
@@ -327,16 +321,23 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool) -> ExitCod
         tracing::error!("writing snippet report: {error}");
         return ExitCode::FAILURE;
     }
-    let strict_failure = strict
-        && summary
-            .results
-            .iter()
-            .any(|result| matches!(result.status, SnippetStatus::Unavailable | SnippetStatus::Downgraded));
+    let strict_failure = strict && has_incomplete_coverage(&summary);
     if summary.has_failures() || strict_failure {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
     }
+}
+
+fn has_incomplete_coverage(summary: &crate::snippets::types::RunSummary) -> bool {
+    summary.results.iter().any(|result| is_incomplete_status(result.status))
+}
+
+fn is_incomplete_status(status: SnippetStatus) -> bool {
+    matches!(
+        status,
+        SnippetStatus::Skip | SnippetStatus::Unavailable | SnippetStatus::Downgraded
+    )
 }
 
 fn parse_side_effect(value: &str) -> Option<SideEffectClass> {
@@ -506,4 +507,17 @@ fn run_gaps(
         }
     }
     ExitCode::FAILURE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strict_coverage_rejects_every_non_validation_status() {
+        assert!(is_incomplete_status(SnippetStatus::Skip));
+        assert!(is_incomplete_status(SnippetStatus::Unavailable));
+        assert!(is_incomplete_status(SnippetStatus::Downgraded));
+        assert!(!is_incomplete_status(SnippetStatus::Pass));
+    }
 }

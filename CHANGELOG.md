@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checks, parse MDX frontmatter, and fail on empty discovery or report write errors. (`src/snippets`,
   `src/cli/commands/snippets.rs`)
 
+- **Strict snippet checks now fail when any discovered example is skipped.** This prevents a
+  configured validation gate from succeeding with zero validated snippets. (`src/cli/commands/snippets.rs`)
+
 - **E2E fixtures can now generate deterministic, tested documentation snippets.** Optional fixture
   documentation metadata, declarative capability requirements, safe collision-checked output under
   `[crates.e2e.snippets]`, and migration comparison APIs let projects replace handwritten examples
