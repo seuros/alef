@@ -40,7 +40,7 @@ env:
 jobs:
   prepare:
     name: Prepare release
-    runs-on: runner-medium
+    runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
       version: ${{ steps.meta.outputs.version }}
@@ -65,7 +65,7 @@ jobs:
   validate-versions:
     name: Validate versions
     needs: prepare
-    runs-on: runner-medium
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
@@ -81,7 +81,7 @@ jobs:
     name: Check crates.io
     needs: prepare
     if: needs.prepare.outputs.release_crates == 'true'
-    runs-on: runner-medium
+    runs-on: ubuntu-latest
     outputs:
       exists: ${{ steps.check.outputs.exists }}
     steps:
@@ -98,7 +98,7 @@ jobs:
     name: Check GitHub release
     needs: prepare
     if: needs.prepare.outputs.release_cli == 'true'
-    runs-on: runner-medium
+    runs-on: ubuntu-latest
     outputs:
       exists: ${{ steps.check.outputs.exists }}
     steps:
@@ -118,7 +118,7 @@ jobs:
     name: Check Homebrew tap
     needs: prepare
     if: needs.prepare.outputs.release_homebrew == 'true'
-    runs-on: runner-medium
+    runs-on: ubuntu-latest
     outputs:
       exists: ${{ steps.check.outputs.exists }}
     steps:
@@ -220,7 +220,7 @@ jobs:
       needs.validate-versions.result == 'success' &&
       (needs.check-homebrew.outputs.exists != 'true' || needs.prepare.outputs.force_republish == 'true') &&
       needs.publish-crates.result != 'failure'
-    runs-on: runner-medium
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/create-github-app-token@v3
         id: tap-token
@@ -332,7 +332,7 @@ jobs:
       needs.prepare.outputs.dry_run != 'true' &&
       needs.publish-homebrew-formula.result == 'success' &&
       needs.homebrew-bottles.result == 'success'
-    runs-on: runner-medium
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/create-github-app-token@v3
         id: tap-token
@@ -392,7 +392,7 @@ jobs:
       needs.validate-versions.result == 'success' &&
       needs.build-cli.result == 'success' &&
       (needs.check-github-release.outputs.exists != 'true' || needs.prepare.outputs.force_republish == 'true')
-    runs-on: runner-medium
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/create-github-app-token@v3
         id: app-token
@@ -431,7 +431,7 @@ jobs:
       needs.prepare.outputs.release_crates == 'true' &&
       needs.validate-versions.result == 'success' &&
       (needs.check-cratesio.outputs.exists != 'true' || needs.prepare.outputs.force_republish == 'true')
-    runs-on: runner-medium
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
@@ -456,7 +456,7 @@ jobs:
     name: Finalize release
     needs: [prepare, upload-release-assets, publish-crates, publish-homebrew-bottles]
     if: always()
-    runs-on: runner-medium
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:

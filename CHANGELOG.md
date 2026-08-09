@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The publish workflow now uses GitHub-hosted runners for release orchestration jobs.** This
+  removes the unavailable `runner-medium` dependency from preparation, validation, release checks,
+  asset upload, package publishing, and finalization so published releases can produce their
+  downloadable CLI archives. (`.github/workflows/publish.yaml`)
 - **TypeScript e2e nested-type discovery is deterministic when distinct Rust types share a short
   name.** Candidate resolution now uses the full Rust path as a stable tie-breaker, preventing
   generated WASM tests from changing with input order. (`src/e2e/codegen/typescript/test_file`)
