@@ -4,7 +4,7 @@ use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::{EnumDef, TypeDef};
 use crate::e2e::codegen::{E2eCodegen, all_generators};
 use crate::e2e::fixture::{Fixture, FixtureDocs, SideEffectClass};
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
@@ -28,6 +28,7 @@ pub struct GeneratedSnippet {
 }
 
 pub const COVERAGE_MANIFEST: &str = ".alef-snippet-coverage.json";
+pub const COVERAGE_MANIFEST_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SnippetCoverageKey {
@@ -50,6 +51,10 @@ pub struct DocumentedSnippetException {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SnippetCoverageLedger {
+    #[serde(default)]
+    pub format_version: u32,
+    #[serde(default)]
+    pub generated_paths: Vec<PathBuf>,
     pub expected: Vec<SnippetCoverageKey>,
     pub generated: Vec<SnippetCoverageKey>,
     pub missing: Vec<MissingSnippet>,
@@ -155,7 +160,10 @@ fn generate_snippet_report_with_extensions(
     validate_relative_path(Path::new(&snippets.output), "snippet output")?;
     let generators = snippet_generators(languages)?;
     let mut generated = BTreeMap::<PathBuf, GeneratedSnippet>::new();
-    let mut coverage = SnippetCoverageLedger::default();
+    let mut coverage = SnippetCoverageLedger {
+        format_version: COVERAGE_MANIFEST_VERSION,
+        ..SnippetCoverageLedger::default()
+    };
     for fixture in fixtures {
         validate_requirements(fixture)?;
         validate_coverage_exceptions(fixture)?;
@@ -235,11 +243,17 @@ fn generate_snippet_report_with_extensions(
             if generated.insert(path.clone(), snippet).is_some() {
                 bail!("snippet output collision at {}", path.display());
             }
+            coverage.generated_paths.push(
+                path.strip_prefix(&snippets.output)
+                    .context("generated snippet path escaped the configured output root")?
+                    .to_path_buf(),
+            );
             coverage.generated.push(key);
         }
     }
     coverage.expected.sort();
     coverage.generated.sort();
+    coverage.generated_paths.sort();
     coverage.missing.sort_by(|left, right| left.key.cmp(&right.key));
     coverage
         .documented_exceptions

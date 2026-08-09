@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Binding-aware snippet sessions now resolve Go and Dart package manifests from their actual project roots, with
   regression coverage for local Go, C#, Dart, Java, and Kotlin dependencies.
 
+- Strict documentation coverage now treats paths from a current, complete fixture-snippet ledger as authoritative
+  references while rejecting missing files and stale ledger formats.
+
 - Go mock-server integration fixtures now initialize the complete protocol fixture surface.
 
 - Generated snippets now retain their binding target independently of the canonical fence language, allowing Node and
