@@ -493,6 +493,8 @@ headingStyle = "HeadingStyle"
         assert!(rendered.contains("HeadingStyle(\"atx\")"), "{rendered}");
         assert!(rendered.contains("ConversionOptions("), "{rendered}");
         assert!(rendered.contains("convert(html, options, None)"), "{rendered}");
+        assert!(rendered.contains("from example_api import"), "{rendered}");
+        assert!(rendered.contains("convert"), "{rendered}");
         assert!(rendered.contains("def main() -> None:"), "{rendered}");
         assert!(!rendered.contains("pytest"), "{rendered}");
         assert!(!rendered.contains("def test_"), "{rendered}");

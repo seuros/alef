@@ -256,6 +256,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/java/snippet_body.jinja"),
     ),
     (
+        "java/snippet_json_object_setup.jinja",
+        include_str!("templates/java/snippet_json_object_setup.jinja"),
+    ),
+    (
         "java/MockServerListener.java.jinja",
         include_str!("templates/java/MockServerListener.java.jinja"),
     ),

@@ -312,9 +312,7 @@ pub(super) fn render_test_file(
         thirdparty_bare.push("import pytest  # noqa: F401".to_string());
     }
 
-    let has_non_http_fixtures = fixtures
-        .iter()
-        .any(|f| !f.is_http_test() && !is_skipped(f, "python") && !f.assertions.is_empty());
+    let has_non_http_fixtures = fixtures.iter().any(|f| !f.is_http_test() && !is_skipped(f, "python"));
     if has_non_http_fixtures {
         build_thirdparty_imports(
             fixtures,

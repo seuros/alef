@@ -24,9 +24,8 @@ pub(super) fn render_snippet_body(
     let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve("java", fixture, call, type_defs);
     let overrides = recipe.override_config;
     let class_name = overrides
-        .and_then(|value| value.class.as_deref())
-        .unwrap_or(&config.name)
-        .to_upper_camel_case();
+        .and_then(|value| value.class.clone())
+        .unwrap_or_else(|| config.name.to_upper_camel_case());
     let function_name = overrides
         .and_then(|value| value.function.as_deref())
         .unwrap_or(&call.function)
@@ -35,7 +34,7 @@ pub(super) fn render_snippet_body(
         .options_type
         .or_else(|| recipe.compatible_options_type(&["kotlin", "csharp", "c", "go", "python"]));
     let mut teardown = String::new();
-    let (setup_lines, mut args) = build_args_and_setup(
+    let (mut setup_lines, mut args) = build_args_and_setup(
         &fixture.input,
         recipe.args,
         JavaArgsContext {
@@ -49,6 +48,7 @@ pub(super) fn render_snippet_body(
             teardown_block: &mut teardown,
         },
     );
+    setup_lines.splice(0..0, render_json_object_setup(fixture, recipe.args, options_type));
     if !recipe.extra_args.is_empty() {
         args = if args.is_empty() {
             recipe.extra_args.join(", ")
@@ -86,6 +86,39 @@ pub(super) fn render_snippet_body(
             fixture_id => fixture.id,
         },
     )
+}
+
+fn render_json_object_setup(
+    fixture: &Fixture,
+    args: &[crate::e2e::config::ArgMapping],
+    options_type: Option<&str>,
+) -> Vec<String> {
+    args.iter()
+        .filter_map(|arg| {
+            if arg.arg_type != "json_object" {
+                return None;
+            }
+            let value = crate::e2e::codegen::resolve_field(&fixture.input, &arg.field);
+            let type_name = crate::e2e::codegen::recipe::json_object_constructor_type(arg, options_type, value)?;
+            if value.is_null() || value.is_array() {
+                return None;
+            }
+            let normalized = crate::e2e::codegen::transform_json_keys_for_language(value, "snake_case");
+            let json = serde_json::to_string(&normalized).unwrap_or_default();
+            Some(
+                crate::e2e::template_env::render(
+                    "java/snippet_json_object_setup.jinja",
+                    minijinja::context! {
+                        variable => arg.name,
+                        json => crate::e2e::escape::escape_java(&json),
+                        type_name => type_name,
+                    },
+                )
+                .trim_end()
+                .to_string(),
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -127,5 +160,67 @@ mod tests {
         assert!(body.contains("public static void main(String[] args) throws Exception"));
         assert!(!body.contains("@Test"));
         assert!(!body.contains("assert"));
+    }
+
+    #[test]
+    fn snippet_declares_typed_json_arguments_and_preserves_qualified_service_name() {
+        let fixture = Fixture {
+            id: "configured_call".into(),
+            description: "Configured call".into(),
+            input: serde_json::json!({"source": "example", "options": {"mode": "fast"}}),
+            ..Fixture::default()
+        };
+        let mut call = CallConfig {
+            function: "process".into(),
+            args: vec![
+                crate::e2e::config::ArgMapping {
+                    name: "source".into(),
+                    field: "source".into(),
+                    arg_type: "string".into(),
+                    optional: false,
+                    owned: false,
+                    element_type: None,
+                    go_type: None,
+                    vec_inner_is_ref: false,
+                    trait_name: None,
+                },
+                crate::e2e::config::ArgMapping {
+                    name: "options".into(),
+                    field: "options".into(),
+                    arg_type: "json_object".into(),
+                    optional: false,
+                    owned: false,
+                    element_type: None,
+                    go_type: None,
+                    vec_inner_is_ref: false,
+                    trait_name: None,
+                },
+            ],
+            ..CallConfig::default()
+        };
+        call.overrides.insert(
+            "java".into(),
+            CallOverride {
+                class: Some("dev.example.SampleService".into()),
+                options_type: Some("ProcessOptions".into()),
+                ..CallOverride::default()
+            },
+        );
+
+        let body = render_snippet_body(
+            &fixture,
+            &E2eConfig {
+                call,
+                ..E2eConfig::default()
+            },
+            &ResolvedCrateConfig::default(),
+            &[],
+        );
+
+        assert!(
+            body.contains("var options = JsonUtil.fromJson(\"{\\\"mode\\\":\\\"fast\\\"}\", ProcessOptions.class);")
+        );
+        assert!(body.contains("dev.example.SampleService.process(\"example\", options)"));
+        assert!(!body.contains("DevExampleSampleService"));
     }
 }
