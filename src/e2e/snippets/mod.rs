@@ -207,6 +207,12 @@ fn generate_snippet_report_with_extensions(
             coverage.generated.push(key);
         }
     }
+    coverage.expected.sort();
+    coverage.generated.sort();
+    coverage.missing.sort_by(|left, right| left.key.cmp(&right.key));
+    coverage
+        .documented_exceptions
+        .sort_by(|left, right| left.key.cmp(&right.key));
     Ok(SnippetGenerationReport {
         snippets: generated.into_values().collect(),
         coverage,
