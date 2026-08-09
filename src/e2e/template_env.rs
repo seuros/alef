@@ -2,6 +2,14 @@ use minijinja::Environment;
 
 static TEMPLATES: &[(&str, &str)] = &[
     (
+        "python/snippet_body.py.jinja",
+        include_str!("templates/python/snippet_body.py.jinja"),
+    ),
+    (
+        "rust/snippet_body.rs.jinja",
+        include_str!("templates/rust/snippet_body.rs.jinja"),
+    ),
+    (
         "snippets/file.md.jinja",
         include_str!("templates/snippets/file.md.jinja"),
     ),

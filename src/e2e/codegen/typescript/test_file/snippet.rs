@@ -97,6 +97,10 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
     let client_setup = effective_factory
         .map(|factory| format!("const client = {factory}(\"your-api-key\");"))
         .unwrap_or_default();
+    let expects_error = fixture
+        .assertions
+        .iter()
+        .any(|assertion| assertion.assertion_type == "error");
     let mut imports = std::collections::BTreeSet::new();
     imports.insert(effective_factory.unwrap_or(&function_name).to_string());
     if let Some(name) = options_type {
@@ -119,6 +123,7 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
             imports => imports.into_iter().collect::<Vec<_>>(), module => module,
             setup_lines => setup_lines, client_setup => client_setup, call_expr => call_expr,
             result_var => call.result_var, is_async => override_config.and_then(|value| value.r#async).unwrap_or(call.r#async),
+            expects_error => expects_error,
         },
     )
 }
@@ -181,5 +186,32 @@ mod tests {
         assert!(body.contains("const document = await loadDocument();"));
         assert!(!body.contains("vitest"));
         assert!(!body.contains("expect("));
+    }
+
+    #[test]
+    fn expected_error_snippet_handles_the_rejected_call() {
+        let mut fixture = fixture();
+        fixture.assertions.push(crate::e2e::fixture::Assertion {
+            assertion_type: "error".into(),
+            ..Default::default()
+        });
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "parse".into();
+        e2e.call.r#async = true;
+        let config = crate::core::config::ResolvedCrateConfig::default();
+        let body = render_snippet_body(SnippetContext {
+            lang: "node",
+            fixture: &fixture,
+            module: "@example/library",
+            client_factory: None,
+            e2e_config: &e2e,
+            type_defs: &[],
+            enums: &[],
+            wasm_type_prefix: "",
+            config: &config,
+        });
+        assert!(body.contains("try {"));
+        assert!(body.contains("Call failed as expected"));
+        assert!(!body.contains("const result = await"));
     }
 }

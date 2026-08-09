@@ -1,0 +1,14 @@
+{% if is_async %}import asyncio
+{% endif %}
+{% for import in imports %}{{ import }}
+{% endfor %}
+
+{% if is_async %}async def main() -> None:
+{% else %}def main() -> None:
+{% endif %}
+{% for line in body %}    {{ line }}
+{% endfor %}
+
+{% if is_async %}asyncio.run(main())
+{% else %}main()
+{% endif %}

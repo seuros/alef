@@ -195,20 +195,47 @@ impl E2eCodegen for RustE2eCodegen {
         _enums: &[crate::core::ir::EnumDef],
     ) -> Result<String> {
         let dep_name = resolve_crate_name(e2e_config, config).replace('-', "_");
-        Ok(render_test_file(
+        let mut call_fixture = fixture.clone();
+        call_fixture.assertions.clear();
+        let test_file = render_test_file(
             &fixture.resolved_category(),
-            &[fixture],
+            &[&call_fixture],
             e2e_config,
             config,
             type_defs,
             &dep_name,
             fixture.needs_mock_server(),
+        );
+        let (imports, body, is_async) = extract_rust_snippet(&test_file)?;
+        Ok(crate::e2e::template_env::render(
+            "rust/snippet_body.rs.jinja",
+            minijinja::context! { imports => imports, body => body, is_async => is_async },
         ))
     }
 
     fn language_name(&self) -> &'static str {
         "rust"
     }
+}
+
+fn extract_rust_snippet(rendered: &str) -> Result<(Vec<&str>, Vec<&str>, bool)> {
+    let lines = rendered.lines().collect::<Vec<_>>();
+    let signature = lines
+        .iter()
+        .position(|line| line.starts_with("async fn test_") || line.starts_with("fn test_"))
+        .ok_or_else(|| anyhow::anyhow!("generated Rust test did not contain a fixture function"))?;
+    let imports = lines[..signature]
+        .iter()
+        .copied()
+        .filter(|line| line.starts_with("use ") && !line.contains("common::"))
+        .collect();
+    let body = lines[signature + 1..lines.len().saturating_sub(1)]
+        .iter()
+        .copied()
+        .filter_map(|line| line.strip_prefix("    "))
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect();
+    Ok((imports, body, lines[signature].starts_with("async fn ")))
 }
 
 // ---------------------------------------------------------------------------
@@ -728,6 +755,9 @@ options_type = "ChatRequest"
         assert!(rendered.contains("let request: ChatRequest"), "{rendered}");
         assert!(rendered.contains("example_core::create_client"), "{rendered}");
         assert!(rendered.contains("client.chat(request).await"), "{rendered}");
+        assert!(rendered.contains("#[tokio::main]"), "{rendered}");
+        assert!(!rendered.contains("#[tokio::test]"), "{rendered}");
+        assert!(!rendered.contains("fn test_"), "{rendered}");
     }
 
     #[test]

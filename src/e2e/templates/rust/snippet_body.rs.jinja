@@ -1,0 +1,10 @@
+{% for import in imports %}{{ import }}
+{% endfor %}
+
+{% if is_async %}#[tokio::main]
+async fn main() {
+{% else %}fn main() {
+{% endif %}
+{% for line in body %}    {{ line }}
+{% endfor %}
+}

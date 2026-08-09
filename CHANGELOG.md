@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Emit runnable Python and Rust documentation entry points and native expected-error handling for Node and PHP snippets.
+
 - External DTO roots now preserve qualified type identity when names overlap with native API types, including field
   references and qualified field exclusions, without false unmatched-exclusion warnings or forced field removal.
 

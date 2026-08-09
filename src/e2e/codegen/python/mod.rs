@@ -142,19 +142,46 @@ impl super::E2eCodegen for PythonE2eCodegen {
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
     ) -> Result<String> {
-        Ok(render_test_file(
+        let mut call_fixture = fixture.clone();
+        call_fixture.assertions.clear();
+        let test_file = render_test_file(
             &fixture.resolved_category(),
-            &[fixture],
+            &[&call_fixture],
             e2e_config,
             config,
             type_defs,
             enums,
+        );
+        let (imports, body, is_async) = extract_python_snippet(&test_file)?;
+        Ok(crate::e2e::template_env::render(
+            "python/snippet_body.py.jinja",
+            minijinja::context! { imports => imports, body => body, is_async => is_async },
         ))
     }
 
     fn language_name(&self) -> &'static str {
         "python"
     }
+}
+
+fn extract_python_snippet(rendered: &str) -> Result<(Vec<&str>, Vec<&str>, bool)> {
+    let lines = rendered.lines().collect::<Vec<_>>();
+    let signature = lines
+        .iter()
+        .position(|line| line.starts_with("async def test_") || line.starts_with("def test_"))
+        .ok_or_else(|| anyhow::anyhow!("generated Python test did not contain a fixture function"))?;
+    let imports = lines[..signature]
+        .iter()
+        .copied()
+        .filter(|line| (line.starts_with("from ") || line.starts_with("import ")) && !line.contains("pytest"))
+        .collect();
+    let body = lines[signature + 1..]
+        .iter()
+        .copied()
+        .filter_map(|line| line.strip_prefix("    "))
+        .filter(|line| !line.trim_start().starts_with("\"\"\"") && !line.trim().is_empty())
+        .collect();
+    Ok((imports, body, lines[signature].starts_with("async def ")))
 }
 
 /// Render a minimal smoke test importing the published Python package.
@@ -466,6 +493,9 @@ headingStyle = "HeadingStyle"
         assert!(rendered.contains("HeadingStyle(\"atx\")"), "{rendered}");
         assert!(rendered.contains("ConversionOptions("), "{rendered}");
         assert!(rendered.contains("convert(html, options, None)"), "{rendered}");
+        assert!(rendered.contains("def main() -> None:"), "{rendered}");
+        assert!(!rendered.contains("pytest"), "{rendered}");
+        assert!(!rendered.contains("def test_"), "{rendered}");
     }
 
     #[test]
