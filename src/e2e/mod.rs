@@ -6,6 +6,7 @@
 
 pub mod codegen;
 pub mod config;
+mod coverage_cache;
 pub mod escape;
 pub mod field_access;
 pub mod fixture;
@@ -200,12 +201,7 @@ pub fn generate_e2e(
             type_defs,
             enums,
         )?;
-        for missing in &report.coverage.missing {
-            warn!(
-                "snippet coverage missing for fixture `{}` language `{}`: {}",
-                missing.key.fixture_id, missing.key.language, missing.reason
-            );
-        }
+        report_snippet_coverage(&report.coverage);
         let coverage_content =
             serde_json::to_string_pretty(&report.coverage).context("failed to serialize snippet coverage manifest")?;
         all_files.push(GeneratedFile {
@@ -217,4 +213,19 @@ pub fn generate_e2e(
     }
 
     Ok(all_files)
+}
+
+pub fn report_cached_snippet_coverage(path: &Path) -> Result<()> {
+    let coverage = coverage_cache::read_coverage_manifest(path)?;
+    report_snippet_coverage(&coverage);
+    Ok(())
+}
+
+fn report_snippet_coverage(coverage: &snippets::SnippetCoverageLedger) {
+    for missing in &coverage.missing {
+        warn!(
+            "snippet coverage missing for fixture `{}` language `{}`: {}",
+            missing.key.fixture_id, missing.key.language, missing.reason
+        );
+    }
 }

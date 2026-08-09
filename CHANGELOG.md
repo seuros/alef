@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- R documentation snippets now render idiomatic package calls, and C, Swift, Zig, and WASM snippets support visitor
+  fixtures through the same native callback and call-preparation paths as their E2E tests.
+
+- Cached E2E generation now reloads and reports the persisted fixture-snippet coverage ledger, so missing language
+  cells remain visible instead of becoming false-green on an unchanged rerun.
+
 - Targeted `alef generate --lang ...` cleanup now stays within the selected language's owned output roots instead of
   deleting generated files belonging to other targets.
 

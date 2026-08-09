@@ -114,6 +114,12 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let cache_key = if registry { "e2e-registry" } else { "e2e" };
                         let stage_hash = cache::compute_stage_hash(&ir_json, cache_key, &config_toml, &fixture_hash);
                         if cache::is_stage_cached(&e2e_crate.name, cache_key, &stage_hash) {
+                            if let Some(snippets) = &this_e2e_config.snippets {
+                                let coverage_path = base_dir
+                                    .join(&snippets.output)
+                                    .join(crate::e2e::snippets::COVERAGE_MANIFEST);
+                                crate::e2e::report_cached_snippet_coverage(&coverage_path)?;
+                            }
                             tracing::info!("E2E tests up to date (cached)");
                             continue;
                         }
