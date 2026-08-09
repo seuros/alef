@@ -28,12 +28,23 @@ pub struct GeneratedSnippet {
 }
 
 pub const COVERAGE_MANIFEST: &str = ".alef-snippet-coverage.json";
-pub const COVERAGE_MANIFEST_VERSION: u32 = 1;
+pub const COVERAGE_MANIFEST_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SnippetCoverageKey {
     pub fixture_id: String,
     pub language: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GeneratedSnippetMetadata {
+    pub key: SnippetCoverageKey,
+    pub path: PathBuf,
+    pub language: String,
+    pub target: String,
+    pub session: String,
+    pub requires: Vec<String>,
+    pub side_effect: SideEffectClass,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +66,8 @@ pub struct SnippetCoverageLedger {
     pub format_version: u32,
     #[serde(default)]
     pub generated_paths: Vec<PathBuf>,
+    #[serde(default)]
+    pub generated_metadata: Vec<GeneratedSnippetMetadata>,
     pub expected: Vec<SnippetCoverageKey>,
     pub generated: Vec<SnippetCoverageKey>,
     pub missing: Vec<MissingSnippet>,
@@ -226,7 +239,7 @@ fn generate_snippet_report_with_extensions(
                     continue;
                 }
             };
-            let content = render_snippet_markdown(&body, fixture, docs, lang, language);
+            let content = render_snippet_markdown(&body, docs, lang);
             let file = GeneratedFile {
                 path: path.clone(),
                 content,
@@ -243,17 +256,29 @@ fn generate_snippet_report_with_extensions(
             if generated.insert(path.clone(), snippet).is_some() {
                 bail!("snippet output collision at {}", path.display());
             }
-            coverage.generated_paths.push(
-                path.strip_prefix(&snippets.output)
-                    .context("generated snippet path escaped the configured output root")?
-                    .to_path_buf(),
-            );
+            let relative_path = path
+                .strip_prefix(&snippets.output)
+                .context("generated snippet path escaped the configured output root")?
+                .to_path_buf();
+            coverage.generated_paths.push(relative_path.clone());
+            coverage.generated_metadata.push(GeneratedSnippetMetadata {
+                key: key.clone(),
+                path: relative_path,
+                language: lang.canonical_name().to_string(),
+                target: language.to_string(),
+                session: language.to_string(),
+                requires: fixture.requirements.clone(),
+                side_effect: docs.side_effects,
+            });
             coverage.generated.push(key);
         }
     }
     coverage.expected.sort();
     coverage.generated.sort();
     coverage.generated_paths.sort();
+    coverage
+        .generated_metadata
+        .sort_by(|left, right| left.path.cmp(&right.path));
     coverage.missing.sort_by(|left, right| left.key.cmp(&right.key));
     coverage
         .documented_exceptions
@@ -370,22 +395,13 @@ fn generator_name(language: &str) -> &str {
     }
 }
 
-fn render_snippet_markdown(
-    body: &str,
-    fixture: &Fixture,
-    docs: &FixtureDocs,
-    language: DocumentationLanguage,
-    target: &str,
-) -> String {
+fn render_snippet_markdown(body: &str, docs: &FixtureDocs, language: DocumentationLanguage) -> String {
     crate::e2e::template_env::render(
         "snippets/file.md.jinja",
         minijinja::context! {
-            description => docs.description.as_deref().unwrap_or(&fixture.description),
+            description => docs.description.as_deref(),
             fence => language.code_fence(),
-            title => docs.title.as_deref().unwrap_or(language.display_name()), body => body,
-            fixture_id => fixture.id, language => language.canonical_name(), requirements => fixture.requirements,
-            target => target,
-            side_effect => side_effect_name(docs.side_effects),
+            title => language.display_name(), body => body,
         },
     )
 }
@@ -687,7 +703,6 @@ mod tests {
             side_effects: SideEffectClass::Safe,
             coverage_exceptions: BTreeMap::new(),
         };
-        let fixture = documented_fixture();
         let cases = [
             ("node", Language::Node, "typescript", "typescript"),
             ("wasm", Language::Wasm, "typescript", "wasm"),
@@ -696,13 +711,17 @@ mod tests {
 
         for (target_language, binding_language, canonical_name, output_slug) in cases {
             let language = DocumentationLanguage::Binding(binding_language);
-            let rendered = render_snippet_markdown("example()", &fixture, &docs, language, target_language);
+            let rendered = render_snippet_markdown("example()", &docs, language);
             let path = snippet_path("docs/snippets", &docs, "example", target_language, language)
                 .expect("snippet path is valid");
 
-            assert!(rendered.contains(&format!("language: {canonical_name}\n")));
-            assert!(rendered.contains(&format!("target: {target_language}\n")));
-            assert!(rendered.contains(&format!("```{canonical_name} ")));
+            assert_eq!(
+                rendered,
+                format!(
+                    "```{canonical_name} title=\"{}\"\nexample()\n```\n",
+                    language.display_name()
+                )
+            );
             assert_eq!(
                 path,
                 Path::new("docs/snippets").join(output_slug).join("api/example.md")
@@ -738,12 +757,6 @@ mod tests {
 
     #[test]
     fn markdown_wrapper_uses_backend_body_and_metadata() {
-        let fixture = Fixture {
-            id: "backend_owned".into(),
-            description: "Backend-owned body".into(),
-            requirements: vec!["feature:docs".into()],
-            ..Fixture::default()
-        };
         let docs = FixtureDocs {
             topic: "api".into(),
             stem: None,
@@ -757,16 +770,13 @@ mod tests {
 
         let rendered = render_snippet_markdown(
             "backend_call()",
-            &fixture,
             &docs,
             DocumentationLanguage::Binding(Language::Python),
-            "python",
         );
 
-        assert!(rendered.contains("language: python"));
-        assert!(rendered.contains("target: python"));
-        assert!(rendered.contains("side_effect: network"));
-        assert!(rendered.contains("```python title=\"Example\"\nbackend_call()\n```"));
+        assert_eq!(rendered, "```python title=\"Python\"\nbackend_call()\n```\n");
+        assert!(!rendered.contains("Backend-owned body"));
+        assert!(!rendered.contains("Example"));
     }
 
     #[test]
@@ -898,8 +908,16 @@ mod tests {
                 "kotlin" | "kotlin_android" => "kotlin",
                 other => panic!("unexpected target: {other}"),
             };
-            assert!(snippet.file.content.contains(&format!("language: {canonical}")));
-            assert!(snippet.file.content.contains(&format!("target: {}", snippet.language)));
+            assert!(snippet.file.content.contains(&format!("```{canonical} title=")));
+            let metadata = report
+                .coverage
+                .generated_metadata
+                .iter()
+                .find(|metadata| metadata.key.language == snippet.language)
+                .expect("target metadata");
+            assert_eq!(metadata.language, canonical);
+            assert_eq!(metadata.target, snippet.language);
+            assert_eq!(metadata.session, snippet.language);
         }
     }
 

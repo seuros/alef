@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated fixture snippets now keep validation metadata in the authoritative coverage ledger while rendering clean
+  Astro-facing fenced Markdown with language titles and only explicitly configured user prose.
+
 - Generated Go documentation snippets now separate package and import declarations into gofmt-compatible lines.
 
 - TypeScript E2E fixture regressions now retain formatter-clean protocol metadata initializers.

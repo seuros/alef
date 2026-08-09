@@ -17,6 +17,7 @@ pub fn discover_snippets(dirs: &[PathBuf], language_filter: Option<&[Language]>)
         if !dir.exists() {
             continue;
         }
+        let ledger_metadata = load_ledger_metadata(dir)?;
 
         for entry in WalkDir::new(dir)
             .follow_links(true)
@@ -31,7 +32,14 @@ pub fn discover_snippets(dirs: &[PathBuf], language_filter: Option<&[Language]>)
             })
         {
             let path = entry.path();
-            let file_snippets = extract_snippets_from_file(path, dir)?;
+            let mut file_snippets = extract_snippets_from_file(path, dir)?;
+            if let Ok(relative) = path.strip_prefix(dir)
+                && let Some(metadata) = ledger_metadata.get(relative)
+            {
+                for snippet in &mut file_snippets {
+                    enrich_from_ledger(snippet, metadata)?;
+                }
+            }
 
             for snippet in file_snippets {
                 if let Some(filter) = language_filter
@@ -51,6 +59,74 @@ pub fn discover_snippets(dirs: &[PathBuf], language_filter: Option<&[Language]>)
             .then(left.block_index.cmp(&right.block_index))
     });
     Ok(snippets)
+}
+
+fn load_ledger_metadata(directory: &Path) -> Result<HashMap<PathBuf, crate::e2e::snippets::GeneratedSnippetMetadata>> {
+    let manifest = directory.join(crate::e2e::snippets::COVERAGE_MANIFEST);
+    if !manifest.is_file() {
+        return Ok(HashMap::new());
+    }
+    let content = std::fs::read_to_string(&manifest)?;
+    let ledger: crate::e2e::snippets::SnippetCoverageLedger = serde_json::from_str(&content)?;
+    if ledger.format_version != crate::e2e::snippets::COVERAGE_MANIFEST_VERSION
+        || ledger.generated_metadata.len() != ledger.generated_paths.len()
+    {
+        return Err(crate::snippets::error::Error::Other(format!(
+            "stale fixture-snippet metadata ledger at {}",
+            manifest.display()
+        )));
+    }
+    let expected: std::collections::BTreeSet<_> = ledger.generated_paths.into_iter().collect();
+    let actual: std::collections::BTreeSet<_> = ledger
+        .generated_metadata
+        .iter()
+        .map(|metadata| metadata.path.clone())
+        .collect();
+    if expected != actual
+        || actual.iter().any(|path| {
+            path.as_os_str().is_empty()
+                || path.is_absolute()
+                || path
+                    .components()
+                    .any(|component| matches!(component, std::path::Component::ParentDir))
+                || !directory.join(path).is_file()
+        })
+    {
+        return Err(crate::snippets::error::Error::Other(format!(
+            "invalid fixture-snippet metadata ledger at {}",
+            manifest.display()
+        )));
+    }
+    Ok(ledger
+        .generated_metadata
+        .into_iter()
+        .map(|metadata| (metadata.path.clone(), metadata))
+        .collect())
+}
+
+fn enrich_from_ledger(snippet: &mut Snippet, metadata: &crate::e2e::snippets::GeneratedSnippetMetadata) -> Result<()> {
+    let language = Language::from_fence_tag(&metadata.language);
+    if language == Language::Unknown {
+        return Err(crate::snippets::error::Error::Other(format!(
+            "unknown ledger language `{}` for {}",
+            metadata.language,
+            metadata.path.display()
+        )));
+    }
+    snippet.id = Some(metadata.key.fixture_id.clone());
+    snippet.language = language;
+    snippet.metadata.id = snippet.id.clone();
+    snippet.metadata.language = Some(language);
+    snippet.metadata.target = Some(metadata.session.clone());
+    snippet.metadata.requires = metadata.requires.clone();
+    snippet.metadata.side_effect = Some(match metadata.side_effect {
+        crate::e2e::fixture::SideEffectClass::Safe => crate::snippets::types::SideEffectClass::Safe,
+        crate::e2e::fixture::SideEffectClass::Network => crate::snippets::types::SideEffectClass::Network,
+        crate::e2e::fixture::SideEffectClass::Process => crate::snippets::types::SideEffectClass::Process,
+        crate::e2e::fixture::SideEffectClass::Install => crate::snippets::types::SideEffectClass::Install,
+        crate::e2e::fixture::SideEffectClass::Server => crate::snippets::types::SideEffectClass::Server,
+    });
+    Ok(())
 }
 
 fn extract_snippets_from_file(path: &Path, base_dir: &Path) -> Result<Vec<Snippet>> {
@@ -233,11 +309,61 @@ mod tests {
         let snippet = directory.path().join("example.md");
         let coverage = directory.path().join(".alef-snippet-coverage.json");
         std::fs::write(&snippet, "```python\nprint('hello')\n```\n").expect("write snippet");
-        std::fs::write(&coverage, r#"{"language":"json"}"#).expect("write coverage");
+        let ledger = crate::e2e::snippets::SnippetCoverageLedger {
+            format_version: crate::e2e::snippets::COVERAGE_MANIFEST_VERSION,
+            ..Default::default()
+        };
+        std::fs::write(&coverage, serde_json::to_vec(&ledger).expect("serialize ledger")).expect("write coverage");
 
         let discovered = discover_snippets(&[directory.path().to_path_buf()], None).expect("discover snippets");
 
         assert_eq!(discovered.len(), 1);
         assert_eq!(discovered[0].path, snippet);
+    }
+
+    #[test]
+    fn generated_markdown_is_enriched_from_authoritative_ledger() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let relative = PathBuf::from("wasm/topic/example.md");
+        let snippet = directory.path().join(&relative);
+        std::fs::create_dir_all(snippet.parent().expect("snippet parent")).expect("create snippet directory");
+        std::fs::write(&snippet, "```typescript title=\"TypeScript\"\nexample();\n```\n").expect("write snippet");
+        let key = crate::e2e::snippets::SnippetCoverageKey {
+            fixture_id: "sample_request".into(),
+            language: "wasm".into(),
+        };
+        let ledger = crate::e2e::snippets::SnippetCoverageLedger {
+            format_version: crate::e2e::snippets::COVERAGE_MANIFEST_VERSION,
+            generated_paths: vec![relative.clone()],
+            generated_metadata: vec![crate::e2e::snippets::GeneratedSnippetMetadata {
+                key: key.clone(),
+                path: relative,
+                language: "typescript".into(),
+                target: "wasm".into(),
+                session: "wasm".into(),
+                requires: vec!["feature:web".into()],
+                side_effect: crate::e2e::fixture::SideEffectClass::Network,
+            }],
+            expected: vec![key.clone()],
+            generated: vec![key],
+            missing: Vec::new(),
+            documented_exceptions: Vec::new(),
+        };
+        std::fs::write(
+            directory.path().join(crate::e2e::snippets::COVERAGE_MANIFEST),
+            serde_json::to_vec(&ledger).expect("serialize ledger"),
+        )
+        .expect("write ledger");
+
+        let discovered = discover_snippets(&[directory.path().to_path_buf()], None).expect("discover snippets");
+
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(discovered[0].id.as_deref(), Some("sample_request"));
+        assert_eq!(discovered[0].metadata.target.as_deref(), Some("wasm"));
+        assert_eq!(discovered[0].metadata.requires, vec!["feature:web"]);
+        assert_eq!(
+            discovered[0].metadata.side_effect,
+            Some(crate::snippets::types::SideEffectClass::Network)
+        );
     }
 }

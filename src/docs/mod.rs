@@ -527,8 +527,23 @@ fn ledger_generated_references(
     {
         anyhow::bail!("incomplete fixture-snippet coverage manifest at {}", manifest.display());
     }
-    if ledger.generated_paths.len() != ledger.generated.len() {
+    if ledger.generated_paths.len() != ledger.generated.len()
+        || ledger.generated_metadata.len() != ledger.generated_paths.len()
+    {
         anyhow::bail!("stale fixture-snippet path ledger at {}", manifest.display());
+    }
+    let metadata_paths = ledger
+        .generated_metadata
+        .iter()
+        .map(|metadata| metadata.path.as_path())
+        .collect::<std::collections::BTreeSet<_>>();
+    let generated_paths = ledger
+        .generated_paths
+        .iter()
+        .map(PathBuf::as_path)
+        .collect::<std::collections::BTreeSet<_>>();
+    if metadata_paths != generated_paths {
+        anyhow::bail!("stale fixture-snippet metadata ledger at {}", manifest.display());
     }
     ledger
         .generated_paths
@@ -617,7 +632,10 @@ fn with_markdown_alef_header(content: &str) -> String {
 mod coverage_manifest_tests {
     use super::*;
     use crate::core::config::e2e::{E2eConfig, SnippetConfig};
-    use crate::e2e::snippets::{COVERAGE_MANIFEST_VERSION, SnippetCoverageKey, SnippetCoverageLedger};
+    use crate::e2e::fixture::SideEffectClass;
+    use crate::e2e::snippets::{
+        COVERAGE_MANIFEST_VERSION, GeneratedSnippetMetadata, SnippetCoverageKey, SnippetCoverageLedger,
+    };
 
     #[test]
     fn current_ledger_paths_are_authoritative_documentation_references() {
@@ -683,6 +701,15 @@ mod coverage_manifest_tests {
         SnippetCoverageLedger {
             format_version,
             generated_paths: vec![PathBuf::from("python/topic/example.md")],
+            generated_metadata: vec![GeneratedSnippetMetadata {
+                key: key.clone(),
+                path: PathBuf::from("python/topic/example.md"),
+                language: "python".into(),
+                target: "python".into(),
+                session: "python".into(),
+                requires: Vec::new(),
+                side_effect: SideEffectClass::Safe,
+            }],
             expected: vec![key.clone()],
             generated: vec![key],
             missing: Vec::new(),

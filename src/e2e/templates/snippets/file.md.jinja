@@ -1,14 +1,6 @@
----
-id: {{ fixture_id }}
-language: {{ language }}
-target: {{ target }}
-requires:{% if requirements %}
-{% for requirement in requirements %}  - {{ requirement }}
-{% endfor %}{% else %} []
-{% endif %}side_effect: {{ side_effect }}
----
-{{ description }}
+{% if description %}{{ description }}
 
+{% endif %}
 ```{{ fence }} title="{{ title }}"
 {{ body }}
 ```
