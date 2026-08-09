@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Generated Elixir e2e suites could leave the harness running as an orphan, hanging `mix test`
+  after every test had already passed.** `test_helper.exs` spawned the harness with
+  `Port.open({:spawn_executable, ...})` and never reaped it. Closing an Erlang port only closes the
+  child's stdin; the harness runs `elixir -noshell` and never reads stdin, so it survives the port
+  close, gets reparented to init, and keeps the stdout pipe it inherited from the test runner open —
+  leaving the runner blocked on EOF indefinitely. The template now captures the harness's OS pid via
+  `:erlang.port_info(port, :os_pid)` and reaps it in `ExUnit.after_suite`, `kill`-ing it and falling
+  back to `kill -9` after a grace period. Only a harness this process spawned is touched — the
+  existing `SUT_URL` guard still leaves an externally supplied harness untouched.
+  (`src/e2e/templates/elixir/test_helper_server.exs.jinja`)
+
 ## [0.58.2] - 2026-08-09
 
 ### Fixed

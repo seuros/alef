@@ -63,5 +63,24 @@ unless System.get_env("SUT_URL") do
     raise "App harness did not become reachable on {{ host }}:{{ port }} within 15s"
   end
 
+  # ~keep Closing an Erlang port only closes the child's stdin. The harness
+  # runs `elixir -noshell` and never reads stdin, so it survives the port
+  # close, gets reparented to init, and keeps the stdout pipe it inherited
+  # from the test runner open -- leaving the runner blocked on EOF forever
+  # even after every test has passed. Reap it by OS pid once the suite ends.
+  case :erlang.port_info(port, :os_pid) do
+    {:os_pid, harness_os_pid} ->
+      ExUnit.after_suite(fn _ ->
+        pid_arg = Integer.to_string(harness_os_pid)
+        System.cmd("kill", [pid_arg], stderr_to_stdout: true)
+        Process.sleep(200)
+        System.cmd("kill", ["-9", pid_arg], stderr_to_stdout: true)
+        :ok
+      end)
+
+    _ ->
+      :ok
+  end
+
   System.put_env("SUT_URL", url)
 end
