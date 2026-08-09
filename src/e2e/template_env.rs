@@ -95,6 +95,7 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/ruby/spec_helper_mock_server.rb.jinja"),
     ),
     ("r/description.jinja", include_str!("templates/r/description.jinja")),
+    ("r/snippet_body.jinja", include_str!("templates/r/snippet_body.jinja")),
     ("r/assertion.jinja", include_str!("templates/r/assertion.jinja")),
     (
         "r/visitor_method.jinja",

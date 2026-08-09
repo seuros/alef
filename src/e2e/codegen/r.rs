@@ -133,4 +133,90 @@ impl E2eCodegen for RCodegen {
     fn language_name(&self) -> &'static str {
         "r"
     }
+
+    fn render_snippet_body(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        _enums: &[crate::core::ir::EnumDef],
+    ) -> Result<String> {
+        let call = e2e_config.resolve_call_for_fixture(
+            fixture.call.as_deref(),
+            &fixture.id,
+            &fixture.resolved_category(),
+            &fixture.tags,
+            &fixture.input,
+        );
+        let r_override = call.overrides.get("r");
+        let result_is_simple = call.result_is_simple || r_override.is_some_and(|value| value.result_is_simple);
+        let result_is_r_list = r_override.is_some_and(|value| value.result_is_r_list);
+        let mut snippet_fixture = fixture.clone();
+        if !fixture
+            .assertions
+            .iter()
+            .any(|assertion| assertion.assertion_type == "error")
+        {
+            snippet_fixture.assertions.clear();
+        }
+        let mut test_case = String::new();
+        test_case::render_test_case(
+            &mut test_case,
+            &snippet_fixture,
+            e2e_config,
+            result_is_simple,
+            result_is_r_list,
+            config,
+            type_defs,
+        );
+        let body = test_case
+            .lines()
+            .skip(1)
+            .take(test_case.lines().count().saturating_sub(2))
+            .map(|line| line.strip_prefix("  ").unwrap_or(line))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let package = e2e_config
+            .resolve_package("r")
+            .and_then(|package| package.name)
+            .unwrap_or_else(|| call.module.clone());
+        Ok(crate::e2e::template_env::render(
+            "r/snippet_body.jinja",
+            minijinja::context! { package => package, body => body },
+        ))
+    }
+}
+
+#[cfg(test)]
+mod snippet_tests {
+    use super::*;
+    use crate::e2e::codegen::E2eCodegen;
+    use crate::e2e::fixture::{CallbackAction, VisitorSpec};
+
+    #[test]
+    fn visitor_snippet_reuses_r_call_preparation_without_testthat() {
+        let mut fixture = Fixture {
+            id: "custom_text".into(),
+            description: "Custom text".into(),
+            input: serde_json::json!({ "html": "<p>Hello</p>" }),
+            ..Fixture::default()
+        };
+        fixture.visitor = Some(VisitorSpec {
+            callbacks: [("visit_text".into(), CallbackAction::Continue)].into(),
+        });
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "render_document".into();
+        e2e.call.module = "sampleR".into();
+
+        let rendered = RCodegen
+            .render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[])
+            .expect("R visitor snippet renders");
+
+        assert!(rendered.contains("library(\"sampleR\", character.only = TRUE)"));
+        assert!(rendered.contains("visitor <- list("));
+        assert!(rendered.contains("visit_text = function(ctx, text)"));
+        assert!(rendered.contains("render_document("));
+        assert!(!rendered.contains("test_that("));
+    }
 }

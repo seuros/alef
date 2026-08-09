@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Snippet discovery now ignores Alef-owned metadata files such as `.alef-snippet-coverage.json`.
+
 - R documentation snippets now render idiomatic package calls, and C, Swift, Zig, and WASM snippets support visitor
   fixtures through the same native callback and call-preparation paths as their E2E tests.
 

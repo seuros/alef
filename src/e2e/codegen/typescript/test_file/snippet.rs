@@ -61,7 +61,7 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
         bigint_fields.extend(value.bigint_fields.iter().cloned());
     }
     let handle_config_type = override_config.and_then(|value| value.handle_config_type.as_deref());
-    let (setup_lines, mut args) = build_args_and_setup(
+    let (mut setup_lines, mut args) = build_args_and_setup(
         &fixture.input,
         recipe.args,
         options_type.as_deref(),
@@ -84,6 +84,18 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
             format!("{args}, {extras}")
         };
     }
+    let mut visitor_imports = Vec::new();
+    if let Some(visitor_spec) = &fixture.visitor {
+        let visitor_arg = build_typescript_visitor(&mut setup_lines, visitor_spec);
+        if lang == "wasm"
+            && let Some(binding) = wasm_visitor_binding(config, options_type.as_deref())
+        {
+            visitor_imports.extend([binding.options_type.clone(), binding.handle_type.clone()]);
+            args = apply_wasm_visitor_arg(&args, &visitor_arg, &binding);
+        } else if lang == "node" {
+            args = node_visitor_args(&args, &visitor_arg);
+        }
+    }
 
     let function_name = resolve_node_function_name(call);
     let effective_factory = override_config
@@ -103,6 +115,7 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
         .any(|assertion| assertion.assertion_type == "error");
     let mut imports = std::collections::BTreeSet::new();
     imports.insert(effective_factory.unwrap_or(&function_name).to_string());
+    imports.extend(visitor_imports);
     let referenced_code = format!("{}\n{args}\n{client_setup}", setup_lines.join("\n"));
     if let Some(name) = options_type
         && referenced_code.contains(&name)
@@ -120,10 +133,10 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
             imports.insert(format!("create{}", arg.name.to_upper_camel_case()));
         }
     }
-    if let Some(name) = handle_config_type {
-        if referenced_code.contains(name) {
-            imports.insert(name.to_string());
-        }
+    if let Some(name) = handle_config_type
+        && referenced_code.contains(name)
+    {
+        imports.insert(name.to_string());
     }
 
     crate::e2e::template_env::render(
@@ -231,5 +244,43 @@ mod tests {
         assert!(body.contains("try {"));
         assert!(body.contains("Call failed as expected"));
         assert!(!body.contains("const result = await"));
+    }
+
+    #[test]
+    fn wasm_visitor_snippet_builds_and_attaches_the_real_bridge() {
+        let mut fixture = fixture();
+        fixture.visitor = Some(crate::e2e::fixture::VisitorSpec {
+            callbacks: [("visit_text".into(), crate::e2e::fixture::CallbackAction::Continue)].into(),
+        });
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "render_document".into();
+        e2e.call.overrides.entry("wasm".into()).or_default().options_type = Some("RenderOptions".into());
+        let config = crate::core::config::ResolvedCrateConfig {
+            trait_bridges: vec![crate::core::config::TraitBridgeConfig {
+                trait_name: "DocumentVisitor".into(),
+                type_alias: Some("VisitorHandle".into()),
+                options_type: Some("RenderOptions".into()),
+                options_field: Some("visitor".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let body = render_snippet_body(SnippetContext {
+            lang: "wasm",
+            fixture: &fixture,
+            module: "@example/wasm",
+            client_factory: None,
+            e2e_config: &e2e,
+            type_defs: &[],
+            enums: &[],
+            wasm_type_prefix: "",
+            config: &config,
+        });
+
+        assert!(body.contains("visitText(ctx: any, text: any)"));
+        assert!(body.contains("new WasmVisitorHandle(_testVisitor)"));
+        assert!(body.contains("RenderOptions.default()"));
+        assert!(body.contains("VisitorHandle"));
     }
 }

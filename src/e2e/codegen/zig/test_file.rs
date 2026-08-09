@@ -641,9 +641,9 @@ pub(super) fn render_snippet_body(
         &fixture.tags,
         &fixture.input,
     );
-    if fixture.http.is_some() || fixture.visitor.is_some() || call.streaming_enabled() == Some(true) {
+    if fixture.http.is_some() || call.streaming_enabled() == Some(true) {
         anyhow::bail!(
-            "zig snippet `{}` requires an unsupported HTTP, visitor, or streaming call pattern",
+            "zig snippet `{}` requires an unsupported HTTP or streaming call pattern",
             fixture.id
         );
     }
@@ -671,13 +671,14 @@ pub(super) fn render_snippet_body(
         config,
         type_defs,
     );
+    let body_line_count = test.lines().count().saturating_sub(3);
     let body = test
         .lines()
         .skip(2)
-        .take_while(|line| line.trim() != "}")
+        .take(body_line_count)
         .filter(|line| !line.trim_start().starts_with("suppress_abort()"))
         .filter(|line| !line.trim_start().starts_with("allow_private_network()"))
-        .filter(|line| !line.trim_start().starts_with("defer "))
+        .filter(|line| fixture.visitor.is_some() || !line.trim_start().starts_with("defer "))
         .map(|line| line.strip_prefix("    ").unwrap_or(line))
         .map(|line| line.replace(" catch {", " catch |err| {"))
         .map(|line| {
@@ -734,5 +735,25 @@ mod snippet_tests {
         assert!(rendered.contains("catch |err|"));
         assert!(rendered.contains("call failed as expected"));
         assert!(!rendered.contains("testing.expect"));
+    }
+
+    #[test]
+    fn visitor_snippet_reuses_native_callback_setup() {
+        let mut fixture = Fixture {
+            id: "custom_text".into(),
+            description: "Custom text".into(),
+            input: serde_json::json!({ "html": "<p>Hello</p>" }),
+            ..Fixture::default()
+        };
+        fixture.visitor = Some(crate::e2e::fixture::VisitorSpec {
+            callbacks: [("visit_text".into(), crate::e2e::fixture::CallbackAction::Continue)].into(),
+        });
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "render_document".into();
+        let rendered = render_snippet_body(&fixture, &e2e, "sample", "sample", &ResolvedCrateConfig::default(), &[])
+            .expect("visitor snippet renders");
+        assert!(rendered.contains("pub fn main() !void"));
+        assert!(rendered.contains("_visitor"));
+        assert!(!rendered.contains("test \""));
     }
 }

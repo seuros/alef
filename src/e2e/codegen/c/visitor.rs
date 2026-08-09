@@ -201,6 +201,36 @@ pub(super) fn render_visitor_test_file(
     out
 }
 
+pub(super) fn render_visitor_snippet(
+    fixture: &Fixture,
+    header: &str,
+    prefix: &str,
+    e2e_config: &E2eConfig,
+    config: &ResolvedCrateConfig,
+) -> anyhow::Result<String> {
+    let rendered = render_visitor_test_file(&[fixture], header, prefix, e2e_config, config);
+    let function_marker = format!("void test_{}(void) {{", sanitize_ident(&fixture.id));
+    let function_start = rendered
+        .find(&function_marker)
+        .ok_or_else(|| anyhow::anyhow!("C visitor snippet `{}` did not emit a test function", fixture.id))?;
+    let declarations_start = rendered[..function_start].find("static ").unwrap_or(function_start);
+    let declarations = rendered[declarations_start..function_start].trim_end();
+    let body_start = function_start + function_marker.len();
+    let body_end = rendered[body_start..]
+        .rfind("\n}")
+        .map(|offset| body_start + offset)
+        .ok_or_else(|| anyhow::anyhow!("C visitor snippet `{}` emitted an unterminated function", fixture.id))?;
+    let body = rendered[body_start..body_end]
+        .lines()
+        .map(|line| line.strip_prefix("    ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(crate::e2e::template_env::render(
+        "c/snippet_body.jinja",
+        minijinja::context! { header => header, declarations => declarations, body => body },
+    ))
+}
+
 /// C function-pointer parameter list for a given visitor callback method.
 ///
 /// Mirrors the cbindgen-emitted visitor callback slot signatures from
@@ -524,7 +554,7 @@ fn c_visitor_placeholder_to_arg(method: &str, name: &str) -> String {
 #[cfg(test)]
 mod visitor_tests {
     use super::super::c_visitor_fixture_has_typed_call;
-    use super::render_visitor_test_file;
+    use super::{render_visitor_snippet, render_visitor_test_file};
     use crate::core::config::e2e::{CallConfig, CallOverride, E2eConfig};
     use crate::core::config::{ResolvedCrateConfig, TraitBridgeConfig};
     use crate::e2e::fixture::{Assertion, CallbackAction, Fixture, VisitorSpec};
@@ -631,6 +661,25 @@ mod visitor_tests {
                 "visitor C output leaked `{hardcoded}`:\n{content}"
             );
         }
+    }
+
+    #[test]
+    fn c_visitor_snippet_reuses_callbacks_and_native_call_without_test_runner() {
+        let fixture = visitor_fixture();
+        let content = render_visitor_snippet(
+            &fixture,
+            "krz.h",
+            "krz",
+            &e2e_config_with_c_call(),
+            &crate_config_with_visitor_metadata(),
+        )
+        .expect("visitor snippet renders");
+
+        assert!(content.contains("static int32_t c_visitor_custom_names_visit_text"));
+        assert!(content.contains("KRZRenderOutput* _result = krz_render_document"));
+        assert!(content.contains("int main(void)"));
+        assert!(!content.contains("test_runner.h"));
+        assert!(!content.contains("void test_custom_names"));
     }
 
     #[test]

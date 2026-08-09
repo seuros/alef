@@ -23,6 +23,12 @@ pub fn discover_snippets(dirs: &[PathBuf], language_filter: Option<&[Language]>)
             .into_iter()
             .filter_map(std::result::Result::ok)
             .filter(|entry| entry.file_type().is_file())
+            .filter(|entry| {
+                !entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with(".alef-"))
+            })
         {
             let path = entry.path();
             let file_snippets = extract_snippets_from_file(path, dir)?;
@@ -219,5 +225,19 @@ mod tests {
         let base = Path::new("/repo/docs");
         let path = Path::new("/repo/docs/cli/usage.md");
         assert_eq!(infer_language_from_path(path, base), None);
+    }
+
+    #[test]
+    fn discovery_ignores_alef_metadata_files() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let snippet = directory.path().join("example.md");
+        let coverage = directory.path().join(".alef-snippet-coverage.json");
+        std::fs::write(&snippet, "```python\nprint('hello')\n```\n").expect("write snippet");
+        std::fs::write(&coverage, r#"{"language":"json"}"#).expect("write coverage");
+
+        let discovered = discover_snippets(&[directory.path().to_path_buf()], None).expect("discover snippets");
+
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(discovered[0].path, snippet);
     }
 }

@@ -45,9 +45,12 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         &fixture.tags,
         &fixture.input,
     );
-    if fixture.http.is_some() || fixture.visitor.is_some() || call.streaming_enabled() == Some(true) {
+    if fixture.visitor.is_some() {
+        return super::visitor::render_visitor_snippet(fixture, header, prefix, e2e_config, config);
+    }
+    if fixture.http.is_some() || call.streaming_enabled() == Some(true) {
         anyhow::bail!(
-            "c snippet `{}` requires an unsupported HTTP, visitor, or streaming call pattern",
+            "c snippet `{}` requires an unsupported HTTP or streaming call pattern",
             fixture.id
         );
     }
@@ -111,7 +114,7 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         .join("\n");
     Ok(crate::e2e::template_env::render(
         "c/snippet_body.jinja",
-        minijinja::context! { header => header, body => body },
+        minijinja::context! { header => header, declarations => "", body => body },
     ))
 }
 

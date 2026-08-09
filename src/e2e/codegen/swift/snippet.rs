@@ -19,9 +19,9 @@ pub(super) fn render(
         &fixture.tags,
         &fixture.input,
     );
-    if fixture.http.is_some() || fixture.visitor.is_some() || call.streaming_enabled() == Some(true) {
+    if fixture.http.is_some() || call.streaming_enabled() == Some(true) {
         bail!(
-            "swift snippet `{}` requires an unsupported HTTP, visitor, or streaming call pattern",
+            "swift snippet `{}` requires an unsupported HTTP or streaming call pattern",
             fixture.id
         );
     }
@@ -131,5 +131,36 @@ mod tests {
         assert!(rendered.contains("catch {"));
         assert!(rendered.contains("Call failed as expected"));
         assert!(!rendered.contains("XCTFail"));
+    }
+
+    #[test]
+    fn visitor_snippet_reuses_native_bridge_setup() {
+        let mut fixture = Fixture {
+            id: "custom_text".into(),
+            description: "Custom text".into(),
+            input: serde_json::json!({ "html": "<p>Hello</p>" }),
+            ..Fixture::default()
+        };
+        fixture.visitor = Some(crate::e2e::fixture::VisitorSpec {
+            callbacks: [("visit_text".into(), crate::e2e::fixture::CallbackAction::Continue)].into(),
+        });
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "render_document".into();
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            trait_bridges: vec![crate::core::config::TraitBridgeConfig {
+                trait_name: "DocumentVisitor".into(),
+                type_alias: Some("VisitorHandle".into()),
+                options_type: Some("RenderOptions".into()),
+                options_field: Some("visitor".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let rendered = render(&fixture, &e2e, &config, &[], &[]).expect("visitor snippet renders");
+        assert!(rendered.contains("class LocalVisitor_CustomText"));
+        assert!(rendered.contains("renderDocument"));
+        assert!(!rendered.contains("XCTest"));
     }
 }

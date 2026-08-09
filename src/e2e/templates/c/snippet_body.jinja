@@ -1,9 +1,13 @@
+#include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "{{ header }}"
 
+{% if declarations %}{{ declarations }}
+
+{% endif %}
 int main(void) {
 {{ body | indent(4, true) }}
     return EXIT_SUCCESS;
