@@ -68,7 +68,7 @@ impl SnippetValidator for SwiftValidator {
         let dir = session.temp_dir()?;
         let file = dir.path().join("snippet.swift");
         std::fs::write(&file, snippet.code.trim())?;
-        let module_directory = swift_module_directory(session)?;
+        let module_directories = swift_module_directories(session)?;
         let mut command = std::process::Command::new("swiftc");
         match level {
             ValidationLevel::Syntax => {
@@ -84,18 +84,13 @@ impl SnippetValidator for SwiftValidator {
                 command.arg("-o").arg(dir.path().join("snippet"));
             }
         }
-        command
-            .args([
-                "-I",
-                module_directory.to_string_lossy().as_ref(),
-                "-L",
-                module_directory
-                    .parent()
-                    .unwrap_or(&module_directory)
-                    .to_string_lossy()
-                    .as_ref(),
-            ])
-            .arg(&file);
+        for directory in &module_directories {
+            command.arg("-I").arg(directory);
+        }
+        if let Some(binary_directory) = module_directories.first().and_then(|path| path.parent()) {
+            command.arg("-L").arg(binary_directory);
+        }
+        command.arg(&file);
         session.apply(&mut command);
         let (success, output) = run_command(&mut command, timeout_secs)?;
         Ok(if success {
@@ -110,7 +105,7 @@ impl SnippetValidator for SwiftValidator {
     }
 }
 
-fn swift_module_directory(session: &ValidationSession) -> Result<std::path::PathBuf> {
+fn swift_module_directories(session: &ValidationSession) -> Result<Vec<std::path::PathBuf>> {
     let mut command = std::process::Command::new("swift");
     command.args(["build", "--show-bin-path"]);
     session.apply(&mut command);
@@ -121,5 +116,12 @@ fn swift_module_directory(session: &ValidationSession) -> Result<std::path::Path
         ));
     }
     let binary_directory = std::path::PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
-    Ok(binary_directory.join("Modules"))
+    let mut directories = vec![binary_directory.join("Modules")];
+    for entry in std::fs::read_dir(&binary_directory)? {
+        let path = entry?.path();
+        if path.join("module.modulemap").is_file() || path.join("include/module.modulemap").is_file() {
+            directories.push(path);
+        }
+    }
+    Ok(directories)
 }

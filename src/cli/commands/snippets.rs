@@ -357,6 +357,13 @@ fn configured_sessions(
     config: &crate::core::config::DocsSnippetsConfig,
     root: &std::path::Path,
 ) -> Result<std::collections::HashMap<String, SessionSpec>, String> {
+    let root = if root.is_absolute() {
+        root.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| format!("resolving current directory for snippet sessions: {error}"))?
+            .join(root)
+    };
     let mut sessions = std::collections::HashMap::new();
     for (target, session) in &config.sessions {
         let normalized = Language::normalize_session_target(target);
@@ -628,6 +635,10 @@ mod tests {
         );
         let sessions = configured_sessions(&config, std::path::Path::new("/workspace")).expect("known target");
         assert_eq!(sessions["wasm"].language, Language::TypeScript);
+        assert_eq!(
+            sessions["wasm"].working_directory,
+            std::path::Path::new("/workspace/bindings/wasm")
+        );
 
         config.sessions.insert(
             "unsupported-runtime".into(),

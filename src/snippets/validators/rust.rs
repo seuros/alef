@@ -44,7 +44,7 @@ impl RustValidator {
     fn cargo_manifest(session: Option<&ValidationSession>) -> Result<String> {
         let dependency = session.map(Self::path_dependency).transpose()?.unwrap_or_default();
         Ok(format!(
-            "[package]\nname = \"snippet-check\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\n{dependency}"
+            "[workspace]\n\n[package]\nname = \"snippet-check\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\n{dependency}"
         ))
     }
 

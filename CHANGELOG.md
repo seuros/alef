@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Snippet compile sessions now wire configured Rust crates, TypeScript packages, C headers, Swift packages, and Zig
   modules into isolated validator projects instead of using their manifests only for cache fingerprints.
 
+- Snippet sessions now canonicalize configured package paths before changing subprocess directories; Rust scratch
+  crates establish their own workspace boundary, and Swift compilation discovers package C-module maps.
+
 - Binding-aware snippet sessions now resolve Go and Dart package manifests from their actual project roots, with
   regression coverage for local Go, C#, Dart, Java, and Kotlin dependencies.
 
