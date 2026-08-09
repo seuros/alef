@@ -143,7 +143,7 @@ pub fn parse_code_blocks(path: &Path) -> crate::snippets::error::Result<Vec<Code
 
 fn parse_frontmatter<'a>(
     content: &'a str,
-    _path: &Path,
+    path: &Path,
 ) -> crate::snippets::error::Result<(SnippetMetadata, &'a str, usize)> {
     let Some(after_open) = content.strip_prefix("---\n") else {
         return Ok((SnippetMetadata::default(), content, 0));
@@ -154,9 +154,20 @@ fn parse_frontmatter<'a>(
     };
 
     let yaml = &after_open[..close_offset];
-    let Ok(metadata) = serde_yaml::from_str(yaml) else {
+    let Ok(mut metadata) = serde_yaml::from_str::<SnippetMetadata>(yaml) else {
         return Ok((SnippetMetadata::default(), content, 0));
     };
+    if let Some(target) = &metadata.target
+        && Language::from_session_target(target) == Language::Unknown
+    {
+        return Err(crate::snippets::error::Error::Parse {
+            path: path.to_path_buf(),
+            reason: format!("unknown snippet validation target `{target}`"),
+        });
+    }
+    metadata.target = metadata
+        .target
+        .map(|target| Language::normalize_session_target(&target));
     let body_start = "---\n".len() + close_offset + "\n---\n".len();
     let line_offset = content[..body_start].lines().count();
     Ok((metadata, &content[body_start..], line_offset))
@@ -262,6 +273,7 @@ print("hello")
             r#"---
 id: hello_world
 language: python
+target: python
 title: Hello
 tags:
   - smoke
@@ -276,8 +288,9 @@ print("hello")
         let blocks = parse_code_blocks(&path).unwrap();
         assert_eq!(blocks[0].metadata.id.as_deref(), Some("hello_world"));
         assert_eq!(blocks[0].metadata.language, Some(Language::Python));
+        assert_eq!(blocks[0].metadata.target.as_deref(), Some("python"));
         assert_eq!(blocks[0].metadata.tags, vec!["smoke"]);
-        assert_eq!(blocks[0].start_line, 8);
+        assert_eq!(blocks[0].start_line, 9);
     }
 
     #[test]

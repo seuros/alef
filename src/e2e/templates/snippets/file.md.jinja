@@ -1,6 +1,7 @@
 ---
 id: {{ fixture_id }}
 language: {{ language }}
+target: {{ target }}
 requires:{% if requirements %}
 {% for requirement in requirements %}  - {{ requirement }}
 {% endfor %}{% else %} []

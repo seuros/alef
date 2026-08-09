@@ -217,7 +217,7 @@ fn generate_snippet_report_with_extensions(
                     continue;
                 }
             };
-            let content = render_snippet_markdown(&body, fixture, docs, lang);
+            let content = render_snippet_markdown(&body, fixture, docs, lang, language);
             let file = GeneratedFile {
                 path: path.clone(),
                 content,
@@ -360,6 +360,7 @@ fn render_snippet_markdown(
     fixture: &Fixture,
     docs: &FixtureDocs,
     language: DocumentationLanguage,
+    target: &str,
 ) -> String {
     crate::e2e::template_env::render(
         "snippets/file.md.jinja",
@@ -368,6 +369,7 @@ fn render_snippet_markdown(
             fence => language.code_fence(),
             title => docs.title.as_deref().unwrap_or(language.display_name()), body => body,
             fixture_id => fixture.id, language => language.canonical_name(), requirements => fixture.requirements,
+            target => target,
             side_effect => side_effect_name(docs.side_effects),
         },
     )
@@ -596,11 +598,12 @@ mod tests {
 
         for (target_language, binding_language, canonical_name, output_slug) in cases {
             let language = DocumentationLanguage::Binding(binding_language);
-            let rendered = render_snippet_markdown("example()", &fixture, &docs, language);
+            let rendered = render_snippet_markdown("example()", &fixture, &docs, language, target_language);
             let path = snippet_path("docs/snippets", &docs, "example", target_language, language)
                 .expect("snippet path is valid");
 
             assert!(rendered.contains(&format!("language: {canonical_name}\n")));
+            assert!(rendered.contains(&format!("target: {target_language}\n")));
             assert!(rendered.contains(&format!("```{canonical_name} ")));
             assert_eq!(
                 path,
@@ -657,9 +660,11 @@ mod tests {
             &fixture,
             &docs,
             DocumentationLanguage::Binding(Language::Python),
+            "python",
         );
 
         assert!(rendered.contains("language: python"));
+        assert!(rendered.contains("target: python"));
         assert!(rendered.contains("side_effect: network"));
         assert!(rendered.contains("```python title=\"Example\"\nbackend_call()\n```"));
     }
@@ -794,6 +799,7 @@ mod tests {
                 other => panic!("unexpected target: {other}"),
             };
             assert!(snippet.file.content.contains(&format!("language: {canonical}")));
+            assert!(snippet.file.content.contains(&format!("target: {}", snippet.language)));
         }
     }
 

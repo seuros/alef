@@ -65,6 +65,22 @@ impl Language {
     }
 
     #[must_use]
+    pub fn from_session_target(target: &str) -> Self {
+        match Self::normalize_session_target(target).as_str() {
+            "node" | "wasm" => Self::TypeScript,
+            "kotlin_android" => Self::Kotlin,
+            "core" | "rust_core" => Self::Rust,
+            "c_ffi" | "ffi" => Self::C,
+            other => Self::from_fence_tag(other),
+        }
+    }
+
+    #[must_use]
+    pub fn normalize_session_target(target: &str) -> String {
+        target.trim().to_lowercase().replace('-', "_")
+    }
+
+    #[must_use]
     pub fn from_extension(ext: &str) -> Self {
         match ext.to_lowercase().as_str() {
             "sh" | "bash" => Self::Bash,
@@ -221,6 +237,7 @@ pub struct SnippetAnnotation {
 pub struct SnippetMetadata {
     pub id: Option<String>,
     pub language: Option<Language>,
+    pub target: Option<String>,
     pub title: Option<String>,
     pub level: Option<ValidationLevel>,
     pub skip: bool,

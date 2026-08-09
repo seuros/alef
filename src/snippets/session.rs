@@ -4,8 +4,9 @@ use crate::snippets::validators::run_command;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SessionSpec {
+    pub language: Language,
     pub working_directory: PathBuf,
     pub manifest: Option<PathBuf>,
     pub before: Vec<String>,
@@ -39,16 +40,17 @@ impl ValidationSession {
 }
 
 pub fn prepare_sessions(
-    specs: &HashMap<Language, SessionSpec>,
+    specs: &HashMap<String, SessionSpec>,
     timeout_secs: u64,
-) -> Result<HashMap<Language, ValidationSession>> {
+) -> Result<HashMap<String, ValidationSession>> {
     specs
         .iter()
-        .map(|(language, spec)| prepare_session(*language, spec, timeout_secs).map(|session| (*language, session)))
+        .map(|(target, spec)| prepare_session(spec, timeout_secs).map(|session| (target.clone(), session)))
         .collect()
 }
 
-fn prepare_session(language: Language, spec: &SessionSpec, timeout_secs: u64) -> Result<ValidationSession> {
+fn prepare_session(spec: &SessionSpec, timeout_secs: u64) -> Result<ValidationSession> {
+    let language = spec.language;
     ensure_directory(&spec.working_directory, language)?;
     if let Some(manifest) = &spec.manifest
         && !manifest.is_file()
@@ -146,8 +148,9 @@ mod tests {
         let marker = directory.path().join("prepared");
         let mut specs = HashMap::new();
         specs.insert(
-            Language::Python,
+            "python".into(),
             SessionSpec {
+                language: Language::Python,
                 working_directory: directory.path().to_path_buf(),
                 manifest: None,
                 before: vec![format!("test ! -e prepared && touch {}", marker.display())],
@@ -166,8 +169,9 @@ mod tests {
         let directory = tempfile::tempdir().expect("temp directory");
         let mut specs = HashMap::new();
         specs.insert(
-            Language::TypeScript,
+            "typescript".into(),
             SessionSpec {
+                language: Language::TypeScript,
                 working_directory: directory.path().to_path_buf(),
                 manifest: Some(directory.path().join("missing.json")),
                 before: Vec::new(),
@@ -185,8 +189,9 @@ mod tests {
         let directory = tempfile::tempdir().expect("temp directory");
         let mut specs = HashMap::new();
         specs.insert(
-            Language::Zig,
+            "zig".into(),
             SessionSpec {
+                language: Language::Zig,
                 working_directory: directory.path().to_path_buf(),
                 manifest: None,
                 before: vec!["test \"$ALEF_SESSION_CACHE\" = configured".into()],
@@ -195,7 +200,7 @@ mod tests {
         );
 
         let sessions = prepare_sessions(&specs, 5).expect("session preparation succeeds");
-        let session = sessions.get(&Language::Zig).expect("zig session");
+        let session = sessions.get("zig").expect("zig session");
         let mut command = std::process::Command::new("true");
         session.apply(&mut command);
 

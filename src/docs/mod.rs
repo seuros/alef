@@ -416,21 +416,24 @@ fn validate_snippets(
             sessions: snippet_cfg
                 .sessions
                 .iter()
-                .filter_map(|(name, session)| {
-                    let language = crate::snippets::types::Language::from_fence_tag(name);
-                    (language != crate::snippets::types::Language::Unknown).then(|| {
-                        (
+                .map(|(target, session)| {
+                    let normalized = crate::snippets::types::Language::normalize_session_target(target);
+                    let language = crate::snippets::types::Language::from_session_target(&normalized);
+                    if language == crate::snippets::types::Language::Unknown {
+                        anyhow::bail!("unknown docs.snippets session target `{target}`");
+                    }
+                    Ok((
+                        normalized,
+                        crate::snippets::session::SessionSpec {
                             language,
-                            crate::snippets::session::SessionSpec {
-                                working_directory: workspace_root.join(&session.cwd),
-                                manifest: session.manifest.as_ref().map(|path| workspace_root.join(path)),
-                                before: session.before.clone(),
-                                env: session.env.clone(),
-                            },
-                        )
-                    })
+                            working_directory: workspace_root.join(&session.cwd),
+                            manifest: session.manifest.as_ref().map(|path| workspace_root.join(path)),
+                            before: session.before.clone(),
+                            env: session.env.clone(),
+                        },
+                    ))
                 })
-                .collect(),
+                .collect::<anyhow::Result<_>>()?,
             ..crate::snippets::runner::RunnerConfig::default()
         };
         if let Some(timeout_secs) = snippet_cfg.timeout_secs {

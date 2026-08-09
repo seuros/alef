@@ -37,7 +37,7 @@ pub fn print_summary(summary: &RunSummary, show_code: bool) {
         println!(
             "{:<60} {:<12} {:<10} {:<8} {}ms",
             truncate(file_name, 58),
-            result.snippet.language,
+            display_language(&result.snippet),
             status,
             result.effective_level,
             result.duration_ms
@@ -137,7 +137,7 @@ pub fn write_report(summary: &RunSummary, path: &Path, show_code: bool) -> Resul
             "  - path: {}\n    line: {}\n    language: {}\n    status: {}\n    requested_level: {}\n    effective_level: {}\n",
             result.snippet.source_origin.path.display(),
             result.snippet.source_origin.line,
-            result.snippet.language,
+            display_language(&result.snippet),
             result.status,
             result.requested_level,
             result.effective_level
@@ -151,6 +151,13 @@ pub fn write_report(summary: &RunSummary, path: &Path, show_code: bool) -> Resul
     }
     std::fs::write(path, output)?;
     Ok(())
+}
+
+fn display_language(snippet: &Snippet) -> String {
+    snippet.metadata.target.as_ref().map_or_else(
+        || snippet.language.to_string(),
+        |target| format!("{}/{target}", snippet.language),
+    )
 }
 
 pub fn print_snippet_list(snippets: &[Snippet]) {

@@ -308,24 +308,13 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool) -> ExitCod
         allowed_side_effects,
         cache_dir: use_cache.then(|| root.join(config.cache_dir())),
         changed_only: use_cache,
-        sessions: config
-            .sessions
-            .iter()
-            .filter_map(|(name, session)| {
-                let language = Language::from_fence_tag(name);
-                (language != Language::Unknown).then(|| {
-                    (
-                        language,
-                        SessionSpec {
-                            working_directory: root.join(&session.cwd),
-                            manifest: session.manifest.as_ref().map(|path| root.join(path)),
-                            before: session.before.clone(),
-                            env: session.env.clone(),
-                        },
-                    )
-                })
-            })
-            .collect(),
+        sessions: match configured_sessions(config, root) {
+            Ok(sessions) => sessions,
+            Err(error) => {
+                tracing::error!("{error}");
+                return ExitCode::FAILURE;
+            }
+        },
     };
     let summary = match run_validation(&found, &ValidatorRegistry::new(), &runner) {
         Ok(summary) => summary,
@@ -362,6 +351,31 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool) -> ExitCod
     } else {
         ExitCode::SUCCESS
     }
+}
+
+fn configured_sessions(
+    config: &crate::core::config::DocsSnippetsConfig,
+    root: &std::path::Path,
+) -> Result<std::collections::HashMap<String, SessionSpec>, String> {
+    let mut sessions = std::collections::HashMap::new();
+    for (target, session) in &config.sessions {
+        let normalized = Language::normalize_session_target(target);
+        let language = Language::from_session_target(&normalized);
+        if language == Language::Unknown {
+            return Err(format!("unknown docs.snippets session target `{target}`"));
+        }
+        let spec = SessionSpec {
+            language,
+            working_directory: root.join(&session.cwd),
+            manifest: session.manifest.as_ref().map(|path| root.join(path)),
+            before: session.before.clone(),
+            env: session.env.clone(),
+        };
+        if sessions.insert(normalized.clone(), spec).is_some() {
+            return Err(format!("duplicate docs.snippets session target `{normalized}`"));
+        }
+    }
+    Ok(sessions)
 }
 
 fn missing_generated_snippets(directories: &[PathBuf]) -> anyhow::Result<Vec<crate::e2e::snippets::MissingSnippet>> {
@@ -600,5 +614,25 @@ mod tests {
 
         let missing = missing_generated_snippets(&[directory.path().to_path_buf()]).expect("read ledger");
         assert_eq!(missing, ledger.missing);
+    }
+
+    #[test]
+    fn configured_sessions_accept_binding_targets_and_reject_unknown_keys() {
+        let mut config = crate::core::config::DocsSnippetsConfig::default();
+        config.sessions.insert(
+            "wasm".into(),
+            crate::core::config::output::DocsSnippetSessionConfig {
+                cwd: "bindings/wasm".into(),
+                ..Default::default()
+            },
+        );
+        let sessions = configured_sessions(&config, std::path::Path::new("/workspace")).expect("known target");
+        assert_eq!(sessions["wasm"].language, Language::TypeScript);
+
+        config.sessions.insert(
+            "unsupported-runtime".into(),
+            crate::core::config::output::DocsSnippetSessionConfig::default(),
+        );
+        assert!(configured_sessions(&config, std::path::Path::new("/workspace")).is_err());
     }
 }

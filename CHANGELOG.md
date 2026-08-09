@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated snippets now retain their binding target independently of the canonical fence language, allowing Node and
+  WASM or Kotlin and Kotlin Android examples to resolve distinct validation sessions.
+
 - C documentation snippets now reuse engine-factory and byte-buffer call preparation, while C, Swift, and Zig
   streaming snippets reuse their binding-aware E2E call paths instead of leaving fixture-language coverage gaps.
 

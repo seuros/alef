@@ -18,7 +18,7 @@ pub struct RunnerConfig {
     pub allowed_side_effects: Vec<SideEffectClass>,
     pub cache_dir: Option<std::path::PathBuf>,
     pub changed_only: bool,
-    pub sessions: HashMap<crate::snippets::types::Language, SessionSpec>,
+    pub sessions: HashMap<String, SessionSpec>,
 }
 
 impl Default for RunnerConfig {
@@ -58,7 +58,7 @@ pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config
         if fail_fast {
             let mut results = Vec::with_capacity(snippets.len());
             for snippet in snippets {
-                let result = validate_one(snippet, registry, config, sessions.get(&snippet.language));
+                let result = validate_one(snippet, registry, config, session_for(snippet, &sessions));
                 let should_stop = matches!(result.status, SnippetStatus::Fail | SnippetStatus::Error);
                 results.push(result);
                 if should_stop {
@@ -69,12 +69,24 @@ pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config
         } else {
             snippets
                 .par_iter()
-                .map(|snippet| validate_one(snippet, registry, config, sessions.get(&snippet.language)))
+                .map(|snippet| validate_one(snippet, registry, config, session_for(snippet, &sessions)))
                 .collect()
         }
     });
 
     Ok(RunSummary::from_results(results))
+}
+
+fn session_for<'a>(
+    snippet: &Snippet,
+    sessions: &'a HashMap<String, crate::snippets::session::ValidationSession>,
+) -> Option<&'a crate::snippets::session::ValidationSession> {
+    snippet
+        .metadata
+        .target
+        .as_ref()
+        .and_then(|target| sessions.get(&crate::snippets::types::Language::normalize_session_target(target)))
+        .or_else(|| sessions.get(&snippet.language.to_string()))
 }
 
 fn validate_one(
@@ -306,6 +318,43 @@ mod tests {
         assert_eq!(
             side_effect_rejection(&snippet, &run).as_deref(),
             Some("side effect class network is not allowed")
+        );
+    }
+
+    #[test]
+    fn target_session_precedes_canonical_language_fallback() {
+        let mut snippet = network_snippet();
+        snippet.language = crate::snippets::types::Language::TypeScript;
+        snippet.metadata.target = Some("wasm".into());
+        let sessions = HashMap::from([
+            (
+                "typescript".into(),
+                crate::snippets::session::ValidationSession {
+                    working_directory: "bindings/node".into(),
+                    manifest: None,
+                    fingerprint: "node".into(),
+                    env: Default::default(),
+                },
+            ),
+            (
+                "wasm".into(),
+                crate::snippets::session::ValidationSession {
+                    working_directory: "bindings/wasm".into(),
+                    manifest: None,
+                    fingerprint: "wasm".into(),
+                    env: Default::default(),
+                },
+            ),
+        ]);
+
+        assert_eq!(
+            session_for(&snippet, &sessions).map(|session| session.fingerprint.as_str()),
+            Some("wasm")
+        );
+        snippet.metadata.target = None;
+        assert_eq!(
+            session_for(&snippet, &sessions).map(|session| session.fingerprint.as_str()),
+            Some("node")
         );
     }
 }
