@@ -15,6 +15,7 @@
 
 use super::{CallCtx, TestClientRenderer, has_meaningful_body, is_skipped};
 use crate::e2e::fixture::Fixture;
+use std::collections::BTreeMap;
 
 /// Default name for the response binding inside a generated test.
 pub const DEFAULT_RESPONSE_VAR: &str = "response";
@@ -68,20 +69,16 @@ pub fn render_http_test<R: TestClientRenderer + ?Sized>(out: &mut String, render
     // request goes out empty and the core rejects it with 422 (required binary
     // field missing) before the handler is reached. The synthesized body is a
     // raw string; each renderer's `render_call` escapes it for its language.
-    let synthesized_multipart = synthesize_multipart_request(http);
-    let (synth_body, synth_ct) = match &synthesized_multipart {
-        Some(body) => (Some(body), Some("multipart/form-data; boundary=alef-boundary")),
-        None => (None, None),
-    };
+    let request_plan = plan_request(http);
 
     let ctx = CallCtx {
         method: req.method.as_str(),
         path: &namespaced_path,
-        headers: &req.headers,
+        headers: &request_plan.headers,
         query_params: &req.query_params,
         cookies: &req.cookies,
-        body: req.body.as_ref().or(synth_body),
-        content_type: synth_ct.or(req.content_type.as_deref()),
+        body: request_plan.body.as_ref(),
+        content_type: request_plan.content_type.as_deref(),
         response_var,
     };
     renderer.render_call(out, &ctx);
@@ -123,14 +120,104 @@ pub fn render_http_test<R: TestClientRenderer + ?Sized>(out: &mut String, render
 }
 
 /// Boundary marker shared by every synthesized multipart body.
-const MULTIPART_BOUNDARY: &str = "alef-boundary";
+pub(crate) const MULTIPART_BOUNDARY: &str = "alef-boundary";
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PlannedRequest {
+    pub headers: BTreeMap<String, String>,
+    pub body: Option<serde_json::Value>,
+    pub content_type: Option<String>,
+}
+
+pub(crate) fn plan_request(http: &crate::e2e::fixture::HttpFixture) -> PlannedRequest {
+    let request = &http.request;
+    let headers = request.headers.clone();
+    let declared_content_type = request
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+        .map(|(_, value)| value.clone())
+        .or_else(|| request.content_type.clone());
+
+    if request.body.is_some() {
+        return PlannedRequest {
+            headers,
+            body: request.body.clone(),
+            content_type: declared_content_type,
+        };
+    }
+
+    if !is_multipart_content_type(declared_content_type.as_deref()) {
+        return PlannedRequest {
+            headers,
+            body: None,
+            content_type: declared_content_type,
+        };
+    }
+
+    plan_multipart_request(http, headers, declared_content_type)
+}
+
+fn plan_multipart_request(
+    http: &crate::e2e::fixture::HttpFixture,
+    mut headers: BTreeMap<String, String>,
+    declared_content_type: Option<String>,
+) -> PlannedRequest {
+    let request = &http.request;
+    if let Some(form_data) = request.form_data.as_ref() {
+        remove_content_type_header(&mut headers);
+        if form_data.is_empty() {
+            return PlannedRequest {
+                headers,
+                body: None,
+                content_type: None,
+            };
+        }
+        return PlannedRequest {
+            headers,
+            body: Some(serde_json::Value::String(render_form_data(form_data))),
+            content_type: Some(multipart_content_type()),
+        };
+    }
+
+    match synthesize_multipart_request(http) {
+        Some(body) => {
+            remove_content_type_header(&mut headers);
+            PlannedRequest {
+                headers,
+                body: Some(body),
+                content_type: Some(multipart_content_type()),
+            }
+        }
+        None => PlannedRequest {
+            headers,
+            body: None,
+            content_type: declared_content_type,
+        },
+    }
+}
+
+fn multipart_content_type() -> String {
+    format!("multipart/form-data; boundary={MULTIPART_BOUNDARY}")
+}
+
+fn remove_content_type_header(headers: &mut BTreeMap<String, String>) {
+    headers.retain(|name, _| !name.eq_ignore_ascii_case("content-type"));
+}
+
+fn is_multipart_content_type(content_type: Option<&str>) -> bool {
+    content_type
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .is_some_and(|value| value.eq_ignore_ascii_case("multipart/form-data"))
+}
 
 /// Synthesize a `multipart/form-data` request body from the handler's body
 /// schema when the fixture declares that content type but carries no explicit
 /// body. Returns the raw body as a JSON string value (each renderer escapes it
 /// for its own language), or `None` when synthesis does not apply.
 fn synthesize_multipart_request(http: &crate::e2e::fixture::HttpFixture) -> Option<serde_json::Value> {
-    if http.request.body.is_some() {
+    if http.request.body.is_some() || http.request.form_data.is_some() {
         return None;
     }
 
@@ -157,6 +244,17 @@ fn synthesize_multipart_request(http: &crate::e2e::fixture::HttpFixture) -> Opti
     }
     let props = schema.get("properties").and_then(|p| p.as_object())?;
     Some(serde_json::Value::String(synthesize_multipart_body_raw(props)))
+}
+
+fn render_form_data(form_data: &BTreeMap<String, String>) -> String {
+    let mut body = String::new();
+    for (name, value) in form_data {
+        body.push_str(&format!(
+            "--{MULTIPART_BOUNDARY}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+        ));
+    }
+    body.push_str(&format!("--{MULTIPART_BOUNDARY}--\r\n"));
+    body
 }
 
 /// Build the raw multipart body: one part per schema property, with a filename
@@ -442,5 +540,44 @@ mod tests {
             }));
         }
         assert!(super::synthesize_multipart_request(json_req.http.as_ref().unwrap()).is_none());
+    }
+
+    #[test]
+    fn explicit_empty_multipart_data_suppresses_body_and_content_type() {
+        let mut fixture = http_fixture("empty_upload", empty_expected(200));
+        let http = fixture.http.as_mut().unwrap();
+        http.request.content_type = Some("multipart/form-data".into());
+        http.request.form_data = Some(BTreeMap::new());
+        http.handler.body_schema = Some(serde_json::json!({
+            "type": "object",
+            "properties": { "file": { "type": "string", "format": "binary" } },
+        }));
+
+        let plan = super::plan_request(http);
+        assert_eq!(plan.body, None);
+        assert_eq!(plan.content_type, None);
+        assert!(
+            !plan
+                .headers
+                .keys()
+                .any(|name| name.eq_ignore_ascii_case("content-type"))
+        );
+    }
+
+    #[test]
+    fn explicit_multipart_form_data_uses_declared_values() {
+        let mut fixture = http_fixture("form_upload", empty_expected(200));
+        let http = fixture.http.as_mut().unwrap();
+        http.request.content_type = Some("multipart/form-data".into());
+        http.request.form_data = Some(BTreeMap::from([("caption".into(), "sample".into())]));
+
+        let plan = super::plan_request(http);
+        assert_eq!(
+            plan.content_type.as_deref(),
+            Some("multipart/form-data; boundary=alef-boundary")
+        );
+        let body = plan.body.and_then(|value| value.as_str().map(str::to_owned)).unwrap();
+        assert!(body.contains("name=\"caption\""));
+        assert!(body.contains("sample"));
     }
 }

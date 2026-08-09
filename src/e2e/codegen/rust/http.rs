@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as FmtWrite;
 
+use crate::e2e::codegen::client::http_call::plan_request;
 use crate::e2e::escape::{escape_rust, rust_raw_string};
 use crate::e2e::fixture::{CorsConfig, Fixture, HttpExpectedResponse, StaticFilesConfig};
 
@@ -308,7 +309,16 @@ pub fn render_http_test_function(out: &mut String, fixture: &Fixture, dep_name: 
     let req_path = &http.request.path;
     let status = http.expected_response.status_code;
 
-    let request_body_literal = http.request.body.as_ref().map(render_request_body_literal);
+    let request_plan = plan_request(http);
+    let request_body_literal = request_plan.body.as_ref().map(render_request_body_literal);
+    let mut request_headers = request_plan.headers.clone();
+    if let Some(content_type) = request_plan.content_type.as_ref()
+        && !request_headers
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case("content-type"))
+    {
+        request_headers.insert("Content-Type".to_string(), content_type.clone());
+    }
 
     // Extract middleware from handler (if any).
     let middleware = http.handler.middleware.as_ref();
@@ -383,7 +393,7 @@ pub fn render_http_test_function(out: &mut String, fixture: &Fixture, dep_name: 
     }
 
     // Add request headers (axum_test::TestRequest::add_header accepts &str via TryInto).
-    for (name, value) in &http.request.headers {
+    for (name, value) in &request_headers {
         let n = rust_raw_string(name);
         let v = rust_raw_string(value);
         let _ = writeln!(out, "        .add_header({n}, {v})");
@@ -739,6 +749,40 @@ mod tests {
         let mut out = String::new();
         render_http_test_function(&mut out, &fixture, "demo");
         assert!(!out.contains("copy_from_slice"));
+    }
+
+    #[test]
+    fn render_http_test_function_synthesizes_schema_only_multipart_request() {
+        let mut fixture = http_fixture(expected_response(None, &[]), None, "POST");
+        let http = fixture.http.as_mut().unwrap();
+        http.request.content_type = Some("multipart/form-data".into());
+        http.handler.body_schema = Some(serde_json::json!({
+            "type": "object",
+            "properties": { "file": { "type": "string", "format": "binary" } },
+        }));
+
+        let mut out = String::new();
+        render_http_test_function(&mut out, &fixture, "demo");
+        assert!(out.contains("boundary=alef-boundary"));
+        assert!(out.contains(r"\r\nContent-Disposition: form-data"));
+        assert!(out.contains("copy_from_slice"));
+    }
+
+    #[test]
+    fn render_http_test_function_omits_explicit_empty_multipart_request() {
+        let mut fixture = http_fixture(expected_response(None, &[]), None, "POST");
+        let http = fixture.http.as_mut().unwrap();
+        http.request.content_type = Some("multipart/form-data".into());
+        http.request.form_data = Some(BTreeMap::new());
+        http.handler.body_schema = Some(serde_json::json!({
+            "type": "object",
+            "properties": { "file": { "type": "string", "format": "binary" } },
+        }));
+
+        let mut out = String::new();
+        render_http_test_function(&mut out, &fixture, "demo");
+        assert!(!out.contains("copy_from_slice"));
+        assert!(!out.contains("multipart/form-data"));
     }
 
     #[test]
