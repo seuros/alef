@@ -23,7 +23,8 @@ pub(super) fn merge_external_type_roots(api: &mut ApiSurface, config: &ResolvedC
         let mut external_api = crate::extract::extractor::extract(&sources, &crate_name, &version, workspace_root)
             .with_context(|| format!("failed to extract external type roots from crate {crate_name}"))?;
 
-        super::filtering::apply_exclude_fields(&mut external_api, &config.exclude.fields);
+        super::type_helpers::normalize_field_type_paths(&mut external_api);
+        super::filtering::apply_exclude_fields_silent(&mut external_api, &config.exclude.fields);
 
         let root_names = resolve_root_names(&external_api, &source_crate.roots, &crate_name)?;
 
@@ -40,9 +41,16 @@ pub(super) fn merge_external_type_roots(api: &mut ApiSurface, config: &ResolvedC
             .filter(|enm| needed.contains(&enm.name))
             .collect();
 
-        reject_conflicting_names(api, &selected_types, &selected_enums, &crate_name)?;
+        let preferred_paths = api
+            .types
+            .iter()
+            .map(|typ| typ.rust_path.clone())
+            .chain(api.enums.iter().map(|enm| enm.rust_path.clone()))
+            .chain(api.errors.iter().map(|error| error.rust_path.clone()))
+            .collect();
         api.types.extend(selected_types);
         api.enums.extend(selected_enums);
+        crate::extract::extractor::disambiguation::disambiguate_type_names_preserving(api, &preferred_paths);
     }
 
     Ok(())
@@ -165,51 +173,4 @@ fn collect_named_types(
         }
         _ => {}
     }
-}
-
-fn reject_conflicting_names(
-    api: &ApiSurface,
-    selected_types: &[TypeDef],
-    selected_enums: &[EnumDef],
-    crate_name: &str,
-) -> anyhow::Result<()> {
-    for external_type in selected_types {
-        if let Some(existing_type) = api.types.iter().find(|typ| typ.name == external_type.name)
-            && existing_type.rust_path != external_type.rust_path
-        {
-            anyhow::bail!(
-                "external type `{}` from crate `{crate_name}` conflicts with existing type path `{}`",
-                external_type.rust_path,
-                existing_type.rust_path
-            );
-        }
-        if let Some(existing_enum) = api.enums.iter().find(|enm| enm.name == external_type.name) {
-            anyhow::bail!(
-                "external type `{}` from crate `{crate_name}` conflicts with existing enum path `{}`",
-                external_type.rust_path,
-                existing_enum.rust_path
-            );
-        }
-    }
-
-    for external_enum in selected_enums {
-        if let Some(existing_type) = api.types.iter().find(|typ| typ.name == external_enum.name) {
-            anyhow::bail!(
-                "external enum `{}` from crate `{crate_name}` conflicts with existing type path `{}`",
-                external_enum.rust_path,
-                existing_type.rust_path
-            );
-        }
-        if let Some(existing_enum) = api.enums.iter().find(|enm| enm.name == external_enum.name)
-            && existing_enum.rust_path != external_enum.rust_path
-        {
-            anyhow::bail!(
-                "external enum `{}` from crate `{crate_name}` conflicts with existing enum path `{}`",
-                external_enum.rust_path,
-                existing_enum.rust_path
-            );
-        }
-    }
-
-    Ok(())
 }

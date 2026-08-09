@@ -1,5 +1,5 @@
 use super::external_types::merge_external_type_roots;
-use super::filtering::{apply_filters, expand_include_list, is_type_excluded};
+use super::filtering::{apply_exclude_fields, apply_filters, expand_include_list, is_type_excluded};
 use super::sanitizer::{TypeSanitization, sanitize_type_ref, sanitize_unknown_types};
 use super::validation::validate_extracted_api;
 use crate::core::config::{ResolvedCrateConfig, SourceCrate};
@@ -486,7 +486,7 @@ pub fn external_function() -> ExternalConfig {
 }
 
 #[test]
-fn merge_external_type_roots_rejects_same_name_host_conflict() {
+fn merge_external_type_roots_disambiguates_same_name_host_conflict() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("external.rs");
     std::fs::write(&source, "pub struct ExternalConfig { pub value: String }\n").unwrap();
@@ -502,12 +502,93 @@ fn merge_external_type_roots_rejects_same_name_host_conflict() {
         ..Default::default()
     };
 
-    let err = merge_external_type_roots(&mut surface, &config).unwrap_err();
+    merge_external_type_roots(&mut surface, &config).expect("qualified host and external types can coexist");
 
+    let names: AHashSet<_> = surface.types.iter().map(|typ| typ.name.as_str()).collect();
+    assert!(names.contains("ExternalConfig"));
+    assert!(names.contains("ExternalExternalConfig"), "names: {names:?}");
+}
+
+#[test]
+fn merge_external_type_roots_preserves_qualified_enum_references() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("external.rs");
+    std::fs::write(
+        &source,
+        r#"
+pub struct ConversionOptions {
+    pub format: OutputFormat,
+}
+
+pub enum OutputFormat {
+    Plain,
+}
+"#,
+    )
+    .unwrap();
+
+    let mut surface = surface_with(vec![], vec![]);
+    surface.enums.push(crate::core::ir::EnumDef {
+        name: "OutputFormat".into(),
+        rust_path: "host_core::OutputFormat".into(),
+        ..Default::default()
+    });
+    let config = ResolvedCrateConfig {
+        source_crates: vec![SourceCrate {
+            name: "external-core".to_string(),
+            sources: vec![source],
+            roots: vec!["ConversionOptions".to_string()],
+            from_registry: false,
+        }],
+        ..Default::default()
+    };
+
+    merge_external_type_roots(&mut surface, &config).expect("qualified enums can coexist");
+
+    assert!(surface.enums.iter().any(|enm| enm.name == "OutputFormat"));
     assert!(
-        err.to_string().contains("conflicts with existing type path"),
-        "expected type conflict error, got: {err:#}"
+        surface.enums.iter().any(|enm| enm.name == "ExternalOutputFormat"),
+        "enums: {:?}",
+        surface.enums
     );
+    let format_field = &surface
+        .types
+        .iter()
+        .find(|typ| typ.name == "ConversionOptions")
+        .expect("external root is merged")
+        .fields[0];
+    assert_eq!(
+        format_field.ty,
+        TypeRef::Named("ExternalOutputFormat".into()),
+        "field: {format_field:?}"
+    );
+    assert_eq!(
+        format_field.type_rust_path.as_deref(),
+        Some("external_core::external::OutputFormat")
+    );
+}
+
+#[test]
+fn qualified_exclude_field_matches_only_its_exact_type_path() {
+    let mut host = make_typedef("ConversionOptions");
+    host.fields.push(crate::core::ir::FieldDef {
+        name: "format".into(),
+        ty: TypeRef::String,
+        ..Default::default()
+    });
+    let mut external = make_typedef("ConversionOptions");
+    external.rust_path = "external_core::options::ConversionOptions".into();
+    external.fields.push(crate::core::ir::FieldDef {
+        name: "format".into(),
+        ty: TypeRef::String,
+        ..Default::default()
+    });
+    let mut surface = surface_with(vec![host, external], vec![]);
+
+    apply_exclude_fields(&mut surface, &["external_core::ConversionOptions.format".into()]);
+
+    assert!(!surface.types[0].fields[0].binding_excluded);
+    assert!(surface.types[1].fields[0].binding_excluded);
 }
 
 #[test]

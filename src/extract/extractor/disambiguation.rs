@@ -16,7 +16,11 @@ use heck::ToPascalCase;
 
 /// Apply the disambiguation pass to the surface in place.
 pub(crate) fn disambiguate_type_names(surface: &mut ApiSurface) {
-    let renames = compute_renames(surface);
+    disambiguate_type_names_preserving(surface, &AHashSet::new());
+}
+
+pub(crate) fn disambiguate_type_names_preserving(surface: &mut ApiSurface, preferred_paths: &AHashSet<String>) {
+    let renames = compute_renames(surface, preferred_paths);
     if renames.is_empty() {
         return;
     }
@@ -24,7 +28,7 @@ pub(crate) fn disambiguate_type_names(surface: &mut ApiSurface) {
 }
 
 /// Build a map of `old_name -> new_name` for every collision.
-fn compute_renames(surface: &ApiSurface) -> AHashMap<String, String> {
+fn compute_renames(surface: &ApiSurface, preferred_paths: &AHashSet<String>) -> AHashMap<String, String> {
     let mut entries: Vec<(String, String, Kind, bool)> = Vec::new();
     for t in &surface.types {
         entries.push((t.name.clone(), t.rust_path.clone(), Kind::Type, t.binding_excluded));
@@ -53,7 +57,14 @@ fn compute_renames(surface: &ApiSurface) -> AHashMap<String, String> {
         if paths.len() < 2 {
             continue;
         }
-        paths.sort_by(|a, b| a.2.cmp(&b.2).then_with(|| a.0.cmp(&b.0)));
+        paths.sort_by(|a, b| {
+            let a_preferred = preferred_paths.contains(&a.0);
+            let b_preferred = preferred_paths.contains(&b.0);
+            b_preferred
+                .cmp(&a_preferred)
+                .then_with(|| a.2.cmp(&b.2))
+                .then_with(|| a.0.cmp(&b.0))
+        });
 
         let mut seen_paths: AHashSet<String> = AHashSet::new();
         paths.retain(|(path, _kind, _bx)| seen_paths.insert(path.clone()));
@@ -83,8 +94,17 @@ enum Kind {
 /// and prepending PascalCase segments until the result is not in `taken`.
 fn pick_unique_name(original: &str, rust_path: &str, taken: &AHashSet<String>) -> String {
     let segments: Vec<&str> = rust_path.split("::").collect();
-    if segments.len() <= 2 {
+    if segments.len() < 2 {
         return numeric_suffix(original, taken);
+    }
+
+    if segments.len() == 2 {
+        let candidate = format!("{}{original}", segments[0].to_pascal_case());
+        return if taken.contains(&candidate) {
+            numeric_suffix(original, taken)
+        } else {
+            candidate
+        };
     }
 
     let module_segments = &segments[1..segments.len() - 1];
@@ -134,6 +154,15 @@ fn apply_renames(surface: &mut ApiSurface, renames: &AHashMap<String, String>) {
         }
     }
 
+    for typ in &mut surface.types {
+        rename_fields(&mut typ.fields, renames);
+    }
+    for enm in &mut surface.enums {
+        for variant in &mut enm.variants {
+            rename_fields(&mut variant.fields, renames);
+        }
+    }
+
     let excluded: Vec<(String, String)> = surface.excluded_type_paths.drain().collect();
     for (name, path) in excluded {
         if let Some(new_name) = renames.get(&path) {
@@ -141,6 +170,42 @@ fn apply_renames(surface: &mut ApiSurface, renames: &AHashMap<String, String>) {
         } else {
             surface.excluded_type_paths.insert(name, path);
         }
+    }
+}
+
+fn rename_fields(fields: &mut [crate::core::ir::FieldDef], renames: &AHashMap<String, String>) {
+    for field in fields {
+        let Some(path) = field.type_rust_path.as_ref() else {
+            continue;
+        };
+        let Some(new_name) = renamed_field_type(path, renames) else {
+            continue;
+        };
+        rename_type_ref(&mut field.ty, new_name);
+    }
+}
+
+fn renamed_field_type<'a>(path: &str, renames: &'a AHashMap<String, String>) -> Option<&'a str> {
+    if let Some(name) = renames.get(path) {
+        return Some(name);
+    }
+    let crate_name = path.split("::").next()?;
+    let short_name = path.rsplit("::").next()?;
+    let mut matches = renames.iter().filter(|(candidate, _)| {
+        candidate.split("::").next() == Some(crate_name) && candidate.rsplit("::").next() == Some(short_name)
+    });
+    let (_, name) = matches.next()?;
+    if matches.next().is_some() { None } else { Some(name) }
+}
+
+fn rename_type_ref(ty: &mut crate::core::ir::TypeRef, new_name: &str) {
+    match ty {
+        crate::core::ir::TypeRef::Named(name) => *name = new_name.to_string(),
+        crate::core::ir::TypeRef::Optional(inner) | crate::core::ir::TypeRef::Vec(inner) => {
+            rename_type_ref(inner, new_name);
+        }
+        crate::core::ir::TypeRef::Map(_, value) => rename_type_ref(value, new_name),
+        _ => {}
     }
 }
 

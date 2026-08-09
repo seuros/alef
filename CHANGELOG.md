@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- External DTO roots now preserve qualified type identity when names overlap with native API types, including field
+  references and qualified field exclusions, without false unmatched-exclusion warnings or forced field removal.
+
 - Generate standalone C and Zig documentation programs and render native expected-error handling for C, Swift, and Zig.
 
 - Targeted E2E generation now derives orphan-sweep roots exclusively from current E2E artifacts, preventing

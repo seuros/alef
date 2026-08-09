@@ -29,6 +29,14 @@ const EXCLUDE_FIELDS_REASON: &str = "exclude.fields config";
 /// fields). Malformed entries (not exactly one `.` splitting a non-empty type and field
 /// name) are logged and skipped rather than panicking.
 pub(super) fn apply_exclude_fields(api: &mut ApiSurface, fields: &[String]) {
+    apply_exclude_fields_with_warnings(api, fields, true);
+}
+
+pub(super) fn apply_exclude_fields_silent(api: &mut ApiSurface, fields: &[String]) {
+    apply_exclude_fields_with_warnings(api, fields, false);
+}
+
+fn apply_exclude_fields_with_warnings(api: &mut ApiSurface, fields: &[String], warn_unmatched: bool) {
     for entry in fields {
         let Some((type_name, field_name)) = entry.rsplit_once('.') else {
             tracing::warn!(entry = %entry, "exclude.fields entry must be \"TypeName.field_name\"; skipping");
@@ -41,7 +49,7 @@ pub(super) fn apply_exclude_fields(api: &mut ApiSurface, fields: &[String]) {
 
         let mut matched = false;
         for typ in &mut api.types {
-            if typ.name != type_name {
+            if !type_identity_matches(type_name, &typ.name, &typ.rust_path) {
                 continue;
             }
             for field in &mut typ.fields {
@@ -53,7 +61,7 @@ pub(super) fn apply_exclude_fields(api: &mut ApiSurface, fields: &[String]) {
             }
         }
         for enm in &mut api.enums {
-            if enm.name != type_name {
+            if !type_identity_matches(type_name, &enm.name, &enm.rust_path) {
                 continue;
             }
             for variant in &mut enm.variants {
@@ -67,9 +75,31 @@ pub(super) fn apply_exclude_fields(api: &mut ApiSurface, fields: &[String]) {
             }
         }
 
-        if !matched {
+        if !matched && warn_unmatched {
             tracing::warn!(entry = %entry, "exclude.fields entry did not match any known type field");
         }
+    }
+}
+
+fn type_identity_matches(configured: &str, name: &str, rust_path: &str) -> bool {
+    if configured.contains("::") {
+        let configured = configured.replace('-', "_");
+        let rust_path = rust_path.replace('-', "_");
+        if rust_path == configured {
+            return true;
+        }
+        let mut segments = configured.split("::");
+        let Some(crate_name) = segments.next() else {
+            return false;
+        };
+        let Some(type_name) = segments.next() else {
+            return false;
+        };
+        segments.next().is_none()
+            && rust_path.starts_with(&format!("{crate_name}::"))
+            && rust_path.ends_with(&format!("::{type_name}"))
+    } else {
+        name == configured
     }
 }
 

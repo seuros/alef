@@ -1,5 +1,5 @@
 mod defaults;
-mod disambiguation;
+pub(crate) mod disambiguation;
 mod functions;
 mod helpers;
 mod paths;
