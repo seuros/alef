@@ -108,3 +108,67 @@ impl SnippetValidator for CsharpValidator {
         Self::is_dependency_error_text(output)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::snippets::types::{SnippetMetadata, SourceOrigin};
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    #[test]
+    fn session_manifest_adds_a_real_project_reference() {
+        if which::which("dotnet").is_err() {
+            return;
+        }
+        let root = tempfile::tempdir().expect("temporary root");
+        let project = root.path().join("LocalFixture");
+        let working = root.path().join("working");
+        std::fs::create_dir_all(&project).expect("project directory");
+        std::fs::create_dir_all(&working).expect("working directory");
+        std::fs::write(
+            project.join("LocalFixture.csproj"),
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>",
+        )
+        .expect("project manifest");
+        std::fs::write(
+            project.join("Value.cs"),
+            "namespace LocalFixture; public static class Values { public const int Value = 1; }",
+        )
+        .expect("project source");
+        let session = ValidationSession {
+            working_directory: working,
+            manifest: Some(project.join("LocalFixture.csproj")),
+            fingerprint: "fixture".into(),
+            env: BTreeMap::from([("DOTNET_CLI_TELEMETRY_OPTOUT".into(), "1".into())]),
+        };
+
+        let (status, output) = CsharpValidator::validate_with_context(
+            &snippet("using LocalFixture; System.Console.WriteLine(Values.Value);"),
+            ValidationLevel::TypeCheck,
+            60,
+            Some(&session),
+        )
+        .expect("validation runs");
+        assert_eq!(status, SnippetStatus::Pass, "{output:?}");
+    }
+
+    fn snippet(code: &str) -> Snippet {
+        Snippet {
+            id: None,
+            path: PathBuf::from("snippet.cs"),
+            language: Language::Csharp,
+            title: None,
+            code: code.into(),
+            start_line: 1,
+            block_index: 0,
+            annotation: None,
+            metadata: SnippetMetadata::default(),
+            source_origin: SourceOrigin {
+                path: PathBuf::from("snippet.cs"),
+                line: 1,
+                block_index: 0,
+            },
+        }
+    }
+}

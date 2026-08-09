@@ -169,3 +169,70 @@ impl SnippetValidator for JavaValidator {
         output.contains("cannot find symbol") || output.contains("package") && output.contains("does not exist")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::snippets::types::{SnippetMetadata, SourceOrigin};
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    #[test]
+    fn session_manifest_is_used_as_a_real_classpath() {
+        if which::which("javac").is_err() {
+            return;
+        }
+        let root = tempfile::tempdir().expect("temporary root");
+        let classes = root.path().join("classes");
+        let sources = root.path().join("sources/localfixture");
+        std::fs::create_dir_all(&classes).expect("classes directory");
+        std::fs::create_dir_all(&sources).expect("sources directory");
+        let source = sources.join("Values.java");
+        std::fs::write(
+            &source,
+            "package localfixture; public final class Values { public static final int VALUE = 1; }",
+        )
+        .expect("Java fixture source");
+        let compiled = std::process::Command::new("javac")
+            .args(["-d"])
+            .arg(&classes)
+            .arg(&source)
+            .status()
+            .expect("javac runs");
+        assert!(compiled.success());
+        let session = ValidationSession {
+            working_directory: root.path().to_path_buf(),
+            manifest: Some(classes),
+            fingerprint: "fixture".into(),
+            env: BTreeMap::new(),
+        };
+
+        let (status, output) = JavaValidator::validate_with_context(
+            &snippet("import localfixture.Values;\npublic final class Example { public static void main(String[] args) { System.out.println(Values.VALUE); } }"),
+            ValidationLevel::TypeCheck,
+            30,
+            Some(&session),
+        )
+        .expect("validation runs");
+        assert_eq!(status, SnippetStatus::Pass, "{output:?}");
+    }
+
+    fn snippet(code: &str) -> Snippet {
+        Snippet {
+            id: None,
+            path: PathBuf::from("Example.java"),
+            language: Language::Java,
+            title: None,
+            code: code.into(),
+            start_line: 1,
+            block_index: 0,
+            annotation: None,
+            metadata: SnippetMetadata::default(),
+            source_origin: SourceOrigin {
+                path: PathBuf::from("Example.java"),
+                line: 1,
+                block_index: 0,
+            },
+        }
+    }
+}

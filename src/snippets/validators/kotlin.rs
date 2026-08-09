@@ -87,3 +87,67 @@ impl SnippetValidator for KotlinValidator {
         output.contains("unresolved reference") || output.contains("expecting an element")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::snippets::types::{SnippetMetadata, SourceOrigin};
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    #[test]
+    fn session_manifest_is_used_as_a_real_classpath() {
+        if which::which("kotlinc").is_err() {
+            return;
+        }
+        let root = tempfile::tempdir().expect("temporary root");
+        let source = root.path().join("LocalFixture.kt");
+        let library = root.path().join("local-fixture.jar");
+        std::fs::write(
+            &source,
+            "package localfixture\nobject Values { const val value: Int = 1 }\n",
+        )
+        .expect("Kotlin fixture source");
+        let compiled = std::process::Command::new("kotlinc")
+            .arg(&source)
+            .args(["-d"])
+            .arg(&library)
+            .status()
+            .expect("kotlinc runs");
+        assert!(compiled.success());
+        let session = ValidationSession {
+            working_directory: root.path().to_path_buf(),
+            manifest: Some(library),
+            fingerprint: "fixture".into(),
+            env: BTreeMap::new(),
+        };
+
+        let (status, output) = KotlinValidator::validate_with_context(
+            &snippet("import localfixture.Values\nfun main() { println(Values.value) }"),
+            ValidationLevel::TypeCheck,
+            30,
+            Some(&session),
+        )
+        .expect("validation runs");
+        assert_eq!(status, SnippetStatus::Pass, "{output:?}");
+    }
+
+    fn snippet(code: &str) -> Snippet {
+        Snippet {
+            id: None,
+            path: PathBuf::from("snippet.kt"),
+            language: Language::Kotlin,
+            title: None,
+            code: code.into(),
+            start_line: 1,
+            block_index: 0,
+            annotation: None,
+            metadata: SnippetMetadata::default(),
+            source_origin: SourceOrigin {
+                path: PathBuf::from("snippet.kt"),
+                line: 1,
+                block_index: 0,
+            },
+        }
+    }
+}

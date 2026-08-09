@@ -14,7 +14,9 @@ impl GoValidator {
         session: Option<&ValidationSession>,
     ) -> Result<(SnippetStatus, Option<String>)> {
         let dir = match session {
-            Some(session) => session.temp_dir()?,
+            Some(session) => tempfile::Builder::new()
+                .prefix(".alef-snippet-")
+                .tempdir_in(Self::project_directory(session))?,
             None => TempDir::new()?,
         };
         let file = dir.path().join("snippet.go");
@@ -45,7 +47,10 @@ impl GoValidator {
             }
         };
         match session {
-            Some(value) => value.apply(&mut command),
+            Some(value) => {
+                command.current_dir(Self::project_directory(value));
+                value.apply_environment(&mut command);
+            }
             None => {
                 command.current_dir(dir.path());
             }
@@ -56,6 +61,14 @@ impl GoValidator {
         } else {
             (SnippetStatus::Fail, Some(output))
         })
+    }
+
+    fn project_directory(session: &ValidationSession) -> &std::path::Path {
+        session
+            .manifest
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .unwrap_or(&session.working_directory)
     }
 
     fn wrap_if_fragment(code: &str) -> String {
@@ -160,5 +173,62 @@ impl SnippetValidator for GoValidator {
 
     fn is_dependency_error(&self, output: &str) -> bool {
         output.contains("undefined:") || output.contains("cannot find package") || output.contains("no required module")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::snippets::types::{SnippetMetadata, SourceOrigin};
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    #[test]
+    fn session_manifest_resolves_a_local_module_outside_the_working_directory() {
+        if which::which("go").is_err() {
+            return;
+        }
+        let root = tempfile::tempdir().expect("temporary root");
+        let working = root.path().join("working");
+        let project = root.path().join("project");
+        std::fs::create_dir_all(&working).expect("working directory");
+        std::fs::create_dir_all(project.join("localpkg")).expect("local package directory");
+        std::fs::write(project.join("go.mod"), "module example.test/local\n\ngo 1.24\n").expect("go manifest");
+        std::fs::write(project.join("localpkg/value.go"), "package localpkg\nconst Value = 1\n").expect("go package");
+        let snippet =
+            snippet("package main\nimport \"example.test/local/localpkg\"\nfunc main() { _ = localpkg.Value }");
+        let session = ValidationSession {
+            working_directory: working,
+            manifest: Some(project.join("go.mod")),
+            fingerprint: "fixture".into(),
+            env: BTreeMap::from([(
+                "GOCACHE".into(),
+                root.path().join("go-cache").to_string_lossy().into_owned(),
+            )]),
+        };
+
+        let (status, output) =
+            GoValidator::validate_with_context(&snippet, ValidationLevel::TypeCheck, 30, Some(&session))
+                .expect("validation runs");
+        assert_eq!(status, SnippetStatus::Pass, "{output:?}");
+    }
+
+    fn snippet(code: &str) -> Snippet {
+        Snippet {
+            id: None,
+            path: PathBuf::from("snippet.go"),
+            language: Language::Go,
+            title: None,
+            code: code.into(),
+            start_line: 1,
+            block_index: 0,
+            annotation: None,
+            metadata: SnippetMetadata::default(),
+            source_origin: SourceOrigin {
+                path: PathBuf::from("snippet.go"),
+                line: 1,
+                block_index: 0,
+            },
+        }
     }
 }
