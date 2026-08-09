@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Multipart fixture requests now share one request plan across the generic and Rust e2e clients. Schema-only
+  uploads synthesize a real multipart body and boundary, while explicitly empty form data emits neither.
+
+- Snippet audits now count README-configured snippet paths, including language redirects, and fixture side-effect
+  metadata uses the canonical safe, network, process, install, and server taxonomy without collapsing mutations.
+
+- Validate configured documentation snippets in binding-aware per-language sessions so compile and run checks resolve
+  local generated packages and manifests, with sanitized one-time setup commands and explicit preparation failures.
+
+- Every configured fixture-language pair, including extension-backed rendering, now participates in deterministic
+  snippet coverage accounting. Missing documentation metadata, empty recipes, and incompatible renderers remain
+  visible unless an exact user-facing documentation exception explains the difference.
+
 - Lossy binding-to-core conversion now boxes named fields after converting their binding values.
 
 - PHP optional struct setters now borrow wrapper values accepted by ext-php-rs and clone them into owned core fields.
