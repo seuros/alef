@@ -288,13 +288,16 @@ fn optional_named_struct_field_gets_a_working_setter_method() {
     );
 
     assert!(
-        content.contains("pub fn set_security_limits(&mut self, value: Option<SecurityLimits>)"),
+        content.contains("pub fn set_security_limits(&mut self, value: Option<&SecurityLimits>)"),
         "an Option<Named-struct> field must now get a real setter method so PHP can actually \
-         configure it:\n{content}"
+         configure it. The parameter has to be a shared reference: class_derives! implements \
+         FromZval for &T and IntoZval for owned T, never FromZval for owned T, so taking the \
+         struct by value does not compile:\n{content}"
     );
 
     assert!(
-        content.contains("self.security_limits = value.map(Into::into);"),
-        "the setter must write through to the real backing field, not a detached clone:\n{content}"
+        content.contains("self.security_limits = value.map(|value| value.clone().into());"),
+        "the setter must write through to the real backing field, not a detached clone. It \
+         clones out of the shared borrow because the backing field is owned:\n{content}"
     );
 }

@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Lossy binding-to-core conversion now boxes named fields after converting their binding values.
 
+- PHP optional struct setters now borrow wrapper values accepted by ext-php-rs and clone them into owned core fields.
+
 - Java, Kotlin, Kotlin Android, and C# documentation snippets now reuse backend-native typed argument and
   setup generation while preserving client factories, coroutine or async calls, and imports without test harnesses.
 

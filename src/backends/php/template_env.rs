@@ -509,6 +509,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/php_method_definition_with_params.jinja"),
     ),
     (
+        "php_optional_named_setter.jinja",
+        include_str!("templates/php_optional_named_setter.jinja"),
+    ),
+    (
         "php_static_method_definition_no_params.jinja",
         include_str!("templates/php_static_method_definition_no_params.jinja"),
     ),
