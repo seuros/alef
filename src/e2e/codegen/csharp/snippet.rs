@@ -40,7 +40,9 @@ pub(super) fn render_snippet_body(
             .get("csharp")
             .and_then(|value| value.options_type.as_deref())
     });
-    let options_via = overrides.and_then(|value| value.options_via.as_deref());
+    let options_via = overrides
+        .and_then(|value| value.options_via.as_deref())
+        .filter(|value| *value != "from_json");
     let mut visitor_declarations = Vec::new();
     let mut teardown_lines = Vec::new();
     let (setup_lines, mut args) = super::setup::build_args_and_setup(
@@ -151,5 +153,59 @@ mod tests {
         assert!(!body.contains("using System;"));
         assert!(!body.contains("[Fact]"));
         assert!(!body.contains("Assert."));
+    }
+
+    #[test]
+    fn snippet_constructs_known_dto_without_json_round_trip() {
+        let fixture = Fixture {
+            id: "typed_input".into(),
+            description: "Typed input".into(),
+            input: serde_json::json!({"payload": {"label": "sample"}}),
+            ..Fixture::default()
+        };
+        let mut call = CallConfig {
+            function: "process".into(),
+            args: vec![crate::e2e::config::ArgMapping {
+                name: "payload".into(),
+                field: "input.payload".into(),
+                arg_type: "json_object".into(),
+                optional: false,
+                owned: false,
+                element_type: Some("SampleInput".into()),
+                go_type: None,
+                vec_inner_is_ref: false,
+                trait_name: None,
+            }],
+            ..CallConfig::default()
+        };
+        call.overrides.insert(
+            "csharp".into(),
+            CallOverride {
+                options_via: Some("from_json".into()),
+                ..CallOverride::default()
+            },
+        );
+        let body = render_snippet_body(
+            &fixture,
+            &E2eConfig {
+                call,
+                ..E2eConfig::default()
+            },
+            &ResolvedCrateConfig::default(),
+            &[TypeDef {
+                name: "SampleInput".into(),
+                fields: vec![crate::core::ir::FieldDef {
+                    name: "label".into(),
+                    ty: crate::core::ir::TypeRef::String,
+                    ..Default::default()
+                }],
+                ..TypeDef::default()
+            }],
+            &[],
+        );
+
+        assert!(body.contains("new SampleInput { Label = \"sample\" }"), "{body}");
+        assert!(!body.contains("FromJson"), "{body}");
+        assert!(!body.contains("JsonSerializer"), "{body}");
     }
 }
