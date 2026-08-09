@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated Go documentation snippets now separate package and import declarations into gofmt-compatible lines.
+
 - TypeScript E2E fixture regressions now retain formatter-clean protocol metadata initializers.
 
 - PHP and Ruby now box converted values when binding DTO fields map to core `Option<Box<T>>` fields.

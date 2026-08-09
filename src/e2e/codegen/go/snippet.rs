@@ -228,4 +228,15 @@ mod tests {
 
         assert!(!body.contains("\"fmt\""), "{body}");
     }
+
+    #[test]
+    fn snippet_separates_package_and_import_declarations() {
+        let mut e2e = E2eConfig::default();
+        e2e.call.module = "example.com/sample".into();
+
+        let body = render_snippet_body(&fixture(), &e2e, &ResolvedCrateConfig::default(), &[], &[]);
+
+        assert!(body.starts_with("package main\n\nimport (\n"), "{body}");
+        assert!(!body.contains("package main import"), "{body}");
+    }
 }

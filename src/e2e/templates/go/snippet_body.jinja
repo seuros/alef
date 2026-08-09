@@ -1,9 +1,7 @@
-package main import (
+package main{{ "\n\n" }}import (
 {% for import in standard_imports %}
   "{{ import }}"
 {% endfor %}
-{% if standard_imports %}
-{% endif %}
 {{ import_alias }} "{{ module }}" )
 
 {% for declaration in package_decls %}
