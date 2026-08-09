@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ruby, PHP, Elixir, and Dart documentation snippets now render standalone HTTP requests for HTTP harness fixtures,
   using the same normalized request bodies, content types, headers, and cookies as E2E generation.
 
+- Missing Dart prebuilt libraries are now a quiet no-op during ordinary development builds, while package creation
+  retains an actionable warning that published consumers will need a local native build.
+
 - Emit runnable Python and Rust documentation entry points and native expected-error handling for Node and PHP snippets.
 
 - External DTO roots now preserve qualified type identity when names overlap with native API types, including field

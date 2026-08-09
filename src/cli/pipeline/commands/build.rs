@@ -552,9 +552,17 @@ pub fn run_post_build(
             }
             PostBuildStep::StageDartNatives { lib_stem } => {
                 let package_root = base_dir.join("packages/dart");
-                crate::publish::dart_native::stage_dart_native_libraries(base_dir, &package_root, lib_stem)
-                    .with_context(|| format!("failed to stage Dart native libraries for stem '{lib_stem}'"))?;
-                info!("Staged native libraries for Dart package from build output (stem: '{lib_stem}')");
+                let status =
+                    crate::publish::dart_native::stage_dart_native_libraries(base_dir, &package_root, lib_stem)
+                        .with_context(|| format!("failed to stage Dart native libraries for stem '{lib_stem}'"))?;
+                match status {
+                    crate::publish::dart_native::NativeLibraryStageStatus::Staged => {
+                        info!("Staged native libraries for Dart package from build output (stem: '{lib_stem}')");
+                    }
+                    crate::publish::dart_native::NativeLibraryStageStatus::Missing => {
+                        debug!("No Dart native libraries available to stage for development stem '{lib_stem}'");
+                    }
+                }
             }
             PostBuildStep::MaterializeSwiftBridge {
                 binding_crate_name,

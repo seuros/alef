@@ -3,10 +3,11 @@
 use super::PackageArtifact;
 use super::util::{copy_dir_recursive, copy_optional_file};
 use crate::core::config::ResolvedCrateConfig;
-use crate::publish::dart_native::stage_dart_native_libraries;
+use crate::publish::dart_native::{NativeLibraryStageStatus, stage_dart_native_libraries};
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
+use tracing::warn;
 
 /// Package Dart bindings into a source tarball suitable for pub.dev.
 ///
@@ -44,8 +45,14 @@ pub fn package_dart(
     copy_dir_recursive(&pkg_src, &staging).context("copying Dart package directory")?;
 
     let lib_stem = format!("{}_dart", pubspec_name.replace('-', "_"));
-    stage_dart_native_libraries(workspace_root, &staging, &lib_stem)
+    let native_status = stage_dart_native_libraries(workspace_root, &staging, &lib_stem)
         .context("staging native libraries for Dart package")?;
+    if native_status == NativeLibraryStageStatus::Missing {
+        warn!(
+            "no prebuilt native libraries found for Dart binding '{}'; published packages will require local build",
+            lib_stem
+        );
+    }
 
     for filename in ["README.md", "CHANGELOG.md", "LICENSE"] {
         copy_optional_file(workspace_root, filename, &staging)

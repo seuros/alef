@@ -7,7 +7,12 @@
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::warn;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeLibraryStageStatus {
+    Staged,
+    Missing,
+}
 
 /// Recursively copy a directory and all its contents.
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
@@ -134,7 +139,11 @@ fn find_native_libraries(
 /// - `workspace_root`: Root of the workspace (where `target/` and Cargo.toml are)
 /// - `package_root`: Root of the Dart package (where `pubspec.yaml` is; often `{workspace_root}/packages/dart`)
 /// - `stem`: The library name stem (e.g., `sample_lib_dart` for a `libsample_lib_dart.dylib`)
-pub fn stage_dart_native_libraries(workspace_root: &Path, package_root: &Path, stem: &str) -> Result<()> {
+pub fn stage_dart_native_libraries(
+    workspace_root: &Path,
+    package_root: &Path,
+    stem: &str,
+) -> Result<NativeLibraryStageStatus> {
     let native_base = package_root.join("lib/src/native");
     let mut staged_any = false;
 
@@ -174,14 +183,11 @@ pub fn stage_dart_native_libraries(workspace_root: &Path, package_root: &Path, s
         }
     }
 
-    if !staged_any {
-        warn!(
-            "no prebuilt native libraries found for Dart binding '{}'; packages will require local build",
-            stem
-        );
-    }
-
-    Ok(())
+    Ok(if staged_any {
+        NativeLibraryStageStatus::Staged
+    } else {
+        NativeLibraryStageStatus::Missing
+    })
 }
 
 #[cfg(test)]
@@ -198,8 +204,9 @@ mod tests {
         let package_root = tmp.path().join("packages/dart");
         fs::create_dir_all(&package_root).unwrap();
 
-        stage_dart_native_libraries(tmp.path(), &package_root, "my_lib_dart").unwrap();
+        let status = stage_dart_native_libraries(tmp.path(), &package_root, "my_lib_dart").unwrap();
 
+        assert_eq!(status, NativeLibraryStageStatus::Staged);
         assert!(
             package_root
                 .join("lib/src/native/macos-arm64/libmy_lib_dart.dylib")
@@ -219,12 +226,25 @@ mod tests {
         let package_root = tmp.path().join("packages/dart");
         fs::create_dir_all(&package_root).unwrap();
 
-        stage_dart_native_libraries(tmp.path(), &package_root, "my_lib_dart").unwrap();
+        let status = stage_dart_native_libraries(tmp.path(), &package_root, "my_lib_dart").unwrap();
 
+        assert_eq!(status, NativeLibraryStageStatus::Staged);
         assert!(
             package_root
                 .join("lib/src/native/macos-arm64/my_lib_dart.framework/my_lib_dart")
                 .exists()
         );
+    }
+
+    #[test]
+    fn missing_native_libraries_are_a_development_no_op() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let package_root = tmp.path().join("packages/dart");
+        fs::create_dir_all(&package_root).unwrap();
+
+        let status = stage_dart_native_libraries(tmp.path(), &package_root, "my_lib_dart").unwrap();
+
+        assert_eq!(status, NativeLibraryStageStatus::Missing);
+        assert!(!package_root.join("lib/src/native").exists());
     }
 }
