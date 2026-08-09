@@ -641,12 +641,6 @@ pub(super) fn render_snippet_body(
         &fixture.tags,
         &fixture.input,
     );
-    if fixture.http.is_some() || call.streaming_enabled() == Some(true) {
-        anyhow::bail!(
-            "zig snippet `{}` requires an unsupported HTTP or streaming call pattern",
-            fixture.id
-        );
-    }
     let expects_error = fixture
         .assertions
         .iter()
@@ -755,5 +749,23 @@ mod snippet_tests {
         assert!(rendered.contains("pub fn main() !void"));
         assert!(rendered.contains("_visitor"));
         assert!(!rendered.contains("test \""));
+    }
+
+    #[test]
+    fn streaming_snippet_reuses_error_union_call_preparation() {
+        let fixture = Fixture {
+            id: "stream_items".into(),
+            description: "Stream items".into(),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "stream_items".into();
+        e2e.call.streaming = Some(crate::core::config::e2e::StreamingConfig::Enabled(true));
+
+        let rendered = render_snippet_body(&fixture, &e2e, "sample", "sample", &ResolvedCrateConfig::default(), &[])
+            .expect("streaming snippet renders");
+
+        assert!(rendered.contains("stream_items"), "{rendered}");
+        assert!(rendered.contains("pub fn main() !void"));
     }
 }

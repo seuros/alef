@@ -695,4 +695,36 @@ mod snippet_tests {
         assert!(rendered.contains("!= NULL) { return EXIT_FAILURE; }"), "{rendered}");
         assert!(!rendered.contains("assert("));
     }
+
+    #[test]
+    fn engine_factory_snippet_reuses_native_call_preparation() {
+        let fixture = Fixture {
+            id: "engine_call".into(),
+            description: "Engine call".into(),
+            input: serde_json::json!({ "url": "https://example.test" }),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "sample_scrape".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.overrides.insert(
+            "c".into(),
+            crate::core::config::e2e::CallOverride {
+                c_engine_factory: Some("EngineConfig".into()),
+                ..Default::default()
+            },
+        );
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+
+        let rendered = CCodegen
+            .render_snippet_body(&fixture, &e2e, &config, &[], &[])
+            .expect("engine-factory snippet renders");
+
+        assert!(rendered.contains("create_engine"), "{rendered}");
+        assert!(rendered.contains("sample_scrape(engine"), "{rendered}");
+        assert!(rendered.contains("crawl_engine_handle_free(engine)"), "{rendered}");
+    }
 }

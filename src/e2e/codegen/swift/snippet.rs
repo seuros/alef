@@ -19,12 +19,6 @@ pub(super) fn render(
         &fixture.tags,
         &fixture.input,
     );
-    if fixture.http.is_some() || call.streaming_enabled() == Some(true) {
-        bail!(
-            "swift snippet `{}` requires an unsupported HTTP or streaming call pattern",
-            fixture.id
-        );
-    }
     let expects_error = fixture
         .assertions
         .iter()
@@ -161,6 +155,37 @@ mod tests {
         let rendered = render(&fixture, &e2e, &config, &[], &[]).expect("visitor snippet renders");
         assert!(rendered.contains("class LocalVisitor_CustomText"));
         assert!(rendered.contains("renderDocument"));
+        assert!(!rendered.contains("XCTest"));
+    }
+
+    #[test]
+    fn streaming_snippet_reuses_async_call_preparation() {
+        let fixture = Fixture {
+            id: "stream_items".into(),
+            description: "Stream items".into(),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "stream_items".into();
+        e2e.call.streaming = Some(crate::core::config::e2e::StreamingConfig::Enabled(true));
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            adapters: vec![
+                serde_json::from_value(serde_json::json!({
+                    "name": "stream_items",
+                    "pattern": "streaming",
+                    "core_path": "sample::stream_items",
+                    "item_type": "StreamItem"
+                }))
+                .expect("streaming adapter config"),
+            ],
+            ..ResolvedCrateConfig::default()
+        };
+
+        let rendered = render(&fixture, &e2e, &config, &[], &[]).expect("streaming snippet renders");
+
+        assert!(rendered.contains("streamItems"), "{rendered}");
+        assert!(rendered.contains("for try await"), "{rendered}");
         assert!(!rendered.contains("XCTest"));
     }
 }

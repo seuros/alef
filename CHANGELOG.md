@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- C documentation snippets now reuse engine-factory and byte-buffer call preparation, while C, Swift, and Zig
+  streaming snippets reuse their binding-aware E2E call paths instead of leaving fixture-language coverage gaps.
+
+- Snippet validation sessions now apply explicitly configured environment variables to setup and validation commands,
+  allowing tool caches to work without inheriting ambient user environment state.
+
+- Snippet side-effect policy now blocks execution only; syntax, compile, and type-check validation still run for
+  network, process, install, and server examples.
+
 - Snippet discovery now ignores Alef-owned metadata files such as `.alef-snippet-coverage.json`.
 
 - R documentation snippets now render idiomatic package calls, and C, Swift, Zig, and WASM snippets support visitor

@@ -48,22 +48,10 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
     if fixture.visitor.is_some() {
         return super::visitor::render_visitor_snippet(fixture, header, prefix, e2e_config, config);
     }
-    if fixture.http.is_some() || call.streaming_enabled() == Some(true) {
-        anyhow::bail!(
-            "c snippet `{}` requires an unsupported HTTP or streaming call pattern",
-            fixture.id
-        );
-    }
     let expects_error = fixture
         .assertions
         .iter()
         .any(|assertion| assertion.assertion_type == "error");
-    if info.c_engine_factory.is_some() || info.result_is_bytes {
-        anyhow::bail!(
-            "c snippet `{}` requires an unsupported engine-factory or byte-buffer call pattern",
-            fixture.id
-        );
-    }
     let mut call_fixture = fixture.clone();
     if !expects_error {
         call_fixture.assertions.clear();
