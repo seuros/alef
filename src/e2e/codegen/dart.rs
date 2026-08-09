@@ -155,11 +155,23 @@ impl E2eCodegen for DartE2eCodegen {
     fn language_name(&self) -> &'static str {
         "dart"
     }
+
+    fn render_snippet_body(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+    ) -> Result<String> {
+        snippet::render_snippet_body(fixture, e2e_config, config, type_defs, enums)
+    }
 }
 
 mod assertions;
 mod http;
 mod project;
+mod snippet;
 mod stubs;
 mod test_case;
 mod test_file;

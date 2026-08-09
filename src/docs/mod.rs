@@ -248,7 +248,7 @@ fn build_snippet_context(
         let abs_dir = workspace_root.join(dir);
         if !abs_dir.exists() {
             anyhow::bail!(
-                "configured docs snippet root '{}' (resolved to '{}') does not exist",
+                "configured docs.snippets.dirs root '{}' (resolved to '{}') does not exist",
                 dir.display(),
                 abs_dir.display()
             );

@@ -285,17 +285,17 @@ impl E2eCodegen for TypeScriptCodegen {
             .and_then(|package| package.name)
             .or_else(|| overrides.and_then(|value| value.module.clone()))
             .unwrap_or_else(|| e2e_config.call.module.clone());
-        Ok(test_file::render_snippet_body(
-            "node",
+        Ok(test_file::render_snippet_body(test_file::SnippetContext {
+            lang: "node",
             fixture,
-            &module,
-            overrides.and_then(|value| value.client_factory.as_deref()),
+            module: &module,
+            client_factory: overrides.and_then(|value| value.client_factory.as_deref()),
             e2e_config,
             type_defs,
             enums,
-            "",
+            wasm_type_prefix: "",
             config,
-        ))
+        }))
     }
 
     fn language_name(&self) -> &'static str {

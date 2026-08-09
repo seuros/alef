@@ -318,6 +318,17 @@ impl E2eCodegen for JavaCodegen {
         Ok(files)
     }
 
+    fn render_snippet_body(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        _enums: &[crate::core::ir::EnumDef],
+    ) -> Result<String> {
+        Ok(snippet::render_snippet_body(fixture, e2e_config, config, type_defs))
+    }
+
     fn language_name(&self) -> &'static str {
         "java"
     }
@@ -327,6 +338,7 @@ mod args;
 mod assertions;
 mod http;
 mod project;
+mod snippet;
 mod stubs;
 mod test_file;
 mod test_method;

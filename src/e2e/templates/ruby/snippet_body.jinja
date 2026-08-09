@@ -1,0 +1,14 @@
+require "{{ package }}"
+{% for line in setup_lines %}
+{{ line }}
+{% endfor %}
+{% if client_factory %}
+client = {{ receiver }}.{{ client_factory }}("your-api-key")
+{% endif %}
+{% if returns_void %}
+{{ call_receiver }}.{{ function }}({{ args }})
+{% elif is_streaming %}
+chunks = {{ call_receiver }}.{{ function }}({{ args }}).to_a
+{% else %}
+{{ result_var }} = {{ call_receiver }}.{{ function }}({{ args }})
+{% endif %}

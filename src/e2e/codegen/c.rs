@@ -324,6 +324,52 @@ impl E2eCodegen for CCodegen {
         Ok(files)
     }
 
+    fn render_snippet_body(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        _enums: &[crate::core::ir::EnumDef],
+    ) -> Result<String> {
+        let info = resolve_fixture_call_info(fixture, e2e_config, "c");
+        let call = e2e_config.resolve_call_for_fixture(
+            fixture.call.as_deref(),
+            &fixture.id,
+            &fixture.resolved_category(),
+            &fixture.tags,
+            &fixture.input,
+        );
+        let prefix = call
+            .overrides
+            .get("c")
+            .and_then(|value| value.prefix.clone())
+            .or_else(|| config.ffi.as_ref().and_then(|value| value.prefix.clone()))
+            .unwrap_or_default();
+        let header = call
+            .overrides
+            .get("c")
+            .and_then(|value| value.header.clone())
+            .unwrap_or_else(|| config.ffi_header_name());
+        let resolver = FieldResolver::new(
+            e2e_config.effective_fields(call),
+            e2e_config.effective_fields_optional(call),
+            e2e_config.effective_result_fields(call),
+            e2e_config.effective_fields_array(call),
+            e2e_config.effective_fields_method_calls(call),
+        );
+        test_function::render_snippet_body(test_function::SnippetContext {
+            fixture,
+            e2e_config,
+            header: &header,
+            prefix: &prefix,
+            info: &info,
+            field_resolver: &resolver,
+            config,
+            type_defs,
+        })
+    }
+
     fn language_name(&self) -> &'static str {
         "c"
     }
@@ -595,4 +641,31 @@ pub fn emit_test_backend(
     _fixture: &crate::e2e::fixture::Fixture,
 ) -> super::TestBackendEmission {
     super::TestBackendEmission::unimplemented("c")
+}
+
+#[cfg(test)]
+mod snippet_tests {
+    use super::*;
+
+    #[test]
+    fn snippet_keeps_header_and_call_without_test_harness() {
+        let fixture = Fixture {
+            id: "count".into(),
+            description: "Count".into(),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "sample_count".into();
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+        let rendered = CCodegen
+            .render_snippet_body(&fixture, &e2e, &config, &[], &[])
+            .expect("snippet renders");
+        assert!(rendered.contains("#include \""));
+        assert!(rendered.contains("sample_count("));
+        assert!(!rendered.contains("void test_"));
+        assert!(!rendered.contains("assert("));
+    }
 }

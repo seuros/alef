@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Java, Kotlin, Kotlin Android, and C# documentation snippets now reuse backend-native typed argument and
+  setup generation while preserving client factories, coroutine or async calls, and imports without test harnesses.
+
+- PHP, Ruby, Elixir, and Dart documentation snippets now reuse their backend-native argument,
+  setup, client, visitor, and streaming call preparation without emitting test assertions or teardown.
+
 - Node, WASM, and Go documentation snippets now reuse backend argument builders for typed setup,
   imports, client factories, async calls, and binding-native function names without test assertions or harness code.
 
@@ -24,6 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   literals, Rust async calls, side-effect frontmatter, whole-input arguments, and Rust/C language aliases.
 
 ### Added
+
+- **Fixture snippet generation can target an explicit subset of E2E languages.** Set
+  `[crates.e2e.snippets].languages` to stage generated documentation alongside languages that
+  remain handwritten; an empty list continues to inherit the E2E target list.
+
+- **Swift, Zig, and C/FFI documentation snippets now reuse their typed e2e call rendering.** Generated examples
+  preserve backend imports, argument setup, allocator and environment handling while omitting test assertions and
+  teardown, and reject complex harness-only patterns with contextual errors.
 
 - **E2E backends now own documentation snippet bodies.** Snippet orchestration resolves the registered
   language generator, passes the extracted type and enum registries through, wraps backend output in

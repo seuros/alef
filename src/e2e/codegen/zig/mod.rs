@@ -427,6 +427,27 @@ impl E2eCodegen for ZigE2eCodegen {
         Ok(files)
     }
 
+    fn render_snippet_body(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        _enums: &[crate::core::ir::EnumDef],
+    ) -> Result<String> {
+        let package = e2e_config.resolve_package("zig");
+        let module = package
+            .as_ref()
+            .and_then(|value| value.name.clone())
+            .unwrap_or_else(|| config.name.to_snake_case());
+        let ffi_prefix = config
+            .ffi
+            .as_ref()
+            .and_then(|value| value.prefix.clone())
+            .unwrap_or_default();
+        test_file::render_snippet_body(fixture, e2e_config, &module, &ffi_prefix, config, type_defs)
+    }
+
     fn language_name(&self) -> &'static str {
         "zig"
     }

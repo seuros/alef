@@ -625,3 +625,89 @@ fn render_test_fn(
 
     let _ = writeln!(out, "}}");
 }
+
+pub(super) fn render_snippet_body(
+    fixture: &Fixture,
+    e2e_config: &E2eConfig,
+    module_name: &str,
+    ffi_prefix: &str,
+    config: &ResolvedCrateConfig,
+    type_defs: &[crate::core::ir::TypeDef],
+) -> anyhow::Result<String> {
+    let call = e2e_config.resolve_call_for_fixture(
+        fixture.call.as_deref(),
+        &fixture.id,
+        &fixture.resolved_category(),
+        &fixture.tags,
+        &fixture.input,
+    );
+    if fixture.http.is_some() || fixture.visitor.is_some() || call.streaming_enabled() == Some(true) {
+        anyhow::bail!(
+            "zig snippet `{}` requires an unsupported HTTP, visitor, or streaming call pattern",
+            fixture.id
+        );
+    }
+    if fixture
+        .assertions
+        .iter()
+        .any(|assertion| assertion.assertion_type == "error")
+    {
+        anyhow::bail!(
+            "zig snippet `{}` cannot represent an expected-error fixture",
+            fixture.id
+        );
+    }
+    if call.args.iter().any(|argument| argument.arg_type == "test_backend") {
+        anyhow::bail!("zig snippet `{}` requires test-backend lifecycle teardown", fixture.id);
+    }
+    let mut call_fixture = fixture.clone();
+    call_fixture.assertions.clear();
+    let mut test = String::new();
+    render_test_fn(
+        &mut test,
+        &call_fixture,
+        e2e_config,
+        "",
+        "",
+        &[],
+        module_name,
+        ffi_prefix,
+        config,
+        type_defs,
+    );
+    let body = test
+        .lines()
+        .skip(2)
+        .take_while(|line| line.trim() != "}")
+        .filter(|line| !line.trim_start().starts_with("suppress_abort()"))
+        .filter(|line| !line.trim_start().starts_with("defer "))
+        .map(|line| line.strip_prefix("    ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(crate::e2e::template_env::render(
+        "zig/snippet_body.jinja",
+        minijinja::context! { module => module_name, body => body },
+    ))
+}
+
+#[cfg(test)]
+mod snippet_tests {
+    use super::*;
+
+    #[test]
+    fn snippet_keeps_import_and_call_without_test_harness() {
+        let fixture = Fixture {
+            id: "count".into(),
+            description: "Count".into(),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "count".into();
+        let rendered = render_snippet_body(&fixture, &e2e, "sample", "sample", &ResolvedCrateConfig::default(), &[])
+            .expect("snippet renders");
+        assert!(rendered.contains("const sample = @import(\"sample\")"));
+        assert!(rendered.contains("_ = try sample.count()"));
+        assert!(!rendered.contains("test \""));
+        assert!(!rendered.contains("defer "));
+    }
+}

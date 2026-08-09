@@ -428,16 +428,19 @@ impl E2eCodegen for WasmCodegen {
             .resolve_package("wasm")
             .and_then(|package| package.name)
             .unwrap_or_else(|| config.wasm_package_name());
+        let wasm_type_prefix = config.wasm_type_prefix();
         Ok(super::typescript::test_file::render_snippet_body(
-            "wasm",
-            fixture,
-            &module,
-            overrides.and_then(|value| value.client_factory.as_deref()),
-            e2e_config,
-            type_defs,
-            enums,
-            &config.wasm_type_prefix(),
-            config,
+            super::typescript::test_file::SnippetContext {
+                lang: "wasm",
+                fixture,
+                module: &module,
+                client_factory: overrides.and_then(|value| value.client_factory.as_deref()),
+                e2e_config,
+                type_defs,
+                enums,
+                wasm_type_prefix: &wasm_type_prefix,
+                config,
+            },
         ))
     }
 

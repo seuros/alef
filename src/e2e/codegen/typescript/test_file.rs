@@ -26,7 +26,7 @@ mod visitor;
 mod wasm;
 
 pub use render::render_test_file;
-pub(crate) use snippet::render_snippet_body;
+pub(crate) use snippet::{SnippetContext, render_snippet_body};
 
 pub(in crate::e2e::codegen::typescript::test_file) use args::build_args_and_setup;
 pub(in crate::e2e::codegen::typescript::test_file) use builders::{

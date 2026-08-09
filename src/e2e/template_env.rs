@@ -5,6 +5,7 @@ static TEMPLATES: &[(&str, &str)] = &[
         "snippets/file.md.jinja",
         include_str!("templates/snippets/file.md.jinja"),
     ),
+    ("c/snippet_body.jinja", include_str!("templates/c/snippet_body.jinja")),
     (
         "python/pyproject.toml.jinja",
         include_str!("templates/python/pyproject.toml.jinja"),
@@ -34,6 +35,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/python/test_smoke.py.jinja"),
     ),
     ("ruby/Gemfile.jinja", include_str!("templates/ruby/Gemfile.jinja")),
+    (
+        "ruby/snippet_body.jinja",
+        include_str!("templates/ruby/snippet_body.jinja"),
+    ),
     (
         "ruby/rubocop.yml.jinja",
         include_str!("templates/ruby/rubocop.yml.jinja"),
@@ -105,6 +110,10 @@ static TEMPLATES: &[(&str, &str)] = &[
     ),
     ("php/assertion.jinja", include_str!("templates/php/assertion.jinja")),
     ("php/test_file.jinja", include_str!("templates/php/test_file.jinja")),
+    (
+        "php/snippet_body.jinja",
+        include_str!("templates/php/snippet_body.jinja"),
+    ),
     ("php/test_method.jinja", include_str!("templates/php/test_method.jinja")),
     (
         "php/visitor_method.jinja",
@@ -179,6 +188,14 @@ static TEMPLATES: &[(&str, &str)] = &[
         "csharp/test_setup_mock_server.cs.jinja",
         include_str!("templates/csharp/test_setup_mock_server.cs.jinja"),
     ),
+    (
+        "csharp/snippet_body.jinja",
+        include_str!("templates/csharp/snippet_body.jinja"),
+    ),
+    (
+        "kotlin/snippet_body.jinja",
+        include_str!("templates/kotlin/snippet_body.jinja"),
+    ),
     ("java/pom.xml.jinja", include_str!("templates/java/pom.xml.jinja")),
     ("java/test_file.jinja", include_str!("templates/java/test_file.jinja")),
     (
@@ -217,6 +234,10 @@ static TEMPLATES: &[(&str, &str)] = &[
     (
         "java/harness_main.jinja",
         include_str!("templates/java/harness_main.jinja"),
+    ),
+    (
+        "java/snippet_body.jinja",
+        include_str!("templates/java/snippet_body.jinja"),
     ),
     (
         "java/MockServerListener.java.jinja",
@@ -308,6 +329,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/elixir/app_harness.exs.jinja"),
     ),
     (
+        "elixir/snippet_body.jinja",
+        include_str!("templates/elixir/snippet_body.jinja"),
+    ),
+    (
         "elixir/test_helper_server.exs.jinja",
         include_str!("templates/elixir/test_helper_server.exs.jinja"),
     ),
@@ -320,8 +345,16 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/dart/app_harness.dart.jinja"),
     ),
     (
+        "dart/snippet_body.jinja",
+        include_str!("templates/dart/snippet_body.jinja"),
+    ),
+    (
         "swift/app_harness.swift.jinja",
         include_str!("templates/swift/app_harness.swift.jinja"),
+    ),
+    (
+        "swift/snippet_body.jinja",
+        include_str!("templates/swift/snippet_body.jinja"),
     ),
     (
         "wasm/package.json.jinja",
@@ -344,6 +377,10 @@ static TEMPLATES: &[(&str, &str)] = &[
     (
         "zig/json_assertion.jinja",
         include_str!("templates/zig/json_assertion.jinja"),
+    ),
+    (
+        "zig/snippet_body.jinja",
+        include_str!("templates/zig/snippet_body.jinja"),
     ),
 ];
 

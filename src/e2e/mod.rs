@@ -193,7 +193,7 @@ pub fn generate_e2e(
     if let Some(snippet_config) = &e2e_config.snippets {
         all_files.extend(snippets::generate_snippets(
             &fixtures,
-            &resolved_languages,
+            snippet_config.languages_or(&resolved_languages),
             e2e_config,
             snippet_config,
             config,

@@ -1,16 +1,29 @@
 use super::*;
 
-pub(crate) fn render_snippet_body(
-    lang: &str,
-    fixture: &Fixture,
-    module: &str,
-    client_factory: Option<&str>,
-    e2e_config: &E2eConfig,
-    type_defs: &[TypeDef],
-    enums: &[EnumDef],
-    wasm_type_prefix: &str,
-    config: &crate::core::config::ResolvedCrateConfig,
-) -> String {
+pub(crate) struct SnippetContext<'a> {
+    pub lang: &'a str,
+    pub fixture: &'a Fixture,
+    pub module: &'a str,
+    pub client_factory: Option<&'a str>,
+    pub e2e_config: &'a E2eConfig,
+    pub type_defs: &'a [TypeDef],
+    pub enums: &'a [EnumDef],
+    pub wasm_type_prefix: &'a str,
+    pub config: &'a crate::core::config::ResolvedCrateConfig,
+}
+
+pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
+    let SnippetContext {
+        lang,
+        fixture,
+        module,
+        client_factory,
+        e2e_config,
+        type_defs,
+        enums,
+        wasm_type_prefix,
+        config,
+    } = context;
     let mut call = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
         &fixture.id,
@@ -150,17 +163,19 @@ mod tests {
             },
             ..E2eConfig::default()
         };
-        let body = render_snippet_body(
-            "node",
-            &fixture(),
-            "@example/library",
-            None,
-            &e2e,
-            &[],
-            &[],
-            "",
-            &crate::core::config::ResolvedCrateConfig::default(),
-        );
+        let fixture = fixture();
+        let config = crate::core::config::ResolvedCrateConfig::default();
+        let body = render_snippet_body(SnippetContext {
+            lang: "node",
+            fixture: &fixture,
+            module: "@example/library",
+            client_factory: None,
+            e2e_config: &e2e,
+            type_defs: &[],
+            enums: &[],
+            wasm_type_prefix: "",
+            config: &config,
+        });
 
         assert!(body.contains("import { loadDocument } from \"@example/library\";"));
         assert!(body.contains("const document = await loadDocument();"));

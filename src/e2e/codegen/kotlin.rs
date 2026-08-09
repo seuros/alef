@@ -20,6 +20,7 @@ mod assertions;
 mod discriminated;
 mod http;
 mod project;
+pub(crate) mod snippet;
 mod stubs;
 mod test_file;
 mod test_method;
@@ -210,6 +211,19 @@ impl E2eCodegen for KotlinE2eCodegen {
         }
 
         Ok(files)
+    }
+
+    fn render_snippet_body(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        _enums: &[crate::core::ir::EnumDef],
+    ) -> Result<String> {
+        Ok(snippet::render_snippet_body(
+            fixture, e2e_config, config, type_defs, false,
+        ))
     }
 
     fn language_name(&self) -> &'static str {

@@ -6199,6 +6199,13 @@
             "all": []
           }
         },
+        "languages": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "output": {
           "type": "string"
         }

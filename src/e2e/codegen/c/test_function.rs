@@ -16,6 +16,99 @@ use super::{
     resolve_c_streaming_adapter, try_emit_enum_accessor,
 };
 
+pub(super) struct SnippetContext<'a> {
+    pub fixture: &'a Fixture,
+    pub e2e_config: &'a crate::e2e::config::E2eConfig,
+    pub header: &'a str,
+    pub prefix: &'a str,
+    pub info: &'a super::ResolvedCallInfo,
+    pub field_resolver: &'a FieldResolver,
+    pub config: &'a ResolvedCrateConfig,
+    pub type_defs: &'a [crate::core::ir::TypeDef],
+}
+
+pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result<String> {
+    let SnippetContext {
+        fixture,
+        e2e_config,
+        header,
+        prefix,
+        info,
+        field_resolver,
+        config,
+        type_defs,
+    } = context;
+    let call = e2e_config.resolve_call_for_fixture(
+        fixture.call.as_deref(),
+        &fixture.id,
+        &fixture.resolved_category(),
+        &fixture.tags,
+        &fixture.input,
+    );
+    if fixture.http.is_some() || fixture.visitor.is_some() || call.streaming_enabled() == Some(true) {
+        anyhow::bail!(
+            "c snippet `{}` requires an unsupported HTTP, visitor, or streaming call pattern",
+            fixture.id
+        );
+    }
+    if fixture
+        .assertions
+        .iter()
+        .any(|assertion| assertion.assertion_type == "error")
+    {
+        anyhow::bail!("c snippet `{}` cannot represent an expected-error fixture", fixture.id);
+    }
+    if info.c_engine_factory.is_some() || info.result_is_bytes {
+        anyhow::bail!(
+            "c snippet `{}` requires an unsupported engine-factory or byte-buffer call pattern",
+            fixture.id
+        );
+    }
+    let mut call_fixture = fixture.clone();
+    call_fixture.assertions.clear();
+    let mut function = String::new();
+    render_test_function(
+        &mut function,
+        &call_fixture,
+        prefix,
+        &info.function_name,
+        &call.result_var,
+        &info.args,
+        field_resolver,
+        e2e_config.effective_fields_c_types(call),
+        e2e_config.effective_fields_enum(call),
+        &info.result_type_name,
+        &info.options_type_name,
+        info.client_factory.as_deref(),
+        info.raw_c_result_type.as_deref(),
+        info.c_free_fn.as_deref(),
+        info.c_engine_factory.as_deref(),
+        info.result_is_option,
+        info.result_is_bytes,
+        info.streaming,
+        &info.extra_args,
+        config,
+        type_defs,
+    );
+    let body = function
+        .lines()
+        .skip(2)
+        .take_while(|line| {
+            let trimmed = line.trim_start();
+            !trimmed.starts_with("assert(")
+                && !trimmed.contains("_free(")
+                && !trimmed.starts_with("free(")
+                && line.trim() != "}"
+        })
+        .map(|line| line.strip_prefix("    ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(crate::e2e::template_env::render(
+        "c/snippet_body.jinja",
+        minijinja::context! { header => header, body => body },
+    ))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_test_function(
     out: &mut String,
