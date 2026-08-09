@@ -151,5 +151,9 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
 
     emit_trait_bridge_shims(&mut out, config, api, &package, &bridge);
 
+    if !config.components.is_empty() {
+        emit_unsupported_component_shims(&mut out, &package, &bridge);
+    }
+
     out
 }
