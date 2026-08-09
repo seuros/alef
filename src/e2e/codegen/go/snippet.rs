@@ -151,6 +151,8 @@ pub(super) fn render_snippet_body(
             returns_void => call.returns_void,
         },
     )
+    .trim_end()
+    .to_string()
 }
 
 fn snippet_setup_line(line: String) -> String {
@@ -275,6 +277,11 @@ mod tests {
             .expect("write Go snippet");
         let output = child.wait_with_output().expect("wait for gofmt");
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-        assert_eq!(String::from_utf8(output.stdout).expect("gofmt output is UTF-8"), body);
+        assert_eq!(
+            String::from_utf8(output.stdout)
+                .expect("gofmt output is UTF-8")
+                .trim_end(),
+            body
+        );
     }
 }

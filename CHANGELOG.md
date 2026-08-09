@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Go documentation snippet bodies now avoid a non-canonical blank line at the end of fenced source.
+
 - Generated Go documentation snippets now match canonical `gofmt` layout, including imports and error blocks.
 
 - C# documentation snippets now construct known DTO arguments with native object initializers instead of JSON round trips.
