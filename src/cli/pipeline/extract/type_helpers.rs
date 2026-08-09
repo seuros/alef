@@ -275,6 +275,57 @@ pub(super) fn normalize_field_type_paths(api: &mut ApiSurface) {
     }
 }
 
+pub(super) fn resolve_qualified_field_type_names(api: &mut ApiSurface) {
+    let identities: Vec<(String, String)> = api
+        .types
+        .iter()
+        .map(|typ| (typ.rust_path.replace('-', "_"), typ.name.clone()))
+        .chain(
+            api.enums
+                .iter()
+                .map(|enm| (enm.rust_path.replace('-', "_"), enm.name.clone())),
+        )
+        .collect();
+
+    let resolve = |fields: &mut Vec<FieldDef>| {
+        for field in fields {
+            let Some(field_path) = field.type_rust_path.as_deref() else {
+                continue;
+            };
+            let field_path = field_path.replace('-', "_");
+            let short_name = field_path.rsplit("::").next().unwrap_or(field_path.as_str());
+            let crate_name = field_path.split("::").next().unwrap_or("");
+            let mut matches = identities.iter().filter(|(path, _)| {
+                path.rsplit("::").next() == Some(short_name) && path.split("::").next() == Some(crate_name)
+            });
+            let Some((_, resolved_name)) = matches.next() else {
+                continue;
+            };
+            if matches.next().is_none() {
+                rename_named_type(&mut field.ty, resolved_name);
+            }
+        }
+    };
+
+    for typ in &mut api.types {
+        resolve(&mut typ.fields);
+    }
+    for enm in &mut api.enums {
+        for variant in &mut enm.variants {
+            resolve(&mut variant.fields);
+        }
+    }
+}
+
+fn rename_named_type(ty: &mut TypeRef, name: &str) {
+    match ty {
+        TypeRef::Named(current) => *current = name.to_string(),
+        TypeRef::Optional(inner) | TypeRef::Vec(inner) => rename_named_type(inner, name),
+        TypeRef::Map(_, value) => rename_named_type(value, name),
+        _ => {}
+    }
+}
+
 /// Apply path_mappings to rewrite all rust_path fields in the API surface.
 ///
 /// Uses [`ResolvedCrateConfig::effective_path_mappings`] which merges auto-derived mappings

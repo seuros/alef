@@ -23,7 +23,8 @@ use raw::extract_raw;
 use sanitizer::{sanitize_unknown_types, strip_binding_excluded};
 use services::{mark_adapter_handled_methods, run_service_extraction, strip_excluded_methods_from_types};
 use type_helpers::{
-    apply_path_mappings, dedup_api_surface, inject_declared_opaque_types, normalize_field_type_paths, strip_cfg_fields,
+    apply_path_mappings, dedup_api_surface, inject_declared_opaque_types, normalize_field_type_paths,
+    resolve_qualified_field_type_names, strip_cfg_fields,
 };
 use validation::validate_extracted_api;
 
@@ -58,6 +59,8 @@ pub fn extract(config: &ResolvedCrateConfig, config_path: &Path, clean: bool) ->
     strip_cfg_fields(&mut api, &config.features);
 
     strip_binding_excluded(&mut api)?;
+
+    resolve_qualified_field_type_names(&mut api);
 
     sanitize_unknown_types(&mut api);
 

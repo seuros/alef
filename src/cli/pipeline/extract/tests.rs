@@ -912,6 +912,30 @@ fn normalize_field_type_paths_preserves_explicit_reexport_path() {
     assert_eq!(field.type_rust_path.as_deref(), Some("external_core::CrawlConfig"));
 }
 
+#[test]
+fn qualified_field_path_restores_surviving_disambiguated_type_name() {
+    let mut owner = make_typedef("PipelineStage");
+    owner.fields.push(crate::core::ir::FieldDef {
+        name: "engine_config".to_string(),
+        ty: TypeRef::Optional(Box::new(TypeRef::Named("EngineConfig".to_string()))),
+        type_rust_path: Some("host_core::types::EngineConfig".to_string()),
+        ..Default::default()
+    });
+    let mut public_config = make_typedef("FormatsEngineConfig");
+    public_config.rust_path = "host_core::types::formats::EngineConfig".to_string();
+    let mut surface = surface_with(vec![owner, public_config], vec![]);
+
+    super::type_helpers::resolve_qualified_field_type_names(&mut surface);
+    sanitize_unknown_types(&mut surface);
+
+    let field = &surface.types[0].fields[0];
+    assert_eq!(
+        field.ty,
+        TypeRef::Optional(Box::new(TypeRef::Named("FormatsEngineConfig".to_string())))
+    );
+    assert!(!field.sanitized);
+}
+
 fn make_unsupported_method(type_name: &str, method_name: &str) -> crate::core::ir::UnsupportedPublicItem {
     crate::core::ir::UnsupportedPublicItem {
         item_kind: "method".to_string(),

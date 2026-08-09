@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Targeted E2E orphan cleanup now requires a current artifact inside a language subdirectory before sweeping it, so
   top-level scaffolding and documentation snippets cannot delete an otherwise ungenerated test suite.
 
+- Qualified field paths now restore the surviving public type name after a same-name internal type is excluded, avoiding
+  lossy `String` sanitization for optional public configuration fields.
+
 - Ruby, PHP, Elixir, and Dart documentation snippets now render standalone HTTP requests for HTTP harness fixtures,
   using the same normalized request bodies, content types, headers, and cookies as E2E generation.
 
