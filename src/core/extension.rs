@@ -176,6 +176,23 @@ pub trait Extension: Send + Sync {
     ) -> Result<Vec<GeneratedFile>> {
         Ok(vec![])
     }
+
+    /// Render the source body for one fixture-driven documentation snippet.
+    ///
+    /// Core owns path selection, frontmatter, and Markdown wrapping. Extensions
+    /// return `None` for fixtures they do not own and a non-empty target-language
+    /// body for fixtures they do own.
+    fn render_e2e_snippet(
+        &self,
+        _fixture: &crate::e2e::fixture::Fixture,
+        _e2e_config: &crate::core::config::E2eConfig,
+        _config: &crate::core::config::ResolvedCrateConfig,
+        _language: &str,
+        _type_defs: &[crate::core::ir::TypeDef],
+        _enums: &[crate::core::ir::EnumDef],
+    ) -> Result<Option<String>> {
+        Ok(None)
+    }
 }
 
 /// Read the `[extensions.<name>]` section from `alef.toml` at `config_path`.

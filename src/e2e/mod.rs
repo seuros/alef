@@ -191,7 +191,7 @@ pub fn generate_e2e(
     })?;
 
     if let Some(snippet_config) = &e2e_config.snippets {
-        all_files.extend(snippets::generate_snippets(
+        let report = snippets::generate_snippet_report(
             &fixtures,
             snippet_config.languages_or(&resolved_languages),
             e2e_config,
@@ -199,7 +199,21 @@ pub fn generate_e2e(
             config,
             type_defs,
             enums,
-        )?);
+        )?;
+        for missing in &report.coverage.missing {
+            warn!(
+                "snippet coverage missing for fixture `{}` language `{}`: {}",
+                missing.key.fixture_id, missing.key.language, missing.reason
+            );
+        }
+        let coverage_content =
+            serde_json::to_string_pretty(&report.coverage).context("failed to serialize snippet coverage manifest")?;
+        all_files.push(GeneratedFile {
+            path: Path::new(&snippet_config.output).join(snippets::COVERAGE_MANIFEST),
+            content: format!("{coverage_content}\n"),
+            generated_header: false,
+        });
+        all_files.extend(report.snippets.into_iter().map(|snippet| snippet.file));
     }
 
     Ok(all_files)

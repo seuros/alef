@@ -5,6 +5,7 @@ use crate::core::ir::{EnumDef, TypeDef};
 use crate::e2e::codegen::{E2eCodegen, all_generators, fixture_inclusion};
 use crate::e2e::fixture::{Fixture, FixtureDocs, SideEffectClass};
 use anyhow::{Result, bail};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
@@ -26,6 +27,41 @@ pub struct GeneratedSnippet {
     pub side_effects: SideEffectClass,
 }
 
+pub const COVERAGE_MANIFEST: &str = ".alef-snippet-coverage.json";
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct SnippetCoverageKey {
+    pub fixture_id: String,
+    pub language: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MissingSnippet {
+    pub key: SnippetCoverageKey,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocumentedSnippetException {
+    pub key: SnippetCoverageKey,
+    pub reason: String,
+    pub reference: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnippetCoverageLedger {
+    pub expected: Vec<SnippetCoverageKey>,
+    pub generated: Vec<SnippetCoverageKey>,
+    pub missing: Vec<MissingSnippet>,
+    pub documented_exceptions: Vec<DocumentedSnippetException>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SnippetGenerationReport {
+    pub snippets: Vec<GeneratedSnippet>,
+    pub coverage: SnippetCoverageLedger,
+}
+
 pub fn generate_snippets(
     fixtures: &[Fixture],
     languages: &[String],
@@ -36,7 +72,8 @@ pub fn generate_snippets(
     enums: &[EnumDef],
 ) -> Result<Vec<GeneratedFile>> {
     Ok(
-        generate_snippet_artifacts(fixtures, languages, e2e, snippets, crate_config, type_defs, enums)?
+        generate_snippet_report(fixtures, languages, e2e, snippets, crate_config, type_defs, enums)?
+            .snippets
             .into_iter()
             .map(|snippet| snippet.file)
             .collect(),
@@ -52,17 +89,76 @@ pub fn generate_snippet_artifacts(
     type_defs: &[TypeDef],
     enums: &[EnumDef],
 ) -> Result<Vec<GeneratedSnippet>> {
+    Ok(generate_snippet_report(fixtures, languages, e2e, snippets, crate_config, type_defs, enums)?.snippets)
+}
+
+pub fn generate_snippet_report(
+    fixtures: &[Fixture],
+    languages: &[String],
+    e2e: &E2eConfig,
+    snippets: &SnippetConfig,
+    crate_config: &ResolvedCrateConfig,
+    type_defs: &[TypeDef],
+    enums: &[EnumDef],
+) -> Result<SnippetGenerationReport> {
+    crate::with_extensions(|extensions| {
+        generate_snippet_report_with_extensions(
+            fixtures,
+            languages,
+            e2e,
+            snippets,
+            crate_config,
+            type_defs,
+            enums,
+            extensions,
+        )
+    })
+}
+
+fn generate_snippet_report_with_extensions(
+    fixtures: &[Fixture],
+    languages: &[String],
+    e2e: &E2eConfig,
+    snippets: &SnippetConfig,
+    crate_config: &ResolvedCrateConfig,
+    type_defs: &[TypeDef],
+    enums: &[EnumDef],
+    extensions: &[Box<dyn crate::Extension>],
+) -> Result<SnippetGenerationReport> {
     validate_relative_path(Path::new(&snippets.output), "snippet output")?;
     let generators = snippet_generators(languages)?;
     let mut generated = BTreeMap::<PathBuf, GeneratedSnippet>::new();
+    let mut coverage = SnippetCoverageLedger::default();
     for fixture in fixtures.iter().filter(|fixture| fixture.docs.is_some()) {
         validate_requirements(fixture)?;
+        validate_coverage_exceptions(fixture)?;
         for (language, generator) in &generators {
-            if !fixture_inclusion(fixture, language, e2e).is_included() {
-                continue;
-            }
+            let key = SnippetCoverageKey {
+                fixture_id: fixture.id.clone(),
+                language: language.to_string(),
+            };
+            coverage.expected.push(key.clone());
+            let docs = fixture.docs.as_ref().expect("filtered docs fixtures have metadata");
+            let fixture_decision = fixture_inclusion(fixture, language, e2e);
             let capabilities = capabilities(language, snippets, crate_config);
-            if !matches!(snippet_inclusion(fixture, &capabilities), SnippetInclusion::Include) {
+            let capability_decision = snippet_inclusion(fixture, &capabilities);
+            let exclusion_reason = match (&fixture_decision, &capability_decision) {
+                (crate::e2e::codegen::InclusionDecision::Exclude(reason), _) => Some((*reason).to_string()),
+                (_, SnippetInclusion::Exclude { missing_requirements }) => {
+                    Some(format!("missing requirements: {}", missing_requirements.join(", ")))
+                }
+                _ => None,
+            };
+            if let Some(reason) = exclusion_reason {
+                if let Some(exception) = docs.coverage_exceptions.get(*language) {
+                    coverage.documented_exceptions.push(DocumentedSnippetException {
+                        key,
+                        reason: exception.reason.clone(),
+                        reference: exception.documentation.clone(),
+                    });
+                } else {
+                    coverage.missing.push(MissingSnippet { key, reason });
+                }
                 continue;
             }
             let lang = parse_language(generator.language_name()).ok_or_else(|| {
@@ -71,9 +167,26 @@ pub fn generate_snippet_artifacts(
                     generator.language_name()
                 )
             })?;
-            let docs = fixture.docs.as_ref().expect("filtered docs fixtures have metadata");
             let path = snippet_path(&snippets.output, docs, &fixture.id, lang)?;
-            let body = generator.render_snippet_body(fixture, e2e, crate_config, type_defs, enums)?;
+            let body = match render_snippet_body(
+                extensions,
+                generator.as_ref(),
+                fixture,
+                e2e,
+                crate_config,
+                language,
+                type_defs,
+                enums,
+            ) {
+                Ok(body) => body,
+                Err(error) => {
+                    coverage.missing.push(MissingSnippet {
+                        key,
+                        reason: format!("{error:#}"),
+                    });
+                    continue;
+                }
+            };
             let content = render_snippet_markdown(&body, fixture, docs, lang, generator.language_name());
             let file = GeneratedFile {
                 path: path.clone(),
@@ -91,9 +204,77 @@ pub fn generate_snippet_artifacts(
             if generated.insert(path.clone(), snippet).is_some() {
                 bail!("snippet output collision at {}", path.display());
             }
+            coverage.generated.push(key);
         }
     }
-    Ok(generated.into_values().collect())
+    Ok(SnippetGenerationReport {
+        snippets: generated.into_values().collect(),
+        coverage,
+    })
+}
+
+fn validate_coverage_exceptions(fixture: &Fixture) -> Result<()> {
+    let Some(docs) = &fixture.docs else {
+        return Ok(());
+    };
+    for (language, exception) in &docs.coverage_exceptions {
+        if language.trim().is_empty() || exception.reason.trim().is_empty() {
+            bail!(
+                "fixture `{}` has invalid coverage exception for language `{language}`: language and reason must be non-empty",
+                fixture.id
+            );
+        }
+        validate_documentation_reference(&exception.documentation).map_err(|error| {
+            anyhow::anyhow!(
+                "fixture `{}` has invalid coverage exception documentation for language `{language}`: {error}",
+                fixture.id
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn validate_documentation_reference(reference: &str) -> Result<()> {
+    if reference.trim() != reference || reference.is_empty() {
+        bail!("reference must be non-empty and have no surrounding whitespace");
+    }
+    if reference.starts_with("https://") || reference.starts_with("http://") {
+        if reference.chars().any(char::is_whitespace) {
+            bail!("URL reference must not contain whitespace");
+        }
+        return Ok(());
+    }
+    validate_relative_path(Path::new(reference), "documentation reference")
+}
+
+fn render_snippet_body(
+    extensions: &[Box<dyn crate::Extension>],
+    generator: &dyn E2eCodegen,
+    fixture: &Fixture,
+    e2e: &E2eConfig,
+    crate_config: &ResolvedCrateConfig,
+    language: &str,
+    type_defs: &[TypeDef],
+    enums: &[EnumDef],
+) -> Result<String> {
+    for extension in extensions {
+        if let Some(body) = extension
+            .render_e2e_snippet(fixture, e2e, crate_config, language, type_defs, enums)
+            .map_err(|error| anyhow::anyhow!("extension `{}` could not render snippet: {error:#}", extension.name()))?
+        {
+            if body.trim().is_empty() {
+                bail!("extension `{}` returned an empty snippet body", extension.name());
+            }
+            return Ok(body);
+        }
+    }
+    let body = generator
+        .render_snippet_body(fixture, e2e, crate_config, type_defs, enums)
+        .map_err(|error| anyhow::anyhow!("built-in `{language}` snippet recipe is incompatible: {error:#}"))?;
+    if body.trim().is_empty() {
+        bail!("built-in `{language}` snippet recipe returned an empty body");
+    }
+    Ok(body)
 }
 
 fn snippet_generators(languages: &[String]) -> Result<Vec<(&str, Box<dyn E2eCodegen>)>> {
@@ -208,8 +389,11 @@ fn validate_relative_path(path: &Path, label: &str) -> Result<()> {
 
 fn side_effect_name(value: SideEffectClass) -> &'static str {
     match value {
-        SideEffectClass::None | SideEffectClass::Local => "safe",
-        SideEffectClass::Network | SideEffectClass::ExternalMutation => "network",
+        SideEffectClass::Safe => "safe",
+        SideEffectClass::Network => "network",
+        SideEffectClass::Process => "process",
+        SideEffectClass::Install => "install",
+        SideEffectClass::Server => "server",
     }
 }
 
@@ -241,6 +425,44 @@ fn parse_language(value: &str) -> Option<Language> {
 mod tests {
     use super::*;
 
+    struct FixtureExtension {
+        body: &'static str,
+    }
+
+    impl crate::Extension for FixtureExtension {
+        fn name(&self) -> &str {
+            "fixture"
+        }
+
+        fn render_e2e_snippet(
+            &self,
+            _fixture: &Fixture,
+            _e2e_config: &E2eConfig,
+            _config: &ResolvedCrateConfig,
+            _language: &str,
+            _type_defs: &[TypeDef],
+            _enums: &[EnumDef],
+        ) -> Result<Option<String>> {
+            Ok(Some(self.body.to_string()))
+        }
+    }
+
+    fn documented_fixture() -> Fixture {
+        Fixture {
+            id: "extension_owned".into(),
+            description: "Extension-owned example".into(),
+            docs: Some(FixtureDocs {
+                topic: "api".into(),
+                stem: None,
+                title: None,
+                description: None,
+                side_effects: SideEffectClass::Safe,
+                coverage_exceptions: BTreeMap::new(),
+            }),
+            ..Fixture::default()
+        }
+    }
+
     #[test]
     fn capability_decision_reports_missing_requirements_deterministically() {
         let fixture = Fixture {
@@ -264,6 +486,7 @@ mod tests {
             title: None,
             description: None,
             side_effects: Default::default(),
+            coverage_exceptions: BTreeMap::new(),
         };
         assert!(snippet_path("docs/snippets", &docs, "basic", Language::Python).is_err());
     }
@@ -312,6 +535,7 @@ mod tests {
             title: Some("Example".into()),
             description: None,
             side_effects: SideEffectClass::Network,
+            coverage_exceptions: BTreeMap::new(),
         };
 
         let rendered = render_snippet_markdown("backend_call()", &fixture, &docs, Language::Python, "python");
@@ -319,5 +543,78 @@ mod tests {
         assert!(rendered.contains("language: python"));
         assert!(rendered.contains("side_effect: network"));
         assert!(rendered.contains("```python title=\"Example\"\nbackend_call()\n```"));
+    }
+
+    #[test]
+    fn extension_owned_recipe_satisfies_expected_coverage() {
+        let fixture = documented_fixture();
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "built_in_would_fail".into();
+        let snippet_config = SnippetConfig {
+            output: "docs/snippets".into(),
+            ..SnippetConfig::default()
+        };
+        let extensions: Vec<Box<dyn crate::Extension>> = vec![Box::new(FixtureExtension {
+            body: "extension_call()",
+        })];
+
+        let report = generate_snippet_report_with_extensions(
+            &[fixture],
+            &["rust".into()],
+            &e2e,
+            &snippet_config,
+            &ResolvedCrateConfig::default(),
+            &[],
+            &[],
+            &extensions,
+        )
+        .expect("extension snippet report renders");
+
+        assert_eq!(report.coverage.expected.len(), 1);
+        assert_eq!(report.coverage.generated, report.coverage.expected);
+        assert!(report.coverage.missing.is_empty());
+        assert!(report.snippets[0].file.content.contains("extension_call()"));
+    }
+
+    #[test]
+    fn empty_extension_recipe_is_recorded_as_missing() {
+        let fixture = documented_fixture();
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "call".into();
+        let snippet_config = SnippetConfig {
+            output: "docs/snippets".into(),
+            ..SnippetConfig::default()
+        };
+        let extensions: Vec<Box<dyn crate::Extension>> = vec![Box::new(FixtureExtension { body: "  " })];
+
+        let report = generate_snippet_report_with_extensions(
+            &[fixture],
+            &["rust".into()],
+            &e2e,
+            &snippet_config,
+            &ResolvedCrateConfig::default(),
+            &[],
+            &[],
+            &extensions,
+        )
+        .expect("empty recipe belongs in coverage report");
+
+        assert!(report.snippets.is_empty());
+        assert_eq!(report.coverage.missing.len(), 1);
+        assert!(report.coverage.missing[0].reason.contains("empty snippet body"));
+    }
+
+    #[test]
+    fn side_effect_names_preserve_every_class() {
+        let cases = [
+            (SideEffectClass::Safe, "safe"),
+            (SideEffectClass::Network, "network"),
+            (SideEffectClass::Process, "process"),
+            (SideEffectClass::Install, "install"),
+            (SideEffectClass::Server, "server"),
+        ];
+        for (class, expected) in cases {
+            assert_eq!(side_effect_name(class), expected);
+        }
     }
 }

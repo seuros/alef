@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 mod metadata;
-pub use metadata::{FixtureDocs, FixtureEnv, SetupCall, SideEffectClass, TemplateReturnForm};
+pub use metadata::{FixtureDocs, FixtureEnv, SetupCall, SideEffectClass, SnippetCoverageException, TemplateReturnForm};
 
 /// Mock HTTP response for testing HTTP clients.
 #[derive(Debug, Clone, Serialize, Deserialize)]
