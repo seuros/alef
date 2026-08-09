@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as FmtWrite;
 
-use crate::e2e::escape::rust_raw_string;
+use crate::e2e::escape::{escape_rust, rust_raw_string};
 use crate::e2e::fixture::{CorsConfig, Fixture, HttpExpectedResponse, StaticFilesConfig};
 
 /// Response headers that the transport or a response-encoding layer computes for itself.
@@ -63,6 +63,24 @@ pub fn plan_expected_body(body: Option<&serde_json::Value>) -> Option<ExpectedBo
         serde_json::Value::String(text) if text.is_empty() => None,
         serde_json::Value::String(text) => Some(ExpectedBody::Text(text.clone())),
         structured => serde_json::to_string(structured).ok().map(ExpectedBody::Json),
+    }
+}
+
+/// Render the Rust literal for the request body a fixture sends.
+///
+/// A JSON string body is a raw payload — form-urlencoded, multipart, XML, or a deliberately
+/// malformed JSON document — and must reach the server byte for byte. Serializing it as JSON
+/// would wrap it in quotes and change what is under test: a malformed-JSON payload becomes a
+/// valid JSON string, and a form body gains two stray characters that shift every field. It is
+/// escaped into a regular string literal rather than a raw one so that `\r\n` and other control
+/// characters survive, which multipart bodies depend on. ~keep
+pub fn render_request_body_literal(body: &serde_json::Value) -> String {
+    match body {
+        serde_json::Value::String(text) => format!("\"{}\"", escape_rust(text)),
+        structured => {
+            let json = serde_json::to_string(structured).unwrap_or_else(|_| "{}".to_string());
+            rust_raw_string(&json)
+        }
     }
 }
 
@@ -290,12 +308,7 @@ pub fn render_http_test_function(out: &mut String, fixture: &Fixture, dep_name: 
     let req_path = &http.request.path;
     let status = http.expected_response.status_code;
 
-    // Serialize request body (if any).
-    let req_body_str = match &http.request.body {
-        Some(b) => serde_json::to_string(b).unwrap_or_else(|_| "{}".to_string()),
-        None => String::new(),
-    };
-    let has_req_body = !req_body_str.is_empty();
+    let request_body_literal = http.request.body.as_ref().map(render_request_body_literal);
 
     // Extract middleware from handler (if any).
     let middleware = http.handler.middleware.as_ref();
@@ -376,12 +389,11 @@ pub fn render_http_test_function(out: &mut String, fixture: &Fixture, dep_name: 
         let _ = writeln!(out, "        .add_header({n}, {v})");
     }
 
-    // Add request body if present (pass as a JSON string so axum-test's bytes() API gets a Bytes value).
-    if has_req_body {
-        let req_body_literal = rust_raw_string(&req_body_str);
+    // Add request body if present (axum-test's bytes() API takes a Bytes value).
+    if let Some(literal) = &request_body_literal {
         let _ = writeln!(
             out,
-            "        .bytes(bytes::Bytes::copy_from_slice({req_body_literal}.as_bytes()))"
+            "        .bytes(bytes::Bytes::copy_from_slice({literal}.as_bytes()))"
         );
     }
 
@@ -670,6 +682,63 @@ mod tests {
         assert!(out.contains("let expected_json: serde_json::Value = serde_json::from_str"));
         assert!(out.contains("serde_json::from_str(&response.text())"));
         assert!(out.contains("assert_eq!(actual_json, expected_json);"));
+    }
+
+    /// A form body must reach the server byte for byte. Serializing it as JSON adds a
+    /// leading and trailing quote, which becomes part of the first and last field and
+    /// silently changes what the fixture tests.
+    #[test]
+    fn render_request_body_literal_sends_a_string_body_verbatim() {
+        let body = serde_json::json!("items[0]=first&items[2]=third");
+        assert_eq!(render_request_body_literal(&body), r#""items[0]=first&items[2]=third""#);
+    }
+
+    /// Multipart bodies are delimited by CRLF, so the escapes must survive into the
+    /// generated literal — a raw string literal would not preserve them.
+    #[test]
+    fn render_request_body_literal_preserves_control_characters_and_quotes() {
+        let body = serde_json::json!("--b\r\nContent-Disposition: form-data; name=\"file\"\r\n\r\nx\r\n--b--\r\n");
+        let literal = render_request_body_literal(&body);
+        assert!(literal.starts_with('"') && literal.ends_with('"'));
+        assert!(literal.contains(r"\r\n"), "CRLF must stay escaped: {literal}");
+        assert!(
+            literal.contains(r#"name=\"file\""#),
+            "quotes must stay escaped: {literal}"
+        );
+        assert!(!literal.contains('\r'), "no bare CR may reach the source: {literal}");
+    }
+
+    /// A deliberately malformed JSON payload must stay malformed; wrapping it in quotes
+    /// would turn it into a valid JSON string and defeat the fixture.
+    #[test]
+    fn render_request_body_literal_keeps_a_malformed_json_payload_malformed() {
+        let body = serde_json::json!(r#"{"name": "Item", "price": }"#);
+        let literal = render_request_body_literal(&body);
+        assert_eq!(literal, r#""{\"name\": \"Item\", \"price\": }""#);
+    }
+
+    #[test]
+    fn render_request_body_literal_serializes_structured_bodies() {
+        let body = serde_json::json!({"name": "Item"});
+        assert_eq!(render_request_body_literal(&body), r##"r#"{"name":"Item"}"#"##);
+    }
+
+    #[test]
+    fn render_http_test_function_sends_a_string_request_body_unquoted() {
+        let mut fixture = http_fixture(expected_response(None, &[]), None, "POST");
+        let http = fixture.http.as_mut().unwrap();
+        http.request.body = Some(serde_json::json!("username=johndoe&password=secret"));
+        let mut out = String::new();
+        render_http_test_function(&mut out, &fixture, "demo");
+        assert!(out.contains(r#"copy_from_slice("username=johndoe&password=secret".as_bytes())"#));
+    }
+
+    #[test]
+    fn render_http_test_function_omits_the_body_call_when_there_is_no_request_body() {
+        let fixture = http_fixture(expected_response(None, &[]), None, "GET");
+        let mut out = String::new();
+        render_http_test_function(&mut out, &fixture, "demo");
+        assert!(!out.contains("copy_from_slice"));
     }
 
     #[test]
