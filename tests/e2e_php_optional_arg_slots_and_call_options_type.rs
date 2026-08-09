@@ -40,6 +40,8 @@ fn render(toml_src: &str, fixture: Fixture) -> String {
 
 fn smoke_fixture(input: serde_json::Value) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "smoke_case".to_string(),
         category: Some("smoke".to_string()),
         description: "smoke".to_string(),

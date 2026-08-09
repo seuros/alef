@@ -4,6 +4,12 @@ use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+mod citation;
+mod sync;
+
+pub use citation::{CitationAuthor, CitationConfig};
+pub use sync::{SyncConfig, TextReplacement};
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ExcludeConfig {
     #[serde(default)]
@@ -404,6 +410,12 @@ pub struct DocsSnippetsConfig {
     /// Documentation/template roots to scan for MkDocs snippet includes.
     #[serde(default)]
     pub docs_dirs: Vec<PathBuf>,
+    /// Documentation roots whose fenced code blocks are validated as snippets.
+    #[serde(default)]
+    pub inline_dirs: Vec<PathBuf>,
+    /// Root-relative path prefixes excluded from snippet discovery and coverage.
+    #[serde(default)]
+    pub exclude: Vec<PathBuf>,
     /// Required language variants for every language-grouped snippet.
     #[serde(default)]
     pub required_languages: Vec<String>,
@@ -422,6 +434,21 @@ pub struct DocsSnippetsConfig {
     /// Stop snippet validation on the first failure.
     #[serde(default)]
     pub fail_fast: bool,
+    /// Treat coverage gaps and unavailable or downgraded checks as errors.
+    #[serde(default)]
+    pub strict: bool,
+    /// Reject snippets whose side-effect classification is missing.
+    #[serde(default)]
+    pub deny_unclassified: bool,
+    /// Permitted side-effect classes. Empty permits only `safe` snippets.
+    #[serde(default)]
+    pub allowed_side_effects: Vec<String>,
+    /// Persistent validation cache directory. Defaults to `.alef/snippets`.
+    #[serde(default)]
+    pub cache_dir: Option<PathBuf>,
+    /// Optional path for the machine-readable validation report.
+    #[serde(default)]
+    pub report_output: Option<PathBuf>,
 }
 
 impl DocsSnippetsConfig {
@@ -433,6 +460,8 @@ impl DocsSnippetsConfig {
         Some(Self {
             dirs: merge_vec(workspace.map(|cfg| &cfg.dirs), krate.map(|cfg| &cfg.dirs)),
             docs_dirs: merge_vec(workspace.map(|cfg| &cfg.docs_dirs), krate.map(|cfg| &cfg.docs_dirs)),
+            inline_dirs: merge_vec(workspace.map(|cfg| &cfg.inline_dirs), krate.map(|cfg| &cfg.inline_dirs)),
+            exclude: merge_vec(workspace.map(|cfg| &cfg.exclude), krate.map(|cfg| &cfg.exclude)),
             required_languages: merge_vec(
                 workspace.map(|cfg| &cfg.required_languages),
                 krate.map(|cfg| &cfg.required_languages),
@@ -453,7 +482,30 @@ impl DocsSnippetsConfig {
             fail_fast: krate
                 .map(|cfg| cfg.fail_fast)
                 .unwrap_or_else(|| workspace.map(|cfg| cfg.fail_fast).unwrap_or(false)),
+            strict: krate
+                .map(|cfg| cfg.strict)
+                .unwrap_or_else(|| workspace.map(|cfg| cfg.strict).unwrap_or(false)),
+            deny_unclassified: krate
+                .map(|cfg| cfg.deny_unclassified)
+                .unwrap_or_else(|| workspace.map(|cfg| cfg.deny_unclassified).unwrap_or(false)),
+            allowed_side_effects: merge_vec(
+                workspace.map(|cfg| &cfg.allowed_side_effects),
+                krate.map(|cfg| &cfg.allowed_side_effects),
+            ),
+            cache_dir: krate
+                .and_then(|cfg| cfg.cache_dir.clone())
+                .or_else(|| workspace.and_then(|cfg| cfg.cache_dir.clone())),
+            report_output: krate
+                .and_then(|cfg| cfg.report_output.clone())
+                .or_else(|| workspace.and_then(|cfg| cfg.report_output.clone())),
         })
+    }
+
+    #[must_use]
+    pub fn cache_dir(&self) -> PathBuf {
+        self.cache_dir
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(".alef/snippets"))
     }
 }
 
@@ -741,102 +793,5 @@ fn validate_output_path(path: &std::path::Path) {
     }
 }
 
-/// A single text replacement rule for version sync.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct TextReplacement {
-    /// Glob pattern for files to process.
-    pub path: String,
-    /// Regex pattern to search for (may contain `{version}` placeholder).
-    pub search: String,
-    /// Replacement string (may contain `{version}` placeholder).
-    pub replace: String,
-}
-
 #[cfg(test)]
 mod tests;
-
-/// Configuration for the `sync-versions` command.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
-pub struct SyncConfig {
-    /// Extra file paths to update version in (glob patterns).
-    #[serde(default)]
-    pub extra_paths: Vec<String>,
-    /// Arbitrary text replacements applied during version sync.
-    #[serde(default)]
-    pub text_replacements: Vec<TextReplacement>,
-}
-
-/// A single author entry in a `CITATION.cff` file. Per the Citation File Format
-/// schema, each entry is either a person (uses `family_names` + `given_names`)
-/// or a legal entity (uses `name`). Validation lives in the renderer rather
-/// than in serde because the choice is mutually exclusive.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct CitationAuthor {
-    /// Person author: family name(s).
-    #[serde(default, alias = "family-names")]
-    pub family_names: Option<String>,
-    /// Person author: given name(s).
-    #[serde(default, alias = "given-names")]
-    pub given_names: Option<String>,
-    /// Entity author: organisation or legal-entity name.
-    #[serde(default)]
-    pub name: Option<String>,
-    /// Optional contact email (applies to either person or entity).
-    #[serde(default)]
-    pub email: Option<String>,
-    /// Optional ORCID iD URL (`https://orcid.org/0000-0000-0000-0000`).
-    #[serde(default)]
-    pub orcid: Option<String>,
-}
-
-/// Configuration for the alef-generated `CITATION.cff` file at the repo root.
-///
-/// When this section is present in `alef.toml`, `alef sync-versions` writes a
-/// fully-rendered Citation File Format YAML using these fields plus the current
-/// workspace version (read from `Cargo.toml`). When absent, alef falls back to
-/// updating the `version:` line of a hand-authored CITATION.cff in place.
-///
-/// All field names follow Rust convention; the renderer emits the canonical
-/// CFF kebab-case keys (`cff-version`, `repository-code`, `date-released`,
-/// `family-names`, `given-names`).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct CitationConfig {
-    /// Software title (`title:`). Required.
-    pub title: String,
-    /// One-paragraph summary (`abstract:`). Required.
-    #[serde(rename = "abstract")]
-    pub abstract_: String,
-    /// Authors list — at least one entry required. Persons and legal entities
-    /// can be mixed (e.g. `Na'aman Hirschfeld` + `SampleCrate, Inc.`).
-    pub authors: Vec<CitationAuthor>,
-    /// Canonical citation message shown to consumers (`message:`).
-    #[serde(default = "default_citation_message")]
-    pub message: String,
-    /// Source-code repository URL (`repository-code:`). Required.
-    #[serde(rename = "repository-code", alias = "repository_code")]
-    pub repository_code: String,
-    /// Project landing-page URL (`url:`). Optional.
-    #[serde(default)]
-    pub url: Option<String>,
-    /// SPDX license identifier (`license:`). When omitted, the renderer falls
-    /// back to `Cargo.toml [workspace.package].license`.
-    #[serde(default)]
-    pub license: Option<String>,
-    /// Release date in `YYYY-MM-DD` form (`date-released:`). Optional override.
-    ///
-    /// When omitted (the recommended default), `alef sync-versions` stamps the
-    /// current system date on every regen so consumers do not need to hand-edit
-    /// alef.toml per release. Set this explicitly only when you need to replay
-    /// a historical release date (e.g. backports, CFF reproducibility audits).
-    #[serde(default, rename = "date-released", alias = "date_released")]
-    pub date_released: Option<String>,
-    /// Persistent DOI for the cited release (`doi:`). Optional.
-    #[serde(default)]
-    pub doi: Option<String>,
-}
-
-fn default_citation_message() -> String {
-    "If you use this software, please cite it using the metadata below.".to_string()
-}

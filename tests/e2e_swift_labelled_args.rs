@@ -48,6 +48,8 @@ fn swift_emits_labelled_arguments_on_free_function_calls() {
     let (e2e_config, crate_config) = build_swift_config();
 
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "test_process_basic".to_string(),
         category: Some("smoke".to_string()),
         description: "Test fixture with labelled args".to_string(),
@@ -136,6 +138,8 @@ name = "SampleLanguagePack"
     let crate_config = cfg.resolve().expect("resolves").remove(0);
 
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "test_language_count".to_string(),
         category: Some("registry".to_string()),
         description: "Test languageCount with module qualification".to_string(),

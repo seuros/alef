@@ -51,6 +51,8 @@ fn group() -> FixtureGroup {
     FixtureGroup {
         category: "smoke".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "scrape_basic".to_string(),
             category: Some("smoke".to_string()),
             description: "basic scrape".to_string(),

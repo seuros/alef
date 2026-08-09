@@ -45,6 +45,8 @@ fn string_array_fixture_group() -> FixtureGroup {
     FixtureGroup {
         category: "embeddings".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "embed_strings_happy".to_string(),
             category: Some("embeddings".to_string()),
             description: "embed array of strings".to_string(),

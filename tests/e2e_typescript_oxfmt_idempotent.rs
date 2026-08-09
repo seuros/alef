@@ -43,6 +43,8 @@ fn simple_fixture_group() -> FixtureGroup {
     FixtureGroup {
         category: "smoke".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "convert_simple_html".to_string(),
             category: Some("smoke".to_string()),
             description: "converts simple HTML".to_string(),

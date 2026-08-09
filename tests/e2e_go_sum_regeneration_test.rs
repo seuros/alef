@@ -45,6 +45,8 @@ fn make_simple_fixture() -> FixtureGroup {
     FixtureGroup {
         category: "smoke".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "simple_fetch".to_string(),
             category: Some("smoke".to_string()),
             description: "Simple fetch test".to_string(),

@@ -535,6 +535,8 @@ mod visitor_tests {
         callbacks.insert("visit_text".to_string(), CallbackAction::Continue);
 
         Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "custom_names".to_string(),
             category: None,
             description: "uses configured names".to_string(),

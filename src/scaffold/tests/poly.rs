@@ -192,6 +192,35 @@ fn poly_toml_emits_workspace_lint_hooks_for_non_bundled_linters() {
 }
 
 #[test]
+fn poly_toml_emits_strict_snippet_check_for_configured_roots() {
+    let config = test_config_with_workspace_toml(
+        r#"[workspace.docs.snippets]
+dirs = ["docs/snippets"]
+inline_dirs = ["docs/guides"]"#,
+    );
+    let files = scaffold_poly_config(&config, &[Language::Python]);
+    let content = &poly_toml(&files).content;
+
+    assert!(content.contains("[hooks.pre-commit.commands.alef-snippets]"));
+    assert!(content.contains("run = \"alef snippets check --strict --cache off\""));
+    assert!(content.contains("root = \".\""));
+    assert!(content.contains("workspace = true"));
+    assert!(content.contains("alef.toml"));
+    assert!(content.contains("fixtures/**/*.json"));
+    assert!(content.contains("docs/snippets/**"));
+    assert!(content.contains("docs/guides/**/*.{md,mdx}"));
+    toml::from_str::<toml::Value>(content).expect("generated poly.toml must parse");
+}
+
+#[test]
+fn poly_toml_omits_snippet_check_without_discovery_roots() {
+    let config = test_config_with_workspace_toml("[workspace.docs.snippets]\nstrict = true");
+    let files = scaffold_poly_config(&config, &[Language::Python]);
+
+    assert!(!poly_toml(&files).content.contains("alef-snippets"));
+}
+
+#[test]
 fn poly_toml_php_uses_mago_correctness_security() {
     let config = test_config();
     let api = test_api();

@@ -16,13 +16,13 @@ pub mod doc_cleaning;
 mod examples;
 mod formatting;
 mod language_pages;
-mod naming;
+pub(crate) mod naming;
 mod render;
 mod rust_static;
 mod shared_pages;
 mod signatures;
 mod sorting;
-mod template_env;
+pub(crate) mod template_env;
 #[cfg(test)]
 mod tests;
 mod type_mapping;
@@ -244,18 +244,24 @@ fn build_snippet_context(
         return Ok(Vec::new());
     };
 
-    for dir in &snippet_cfg.dirs {
+    for dir in snippet_cfg.dirs.iter().chain(&snippet_cfg.inline_dirs) {
         let abs_dir = workspace_root.join(dir);
         if !abs_dir.exists() {
             anyhow::bail!(
-                "config key `docs.snippets.dirs` includes '{}' (resolved to '{}'), which does not exist",
+                "configured docs snippet root '{}' (resolved to '{}') does not exist",
                 dir.display(),
                 abs_dir.display()
             );
         }
     }
     let snippet_dirs = snippet_cfg.dirs.clone();
-    if snippet_dirs.is_empty() {
+    let discovery_dirs = snippet_cfg
+        .dirs
+        .iter()
+        .chain(&snippet_cfg.inline_dirs)
+        .cloned()
+        .collect::<Vec<_>>();
+    if discovery_dirs.is_empty() {
         if snippet_cfg.validation_level.is_some() || !snippet_cfg.required_languages.is_empty() {
             tracing::warn!("docs.snippets is configured for validation but docs.snippets.dirs is empty");
         }
@@ -266,7 +272,19 @@ fn build_snippet_context(
         .iter()
         .map(|dir| workspace_root.join(dir))
         .collect::<Vec<_>>();
-    let snippets = crate::snippets::discovery::discover_snippets(&absolute_snippet_dirs, None)?;
+    let absolute_discovery_dirs = discovery_dirs
+        .iter()
+        .map(|dir| workspace_root.join(dir))
+        .collect::<Vec<_>>();
+    let excluded = snippet_cfg
+        .exclude
+        .iter()
+        .map(|path| workspace_root.join(path))
+        .collect::<Vec<_>>();
+    let snippets = crate::snippets::discovery::discover_snippets(&absolute_discovery_dirs, None)?
+        .into_iter()
+        .filter(|snippet| !excluded.iter().any(|prefix| snippet.path.starts_with(prefix)))
+        .collect::<Vec<_>>();
     let mut counts_by_language = BTreeMap::new();
     for snippet in &snippets {
         *counts_by_language.entry(snippet.language.to_string()).or_insert(0) += 1;
@@ -309,16 +327,27 @@ fn validate_snippets(
             .map(|dir| workspace_root.join(dir))
             .collect::<Vec<_>>()
     };
-    let include_base_paths = snippet_cfg
-        .include_base_paths
+    let include_base_paths = if snippet_cfg.include_base_paths.is_empty() {
+        docs_dirs.clone()
+    } else {
+        snippet_cfg
+            .include_base_paths
+            .iter()
+            .map(|dir| workspace_root.join(dir))
+            .collect::<Vec<_>>()
+    };
+    let exclude = snippet_cfg
+        .exclude
         .iter()
-        .map(|dir| workspace_root.join(dir))
+        .map(|path| workspace_root.join(path))
         .collect::<Vec<_>>();
 
     if !docs_dirs.is_empty() {
         let audit_report = crate::snippets::audit::audit(&crate::snippets::audit::AuditConfig {
             docs_dirs: docs_dirs.clone(),
             snippet_dirs: absolute_snippet_dirs.to_vec(),
+            include_base_paths: include_base_paths.clone(),
+            exclude: exclude.clone(),
             require_frontmatter: snippet_cfg.require_frontmatter,
         });
         if audit_report.has_errors() {
@@ -346,7 +375,15 @@ fn validate_snippets(
             snippet_dirs: absolute_snippet_dirs.to_vec(),
             required_languages,
             include_base_paths,
+            exclude,
         })?;
+        if !report.unreferenced_snippets.is_empty() && snippet_cfg.strict {
+            anyhow::bail!(
+                "strict snippet coverage failed for crate `{}`: {} unreferenced snippet file(s)",
+                config.name,
+                report.unreferenced_snippets.len()
+            );
+        }
         if !report.unreferenced_snippets.is_empty() {
             tracing::warn!(
                 "docs.snippets found {} unreferenced snippet file(s); not failing because extra examples can be intentional",
@@ -369,6 +406,9 @@ fn validate_snippets(
         let mut runner_cfg = crate::snippets::runner::RunnerConfig {
             level,
             fail_fast: snippet_cfg.fail_fast,
+            deny_unclassified: snippet_cfg.deny_unclassified,
+            allowed_side_effects: parse_allowed_side_effects(&snippet_cfg.allowed_side_effects)?,
+            cache_dir: Some(workspace_root.join(snippet_cfg.cache_dir())),
             ..crate::snippets::runner::RunnerConfig::default()
         };
         if let Some(timeout_secs) = snippet_cfg.timeout_secs {
@@ -376,6 +416,20 @@ fn validate_snippets(
         }
         let registry = crate::snippets::validators::ValidatorRegistry::default();
         let summary = crate::snippets::runner::run_validation(snippets, &registry, &runner_cfg)?;
+        if summary.unavailable > 0 && snippet_cfg.strict {
+            anyhow::bail!(
+                "strict snippet validation failed for crate `{}`: {} validation(s) unavailable",
+                config.name,
+                summary.unavailable
+            );
+        }
+        if summary.downgraded > 0 && snippet_cfg.strict {
+            anyhow::bail!(
+                "strict snippet validation failed for crate `{}`: {} validation(s) downgraded",
+                config.name,
+                summary.downgraded
+            );
+        }
         if summary.unavailable > 0 {
             tracing::warn!(
                 "docs.snippets skipped {} snippet validation(s) because required toolchains were unavailable",
@@ -390,9 +444,32 @@ fn validate_snippets(
                 summary.errors
             );
         }
+        if let Some(path) = &snippet_cfg.report_output {
+            let report_path = workspace_root.join(path);
+            crate::snippets::output::write_report(&summary, &report_path, false).map_err(|err| {
+                anyhow::anyhow!(
+                    "writing snippet validation report to '{}': {err}",
+                    report_path.display()
+                )
+            })?;
+        }
     }
 
     Ok(())
+}
+
+fn parse_allowed_side_effects(configured: &[String]) -> anyhow::Result<Vec<crate::snippets::types::SideEffectClass>> {
+    configured
+        .iter()
+        .map(|value| match value.as_str() {
+            "safe" => Ok(crate::snippets::types::SideEffectClass::Safe),
+            "network" => Ok(crate::snippets::types::SideEffectClass::Network),
+            "process" => Ok(crate::snippets::types::SideEffectClass::Process),
+            "install" => Ok(crate::snippets::types::SideEffectClass::Install),
+            "server" => Ok(crate::snippets::types::SideEffectClass::Server),
+            _ => anyhow::bail!("invalid docs.snippets.allowed_side_effects entry: `{value}`"),
+        })
+        .collect()
 }
 
 fn docs_sources(config: &ResolvedCrateConfig, configured_sources: &[PathBuf], workspace_root: &Path) -> Vec<PathBuf> {

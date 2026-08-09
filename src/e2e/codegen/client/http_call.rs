@@ -230,6 +230,8 @@ mod tests {
 
     fn http_fixture(id: &str, expected: HttpExpectedResponse) -> Fixture {
         Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: id.into(),
             description: "test".into(),
             category: Some("smoke".into()),

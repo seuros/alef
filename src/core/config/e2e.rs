@@ -6,6 +6,7 @@ mod harness;
 mod package;
 mod root;
 mod selection;
+mod snippets;
 
 #[cfg(test)]
 mod tests;
@@ -15,3 +16,4 @@ pub use harness::{HarnessConfig, HarnessOverride, RouteCallForm};
 pub use package::{DependencyMode, HomebrewCliTest, PackageRef, RegistryConfig};
 pub use root::E2eConfig;
 pub use selection::SelectWhen;
+pub use snippets::{SnippetCapabilities, SnippetConfig};

@@ -17,6 +17,8 @@ use alef::e2e::fixture::{Assertion, Fixture, FixtureGroup};
 
 fn make_fixture_omit_config(id: &str) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: Some("test_category".to_string()),
         description: "Test config parameter type inference - fixture omits config field".to_string(),

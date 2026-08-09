@@ -9,6 +9,8 @@ mod trait_bridge_tests {
 
     fn make_fixture(id: &str) -> Fixture {
         Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: id.to_string(),
             category: None,
             description: "test".to_string(),
@@ -334,6 +336,8 @@ mod gemfile_tests {
 
         // Build a minimal HTTP fixture so render_app_harness produces server-pattern content.
         let fixture = Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "test_get".to_owned(),
             description: "test fixture".to_owned(),
             category: Some("smoke".to_owned()),

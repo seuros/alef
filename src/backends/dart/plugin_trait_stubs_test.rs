@@ -71,6 +71,8 @@ mod plugin_trait_stub_generation {
             id: id.to_string(),
             category: None,
             description: "test".to_string(),
+            docs: None,
+            requirements: Vec::new(),
             tags: vec![],
             skip: None,
             env: None,

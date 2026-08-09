@@ -112,7 +112,7 @@ pub fn parse_code_blocks(path: &Path) -> crate::snippets::error::Result<Vec<Code
         .unwrap_or_default()
         .to_lowercase();
 
-    if extension == "md" || extension == "markdown" {
+    if matches!(extension.as_str(), "md" | "markdown" | "mdx") {
         let (metadata, body, line_offset) = parse_frontmatter(&content, path)?;
         let mut blocks = extract_fenced_blocks_with_metadata(body, metadata);
         for block in &mut blocks {
@@ -278,5 +278,25 @@ print("hello")
         assert_eq!(blocks[0].metadata.language, Some(Language::Python));
         assert_eq!(blocks[0].metadata.tags, vec!["smoke"]);
         assert_eq!(blocks[0].start_line, 8);
+    }
+
+    #[test]
+    fn parses_mdx_frontmatter_with_source_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snippet.mdx");
+        std::fs::write(
+            &path,
+            "---\nid: mdx-example\nside_effect: network\n---\n```typescript\nconst value = 1;\n```\n",
+        )
+        .unwrap();
+
+        let blocks = parse_code_blocks(&path).unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].metadata.id.as_deref(), Some("mdx-example"));
+        assert_eq!(
+            blocks[0].metadata.side_effect,
+            Some(crate::snippets::types::SideEffectClass::Network)
+        );
+        assert_eq!(blocks[0].start_line, 5);
     }
 }

@@ -11,6 +11,8 @@ use alef::e2e::fixture::{Assertion, Fixture, FixtureGroup};
 
 fn make_fixture(id: &str, input: serde_json::Value) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: Some("embed".to_string()),
         description: "embed texts test fixture".to_string(),

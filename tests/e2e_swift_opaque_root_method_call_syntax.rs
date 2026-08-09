@@ -116,6 +116,8 @@ type = "file_path"
 
 fn make_contains_fixture(id: &str, field: &str, value: &str) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: Some("smoke".to_string()),
         description: "opaque root type regression fixture".to_string(),

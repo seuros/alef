@@ -333,6 +333,8 @@ fn wasm_imports_nested_types_from_json_object_element_types() {
     }];
 
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "extract_input_with_nested_config".to_string(),
         category: Some("extract".to_string()),
         description: "extract input with nested config".to_string(),
@@ -588,6 +590,8 @@ fn http_only_test_file_with_json_body_emits_decompress_helper() {
     use crate::e2e::fixture::{Fixture, HttpExpectedResponse, HttpFixture, HttpHandler, HttpRequest};
 
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "get_user_returns_json".to_string(),
         category: Some("users".to_string()),
         description: "GET /user returns JSON object".to_string(),
@@ -722,6 +726,8 @@ fn multipart_param_with_json_object_body_does_not_emit_boundary_content_type() {
     use crate::e2e::fixture::{Fixture, HttpExpectedResponse, HttpFixture, HttpHandler, HttpRequest};
 
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "upload_file_basic".to_string(),
         category: Some("upload".to_string()),
         description: "upload a file".to_string(),
@@ -790,6 +796,8 @@ fn multipart_synthesized_body_emits_boundary_content_type() {
     use crate::e2e::fixture::{Fixture, HttpExpectedResponse, HttpFixture, HttpHandler, HttpRequest};
 
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "upload_synth".to_string(),
         category: Some("upload".to_string()),
         description: "synthesized multipart".to_string(),

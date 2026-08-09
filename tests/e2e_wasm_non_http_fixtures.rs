@@ -51,6 +51,8 @@ fn smoke_fixture() -> FixtureGroup {
     FixtureGroup {
         category: "smoke".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "smoke_basic".to_string(),
             category: Some("smoke".to_string()),
             description: "extract a small pdf".to_string(),

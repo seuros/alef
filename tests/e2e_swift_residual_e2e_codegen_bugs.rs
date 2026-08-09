@@ -111,6 +111,8 @@ fn process_result_ir() -> Vec<TypeDef> {
 
 fn make_fixture(id: &str, assertion: Assertion) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: Some("smoke".to_string()),
         description: "regression fixture".to_string(),

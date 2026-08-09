@@ -15,6 +15,8 @@ use std::collections::BTreeMap;
 
 fn make_http_fixture(id: &str, description: &str) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: Some("http".to_string()),
         description: description.to_string(),

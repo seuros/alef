@@ -10,6 +10,8 @@ pub struct AuditConfig {
     pub docs_dirs: Vec<PathBuf>,
     pub snippet_dirs: Vec<PathBuf>,
     pub require_frontmatter: bool,
+    pub include_base_paths: Vec<PathBuf>,
+    pub exclude: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,10 +62,10 @@ impl AuditReport {
 pub fn audit(config: &AuditConfig) -> AuditReport {
     let mut issues = Vec::new();
     for snippet_dir in &config.snippet_dirs {
-        issues.extend(audit_snippets(snippet_dir, config.require_frontmatter));
+        issues.extend(audit_snippets(snippet_dir, config.require_frontmatter, &config.exclude));
     }
     for docs_dir in &config.docs_dirs {
-        issues.extend(audit_docs(docs_dir));
+        issues.extend(audit_docs(docs_dir, &config.include_base_paths, &config.exclude));
     }
     issues.sort_by(|left, right| {
         left.path
@@ -74,8 +76,8 @@ pub fn audit(config: &AuditConfig) -> AuditReport {
     AuditReport { issues }
 }
 
-fn audit_snippets(snippet_dir: &Path, require_frontmatter: bool) -> Vec<AuditIssue> {
-    markdown_files(snippet_dir)
+fn audit_snippets(snippet_dir: &Path, require_frontmatter: bool, exclude: &[PathBuf]) -> Vec<AuditIssue> {
+    markdown_files(snippet_dir, exclude)
         .into_iter()
         .flat_map(|path| audit_snippet_file(&path, require_frontmatter))
         .collect()
@@ -114,9 +116,9 @@ fn audit_snippet_file(path: &Path, require_frontmatter: bool) -> Vec<AuditIssue>
     issues
 }
 
-fn audit_docs(docs_dir: &Path) -> Vec<AuditIssue> {
+fn audit_docs(docs_dir: &Path, include_base_paths: &[PathBuf], exclude: &[PathBuf]) -> Vec<AuditIssue> {
     let mut issues = Vec::new();
-    for path in markdown_files(docs_dir) {
+    for path in markdown_files(docs_dir, exclude) {
         let content = match std::fs::read_to_string(&path) {
             Ok(content) => content,
             Err(err) => {
@@ -134,9 +136,12 @@ fn audit_docs(docs_dir: &Path) -> Vec<AuditIssue> {
         issues.extend(audit_includes(&path, &content));
     }
 
-    match discover_includes(&[docs_dir.to_path_buf()], &[]) {
+    match discover_includes(&[docs_dir.to_path_buf()], include_base_paths) {
         Ok(references) => {
-            for reference in references {
+            for reference in references
+                .into_iter()
+                .filter(|reference| !is_excluded(&reference.source, exclude))
+            {
                 if !reference.target.exists() {
                     issues.push(issue(
                         AuditIssueKind::MissingInclude,
@@ -226,7 +231,7 @@ fn audit_fences(path: &Path, content: &str) -> Vec<AuditIssue> {
     issues
 }
 
-fn markdown_files(base: &Path) -> Vec<PathBuf> {
+fn markdown_files(base: &Path, exclude: &[PathBuf]) -> Vec<PathBuf> {
     if !base.exists() {
         return Vec::new();
     }
@@ -237,6 +242,7 @@ fn markdown_files(base: &Path) -> Vec<PathBuf> {
         .filter_map(std::result::Result::ok)
         .filter(|entry| entry.file_type().is_file())
         .map(walkdir::DirEntry::into_path)
+        .filter(|path| !is_excluded(path, exclude))
         .filter(|path| {
             path.extension()
                 .and_then(|extension| extension.to_str())
@@ -246,6 +252,10 @@ fn markdown_files(base: &Path) -> Vec<PathBuf> {
         .collect();
     files.sort();
     files
+}
+
+fn is_excluded(path: &Path, exclude: &[PathBuf]) -> bool {
+    exclude.iter().any(|excluded| path.starts_with(excluded))
 }
 
 fn issue(kind: AuditIssueKind, path: &Path, line: usize, message: String) -> AuditIssue {
@@ -328,6 +338,7 @@ mod tests {
             docs_dirs: Vec::new(),
             snippet_dirs: vec![snippets],
             require_frontmatter: true,
+            ..AuditConfig::default()
         });
 
         assert!(report.has_errors());
@@ -361,6 +372,7 @@ mod tests {
             docs_dirs: vec![docs],
             snippet_dirs: Vec::new(),
             require_frontmatter: false,
+            ..AuditConfig::default()
         });
 
         assert_eq!(report.issues.len(), 2);
@@ -393,6 +405,7 @@ mod tests {
             docs_dirs: vec![docs],
             snippet_dirs: Vec::new(),
             require_frontmatter: false,
+            ..AuditConfig::default()
         });
 
         assert_eq!(report.issues.len(), 1);

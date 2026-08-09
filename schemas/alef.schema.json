@@ -1016,11 +1016,11 @@
     },
     "CitationAuthor": {
       "additionalProperties": false,
-      "description": "A single author entry in a `CITATION.cff` file. Per the Citation File Format\nschema, each entry is either a person (uses `family_names` + `given_names`)\nor a legal entity (uses `name`). Validation lives in the renderer rather\nthan in serde because the choice is mutually exclusive.",
+      "description": "A person or legal-entity author in a generated `CITATION.cff`. ~keep",
       "properties": {
         "email": {
           "default": null,
-          "description": "Optional contact email (applies to either person or entity).",
+          "description": "Optional contact email. ~keep",
           "type": [
             "string",
             "null"
@@ -1028,7 +1028,7 @@
         },
         "family_names": {
           "default": null,
-          "description": "Person author: family name(s).",
+          "description": "Person author: family name(s). ~keep",
           "type": [
             "string",
             "null"
@@ -1036,7 +1036,7 @@
         },
         "given_names": {
           "default": null,
-          "description": "Person author: given name(s).",
+          "description": "Person author: given name(s). ~keep",
           "type": [
             "string",
             "null"
@@ -1044,7 +1044,7 @@
         },
         "name": {
           "default": null,
-          "description": "Entity author: organisation or legal-entity name.",
+          "description": "Entity author: organisation or legal-entity name. ~keep",
           "type": [
             "string",
             "null"
@@ -1052,7 +1052,7 @@
         },
         "orcid": {
           "default": null,
-          "description": "Optional ORCID iD URL (`https://orcid.org/0000-0000-0000-0000`).",
+          "description": "Optional ORCID iD URL. ~keep",
           "type": [
             "string",
             "null"
@@ -1063,14 +1063,14 @@
     },
     "CitationConfig": {
       "additionalProperties": false,
-      "description": "Configuration for the alef-generated `CITATION.cff` file at the repo root.\n\nWhen this section is present in `alef.toml`, `alef sync-versions` writes a\nfully-rendered Citation File Format YAML using these fields plus the current\nworkspace version (read from `Cargo.toml`). When absent, alef falls back to\nupdating the `version:` line of a hand-authored CITATION.cff in place.\n\nAll field names follow Rust convention; the renderer emits the canonical\nCFF kebab-case keys (`cff-version`, `repository-code`, `date-released`,\n`family-names`, `given-names`).",
+      "description": "Configuration for the Alef-generated `CITATION.cff` file. ~keep",
       "properties": {
         "abstract": {
-          "description": "One-paragraph summary (`abstract:`). Required.",
+          "description": "One-paragraph software summary. ~keep",
           "type": "string"
         },
         "authors": {
-          "description": "Authors list — at least one entry required. Persons and legal entities\ncan be mixed (e.g. `Na'aman Hirschfeld` + `SampleCrate, Inc.`).",
+          "description": "Person and legal-entity authors. ~keep",
           "items": {
             "$ref": "#/$defs/CitationAuthor"
           },
@@ -1078,7 +1078,7 @@
         },
         "date-released": {
           "default": null,
-          "description": "Release date in `YYYY-MM-DD` form (`date-released:`). Optional override.\n\nWhen omitted (the recommended default), `alef sync-versions` stamps the\ncurrent system date on every regen so consumers do not need to hand-edit\nalef.toml per release. Set this explicitly only when you need to replay\na historical release date (e.g. backports, CFF reproducibility audits).",
+          "description": "Optional release date in `YYYY-MM-DD` form. ~keep",
           "type": [
             "string",
             "null"
@@ -1086,7 +1086,7 @@
         },
         "doi": {
           "default": null,
-          "description": "Persistent DOI for the cited release (`doi:`). Optional.",
+          "description": "Persistent DOI for the cited release. ~keep",
           "type": [
             "string",
             "null"
@@ -1094,7 +1094,7 @@
         },
         "license": {
           "default": null,
-          "description": "SPDX license identifier (`license:`). When omitted, the renderer falls\nback to `Cargo.toml [workspace.package].license`.",
+          "description": "SPDX license identifier. ~keep",
           "type": [
             "string",
             "null"
@@ -1102,20 +1102,20 @@
         },
         "message": {
           "default": "If you use this software, please cite it using the metadata below.",
-          "description": "Canonical citation message shown to consumers (`message:`).",
+          "description": "Canonical citation message shown to consumers. ~keep",
           "type": "string"
         },
         "repository-code": {
-          "description": "Source-code repository URL (`repository-code:`). Required.",
+          "description": "Source-code repository URL. ~keep",
           "type": "string"
         },
         "title": {
-          "description": "Software title (`title:`). Required.",
+          "description": "Software title. ~keep",
           "type": "string"
         },
         "url": {
           "default": null,
-          "description": "Project landing-page URL (`url:`). Optional.",
+          "description": "Project landing-page URL. ~keep",
           "type": [
             "string",
             "null"
@@ -1755,6 +1755,27 @@
     },
     "DocsSnippetsConfig": {
       "properties": {
+        "allowed_side_effects": {
+          "default": [],
+          "description": "Permitted side-effect classes. Empty permits only `safe` snippets.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cache_dir": {
+          "default": null,
+          "description": "Persistent validation cache directory. Defaults to `.alef/snippets`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deny_unclassified": {
+          "default": false,
+          "description": "Reject snippets whose side-effect classification is missing.",
+          "type": "boolean"
+        },
         "dirs": {
           "default": [],
           "description": "Snippet roots to discover.",
@@ -1766,6 +1787,14 @@
         "docs_dirs": {
           "default": [],
           "description": "Documentation/template roots to scan for MkDocs snippet includes.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "exclude": {
+          "default": [],
+          "description": "Root-relative path prefixes excluded from snippet discovery and coverage.",
           "items": {
             "type": "string"
           },
@@ -1784,6 +1813,22 @@
           },
           "type": "array"
         },
+        "inline_dirs": {
+          "default": [],
+          "description": "Documentation roots whose fenced code blocks are validated as snippets.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "report_output": {
+          "default": null,
+          "description": "Optional path for the machine-readable validation report.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "require_frontmatter": {
           "default": false,
           "description": "Require YAML frontmatter in snippet markdown files.",
@@ -1796,6 +1841,11 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "strict": {
+          "default": false,
+          "description": "Treat coverage gaps and unavailable or downgraded checks as errors.",
+          "type": "boolean"
         },
         "timeout_secs": {
           "default": null,
@@ -2097,6 +2147,18 @@
           },
           "type": "array",
           "uniqueItems": true
+        },
+        "snippets": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SnippetConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional fixture-driven documentation snippet output."
         },
         "test_documents_dir": {
           "default": "test_documents",
@@ -6109,6 +6171,43 @@
       },
       "type": "object"
     },
+    "SnippetCapabilities": {
+      "additionalProperties": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array",
+        "uniqueItems": true
+      },
+      "properties": {
+        "all": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "type": "object"
+    },
+    "SnippetConfig": {
+      "properties": {
+        "capabilities": {
+          "$ref": "#/$defs/SnippetCapabilities",
+          "default": {
+            "all": []
+          }
+        },
+        "output": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "output"
+      ],
+      "type": "object"
+    },
     "SourceCrate": {
       "description": "A source crate group for multi-crate extraction.",
       "properties": {
@@ -6416,11 +6515,11 @@
       "type": "object"
     },
     "SyncConfig": {
-      "description": "Configuration for the `sync-versions` command.",
+      "description": "Configuration for the `sync-versions` command. ~keep",
       "properties": {
         "extra_paths": {
           "default": [],
-          "description": "Extra file paths to update version in (glob patterns).",
+          "description": "Extra file paths to update version in (glob patterns). ~keep",
           "items": {
             "type": "string"
           },
@@ -6428,7 +6527,7 @@
         },
         "text_replacements": {
           "default": [],
-          "description": "Arbitrary text replacements applied during version sync.",
+          "description": "Arbitrary text replacements applied during version sync. ~keep",
           "items": {
             "$ref": "#/$defs/TextReplacement"
           },
@@ -6528,18 +6627,18 @@
       "type": "object"
     },
     "TextReplacement": {
-      "description": "A single text replacement rule for version sync.",
+      "description": "A single text replacement rule for version sync. ~keep",
       "properties": {
         "path": {
-          "description": "Glob pattern for files to process.",
+          "description": "Glob pattern for files to process. ~keep",
           "type": "string"
         },
         "replace": {
-          "description": "Replacement string (may contain `{version}` placeholder).",
+          "description": "Replacement string (may contain `{version}` placeholder). ~keep",
           "type": "string"
         },
         "search": {
-          "description": "Regex pattern to search for (may contain `{version}` placeholder).",
+          "description": "Regex pattern to search for (may contain `{version}` placeholder). ~keep",
           "type": "string"
         }
       },

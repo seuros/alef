@@ -237,7 +237,7 @@ impl E2eCodegen for TypeScriptCodegen {
             let active: Vec<_> = group
                 .fixtures
                 .iter()
-                .filter(|fixture| is_node_fixture_runnable(fixture))
+                .filter(|fixture| is_node_fixture_runnable(fixture, e2e_config))
                 .collect();
 
             if active.is_empty() {
@@ -276,8 +276,8 @@ impl E2eCodegen for TypeScriptCodegen {
     }
 }
 
-fn is_node_fixture_runnable(fixture: &Fixture) -> bool {
-    if fixture.skip.as_ref().is_some_and(|skip| skip.should_skip("node")) {
+fn is_node_fixture_runnable(fixture: &Fixture, e2e_config: &E2eConfig) -> bool {
+    if !super::fixture_inclusion(fixture, "node", e2e_config).is_included() {
         return false;
     }
 

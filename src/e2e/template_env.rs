@@ -2,6 +2,11 @@ use minijinja::Environment;
 
 static TEMPLATES: &[(&str, &str)] = &[
     (
+        "snippets/file.md.jinja",
+        include_str!("templates/snippets/file.md.jinja"),
+    ),
+    ("snippets/call.jinja", include_str!("templates/snippets/call.jinja")),
+    (
         "python/pyproject.toml.jinja",
         include_str!("templates/python/pyproject.toml.jinja"),
     ),

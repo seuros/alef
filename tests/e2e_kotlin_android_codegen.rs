@@ -16,6 +16,8 @@ use std::path::{Path, PathBuf};
 
 fn make_chat_fixture(id: &str) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: Some("chat".to_string()),
         description: "chat test".to_string(),
@@ -54,6 +56,8 @@ fn make_chat_fixture(id: &str) -> Fixture {
 
 fn make_chat_fixture_with_field_assertion(id: &str, field: &str, expected: &str) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: Some("chat".to_string()),
         description: "chat assertion test".to_string(),
@@ -244,6 +248,8 @@ fn render_kotlin_android_chat(toml: &str, fixture: Fixture) -> String {
 
 fn make_streaming_fixture(id: &str) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: Some("chat".to_string()),
         description: "chat stream test".to_string(),

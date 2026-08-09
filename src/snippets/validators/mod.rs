@@ -27,6 +27,9 @@ use std::io::Read;
 pub trait SnippetValidator: Send + Sync {
     fn language(&self) -> Language;
     fn is_available(&self) -> bool;
+    fn is_available_at(&self, _level: ValidationLevel) -> bool {
+        self.is_available()
+    }
     /// Validate a snippet at the requested level.
     ///
     /// # Errors
@@ -127,6 +130,7 @@ fn strip_ansi_codes(input: &str) -> String {
 ///
 /// Returns an error when the child process cannot be spawned, waited on, or times out.
 pub fn run_command(command: &mut std::process::Command, timeout_secs: u64) -> Result<(bool, String)> {
+    sanitize_environment(command);
     let mut child = command
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -158,6 +162,27 @@ pub fn run_command(command: &mut std::process::Command, timeout_secs: u64) -> Re
         }
         Err(err) => Err(crate::snippets::error::Error::Other(format!("wait failed: {err}"))),
     }
+}
+
+fn sanitize_environment(command: &mut std::process::Command) {
+    const ALLOWED_VARIABLES: &[&str] = &[
+        "PATH",
+        "PATHEXT",
+        "SYSTEMROOT",
+        "WINDIR",
+        "TMP",
+        "TEMP",
+        "TMPDIR",
+        "LANG",
+        "LC_ALL",
+    ];
+    let values: Vec<_> = ALLOWED_VARIABLES
+        .iter()
+        .filter_map(|key| std::env::var_os(key).map(|value| (*key, value)))
+        .collect();
+    command.env_clear();
+    command.envs(values);
+    command.env("NO_COLOR", "1");
 }
 
 trait WaitTimeout {

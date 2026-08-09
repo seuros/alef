@@ -40,6 +40,8 @@ fn make_method(name: &str, return_type: TypeRef, has_default: bool) -> MethodDef
 
 fn make_fixture(id: &str, input: serde_json::Value) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: None,
         description: "test".to_string(),

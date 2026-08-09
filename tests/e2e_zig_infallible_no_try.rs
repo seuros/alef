@@ -13,6 +13,8 @@ use alef::e2e::fixture::{Assertion, Fixture, FixtureGroup};
 
 fn make_fixture(id: &str) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: Some("registry".to_string()),
         description: "test fixture".to_string(),
@@ -145,6 +147,8 @@ args = [{ name = "name", field = "language", type = "string" }]
     let e2e = cfg.crates[0].e2e.clone().expect("e2e config present");
 
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "registry_has_language_true".to_string(),
         category: Some("registry".to_string()),
         description: "has_language returns true for python".to_string(),

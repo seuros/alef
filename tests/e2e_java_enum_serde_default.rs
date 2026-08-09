@@ -15,6 +15,8 @@ use alef::e2e::fixture::{Assertion, Fixture, FixtureGroup};
 
 fn make_keyword_fixture() -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "config_keywords".to_string(),
         category: Some("contract".to_string()),
         description: "Tests keyword extraction with partial config (omits algorithm, relying on Rust default)"

@@ -41,6 +41,8 @@ args = [
 
 fn fixture_for(category: &str, id: &str) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: Some(category.to_string()),
         description: format!("{category} fixture {id}"),

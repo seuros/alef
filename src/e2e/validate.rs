@@ -318,6 +318,8 @@ mod tests {
 
     fn make_fixture(id: &str, source: &str, skip: Option<SkipDirective>, call: Option<&str>) -> Fixture {
         Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: id.to_string(),
             category: None,
             description: format!("Test {id}"),
@@ -505,6 +507,8 @@ mod tests {
     #[test]
     fn test_missing_required_input_field() {
         let fixture = Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "test_missing".to_string(),
             category: None,
             description: "Test".to_string(),
@@ -576,6 +580,8 @@ mod tests {
         use crate::core::config::e2e::ArgMapping;
 
         let fixture = Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "basic_chat".to_string(),
             category: None,
             description: "Chat completion".to_string(),
@@ -625,6 +631,8 @@ mod tests {
         use crate::core::config::e2e::ArgMapping;
 
         let fixture = Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "url_batch".to_string(),
             category: None,
             description: "URL batch".to_string(),
@@ -686,6 +694,8 @@ mod tests {
         use std::collections::HashSet;
 
         let fixture = Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "budget_enforced".to_string(),
             category: None,
             description: "Budget enforcement test".to_string(),

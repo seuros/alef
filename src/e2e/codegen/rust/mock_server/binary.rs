@@ -67,6 +67,8 @@ struct HttpFixture {
 
 #[derive(Debug, Deserialize)]
 struct Fixture {
+    docs: None,
+    requirements: Vec::new(),
     id: String,
     #[serde(default)]
     mock_response: Option<MockResponse>,

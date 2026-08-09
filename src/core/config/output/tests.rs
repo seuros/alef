@@ -1,6 +1,50 @@
 use super::*;
 
 #[test]
+fn docs_snippets_merge_covers_validation_policy_and_paths() {
+    let workspace: DocsSnippetsConfig = toml::from_str(
+        r#"
+dirs = ["docs/snippets"]
+inline_dirs = ["docs/guides"]
+exclude = ["docs/reference"]
+strict = true
+deny_unclassified = true
+allowed_side_effects = ["safe", "filesystem"]
+cache_dir = ".cache/snippets"
+report_output = "artifacts/snippets.json"
+"#,
+    )
+    .unwrap();
+    let krate: DocsSnippetsConfig = toml::from_str(
+        r#"
+inline_dirs = ["book"]
+allowed_side_effects = ["safe"]
+strict = true
+deny_unclassified = true
+"#,
+    )
+    .unwrap();
+
+    let merged = DocsSnippetsConfig::merge(Some(&workspace), Some(&krate)).unwrap();
+    assert_eq!(merged.dirs, vec![PathBuf::from("docs/snippets")]);
+    assert_eq!(merged.inline_dirs, vec![PathBuf::from("book")]);
+    assert_eq!(merged.exclude, vec![PathBuf::from("docs/reference")]);
+    assert!(merged.strict);
+    assert!(merged.deny_unclassified);
+    assert_eq!(merged.allowed_side_effects, vec!["safe"]);
+    assert_eq!(merged.cache_dir(), PathBuf::from(".cache/snippets"));
+    assert_eq!(merged.report_output, Some(PathBuf::from("artifacts/snippets.json")));
+}
+
+#[test]
+fn docs_snippets_cache_dir_has_stable_default() {
+    assert_eq!(
+        DocsSnippetsConfig::default().cache_dir(),
+        PathBuf::from(".alef/snippets")
+    );
+}
+
+#[test]
 fn string_or_vec_single_from_toml() {
     let toml_str = r#"format = "ruff format""#;
     #[derive(Deserialize)]

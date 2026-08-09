@@ -28,6 +28,8 @@ fn error_fixture_with_mock() -> FixtureGroup {
     FixtureGroup {
         category: "error".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "request_returns_500".to_string(),
             category: Some("error".to_string()),
             description: "server 500 should surface as Err".to_string(),

@@ -232,6 +232,8 @@ mod zig_visitor_tests {
             ..Default::default()
         };
         let fixture = crate::e2e::fixture::Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "configured_symbols".to_string(),
             category: None,
             description: "configured symbols".to_string(),
@@ -355,6 +357,8 @@ mod tests_trait_bridge {
         };
 
         let fixture = Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "my_fixture".to_string(),
             category: None,
             description: "test".to_string(),

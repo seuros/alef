@@ -322,6 +322,8 @@ mod tests {
 
     fn fixture() -> Fixture {
         Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "neutral_fixture".to_string(),
             category: Some("smoke".to_string()),
             description: "neutral fixture".to_string(),

@@ -318,6 +318,8 @@ mod tests {
     fn render_test_function_skipped_fixture_emits_skip_decorator() {
         use crate::e2e::fixture::{Fixture, SkipDirective};
         let fixture = Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "skipped_test".to_string(),
             description: "A skipped test".to_string(),
             input: serde_json::Value::Null,

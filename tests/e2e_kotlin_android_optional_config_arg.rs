@@ -22,6 +22,8 @@ fn make_extract_bytes_fixture(id: &str, has_config: bool) -> Fixture {
         });
     }
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: Some("async".to_string()),
         description: "extract_bytes test".to_string(),

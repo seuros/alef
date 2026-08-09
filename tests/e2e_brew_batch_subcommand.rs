@@ -77,6 +77,8 @@ fn build_batch_scrape_fixture() -> FixtureGroup {
     FixtureGroup {
         category: "batch".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "scrape_batch_basic".to_string(),
             category: Some("batch".to_string()),
             description: "Batch scrape multiple URLs".to_string(),
@@ -113,6 +115,8 @@ fn build_batch_crawl_fixture() -> FixtureGroup {
     FixtureGroup {
         category: "crawl".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "crawl_batch_depth".to_string(),
             category: Some("crawl".to_string()),
             description: "Batch crawl with depth limit".to_string(),

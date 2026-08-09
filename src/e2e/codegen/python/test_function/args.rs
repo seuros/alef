@@ -276,6 +276,8 @@ mod tests {
     fn build_args_and_setup_empty_args_returns_empty_vecs() {
         use crate::e2e::fixture::Fixture;
         let fixture = Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "t".to_string(),
             description: "d".to_string(),
             input: serde_json::Value::Null,

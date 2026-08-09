@@ -227,12 +227,24 @@ pub struct SnippetMetadata {
     pub reason: Option<String>,
     pub tags: Vec<String>,
     pub requires: Vec<String>,
+    pub side_effect: Option<SideEffectClass>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SideEffectClass {
+    Safe,
+    Network,
+    Process,
+    Install,
+    Server,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SnippetStatus {
     Pass,
+    Downgraded,
     Fail,
     Skip,
     Error,
@@ -243,6 +255,7 @@ impl fmt::Display for SnippetStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Pass => write!(f, "pass"),
+            Self::Downgraded => write!(f, "downgraded"),
             Self::Fail => write!(f, "fail"),
             Self::Skip => write!(f, "skip"),
             Self::Error => write!(f, "error"),
@@ -262,6 +275,14 @@ pub struct Snippet {
     pub block_index: usize,
     pub annotation: Option<SnippetAnnotation>,
     pub metadata: SnippetMetadata,
+    pub source_origin: SourceOrigin,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceOrigin {
+    pub path: PathBuf,
+    pub line: usize,
+    pub block_index: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -269,14 +290,18 @@ pub struct ValidationResult {
     pub snippet: Snippet,
     pub status: SnippetStatus,
     pub level: ValidationLevel,
+    pub requested_level: ValidationLevel,
+    pub effective_level: ValidationLevel,
     pub message: Option<String>,
     pub duration_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunSummary {
+    pub schema_version: u32,
     pub total: usize,
     pub passed: usize,
+    pub downgraded: usize,
     pub failed: usize,
     pub skipped: usize,
     pub errors: usize,
@@ -288,8 +313,10 @@ impl RunSummary {
     #[must_use]
     pub fn from_results(results: Vec<ValidationResult>) -> Self {
         let mut summary = Self {
+            schema_version: 1,
             total: results.len(),
             passed: 0,
+            downgraded: 0,
             failed: 0,
             skipped: 0,
             errors: 0,
@@ -300,6 +327,7 @@ impl RunSummary {
         for result in &summary.results {
             match result.status {
                 SnippetStatus::Pass => summary.passed += 1,
+                SnippetStatus::Downgraded => summary.downgraded += 1,
                 SnippetStatus::Fail => summary.failed += 1,
                 SnippetStatus::Skip => summary.skipped += 1,
                 SnippetStatus::Error => summary.errors += 1,

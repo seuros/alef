@@ -64,6 +64,8 @@ fn make_bool_fixture() -> FixtureGroup {
     FixtureGroup {
         category: "test".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "test_has_language_bool".to_string(),
             category: Some("test".to_string()),
             description: "Test bool return handling".to_string(),
@@ -97,6 +99,8 @@ fn make_uint_fixture() -> FixtureGroup {
     FixtureGroup {
         category: "test".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "test_language_count".to_string(),
             category: Some("test".to_string()),
             description: "Test uint return handling".to_string(),

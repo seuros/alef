@@ -11,6 +11,7 @@ pub mod field_access;
 pub mod fixture;
 pub mod format;
 pub mod scaffold;
+pub mod snippets;
 pub mod template_env;
 pub mod validate;
 
@@ -188,6 +189,16 @@ pub fn generate_e2e(
         }
         Ok::<(), anyhow::Error>(())
     })?;
+
+    if let Some(snippet_config) = &e2e_config.snippets {
+        all_files.extend(snippets::generate_snippets(
+            &fixtures,
+            &resolved_languages,
+            e2e_config,
+            snippet_config,
+            config,
+        )?);
+    }
 
     Ok(all_files)
 }

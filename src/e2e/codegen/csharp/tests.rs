@@ -7,6 +7,8 @@ use super::stubs::emit_test_backend_with_class_name;
 
 fn make_fixture_with_input(id: &str, input: serde_json::Value) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: None,
         description: "test fixture".to_string(),
@@ -171,6 +173,8 @@ fn test_emit_test_backend_is_generic_no_domain_names() {
     };
 
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "my_fixture".to_string(),
         category: None,
         description: "test".to_string(),
@@ -268,6 +272,8 @@ fn test_emit_test_backend_includes_name_version_properties_with_super_trait() {
     };
 
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "test_ocr".to_string(),
         category: None,
         description: "test".to_string(),

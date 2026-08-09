@@ -11,6 +11,8 @@ use super::{render_env_setup, render_go_mod, render_main_test_go};
 
 fn make_fixture(id: &str) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: None,
         description: "test fixture".to_string(),
@@ -97,6 +99,8 @@ fn handle_config_deserialization_uses_resolved_options_type() {
         trait_name: None,
     }];
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "session_fixture".to_string(),
         category: None,
         description: "test fixture".to_string(),
@@ -305,6 +309,8 @@ fn test_indexed_element_prefix_guard_uses_array_not_element() {
     };
 
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "edge_transcribe_with_timestamps".to_string(),
         category: None,
         description: "Transcription with timestamp segments".to_string(),
@@ -407,6 +413,8 @@ fn test_result_is_simple_contains_binds_result_and_emits_imports() {
     };
 
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "mime_detect_bytes".to_string(),
         category: None,
         description: "Detect MIME type from file bytes".to_string(),
@@ -593,6 +601,8 @@ fn test_go_plain_optional_string_uses_string_deref_not_text_accessor() {
         ..E2eConfig::default()
     };
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "plain_optional_string".to_string(),
         category: None,
         description: "plain optional string field".to_string(),
@@ -670,6 +680,8 @@ fn test_go_display_as_text_optional_uses_text_accessor_not_string_deref() {
         ..E2eConfig::default()
     };
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "display_as_text_content".to_string(),
         category: None,
         description: "display_as_text optional field".to_string(),

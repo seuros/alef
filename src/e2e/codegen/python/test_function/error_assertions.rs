@@ -78,6 +78,8 @@ mod tests {
 
     fn fixture_with_error(value: Option<serde_json::Value>) -> Fixture {
         Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "streaming_error".to_string(),
             description: "streaming error".to_string(),
             input: serde_json::Value::Null,

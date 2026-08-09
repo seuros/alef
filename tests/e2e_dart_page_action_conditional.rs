@@ -9,6 +9,8 @@ use alef::e2e::fixture::{Assertion, Fixture, FixtureGroup};
 
 fn make_fixture(id: &str, input: serde_json::Value) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: Some("code".to_string()),
         description: "test fixture without PageAction".to_string(),

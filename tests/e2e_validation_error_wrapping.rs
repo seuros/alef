@@ -77,6 +77,8 @@ fn build_validation_fixture() -> FixtureGroup {
     FixtureGroup {
         category: "validation".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "validation_max_depth_too_high".to_string(),
             category: Some("validation".to_string()),
             description: "max_depth above allowed maximum should be rejected".to_string(),

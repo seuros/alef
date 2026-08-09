@@ -44,6 +44,8 @@ fn not_error_only_fixture_group() -> FixtureGroup {
     FixtureGroup {
         category: "smoke".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "smoke_not_error_only".to_string(),
             category: Some("smoke".to_string()),
             description: "call succeeds without raising".to_string(),

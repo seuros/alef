@@ -311,6 +311,8 @@ mod tests_trait_bridge {
         };
 
         let fixture = Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "my_fixture".to_string(),
             category: None,
             description: "test".to_string(),

@@ -1,6 +1,6 @@
 use crate::snippets::error::Result;
 use crate::snippets::parser;
-use crate::snippets::types::{Language, Snippet, SnippetAnnotation, SnippetAnnotationKind};
+use crate::snippets::types::{Language, Snippet, SnippetAnnotation, SnippetAnnotationKind, SourceOrigin};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -81,6 +81,11 @@ fn extract_snippets_from_file(path: &Path, base_dir: &Path) -> Result<Vec<Snippe
             annotation
         };
 
+        let source_origin = SourceOrigin {
+            path: path.to_path_buf(),
+            line: block.start_line,
+            block_index: index,
+        };
         snippets.push(Snippet {
             id: metadata.id.clone(),
             path: path.to_path_buf(),
@@ -91,6 +96,7 @@ fn extract_snippets_from_file(path: &Path, base_dir: &Path) -> Result<Vec<Snippe
             block_index: index,
             annotation,
             metadata,
+            source_origin,
         });
     }
 

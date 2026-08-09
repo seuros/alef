@@ -12,6 +12,8 @@ use alef::e2e::fixture::{Fixture, FixtureGroup};
 
 fn make_fixture(id: &str, description: &str) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: Some("smoke".to_string()),
         description: description.to_string(),

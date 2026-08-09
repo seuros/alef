@@ -61,6 +61,8 @@ fn render_with_fixture(fixture: Fixture) -> String {
 #[test]
 fn greater_than_negative_one_is_skipped() {
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "links_greater_than_negative".to_string(),
         category: Some("error_handling".to_string()),
         description: "Links count > -1 (sentinel, always true)".to_string(),
@@ -118,6 +120,8 @@ fn greater_than_negative_one_is_skipped() {
 #[test]
 fn greater_than_or_equal_negative_one_is_skipped() {
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "items_gte_negative".to_string(),
         category: Some("error_handling".to_string()),
         description: "Items count >= -1 (sentinel, always true)".to_string(),
@@ -170,6 +174,8 @@ fn greater_than_or_equal_negative_one_is_skipped() {
 #[test]
 fn greater_than_positive_value_is_emitted() {
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "links_greater_than_zero".to_string(),
         category: Some("error_handling".to_string()),
         description: "Links count > 0 (valid, not a sentinel)".to_string(),
@@ -223,6 +229,8 @@ fn greater_than_positive_value_is_emitted() {
 #[test]
 fn less_than_negative_value_is_emitted() {
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "count_less_than_negative".to_string(),
         category: Some("error_handling".to_string()),
         description: "Count < -1 (edge case, must emit)".to_string(),

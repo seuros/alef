@@ -22,7 +22,6 @@ use crate::e2e::fixture::{Fixture, FixtureGroup};
 use anyhow::Result;
 
 use self::config::{render_conftest, render_pyproject};
-use self::helpers::is_skipped;
 use self::test_file::render_test_file;
 
 /// Python e2e test code generator.
@@ -95,7 +94,7 @@ impl super::E2eCodegen for PythonE2eCodegen {
             let fixtures: Vec<&Fixture> = group
                 .fixtures
                 .iter()
-                .filter(|fixture| is_python_fixture_runnable(fixture))
+                .filter(|fixture| is_python_fixture_runnable(fixture, e2e_config))
                 .collect();
             if fixtures.is_empty() {
                 continue;
@@ -158,8 +157,8 @@ fn render_python_smoke_test(pip_name: &str) -> String {
     crate::e2e::template_env::render("python/test_smoke.py.jinja", ctx)
 }
 
-fn is_python_fixture_runnable(fixture: &Fixture) -> bool {
-    if is_skipped(fixture, "python") {
+fn is_python_fixture_runnable(fixture: &Fixture, e2e_config: &E2eConfig) -> bool {
+    if !super::fixture_inclusion(fixture, "python", e2e_config).is_included() {
         return false;
     }
 

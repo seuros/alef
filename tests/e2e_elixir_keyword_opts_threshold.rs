@@ -45,6 +45,8 @@ fn fixture_with_input(input: serde_json::Value) -> FixtureGroup {
     FixtureGroup {
         category: "test".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "test_fixture".to_string(),
             category: Some("test".to_string()),
             description: "test fixture".to_string(),

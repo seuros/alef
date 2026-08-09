@@ -65,6 +65,8 @@ fn build_fixture_with_http() -> FixtureGroup {
     FixtureGroup {
         category: "chat".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "chat_basic".to_string(),
             category: Some("chat".to_string()),
             description: "basic chat".to_string(),
@@ -227,6 +229,8 @@ prefix = "htm"
     let groups = vec![FixtureGroup {
         category: "smoke".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "smoke_basic".to_string(),
             category: Some("smoke".to_string()),
             description: "basic conversion".to_string(),

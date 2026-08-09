@@ -43,6 +43,8 @@ fn fixture_with_no_assertions() -> FixtureGroup {
     FixtureGroup {
         category: "smoke".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "smoke_no_assertions".to_string(),
             category: Some("smoke".to_string()),
             description: "call with no assertions".to_string(),
@@ -67,6 +69,8 @@ fn fixture_with_assertions() -> FixtureGroup {
     FixtureGroup {
         category: "smoke".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "smoke_with_assertions".to_string(),
             category: Some("smoke".to_string()),
             description: "call with assertions".to_string(),

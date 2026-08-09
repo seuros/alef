@@ -95,6 +95,8 @@ fn render(fixture: Fixture) -> String {
 #[test]
 fn not_error_alone_does_not_emit_not_null_check() {
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "error_detect_content_empty".to_string(),
         category: Some("error_handling".to_string()),
         description: "Detect language from empty content returns null".to_string(),
@@ -131,6 +133,8 @@ fn not_error_alone_does_not_emit_not_null_check() {
 #[test]
 fn not_error_with_is_empty_does_not_contradict() {
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "error_detect_content_empty_pair".to_string(),
         category: Some("error_handling".to_string()),
         description: "not_error + is_empty must not contradict".to_string(),

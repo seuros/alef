@@ -43,6 +43,8 @@ fn fixture() -> FixtureGroup {
     FixtureGroup {
         category: "sample".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "sample_default_settings".to_string(),
             category: Some("sample".to_string()),
             description: "sample default settings".to_string(),

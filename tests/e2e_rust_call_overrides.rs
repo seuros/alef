@@ -59,6 +59,8 @@ fn build_fixture_with_assertions(id: &str, assertions: Vec<Assertion>) -> Fixtur
     FixtureGroup {
         category: "smoke".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: id.to_string(),
             category: Some("smoke".to_string()),
             description: "regression test fixture".to_string(),
@@ -132,6 +134,8 @@ fn build_fixture() -> FixtureGroup {
     FixtureGroup {
         category: "smoke".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "smoke_basic".to_string(),
             category: Some("smoke".to_string()),
             description: "basic conversion".to_string(),

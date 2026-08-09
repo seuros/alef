@@ -61,6 +61,8 @@ fn build_interact_fixture() -> FixtureGroup {
     FixtureGroup {
         category: "interaction".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "interact_click".to_string(),
             category: Some("interaction".to_string()),
             description: "click an element".to_string(),

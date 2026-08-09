@@ -16,6 +16,8 @@ use alef::e2e::fixture::{Assertion, Fixture, FixtureGroup};
 
 fn make_extract_fixture() -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "extract_with_config".to_string(),
         category: Some("contract".to_string()),
         description: "Tests extraction with config provided".to_string(),

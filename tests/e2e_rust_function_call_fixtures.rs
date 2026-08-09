@@ -80,6 +80,8 @@ fn build_function_call_fixture(id: &str) -> FixtureGroup {
     FixtureGroup {
         category: "smoke".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: id.to_string(),
             category: Some("smoke".to_string()),
             description: "regression: function-call fixture (no http, no mock)".to_string(),
@@ -171,6 +173,8 @@ result_is_simple = true
     let groups = vec![FixtureGroup {
         category: "smoke".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "load_pdf".to_string(),
             category: Some("smoke".to_string()),
             description: "load a pdf by path".to_string(),
@@ -259,6 +263,8 @@ result_is_simple = true
     let groups = vec![FixtureGroup {
         category: "smoke".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "owned_bytes_filepath".to_string(),
             category: Some("smoke".to_string()),
             description: "owned bytes arg loaded from test_documents".to_string(),
@@ -345,6 +351,8 @@ result_is_simple = true
     let groups = vec![FixtureGroup {
         category: "smoke".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "owned_string_arg".to_string(),
             category: Some("smoke".to_string()),
             description: "owned string arg passed by value".to_string(),
@@ -466,6 +474,8 @@ function = "process"
     let group = FixtureGroup {
         category: "smoke".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "chunking_non_streaming".to_string(),
             category: Some("smoke".to_string()),
             description: "non-streaming process() returning a struct with chunks: Vec<_>".to_string(),

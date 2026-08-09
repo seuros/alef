@@ -19,6 +19,8 @@ use alef::e2e::fixture::{Assertion, Fixture, FixtureGroup};
 
 fn make_fixture_omit_config(id: &str) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: Some("batch_test".to_string()),
         description: "Batch test with omitted config parameter".to_string(),

@@ -161,6 +161,8 @@ mod tests {
 
     fn fixture(assertions: Vec<Assertion>) -> Fixture {
         Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "fixture".to_string(),
             category: None,
             description: "fixture".to_string(),

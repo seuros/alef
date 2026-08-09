@@ -8,6 +8,8 @@ mod trait_bridge_tests {
 
     fn make_fixture(id: &str) -> Fixture {
         Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: id.to_string(),
             category: None,
             description: "test".to_string(),

@@ -23,6 +23,8 @@ fn make_fixture_with_string_array() -> FixtureGroup {
     FixtureGroup {
         category: "embed_texts".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "string_array_basic".to_string(),
             category: Some("embed_texts".to_string()),
             description: "embed texts: basic string array".to_string(),

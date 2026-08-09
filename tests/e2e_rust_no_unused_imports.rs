@@ -20,6 +20,8 @@ fn build_config(toml: &str) -> (alef::e2e::config::E2eConfig, alef::core::config
 
 fn fixture_without_config(id: &str) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: Some("encoding".to_string()),
         description: "scrape with default engine (no config)".to_string(),

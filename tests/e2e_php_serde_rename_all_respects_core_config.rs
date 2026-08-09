@@ -36,6 +36,8 @@ fn render_with_type_defs(toml_src: &str, type_defs: Vec<TypeDef>, fixture: Fixtu
 
 fn test_fixture(input: serde_json::Value) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "test_case".to_string(),
         category: Some("test".to_string()),
         description: "test case".to_string(),

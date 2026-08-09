@@ -61,6 +61,8 @@ fn build_fixture_group() -> FixtureGroup {
     FixtureGroup {
         category: "smoke".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "smoke_two_arrays".to_string(),
             category: Some("smoke".to_string()),
             description: "result exposes two array fields".to_string(),

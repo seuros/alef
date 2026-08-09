@@ -40,6 +40,8 @@ args = [
 
 fn fixture(id: &str, language: &str) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: Some("smoke".to_string()),
         description: format!("parse {language}"),

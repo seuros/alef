@@ -5,7 +5,7 @@ use crate::snippets::discovery;
 use crate::snippets::gaps::{GapConfig, detect_gaps};
 use crate::snippets::output;
 use crate::snippets::runner::{RunnerConfig, run_validation};
-use crate::snippets::types::{Language, ValidationLevel};
+use crate::snippets::types::{Language, SideEffectClass, SnippetStatus, ValidationLevel};
 use crate::snippets::validators::ValidatorRegistry;
 use clap::Subcommand;
 use std::path::{Path, PathBuf};
@@ -50,6 +50,22 @@ pub enum SnippetsAction {
 
         #[arg(long)]
         show_code: bool,
+
+        #[arg(long)]
+        strict: bool,
+
+        #[arg(long)]
+        changed_only: bool,
+    },
+
+    /// Run the configured snippet discovery, validation, audit, and gap checks.
+    Check {
+        #[arg(short, long, default_value = "alef.toml")]
+        config: PathBuf,
+        #[arg(long)]
+        strict: bool,
+        #[arg(long, default_value = "on", value_parser = ["on", "off"])]
+        cache: String,
     },
 
     /// Parse a single file and print its code blocks.
@@ -101,6 +117,8 @@ pub fn run(action: SnippetsAction) -> ExitCode {
             fail_fast,
             include,
             show_code,
+            strict,
+            changed_only,
         } => run_validate(
             &snippets,
             level,
@@ -111,7 +129,10 @@ pub fn run(action: SnippetsAction) -> ExitCode {
             fail_fast,
             include.as_ref(),
             show_code,
+            strict,
+            changed_only,
         ),
+        SnippetsAction::Check { config, strict, cache } => run_check(&config, strict, cache != "off"),
         SnippetsAction::Parse { file } => run_parse(&file),
         SnippetsAction::Audit {
             snippets,
@@ -168,6 +189,8 @@ fn run_validate(
     fail_fast: bool,
     include: Option<&String>,
     show_code: bool,
+    strict: bool,
+    changed_only: bool,
 ) -> ExitCode {
     let filter = parse_language_filter(languages.map(Vec::as_slice));
     let mut found = match discovery::discover_snippets(snippets, filter.as_deref()) {
@@ -183,8 +206,8 @@ fn run_validate(
     }
 
     if found.is_empty() {
-        crate::bin_cli::output::line("No snippets found.");
-        return ExitCode::SUCCESS;
+        tracing::error!("no snippets found");
+        return ExitCode::FAILURE;
     }
 
     tracing::info!("Validating {} snippets at level '{level}'...", found.len());
@@ -194,6 +217,10 @@ fn run_validate(
         parallelism: jobs,
         timeout_secs: timeout,
         fail_fast,
+        deny_unclassified: strict,
+        allowed_side_effects: Vec::new(),
+        cache_dir: Some(PathBuf::from(".alef/snippets")),
+        changed_only,
     };
 
     match run_validation(&found, &registry, &config) {
@@ -201,14 +228,21 @@ fn run_validate(
             output::print_summary(&summary, show_code);
 
             if let Some(path) = output_path {
-                if let Err(err) = output::write_json(&summary.results, &path) {
+                if let Err(err) = output::write_report(&summary, &path, show_code) {
                     tracing::error!("writing JSON output: {err}");
+                    return ExitCode::FAILURE;
                 } else {
                     tracing::info!("Results written to {}", path.display());
                 }
             }
 
-            if summary.has_failures() {
+            if summary.has_failures()
+                || strict
+                    && summary
+                        .results
+                        .iter()
+                        .any(|result| matches!(result.status, SnippetStatus::Unavailable | SnippetStatus::Downgraded))
+            {
                 ExitCode::FAILURE
             } else {
                 ExitCode::SUCCESS
@@ -218,6 +252,101 @@ fn run_validate(
             tracing::error!("running validation: {err}");
             ExitCode::FAILURE
         }
+    }
+}
+
+fn run_check(config_path: &Path, force_strict: bool, use_cache: bool) -> ExitCode {
+    let (_, resolved) = match crate::bin_cli::helpers::load_config(config_path) {
+        Ok(config) => config,
+        Err(error) => {
+            tracing::error!("loading snippet config: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(config) = resolved.iter().find_map(|krate| krate.docs.as_ref()?.snippets.as_ref()) else {
+        tracing::error!("no [workspace.docs.snippets] or [crates.docs.snippets] configuration found");
+        return ExitCode::FAILURE;
+    };
+    let root = config_path.parent().unwrap_or_else(|| Path::new("."));
+    let mut directories: Vec<PathBuf> = config
+        .dirs
+        .iter()
+        .chain(&config.inline_dirs)
+        .map(|path| root.join(path))
+        .collect();
+    directories.retain(|path| {
+        !config
+            .exclude
+            .iter()
+            .any(|excluded| path.starts_with(root.join(excluded)))
+    });
+    let level = config
+        .validation_level
+        .as_deref()
+        .unwrap_or("syntax")
+        .parse::<ValidationLevel>()
+        .unwrap_or(ValidationLevel::Syntax);
+    let strict = force_strict || config.strict;
+    let found = match discovery::discover_snippets(&directories, None) {
+        Ok(found) if !found.is_empty() => found,
+        Ok(_) => {
+            tracing::error!("snippet discovery returned no snippets");
+            return ExitCode::FAILURE;
+        }
+        Err(error) => {
+            tracing::error!("discovering configured snippets: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let allowed_side_effects = config
+        .allowed_side_effects
+        .iter()
+        .filter_map(|value| parse_side_effect(value))
+        .collect();
+    let runner = RunnerConfig {
+        level,
+        parallelism: std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get),
+        timeout_secs: config.timeout_secs.unwrap_or(120),
+        fail_fast: config.fail_fast,
+        deny_unclassified: config.deny_unclassified || force_strict,
+        allowed_side_effects,
+        cache_dir: use_cache.then(|| root.join(config.cache_dir())),
+        changed_only: use_cache,
+    };
+    let summary = match run_validation(&found, &ValidatorRegistry::new(), &runner) {
+        Ok(summary) => summary,
+        Err(error) => {
+            tracing::error!("running configured snippet validation: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    output::print_summary(&summary, false);
+    if let Some(path) = &config.report_output
+        && let Err(error) = output::write_report(&summary, &root.join(path), false)
+    {
+        tracing::error!("writing snippet report: {error}");
+        return ExitCode::FAILURE;
+    }
+    let strict_failure = strict
+        && summary
+            .results
+            .iter()
+            .any(|result| matches!(result.status, SnippetStatus::Unavailable | SnippetStatus::Downgraded));
+    if summary.has_failures() || strict_failure {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+fn parse_side_effect(value: &str) -> Option<SideEffectClass> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "safe" => Some(SideEffectClass::Safe),
+        "network" => Some(SideEffectClass::Network),
+        "process" => Some(SideEffectClass::Process),
+        "install" => Some(SideEffectClass::Install),
+        "server" => Some(SideEffectClass::Server),
+        _ => None,
     }
 }
 
@@ -255,6 +384,8 @@ fn run_audit(snippet_dirs: &[PathBuf], docs_dirs: &[PathBuf], require_frontmatte
         docs_dirs: docs_dirs.to_vec(),
         snippet_dirs: snippet_dirs.to_vec(),
         require_frontmatter,
+        include_base_paths: docs_dirs.to_vec(),
+        exclude: Vec::new(),
     };
     let report = audit(&config);
     if report.issues.is_empty() {
@@ -307,6 +438,7 @@ fn run_gaps(
         snippet_dirs: snippet_dirs.to_vec(),
         required_languages: required,
         include_base_paths: resolved_base_paths,
+        exclude: Vec::new(),
     };
     let report = match detect_gaps(&config) {
         Ok(report) => report,

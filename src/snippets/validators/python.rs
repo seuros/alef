@@ -146,6 +146,13 @@ impl SnippetValidator for PythonValidator {
         which::which("python3").is_ok() || which::which("python").is_ok()
     }
 
+    fn is_available_at(&self, level: ValidationLevel) -> bool {
+        if level != ValidationLevel::TypeCheck {
+            return self.is_available();
+        }
+        which::which("mypy").is_ok()
+    }
+
     fn validate(
         &self,
         snippet: &Snippet,

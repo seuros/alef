@@ -95,7 +95,7 @@ impl SnippetValidator for CValidator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::snippets::types::{Snippet, SnippetMetadata};
+    use crate::snippets::types::{Snippet, SnippetMetadata, SourceOrigin};
     use std::path::PathBuf;
 
     fn snippet(code: &str) -> Snippet {
@@ -109,6 +109,11 @@ mod tests {
             block_index: 0,
             annotation: None,
             metadata: SnippetMetadata::default(),
+            source_origin: SourceOrigin {
+                path: PathBuf::from("test.c"),
+                line: 1,
+                block_index: 0,
+            },
         }
     }
 

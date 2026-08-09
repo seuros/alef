@@ -52,6 +52,8 @@ fn fields_array_binding_emitted_before_count_min_assertion_for_non_streaming_fix
     };
 
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "chunking_test".to_string(),
         description: "Chunking produces multiple pieces".to_string(),
         tags: Vec::new(),
@@ -130,6 +132,8 @@ fn result_is_simple_count_assertion_binds_to_result_variable() {
     };
 
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "embed_empty".to_string(),
         description: "embed_texts: empty input".to_string(),
         tags: Vec::new(),
@@ -229,6 +233,8 @@ fn handle_config_import_uses_resolved_options_type() {
         ..Default::default()
     };
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "session_fixture".to_string(),
         description: "session fixture".to_string(),
         tags: Vec::new(),

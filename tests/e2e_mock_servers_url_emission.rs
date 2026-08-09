@@ -20,6 +20,8 @@ use alef::e2e::fixture::{Assertion, Fixture, FixtureGroup};
 
 fn make_host_root_fixture(id: &str) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: Some("smoke".to_string()),
         description: format!("{id} fixture with host-root route"),
@@ -56,6 +58,8 @@ fn make_host_root_fixture(id: &str) -> Fixture {
 
 fn make_plain_fixture(id: &str) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: Some("smoke".to_string()),
         description: format!("{id} plain fixture"),
@@ -86,6 +90,8 @@ fn make_plain_fixture(id: &str) -> Fixture {
 
 fn make_typed_url_fixture(id: &str) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: Some("url".to_string()),
         description: format!("{id} typed URL fixture"),

@@ -8,6 +8,8 @@ use alef::e2e::fixture::{Assertion, Fixture, FixtureGroup, MockResponse};
 
 fn make_fixture(id: &str) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: Some("smoke".to_string()),
         description: "test fixture".to_string(),

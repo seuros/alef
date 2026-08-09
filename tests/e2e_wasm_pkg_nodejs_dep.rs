@@ -39,6 +39,8 @@ fn group() -> FixtureGroup {
     FixtureGroup {
         category: "smoke".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "wasm_basic".to_string(),
             category: Some("smoke".to_string()),
             description: "wasm smoke".to_string(),

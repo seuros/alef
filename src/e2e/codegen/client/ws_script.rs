@@ -62,6 +62,8 @@ mod tests {
     #[test]
     fn stub_driver_emits_no_test() {
         let fixture = Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "ws_stub".into(),
             description: "stub".into(),
             category: None,

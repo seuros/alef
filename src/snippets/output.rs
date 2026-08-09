@@ -6,7 +6,7 @@
 #![allow(clippy::print_stdout)]
 
 use crate::snippets::error::Result;
-use crate::snippets::types::{RunSummary, Snippet, SnippetStatus, ValidationResult};
+use crate::snippets::types::{RunSummary, Snippet, SnippetStatus};
 use std::path::Path;
 
 pub fn print_summary(summary: &RunSummary, show_code: bool) {
@@ -27,6 +27,7 @@ pub fn print_summary(summary: &RunSummary, show_code: bool) {
 
         let status = match result.status {
             SnippetStatus::Pass => "PASS",
+            SnippetStatus::Downgraded => "DOWNGRADE",
             SnippetStatus::Fail => "FAIL",
             SnippetStatus::Skip => "SKIP",
             SnippetStatus::Error => "ERROR",
@@ -38,7 +39,7 @@ pub fn print_summary(summary: &RunSummary, show_code: bool) {
             truncate(file_name, 58),
             result.snippet.language,
             status,
-            result.level,
+            result.effective_level,
             result.duration_ms
         );
 
@@ -79,8 +80,14 @@ pub fn print_summary(summary: &RunSummary, show_code: bool) {
 
     println!("{}", "-".repeat(100));
     println!(
-        "Total: {}  Passed: {}  Failed: {}  Skipped: {}  Errors: {}  Unavailable: {}",
-        summary.total, summary.passed, summary.failed, summary.skipped, summary.errors, summary.unavailable
+        "Total: {}  Passed: {}  Downgraded: {}  Failed: {}  Skipped: {}  Errors: {}  Unavailable: {}",
+        summary.total,
+        summary.passed,
+        summary.downgraded,
+        summary.failed,
+        summary.skipped,
+        summary.errors,
+        summary.unavailable
     );
     println!();
 }
@@ -90,9 +97,59 @@ pub fn print_summary(summary: &RunSummary, show_code: bool) {
 /// # Errors
 ///
 /// Returns an error when serialization fails or the destination cannot be written.
-pub fn write_json(results: &[ValidationResult], path: &Path) -> Result<()> {
-    let json = serde_json::to_string_pretty(results)?;
+pub fn write_json(summary: &RunSummary, path: &Path, show_code: bool) -> Result<()> {
+    let mut value = serde_json::to_value(summary)?;
+    if !show_code && let Some(results) = value.get_mut("results").and_then(serde_json::Value::as_array_mut) {
+        for result in results {
+            if let Some(snippet) = result.get_mut("snippet").and_then(serde_json::Value::as_object_mut) {
+                snippet.remove("code");
+            }
+        }
+    }
+    let json = serde_json::to_string_pretty(&value)?;
     std::fs::write(path, json)?;
+    Ok(())
+}
+
+/// Write a versioned summary as JSON or TOON, selected by the destination extension.
+///
+/// # Errors
+///
+/// Returns an error when serialization or writing fails.
+pub fn write_report(summary: &RunSummary, path: &Path, show_code: bool) -> Result<()> {
+    if path.extension().and_then(|value| value.to_str()) != Some("toon") {
+        return write_json(summary, path, show_code);
+    }
+    let mut output = format!(
+        "schema_version: {}\ntotal: {}\npassed: {}\ndowngraded: {}\nfailed: {}\nskipped: {}\nerrors: {}\nunavailable: {}\nresults[{}]:\n",
+        summary.schema_version,
+        summary.total,
+        summary.passed,
+        summary.downgraded,
+        summary.failed,
+        summary.skipped,
+        summary.errors,
+        summary.unavailable,
+        summary.results.len()
+    );
+    for result in &summary.results {
+        output.push_str(&format!(
+            "  - path: {}\n    line: {}\n    language: {}\n    status: {}\n    requested_level: {}\n    effective_level: {}\n",
+            result.snippet.source_origin.path.display(),
+            result.snippet.source_origin.line,
+            result.snippet.language,
+            result.status,
+            result.requested_level,
+            result.effective_level
+        ));
+        if show_code {
+            output.push_str("    code: |\n");
+            for line in result.snippet.code.lines() {
+                output.push_str(&format!("      {line}\n"));
+            }
+        }
+    }
+    std::fs::write(path, output)?;
     Ok(())
 }
 

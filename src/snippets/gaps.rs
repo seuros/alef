@@ -18,6 +18,7 @@ pub struct GapConfig {
     /// against these paths in order; the first match wins. Falls back to
     /// `docs_dir.join(target)` when the list is empty or no path matches.
     pub include_base_paths: Vec<PathBuf>,
+    pub exclude: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,8 +74,14 @@ impl GapReport {
 ///
 /// Returns an error when snippets or markdown files cannot be read.
 pub fn detect_gaps(config: &GapConfig) -> Result<GapReport> {
-    let snippets = discover_snippets(&config.snippet_dirs, None)?;
-    let references = discover_includes(&config.docs_dirs, &config.include_base_paths)?;
+    let snippets: Vec<_> = discover_snippets(&config.snippet_dirs, None)?
+        .into_iter()
+        .filter(|snippet| !is_excluded(&snippet.path, &config.exclude))
+        .collect();
+    let references: Vec<_> = discover_includes(&config.docs_dirs, &config.include_base_paths)?
+        .into_iter()
+        .filter(|reference| !is_excluded(&reference.source, &config.exclude))
+        .collect();
     let snippet_files = snippet_files(&snippets);
 
     Ok(GapReport {
@@ -82,8 +89,15 @@ pub fn detect_gaps(config: &GapConfig) -> Result<GapReport> {
         unreferenced_snippets: unreferenced_snippets(&snippet_files, &references),
         missing_language_variants: missing_language_variants(&snippets, &config.required_languages),
         skips_without_reason: skips_without_reason(&snippets),
-        unknown_languages: unknown_languages(&config.snippet_dirs)?,
+        unknown_languages: unknown_languages(&config.snippet_dirs)?
+            .into_iter()
+            .filter(|unknown| !is_excluded(&unknown.path, &config.exclude))
+            .collect(),
     })
+}
+
+fn is_excluded(path: &Path, exclude: &[PathBuf]) -> bool {
+    exclude.iter().any(|excluded| path.starts_with(excluded))
 }
 
 /// Discover MkDocs `--8<-- "path"` include references beneath documentation roots.
@@ -394,6 +408,7 @@ mod tests {
             snippet_dirs: vec![snippets],
             required_languages: vec![Language::Python, Language::Rust],
             include_base_paths: vec![],
+            exclude: vec![],
         })
         .unwrap();
 
@@ -419,6 +434,7 @@ mod tests {
             snippet_dirs: vec![snippets],
             required_languages: vec![],
             include_base_paths: vec![root.to_path_buf()],
+            exclude: vec![],
         })
         .unwrap();
 
@@ -512,6 +528,7 @@ mod tests {
             snippet_dirs: vec![snippets],
             required_languages: vec![],
             include_base_paths: vec![],
+            exclude: vec![],
         })
         .unwrap();
 

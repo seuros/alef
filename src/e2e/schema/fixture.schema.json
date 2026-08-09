@@ -19,6 +19,22 @@
           "description": "Test category. Defaults to parent directory name if omitted"
         },
         "description": { "type": "string", "description": "Human-readable test description" },
+        "docs": {
+          "type": "object",
+          "required": ["topic"],
+          "additionalProperties": false,
+          "properties": {
+            "topic": { "type": "string" },
+            "stem": { "type": "string" },
+            "title": { "type": "string" },
+            "description": { "type": "string" },
+            "side_effects": { "enum": ["none", "local", "network", "external_mutation"] }
+          }
+        },
+        "requirements": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^(feature|model|service|credential):[^:]+$" }
+        },
         "tags": {
           "type": "array",
           "items": { "type": "string" },

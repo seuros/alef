@@ -489,6 +489,8 @@ mod test_backend_tests {
 
     fn make_fixture(id: &str) -> Fixture {
         Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: id.to_string(),
             category: None,
             description: "test".to_string(),
@@ -608,6 +610,8 @@ mod test_backend_tests {
         name_method.trait_source = Some("Plugin".to_string());
         let methods = [&name_method];
         let fixture = Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "register_document_extractor_trait_bridge".to_string(),
             category: None,
             description: "test".to_string(),
@@ -802,6 +806,8 @@ mod test_backend_tests {
 
         let methods = [&method];
         let fixture = Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "register_embedding_backend_with_input".to_string(),
             category: None,
             description: "test".to_string(),

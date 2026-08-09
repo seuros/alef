@@ -14,6 +14,8 @@ use std::collections::HashSet;
 
 fn make_fixture(id: &str, category: Option<&str>, source: &str) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: category.map(str::to_string),
         description: format!("fixture {id}"),
@@ -35,6 +37,7 @@ fn make_fixture(id: &str, category: Option<&str>, source: &str) -> Fixture {
 
 fn e2e_config_with_exclusions(excluded: &[&str]) -> E2eConfig {
     E2eConfig {
+        snippets: None,
         fixtures: "fixtures".to_string(),
         output: "e2e".to_string(),
         languages: Vec::new(),

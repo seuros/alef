@@ -7,6 +7,8 @@ use std::collections::HashMap;
 
 fn make_fixture_with_input(id: &str, input: serde_json::Value) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: None,
         description: "test fixture".to_string(),

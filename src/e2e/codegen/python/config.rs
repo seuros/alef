@@ -707,6 +707,8 @@ mod tests {
         use std::collections::BTreeMap;
 
         let cors_fixture = Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "cors_preflight_test".to_owned(),
             description: "CORS preflight test".to_owned(),
             category: Some("cors".to_owned()),
@@ -798,6 +800,8 @@ mod tests {
         use std::collections::BTreeMap;
 
         let fixture = Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "simple_test".to_owned(),
             description: "Simple test".to_owned(),
             category: Some("smoke".to_owned()),

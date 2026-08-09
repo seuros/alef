@@ -64,15 +64,27 @@ use anyhow::Result;
 ///   `function` set and no override for the language). Calls that share a base
 ///   function but only carry per-language type/arg overrides are still emitted
 ///   for languages without an explicit override.
-pub(crate) fn should_include_fixture(fixture: &Fixture, language: &str, e2e_config: &E2eConfig) -> bool {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InclusionDecision {
+    Include,
+    Exclude(&'static str),
+}
+
+impl InclusionDecision {
+    pub fn is_included(&self) -> bool {
+        matches!(self, Self::Include)
+    }
+}
+
+pub fn fixture_inclusion(fixture: &Fixture, language: &str, e2e_config: &E2eConfig) -> InclusionDecision {
     if !e2e_config.exclude_categories.is_empty() && e2e_config.exclude_categories.contains(&fixture.resolved_category())
     {
-        return false;
+        return InclusionDecision::Exclude("excluded category");
     }
     if let Some(skip) = &fixture.skip
         && skip.should_skip(language)
     {
-        return false;
+        return InclusionDecision::Exclude("fixture skip directive");
     }
     let call_config = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
@@ -83,7 +95,7 @@ pub(crate) fn should_include_fixture(fixture: &Fixture, language: &str, e2e_conf
     );
     // Also respect skip_languages on the resolved call (e.g. batch_scrape skips elixir).
     if call_config.skip_languages.iter().any(|l| l == language) {
-        return false;
+        return InclusionDecision::Exclude("call skips language");
     }
     // HTTP/mock fixtures are exercised by issuing a request to the alef mock server
     // (`MOCK_SERVER_URL/fixtures/<id>`), not by invoking a binding function, so they are
@@ -92,9 +104,13 @@ pub(crate) fn should_include_fixture(fixture: &Fixture, language: &str, e2e_conf
     // or a per-language override, leaving their behaviour unchanged.
     let is_http_fixture = fixture.mock_response.is_some() || fixture.http.is_some();
     if !is_http_fixture && call_config.function.is_empty() && !call_config.overrides.contains_key(language) {
-        return false;
+        return InclusionDecision::Exclude("no callable function");
     }
-    true
+    InclusionDecision::Include
+}
+
+pub(crate) fn should_include_fixture(fixture: &Fixture, language: &str, e2e_config: &E2eConfig) -> bool {
+    fixture_inclusion(fixture, language, e2e_config).is_included()
 }
 
 /// Percent-encode a string for use as a URI query component per RFC 3986.

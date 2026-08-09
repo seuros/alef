@@ -47,6 +47,8 @@ fn trait_bridge_tests_are_async_and_await_calls() {
     let (e2e_config, resolved_config) = build_config();
 
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "register_my_backend_trait_bridge".to_string(),
         category: Some("plugin_api".to_string()),
         description: "register_my_backend: trait bridge".to_string(),

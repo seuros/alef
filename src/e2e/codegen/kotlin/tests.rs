@@ -76,6 +76,8 @@ fn handle_config_deserialization_uses_resolved_options_type() {
         trait_name: None,
     }];
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "session_fixture".to_string(),
         category: None,
         description: "test fixture".to_string(),
@@ -405,6 +407,8 @@ fn kotlin_android_streaming_fixture_emits_flow_to_list_import() {
 
     // A fixture with a streaming mock response triggers is_streaming_mock().
     let streaming_fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "smoke_stream".to_string(),
         category: None,
         description: "streaming test".to_string(),
@@ -490,6 +494,8 @@ fn kotlin_android_object_mapper_emits_register_kotlin_module() {
 
     // An HTTP fixture forces `needs_object_mapper = true` regardless of args.
     let http_fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "http_test".to_string(),
         category: None,
         description: "http test".to_string(),
@@ -661,6 +667,8 @@ fn kotlin_android_bytes_arg_emits_files_read_all_bytes() {
         trait_name: None,
     }];
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "extract_bytes_fixture".to_string(),
         category: None,
         description: "test bytes extraction".to_string(),
@@ -738,6 +746,8 @@ fn kotlin_android_batch_bytes_item_wraps_paths() {
         trait_name: None,
     }];
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "batch_extract_fixture".to_string(),
         category: None,
         description: "test batch extraction".to_string(),
@@ -796,6 +806,8 @@ fn kotlin_android_test_file_loads_resolved_jni_lib_name_not_crate_name() {
     use crate::e2e::fixture::MockResponse;
 
     let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: "smoke_one".to_string(),
         category: None,
         description: "smoke".to_string(),

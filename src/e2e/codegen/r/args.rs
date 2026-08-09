@@ -330,6 +330,8 @@ mod tests {
             trait_name: None,
         }];
         let fixture = Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "typed_options".to_string(),
             ..Fixture::default()
         };

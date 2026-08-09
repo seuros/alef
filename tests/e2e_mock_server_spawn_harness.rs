@@ -24,6 +24,8 @@ use alef::e2e::fixture::{
 /// via `MOCK_SERVER_URL/fixtures/<id>`).
 fn make_http_fixture(id: &str) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: Some("smoke".to_string()),
         description: format!("{id} HTTP fixture"),

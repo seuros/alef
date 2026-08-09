@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Snippet checks now produce versioned, source-aware reports and enforce explicit validation policy.**
+  Results distinguish requested from effective validation levels, report downgraded probes, classify
+  side effects, sanitize validator environments, reuse a persistent content-hash cache for changed-only
+  checks, parse MDX frontmatter, and fail on empty discovery or report write errors. (`src/snippets`,
+  `src/cli/commands/snippets.rs`)
+
+- **E2E fixtures can now generate deterministic, tested documentation snippets.** Optional fixture
+  documentation metadata, declarative capability requirements, safe collision-checked output under
+  `[crates.e2e.snippets]`, and migration comparison APIs let projects replace handwritten examples
+  incrementally while preserving existing e2e output when snippet generation is not configured.
+  (`src/e2e/snippets`, `src/core/config/e2e`)
+
+- **Snippet validation can be configured and enforced across a generated workspace.** Docs snippet
+  configuration now distinguishes reusable snippet roots from handwritten pages containing inline
+  fences, supports exclusions, strict coverage and side-effect policies, and configures cache and
+  report paths. Newly scaffolded Poly configuration runs the strict aggregate snippet check when
+  snippet inputs are present. (`src/core/config/output`, `src/docs`, `src/scaffold/languages/poly.rs`)
+
 ## [0.59.0] - 2026-08-09
 
 ### Added
@@ -26,10 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Generated Rust HTTP e2e tests sent string request bodies wrapped in quotes.** A string body was
   emitted through `serde_json::to_string`, so the payload reached the server with a leading and
   trailing `"`. Form-urlencoded bodies gained two characters that shifted every field index,
-  multipart bodies received the two-character sequence `\r\n` instead of CRLF, and deliberately
-  malformed JSON payloads arrived as valid JSON strings — silently defeating the fixtures that
-  tested them. String bodies are now emitted verbatim, escaped into a regular string literal so
-  control characters survive; structured bodies are unchanged. (`src/e2e/codegen/rust/http.rs`)
+  multipart bodies received the two-character sequence `\\r\\n` instead of CRLF, and deliberately
+  malformed JSON payloads arrived as valid JSON strings. String bodies are now emitted verbatim;
+  structured bodies are unchanged. (`src/e2e/codegen/rust/http.rs`)
 
 ## [0.58.3] - 2026-08-09
 

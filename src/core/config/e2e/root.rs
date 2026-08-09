@@ -1,5 +1,5 @@
 use super::defaults::*;
-use super::{CallConfig, DependencyMode, HarnessConfig, PackageRef, RegistryConfig};
+use super::{CallConfig, DependencyMode, HarnessConfig, PackageRef, RegistryConfig, SnippetConfig};
 use crate::core::config::manifest_extras::ManifestExtras;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -212,6 +212,9 @@ pub struct E2eConfig {
     /// Registry-mode configuration from `[e2e.registry]`.
     #[serde(default)]
     pub registry: RegistryConfig,
+    /// Optional fixture-driven documentation snippet output.
+    #[serde(default)]
+    pub snippets: Option<SnippetConfig>,
 }
 
 impl E2eConfig {
@@ -441,6 +444,7 @@ impl Default for E2eConfig {
             harness: HarnessConfig::default(),
             dep_mode: DependencyMode::default(),
             registry: RegistryConfig::default(),
+            snippets: None,
         }
     }
 }

@@ -10,6 +10,8 @@ use alef::e2e::fixture::{Assertion, Fixture, FixtureGroup};
 
 fn make_fixture(id: &str, description: &str, assertions: Vec<Assertion>) -> Fixture {
     Fixture {
+        docs: None,
+        requirements: Vec::new(),
         id: id.to_string(),
         category: Some("language-detection".to_string()),
         description: description.to_string(),

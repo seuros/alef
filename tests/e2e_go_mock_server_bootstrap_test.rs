@@ -45,6 +45,8 @@ fn make_mock_server_fixture() -> FixtureGroup {
     FixtureGroup {
         category: "mock_server_tests".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "test_with_mock_response".to_string(),
             category: Some("mock_server_tests".to_string()),
             description: "Test with mock server response".to_string(),
@@ -139,6 +141,8 @@ fn test_go_main_test_fixture_has_http_fixtures_not_mock_server() {
     let groups = vec![FixtureGroup {
         category: "http_tests".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "test_http".to_string(),
             category: Some("http_tests".to_string()),
             description: "HTTP test".to_string(),

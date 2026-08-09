@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
+mod metadata;
+pub use metadata::{FixtureDocs, FixtureEnv, SetupCall, SideEffectClass, TemplateReturnForm};
+
 /// Mock HTTP response for testing HTTP clients.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MockResponse {
@@ -65,37 +68,6 @@ pub enum CallbackAction {
     },
 }
 
-/// How a `CustomTemplate` action returns its rendered value from the visitor.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TemplateReturnForm {
-    /// Return a host-native structured value (e.g. dict, hash, array, object)
-    /// carrying the rendered string under a `custom` key.
-    #[default]
-    Dict,
-    /// Return the rendered string directly, with no wrapper.
-    BareString,
-}
-
-/// Environment variable requirements for a smoke/live test fixture.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FixtureEnv {
-    /// Name of the env var that holds the API key (e.g. `"OPENAI_API_KEY"`).
-    #[serde(default)]
-    pub api_key_var: Option<String>,
-}
-
-/// Setup call: a mini-call executed before the main fixture call.
-/// Used to establish stateful resources like registered backends.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SetupCall {
-    /// Named call config to use (references `[e2e.calls.<name>]`).
-    pub call: String,
-    /// Input data passed to the setup call.
-    #[serde(default)]
-    pub input: serde_json::Value,
-}
-
 /// A single e2e test fixture.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -107,6 +79,12 @@ pub struct Fixture {
     pub category: Option<String>,
     /// Human-readable description.
     pub description: String,
+    /// Optional documentation-snippet placement metadata.
+    #[serde(default)]
+    pub docs: Option<FixtureDocs>,
+    /// Declarative capabilities required to publish this fixture as a snippet.
+    #[serde(default)]
+    pub requirements: Vec<String>,
     /// Optional tags for filtering.
     #[serde(default)]
     pub tags: Vec<String>,
@@ -382,6 +360,8 @@ impl Default for Fixture {
             id: String::new(),
             category: None,
             description: String::new(),
+            docs: None,
+            requirements: Vec::new(),
             tags: Vec::new(),
             skip: None,
             env: None,

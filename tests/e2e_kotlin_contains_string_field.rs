@@ -22,6 +22,8 @@ fn make_fixture_with_contains_on_string() -> FixtureGroup {
     FixtureGroup {
         category: "transcribe".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "basic_audio".to_string(),
             category: Some("transcribe".to_string()),
             description: "transcribe an audio clip and assert phrase".to_string(),
@@ -197,6 +199,8 @@ type = "json_object"
     let groups = vec![FixtureGroup {
         category: "tags".to_string(),
         fixtures: vec![Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "basic".to_string(),
             category: Some("tags".to_string()),
             description: "tags".to_string(),

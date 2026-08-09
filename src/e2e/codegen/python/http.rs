@@ -272,6 +272,8 @@ mod tests {
 
     fn fixture_with_body(body: Option<serde_json::Value>) -> Fixture {
         Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "basic_http".to_string(),
             description: "A basic HTTP test".to_string(),
             input: serde_json::Value::Null,
@@ -319,6 +321,8 @@ mod tests {
     #[test]
     fn render_http_test_function_no_http_field_emits_nothing() {
         let fixture = crate::e2e::fixture::Fixture {
+            docs: None,
+            requirements: Vec::new(),
             id: "test_fixture".to_string(),
             description: "A test".to_string(),
             input: serde_json::Value::Null,
