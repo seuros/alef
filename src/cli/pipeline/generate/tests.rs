@@ -132,6 +132,33 @@ mod write_scaffold_normalize_tests {
         assert_eq!(removed, 0, "must not descend into dependency directories");
     }
 
+    #[test]
+    fn targeted_e2e_sweep_ignores_snippet_outputs_nested_under_e2e_root() {
+        let base = PathBuf::from("/workspace");
+        let e2e_root = base.join("e2e");
+        let snippet_root = e2e_root.join("ruby");
+        let outputs = vec![snippet_root.join(".alef-snippet-coverage.json")];
+
+        let roots = targeted_e2e_sweep_roots(&outputs, &e2e_root, Some(&snippet_root));
+
+        assert!(roots.is_empty(), "snippet-only output must not authorize an e2e sweep");
+    }
+
+    #[test]
+    fn targeted_e2e_sweep_includes_only_languages_with_current_e2e_outputs() {
+        let base = PathBuf::from("/workspace");
+        let e2e_root = base.join("e2e");
+        let snippet_root = base.join("docs/snippets-generated");
+        let outputs = vec![
+            e2e_root.join("ruby/spec/example_spec.rb"),
+            snippet_root.join("ruby/api/example.md"),
+        ];
+
+        let roots = targeted_e2e_sweep_roots(&outputs, &e2e_root, Some(&snippet_root));
+
+        assert_eq!(roots, [e2e_root.join("ruby")]);
+    }
+
     /// Regression: a file that contains loose "auto-generated" or "DO NOT EDIT"
     /// markers but lacks the `alef:hash:` line must NOT be deleted by
     /// `sweep_orphans`. This protects consumer-vendored files such as cgo headers.

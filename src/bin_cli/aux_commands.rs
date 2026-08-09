@@ -142,16 +142,15 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                         let e2e_output_root = base_dir.join(e2e_ref.effective_output());
                         let sweep_roots: Vec<PathBuf> = if lang.is_some() {
-                            let mut seen = std::collections::HashSet::new();
-                            for path in &output_paths {
-                                if let Ok(rel) = path.strip_prefix(&e2e_output_root)
-                                    && let Some(top) = rel.components().next()
-                                {
-                                    let lang_dir = e2e_output_root.join(top.as_os_str());
-                                    seen.insert(lang_dir);
-                                }
-                            }
-                            seen.into_iter().collect()
+                            let snippet_output_root = e2e_ref
+                                .snippets
+                                .as_ref()
+                                .map(|snippets| base_dir.join(&snippets.output));
+                            pipeline::targeted_e2e_sweep_roots(
+                                &output_paths,
+                                &e2e_output_root,
+                                snippet_output_root.as_deref(),
+                            )
                         } else {
                             vec![e2e_output_root]
                         };
@@ -412,15 +411,15 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         pipeline::finalize_hashes(&path_set, &sources_hash, &alef_toml_bytes)?;
 
                         let sweep_roots: Vec<PathBuf> = if lang.is_some() {
-                            let mut seen = std::collections::HashSet::new();
-                            for path in &output_paths {
-                                if let Ok(rel) = path.strip_prefix(&output_root)
-                                    && let Some(top) = rel.components().next()
-                                {
-                                    seen.insert(output_root.join(top.as_os_str()));
-                                }
-                            }
-                            seen.into_iter().collect()
+                            let snippet_output_root = e2e_ref
+                                .snippets
+                                .as_ref()
+                                .map(|snippets| base_dir.join(&snippets.output));
+                            pipeline::targeted_e2e_sweep_roots(
+                                &output_paths,
+                                &output_root,
+                                snippet_output_root.as_deref(),
+                            )
                         } else {
                             vec![output_root]
                         };

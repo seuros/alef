@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Generate standalone C and Zig documentation programs and render native expected-error handling for C, Swift, and Zig.
 
+- Targeted E2E generation now derives orphan-sweep roots exclusively from current E2E artifacts, preventing
+  snippet-only output from deleting valid language test suites.
+
 - Fix generated documentation snippets for Go, Dart, Java, Kotlin, C#, and PHP to include standalone runtime wrappers,
   required imports, and non-test error handling.
 
