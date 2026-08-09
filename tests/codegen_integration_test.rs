@@ -269,6 +269,8 @@ mod fluent_builder;
 mod functional_ref_mut;
 #[path = "codegen_integration/functions.rs"]
 mod functions_tests;
+#[path = "codegen_integration/lossy_boxed_fields.rs"]
+mod lossy_boxed_fields;
 #[path = "codegen_integration/method_async_adapter.rs"]
 mod method_async_adapter;
 #[path = "codegen_integration/method_edge_cases.rs"]

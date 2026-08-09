@@ -336,6 +336,16 @@ fn gen_lossy_binding_to_core_fields_inner(
         } else {
             expr
         };
+        // ~keep Convert the binding value before boxing because Box<Core> cannot convert from Binding.
+        let expr = if field.is_boxed && matches!(&field.ty, TypeRef::Named(_)) {
+            if field.optional {
+                format!("{expr}.map(Box::new)")
+            } else {
+                format!("Box::new({expr})")
+            }
+        } else {
+            expr
+        };
         out.push_str(&crate::codegen::template_env::render(
             "binding_helpers/struct_field_line.jinja",
             minijinja::context! {
