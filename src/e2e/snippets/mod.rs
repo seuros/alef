@@ -2,6 +2,7 @@ use crate::core::backend::GeneratedFile;
 use crate::core::config::e2e::{E2eConfig, SnippetConfig};
 use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::e2e::codegen::fixture_inclusion;
+use crate::e2e::codegen::recipe::E2eCallRecipe;
 use crate::e2e::fixture::{Fixture, FixtureDocs, SideEffectClass};
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
@@ -12,6 +13,7 @@ pub mod migration;
 #[derive(Debug, Clone, PartialEq)]
 pub struct FixtureCallArgument {
     pub name: String,
+    pub arg_type: String,
     pub value: serde_json::Value,
 }
 
@@ -21,6 +23,18 @@ pub struct FixtureCallModel {
     pub language: String,
     pub function: String,
     pub is_async: bool,
+    pub arguments: Vec<FixtureCallArgument>,
+    pub module: String,
+    pub options_type: Option<String>,
+    pub options_via: String,
+    pub client_factory: Option<String>,
+    pub setup: Vec<FixtureSetupCall>,
+    pub uses_mock_url: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FixtureSetupCall {
+    pub function: String,
     pub arguments: Vec<FixtureCallArgument>,
 }
 
@@ -122,28 +136,72 @@ impl FixtureCallModel {
             &fixture.input,
         );
         let override_config = call.overrides.get(language);
+        let recipe = E2eCallRecipe::resolve(language, fixture, call, &[]);
         let function = override_config
             .and_then(|value| value.function.clone())
             .unwrap_or_else(|| call.function.clone());
         if function.is_empty() {
             bail!("fixture `{}` has no callable function for `{language}`", fixture.id);
         }
-        let arguments = fixture
-            .resolved_args(call)
+        let arguments = recipe
+            .args
             .iter()
             .map(|argument| FixtureCallArgument {
                 name: argument.name.clone(),
+                arg_type: argument.arg_type.clone(),
                 value: input_value(&fixture.input, &argument.field)
                     .cloned()
                     .unwrap_or(serde_json::Value::Null),
             })
             .collect();
+        let setup = fixture
+            .setup
+            .iter()
+            .map(|setup| {
+                let setup_call = e2e.resolve_call_for_fixture(
+                    Some(&setup.call),
+                    &fixture.id,
+                    &fixture.resolved_category(),
+                    &fixture.tags,
+                    &setup.input,
+                );
+                let setup_override = setup_call.overrides.get(language);
+                FixtureSetupCall {
+                    function: setup_override
+                        .and_then(|value| value.function.clone())
+                        .unwrap_or_else(|| setup_call.function.clone()),
+                    arguments: setup_call
+                        .args
+                        .iter()
+                        .map(|argument| FixtureCallArgument {
+                            name: argument.name.clone(),
+                            arg_type: argument.arg_type.clone(),
+                            value: input_value(&setup.input, &argument.field)
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null),
+                        })
+                        .collect(),
+                }
+            })
+            .collect();
+        let uses_mock_url = recipe
+            .args
+            .iter()
+            .any(|argument| matches!(argument.arg_type.as_str(), "mock_url" | "mock_url_list"));
         Ok(Self {
             fixture_id: fixture.id.clone(),
             language: language.to_string(),
             function,
-            is_async: call.r#async,
+            is_async: override_config.and_then(|value| value.r#async).unwrap_or(call.r#async),
             arguments,
+            module: override_config
+                .and_then(|value| value.module.clone())
+                .unwrap_or_else(|| call.module.clone()),
+            options_type: recipe.options_type.map(str::to_string),
+            options_via: recipe.options_via.to_string(),
+            client_factory: override_config.and_then(|value| value.client_factory.clone()),
+            setup,
+            uses_mock_url,
         })
     }
 }
@@ -196,27 +254,125 @@ fn validate_relative_path(path: &Path, label: &str) -> Result<()> {
 }
 
 fn input_value<'a>(input: &'a serde_json::Value, field: &str) -> Option<&'a serde_json::Value> {
+    if field == "input" {
+        return Some(input);
+    }
     field.split('.').try_fold(input, |value, segment| value.get(segment))
 }
 
 fn render_snippet(model: &FixtureCallModel, fixture: &Fixture, docs: &FixtureDocs, language: Language) -> String {
-    let arguments = model
+    let call = model
         .arguments
         .iter()
-        .map(|argument| render_literal(&argument.value, language))
+        .map(|argument| render_argument(argument, model, fixture, language))
         .collect::<Vec<_>>()
         .join(", ");
-    let body = crate::e2e::template_env::render("snippets/call.jinja", minijinja::context! {
-        language => model.language, function => model.function, arguments => arguments, async_call => model.is_async,
-    }).trim_end().to_string();
+    let setup = model
+        .setup
+        .iter()
+        .map(|setup| {
+            let arguments = setup
+                .arguments
+                .iter()
+                .map(|argument| render_literal(&argument.value, language))
+                .collect::<Vec<_>>()
+                .join(", ");
+            crate::e2e::template_env::render(
+                "snippets/setup_call.jinja",
+                minijinja::context! {
+                    language => model.language, function => setup.function, arguments => arguments,
+                },
+            )
+            .trim_end()
+            .to_string()
+        })
+        .collect::<Vec<_>>();
+    let setup_functions = model
+        .setup
+        .iter()
+        .map(|setup| setup.function.as_str())
+        .collect::<Vec<_>>();
+    let body = crate::e2e::template_env::render(
+        "snippets/call.jinja",
+        minijinja::context! {
+            language => model.language, module => model.module, function => model.function, arguments => call,
+        async_call => model.is_async, setup => setup, client_factory => model.client_factory,
+        setup_functions => setup_functions,
+            options_type => model.options_type, uses_mock_url => model.uses_mock_url,
+            fixture_id => model.fixture_id,
+        },
+    )
+    .trim_end()
+    .to_string();
     crate::e2e::template_env::render(
         "snippets/file.md.jinja",
         minijinja::context! {
             description => docs.description.as_deref().unwrap_or(&fixture.description),
             fence => crate::docs::naming::lang_code_fence(language),
             title => docs.title.as_deref().unwrap_or(crate::docs::naming::lang_display_name(language)), body => body,
+            fixture_id => fixture.id, language => model.language, requirements => fixture.requirements,
+            side_effect => side_effect_name(docs.side_effects),
         },
     )
+}
+
+fn render_argument(
+    argument: &FixtureCallArgument,
+    model: &FixtureCallModel,
+    fixture: &Fixture,
+    language: Language,
+) -> String {
+    if argument.arg_type == "mock_url" {
+        return mock_url_expression(&fixture.id, language);
+    }
+    let literal = render_literal(&argument.value, language);
+    let Some(options_type) = model
+        .options_type
+        .as_deref()
+        .filter(|_| argument.arg_type == "json_object" && argument.value.is_object())
+    else {
+        return literal;
+    };
+    render_options(options_type, &argument.value, &model.options_via, language).unwrap_or(literal)
+}
+
+fn render_options(options_type: &str, value: &serde_json::Value, via: &str, language: Language) -> Option<String> {
+    let object = value.as_object()?;
+    let fields = object
+        .iter()
+        .map(|(key, value)| format!("{key}={}", render_literal(value, language)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(match (language, via) {
+        (Language::Python, "from_json") => {
+            let json = serde_json::to_string(value).expect("JSON option values serialize");
+            format!(
+                "{options_type}.from_json({})",
+                render_literal(&serde_json::Value::String(json), language)
+            )
+        }
+        (Language::Python, "dict") => render_literal(value, language),
+        (Language::Python, _) => format!("{options_type}({fields})"),
+        (Language::Ruby, _) => format!("{options_type}.new({})", fields.replace('=', ": ")),
+        (Language::Node | Language::Wasm, _) => format!("new {options_type}({})", render_literal(value, language)),
+        _ => return None,
+    })
+}
+
+fn mock_url_expression(fixture_id: &str, language: Language) -> String {
+    match language {
+        Language::Python => format!("f\"{{os.environ['MOCK_SERVER_URL']}}/fixtures/{fixture_id}\""),
+        Language::Ruby => format!("\"#{{ENV.fetch('MOCK_SERVER_URL')}}/fixtures/{fixture_id}\""),
+        Language::Node | Language::Wasm => format!("`${{process.env.MOCK_SERVER_URL}}/fixtures/{fixture_id}`"),
+        _ => format!("\"${{MOCK_SERVER_URL}}/fixtures/{fixture_id}\""),
+    }
+}
+
+fn side_effect_name(value: SideEffectClass) -> &'static str {
+    match value {
+        SideEffectClass::None | SideEffectClass::Local => "safe",
+        SideEffectClass::Network | SideEffectClass::ExternalMutation => "network",
+    }
 }
 
 fn render_literal(value: &serde_json::Value, language: Language) -> String {
@@ -230,7 +386,29 @@ fn render_literal(value: &serde_json::Value, language: Language) -> String {
         serde_json::Value::Bool(value) => value.to_string(),
         serde_json::Value::Number(value) => value.to_string(),
         serde_json::Value::String(value) => serde_json::to_string(value).expect("JSON strings serialize"),
-        other => serde_json::to_string_pretty(other).expect("JSON values serialize"),
+        serde_json::Value::Array(values) => format!(
+            "[{}]",
+            values
+                .iter()
+                .map(|value| render_literal(value, language))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        serde_json::Value::Object(values) => {
+            let separator = if language == Language::Ruby { " => " } else { ": " };
+            let fields = values
+                .iter()
+                .map(|(key, value)| {
+                    format!(
+                        "{}{separator}{}",
+                        serde_json::to_string(key).expect("JSON object keys serialize"),
+                        render_literal(value, language)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{{{fields}}}")
+        }
     }
 }
 
@@ -246,14 +424,14 @@ fn parse_language(value: &str) -> Option<Language> {
         "java" => Language::Java,
         "csharp" => Language::Csharp,
         "r" => Language::R,
-        "rust" => Language::Rust,
+        "rust" | "rust_core" | "core" => Language::Rust,
         "kotlin" => Language::Kotlin,
         "kotlin_android" => Language::KotlinAndroid,
         "swift" => Language::Swift,
         "dart" => Language::Dart,
         "gleam" => Language::Gleam,
         "zig" => Language::Zig,
-        "c" => Language::C,
+        "c" | "ffi" | "c_ffi" => Language::C,
         _ => return None,
     })
 }
@@ -287,5 +465,108 @@ mod tests {
             side_effects: Default::default(),
         };
         assert!(snippet_path("docs/snippets", &docs, "basic", Language::Python).is_err());
+    }
+
+    #[test]
+    fn whole_input_argument_does_not_look_for_a_nested_input_field() {
+        let input = serde_json::json!({"text": "hello"});
+        assert_eq!(input_value(&input, "input"), Some(&input));
+    }
+
+    #[test]
+    fn dynamic_language_object_literals_are_native() {
+        let value = serde_json::json!({"enabled": true, "nested": {"count": 2}});
+        assert_eq!(
+            render_literal(&value, Language::Python),
+            r#"{"enabled": true, "nested": {"count": 2}}"#
+        );
+        assert_eq!(
+            render_literal(&value, Language::Ruby),
+            r#"{"enabled" => true, "nested" => {"count" => 2}}"#
+        );
+    }
+
+    #[test]
+    fn language_aliases_include_core_and_ffi_targets() {
+        assert_eq!(parse_language("rust_core"), Some(Language::Rust));
+        assert_eq!(parse_language("ffi"), Some(Language::C));
+    }
+
+    #[test]
+    fn rendered_markdown_preserves_side_effect_metadata() {
+        let fixture = Fixture {
+            id: "network_call".into(),
+            description: "Call the service".into(),
+            ..Fixture::default()
+        };
+        let docs = FixtureDocs {
+            topic: "api".into(),
+            stem: None,
+            title: None,
+            description: None,
+            side_effects: SideEffectClass::Network,
+        };
+        let model = FixtureCallModel {
+            fixture_id: fixture.id.clone(),
+            language: "python".into(),
+            function: "run".into(),
+            is_async: false,
+            arguments: Vec::new(),
+            module: "sample".into(),
+            options_type: None,
+            options_via: "kwargs".into(),
+            client_factory: None,
+            setup: Vec::new(),
+            uses_mock_url: false,
+        };
+        let rendered = render_snippet(&model, &fixture, &docs, Language::Python);
+        assert!(
+            rendered.starts_with("---\nid: network_call\nlanguage: python\nrequires: []\nside_effect: network\n---")
+        );
+        assert!(rendered.contains("from sample import run"));
+    }
+
+    #[test]
+    fn renders_options_client_factory_and_mock_url_recipe() {
+        let fixture = Fixture {
+            id: "configured_call".into(),
+            description: "Configured call".into(),
+            input: serde_json::json!({"options": {"enabled": true}, "url": "/request"}),
+            ..Fixture::default()
+        };
+        let model = FixtureCallModel {
+            fixture_id: fixture.id.clone(),
+            language: "python".into(),
+            function: "execute".into(),
+            is_async: true,
+            arguments: vec![
+                FixtureCallArgument {
+                    name: "options".into(),
+                    arg_type: "json_object".into(),
+                    value: fixture.input["options"].clone(),
+                },
+                FixtureCallArgument {
+                    name: "url".into(),
+                    arg_type: "mock_url".into(),
+                    value: fixture.input["url"].clone(),
+                },
+            ],
+            module: "sample".into(),
+            options_type: Some("Options".into()),
+            options_via: "kwargs".into(),
+            client_factory: Some("create_client".into()),
+            setup: Vec::new(),
+            uses_mock_url: true,
+        };
+        let docs = FixtureDocs {
+            topic: "api".into(),
+            stem: None,
+            title: None,
+            description: None,
+            side_effects: SideEffectClass::Network,
+        };
+        let rendered = render_snippet(&model, &fixture, &docs, Language::Python);
+        assert!(rendered.contains("client = create_client(\"test-key\", f\"{os.environ['MOCK_SERVER_URL']}"));
+        assert!(rendered.contains("result = await client.execute(Options(enabled=true), f\"{os.environ"));
     }
 }

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Render fixture-driven documentation snippets with setup calls, imports, options constructors, client factories,
+  mock-server URLs, valid Python/Ruby object literals, side-effect frontmatter, whole-input arguments, and Rust/C
+  language aliases.
+
 ### Added
 
 - **Snippet checks now produce versioned, source-aware reports and enforce explicit validation policy.**
