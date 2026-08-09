@@ -513,11 +513,11 @@ pub fn render_test_function(
         ) {
             let _ = writeln!(out, "    {collect}");
         }
-    } else if !returns_result || (only_emptiness_checks && !has_not_error) {
+    } else if !returns_result || (only_emptiness_checks && !has_not_error && !fixture.has_docs_presentation()) {
         // Option-returning or non-Result-returning (and not a not_error check): bind raw value, no unwrap.
         // When returns_result=true and has_not_error, fall through to emit .expect() so errors panic.
         let _ = writeln!(out, "    let {result_binding} = {call_expr}{await_suffix};");
-    } else if has_not_error || !fixture.assertions.is_empty() {
+    } else if has_not_error || !fixture.assertions.is_empty() || fixture.has_docs_presentation() {
         let _ = writeln!(
             out,
             "    let {result_binding} = {call_expr}{await_suffix}{unwrap_suffix};"

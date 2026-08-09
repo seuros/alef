@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Generated fixture snippets now keep validation metadata in the authoritative coverage ledger while rendering clean
   Astro-facing fenced Markdown with language titles and only explicitly configured user prose.
 
+- Structured fixture presentations now preserve Rust `Result` unwrapping and import every TypeScript DTO referenced by
+  docs-specific typed arguments, so result access and overridden inputs remain compilable.
+
 - Generated Go documentation snippets now separate package and import declarations into gofmt-compatible lines.
 
 - TypeScript E2E fixture regressions now retain formatter-clean protocol metadata initializers.

@@ -747,6 +747,10 @@ options_type = "ChatRequest"
             "id": "client_chat",
             "description": "send a request",
             "input": {"model": "example-model", "messages": []},
+            "docs": {
+                "topic": "guides",
+                "presentation": {"operations": [{"op": "show", "path": "message"}]}
+            },
             "assertions": [{"type": "not_error"}]
         }))
         .expect("fixture must parse");
@@ -758,6 +762,8 @@ options_type = "ChatRequest"
         assert!(rendered.contains("let request: ChatRequest"), "{rendered}");
         assert!(rendered.contains("example_core::create_client"), "{rendered}");
         assert!(rendered.contains("client.chat(request).await"), "{rendered}");
+        assert!(rendered.contains(".await.expect(\"should succeed\")"), "{rendered}");
+        assert!(rendered.contains("println!(\"{:?}\", result.message);"), "{rendered}");
         assert!(rendered.contains("#[tokio::main]"), "{rendered}");
         assert!(!rendered.contains("#[tokio::test]"), "{rendered}");
         assert!(!rendered.contains("fn test_"), "{rendered}");

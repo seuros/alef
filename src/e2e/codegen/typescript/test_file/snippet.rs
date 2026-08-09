@@ -131,6 +131,14 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
             .filter(|name| referenced_code.contains(name)),
     );
     for arg in recipe.args {
+        if arg.arg_type == "json_object"
+            && let Some(type_name) = &arg.element_type
+        {
+            let type_name = canonical_ts_type_name(lang, type_name, config);
+            if referenced_code.contains(&type_name) {
+                imports.insert(type_name);
+            }
+        }
         if arg.arg_type == "handle" {
             imports.insert(format!("create{}", arg.name.to_upper_camel_case()));
         }
@@ -220,6 +228,61 @@ mod tests {
         assert!(!body.contains("vitest"));
         assert!(!body.contains("expect("));
         assert!(!body.contains("UnusedMode"));
+    }
+
+    #[test]
+    fn docs_argument_override_imports_its_referenced_input_type() {
+        let mut fixture = fixture();
+        fixture.docs = Some(crate::e2e::fixture::FixtureDocs {
+            topic: "guides".into(),
+            stem: None,
+            paths: Default::default(),
+            title: None,
+            description: None,
+            presentation: Some(crate::e2e::fixture::FixtureDocsPresentation {
+                input: Some(serde_json::json!({"source": {"kind": "uri", "uri": "guide.txt"}})),
+                args: Some(vec![crate::e2e::config::ArgMapping {
+                    name: "source".into(),
+                    field: "source".into(),
+                    arg_type: "json_object".into(),
+                    optional: false,
+                    owned: true,
+                    element_type: Some("DocumentInput".into()),
+                    go_type: None,
+                    vec_inner_is_ref: false,
+                    trait_name: None,
+                }]),
+                operations: Vec::new(),
+            }),
+            side_effects: crate::e2e::fixture::SideEffectClass::Safe,
+            coverage_exceptions: Default::default(),
+        });
+        let e2e = E2eConfig {
+            call: CallConfig {
+                function: "load_document".into(),
+                module: "@example/library".into(),
+                result_var: "document".into(),
+                r#async: true,
+                ..CallConfig::default()
+            },
+            ..E2eConfig::default()
+        };
+        let config = crate::core::config::ResolvedCrateConfig::default();
+
+        let body = render_snippet_body(SnippetContext {
+            lang: "node",
+            fixture: &fixture,
+            module: "@example/library",
+            client_factory: None,
+            e2e_config: &e2e,
+            type_defs: &[],
+            enums: &[],
+            wasm_type_prefix: "",
+            config: &config,
+        });
+
+        assert!(body.contains("import { DocumentInput, loadDocument }"), "{body}");
+        assert!(body.contains("as DocumentInput"), "{body}");
     }
 
     #[test]
