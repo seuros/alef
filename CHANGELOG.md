@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated snippet paths, fences, and frontmatter now share the validator's canonical documentation language identity,
+  including TypeScript for Node and WASM and Kotlin for Kotlin Android, while coverage retains the configured target.
+
 - Brew and Homebrew fixture snippet targets now use shell documentation metadata and report unsupported recipes through
   exact per-language coverage exceptions instead of aborting snippet generation with a language-mapping error.
 

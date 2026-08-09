@@ -77,10 +77,7 @@ enum DocumentationLanguage {
 
 impl DocumentationLanguage {
     fn slug(self) -> &'static str {
-        match self {
-            Self::Binding(language) => crate::docs::naming::lang_slug(language),
-            Self::Shell => "shell",
-        }
+        self.canonical_name()
     }
 
     fn code_fence(self) -> &'static str {
@@ -88,6 +85,10 @@ impl DocumentationLanguage {
             Self::Binding(language) => crate::docs::naming::lang_code_fence(language),
             Self::Shell => "bash",
         }
+    }
+
+    fn canonical_name(self) -> &'static str {
+        self.code_fence()
     }
 
     fn display_name(self) -> &'static str {
@@ -222,7 +223,7 @@ fn generate_snippet_report_with_extensions(
                     continue;
                 }
             };
-            let content = render_snippet_markdown(&body, fixture, docs, lang, generator.language_name());
+            let content = render_snippet_markdown(&body, fixture, docs, lang);
             let file = GeneratedFile {
                 path: path.clone(),
                 content,
@@ -365,7 +366,6 @@ fn render_snippet_markdown(
     fixture: &Fixture,
     docs: &FixtureDocs,
     language: DocumentationLanguage,
-    language_name: &str,
 ) -> String {
     crate::e2e::template_env::render(
         "snippets/file.md.jinja",
@@ -373,7 +373,7 @@ fn render_snippet_markdown(
             description => docs.description.as_deref().unwrap_or(&fixture.description),
             fence => language.code_fence(),
             title => docs.title.as_deref().unwrap_or(language.display_name()), body => body,
-            fixture_id => fixture.id, language => language_name, requirements => fixture.requirements,
+            fixture_id => fixture.id, language => language.canonical_name(), requirements => fixture.requirements,
             side_effect => side_effect_name(docs.side_effects),
         },
     )
@@ -571,6 +571,41 @@ mod tests {
     }
 
     #[test]
+    fn generated_docs_use_validator_canonical_language_identity() {
+        let docs = FixtureDocs {
+            topic: "api".into(),
+            stem: None,
+            title: None,
+            description: None,
+            side_effects: SideEffectClass::Safe,
+            coverage_exceptions: BTreeMap::new(),
+        };
+        let fixture = documented_fixture();
+        let cases = [
+            (Language::Node, "typescript"),
+            (Language::Wasm, "typescript"),
+            (Language::KotlinAndroid, "kotlin"),
+        ];
+
+        for (binding_language, canonical_name) in cases {
+            let language = DocumentationLanguage::Binding(binding_language);
+            let rendered = render_snippet_markdown("example()", &fixture, &docs, language);
+            let path = snippet_path("docs/snippets", &docs, "example", language).expect("snippet path is valid");
+
+            assert!(rendered.contains(&format!("language: {canonical_name}\n")));
+            assert!(rendered.contains(&format!("```{canonical_name} ")));
+            assert_eq!(
+                path,
+                Path::new("docs/snippets").join(canonical_name).join("api/example.md")
+            );
+            assert_ne!(
+                crate::snippets::types::Language::from_fence_tag(canonical_name),
+                crate::snippets::types::Language::Unknown
+            );
+        }
+    }
+
+    #[test]
     fn snippet_generator_resolution_rejects_unknown_languages() {
         let error = snippet_generators(&["unknown".into()])
             .err()
@@ -614,7 +649,6 @@ mod tests {
             &fixture,
             &docs,
             DocumentationLanguage::Binding(Language::Python),
-            "python",
         );
 
         assert!(rendered.contains("language: python"));
