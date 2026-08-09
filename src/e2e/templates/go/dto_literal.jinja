@@ -1,5 +1,5 @@
 {{ type_name }}{
 {% for field in fields %}
-  {{- "\t" }}{{ field.name }}: {{ field.expression }},
+  {{- "\t" }}{{ field.name }}{{ field.padding }}: {{ field.expression }},
 {% endfor %}
 }

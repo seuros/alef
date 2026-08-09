@@ -289,7 +289,7 @@ mod tests {
     #[test]
     fn snippet_constructs_known_dto_without_json_round_trip() {
         let mut fixture = fixture();
-        fixture.input = serde_json::json!({"payload": {"label": "sample"}, "config": {}});
+        fixture.input = serde_json::json!({"payload": {"label": "sample"}});
         let mut e2e = E2eConfig::default();
         e2e.call.module = "example.com/sample".into();
         e2e.call.function = "process".into();

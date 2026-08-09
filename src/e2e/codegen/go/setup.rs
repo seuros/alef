@@ -25,7 +25,7 @@ fn native_go_dto_literal(
 ) -> Option<String> {
     let object = value.as_object()?;
     let definition = type_defs.iter().find(|definition| definition.name == type_name)?;
-    let fields = definition
+    let field_values = definition
         .fields
         .iter()
         .filter_map(|field| {
@@ -67,9 +67,19 @@ fn native_go_dto_literal(
                 crate::core::ir::TypeRef::Primitive(_) => json_to_go(value),
                 _ => return None,
             };
-            Some(minijinja::context! {
-                name => crate::codegen::naming::to_go_name(&field.name), expression => expression,
-            })
+            Some((crate::codegen::naming::to_go_name(&field.name), expression))
+        })
+        .collect::<Vec<_>>();
+    let max_name_len = field_values
+        .iter()
+        .map(|(name, _)| name.len())
+        .max()
+        .unwrap_or_default();
+    let fields = field_values
+        .into_iter()
+        .map(|(name, expression)| {
+            let padding = " ".repeat(max_name_len.saturating_sub(name.len()));
+            minijinja::context! { name => name, padding => padding, expression => expression }
         })
         .collect::<Vec<_>>();
     if fields.is_empty() {
@@ -276,6 +286,22 @@ pub(super) fn build_args_and_setup(
             let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
             input.get(field)
         };
+
+        if native_dtos
+            && arg.arg_type == "json_object"
+            && val.is_none_or(serde_json::Value::is_null)
+            && let Some(type_name) = json_object_go_type(arg, options_type)
+            && let Some(literal) = native_go_dto_literal(
+                &serde_json::Value::Object(serde_json::Map::new()),
+                type_name,
+                import_alias,
+                type_defs,
+            )
+        {
+            setup_lines.push(format!("{} := {literal}", arg.name));
+            parts.push(arg.name.clone());
+            continue;
+        }
 
         if arg.arg_type == "bytes" {
             let var_name = format!("{}Bytes", arg.name);
