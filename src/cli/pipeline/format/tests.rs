@@ -606,6 +606,14 @@ fn poly_fmt_is_clean_reflects_check_state() {
     );
 }
 
+#[test]
+fn poly_format_accepts_clean_and_reformatted_exit_codes() {
+    assert!(poly_format_exit_code_is_success(Some(0)));
+    assert!(poly_format_exit_code_is_success(Some(1)));
+    assert!(!poly_format_exit_code_is_success(Some(2)));
+    assert!(!poly_format_exit_code_is_success(None));
+}
+
 /// poly rewrites changed files via atomic rename, which resets the mode to `0644`.
 /// `poly_format` must put the executable bit back, or every regen strips it from
 /// the generated shebang scripts and poly's own `file-safety` lint rejects the

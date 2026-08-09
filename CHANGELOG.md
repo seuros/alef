@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - PHP no longer reports complex map fields as non-settable when serde-backed `fromJson()` construction is available.
 
+- Poly's successful "files reformatted" status no longer produces a non-fatal formatter warning during scaffolding.
+
 - C documentation snippets now reuse engine-factory and byte-buffer call preparation, while C, Swift, and Zig
   streaming snippets reuse their binding-aware E2E call paths instead of leaving fixture-language coverage gaps.
 

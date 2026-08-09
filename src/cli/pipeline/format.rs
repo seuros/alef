@@ -407,11 +407,23 @@ pub(crate) fn poly_format(paths: &[PathBuf], config_start: &Path) {
     args.extend(paths.iter().map(|path| path.to_string_lossy().into_owned()));
     push_poly_elixir_excludes(&mut args);
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    match run_formatter("poly", &arg_refs, config_start) {
+    match run_poly_formatter(&arg_refs, config_start) {
         Ok(()) => debug!("poly fmt over {} path(s) ok", paths.len()),
         Err(e) => warn!("poly fmt failed (non-fatal): {e}"),
     }
     restore_executable_modes(&executable_modes);
+}
+
+fn run_poly_formatter(args: &[&str], work_dir: &Path) -> anyhow::Result<()> {
+    let output = Command::new("poly").args(args).current_dir(work_dir).output()?;
+    if poly_format_exit_code_is_success(output.status.code()) {
+        return Ok(());
+    }
+    Err(formatter_failure(&output))
+}
+
+fn poly_format_exit_code_is_success(exit_code: Option<i32>) -> bool {
+    matches!(exit_code, Some(0 | 1))
 }
 
 /// Directory names the executable-mode snapshot never descends into. They hold
@@ -678,14 +690,18 @@ fn run_formatter(command: &str, args: &[&str], work_dir: &Path) -> anyhow::Resul
     let output = Command::new(command).args(args).current_dir(work_dir).output()?;
 
     if !output.status.success() {
-        return Err(anyhow::anyhow!(
-            "formatter exited with code {:?}: {}",
-            output.status.code(),
-            format_command_output(&output)
-        ));
+        return Err(formatter_failure(&output));
     }
 
     Ok(())
+}
+
+fn formatter_failure(output: &Output) -> anyhow::Error {
+    anyhow::anyhow!(
+        "formatter exited with code {:?}: {}",
+        output.status.code(),
+        format_command_output(output)
+    )
 }
 
 fn format_command_output(output: &Output) -> String {
