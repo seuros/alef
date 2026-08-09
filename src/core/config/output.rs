@@ -464,6 +464,9 @@ pub struct DocsSnippetSessionConfig {
     /// Setup commands run once before validating this language.
     #[serde(default)]
     pub before: Vec<String>,
+    /// Environment variables applied to setup and validation commands.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
 }
 
 impl DocsSnippetsConfig {

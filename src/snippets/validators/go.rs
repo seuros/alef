@@ -44,7 +44,12 @@ impl GoValidator {
                 command
             }
         };
-        command.current_dir(session.map_or(dir.path(), |value| &value.working_directory));
+        match session {
+            Some(value) => value.apply(&mut command),
+            None => {
+                command.current_dir(dir.path());
+            }
+        }
         let (success, output) = run_command(&mut command, timeout_secs)?;
         Ok(if success {
             (SnippetStatus::Pass, None)

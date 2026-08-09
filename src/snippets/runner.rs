@@ -222,6 +222,9 @@ fn cached_result(
 }
 
 fn side_effect_rejection(snippet: &Snippet, config: &RunnerConfig) -> Option<String> {
+    if config.level != ValidationLevel::Run {
+        return None;
+    }
     let Some(class) = snippet.metadata.side_effect else {
         return config
             .deny_unclassified
@@ -257,5 +260,52 @@ fn skip_message(message: &str, reason: Option<&str>) -> String {
     match reason {
         Some(reason) if !reason.is_empty() => format!("{message}: {reason}"),
         _ => message.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::snippets::types::{SnippetMetadata, SourceOrigin};
+
+    fn network_snippet() -> Snippet {
+        Snippet {
+            id: None,
+            path: "example.md".into(),
+            language: crate::snippets::types::Language::Rust,
+            title: None,
+            code: "fn main() {}".into(),
+            start_line: 1,
+            block_index: 0,
+            annotation: None,
+            metadata: SnippetMetadata {
+                side_effect: Some(SideEffectClass::Network),
+                ..SnippetMetadata::default()
+            },
+            source_origin: SourceOrigin {
+                path: "example.md".into(),
+                line: 1,
+                block_index: 0,
+            },
+        }
+    }
+
+    #[test]
+    fn side_effect_policy_only_blocks_execution() {
+        let snippet = network_snippet();
+        let compile = RunnerConfig {
+            level: ValidationLevel::Compile,
+            ..RunnerConfig::default()
+        };
+        let run = RunnerConfig {
+            level: ValidationLevel::Run,
+            ..RunnerConfig::default()
+        };
+
+        assert_eq!(side_effect_rejection(&snippet, &compile), None);
+        assert_eq!(
+            side_effect_rejection(&snippet, &run).as_deref(),
+            Some("side effect class network is not allowed")
+        );
     }
 }

@@ -44,6 +44,9 @@ impl CsharpValidator {
             }
         }
         command.current_dir(dir.path());
+        if let Some(session) = session {
+            session.apply_environment(&mut command);
+        }
         let (success, output) = run_command(&mut command, timeout_secs)?;
         Ok(if success {
             (SnippetStatus::Pass, None)

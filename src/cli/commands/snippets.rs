@@ -320,6 +320,7 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool) -> ExitCod
                             working_directory: root.join(&session.cwd),
                             manifest: session.manifest.as_ref().map(|path| root.join(path)),
                             before: session.before.clone(),
+                            env: session.env.clone(),
                         },
                     )
                 })

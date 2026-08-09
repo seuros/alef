@@ -89,7 +89,7 @@ impl TypeScriptValidator {
             command
         };
         if let Some(session) = session {
-            command.current_dir(&session.working_directory);
+            session.apply(&mut command);
         }
         command
     }

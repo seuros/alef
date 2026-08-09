@@ -1,7 +1,7 @@
 use crate::snippets::error::{Error, Result};
 use crate::snippets::types::Language;
 use crate::snippets::validators::run_command;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Default)]
@@ -9,6 +9,7 @@ pub struct SessionSpec {
     pub working_directory: PathBuf,
     pub manifest: Option<PathBuf>,
     pub before: Vec<String>,
+    pub env: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -16,6 +17,7 @@ pub struct ValidationSession {
     pub working_directory: PathBuf,
     pub manifest: Option<PathBuf>,
     pub fingerprint: String,
+    pub env: BTreeMap<String, String>,
 }
 
 impl ValidationSession {
@@ -28,6 +30,11 @@ impl ValidationSession {
 
     pub fn apply(&self, command: &mut std::process::Command) {
         command.current_dir(&self.working_directory);
+        self.apply_environment(command);
+    }
+
+    pub fn apply_environment(&self, command: &mut std::process::Command) {
+        command.envs(&self.env);
     }
 }
 
@@ -52,13 +59,14 @@ fn prepare_session(language: Language, spec: &SessionSpec, timeout_secs: u64) ->
         )));
     }
     for command in &spec.before {
-        run_before(command, &spec.working_directory, timeout_secs)
+        run_before(command, &spec.working_directory, &spec.env, timeout_secs)
             .map_err(|error| Error::Other(format!("preparing {language} snippet validation session: {error}")))?;
     }
     Ok(ValidationSession {
         working_directory: spec.working_directory.clone(),
         manifest: spec.manifest.clone(),
         fingerprint: session_fingerprint(spec)?,
+        env: spec.env.clone(),
     })
 }
 
@@ -81,6 +89,10 @@ fn session_fingerprint(spec: &SessionSpec) -> Result<String> {
     }
     for command in &spec.before {
         hasher.update(command.as_bytes());
+    }
+    for (name, value) in &spec.env {
+        hasher.update(name.as_bytes());
+        hasher.update(value.as_bytes());
     }
     for path in paths {
         hasher.update(
@@ -105,9 +117,10 @@ fn ensure_directory(path: &Path, language: Language) -> Result<()> {
     }
 }
 
-fn run_before(source: &str, working_directory: &Path, timeout_secs: u64) -> Result<()> {
+fn run_before(source: &str, working_directory: &Path, env: &BTreeMap<String, String>, timeout_secs: u64) -> Result<()> {
     let mut command = shell_command(source);
     command.current_dir(working_directory);
+    command.envs(env);
     let (success, output) = run_command(&mut command, timeout_secs)?;
     if success {
         Ok(())
@@ -138,6 +151,7 @@ mod tests {
                 working_directory: directory.path().to_path_buf(),
                 manifest: None,
                 before: vec![format!("test ! -e prepared && touch {}", marker.display())],
+                env: BTreeMap::new(),
             },
         );
 
@@ -157,12 +171,38 @@ mod tests {
                 working_directory: directory.path().to_path_buf(),
                 manifest: Some(directory.path().join("missing.json")),
                 before: Vec::new(),
+                env: BTreeMap::new(),
             },
         );
 
         let error = prepare_sessions(&specs, 5).expect_err("missing manifest is rejected");
 
         assert!(error.to_string().contains("manifest does not exist"));
+    }
+
+    #[test]
+    fn applies_environment_to_setup_and_validation_commands() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let mut specs = HashMap::new();
+        specs.insert(
+            Language::Zig,
+            SessionSpec {
+                working_directory: directory.path().to_path_buf(),
+                manifest: None,
+                before: vec!["test \"$ALEF_SESSION_CACHE\" = configured".into()],
+                env: BTreeMap::from([("ALEF_SESSION_CACHE".into(), "configured".into())]),
+            },
+        );
+
+        let sessions = prepare_sessions(&specs, 5).expect("session preparation succeeds");
+        let session = sessions.get(&Language::Zig).expect("zig session");
+        let mut command = std::process::Command::new("true");
+        session.apply(&mut command);
+
+        assert_eq!(
+            command.get_envs().next(),
+            Some(("ALEF_SESSION_CACHE".as_ref(), Some("configured".as_ref())))
+        );
     }
 }
 

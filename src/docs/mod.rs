@@ -425,6 +425,7 @@ fn validate_snippets(
                                 working_directory: workspace_root.join(&session.cwd),
                                 manifest: session.manifest.as_ref().map(|path| workspace_root.join(path)),
                                 before: session.before.clone(),
+                                env: session.env.clone(),
                             },
                         )
                     })

@@ -1753,6 +1753,42 @@
       },
       "type": "object"
     },
+    "DocsSnippetSessionConfig": {
+      "properties": {
+        "before": {
+          "default": [],
+          "description": "Setup commands run once before validating this language.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cwd": {
+          "description": "Working directory used to resolve the generated local package.",
+          "type": "string"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Environment variables applied to setup and validation commands.",
+          "type": "object"
+        },
+        "manifest": {
+          "default": null,
+          "description": "Optional local package manifest, resolved relative to the repository root.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "cwd"
+      ],
+      "type": "object"
+    },
     "DocsSnippetsConfig": {
       "properties": {
         "allowed_side_effects": {
@@ -1841,6 +1877,14 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "sessions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DocsSnippetSessionConfig"
+          },
+          "default": {},
+          "description": "Binding-aware validation sessions keyed by language name.",
+          "type": "object"
         },
         "strict": {
           "default": false,

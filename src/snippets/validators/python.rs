@@ -30,7 +30,7 @@ impl PythonValidator {
         let path = snippet_path.to_string_lossy().to_string();
         let mut command = Self::command(level, dir.path(), python, &path)?;
         if let Some(session) = session {
-            command.current_dir(&session.working_directory);
+            session.apply(&mut command);
             command.env("PYTHONPATH", &session.working_directory);
         }
         let (success, output) = run_command(&mut command, timeout_secs)?;
@@ -331,6 +331,7 @@ mod tests {
             working_directory: directory.path().to_path_buf(),
             manifest: None,
             fingerprint: "test-binding".into(),
+            env: std::collections::BTreeMap::new(),
         };
 
         let (status, message) = PythonValidator
