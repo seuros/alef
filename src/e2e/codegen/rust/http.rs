@@ -1,9 +1,30 @@
 //! HTTP integration test generation for Rust e2e tests.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as FmtWrite;
 
 use crate::e2e::escape::rust_raw_string;
-use crate::e2e::fixture::{CorsConfig, Fixture, StaticFilesConfig};
+use crate::e2e::fixture::{CorsConfig, Fixture, HttpExpectedResponse, StaticFilesConfig};
+
+/// Response headers that the transport or a response-encoding layer computes for itself.
+/// The generated handler must neither set nor assert them: `content-length` and the
+/// framing headers are recomputed downstream, and `content-encoding` only appears when a
+/// compression layer is wired, which this backend does not do. The sibling backends skip
+/// `content-encoding` for the same reason. ~keep
+const TRANSPORT_OWNED_HEADERS: [&str; 5] = [
+    "content-encoding",
+    "content-length",
+    "connection",
+    "transfer-encoding",
+    "upgrade",
+];
+
+/// Value emitted for a `<<present>>` header expectation — the test only asserts presence.
+const PRESENT_HEADER_PLACEHOLDER: &str = "present";
+
+/// Value emitted for a `<<uuid>>` header expectation; the test re-checks its shape rather
+/// than its bytes, so any well-formed hyphenated hex UUID would do.
+const UUID_HEADER_PLACEHOLDER: &str = "f81d4fae-7dec-11d0-a765-00a0c91e6bf6";
 
 /// How to call a method on axum_test::TestServer in generated code.
 enum ServerCall<'a> {
@@ -11,6 +32,206 @@ enum ServerCall<'a> {
     Shorthand(&'a str),
     /// Emit `server.method(axum::http::Method::OPTIONS, path)` etc.
     AxumMethod(&'a str),
+}
+
+/// How the generated test compares the response body against the fixture expectation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExpectedBody {
+    /// Compare the response text verbatim against a string literal.
+    Text(String),
+    /// Parse both sides and compare as JSON values, so key order and whitespace do not matter.
+    Json(String),
+}
+
+impl ExpectedBody {
+    /// The exact bytes the generated handler returns for this expectation.
+    fn wire_text(&self) -> &str {
+        match self {
+            ExpectedBody::Text(text) | ExpectedBody::Json(text) => text,
+        }
+    }
+}
+
+/// Resolve the body expectation for a fixture, or `None` when there is nothing to assert.
+///
+/// Absent, `null` and empty-string bodies carry no expectation — the same rule the other
+/// backends apply. A JSON string body is compared as raw text because that is what a server
+/// puts on the wire; every other JSON value is compared structurally.
+pub fn plan_expected_body(body: Option<&serde_json::Value>) -> Option<ExpectedBody> {
+    match body? {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(text) if text.is_empty() => None,
+        serde_json::Value::String(text) => Some(ExpectedBody::Text(text.clone())),
+        structured => serde_json::to_string(structured).ok().map(ExpectedBody::Json),
+    }
+}
+
+/// The check applied to a single expected response header.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HeaderCheck {
+    /// The header must equal this exact value.
+    Exact(String),
+    /// The header must be set, whatever its value (`<<present>>`).
+    Present,
+    /// The header must not be set (`<<absent>>`).
+    Absent,
+    /// The header must hold a hyphenated hex UUID (`<<uuid>>`).
+    Uuid,
+}
+
+/// A planned header expectation with its name already normalised to lowercase.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpectedHeader {
+    pub name: String,
+    pub check: HeaderCheck,
+}
+
+impl ExpectedHeader {
+    /// The value the generated handler sets for this header, or `None` when the handler
+    /// must leave it unset.
+    fn handler_value(&self) -> Option<&str> {
+        match &self.check {
+            HeaderCheck::Exact(value) => Some(value),
+            HeaderCheck::Present => Some(PRESENT_HEADER_PLACEHOLDER),
+            HeaderCheck::Uuid => Some(UUID_HEADER_PLACEHOLDER),
+            HeaderCheck::Absent => None,
+        }
+    }
+}
+
+/// Returns true for headers a CORS layer writes itself. When one is applied, the handler
+/// must not also set them or the response carries duplicates. ~keep
+fn is_cors_owned_header(name: &str) -> bool {
+    name.starts_with("access-control-") || name == "vary"
+}
+
+/// Plan the header expectations for a fixture, dropping the ones this backend cannot own.
+///
+/// Names are lowercased so the comparison against the response is case-insensitive, matching
+/// the sibling backends.
+pub fn plan_expected_headers(headers: &BTreeMap<String, String>, cors_applied: bool) -> Vec<ExpectedHeader> {
+    let mut planned = Vec::new();
+    for (raw_name, value) in headers {
+        let name = raw_name.to_lowercase();
+        if TRANSPORT_OWNED_HEADERS.contains(&name.as_str()) {
+            continue;
+        }
+        if cors_applied && is_cors_owned_header(&name) {
+            continue;
+        }
+        let check = match value.as_str() {
+            "<<present>>" => HeaderCheck::Present,
+            "<<absent>>" => HeaderCheck::Absent,
+            "<<uuid>>" => HeaderCheck::Uuid,
+            exact => HeaderCheck::Exact(exact.to_string()),
+        };
+        planned.push(ExpectedHeader { name, check });
+    }
+    planned
+}
+
+/// Emit the body assertion for a resolved body expectation.
+pub fn render_body_assertion(out: &mut String, expected: &ExpectedBody) {
+    match expected {
+        ExpectedBody::Text(text) => {
+            let literal = rust_raw_string(text);
+            let _ = writeln!(out, "    assert_eq!(response.text(), {literal});");
+        }
+        ExpectedBody::Json(json) => {
+            let literal = rust_raw_string(json);
+            let _ = writeln!(
+                out,
+                "    let expected_json: serde_json::Value = serde_json::from_str({literal}).expect(\"fixture body is valid JSON\");"
+            );
+            let _ = writeln!(
+                out,
+                "    let actual_json: serde_json::Value = serde_json::from_str(&response.text()).expect(\"response body is valid JSON\");"
+            );
+            let _ = writeln!(out, "    assert_eq!(actual_json, expected_json);");
+        }
+    }
+}
+
+/// Emit the assertions for a planned set of header expectations.
+pub fn render_header_assertions(out: &mut String, planned: &[ExpectedHeader]) {
+    for header in planned {
+        let name = &header.name;
+        match &header.check {
+            HeaderCheck::Exact(value) => {
+                let literal = rust_raw_string(value);
+                let _ = writeln!(
+                    out,
+                    "    assert_eq!(response.headers().get({name:?}).and_then(|v| v.to_str().ok()), Some({literal}), \"unexpected value for header '{name}'\");"
+                );
+            }
+            HeaderCheck::Present => {
+                let _ = writeln!(
+                    out,
+                    "    assert!(response.headers().contains_key({name:?}), \"expected header '{name}' to be present\");"
+                );
+            }
+            HeaderCheck::Absent => {
+                let _ = writeln!(
+                    out,
+                    "    assert!(!response.headers().contains_key({name:?}), \"expected header '{name}' to be absent\");"
+                );
+            }
+            HeaderCheck::Uuid => {
+                let _ = writeln!(
+                    out,
+                    "    let header_value = response.headers().get({name:?}).and_then(|v| v.to_str().ok()).unwrap_or_default();"
+                );
+                let _ = writeln!(out, "    assert!(");
+                let _ = writeln!(out, "        header_value.len() == 36");
+                let _ = writeln!(out, "            && header_value.chars().enumerate().all(|(i, c)| {{");
+                let _ = writeln!(
+                    out,
+                    "                if matches!(i, 8 | 13 | 18 | 23) {{ c == '-' }} else {{ c.is_ascii_hexdigit() }}"
+                );
+                let _ = writeln!(out, "            }}),");
+                let _ = writeln!(
+                    out,
+                    "        \"expected header '{name}' to be a UUID, got {{header_value:?}}\""
+                );
+                let _ = writeln!(out, "    );");
+            }
+        }
+    }
+}
+
+/// Emit the `.header(...)` builder calls the generated handler needs to satisfy the planned
+/// header expectations, plus the default `content-type` when the fixture does not pin one.
+fn render_handler_headers(out: &mut String, planned: &[ExpectedHeader]) {
+    let pins_content_type = planned.iter().any(|header| header.name == "content-type");
+    if !pins_content_type {
+        let _ = writeln!(out, "                .header(\"content-type\", \"application/json\")");
+    }
+    for header in planned {
+        if let Some(value) = header.handler_value() {
+            let name = &header.name;
+            let literal = rust_raw_string(value);
+            let _ = writeln!(out, "                .header({name:?}, {literal})");
+        }
+    }
+}
+
+/// Resolve what a fixture's response assertions should cover.
+///
+/// A CORS layer answers a preflight request itself without ever invoking the handler, so
+/// neither the handler's body nor its headers reach the client. Asserting them would test
+/// the layer's short-circuit, not the fixture.
+fn plan_response_assertions(
+    expected: &HttpExpectedResponse,
+    request_method: &str,
+    cors_applied: bool,
+) -> (Option<ExpectedBody>, Vec<ExpectedHeader>) {
+    if cors_applied && request_method.eq_ignore_ascii_case("OPTIONS") {
+        return (None, Vec::new());
+    }
+    (
+        plan_expected_body(expected.body.as_ref()),
+        plan_expected_headers(&expected.headers, cors_applied),
+    )
 }
 
 /// How to register a route on the configured HTTP framework's App in generated code.
@@ -69,13 +290,6 @@ pub fn render_http_test_function(out: &mut String, fixture: &Fixture, dep_name: 
     let req_path = &http.request.path;
     let status = http.expected_response.status_code;
 
-    // Serialize expected response body (if any).
-    let body_str = match &http.expected_response.body {
-        Some(b) => serde_json::to_string(b).unwrap_or_else(|_| "{}".to_string()),
-        None => String::new(),
-    };
-    let body_literal = rust_raw_string(&body_str);
-
     // Serialize request body (if any).
     let req_body_str = match &http.request.body {
         Some(b) => serde_json::to_string(b).unwrap_or_else(|_| "{}".to_string()),
@@ -88,6 +302,13 @@ pub fn render_http_test_function(out: &mut String, fixture: &Fixture, dep_name: 
     let cors_cfg: Option<&CorsConfig> = middleware.and_then(|m| m.cors.as_ref());
     let static_files_cfgs: Option<&Vec<StaticFilesConfig>> = middleware.and_then(|m| m.static_files.as_ref());
     let has_static_files = static_files_cfgs.is_some_and(|v| !v.is_empty());
+
+    // The handler always echoes the fixture's body, even where the assertions below are
+    // suppressed, so the response the framework routes stays faithful to the fixture.
+    let fixture_body = plan_expected_body(http.expected_response.body.as_ref());
+    let body_literal = rust_raw_string(fixture_body.as_ref().map(ExpectedBody::wire_text).unwrap_or_default());
+    let (expected_body, expected_headers) =
+        plan_response_assertions(&http.expected_response, &http.request.method, cors_cfg.is_some());
 
     let _ = writeln!(out, "#[tokio::test]");
     let _ = writeln!(out, "async fn test_{fn_name}() {{");
@@ -122,7 +343,7 @@ pub fn render_http_test_function(out: &mut String, fixture: &Fixture, dep_name: 
     let _ = writeln!(out, "        async move {{");
     let _ = writeln!(out, "            Ok(axum::http::Response::builder()");
     let _ = writeln!(out, "                .status({status}u16)");
-    let _ = writeln!(out, "                .header(\"content-type\", \"application/json\")");
+    render_handler_headers(out, &expected_headers);
     let _ = writeln!(out, "                .body(axum::body::Body::from(body))");
     let _ = writeln!(out, "                .unwrap())");
     let _ = writeln!(out, "        }}");
@@ -177,6 +398,11 @@ pub fn render_http_test_function(out: &mut String, fixture: &Fixture, dep_name: 
     } else {
         let _ = writeln!(out, "    assert_eq!(response.status_code().as_u16(), {status}u16);");
     }
+
+    if let Some(expected) = &expected_body {
+        render_body_assertion(out, expected);
+    }
+    render_header_assertions(out, &expected_headers);
 
     let _ = writeln!(out, "}}");
 }
@@ -345,12 +571,313 @@ fn render_static_files_test(
 
     let _ = writeln!(out, "        .await;");
     let _ = writeln!(out, "    assert_eq!(response.status_code().as_u16(), {status}u16);");
+
+    // Only a successful static-file response carries the served content; error responses are
+    // synthesised by the file service and have no body to compare. Response headers are left
+    // unasserted because the file service — not the fixture — decides them. ~keep
+    if (200..300).contains(&status)
+        && let Some(expected) = plan_expected_body(http.expected_response.body.as_ref())
+    {
+        render_body_assertion(out, &expected);
+    }
+
     let _ = writeln!(out, "}}");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::e2e::fixture::{HttpFixture, HttpHandler, HttpMiddleware, HttpRequest};
+
+    fn http_fixture(expected: HttpExpectedResponse, middleware: Option<HttpMiddleware>, method: &str) -> Fixture {
+        Fixture {
+            id: "sample".to_string(),
+            description: "A sample HTTP test".to_string(),
+            http: Some(HttpFixture {
+                handler: HttpHandler {
+                    route: "/sample".to_string(),
+                    method: method.to_string(),
+                    body_schema: None,
+                    parameters: BTreeMap::new(),
+                    middleware,
+                },
+                request: HttpRequest {
+                    method: method.to_string(),
+                    path: "/sample".to_string(),
+                    headers: BTreeMap::new(),
+                    query_params: BTreeMap::new(),
+                    cookies: BTreeMap::new(),
+                    body: None,
+                    form_data: None,
+                    content_type: None,
+                },
+                expected_response: expected,
+            }),
+            ..Fixture::default()
+        }
+    }
+
+    fn expected_response(body: Option<serde_json::Value>, headers: &[(&str, &str)]) -> HttpExpectedResponse {
+        HttpExpectedResponse {
+            status_code: 200,
+            body,
+            body_partial: None,
+            headers: headers
+                .iter()
+                .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+                .collect(),
+            validation_errors: None,
+        }
+    }
+
+    #[test]
+    fn plan_expected_body_returns_none_for_absent_null_and_empty_bodies() {
+        assert_eq!(plan_expected_body(None), None);
+        assert_eq!(plan_expected_body(Some(&serde_json::Value::Null)), None);
+        assert_eq!(plan_expected_body(Some(&serde_json::json!(""))), None);
+    }
+
+    #[test]
+    fn plan_expected_body_compares_string_bodies_as_raw_text() {
+        let body = serde_json::json!("Hello from static storage");
+        assert_eq!(
+            plan_expected_body(Some(&body)),
+            Some(ExpectedBody::Text("Hello from static storage".to_string()))
+        );
+    }
+
+    #[test]
+    fn plan_expected_body_compares_structured_bodies_as_json() {
+        let body = serde_json::json!({"status": "ok"});
+        assert_eq!(
+            plan_expected_body(Some(&body)),
+            Some(ExpectedBody::Json(r#"{"status":"ok"}"#.to_string()))
+        );
+    }
+
+    #[test]
+    fn render_body_assertion_for_text_compares_response_text() {
+        let mut out = String::new();
+        render_body_assertion(&mut out, &ExpectedBody::Text("plain".to_string()));
+        assert_eq!(out, "    assert_eq!(response.text(), r#\"plain\"#);\n");
+    }
+
+    #[test]
+    fn render_body_assertion_for_json_compares_parsed_values() {
+        let mut out = String::new();
+        render_body_assertion(&mut out, &ExpectedBody::Json(r#"{"status":"ok"}"#.to_string()));
+        assert!(out.contains("let expected_json: serde_json::Value = serde_json::from_str"));
+        assert!(out.contains("serde_json::from_str(&response.text())"));
+        assert!(out.contains("assert_eq!(actual_json, expected_json);"));
+    }
+
+    #[test]
+    fn plan_expected_headers_lowercases_names_for_case_insensitive_comparison() {
+        let headers = BTreeMap::from([("X-Total-Count".to_string(), "42".to_string())]);
+        let planned = plan_expected_headers(&headers, false);
+        assert_eq!(
+            planned,
+            vec![ExpectedHeader {
+                name: "x-total-count".to_string(),
+                check: HeaderCheck::Exact("42".to_string()),
+            }]
+        );
+    }
+
+    #[test]
+    fn plan_expected_headers_maps_the_sentinel_tokens() {
+        let headers = BTreeMap::from([
+            ("a-present".to_string(), "<<present>>".to_string()),
+            ("b-absent".to_string(), "<<absent>>".to_string()),
+            ("c-uuid".to_string(), "<<uuid>>".to_string()),
+        ]);
+        let checks: Vec<HeaderCheck> = plan_expected_headers(&headers, false)
+            .into_iter()
+            .map(|header| header.check)
+            .collect();
+        assert_eq!(
+            checks,
+            vec![HeaderCheck::Present, HeaderCheck::Absent, HeaderCheck::Uuid]
+        );
+    }
+
+    #[test]
+    fn plan_expected_headers_drops_transport_owned_headers() {
+        let headers = BTreeMap::from([
+            ("Content-Encoding".to_string(), "gzip".to_string()),
+            ("Content-Length".to_string(), "85".to_string()),
+            ("Connection".to_string(), "close".to_string()),
+            ("X-Kept".to_string(), "yes".to_string()),
+        ]);
+        let planned = plan_expected_headers(&headers, false);
+        assert_eq!(planned.len(), 1);
+        assert_eq!(planned[0].name, "x-kept");
+    }
+
+    #[test]
+    fn plan_expected_headers_keeps_cors_headers_when_no_cors_layer_is_applied() {
+        let headers = BTreeMap::from([("Access-Control-Allow-Origin".to_string(), "https://x.dev".to_string())]);
+        assert_eq!(plan_expected_headers(&headers, false).len(), 1);
+    }
+
+    #[test]
+    fn plan_expected_headers_drops_cors_owned_headers_when_a_cors_layer_is_applied() {
+        let headers = BTreeMap::from([
+            ("Access-Control-Allow-Origin".to_string(), "https://x.dev".to_string()),
+            ("Vary".to_string(), "Origin".to_string()),
+            ("X-Total-Count".to_string(), "42".to_string()),
+        ]);
+        let planned = plan_expected_headers(&headers, true);
+        assert_eq!(planned.len(), 1);
+        assert_eq!(planned[0].name, "x-total-count");
+    }
+
+    #[test]
+    fn render_header_assertions_emits_an_equality_check_for_an_exact_value() {
+        let mut out = String::new();
+        render_header_assertions(
+            &mut out,
+            &[ExpectedHeader {
+                name: "x-total-count".to_string(),
+                check: HeaderCheck::Exact("42".to_string()),
+            }],
+        );
+        assert!(out.contains(r#"response.headers().get("x-total-count").and_then(|v| v.to_str().ok())"#));
+        assert!(out.contains(r##"Some(r#"42"#)"##));
+        assert!(out.contains("unexpected value for header 'x-total-count'"));
+    }
+
+    #[test]
+    fn render_header_assertions_emits_presence_and_absence_checks() {
+        let mut out = String::new();
+        render_header_assertions(
+            &mut out,
+            &[
+                ExpectedHeader {
+                    name: "set-cookie".to_string(),
+                    check: HeaderCheck::Present,
+                },
+                ExpectedHeader {
+                    name: "x-gone".to_string(),
+                    check: HeaderCheck::Absent,
+                },
+            ],
+        );
+        assert!(out.contains(r#"assert!(response.headers().contains_key("set-cookie")"#));
+        assert!(out.contains(r#"assert!(!response.headers().contains_key("x-gone")"#));
+    }
+
+    #[test]
+    fn render_header_assertions_checks_uuid_shape_rather_than_value() {
+        let mut out = String::new();
+        render_header_assertions(
+            &mut out,
+            &[ExpectedHeader {
+                name: "x-request-id".to_string(),
+                check: HeaderCheck::Uuid,
+            }],
+        );
+        assert!(out.contains("header_value.len() == 36"));
+        assert!(out.contains("c.is_ascii_hexdigit()"));
+        assert!(out.contains("to be a UUID"));
+    }
+
+    /// Generated assertion messages are embedded in a Rust string literal, so the header
+    /// name must not be quoted inside it — nested double quotes would not compile.
+    #[test]
+    fn render_header_assertions_messages_contain_no_nested_double_quotes() {
+        let mut out = String::new();
+        render_header_assertions(
+            &mut out,
+            &[ExpectedHeader {
+                name: "x-total-count".to_string(),
+                check: HeaderCheck::Exact("42".to_string()),
+            }],
+        );
+        assert!(!out.contains(r#"header ""#), "message quotes the header name: {out}");
+    }
+
+    #[test]
+    fn render_handler_headers_emits_the_default_content_type_when_unpinned() {
+        let mut out = String::new();
+        render_handler_headers(&mut out, &[]);
+        assert_eq!(out, "                .header(\"content-type\", \"application/json\")\n");
+    }
+
+    #[test]
+    fn render_handler_headers_lets_the_fixture_pin_the_content_type() {
+        let mut out = String::new();
+        render_handler_headers(
+            &mut out,
+            &[ExpectedHeader {
+                name: "content-type".to_string(),
+                check: HeaderCheck::Exact("text/html".to_string()),
+            }],
+        );
+        assert!(!out.contains("application/json"));
+        assert!(out.contains(r##".header("content-type", r#"text/html"#)"##));
+    }
+
+    /// An `<<absent>>` expectation means the handler must not set the header at all.
+    #[test]
+    fn render_handler_headers_skips_absent_expectations() {
+        let mut out = String::new();
+        render_handler_headers(
+            &mut out,
+            &[ExpectedHeader {
+                name: "x-gone".to_string(),
+                check: HeaderCheck::Absent,
+            }],
+        );
+        assert!(!out.contains("x-gone"));
+    }
+
+    #[test]
+    fn render_http_test_function_asserts_status_body_and_headers() {
+        let fixture = http_fixture(
+            expected_response(Some(serde_json::json!({"status": "ok"})), &[("X-Total-Count", "42")]),
+            None,
+            "GET",
+        );
+        let mut out = String::new();
+        render_http_test_function(&mut out, &fixture, "demo");
+        assert!(out.contains("assert_eq!(response.status_code().as_u16(), 200u16);"));
+        assert!(out.contains("assert_eq!(actual_json, expected_json);"));
+        assert!(out.contains(r#"response.headers().get("x-total-count")"#));
+        assert!(out.contains(r##".header("x-total-count", r#"42"#)"##));
+    }
+
+    #[test]
+    fn render_http_test_function_omits_body_assertion_when_there_is_no_expected_body() {
+        let fixture = http_fixture(expected_response(None, &[]), None, "GET");
+        let mut out = String::new();
+        render_http_test_function(&mut out, &fixture, "demo");
+        assert!(!out.contains("response.text()"));
+        assert!(!out.contains("actual_json"));
+    }
+
+    /// A CORS layer answers preflight itself, so the handler's body and headers never
+    /// reach the client and must not be asserted.
+    #[test]
+    fn render_http_test_function_skips_response_assertions_for_cors_preflight() {
+        let middleware = HttpMiddleware {
+            cors: Some(CorsConfig {
+                allow_origins: vec!["https://example.com".to_string()],
+                ..CorsConfig::default()
+            }),
+            ..HttpMiddleware::default()
+        };
+        let fixture = http_fixture(
+            expected_response(Some(serde_json::json!({"status": "ok"})), &[("X-Total-Count", "42")]),
+            Some(middleware),
+            "OPTIONS",
+        );
+        let mut out = String::new();
+        render_http_test_function(&mut out, &fixture, "demo");
+        assert!(!out.contains("actual_json"));
+        assert!(!out.contains("x-total-count"));
+    }
 
     #[test]
     fn render_cors_layer_empty_policy_uses_any() {
