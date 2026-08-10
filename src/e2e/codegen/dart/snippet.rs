@@ -44,10 +44,12 @@ pub(super) fn render_snippet_body(
     let needs_json = statements
         .iter()
         .any(|statement| statement.contains("jsonDecode(") || statement.contains("jsonEncode("));
+    let needs_io = statements.iter().any(|statement| statement.contains("File("));
     Ok(crate::e2e::template_env::render(
         "dart/snippet_body.jinja",
         minijinja::context! {
             package => package, module => module, statements => statements, needs_json => needs_json,
+            needs_io => needs_io,
         },
     ))
 }

@@ -393,8 +393,13 @@ pub(super) fn build_args_and_setup(
                         _ => {
                             if let Some(type_name) = json_object_type {
                                 if native_typed_dtos
-                                    && let Some(expression) =
-                                        super::values::render_native_php_dto(namespace, type_name, v, type_defs)
+                                    && let Some(expression) = super::values::render_native_php_dto(
+                                        namespace,
+                                        type_name,
+                                        v,
+                                        type_defs,
+                                        &fixture.docs_files_for_arg(&arg.field),
+                                    )
                                 {
                                     parts.push(expression);
                                     continue;

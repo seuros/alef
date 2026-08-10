@@ -9,6 +9,18 @@ pub(super) fn render_native_php_dto(
     type_name: &str,
     value: &serde_json::Value,
     type_defs: &[crate::core::ir::TypeDef],
+    files: &[crate::e2e::fixture::FixtureDocsFileInput],
+) -> Option<String> {
+    render_native_php_dto_at(namespace, type_name, value, type_defs, files, "")
+}
+
+fn render_native_php_dto_at(
+    namespace: &str,
+    type_name: &str,
+    value: &serde_json::Value,
+    type_defs: &[crate::core::ir::TypeDef],
+    files: &[crate::e2e::fixture::FixtureDocsFileInput],
+    pointer: &str,
 ) -> Option<String> {
     let object = value.as_object()?;
     let type_def = type_defs.iter().find(|candidate| candidate.name == type_name)?;
@@ -34,7 +46,8 @@ pub(super) fn render_native_php_dto(
         .filter_map(|field| object.get(&field.name).map(|value| (field, value)))
         .map(|(field, value)| {
             let name = crate::codegen::naming::public_field_name(crate::core::config::Language::Php, &field.name, None);
-            let value = render_native_php_value(namespace, value, &field.ty, type_defs)?;
+            let field_pointer = format!("{pointer}/{}", field.name);
+            let value = render_native_php_value(namespace, value, &field.ty, type_defs, files, &field_pointer)?;
             Some(minijinja::context! { name => name, value => value })
         })
         .collect::<Option<Vec<_>>>()?;
@@ -50,7 +63,7 @@ pub(super) fn render_native_php_dto(
 
 fn php_native_constructor_type(ty: &TypeRef) -> bool {
     match ty {
-        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Char | TypeRef::Path => true,
+        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Bytes => true,
         TypeRef::Optional(inner) | TypeRef::Vec(inner) => php_native_constructor_type(inner),
         _ => false,
     }
@@ -61,14 +74,24 @@ fn render_native_php_value(
     value: &serde_json::Value,
     ty: &TypeRef,
     type_defs: &[crate::core::ir::TypeDef],
+    files: &[crate::e2e::fixture::FixtureDocsFileInput],
+    pointer: &str,
 ) -> Option<String> {
+    if files.iter().any(|file| file.field == pointer) && matches!(ty, TypeRef::Bytes) {
+        return Some(format!("file_get_contents(\"{}\")", escape_php(value.as_str()?)));
+    }
     match (value, ty) {
         (serde_json::Value::Null, _) => Some("null".into()),
-        (value, TypeRef::Optional(inner)) => render_native_php_value(namespace, value, inner, type_defs),
-        (value, TypeRef::Named(name)) => render_native_php_dto(namespace, name, value, type_defs),
+        (value, TypeRef::Optional(inner)) => {
+            render_native_php_value(namespace, value, inner, type_defs, files, pointer)
+        }
+        (value, TypeRef::Named(name)) => render_native_php_dto_at(namespace, name, value, type_defs, files, pointer),
         (serde_json::Value::Array(values), TypeRef::Vec(inner)) => values
             .iter()
-            .map(|value| render_native_php_value(namespace, value, inner, type_defs))
+            .enumerate()
+            .map(|(index, value)| {
+                render_native_php_value(namespace, value, inner, type_defs, files, &format!("{pointer}/{index}"))
+            })
             .collect::<Option<Vec<_>>>()
             .map(|items| format!("[{}]", items.join(", "))),
         (serde_json::Value::String(value), TypeRef::String | TypeRef::Char | TypeRef::Path) => {
@@ -372,11 +395,41 @@ mod native_dto_tests {
             "SampleRequest",
             &serde_json::json!({"display_name": "Ada"}),
             &type_defs,
+            &[],
         );
 
         assert_eq!(
             rendered.as_deref(),
             Some("new \\Sample\\SampleRequest(displayName: \"Ada\")")
+        );
+    }
+
+    #[test]
+    fn renders_file_pointer_as_binary_string_read() {
+        let type_defs = [TypeDef {
+            name: "Upload".into(),
+            fields: vec![FieldDef {
+                name: "content".into(),
+                ty: TypeRef::Bytes,
+                ..FieldDef::default()
+            }],
+            ..TypeDef::default()
+        }];
+        let files = [crate::e2e::fixture::FixtureDocsFileInput {
+            field: "/content".into(),
+            path: "guide.pdf".into(),
+        }];
+        let rendered = render_native_php_dto(
+            "Sample",
+            "Upload",
+            &serde_json::json!({"content": "guide.pdf"}),
+            &type_defs,
+            &files,
+        )
+        .expect("native DTO");
+        assert!(
+            rendered.contains("content: file_get_contents(\"guide.pdf\")"),
+            "{rendered}"
         );
     }
 }

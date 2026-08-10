@@ -364,6 +364,10 @@ static TEMPLATES: &[(&str, &str)] = &[
     ("go/snippet_body.jinja", include_str!("templates/go/snippet_body.jinja")),
     ("go/dto_literal.jinja", include_str!("templates/go/dto_literal.jinja")),
     (
+        "go/read_file_helper.jinja",
+        include_str!("templates/go/read_file_helper.jinja"),
+    ),
+    (
         "go/empty_dto_literal.jinja",
         include_str!("templates/go/empty_dto_literal.jinja"),
     ),

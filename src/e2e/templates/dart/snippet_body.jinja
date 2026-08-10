@@ -1,5 +1,7 @@
 {% if needs_json %}import 'dart:convert';
 {% endif %}
+{% if needs_io %}import 'dart:io';
+{% endif %}
 import 'package:{{ package }}/{{ module }}.dart';
 Future<void> main() async {
 {% for statement in statements %}

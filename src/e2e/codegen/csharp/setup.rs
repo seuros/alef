@@ -370,6 +370,8 @@ pub(super) fn build_args_and_setup(
                             enum_fields,
                             nested_types,
                             type_defs,
+                            &fixture.docs_files_for_arg(&arg.field),
+                            "",
                         ));
                         continue;
                     }
@@ -561,6 +563,8 @@ fn csharp_object_initializer(
     enum_fields: &HashMap<String, String>,
     nested_types: &HashMap<String, String>,
     type_defs: &[crate::core::ir::TypeDef],
+    files: &[crate::e2e::fixture::FixtureDocsFileInput],
+    pointer: &str,
 ) -> String {
     if obj.is_empty() {
         return format!("new {type_name}()");
@@ -574,6 +578,7 @@ fn csharp_object_initializer(
         .iter()
         .map(|(key, val)| {
             let pascal_key = key.to_upper_camel_case();
+            let field_pointer = format!("{pointer}/{key}");
             let implicit_enum_type = IMPLICIT_ENUM_FIELDS
                 .iter()
                 .find(|(k, _)| *k == key.as_str())
@@ -582,7 +587,12 @@ fn csharp_object_initializer(
             // The alef.toml config uses camelCase keys (e.g., "codeBlockStyle"), but fixture
             // JSON uses snake_case keys (e.g., "code_block_style"). So we check both.
             let camel_key = key.to_lower_camel_case();
-            let cs_val = if let Some(enum_type) = enum_fields
+            let cs_val = if files.iter().any(|file| file.field == field_pointer) {
+                format!(
+                    "System.IO.File.ReadAllBytes(\"{}\")",
+                    escape_csharp(val.as_str().unwrap_or_default())
+                )
+            } else if let Some(enum_type) = enum_fields
                 .get(key.as_str())
                 .or_else(|| enum_fields.get(camel_key.as_str()))
                 .map(String::as_str)
@@ -599,13 +609,27 @@ fn csharp_object_initializer(
                     format!("{enum_type}.{member}")
                 }
             } else if let Some(field_type) = resolve_csharp_field_type_from_struct(type_name, key, type_defs) {
-                // Field type resolved from struct definition: deserialize using that type.
-                // This handles model fields (e.g., RerankerConfig.model → RerankerModelType).
-                // Check this BEFORE nested_types to ensure accurate field types take precedence.
-                let normalized = normalize_csharp_enum_values(val, enum_fields);
-                let json_str = serde_json::to_string(&normalized).unwrap_or_default();
-                let escaped = escape_csharp(&json_str);
-                format!("JsonSerializer.Deserialize<{field_type}>(\"{escaped}\", ConfigOptions)!")
+                if let Some(object) = val.as_object()
+                    && type_defs.iter().any(|definition| definition.name == field_type)
+                {
+                    csharp_object_initializer(
+                        object,
+                        &field_type,
+                        enum_fields,
+                        nested_types,
+                        type_defs,
+                        files,
+                        &field_pointer,
+                    )
+                } else {
+                    // Field type resolved from struct definition: deserialize using that type.
+                    // This handles model fields (e.g., RerankerConfig.model → RerankerModelType).
+                    // Check this BEFORE nested_types to ensure accurate field types take precedence.
+                    let normalized = normalize_csharp_enum_values(val, enum_fields);
+                    let json_str = serde_json::to_string(&normalized).unwrap_or_default();
+                    let escaped = escape_csharp(&json_str);
+                    format!("JsonSerializer.Deserialize<{field_type}>(\"{escaped}\", ConfigOptions)!")
+                }
             } else if let Some(nested_type) = nested_types
                 .get(key.as_str())
                 .or_else(|| nested_types.get(camel_key.as_str()))
@@ -819,5 +843,35 @@ mod tests {
         // Test: element_type is preferred over inferred names when explicit options_type is absent
         let result = resolve_json_object_default(None, &Some("ElemConfig".to_string()), "other", &type_defs, None);
         assert_eq!(result, "new ElemConfig()", "Expected ElemConfig from element_type");
+    }
+
+    #[test]
+    fn native_initializer_reads_file_pointer_as_bytes() {
+        let type_defs = [TypeDef {
+            name: "Upload".into(),
+            fields: vec![FieldDef {
+                name: "content".into(),
+                ty: TypeRef::Bytes,
+                ..FieldDef::default()
+            }],
+            ..TypeDef::default()
+        }];
+        let files = [crate::e2e::fixture::FixtureDocsFileInput {
+            field: "/content".into(),
+            path: "guide.pdf".into(),
+        }];
+        let rendered = csharp_object_initializer(
+            serde_json::json!({"content": "guide.pdf"}).as_object().expect("object"),
+            "Upload",
+            &HashMap::new(),
+            &HashMap::new(),
+            &type_defs,
+            &files,
+            "",
+        );
+        assert!(
+            rendered.contains("Content = System.IO.File.ReadAllBytes(\"guide.pdf\")"),
+            "{rendered}"
+        );
     }
 }

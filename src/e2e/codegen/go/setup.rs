@@ -22,6 +22,18 @@ fn native_go_dto_literal(
     type_name: &str,
     import_alias: &str,
     type_defs: &[crate::core::ir::TypeDef],
+    files: &[crate::e2e::fixture::FixtureDocsFileInput],
+) -> Option<String> {
+    native_go_dto_literal_at(value, type_name, import_alias, type_defs, files, "")
+}
+
+fn native_go_dto_literal_at(
+    value: &serde_json::Value,
+    type_name: &str,
+    import_alias: &str,
+    type_defs: &[crate::core::ir::TypeDef],
+    files: &[crate::e2e::fixture::FixtureDocsFileInput],
+    pointer: &str,
 ) -> Option<String> {
     let object = value.as_object()?;
     let definition = type_defs.iter().find(|definition| definition.name == type_name)?;
@@ -30,6 +42,7 @@ fn native_go_dto_literal(
         .iter()
         .filter_map(|field| {
             let value = object.get(&field.name)?;
+            let field_pointer = format!("{pointer}/{}", field.name);
             let optional = matches!(field.ty, crate::core::ir::TypeRef::Optional(_))
                 || field.optional
                 || field.default.is_some()
@@ -38,37 +51,45 @@ fn native_go_dto_literal(
                 crate::core::ir::TypeRef::Optional(inner) => inner.as_ref(),
                 other => other,
             };
-            let expression = match inner {
-                crate::core::ir::TypeRef::String | crate::core::ir::TypeRef::Path => {
-                    let literal = value.as_str().map(go_string_literal)?;
-                    if optional { format!("ptr({literal})") } else { literal }
-                }
-                crate::core::ir::TypeRef::Bytes => {
-                    let items = value
-                        .as_array()?
-                        .iter()
-                        .filter_map(serde_json::Value::as_u64)
-                        .collect::<Vec<_>>();
-                    format!(
-                        "[]byte{{{}}}",
-                        items.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
-                    )
-                }
-                crate::core::ir::TypeRef::Named(name) => {
-                    if let Some(nested) = native_go_dto_literal(value, name, import_alias, type_defs) {
-                        if optional { format!("&{nested}") } else { nested }
-                    } else {
-                        let literal = format!(
-                            "{}.{}({})",
-                            import_alias,
-                            crate::codegen::naming::go_type_name(name),
-                            json_to_go(value)
-                        );
+            let expression = if files.iter().any(|file| file.field == field_pointer)
+                && matches!(inner, crate::core::ir::TypeRef::Bytes)
+            {
+                format!("mustReadFile({})", go_string_literal(value.as_str()?))
+            } else {
+                match inner {
+                    crate::core::ir::TypeRef::String | crate::core::ir::TypeRef::Path => {
+                        let literal = value.as_str().map(go_string_literal)?;
                         if optional { format!("ptr({literal})") } else { literal }
                     }
+                    crate::core::ir::TypeRef::Bytes => {
+                        let items = value
+                            .as_array()?
+                            .iter()
+                            .filter_map(serde_json::Value::as_u64)
+                            .collect::<Vec<_>>();
+                        format!(
+                            "[]byte{{{}}}",
+                            items.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+                        )
+                    }
+                    crate::core::ir::TypeRef::Named(name) => {
+                        if let Some(nested) =
+                            native_go_dto_literal_at(value, name, import_alias, type_defs, files, &field_pointer)
+                        {
+                            if optional { format!("&{nested}") } else { nested }
+                        } else {
+                            let literal = format!(
+                                "{}.{}({})",
+                                import_alias,
+                                crate::codegen::naming::go_type_name(name),
+                                json_to_go(value)
+                            );
+                            if optional { format!("ptr({literal})") } else { literal }
+                        }
+                    }
+                    crate::core::ir::TypeRef::Primitive(_) => json_to_go(value),
+                    _ => return None,
                 }
-                crate::core::ir::TypeRef::Primitive(_) => json_to_go(value),
-                _ => return None,
             };
             Some((crate::codegen::naming::to_go_name(&field.name), expression))
         })
@@ -299,6 +320,7 @@ pub(super) fn build_args_and_setup(
                 type_name,
                 import_alias,
                 type_defs,
+                &fixture.docs_files_for_arg(&arg.field),
             )
         {
             setup_lines.push(format!("{} := {literal}", arg.name));
@@ -374,7 +396,13 @@ pub(super) fn build_args_and_setup(
                     if native_dtos
                         && !is_array
                         && let Some(opts_type) = json_object_go_type(arg, options_type)
-                        && let Some(literal) = native_go_dto_literal(v, opts_type, import_alias, type_defs)
+                        && let Some(literal) = native_go_dto_literal(
+                            v,
+                            opts_type,
+                            import_alias,
+                            type_defs,
+                            &fixture.docs_files_for_arg(&arg.field),
+                        )
                     {
                         if literal.contains("ptr(")
                             && !package_decls
@@ -382,6 +410,17 @@ pub(super) fn build_args_and_setup(
                                 .any(|declaration| declaration.starts_with("func ptr["))
                         {
                             package_decls.push("func ptr[T any](value T) *T { return &value }".to_string());
+                        }
+                        if literal.contains("mustReadFile(")
+                            && !package_decls
+                                .iter()
+                                .any(|declaration| declaration.starts_with("func mustReadFile("))
+                        {
+                            package_decls.push(
+                                crate::e2e::template_env::render("go/read_file_helper.jinja", minijinja::context! {})
+                                    .trim_end()
+                                    .to_string(),
+                            );
                         }
                         setup_lines.push(format!("{} := {}", arg.name, literal.replace('\n', "\n\t")));
                         parts.push(arg.name.clone());
@@ -510,4 +549,36 @@ pub(super) fn build_args_and_setup(
     }
 
     (package_decls, setup_lines, parts.join(", "))
+}
+
+#[cfg(test)]
+mod file_dto_tests {
+    use super::*;
+    use crate::core::ir::{FieldDef, TypeDef, TypeRef};
+
+    #[test]
+    fn renders_nested_file_pointer_as_byte_read() {
+        let types = [TypeDef {
+            name: "Upload".into(),
+            fields: vec![FieldDef {
+                name: "content".into(),
+                ty: TypeRef::Bytes,
+                ..FieldDef::default()
+            }],
+            ..TypeDef::default()
+        }];
+        let files = [crate::e2e::fixture::FixtureDocsFileInput {
+            field: "/content".into(),
+            path: "guide.pdf".into(),
+        }];
+        let rendered = native_go_dto_literal(
+            &serde_json::json!({"content": "guide.pdf"}),
+            "Upload",
+            "sample",
+            &types,
+            &files,
+        )
+        .expect("native DTO");
+        assert!(rendered.contains("Content: mustReadFile(`guide.pdf`)"), "{rendered}");
+    }
 }

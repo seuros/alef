@@ -583,8 +583,12 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                         && !arg_value.is_null()
                     {
                         if native_typed_dtos
-                            && let Some(expression) =
-                                super::values::render_native_dart_dto(opts_type, arg_value, type_defs)
+                            && let Some(expression) = super::values::render_native_dart_dto(
+                                opts_type,
+                                arg_value,
+                                type_defs,
+                                &fixture.docs_files_for_arg(&arg_def.field),
+                            )
                         {
                             let var_name = format!("_{}", arg_def.name);
                             setup_lines.push(format!("final {var_name} = {expression};"));

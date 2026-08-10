@@ -1,0 +1,7 @@
+func mustReadFile(path string) []byte {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		panic(err)
+	}
+	return content
+}

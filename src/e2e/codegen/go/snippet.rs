@@ -127,7 +127,8 @@ pub(super) fn render_snippet_body(
     let mut standard_imports = std::collections::BTreeSet::new();
     let setup_lines: Vec<String> = setup_lines.into_iter().map(snippet_setup_line).collect();
     let joined_setup = setup_lines.join("\n");
-    if joined_setup.contains("os.") {
+    let joined_declarations = package_decls.join("\n");
+    if joined_setup.contains("os.") || joined_declarations.contains("os.") {
         standard_imports.insert("os");
     }
     if joined_setup.contains("json.") {

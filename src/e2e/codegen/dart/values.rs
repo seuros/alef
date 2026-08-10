@@ -6,6 +6,17 @@ pub(super) fn render_native_dart_dto(
     type_name: &str,
     value: &serde_json::Value,
     type_defs: &[crate::core::ir::TypeDef],
+    files: &[crate::e2e::fixture::FixtureDocsFileInput],
+) -> Option<String> {
+    render_native_dart_dto_at(type_name, value, type_defs, files, "")
+}
+
+fn render_native_dart_dto_at(
+    type_name: &str,
+    value: &serde_json::Value,
+    type_defs: &[crate::core::ir::TypeDef],
+    files: &[crate::e2e::fixture::FixtureDocsFileInput],
+    pointer: &str,
 ) -> Option<String> {
     let object = value.as_object()?;
     let type_def = type_defs.iter().find(|candidate| candidate.name == type_name)?;
@@ -21,7 +32,8 @@ pub(super) fn render_native_dart_dto(
             };
             let name =
                 crate::codegen::naming::public_field_name(crate::core::config::Language::Dart, &field.name, None);
-            let value = render_native_dart_value(field_value, &field.ty, type_defs)?;
+            let field_pointer = format!("{pointer}/{}", field.name);
+            let value = render_native_dart_value(field_value, &field.ty, type_defs, files, &field_pointer)?;
             Some(minijinja::context! { name => name, value => value })
         })
         .collect::<Option<Vec<_>>>()?;
@@ -39,14 +51,22 @@ fn render_native_dart_value(
     value: &serde_json::Value,
     ty: &TypeRef,
     type_defs: &[crate::core::ir::TypeDef],
+    files: &[crate::e2e::fixture::FixtureDocsFileInput],
+    pointer: &str,
 ) -> Option<String> {
+    if files.iter().any(|file| file.field == pointer) && matches!(ty, TypeRef::Bytes) {
+        return Some(format!("File('{}').readAsBytesSync()", escape_dart(value.as_str()?)));
+    }
     match (value, ty) {
         (serde_json::Value::Null, _) => Some("null".into()),
-        (value, TypeRef::Optional(inner)) => render_native_dart_value(value, inner, type_defs),
-        (value, TypeRef::Named(name)) => render_native_dart_dto(name, value, type_defs),
+        (value, TypeRef::Optional(inner)) => render_native_dart_value(value, inner, type_defs, files, pointer),
+        (value, TypeRef::Named(name)) => render_native_dart_dto_at(name, value, type_defs, files, pointer),
         (serde_json::Value::Array(values), TypeRef::Vec(inner)) => values
             .iter()
-            .map(|value| render_native_dart_value(value, inner, type_defs))
+            .enumerate()
+            .map(|(index, value)| {
+                render_native_dart_value(value, inner, type_defs, files, &format!("{pointer}/{index}"))
+            })
             .collect::<Option<Vec<_>>>()
             .map(|items| format!("[{}]", items.join(", "))),
         (serde_json::Value::String(value), TypeRef::String | TypeRef::Char | TypeRef::Path) => {
@@ -270,8 +290,41 @@ mod native_dto_tests {
             }],
             ..TypeDef::default()
         }];
-        let rendered = render_native_dart_dto("SampleRequest", &serde_json::json!({"display_name": "Ada"}), &type_defs);
+        let rendered = render_native_dart_dto(
+            "SampleRequest",
+            &serde_json::json!({"display_name": "Ada"}),
+            &type_defs,
+            &[],
+        );
 
         assert_eq!(rendered.as_deref(), Some("SampleRequest(displayName: 'Ada')"));
+    }
+
+    #[test]
+    fn renders_file_pointer_as_uint8_list_read() {
+        let type_defs = [TypeDef {
+            name: "Upload".into(),
+            fields: vec![FieldDef {
+                name: "content".into(),
+                ty: TypeRef::Bytes,
+                ..FieldDef::default()
+            }],
+            ..TypeDef::default()
+        }];
+        let files = [crate::e2e::fixture::FixtureDocsFileInput {
+            field: "/content".into(),
+            path: "guide.pdf".into(),
+        }];
+        let rendered = render_native_dart_dto(
+            "Upload",
+            &serde_json::json!({"content": "guide.pdf"}),
+            &type_defs,
+            &files,
+        )
+        .expect("native DTO");
+        assert!(
+            rendered.contains("content: File('guide.pdf').readAsBytesSync()"),
+            "{rendered}"
+        );
     }
 }
