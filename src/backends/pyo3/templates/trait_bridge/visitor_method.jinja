@@ -25,6 +25,24 @@ fn {{ method_name }}({{ sig }}) -> {{ ret_ty }} {
                 } else {
                     let py_dict = result.cast::<pyo3::types::PyDict>();
                     if let Ok(d) = py_dict {
+                        if let Some(action) = d.get_item("type").ok().flatten().and_then(|v| v.extract::<String>().ok()) {
+                            match action.as_str() {
+{%- for variant in unit_result_variants %}
+                                "{{ variant.wire_name }}" => return {{ ret_ty }}::{{ variant.name }},
+{%- endfor %}
+{%- for variant in payload_result_variants %}
+                                "{{ variant.wire_name }}" => {
+                                    if let Some(v) = d.get_item("output").ok().flatten() {
+                                        return {{ ret_ty }}::{{ variant.name }}(v.extract::<String>().unwrap_or_else(|e| {
+                                            tracing::warn!(wrapper = "{{ wrapper }}", method = "{{ method_name }}", variant = "{{ variant.wire_name }}", error = %e, "host returned non-string payload; using empty string");
+                                            String::new()
+                                        }));
+                                    }
+                                }
+{%- endfor %}
+                                _ => {}
+                            }
+                        }
 {%- for variant in payload_result_variants %}
                         if let Some(v) = d.get_item("{{ variant.wire_name }}").ok().flatten() {
                             return {{ ret_ty }}::{{ variant.name }}(v.extract::<String>().unwrap_or_else(|e| {

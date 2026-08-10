@@ -648,7 +648,22 @@ mod tests {
 
     #[test]
     fn visitor_bridge_uses_configured_context_and_result_metadata() {
-        let (api, trait_type, bridge) = crate::codegen::visitor_context::test_support::neutral_visitor_fixture();
+        let (mut api, trait_type, bridge) = crate::codegen::visitor_context::test_support::neutral_visitor_fixture();
+        let result_enum = api
+            .enums
+            .iter_mut()
+            .find(|enum_def| enum_def.name == "WalkOutcome")
+            .expect("neutral visitor fixture should include its result enum");
+        result_enum.serde_rename_all = Some("snake_case".to_string());
+        result_enum.variants.push(crate::core::ir::EnumVariant {
+            name: "ReplaceOutput".to_string(),
+            fields: vec![crate::core::ir::FieldDef {
+                name: "output".to_string(),
+                ty: crate::core::ir::TypeRef::String,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
         let output = super::gen_trait_bridge(
             &trait_type,
             &bridge,
@@ -662,5 +677,23 @@ mod tests {
 
         crate::codegen::visitor_context::test_support::assert_neutral_visitor_output(&output.code);
         assert!(output.code.contains("\"display_name\""));
+        assert!(output.code.contains("d.get_item(\"type\")"), "{}", output.code);
+        assert!(
+            output
+                .code
+                .contains("\"keep_going\" => return sample_core::walk::WalkOutcome::KeepGoing"),
+            "{}",
+            output.code
+        );
+        assert!(
+            output.code.contains("d.get_item(\"output\")") && output.code.contains("WalkOutcome::ReplaceOutput"),
+            "{}",
+            output.code
+        );
+        assert!(
+            output.code.contains("d.get_item(\"replace_output\")"),
+            "{}",
+            output.code
+        );
     }
 }

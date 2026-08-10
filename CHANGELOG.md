@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Python visitor bridges now honor internally tagged return-action dictionaries such as
+  `{"type": "custom", "output": "..."}` while retaining legacy externally tagged payloads.
+
 - C documentation snippets now read configured file inputs into byte-array fields of typed DTO JSON.
 
 - Zig documentation snippets now read configured file inputs into byte-array fields of typed DTO JSON.
