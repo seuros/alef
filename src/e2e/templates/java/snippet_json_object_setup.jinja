@@ -1,1 +1,10 @@
-var {{ variable }} = JsonUtil.fromJson("{{ json }}", {{ type_name }}.class);
+{% for index, marker, path in file_reads %}
+var {{ variable }}File{{ index }} = java.util.Base64.getEncoder().encodeToString(
+    java.nio.file.Files.readAllBytes(java.nio.file.Path.of("{{ path }}"))
+);
+{% endfor %}
+var {{ variable }}Json = "{{ json }}";
+{% for index, marker, path in file_reads %}
+{{ variable }}Json = {{ variable }}Json.replace("{{ marker }}", {{ variable }}File{{ index }});
+{% endfor %}
+var {{ variable }} = JsonUtil.fromJson({{ variable }}Json, {{ type_name }}.class);

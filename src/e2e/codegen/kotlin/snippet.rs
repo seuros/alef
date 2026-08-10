@@ -141,4 +141,59 @@ mod tests {
         assert!(!body.contains("@Test"));
         assert!(!body.contains("assert"));
     }
+
+    #[test]
+    fn snippet_reads_nested_typed_dto_files() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "document_input",
+            "description": "Read a document",
+            "input": {"request": {"content": "ignored"}},
+            "assertions": [],
+            "docs": {
+                "topic": "documents",
+                "presentation": {"files": [{"field": "/request/content", "path": "document.pdf"}]}
+            }
+        }))
+        .expect("fixture");
+        let mut call = CallConfig {
+            function: "process".into(),
+            args: vec![crate::e2e::config::ArgMapping {
+                name: "request".into(),
+                field: "request".into(),
+                arg_type: "json_object".into(),
+                optional: false,
+                owned: false,
+                element_type: None,
+                go_type: None,
+                vec_inner_is_ref: false,
+                trait_name: None,
+            }],
+            ..CallConfig::default()
+        };
+        call.overrides.insert(
+            "kotlin".into(),
+            CallOverride {
+                options_type: Some("DocumentRequest".into()),
+                ..CallOverride::default()
+            },
+        );
+
+        let body = render_snippet_body(
+            &fixture.docs_call_fixture(),
+            &E2eConfig {
+                call,
+                ..E2eConfig::default()
+            },
+            &ResolvedCrateConfig::default(),
+            &[],
+            false,
+        );
+
+        assert!(
+            body.contains("Files.readAllBytes(java.nio.file.Path.of(\"document.pdf\"))"),
+            "{body}"
+        );
+        assert!(body.contains("Base64.getEncoder().encodeToString"), "{body}");
+        assert!(body.contains("DocumentRequest::class.java"), "{body}");
+    }
 }

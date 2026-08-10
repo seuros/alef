@@ -103,7 +103,22 @@ fn render_json_object_setup(
             if value.is_null() || value.is_array() {
                 return None;
             }
-            let normalized = crate::e2e::codegen::transform_json_keys_for_language(value, "snake_case");
+            let mut normalized = crate::e2e::codegen::transform_json_keys_for_language(value, "snake_case");
+            let files = fixture.docs_files_for_arg(&arg.field);
+            let file_reads = files
+                .iter()
+                .enumerate()
+                .filter_map(|(index, file)| {
+                    let marker = format!("__ALEF_DOC_FILE_{index}__");
+                    let target = if file.field.is_empty() {
+                        Some(&mut normalized)
+                    } else {
+                        normalized.pointer_mut(&file.field)
+                    }?;
+                    *target = serde_json::Value::String(marker.clone());
+                    Some((index, marker, file.path.clone()))
+                })
+                .collect::<Vec<_>>();
             let json = serde_json::to_string(&normalized).unwrap_or_default();
             Some(
                 crate::e2e::template_env::render(
@@ -112,6 +127,7 @@ fn render_json_object_setup(
                         variable => arg.name,
                         json => crate::e2e::escape::escape_java(&json),
                         type_name => type_name,
+                        file_reads => file_reads,
                     },
                 )
                 .trim_end()
@@ -222,5 +238,59 @@ mod tests {
         );
         assert!(body.contains("dev.example.SampleService.process(\"example\", options)"));
         assert!(!body.contains("DevExampleSampleService"));
+    }
+
+    #[test]
+    fn snippet_reads_nested_typed_dto_files() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "document_input",
+            "description": "Read a document",
+            "input": {"request": {"content": "ignored"}},
+            "assertions": [],
+            "docs": {
+                "topic": "documents",
+                "presentation": {"files": [{"field": "/request/content", "path": "document.pdf"}]}
+            }
+        }))
+        .expect("fixture");
+        let mut call = CallConfig {
+            function: "process".into(),
+            args: vec![crate::e2e::config::ArgMapping {
+                name: "request".into(),
+                field: "request".into(),
+                arg_type: "json_object".into(),
+                optional: false,
+                owned: false,
+                element_type: None,
+                go_type: None,
+                vec_inner_is_ref: false,
+                trait_name: None,
+            }],
+            ..CallConfig::default()
+        };
+        call.overrides.insert(
+            "java".into(),
+            CallOverride {
+                options_type: Some("DocumentRequest".into()),
+                ..CallOverride::default()
+            },
+        );
+
+        let body = render_snippet_body(
+            &fixture.docs_call_fixture(),
+            &E2eConfig {
+                call,
+                ..E2eConfig::default()
+            },
+            &ResolvedCrateConfig::default(),
+            &[],
+        );
+
+        assert!(
+            body.contains("Files.readAllBytes(java.nio.file.Path.of(\"document.pdf\"))"),
+            "{body}"
+        );
+        assert!(body.contains("Base64.getEncoder().encodeToString"), "{body}");
+        assert!(body.contains("DocumentRequest.class"), "{body}");
     }
 }

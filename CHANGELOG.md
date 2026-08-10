@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Java and Kotlin documentation snippets now read configured file inputs into byte fields of typed DTOs.
+
+- Go, C#, Dart, and PHP documentation snippets now read configured file inputs into native byte values inside typed DTOs.
+
 - Go native DTO snippets now pass defaulted fields through pointers to match generated binding struct types.
 
 - Go documentation snippets now inherit configured options DTO types when fixture recipes omit an inline type.

@@ -218,6 +218,14 @@ static TEMPLATES: &[(&str, &str)] = &[
         "kotlin/snippet_body.jinja",
         include_str!("templates/kotlin/snippet_body.jinja"),
     ),
+    (
+        "kotlin/docs_file_read.jinja",
+        include_str!("templates/kotlin/docs_file_read.jinja"),
+    ),
+    (
+        "kotlin/snippet_json_object_setup.jinja",
+        include_str!("templates/kotlin/snippet_json_object_setup.jinja"),
+    ),
     ("java/pom.xml.jinja", include_str!("templates/java/pom.xml.jinja")),
     ("java/test_file.jinja", include_str!("templates/java/test_file.jinja")),
     (

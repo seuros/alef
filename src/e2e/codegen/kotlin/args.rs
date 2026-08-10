@@ -309,7 +309,13 @@ pub(super) fn build_args_and_setup(
                 }
                 // For json_object args, deserialize via Jackson or use pre-deserialized variable.
                 if arg.arg_type == "json_object" {
-                    if options_type.is_some() {
+                    if let Some(opts_type) = options_type {
+                        let files = fixture.docs_files_for_arg(&arg.field);
+                        if !files.is_empty() {
+                            let mut json_value = v.clone();
+                            let file_reads = prepare_docs_file_reads(&mut json_value, &files);
+                            append_docs_file_setup(&mut setup_lines, &arg.name, &json_value, opts_type, &file_reads);
+                        }
                         // Pre-deserialized variable via options_type
                         parts.push(arg.name.clone());
                     } else {
@@ -340,7 +346,23 @@ pub(super) fn build_args_and_setup(
                         });
 
                         // Setup deserialization
-                        let json_str = serde_json::to_string(v).unwrap_or_default();
+                        let files = fixture.docs_files_for_arg(&arg.field);
+                        let mut json_value = v.clone();
+                        let file_reads = files
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(index, file)| {
+                                let marker = format!("__ALEF_DOC_FILE_{index}__");
+                                let target = if file.field.is_empty() {
+                                    Some(&mut json_value)
+                                } else {
+                                    json_value.pointer_mut(&file.field)
+                                }?;
+                                *target = serde_json::Value::String(marker.clone());
+                                Some((index, marker, file.path.clone()))
+                            })
+                            .collect::<Vec<_>>();
+                        let json_str = serde_json::to_string(&json_value).unwrap_or_default();
                         let var_name = format!("{}_Config", arg.name);
                         if crate::e2e::codegen::value_contains_mock_url_placeholder(v) {
                             let env_key = crate::e2e::codegen::mock_url_env_key(fixture_id);
@@ -357,11 +379,43 @@ pub(super) fn build_args_and_setup(
                             setup_lines.push(format!(
                                 "val {var_name} = MAPPER.readValue({json_var}, {config_type}::class.java)"
                             ));
-                        } else {
+                        } else if file_reads.is_empty() {
                             setup_lines.push(format!(
                                 "val {var_name} = MAPPER.readValue(\"{}\", {config_type}::class.java)",
                                 crate::e2e::escape::escape_kotlin(&json_str)
                             ));
+                        } else {
+                            let replacements = file_reads
+                                .iter()
+                                .map(|(index, marker, _)| format!(".replace(\"{marker}\", {}File{index})", arg.name))
+                                .collect::<String>();
+                            for (index, _, path) in &file_reads {
+                                setup_lines.push(
+                                    crate::e2e::template_env::render(
+                                        "kotlin/docs_file_read.jinja",
+                                        minijinja::context! {
+                                            variable => arg.name,
+                                            index => index,
+                                            path => escape_kotlin(path),
+                                        },
+                                    )
+                                    .trim_end()
+                                    .to_string(),
+                                );
+                            }
+                            setup_lines.push(
+                                crate::e2e::template_env::render(
+                                    "kotlin/snippet_json_object_setup.jinja",
+                                    minijinja::context! {
+                                        variable => var_name,
+                                        json => escape_kotlin(&json_str),
+                                        replacements => replacements,
+                                        type_name => config_type,
+                                    },
+                                )
+                                .trim_end()
+                                .to_string(),
+                            );
                         }
                         parts.push(var_name);
                     }
@@ -407,4 +461,61 @@ pub(super) fn build_args_and_setup(
     }
 
     (setup_lines, parts.join(", "))
+}
+
+fn prepare_docs_file_reads(
+    value: &mut serde_json::Value,
+    files: &[crate::e2e::fixture::FixtureDocsFileInput],
+) -> Vec<(usize, String, String)> {
+    files
+        .iter()
+        .enumerate()
+        .filter_map(|(index, file)| {
+            let marker = format!("__ALEF_DOC_FILE_{index}__");
+            let target = if file.field.is_empty() {
+                Some(&mut *value)
+            } else {
+                value.pointer_mut(&file.field)
+            }?;
+            *target = serde_json::Value::String(marker.clone());
+            Some((index, marker, file.path.clone()))
+        })
+        .collect()
+}
+
+fn append_docs_file_setup(
+    setup_lines: &mut Vec<String>,
+    variable: &str,
+    value: &serde_json::Value,
+    type_name: &str,
+    file_reads: &[(usize, String, String)],
+) {
+    let replacements = file_reads
+        .iter()
+        .map(|(index, marker, _)| format!(".replace(\"{marker}\", {variable}File{index})"))
+        .collect::<String>();
+    for (index, _, path) in file_reads {
+        setup_lines.push(
+            crate::e2e::template_env::render(
+                "kotlin/docs_file_read.jinja",
+                minijinja::context! { variable => variable, index => index, path => escape_kotlin(path) },
+            )
+            .trim_end()
+            .to_string(),
+        );
+    }
+    let json = serde_json::to_string(value).unwrap_or_default();
+    setup_lines.push(
+        crate::e2e::template_env::render(
+            "kotlin/snippet_json_object_setup.jinja",
+            minijinja::context! {
+                variable => variable,
+                json => escape_kotlin(&json),
+                replacements => replacements,
+                type_name => type_name,
+            },
+        )
+        .trim_end()
+        .to_string(),
+    );
 }
