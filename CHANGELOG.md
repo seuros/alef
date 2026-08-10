@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - TypeScript documentation snippets now use imported enum members and safely destructure optional result collections.
 
+- Fixture documentation presentations can replace inline test data with validated local-file inputs, and generated
+  snippets no longer expose mock-server harness details.
+
 - Dart and PHP documentation snippets now construct known DTO arguments with native typed constructors instead of
   JSON round trips.
 

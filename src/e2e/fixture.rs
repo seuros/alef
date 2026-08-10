@@ -9,8 +9,8 @@ use std::path::Path;
 mod metadata;
 mod protocol;
 pub use metadata::{
-    FixtureDocs, FixtureDocsOperation, FixtureDocsPresentation, FixtureEnv, SetupCall, SideEffectClass,
-    SnippetCoverageException, TemplateReturnForm,
+    FixtureDocs, FixtureDocsFileInput, FixtureDocsOperation, FixtureDocsPresentation, FixtureEnv, SetupCall,
+    SideEffectClass, SnippetCoverageException, TemplateReturnForm,
 };
 pub use protocol::{
     AsyncApiFixture, WebSocketFixture, WebSocketFrameType, WebSocketHandler, WebSocketMessage,
@@ -394,14 +394,64 @@ impl Fixture {
     pub fn docs_call_fixture(&self) -> Self {
         let mut fixture = self.clone();
         if let Some(presentation) = self.docs.as_ref().and_then(|docs| docs.presentation.as_ref()) {
+            if let Some(call) = &presentation.call {
+                fixture.call = Some(call.clone());
+            }
             if let Some(input) = &presentation.input {
                 fixture.input = input.clone();
+            }
+            for file in &presentation.files {
+                if let Some(value) = fixture.input.pointer_mut(&file.field) {
+                    *value = serde_json::Value::String(file.path.clone());
+                }
             }
             if let Some(args) = &presentation.args {
                 fixture.args = args.clone();
             }
         }
+        fixture.mock_response = None;
+        if let Some(input) = fixture.input.as_object_mut() {
+            input.remove("mock_responses");
+        }
+        replace_docs_mock_urls(&mut fixture.input);
         fixture
+    }
+
+    pub fn docs_files_for_arg(&self, field: &str) -> Vec<FixtureDocsFileInput> {
+        let base = if field == "input" {
+            if self.input.get("extract_input").is_some() {
+                "/extract_input".to_string()
+            } else {
+                String::new()
+            }
+        } else {
+            format!("/{}", field.strip_prefix("input.").unwrap_or(field).replace('.', "/"))
+        };
+        self.docs
+            .as_ref()
+            .and_then(|docs| docs.presentation.as_ref())
+            .map(|presentation| {
+                presentation
+                    .files
+                    .iter()
+                    .filter_map(|file| {
+                        file.field.strip_prefix(&base).and_then(|relative| {
+                            (relative.is_empty() || relative.starts_with('/')).then(|| FixtureDocsFileInput {
+                                field: relative.to_string(),
+                                path: file.path.clone(),
+                            })
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn docs_file_path(&self, field: &str) -> Option<String> {
+        self.docs_files_for_arg(field)
+            .into_iter()
+            .find(|file| file.field.is_empty())
+            .map(|file| file.path)
     }
 
     pub fn has_docs_presentation(&self) -> bool {
@@ -567,6 +617,25 @@ impl Fixture {
     }
 }
 
+fn replace_docs_mock_urls(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(text) => {
+            *text = text.replace(crate::e2e::codegen::MOCK_URL_PLACEHOLDER, "https://example.com");
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                replace_docs_mock_urls(value);
+            }
+        }
+        serde_json::Value::Object(values) => {
+            for value in values.values_mut() {
+                replace_docs_mock_urls(value);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Skip directive for conditionally excluding fixtures.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkipDirective {
@@ -698,6 +767,8 @@ fn load_fixtures_recursive(base: &Path, dir: &Path, fixtures: &mut Vec<Fixture>)
 
             for mut fixture in parsed {
                 fixture.source = relative.clone();
+                validate_docs_file_inputs(&fixture)
+                    .with_context(|| format!("invalid docs file input in fixture: {}", path.display()))?;
                 // Expand template expressions (e.g. `{{ repeat 'x' 10000 times }}`)
                 // in all JSON string values so generators emit the expanded values.
                 expand_json_templates(&mut fixture.input);
@@ -711,6 +782,27 @@ fn load_fixtures_recursive(base: &Path, dir: &Path, fixtures: &mut Vec<Fixture>)
                 }
                 fixtures.push(fixture);
             }
+        }
+    }
+    Ok(())
+}
+
+fn validate_docs_file_inputs(fixture: &Fixture) -> Result<()> {
+    let Some(presentation) = fixture.docs.as_ref().and_then(|docs| docs.presentation.as_ref()) else {
+        return Ok(());
+    };
+    let input = presentation.input.as_ref().unwrap_or(&fixture.input);
+    for file in &presentation.files {
+        let path = Path::new(&file.path);
+        if path.is_absolute()
+            || path
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            bail!("docs file path must be relative and traversal-free: {}", file.path);
+        }
+        if !file.field.starts_with('/') || input.pointer(&file.field).is_none() {
+            bail!("docs file field must be an existing JSON pointer: {}", file.field);
         }
     }
     Ok(())
@@ -1144,5 +1236,60 @@ mod tests {
             "error should name the bad id: {message}"
         );
         assert!(message.contains("python"), "error should list valid ids: {message}");
+    }
+
+    #[test]
+    fn docs_file_inputs_require_safe_existing_pointers() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "file_input",
+            "description": "Reads a local document",
+            "input": {"content": [1, 2, 3]},
+            "assertions": [],
+            "docs": {
+                "topic": "guides",
+                "presentation": {"files": [{"field": "/content", "path": "../secret.pdf"}]}
+            }
+        }))
+        .expect("fixture");
+
+        let error = validate_docs_file_inputs(&fixture).expect_err("traversal must be rejected");
+        assert!(error.to_string().contains("traversal-free"), "{error}");
+
+        let mut missing = fixture;
+        let file = &mut missing
+            .docs
+            .as_mut()
+            .and_then(|docs| docs.presentation.as_mut())
+            .expect("presentation")
+            .files[0];
+        file.path = "document.pdf".into();
+        file.field = "/missing".into();
+        let error = validate_docs_file_inputs(&missing).expect_err("missing pointers must be rejected");
+        assert!(error.to_string().contains("existing JSON pointer"), "{error}");
+    }
+
+    #[test]
+    fn docs_files_resolve_relative_to_each_argument() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "typed_file_input",
+            "description": "Reads a typed document input",
+            "input": {"extract_input": {"kind": "bytes", "bytes": [1, 2, 3]}},
+            "assertions": [],
+            "docs": {
+                "topic": "guides",
+                "presentation": {
+                    "files": [{"field": "/extract_input/bytes", "path": "document.pdf"}]
+                }
+            }
+        }))
+        .expect("fixture");
+
+        assert_eq!(
+            fixture.docs_files_for_arg("input"),
+            vec![FixtureDocsFileInput {
+                field: "/bytes".into(),
+                path: "document.pdf".into(),
+            }]
+        );
     }
 }

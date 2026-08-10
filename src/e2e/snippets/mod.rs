@@ -330,6 +330,8 @@ fn render_snippet_body(
     language: &str,
     context: &SnippetRenderContext<'_>,
 ) -> Result<String> {
+    let docs_fixture = fixture.docs_call_fixture();
+    let fixture = &docs_fixture;
     for extension in extensions {
         if let Some(body) = extension
             .render_e2e_snippet(

@@ -280,6 +280,7 @@ mod tests {
             title: None,
             description: None,
             presentation: Some(crate::e2e::fixture::FixtureDocsPresentation {
+                call: None,
                 input: Some(serde_json::json!({"source": {"kind": "uri", "uri": "guide.txt"}})),
                 args: Some(vec![crate::e2e::config::ArgMapping {
                     name: "source".into(),
@@ -292,6 +293,7 @@ mod tests {
                     vec_inner_is_ref: false,
                     trait_name: None,
                 }]),
+                files: Vec::new(),
                 operations: Vec::new(),
             }),
             side_effects: crate::e2e::fixture::SideEffectClass::Safe,

@@ -46,11 +46,21 @@ pub struct FixtureDocs {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FixtureDocsPresentation {
     #[serde(default)]
+    pub call: Option<String>,
+    #[serde(default)]
     pub input: Option<serde_json::Value>,
     #[serde(default)]
     pub args: Option<Vec<ArgMapping>>,
     #[serde(default)]
+    pub files: Vec<FixtureDocsFileInput>,
+    #[serde(default)]
     pub operations: Vec<FixtureDocsOperation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FixtureDocsFileInput {
+    pub field: String,
+    pub path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -140,8 +150,10 @@ mod tests {
         let docs: FixtureDocs = serde_json::from_value(serde_json::json!({
             "topic": "configuration",
             "presentation": {
+                "call": "process_file",
                 "input": {"source": "guide.txt"},
                 "args": [{"name": "source", "field": "source", "type": "string"}],
+                "files": [{"field": "/source", "path": "examples/guide.txt"}],
                 "operations": [
                     {"op": "show", "path": "summary"},
                     {"op": "iterate", "path": "items", "item": "item", "fields": ["text"], "optional": true}
@@ -152,6 +164,8 @@ mod tests {
 
         let presentation = docs.presentation.expect("presentation");
         assert_eq!(presentation.input, Some(serde_json::json!({"source": "guide.txt"})));
+        assert_eq!(presentation.call.as_deref(), Some("process_file"));
+        assert_eq!(presentation.files[0].field, "/source");
         assert!(matches!(presentation.operations[0], FixtureDocsOperation::Show { .. }));
         assert!(matches!(
             presentation.operations[1],

@@ -111,6 +111,7 @@ mod tests {
                 title: None,
                 description: None,
                 presentation: Some(FixtureDocsPresentation {
+                    call: None,
                     input: Some(serde_json::json!({"source": "guide.txt"})),
                     args: Some(vec![ArgMapping {
                         name: "source".into(),
@@ -123,6 +124,7 @@ mod tests {
                         vec_inner_is_ref: false,
                         trait_name: None,
                     }]),
+                    files: Vec::new(),
                     operations: vec![FixtureDocsOperation::Iterate {
                         path: "items".into(),
                         item: "item".into(),
@@ -156,6 +158,40 @@ mod tests {
         assert_eq!(fixture.input, serde_json::json!({"source": "guide.txt"}));
         assert_eq!(fixture.args[0].arg_type, "string");
         assert_eq!(fixture.args[0].field, "source");
+    }
+
+    #[test]
+    fn docs_call_fixture_removes_mock_harness_and_uses_an_illustrative_url() {
+        let mut fixture = fixture();
+        fixture
+            .docs
+            .as_mut()
+            .and_then(|docs| docs.presentation.as_mut())
+            .expect("presentation")
+            .input = None;
+        fixture.input = serde_json::json!({
+            "mock_responses": [{"path": "/guide.txt", "status_code": 200}],
+            "extract_input": {"kind": "uri", "uri": "$mock_url/guide.txt"}
+        });
+        fixture.mock_response = Some(crate::e2e::fixture::MockResponse {
+            status: 200,
+            body: None,
+            stream_chunks: None,
+            headers: Default::default(),
+        });
+
+        let docs_fixture = fixture.docs_call_fixture();
+
+        assert!(docs_fixture.mock_response.is_none());
+        assert!(docs_fixture.input.get("mock_responses").is_none());
+        assert_eq!(
+            docs_fixture
+                .input
+                .pointer("/extract_input/uri")
+                .and_then(serde_json::Value::as_str),
+            Some("https://example.com/guide.txt")
+        );
+        assert!(!docs_fixture.needs_mock_server());
     }
 
     #[test]
