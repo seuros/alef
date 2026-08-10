@@ -43,7 +43,8 @@ impl JavaValidator {
         if let Some(value) = session {
             value.apply(&mut command);
             if let Some(manifest) = &value.manifest {
-                command.args(["--class-path", manifest.to_string_lossy().as_ref()]);
+                let class_path = Self::class_path(manifest)?;
+                command.args(["--class-path", class_path.to_string_lossy().as_ref()]);
             }
         }
         let (success, output) = run_command(&mut command, timeout_secs)?;
@@ -70,6 +71,33 @@ impl JavaValidator {
             }
         }
         "Snippet".to_string()
+    }
+
+    fn class_path(manifest: &std::path::Path) -> Result<std::ffi::OsString> {
+        if manifest.is_dir() || manifest.extension().is_some_and(|extension| extension == "jar") {
+            return Ok(manifest.as_os_str().to_owned());
+        }
+        let root = manifest.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let target = root.join("target");
+        let mut entries = [target.join("classes"), target.join("test-classes")]
+            .into_iter()
+            .filter(|path| path.exists())
+            .collect::<Vec<_>>();
+        let dependency_directory = target.join("dependency");
+        if dependency_directory.is_dir() {
+            entries.extend(
+                std::fs::read_dir(dependency_directory)?
+                    .filter_map(std::result::Result::ok)
+                    .map(|entry| entry.path())
+                    .filter(|path| path.extension().is_some_and(|extension| extension == "jar")),
+            );
+        }
+        if entries.is_empty() {
+            entries.push(root.to_path_buf());
+        }
+        std::env::join_paths(entries).map_err(|error| {
+            crate::snippets::error::Error::Other(format!("building Java classpath for {}: {error}", manifest.display()))
+        })
     }
 
     fn has_class_or_interface(code: &str) -> bool {
@@ -207,6 +235,8 @@ mod tests {
             manifest: Some(classes),
             fingerprint: "fixture".into(),
             env: BTreeMap::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: BTreeMap::new(),
         };
 
         let (status, output) = JavaValidator::validate_with_context(
@@ -217,6 +247,18 @@ mod tests {
         )
         .expect("validation runs");
         assert_eq!(status, SnippetStatus::Pass, "{output:?}");
+    }
+
+    #[test]
+    fn project_manifest_resolves_compiled_class_directory() {
+        let project = tempfile::tempdir().expect("project directory");
+        let classes = project.path().join("target/classes");
+        std::fs::create_dir_all(&classes).expect("classes directory");
+        let manifest = project.path().join("pom.xml");
+        std::fs::write(&manifest, "<project />").expect("manifest");
+
+        let class_path = JavaValidator::class_path(&manifest).expect("classpath");
+        assert_eq!(std::env::split_paths(&class_path).collect::<Vec<_>>(), vec![classes]);
     }
 
     fn snippet(code: &str) -> Snippet {

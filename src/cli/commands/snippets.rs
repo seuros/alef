@@ -377,6 +377,8 @@ fn configured_sessions(
             manifest: session.manifest.as_ref().map(|path| root.join(path)),
             before: session.before.clone(),
             env: session.env.clone(),
+            rust_features: session.rust_features.clone(),
+            rust_dependencies: session.rust_dependencies.clone(),
         };
         if sessions.insert(normalized.clone(), spec).is_some() {
             return Err(format!("duplicate docs.snippets session target `{normalized}`"));
@@ -639,6 +641,9 @@ mod tests {
 
     #[test]
     fn configured_sessions_accept_binding_targets_and_reject_unknown_keys() {
+        let root = std::env::current_dir()
+            .expect("current directory")
+            .join("neutral-workspace");
         let mut config = crate::core::config::DocsSnippetsConfig::default();
         config.sessions.insert(
             "wasm".into(),
@@ -647,17 +652,14 @@ mod tests {
                 ..Default::default()
             },
         );
-        let sessions = configured_sessions(&config, std::path::Path::new("/workspace")).expect("known target");
+        let sessions = configured_sessions(&config, &root).expect("known target");
         assert_eq!(sessions["wasm"].language, Language::TypeScript);
-        assert_eq!(
-            sessions["wasm"].working_directory,
-            std::path::Path::new("/workspace/bindings/wasm")
-        );
+        assert_eq!(sessions["wasm"].working_directory, root.join("bindings/wasm"));
 
         config.sessions.insert(
             "unsupported-runtime".into(),
             crate::core::config::output::DocsSnippetSessionConfig::default(),
         );
-        assert!(configured_sessions(&config, std::path::Path::new("/workspace")).is_err());
+        assert!(configured_sessions(&config, &root).is_err());
     }
 }

@@ -205,6 +205,8 @@ mod tests {
                 "GOCACHE".into(),
                 root.path().join("go-cache").to_string_lossy().into_owned(),
             )]),
+            rust_features: Vec::new(),
+            rust_dependencies: BTreeMap::new(),
         };
 
         let (status, output) =

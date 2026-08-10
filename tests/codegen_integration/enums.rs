@@ -111,6 +111,14 @@ fn test_gen_enum_with_single_variant_uses_discriminant_zero() {
     assert!(result.contains("pub enum Single {"), "should have enum declaration");
     assert!(result.contains("Only = 0"), "single variant has discriminant 0");
     assert!(result.contains("#[default]"), "first variant gets #[default]");
+
+    let attrs = vec!["pyclass(eq, eq_int)"];
+    let mut pyo3_cfg = default_cfg();
+    pyo3_cfg.enum_attrs = &attrs;
+    let pyo3_result = gen_enum(&enum_def, &pyo3_cfg);
+    assert!(!pyo3_result.contains("match s_lower.as_str()"), "{pyo3_result}");
+    assert!(!pyo3_result.contains("match n"), "{pyo3_result}");
+    assert!(pyo3_result.contains("if n == 0"), "{pyo3_result}");
 }
 
 #[test]

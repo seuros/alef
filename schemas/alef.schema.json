@@ -1753,6 +1753,31 @@
       },
       "type": "object"
     },
+    "DocsSnippetRustDependencyConfig": {
+      "properties": {
+        "default_features": {
+          "default": true,
+          "description": "Whether Cargo enables the dependency's default features.",
+          "type": "boolean"
+        },
+        "features": {
+          "default": [],
+          "description": "Cargo features enabled for the dependency.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "version": {
+          "description": "Cargo package version requirement.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version"
+      ],
+      "type": "object"
+    },
     "DocsSnippetSessionConfig": {
       "properties": {
         "before": {
@@ -1782,6 +1807,22 @@
             "string",
             "null"
           ]
+        },
+        "rust_dependencies": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DocsSnippetRustDependencyConfig"
+          },
+          "default": {},
+          "description": "Additional Cargo dependencies available to Rust snippets.",
+          "type": "object"
+        },
+        "rust_features": {
+          "default": [],
+          "description": "Cargo features enabled on the local Rust package dependency.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [

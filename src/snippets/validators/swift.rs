@@ -109,6 +109,9 @@ fn swift_module_directories(session: &ValidationSession) -> Result<Vec<std::path
     let mut command = std::process::Command::new("swift");
     command.args(["build", "--show-bin-path"]);
     session.apply(&mut command);
+    if let Some(package_root) = session.manifest.as_deref().and_then(std::path::Path::parent) {
+        command.current_dir(package_root);
+    }
     let output = command.output()?;
     if !output.status.success() {
         return Err(crate::snippets::error::Error::Other(

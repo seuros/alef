@@ -26,7 +26,13 @@ pub(super) fn generated_module_files(
 ) -> (String, Vec<GeneratedFile>) {
     let output_dir = elixir_output_dir(config);
     let enum_defaults = enum_defaults(api);
-    let known_struct_types = known_public_struct_types(api, context.exclude_types);
+    let mut known_struct_types = known_public_struct_types(api, context.exclude_types);
+    known_struct_types.extend(
+        api.enums
+            .iter()
+            .filter(|enum_def| !context.exclude_types.contains(enum_def.name.as_str()))
+            .map(|enum_def| enum_def.name.clone()),
+    );
     let mut files = Vec::new();
 
     push_native_module_file(api, config, &context, &output_dir, &mut files);

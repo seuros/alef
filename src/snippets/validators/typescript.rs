@@ -60,7 +60,7 @@ impl TypeScriptValidator {
         let content = if manifest_value.get("compilerOptions").is_some() {
             Self::project_overlay(directory, manifest)
         } else {
-            Self::package_overlay(directory, manifest, &manifest_value)?
+            Self::package_overlay(manifest, &manifest_value)?
         };
         std::fs::write(
             &path,
@@ -79,11 +79,7 @@ impl TypeScriptValidator {
         })
     }
 
-    fn package_overlay(
-        directory: &std::path::Path,
-        manifest: &std::path::Path,
-        manifest_value: &serde_json::Value,
-    ) -> Result<serde_json::Value> {
+    fn package_overlay(manifest: &std::path::Path, manifest_value: &serde_json::Value) -> Result<serde_json::Value> {
         let package_name = manifest_value
             .get("name")
             .and_then(serde_json::Value::as_str)
@@ -105,7 +101,6 @@ impl TypeScriptValidator {
                 "module": "ES2022",
                 "moduleResolution": "bundler",
                 "skipLibCheck": true,
-                "baseUrl": directory,
                 "paths": { package_name: [declaration] }
             },
             "files": ["snippet.ts"]
@@ -254,6 +249,7 @@ mod tests {
             value["compilerOptions"]["paths"]["sample-binding"][0],
             package.path().join("index.d.ts").to_string_lossy().as_ref()
         );
+        assert!(value["compilerOptions"].get("baseUrl").is_none());
     }
 
     #[test]
@@ -281,6 +277,8 @@ mod tests {
             manifest: Some(manifest),
             fingerprint: "neutral-project".into(),
             env: BTreeMap::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: BTreeMap::new(),
         };
 
         let valid = snippet("import { value } from 'sample-binding';\nconst result: number = value;");

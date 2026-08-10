@@ -43,8 +43,12 @@ impl RustValidator {
 
     fn cargo_manifest(session: Option<&ValidationSession>) -> Result<String> {
         let dependency = session.map(Self::path_dependency).transpose()?.unwrap_or_default();
+        let dependencies = session
+            .map(Self::additional_dependencies)
+            .transpose()?
+            .unwrap_or_default();
         Ok(format!(
-            "[workspace]\n\n[package]\nname = \"snippet-check\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\n{dependency}"
+            "[workspace]\n\n[package]\nname = \"snippet-check\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\n{dependency}{dependencies}"
         ))
     }
 
@@ -66,12 +70,43 @@ impl RustValidator {
             })?;
         let crate_name = package.replace('-', "_");
         Ok(format!(
-            "{crate_name} = {{ package = {package:?}, path = {:?} }}\n",
+            "{crate_name} = {{ package = {package:?}, path = {:?}, features = {:?} }}\n",
             manifest
                 .parent()
                 .unwrap_or(&session.working_directory)
-                .to_string_lossy()
+                .to_string_lossy(),
+            session.rust_features
         ))
+    }
+
+    fn additional_dependencies(session: &ValidationSession) -> Result<String> {
+        let mut dependencies = String::new();
+        for (name, dependency) in &session.rust_dependencies {
+            if !Self::valid_dependency_name(name) {
+                return Err(crate::snippets::error::Error::Other(format!(
+                    "invalid Rust snippet dependency name `{name}`"
+                )));
+            }
+            let mut specification = toml::map::Map::new();
+            specification.insert("version".into(), toml::Value::String(dependency.version.clone()));
+            specification.insert(
+                "features".into(),
+                toml::Value::Array(dependency.features.iter().cloned().map(toml::Value::String).collect()),
+            );
+            specification.insert(
+                "default-features".into(),
+                toml::Value::Boolean(dependency.default_features),
+            );
+            dependencies.push_str(&format!("{name} = {}\n", toml::Value::Table(specification)));
+        }
+        Ok(dependencies)
+    }
+
+    fn valid_dependency_name(name: &str) -> bool {
+        !name.is_empty()
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     }
 
     fn is_bare_signature(code: &str) -> bool {
@@ -269,6 +304,8 @@ mod tests {
             manifest: Some(manifest),
             fingerprint: "neutral-project".into(),
             env: BTreeMap::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: BTreeMap::new(),
         };
         let snippet = Snippet {
             id: None,
@@ -292,5 +329,75 @@ mod tests {
                 .expect("validation runs");
 
         assert_eq!(status, SnippetStatus::Pass, "{output:?}");
+    }
+
+    #[test]
+    fn session_dependency_enables_declared_features() {
+        let project = tempfile::tempdir().expect("project directory");
+        let manifest = project.path().join("Cargo.toml");
+        std::fs::write(
+            &manifest,
+            "[package]\nname = \"sample-binding\"\nversion = \"0.1.0\"\n\n[features]\ndefault = []\nnetwork = []\n",
+        )
+        .expect("package manifest");
+        let session = ValidationSession {
+            working_directory: project.path().to_path_buf(),
+            manifest: Some(manifest),
+            fingerprint: "neutral-project".into(),
+            env: BTreeMap::new(),
+            rust_features: vec!["network".into()],
+            rust_dependencies: BTreeMap::new(),
+        };
+
+        let dependency = RustValidator::path_dependency(&session).expect("dependency");
+        assert!(dependency.contains("features = [\"network\"]"));
+    }
+
+    #[test]
+    fn session_manifest_adds_explicit_dependencies() {
+        let mut session = ValidationSession {
+            working_directory: std::path::PathBuf::from("fixture"),
+            manifest: None,
+            fingerprint: "neutral-project".into(),
+            env: BTreeMap::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: BTreeMap::new(),
+        };
+        session.rust_dependencies.insert(
+            "async-runtime".into(),
+            crate::core::config::output::DocsSnippetRustDependencyConfig {
+                version: "1".into(),
+                features: vec!["macros".into()],
+                default_features: false,
+            },
+        );
+
+        let dependencies = RustValidator::additional_dependencies(&session).expect("dependencies");
+        assert!(dependencies.starts_with("async-runtime = {"));
+        assert!(dependencies.contains("version = \"1\""));
+        assert!(dependencies.contains("features = [\"macros\"]"));
+        assert!(dependencies.contains("default-features = false"));
+    }
+
+    #[test]
+    fn rejects_invalid_dependency_names() {
+        let mut session = ValidationSession {
+            working_directory: std::path::PathBuf::from("fixture"),
+            manifest: None,
+            fingerprint: "neutral-project".into(),
+            env: BTreeMap::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: BTreeMap::new(),
+        };
+        session.rust_dependencies.insert(
+            "invalid\n[package]".into(),
+            crate::core::config::output::DocsSnippetRustDependencyConfig {
+                version: "1".into(),
+                features: Vec::new(),
+                default_features: true,
+            },
+        );
+
+        assert!(RustValidator::additional_dependencies(&session).is_err());
     }
 }

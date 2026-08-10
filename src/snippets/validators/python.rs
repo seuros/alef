@@ -332,6 +332,8 @@ mod tests {
             manifest: None,
             fingerprint: "test-binding".into(),
             env: std::collections::BTreeMap::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: std::collections::BTreeMap::new(),
         };
 
         let (status, message) = PythonValidator

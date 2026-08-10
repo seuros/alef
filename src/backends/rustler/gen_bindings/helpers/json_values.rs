@@ -436,4 +436,19 @@ mod tests {
 
         assert_eq!(result, "String.t() | nil");
     }
+
+    #[test]
+    fn struct_field_vector_prefers_known_public_enum_module() {
+        let default_types = AHashSet::from_iter(["HostMatcher".to_string()]);
+        let known_types = AHashSet::from_iter(["HostMatcher".to_string()]);
+        let result = elixir_struct_field_typespec(
+            &TypeRef::Vec(Box::new(TypeRef::Named("HostMatcher".into()))),
+            "Sample",
+            &AHashSet::new(),
+            &default_types,
+            &known_types,
+        );
+
+        assert_eq!(result, "[Sample.HostMatcher.t()]");
+    }
 }

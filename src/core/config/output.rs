@@ -467,6 +467,24 @@ pub struct DocsSnippetSessionConfig {
     /// Environment variables applied to setup and validation commands.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Cargo features enabled on the local Rust package dependency.
+    #[serde(default)]
+    pub rust_features: Vec<String>,
+    /// Additional Cargo dependencies available to Rust snippets.
+    #[serde(default)]
+    pub rust_dependencies: BTreeMap<String, DocsSnippetRustDependencyConfig>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct DocsSnippetRustDependencyConfig {
+    /// Cargo package version requirement.
+    pub version: String,
+    /// Cargo features enabled for the dependency.
+    #[serde(default)]
+    pub features: Vec<String>,
+    /// Whether Cargo enables the dependency's default features.
+    #[serde(default = "default_true")]
+    pub default_features: bool,
 }
 
 impl DocsSnippetsConfig {

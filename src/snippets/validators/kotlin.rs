@@ -29,7 +29,8 @@ impl KotlinValidator {
             command.arg("-nowarn");
         }
         if let Some(manifest) = session.and_then(|value| value.manifest.as_ref()) {
-            command.args(["-classpath", manifest.to_string_lossy().as_ref()]);
+            let class_path = Self::class_path(manifest)?;
+            command.args(["-classpath", class_path.to_string_lossy().as_ref()]);
         }
         command
             .arg("-d")
@@ -47,6 +48,40 @@ impl KotlinValidator {
             (SnippetStatus::Pass, None)
         } else {
             (SnippetStatus::Fail, Some(output))
+        })
+    }
+
+    fn class_path(manifest: &std::path::Path) -> Result<std::ffi::OsString> {
+        if manifest.is_dir() || manifest.extension().is_some_and(|extension| extension == "jar") {
+            return Ok(manifest.as_os_str().to_owned());
+        }
+        let root = manifest.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let build = root.join("build");
+        let mut entries = [
+            build.join("classes/kotlin/main"),
+            build.join("classes/java/main"),
+            build.join("intermediates/javac/debug/classes"),
+        ]
+        .into_iter()
+        .filter(|path| path.exists())
+        .collect::<Vec<_>>();
+        let libraries = build.join("libs");
+        if libraries.is_dir() {
+            entries.extend(
+                std::fs::read_dir(libraries)?
+                    .filter_map(std::result::Result::ok)
+                    .map(|entry| entry.path())
+                    .filter(|path| path.extension().is_some_and(|extension| extension == "jar")),
+            );
+        }
+        if entries.is_empty() {
+            entries.push(root.to_path_buf());
+        }
+        std::env::join_paths(entries).map_err(|error| {
+            crate::snippets::error::Error::Other(format!(
+                "building Kotlin classpath for {}: {error}",
+                manifest.display()
+            ))
         })
     }
 }
@@ -120,6 +155,8 @@ mod tests {
             manifest: Some(library),
             fingerprint: "fixture".into(),
             env: BTreeMap::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: BTreeMap::new(),
         };
 
         let (status, output) = KotlinValidator::validate_with_context(
@@ -130,6 +167,18 @@ mod tests {
         )
         .expect("validation runs");
         assert_eq!(status, SnippetStatus::Pass, "{output:?}");
+    }
+
+    #[test]
+    fn build_manifest_resolves_compiled_class_directory() {
+        let project = tempfile::tempdir().expect("project directory");
+        let classes = project.path().join("build/classes/kotlin/main");
+        std::fs::create_dir_all(&classes).expect("classes directory");
+        let manifest = project.path().join("build.gradle.kts");
+        std::fs::write(&manifest, "plugins {}").expect("manifest");
+
+        let class_path = KotlinValidator::class_path(&manifest).expect("classpath");
+        assert_eq!(std::env::split_paths(&class_path).collect::<Vec<_>>(), vec![classes]);
     }
 
     fn snippet(code: &str) -> Snippet {

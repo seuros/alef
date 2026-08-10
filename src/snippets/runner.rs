@@ -375,6 +375,8 @@ mod tests {
                     manifest: None,
                     fingerprint: "node".into(),
                     env: Default::default(),
+                    rust_features: Vec::new(),
+                    rust_dependencies: Default::default(),
                 },
             ),
             (
@@ -384,6 +386,8 @@ mod tests {
                     manifest: None,
                     fingerprint: "wasm".into(),
                     env: Default::default(),
+                    rust_features: Vec::new(),
+                    rust_dependencies: Default::default(),
                 },
             ),
         ]);

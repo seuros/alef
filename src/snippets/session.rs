@@ -11,6 +11,8 @@ pub struct SessionSpec {
     pub manifest: Option<PathBuf>,
     pub before: Vec<String>,
     pub env: BTreeMap<String, String>,
+    pub rust_features: Vec<String>,
+    pub rust_dependencies: BTreeMap<String, crate::core::config::output::DocsSnippetRustDependencyConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -19,6 +21,8 @@ pub struct ValidationSession {
     pub manifest: Option<PathBuf>,
     pub fingerprint: String,
     pub env: BTreeMap<String, String>,
+    pub rust_features: Vec<String>,
+    pub rust_dependencies: BTreeMap<String, crate::core::config::output::DocsSnippetRustDependencyConfig>,
 }
 
 impl ValidationSession {
@@ -44,7 +48,26 @@ impl ValidationSession {
     }
 
     pub fn apply_environment(&self, command: &mut std::process::Command) {
-        command.envs(&self.env);
+        let (go_cache, zig_cache) = self.cache_directories();
+        command.env("GOCACHE", &go_cache);
+        command.env("ZIG_GLOBAL_CACHE_DIR", &zig_cache);
+        for (name, value) in &self.env {
+            let path = std::path::Path::new(value);
+            let value = if matches!(name.as_str(), "GOCACHE" | "ZIG_GLOBAL_CACHE_DIR") && path.is_relative() {
+                self.working_directory.join(path).into_os_string()
+            } else {
+                value.into()
+            };
+            command.env(name, value);
+        }
+    }
+
+    fn cache_directories(&self) -> (PathBuf, PathBuf) {
+        let root = self
+            .working_directory
+            .join(".alef/snippets/cache")
+            .join(&self.fingerprint);
+        (root.join("go-build"), root.join("zig-global"))
     }
 }
 
@@ -73,12 +96,23 @@ fn prepare_session(spec: &SessionSpec, timeout_secs: u64) -> Result<ValidationSe
         run_before(command, &spec.working_directory, &spec.env, timeout_secs)
             .map_err(|error| Error::Other(format!("preparing {language} snippet validation session: {error}")))?;
     }
-    Ok(ValidationSession {
+    let session = ValidationSession {
         working_directory: spec.working_directory.clone(),
         manifest: spec.manifest.clone(),
         fingerprint: session_fingerprint(spec)?,
         env: spec.env.clone(),
-    })
+        rust_features: spec.rust_features.clone(),
+        rust_dependencies: spec.rust_dependencies.clone(),
+    };
+    for directory in [session.cache_directories().0, session.cache_directories().1] {
+        std::fs::create_dir_all(&directory).map_err(|error| {
+            Error::Other(format!(
+                "creating snippet toolchain cache {}: {error}",
+                directory.display()
+            ))
+        })?;
+    }
+    Ok(session)
 }
 
 fn session_fingerprint(spec: &SessionSpec) -> Result<String> {
@@ -104,6 +138,17 @@ fn session_fingerprint(spec: &SessionSpec) -> Result<String> {
     for (name, value) in &spec.env {
         hasher.update(name.as_bytes());
         hasher.update(value.as_bytes());
+    }
+    for feature in &spec.rust_features {
+        hasher.update(feature.as_bytes());
+    }
+    for (name, dependency) in &spec.rust_dependencies {
+        hasher.update(name.as_bytes());
+        hasher.update(dependency.version.as_bytes());
+        hasher.update(&[u8::from(dependency.default_features)]);
+        for feature in &dependency.features {
+            hasher.update(feature.as_bytes());
+        }
     }
     for path in paths {
         hasher.update(
@@ -164,6 +209,8 @@ mod tests {
                 manifest: None,
                 before: vec![format!("test ! -e prepared && touch {}", marker.display())],
                 env: BTreeMap::new(),
+                rust_features: Vec::new(),
+                rust_dependencies: BTreeMap::new(),
             },
         );
 
@@ -185,6 +232,8 @@ mod tests {
                 manifest: Some(directory.path().join("missing.json")),
                 before: Vec::new(),
                 env: BTreeMap::new(),
+                rust_features: Vec::new(),
+                rust_dependencies: BTreeMap::new(),
             },
         );
 
@@ -205,6 +254,8 @@ mod tests {
                 manifest: None,
                 before: vec!["test \"$ALEF_SESSION_CACHE\" = configured".into()],
                 env: BTreeMap::from([("ALEF_SESSION_CACHE".into(), "configured".into())]),
+                rust_features: Vec::new(),
+                rust_dependencies: BTreeMap::new(),
             },
         );
 
@@ -227,6 +278,8 @@ mod tests {
             manifest: None,
             fingerprint: "neutral-fixture".into(),
             env: BTreeMap::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: BTreeMap::new(),
         };
 
         let first = session.workspace_directory().expect("first workspace");
@@ -238,6 +291,29 @@ mod tests {
             std::fs::read_to_string(second.join("compiler-output")).unwrap(),
             "cached"
         );
+    }
+
+    #[test]
+    fn provides_absolute_isolated_toolchain_directories() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let session = ValidationSession {
+            working_directory: directory.path().to_path_buf(),
+            manifest: None,
+            fingerprint: "neutral-fixture".into(),
+            env: BTreeMap::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: BTreeMap::new(),
+        };
+        let mut command = std::process::Command::new("true");
+        session.apply_environment(&mut command);
+        let values = command
+            .get_envs()
+            .filter_map(|(name, value)| value.map(|value| (name.to_string_lossy().into_owned(), value.to_owned())))
+            .collect::<BTreeMap<_, _>>();
+
+        for name in ["GOCACHE", "ZIG_GLOBAL_CACHE_DIR"] {
+            assert!(std::path::Path::new(&values[name]).is_absolute(), "{name}");
+        }
     }
 }
 

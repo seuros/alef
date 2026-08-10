@@ -13,8 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Snippet validation sessions now integrate configured package manifests and toolchain roots across Rust, TypeScript,
+  Go, C#, Java, Kotlin, Dart, Python, Swift, and Zig, with isolated absolute caches and explicit Rust dependencies.
+
 - Generated C snippets now use configured ABI prefixes, explicitly typed scalar and void return shapes, while Java snippets present
   returned values and selected fields; C Doxygen output also escapes nested comment delimiters.
+
+- Elixir DTO typespecs now retain generated enum modules inside lists, and PyO3 single-variant enum constructors avoid
+  warning-producing one-arm matches.
 
 ## [0.60.0] - 2026-08-10
 
