@@ -426,7 +426,7 @@ fn render_snippet_markdown(
             fence => language.code_fence(),
             id => snippet_id,
             language => language.canonical_name(),
-            level => "syntax",
+            level => "typecheck",
             requires => requires,
             side_effect => side_effect_name(docs.side_effects),
             target => target,
@@ -749,7 +749,7 @@ mod tests {
             assert_eq!(
                 rendered,
                 format!(
-                    "---\nid: fixture_{target_language}_extension_owned\nlanguage: {canonical_name}\ntarget: {target_language}\nlevel: syntax\nrequires: []\nside_effect: safe\n---\n\n```{canonical_name} title=\"{}\"\nexample()\n```\n",
+                    "---\nid: fixture_{target_language}_extension_owned\nlanguage: {canonical_name}\ntarget: {target_language}\nlevel: typecheck\nrequires: []\nside_effect: safe\n---\n\n```{canonical_name} title=\"{}\"\nexample()\n```\n",
                     language.display_name()
                 )
             );
