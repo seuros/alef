@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Node and WASM snippet sessions now extend configured TypeScript project manifests, so declared local packages resolve
+  during strict validation while stable validation workspaces still replace each snippet's source.
+
+- Restore generated ownership headers when a managed backend file omits its inline header, keeping `alef:hash`
+  verification and orphan cleanup active after regeneration.
+
 - Domain-shaped E2E fixtures now require extension-owned documentation recipes instead of falling back to generic
   function-call generators that could emit invalid or test-harness snippets.
 
