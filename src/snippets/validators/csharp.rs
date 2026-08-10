@@ -13,11 +13,13 @@ impl CsharpValidator {
         timeout_secs: u64,
         session: Option<&ValidationSession>,
     ) -> Result<(SnippetStatus, Option<String>)> {
-        let dir = match session {
-            Some(value) => value.temp_dir()?,
-            None => TempDir::new()?,
+        let temporary_directory = session.is_none().then(TempDir::new).transpose()?;
+        let directory = match (session, temporary_directory.as_ref()) {
+            (Some(value), _) => value.workspace_directory()?,
+            (None, Some(value)) => value.path().to_path_buf(),
+            (None, None) => unreachable!(),
         };
-        let project_path = dir.path().join("Snippet.csproj");
+        let project_path = directory.join("Snippet.csproj");
         let reference = session
             .and_then(|value| value.manifest.as_ref())
             .map_or_else(String::new, |manifest| {
@@ -30,7 +32,7 @@ impl CsharpValidator {
             "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>{reference}</Project>\n"
         );
         std::fs::write(&project_path, project)?;
-        std::fs::write(dir.path().join("Program.cs"), Self::wrap_if_fragment(&snippet.code))?;
+        std::fs::write(directory.join("Program.cs"), Self::wrap_if_fragment(&snippet.code))?;
         let mut command = std::process::Command::new("dotnet");
         match level {
             ValidationLevel::Syntax | ValidationLevel::Compile => {
@@ -43,7 +45,7 @@ impl CsharpValidator {
                 command.args(["run", "--nologo"]);
             }
         }
-        command.current_dir(dir.path());
+        command.current_dir(&directory);
         if let Some(session) = session {
             session.apply_environment(&mut command);
         }

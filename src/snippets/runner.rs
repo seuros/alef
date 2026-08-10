@@ -7,6 +7,7 @@ use crate::snippets::types::{
 use crate::snippets::validators::ValidatorRegistry;
 use rayon::prelude::*;
 use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::Instant;
 
 pub struct RunnerConfig {
@@ -48,6 +49,10 @@ fn available_parallelism() -> usize {
 /// Returns an error when the validation thread pool cannot be created.
 pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config: &RunnerConfig) -> Result<RunSummary> {
     let sessions = prepare_sessions(&config.sessions, config.timeout_secs)?;
+    let session_locks = sessions
+        .keys()
+        .map(|target| (target.clone(), Mutex::new(())))
+        .collect::<HashMap<_, _>>();
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(config.parallelism)
         .build()
@@ -58,7 +63,9 @@ pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config
         if fail_fast {
             let mut results = Vec::with_capacity(snippets.len());
             for snippet in snippets {
-                let result = validate_one(snippet, registry, config, session_for(snippet, &sessions));
+                let session = session_for(snippet, &sessions);
+                let lock = session_key(snippet, &sessions).and_then(|key| session_locks.get(key));
+                let result = validate_one(snippet, registry, config, session, lock);
                 let should_stop = matches!(result.status, SnippetStatus::Fail | SnippetStatus::Error);
                 results.push(result);
                 if should_stop {
@@ -69,7 +76,11 @@ pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config
         } else {
             snippets
                 .par_iter()
-                .map(|snippet| validate_one(snippet, registry, config, session_for(snippet, &sessions)))
+                .map(|snippet| {
+                    let session = session_for(snippet, &sessions);
+                    let lock = session_key(snippet, &sessions).and_then(|key| session_locks.get(key));
+                    validate_one(snippet, registry, config, session, lock)
+                })
                 .collect()
         }
     });
@@ -89,11 +100,31 @@ fn session_for<'a>(
         .or_else(|| sessions.get(&snippet.language.to_string()))
 }
 
+fn session_key<'a>(
+    snippet: &Snippet,
+    sessions: &'a HashMap<String, crate::snippets::session::ValidationSession>,
+) -> Option<&'a str> {
+    let target = snippet
+        .metadata
+        .target
+        .as_ref()
+        .map(|target| crate::snippets::types::Language::normalize_session_target(target));
+    if let Some(target) = target.as_deref()
+        && sessions.contains_key(target)
+    {
+        return sessions.get_key_value(target).map(|(key, _)| key.as_str());
+    }
+    sessions
+        .get_key_value(&snippet.language.to_string())
+        .map(|(key, _)| key.as_str())
+}
+
 fn validate_one(
     snippet: &Snippet,
     registry: &ValidatorRegistry,
     config: &RunnerConfig,
     session: Option<&crate::snippets::session::ValidationSession>,
+    session_lock: Option<&Mutex<()>>,
 ) -> ValidationResult {
     if let Some(result) = cached_result(snippet, config, session) {
         return result;
@@ -180,11 +211,21 @@ fn validate_one(
     }
 
     let start = Instant::now();
-    let (mut status, message) =
-        match validator.validate_in_session(snippet, effective_level, config.timeout_secs, session) {
-            Ok((status, message)) => (status, message),
-            Err(err) => (SnippetStatus::Error, Some(err.to_string())),
-        };
+    let validation = || validator.validate_in_session(snippet, effective_level, config.timeout_secs, session);
+    let validation_result = match session_lock {
+        Some(lock) => match lock.lock() {
+            Ok(_guard) => validation(),
+            Err(error) => Err(crate::snippets::error::Error::Other(format!(
+                "locking {} snippet validation session: {error}",
+                snippet.language
+            ))),
+        },
+        None => validation(),
+    };
+    let (mut status, message) = match validation_result {
+        Ok((status, message)) => (status, message),
+        Err(err) => (SnippetStatus::Error, Some(err.to_string())),
+    };
     let duration_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
     if status == SnippetStatus::Fail

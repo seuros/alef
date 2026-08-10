@@ -13,13 +13,15 @@ impl JavaValidator {
         timeout_secs: u64,
         session: Option<&ValidationSession>,
     ) -> Result<(SnippetStatus, Option<String>)> {
-        let dir = match session {
-            Some(value) => value.temp_dir()?,
-            None => TempDir::new()?,
+        let temporary_directory = session.is_none().then(TempDir::new).transpose()?;
+        let directory = match (session, temporary_directory.as_ref()) {
+            (Some(value), _) => value.workspace_directory()?,
+            (None, Some(value)) => value.path().to_path_buf(),
+            (None, None) => unreachable!(),
         };
         let wrapped = Self::wrap_if_fragment(&snippet.code);
         let class_name = Self::extract_class_name(&wrapped);
-        let file = dir.path().join(format!("{class_name}.java"));
+        let file = directory.join(format!("{class_name}.java"));
         std::fs::write(&file, &wrapped)?;
         let mut command = if level == ValidationLevel::Run {
             let mut value = std::process::Command::new("java");
@@ -35,7 +37,7 @@ impl JavaValidator {
             if level == ValidationLevel::TypeCheck {
                 value.arg("-Werror");
             }
-            value.args(["-d"]).arg(dir.path()).arg(&file);
+            value.args(["-d"]).arg(&directory).arg(&file);
             value
         };
         if let Some(value) = session {

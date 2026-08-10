@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Configured C#, Java, Node, and WASM snippet validation sessions now reuse stable project workspaces, preserving
+  local package linkage and compiler state across snippets instead of creating an isolated project for every block.
+
 - Generated Rust mock servers now emit valid fixture field types when loading documentation-rich fixtures.
 
 - E2E fixture validation now accepts the complete structured documentation metadata model, including target paths,

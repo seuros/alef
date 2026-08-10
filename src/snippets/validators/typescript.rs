@@ -20,23 +20,23 @@ impl TypeScriptValidator {
         {
             return Ok((SnippetStatus::Pass, None));
         }
-        let dir = match session {
-            Some(session) => tempfile::Builder::new()
-                .prefix(".alef-snippet-")
-                .tempdir_in(&session.working_directory)?,
-            None => TempDir::new()?,
+        let temporary_directory = session.is_none().then(TempDir::new).transpose()?;
+        let directory = match (session, temporary_directory.as_ref()) {
+            (Some(value), _) => value.workspace_directory()?,
+            (None, Some(value)) => value.path().to_path_buf(),
+            (None, None) => unreachable!(),
         };
         if session.is_none() {
-            std::fs::write(dir.path().join("tsconfig.json"), Self::isolated_tsconfig())?;
+            std::fs::write(directory.join("tsconfig.json"), Self::isolated_tsconfig())?;
         }
-        let file_path = dir.path().join("snippet.ts");
+        let file_path = directory.join("snippet.ts");
         let mut file = std::fs::File::create(&file_path)?;
         file.write_all(Self::dedent(&snippet.code).as_bytes())?;
         let project = session
             .and_then(|value| value.manifest.as_ref())
-            .map(|manifest| Self::write_overlay_config(dir.path(), manifest))
+            .map(|manifest| Self::write_overlay_config(&directory, manifest))
             .transpose()?;
-        let mut command = Self::command(level, &file_path, dir.path(), session, project.as_deref());
+        let mut command = Self::command(level, &file_path, &directory, session, project.as_deref());
         let (success, output) = run_command(&mut command, timeout_secs)?;
         Ok(if success {
             (SnippetStatus::Pass, None)

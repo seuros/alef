@@ -22,6 +22,15 @@ pub struct ValidationSession {
 }
 
 impl ValidationSession {
+    pub fn workspace_directory(&self) -> Result<PathBuf> {
+        let directory = self
+            .working_directory
+            .join(".alef/snippets/sessions")
+            .join(&self.fingerprint);
+        std::fs::create_dir_all(&directory)?;
+        Ok(directory)
+    }
+
     pub fn temp_dir(&self) -> Result<tempfile::TempDir> {
         tempfile::Builder::new()
             .prefix(".alef-snippet-")
@@ -207,6 +216,27 @@ mod tests {
         assert_eq!(
             command.get_envs().next(),
             Some(("ALEF_SESSION_CACHE".as_ref(), Some("configured".as_ref())))
+        );
+    }
+
+    #[test]
+    fn reuses_a_stable_workspace_for_a_prepared_session() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let session = ValidationSession {
+            working_directory: directory.path().to_path_buf(),
+            manifest: None,
+            fingerprint: "neutral-fixture".into(),
+            env: BTreeMap::new(),
+        };
+
+        let first = session.workspace_directory().expect("first workspace");
+        std::fs::write(first.join("compiler-output"), "cached").expect("compiler output");
+        let second = session.workspace_directory().expect("second workspace");
+
+        assert_eq!(first, second);
+        assert_eq!(
+            std::fs::read_to_string(second.join("compiler-output")).unwrap(),
+            "cached"
         );
     }
 }
