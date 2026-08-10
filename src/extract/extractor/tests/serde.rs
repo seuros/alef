@@ -99,6 +99,33 @@ fn test_has_serde_only_serialize_not_set() {
 }
 
 #[test]
+fn test_internally_tagged_enum_preserves_named_value_fields() {
+    let source = r#"
+        #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+        #[serde(tag = "kind", rename_all = "snake_case")]
+        pub enum MatchRule {
+            Exact { value: String },
+            Suffix { value: String },
+            Pattern { value: String },
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let enum_def = surface.enums.first().expect("MatchRule should be extracted");
+
+    assert_eq!(enum_def.name, "MatchRule");
+    assert_eq!(enum_def.serde_tag.as_deref(), Some("kind"));
+    assert_eq!(enum_def.serde_rename_all.as_deref(), Some("snake_case"));
+    assert_eq!(enum_def.variants.len(), 3);
+    for variant in &enum_def.variants {
+        assert_eq!(variant.fields.len(), 1, "{} must retain its payload", variant.name);
+        assert_eq!(variant.fields[0].name, "value");
+        assert_eq!(variant.fields[0].ty, TypeRef::String);
+        assert!(!variant.is_tuple);
+    }
+}
+
+#[test]
 fn test_enum_rename_all_under_cfg_attr_any_is_honoured() {
     // Regression for the html-to-markdown `TierStrategy` bug: `rename_all` living inside
     // `#[cfg_attr(any(...), serde(rename_all = "..."))]` used to be invisible to Alef's
