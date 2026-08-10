@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Alef skip extraction now parses attribute structure instead of token substrings, supporting `#[alef::skip]` without
+  misclassifying similarly named or feature-gated serde attributes, and positional enum/newtype fields now preserve
+  field-level exclusion metadata.
+
 - Alef scratch workspaces and caches are ignored recursively, preventing nested validation artifacts from appearing
   as consumer repository changes.
 

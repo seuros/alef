@@ -303,12 +303,33 @@ fn has_doc_hidden(attrs: &[syn::Attribute]) -> bool {
 
 fn has_alef_skip(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|attr| {
-        let attr_str = quote::quote!(#attr).to_string();
-        let is_direct_alef = attr.path().is_ident("alef") && attr_str.contains("skip");
-        let is_cfg_attr_alef =
-            attr.path().is_ident("cfg_attr") && attr_str.contains("alef") && attr_str.contains("skip");
-        is_direct_alef || is_cfg_attr_alef
+        if meta_is_alef_skip(&attr.meta) {
+            return true;
+        }
+        if !attr.path().is_ident("cfg_attr") {
+            return false;
+        }
+        let mut found = false;
+        cfg_attr_walk_inner_metas(attr, &mut |meta| found |= meta_is_alef_skip(meta));
+        found
     })
+}
+
+fn meta_is_alef_skip(meta: &syn::Meta) -> bool {
+    let path = meta.path();
+    if path.segments.len() == 2
+        && path.segments.first().is_some_and(|segment| segment.ident == "alef")
+        && path.segments.last().is_some_and(|segment| segment.ident == "skip")
+    {
+        return true;
+    }
+    if !path.is_ident("alef") {
+        return false;
+    }
+    let syn::Meta::List(list) = meta else {
+        return false;
+    };
+    list.parse_args::<syn::Ident>().is_ok_and(|ident| ident == "skip")
 }
 
 /// True when any of the given attributes is `#[serde(flatten)]` (also matching

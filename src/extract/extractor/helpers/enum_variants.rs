@@ -1,9 +1,6 @@
-use crate::core::ir::{CoreWrapper, EnumVariant, FieldDef};
-
-use crate::extract::type_resolver;
+use crate::core::ir::EnumVariant;
 
 use super::attributes::{extract_binding_exclusion_reason, extract_cfg_condition, extract_version_annotation};
-use super::field_types::{extract_field_type_rust_path, syn_type_is_boxed};
 use super::fields::extract_field;
 use super::rustdoc::extract_doc_comments;
 
@@ -17,29 +14,9 @@ pub(crate) fn extract_enum_variant(v: &syn::Variant) -> EnumVariant {
             .iter()
             .enumerate()
             .map(|(i, f)| {
-                let ty = type_resolver::resolve_type(&f.ty);
-                let optional = type_resolver::is_option_type(&f.ty).is_some();
-                FieldDef {
-                    name: format!("_{i}"),
-                    ty,
-                    optional,
-                    default: None,
-                    doc: extract_doc_comments(&f.attrs),
-                    sanitized: false,
-                    is_boxed: syn_type_is_boxed(&f.ty),
-                    type_rust_path: extract_field_type_rust_path(&f.ty, None),
-                    cfg: None,
-                    typed_default: None,
-                    core_wrapper: CoreWrapper::None,
-                    vec_inner_core_wrapper: CoreWrapper::None,
-                    newtype_wrapper: None,
-                    serde_rename: None,
-                    serde_flatten: false,
-                    binding_excluded: false,
-                    binding_exclusion_reason: None,
-                    original_type: None,
-                    version: extract_version_annotation(&f.attrs),
-                }
+                let mut field = extract_field(f, None);
+                field.name = format!("_{i}");
+                field
             })
             .collect(),
         syn::Fields::Unit => vec![],

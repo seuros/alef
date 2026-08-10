@@ -46,6 +46,60 @@ fn test_extract_binding_excluded_fields() {
 }
 
 #[test]
+fn test_namespaced_alef_skip_excludes_field_without_matching_similar_names() {
+    let source = r#"
+        pub struct Request {
+            #[alef::skip]
+            pub internal: String,
+            #[alef(skipper)]
+            pub visible: String,
+            #[cfg_attr(feature = "alef", serde(skip))]
+            pub conditionally_serialized: String,
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let request = &surface.types[0];
+    let internal = request.fields.iter().find(|field| field.name == "internal").unwrap();
+    let visible = request.fields.iter().find(|field| field.name == "visible").unwrap();
+    let conditionally_serialized = request
+        .fields
+        .iter()
+        .find(|field| field.name == "conditionally_serialized")
+        .unwrap();
+
+    assert!(internal.binding_excluded);
+    assert_eq!(internal.binding_exclusion_reason.as_deref(), Some("alef(skip)"));
+    assert!(!visible.binding_excluded);
+    assert!(!conditionally_serialized.binding_excluded);
+}
+
+#[test]
+fn test_alef_skip_excludes_positional_fields() {
+    let source = r#"
+        pub struct Identifier(#[alef(skip)] pub String);
+
+        pub enum Event {
+            Changed(String, #[alef(skip)] u64),
+        }
+    "#;
+
+    let item: syn::ItemStruct = syn::parse_str("pub struct Identifier(#[alef(skip)] pub String);").unwrap();
+    let identifier = extract_struct(&item, "test_crate", "").unwrap();
+    assert!(identifier.fields[0].binding_excluded);
+    assert_eq!(
+        identifier.fields[0].binding_exclusion_reason.as_deref(),
+        Some("alef(skip)")
+    );
+
+    let surface = extract_from_source(source);
+    let event = surface.enums.iter().find(|enm| enm.name == "Event").unwrap();
+    let skipped_field = &event.variants[0].fields[1];
+    assert!(skipped_field.binding_excluded);
+    assert_eq!(skipped_field.binding_exclusion_reason.as_deref(), Some("alef(skip)"));
+}
+
+#[test]
 fn test_struct_with_non_pub_field_sets_has_private_fields() {
     let source = r#"
         #[derive(Default)]

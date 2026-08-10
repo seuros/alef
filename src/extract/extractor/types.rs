@@ -1,14 +1,13 @@
 use crate::core::ir::{CoreWrapper, DefaultValue, EnumDef, ErrorDef, ErrorVariant, FieldDef, TypeDef};
 use syn;
 
-use super::helpers::{detect_core_wrapper, detect_vec_inner_core_wrapper, extract_binding_exclusion_reason};
+use super::helpers::extract_binding_exclusion_reason;
 use crate::extract::type_resolver;
 
 use super::helpers::{
     build_rust_path, extract_cfg_condition, extract_doc_comments, extract_enum_variant, extract_error_message_template,
     extract_field, extract_field_binding_exclusion_reason, extract_field_type_rust_path, extract_serde_rename_all,
     extract_version_annotation, has_cfg_attribute, has_derive, has_field_attr, is_pub, syn_type_is_boxed,
-    unwrap_optional,
 };
 
 /// Return true when the enum has `#[serde(untagged)]`.
@@ -98,29 +97,9 @@ pub(crate) fn extract_struct(item: &syn::ItemStruct, crate_name: &str, module_pa
             .collect(),
         syn::Fields::Unnamed(unnamed) if unnamed.unnamed.len() == 1 && is_pub(&unnamed.unnamed[0].vis) => {
             let field = &unnamed.unnamed[0];
-            let resolved = type_resolver::resolve_type(&field.ty);
-            let (ty, optional) = unwrap_optional(resolved);
-            vec![FieldDef {
-                name: "_0".to_string(),
-                ty,
-                optional,
-                default: None,
-                doc: String::new(),
-                sanitized: false,
-                is_boxed: syn_type_is_boxed(&field.ty),
-                type_rust_path: extract_field_type_rust_path(&field.ty, Some(crate_name)),
-                cfg: None,
-                typed_default: None,
-                core_wrapper: detect_core_wrapper(&field.ty),
-                vec_inner_core_wrapper: detect_vec_inner_core_wrapper(&field.ty),
-                newtype_wrapper: None,
-                serde_rename: None,
-                serde_flatten: false,
-                binding_excluded: false,
-                binding_exclusion_reason: None,
-                original_type: None,
-                version: extract_version_annotation(&field.attrs),
-            }]
+            let mut extracted = extract_field(field, Some(crate_name));
+            extracted.name = "_0".to_string();
+            vec![extracted]
         }
         _ => vec![],
     };
