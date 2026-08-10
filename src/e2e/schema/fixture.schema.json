@@ -25,8 +25,13 @@
           "properties": {
             "topic": { "type": "string" },
             "stem": { "type": "string" },
+            "paths": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            },
             "title": { "type": "string" },
             "description": { "type": "string" },
+            "presentation": { "$ref": "#/$defs/docs_presentation" },
             "coverage_exceptions": {
               "type": "object",
               "additionalProperties": {
@@ -94,6 +99,64 @@
           "description": "HTTP server fixture specification"
         }
       }
+    },
+    "docs_presentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "call": { "type": "string" },
+        "input": {},
+        "args": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/arg_mapping" }
+        },
+        "files": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/docs_file_input" }
+        },
+        "operations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/docs_operation" }
+        }
+      }
+    },
+    "docs_file_input": {
+      "type": "object",
+      "required": ["field", "path"],
+      "additionalProperties": false,
+      "properties": {
+        "field": { "type": "string" },
+        "path": { "type": "string" }
+      }
+    },
+    "docs_operation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["op", "path"],
+          "additionalProperties": false,
+          "properties": {
+            "op": { "const": "show" },
+            "path": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["op", "path", "item"],
+          "additionalProperties": false,
+          "properties": {
+            "op": { "const": "iterate" },
+            "path": { "type": "string" },
+            "item": { "type": "string" },
+            "fields": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "display": { "type": "boolean" },
+            "optional": { "type": "boolean" }
+          }
+        }
+      ]
     },
     "env": {
       "type": "object",

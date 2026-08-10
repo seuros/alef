@@ -394,6 +394,44 @@ mod tests {
         assert!(!errors.is_empty());
         assert!(errors.iter().all(|error| error.file == "fixtures.json[1]"));
     }
+
+    #[test]
+    fn fixture_schema_accepts_current_docs_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("fixture.json"),
+            r#"{
+                "id": "documented_fixture",
+                "description": "documented",
+                "docs": {
+                    "topic": "configuration",
+                    "paths": {"node": "configuration/example.md"},
+                    "presentation": {
+                        "call": "process_file",
+                        "input": {"source": "guide.txt"},
+                        "args": [{"name": "source", "field": "input.source", "type": "string"}],
+                        "files": [{"field": "/source", "path": "examples/guide.txt"}],
+                        "operations": [
+                            {"op": "show", "path": "summary"},
+                            {
+                                "op": "iterate",
+                                "path": "items",
+                                "item": "item",
+                                "fields": ["text"],
+                                "display": true,
+                                "optional": true
+                            }
+                        ]
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let errors = validate_fixtures(directory.path()).unwrap();
+
+        assert!(errors.is_empty(), "unexpected validation errors: {errors:?}");
+    }
     use crate::e2e::codegen::assertion_recipes::{EMBEDDINGS_RECIPE, KEYWORDS_RECIPE};
     use crate::e2e::fixture::{Assertion, SkipDirective};
 

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- E2E fixture validation now accepts the complete structured documentation metadata model, including target paths,
+  typed presentation arguments, file inputs, and result operations.
+
 - Python visitor bridges now honor internally tagged return-action dictionaries such as
   `{"type": "custom", "output": "..."}` while retaining legacy externally tagged payloads.
 
