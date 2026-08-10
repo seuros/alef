@@ -6,8 +6,20 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/python/snippet_body.py.jinja"),
     ),
     (
+        "python/docs_file_expression.py.jinja",
+        include_str!("templates/python/docs_file_expression.py.jinja"),
+    ),
+    (
         "rust/snippet_body.rs.jinja",
         include_str!("templates/rust/snippet_body.rs.jinja"),
+    ),
+    (
+        "rust/docs_file_read.rs.jinja",
+        include_str!("templates/rust/docs_file_read.rs.jinja"),
+    ),
+    (
+        "rust/docs_json_file.rs.jinja",
+        include_str!("templates/rust/docs_json_file.rs.jinja"),
     ),
     (
         "typescript/typed_binding.jinja",
@@ -20,6 +32,10 @@ static TEMPLATES: &[(&str, &str)] = &[
     (
         "typescript/docs_file_assignment.jinja",
         include_str!("templates/typescript/docs_file_assignment.jinja"),
+    ),
+    (
+        "typescript/builder_iife.jinja",
+        include_str!("templates/typescript/builder_iife.jinja"),
     ),
     (
         "snippets/file.md.jinja",

@@ -329,6 +329,49 @@ mod tests {
     }
 
     #[test]
+    fn docs_bytes_read_the_presented_relative_path() {
+        let mut fixture = fixture();
+        fixture.input = serde_json::json!({"content": "document.pdf"});
+        fixture.args = vec![crate::e2e::config::ArgMapping {
+            name: "content".into(),
+            field: "content".into(),
+            arg_type: "bytes".into(),
+            optional: false,
+            owned: true,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }];
+        let e2e = E2eConfig {
+            call: CallConfig {
+                function: "load_document".into(),
+                module: "@example/library".into(),
+                result_var: "document".into(),
+                r#async: true,
+                ..CallConfig::default()
+            },
+            ..E2eConfig::default()
+        };
+        let config = crate::core::config::ResolvedCrateConfig::default();
+
+        let body = render_snippet_body(SnippetContext {
+            lang: "node",
+            fixture: &fixture,
+            module: "@example/library",
+            client_factory: None,
+            e2e_config: &e2e,
+            type_defs: &[],
+            enums: &[],
+            wasm_type_prefix: "",
+            config: &config,
+        });
+
+        assert!(body.contains("readFile(\"document.pdf\")"), "{body}");
+        assert!(body.contains("await loadDocument(_content_content)"), "{body}");
+    }
+
+    #[test]
     fn expected_error_snippet_handles_the_rejected_call() {
         let mut fixture = fixture();
         fixture.assertions.push(crate::e2e::fixture::Assertion {

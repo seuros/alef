@@ -22,6 +22,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression(
     type_defs: &[TypeDef],
     enums: &[EnumDef],
     wasm_type_prefix: &str,
+    docs_files: &[crate::e2e::fixture::FixtureDocsFileInput],
 ) -> String {
     ts_builder_expression_inner(
         obj,
@@ -33,6 +34,8 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression(
         type_defs,
         enums,
         wasm_type_prefix,
+        docs_files,
+        "",
         0,
     )
 }
@@ -158,6 +161,8 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
     type_defs: &[TypeDef],
     enums: &[EnumDef],
     wasm_type_prefix: &str,
+    docs_files: &[crate::e2e::fixture::FixtureDocsFileInput],
+    pointer: &str,
     depth: usize,
 ) -> String {
     // Use a depth-indexed variable name so nested IFEs don't shadow each other.
@@ -184,6 +189,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
 
         let mut fields = Vec::new();
         for (key, val) in obj {
+            let field_pointer = json_pointer_child(pointer, key);
             // Rename serde_tag key → "kind" for node-bound tagged-data enum objects.
             let js_key = if lang == "node" {
                 match serde_tag_for_this_type {
@@ -212,7 +218,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
                         json_to_js(&preprocessed)
                     }
                 } else {
-                    node_value_expression(&preprocessed, key, enum_fields)
+                    node_value_expression(&preprocessed, key, enum_fields, docs_files, &field_pointer)
                 }
             } else {
                 match val {
@@ -253,6 +259,18 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
     let mut stmts: Vec<String> = vec![init_stmt];
     for (key, val) in obj {
         let camel_key = snake_to_camel(key);
+        let field_pointer = json_pointer_child(pointer, key);
+        if let Some(file) = docs_files.iter().find(|file| file.field == field_pointer) {
+            stmts.push(
+                crate::e2e::template_env::render(
+                    "typescript/docs_file_assignment.jinja",
+                    minijinja::context! { target => format!("{var}.{camel_key}"), path => escape_js(&file.path) },
+                )
+                .trim_end()
+                .to_string(),
+            );
+            continue;
+        }
         let is_bigint = bigint_fields.contains(&camel_key) || bigint_fields.contains(key);
         if let serde_json::Value::Object(nested_obj) = val {
             if let Some(nested_type) = effective_nested_types.get(key.as_str()) {
@@ -266,6 +284,8 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
                     type_defs,
                     enums,
                     wasm_type_prefix,
+                    docs_files,
+                    &field_pointer,
                     depth + 1,
                 );
                 stmts.push(format!("{var}.{camel_key} = {nested_expr};"));
@@ -281,7 +301,8 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
             if let Some(elem_type) = effective_nested_types.get(key.as_str()) {
                 let element_exprs: Vec<String> = items
                     .iter()
-                    .map(|item| {
+                    .enumerate()
+                    .map(|(index, item)| {
                         if let serde_json::Value::Object(item_obj) = item {
                             ts_builder_expression_inner(
                                 item_obj,
@@ -293,6 +314,8 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
                                 type_defs,
                                 enums,
                                 wasm_type_prefix,
+                                docs_files,
+                                &json_pointer_child(&field_pointer, &index.to_string()),
                                 depth + 1,
                             )
                         } else {
@@ -330,14 +353,29 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
 
     stmts.push(format!("return {var};"));
     let body = stmts.join(" ");
-    format!("(() => {{ {body} }})()")
+    crate::e2e::template_env::render(
+        "typescript/builder_iife.jinja",
+        minijinja::context! { body => body, is_async => !docs_files.is_empty() },
+    )
+    .trim_end()
+    .to_string()
 }
 
 fn node_value_expression(
     value: &serde_json::Value,
     field: &str,
     enum_fields: &std::collections::HashMap<String, String>,
+    docs_files: &[crate::e2e::fixture::FixtureDocsFileInput],
+    pointer: &str,
 ) -> String {
+    if let Some(file) = docs_files.iter().find(|file| file.field == pointer) {
+        return crate::e2e::template_env::render(
+            "typescript/docs_file_expression.jinja",
+            minijinja::context! { path => escape_js(&file.path) },
+        )
+        .trim_end()
+        .to_string();
+    }
     let camel_field = snake_to_camel(field);
     if let Some(enum_type) = enum_fields.get(field).or_else(|| enum_fields.get(camel_field.as_str()))
         && let Some(variant) = value.as_str()
@@ -352,7 +390,7 @@ fn node_value_expression(
                     format!(
                         "{}: {}",
                         snake_to_camel(name),
-                        node_value_expression(value, name, enum_fields)
+                        node_value_expression(value, name, enum_fields, docs_files, &json_pointer_child(pointer, name),)
                     )
                 })
                 .collect::<Vec<_>>();
@@ -361,12 +399,26 @@ fn node_value_expression(
         serde_json::Value::Array(values) => {
             let values = values
                 .iter()
-                .map(|value| node_value_expression(value, "", enum_fields))
+                .enumerate()
+                .map(|(index, value)| {
+                    node_value_expression(
+                        value,
+                        "",
+                        enum_fields,
+                        docs_files,
+                        &json_pointer_child(pointer, &index.to_string()),
+                    )
+                })
                 .collect::<Vec<_>>();
             format!("[{}]", values.join(", "))
         }
         _ => json_to_js(value),
     }
+}
+
+fn json_pointer_child(pointer: &str, field: &str) -> String {
+    let field = field.replace('~', "~0").replace('/', "~1");
+    format!("{pointer}/{field}")
 }
 
 #[cfg(test)]
@@ -385,8 +437,44 @@ mod tests {
             &[],
             &[],
             "",
+            &[],
         );
 
         assert_eq!(expression, "{ kind: InputKind.Uri } as DocumentInput");
+    }
+
+    #[test]
+    fn node_and_wasm_typed_objects_read_documented_files() {
+        let object = serde_json::json!({"bytes": "document.pdf"});
+        let object = object.as_object().expect("object");
+        let files = [crate::e2e::fixture::FixtureDocsFileInput {
+            field: "/bytes".into(),
+            path: "document.pdf".into(),
+        }];
+        for language in ["node", "wasm"] {
+            let expression = ts_builder_expression(
+                object,
+                "DocumentInput",
+                &Default::default(),
+                language,
+                &Default::default(),
+                &Default::default(),
+                &[],
+                &[],
+                "",
+                &files,
+            );
+            assert!(
+                expression.contains("readFile(\"document.pdf\")"),
+                "{language}: {expression}"
+            );
+            assert!(
+                !expression.contains("bytes: \"document.pdf\""),
+                "{language}: {expression}"
+            );
+            if language == "wasm" {
+                assert!(expression.starts_with("await (async () =>"), "{expression}");
+            }
+        }
     }
 }

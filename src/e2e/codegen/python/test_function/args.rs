@@ -147,6 +147,7 @@ pub(super) fn build_args_and_setup(
                 fixture.has_host_root_route(),
                 type_defs,
                 enums,
+                &fixture.docs_files_for_arg(&arg.field),
             )
         {
             continue;

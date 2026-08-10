@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use heck::ToSnakeCase;
 
 use crate::e2e::escape::escape_python;
+use crate::e2e::fixture::FixtureDocsFileInput;
 
 use super::super::json::json_to_python_literal;
 
@@ -55,6 +56,7 @@ pub(super) fn emit_json_object_arg(
     has_host_root_route: bool,
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
+    docs_files: &[FixtureDocsFileInput],
 ) -> bool {
     if crate::e2e::codegen::value_contains_mock_url_placeholder(value) {
         return emit_json_object_arg_with_mock_url(
@@ -137,7 +139,8 @@ pub(super) fn emit_json_object_arg(
                 let items: Vec<String> = arr
                     .iter()
                     .filter_map(|item| item.as_object())
-                    .map(|obj| emit_python_typed_instance(obj, elem_type))
+                    .enumerate()
+                    .map(|(index, obj)| emit_python_typed_instance(obj, elem_type, docs_files, &format!("/{index}")))
                     .collect();
                 arg_bindings.push(format!("    {var_name} = [{}]", items.join(", ")));
                 kwarg_exprs.push(var_name.to_string());
@@ -170,6 +173,8 @@ pub(super) fn emit_json_object_arg(
                             } else {
                                 json_to_python_literal(v)
                             }
+                        } else if let Some(file) = docs_files.iter().find(|file| file.field == format!("/{k}")) {
+                            docs_file_expression(&file.path)
                         } else {
                             json_to_python_literal(v)
                         };
@@ -272,15 +277,38 @@ fn emit_python_object_item(obj: &serde_json::Map<String, serde_json::Value>) -> 
 }
 
 /// Emit a Python constructor call for a typed instance (e.g., BatchFileItem(...)).
-fn emit_python_typed_instance(obj: &serde_json::Map<String, serde_json::Value>, elem_type: &str) -> String {
+fn emit_python_typed_instance(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    elem_type: &str,
+    docs_files: &[FixtureDocsFileInput],
+    pointer: &str,
+) -> String {
     let kwargs: Vec<String> = obj
         .iter()
         .map(|(k, v)| {
             let snake_key = k.to_snake_case();
-            format!("{}={}", snake_key, json_to_python_literal(v))
+            let field_pointer = format!("{pointer}/{}", escape_json_pointer(k));
+            let value = docs_files
+                .iter()
+                .find(|file| file.field == field_pointer)
+                .map_or_else(|| json_to_python_literal(v), |file| docs_file_expression(&file.path));
+            format!("{snake_key}={value}")
         })
         .collect();
     format!("{}({})", elem_type, kwargs.join(", "))
+}
+
+fn docs_file_expression(path: &str) -> String {
+    crate::e2e::template_env::render(
+        "python/docs_file_expression.py.jinja",
+        minijinja::context! { path => escape_python(path) },
+    )
+    .trim_end()
+    .to_string()
+}
+
+fn escape_json_pointer(field: &str) -> String {
+    field.replace('~', "~0").replace('/', "~1")
 }
 
 #[cfg(test)]
@@ -350,6 +378,7 @@ mod tests {
             false,
             &type_defs,
             &enums,
+            &[],
         );
         assert!(done);
         // Constructor-call form works for both (str, Enum) subclasses and #[pyclass] tagged-union
@@ -387,9 +416,41 @@ mod tests {
             false,
             &type_defs,
             &enums,
+            &[],
         );
         assert!(done);
         assert!(bindings[0].contains("\"key\""), "got: {:?}", bindings[0]);
+    }
+
+    #[test]
+    fn emit_json_object_arg_reads_documented_nested_file() {
+        let mut bindings = Vec::new();
+        let mut expressions = Vec::new();
+        let value = serde_json::json!({"bytes": "document.pdf"});
+        let done = emit_json_object_arg(
+            &mut bindings,
+            &mut expressions,
+            &value,
+            "input",
+            Some("DocumentInput"),
+            "kwargs",
+            &HashMap::new(),
+            &None,
+            "fixture",
+            false,
+            &[],
+            &[],
+            &[FixtureDocsFileInput {
+                field: "/bytes".into(),
+                path: "document.pdf".into(),
+            }],
+        );
+
+        assert!(done);
+        assert_eq!(
+            bindings,
+            [r#"    input = DocumentInput(bytes=Path("document.pdf").read_bytes())"#]
+        );
     }
 
     #[test]

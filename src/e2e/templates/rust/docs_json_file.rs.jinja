@@ -1,0 +1,2 @@
+let {{ binding }} = std::fs::read({{ path }}).expect("file read failed");
+*{{ json_name }}.pointer_mut({{ pointer }}).expect("docs file field missing") = serde_json::json!({{ binding }});

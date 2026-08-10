@@ -208,6 +208,8 @@ fn ts_builder_uses_default_factory_for_all_wasm_classes_not_just_config() {
         &[],
         &[],
         "Wasm",
+        &[],
+        "",
         0,
     );
     assert!(
@@ -236,6 +238,8 @@ fn ts_builder_uses_new_for_non_wasm_targets() {
         &std::collections::HashMap::new(),
         &std::collections::BTreeSet::new(),
         &[],
+        &[],
+        "",
         &[],
         "",
         0,

@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - R documentation snippets now read configured file inputs into raw-vector fields of typed DTOs.
 
+- Python, Rust, Node, and WASM documentation snippets now read configured file inputs into typed DTO byte fields.
+
 - Ruby bindings now box converted named fields in data-enum variants when the Rust core field is boxed.
 
 - Ruby and Elixir documentation snippets now read configured file inputs into typed DTO fields.

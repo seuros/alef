@@ -197,6 +197,8 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
                                         type_defs,
                                         enums,
                                         wasm_type_prefix,
+                                        &[],
+                                        "",
                                         0,
                                     )
                                 } else {
@@ -358,6 +360,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
                                 type_defs,
                                 enums,
                                 wasm_type_prefix,
+                                &fixture.docs_files_for_arg(&arg.field),
                             );
                             if bind_typed_json_objects {
                                 let suffix = format!(" as {opts_type}");

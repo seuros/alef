@@ -152,6 +152,13 @@ pub(super) fn render_test_file(
         });
 
     let needs_path_import = fixtures.iter().any(|f| {
+        if f.docs
+            .as_ref()
+            .and_then(|docs| docs.presentation.as_ref())
+            .is_some_and(|presentation| !presentation.files.is_empty())
+        {
+            return true;
+        }
         let cc =
             e2e_config.resolve_call_for_fixture(f.call.as_deref(), &f.id, &f.resolved_category(), &f.tags, &f.input);
         cc.args.iter().any(|arg| {

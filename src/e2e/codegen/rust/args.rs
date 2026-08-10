@@ -1,6 +1,7 @@
 //! Rust argument rendering helpers.
 
 use crate::e2e::escape::rust_raw_string;
+use crate::e2e::fixture::FixtureDocsFileInput;
 
 pub(crate) fn resolve_handle_config_type(
     arg: &crate::e2e::config::ArgMapping,
@@ -43,6 +44,7 @@ pub fn render_rust_arg(
     test_documents_dir: &str,
     is_error_context: bool,
     handle_config_type: Option<&str>,
+    docs_files: &[FixtureDocsFileInput],
     vec_inner_is_ref: bool,
 ) -> (Vec<String>, String) {
     if arg_type == "mock_url" {
@@ -138,6 +140,7 @@ pub fn render_rust_arg(
             module,
             fixture_id,
             vec_inner_is_ref,
+            docs_files,
         );
     }
     if value.is_null() && !optional {
@@ -163,10 +166,18 @@ pub fn render_rust_arg(
     // This matches the upstream behaviour introduced in alef-e2e commit 9133eb3b.
     if arg_type == "bytes" {
         if let serde_json::Value::String(path_str) = value {
-            // File-path value: load via std::fs::read at test-run time.
-            let binding = format!(
-                "let {name} = std::fs::read(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../../{test_documents_dir}/{path_str}\")).expect(\"{test_documents_dir}/{path_str} must exist\");"
-            );
+            let binding = if docs_files.iter().any(|file| file.field.is_empty()) {
+                crate::e2e::template_env::render(
+                    "rust/docs_file_read.rs.jinja",
+                    minijinja::context! { name => name, path => rust_raw_string(path_str) },
+                )
+                .trim_end()
+                .to_string()
+            } else {
+                format!(
+                    "let {name} = std::fs::read(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../../{test_documents_dir}/{path_str}\")).expect(\"{test_documents_dir}/{path_str} must exist\");"
+                )
+            };
             let call_expr = if owned { name.to_string() } else { format!("&{name}") };
             return (vec![binding], call_expr);
         }
@@ -249,6 +260,7 @@ fn render_json_object_arg(
     _module: &str,
     fixture_id: &str,
     vec_inner_is_ref: bool,
+    docs_files: &[FixtureDocsFileInput],
 ) -> (Vec<String>, String) {
     // Owned params (Vec<T>) are passed by value; ref params (most configs) use &.
     let pass_by_ref = !owned;
@@ -289,6 +301,22 @@ fn render_json_object_arg(
         lines.push(format!(
             "let {name}_json: serde_json::Value = serde_json::from_str({json_literal}).unwrap();"
         ));
+    }
+    for (index, file) in docs_files.iter().enumerate() {
+        let binding = format!("{name}_file_{index}");
+        lines.extend(
+            crate::e2e::template_env::render(
+                "rust/docs_json_file.rs.jinja",
+                minijinja::context! {
+                    binding => binding,
+                    path => rust_raw_string(&file.path),
+                    json_name => format!("{name}_json"),
+                    pointer => rust_raw_string(&file.field),
+                },
+            )
+            .lines()
+            .map(str::to_string),
+        );
     }
 
     // When an explicit element type is given, annotate with Vec<T> so that
@@ -552,6 +580,7 @@ mod tests {
             "test_documents",
             false,
             Some("SessionConfig"),
+            &[],
             false,
         );
 
@@ -577,6 +606,7 @@ mod tests {
             "test_documents",
             false,
             None,
+            &[],
             true,
         );
 
@@ -600,6 +630,7 @@ mod tests {
             "test_documents",
             false,
             None,
+            &[],
             false,
         );
 
@@ -623,6 +654,7 @@ mod tests {
             "test_documents",
             false,
             None,
+            &[],
             false,
         );
 
@@ -647,6 +679,7 @@ mod tests {
             "test_documents",
             false,
             None,
+            &[],
             false,
         );
 
@@ -654,5 +687,69 @@ mod tests {
         let rendered = lines.join("\n");
         assert!(rendered.contains("MOCK_SERVER_URL_FIXTURE"));
         assert!(rendered.contains(".replace(\"$mock_url\", &input_mock_base_url)"));
+    }
+
+    #[test]
+    fn docs_bytes_read_the_presented_relative_path() {
+        let (lines, expression) = render_rust_arg(
+            "content",
+            &serde_json::json!("document.pdf"),
+            "bytes",
+            false,
+            "sample",
+            "fixture",
+            None,
+            true,
+            None,
+            "test_documents",
+            false,
+            None,
+            &[FixtureDocsFileInput {
+                field: String::new(),
+                path: "document.pdf".into(),
+            }],
+            false,
+        );
+
+        assert_eq!(expression, "content");
+        assert_eq!(
+            lines,
+            vec![r##"let content = std::fs::read(r#"document.pdf"#).expect("file read failed");"##]
+        );
+    }
+
+    #[test]
+    fn docs_nested_bytes_replace_the_typed_json_field() {
+        let (lines, expression) = render_rust_arg(
+            "input",
+            &serde_json::json!({"kind": "bytes", "bytes": "document.pdf"}),
+            "json_object",
+            false,
+            "sample",
+            "fixture",
+            None,
+            true,
+            Some("DocumentInput"),
+            "test_documents",
+            false,
+            None,
+            &[FixtureDocsFileInput {
+                field: "/bytes".into(),
+                path: "document.pdf".into(),
+            }],
+            false,
+        );
+
+        assert_eq!(expression, "input");
+        let rendered = lines.join("\n");
+        assert!(rendered.contains(r##"std::fs::read(r#"document.pdf"#)"##), "{rendered}");
+        assert!(
+            rendered.contains(r##"input_json.pointer_mut(r#"/bytes"#)"##),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("serde_json::from_value::<DocumentInput>"),
+            "{rendered}"
+        );
     }
 }
