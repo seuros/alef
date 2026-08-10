@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Ruby bindings now box converted named fields in data-enum variants when the Rust core field is boxed.
+
 - Ruby and Elixir documentation snippets now read configured file inputs into typed DTO fields.
 
 - Java and Kotlin documentation snippets now read configured file inputs into byte fields of typed DTOs.

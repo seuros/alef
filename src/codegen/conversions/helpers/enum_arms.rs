@@ -95,12 +95,22 @@ pub fn binding_to_core_match_arm_ext_cfg(
                     return format!("{}: serde_json::from_str(&{}).unwrap_or_default()", f.name, f.name);
                 }
                 let conv = field_conversion_to_core_cfg(&f.name, &f.ty, f.optional, config);
-                if let Some(expr) = conv.strip_prefix(&format!("{}: ", f.name)) {
+                let expr = if let Some(expr) = conv.strip_prefix(&format!("{}: ", f.name)) {
                     let expr = expr.replace(&format!("val.{}", f.name), &f.name);
-                    format!("{}: {}", f.name, expr)
+                    expr
                 } else {
-                    conv
-                }
+                    conv.strip_prefix(&format!("{}: ", f.name)).unwrap_or(&conv).to_string()
+                };
+                let expr = if f.is_boxed {
+                    if f.optional {
+                        format!("{expr}.map(Box::new)")
+                    } else {
+                        format!("Box::new({expr})")
+                    }
+                } else {
+                    expr
+                };
+                format!("{}: {expr}", f.name)
             })
             .collect();
         format!(
