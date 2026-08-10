@@ -359,7 +359,12 @@ pub(super) fn build_args_and_setup(
                             setup_lines.push(format!(
                                 "{base_var} = System.get_env(\"{env_key}\") || \"#{{System.get_env(\"MOCK_SERVER_URL\")}}/fixtures/{fixture_id}\""
                             ));
-                            let fields = render_struct_fields(obj, enum_fields, Some(&base_var));
+                            let fields = render_struct_fields(
+                                obj,
+                                enum_fields,
+                                Some(&base_var),
+                                &fixture.docs_files_for_arg(&arg.field),
+                            );
                             setup_lines.push(format!("{options_var} = %{module_path}.{opts_type}{{{fields}}}"));
                             if use_keyword_form_for_optional_args && arg.optional {
                                 parts.push(format!("{}: {options_var}", arg.name));
@@ -368,7 +373,8 @@ pub(super) fn build_args_and_setup(
                             }
                             continue;
                         }
-                        let fields = render_struct_fields(obj, enum_fields, None);
+                        let fields =
+                            render_struct_fields(obj, enum_fields, None, &fixture.docs_files_for_arg(&arg.field));
                         setup_lines.push(format!("{options_var} = %{module_path}.{opts_type}{{{fields}}}"));
                         if use_keyword_form_for_optional_args && arg.optional {
                             parts.push(format!("{}: {options_var}", arg.name));
@@ -521,11 +527,20 @@ fn render_struct_fields(
     obj: &serde_json::Map<String, serde_json::Value>,
     enum_fields: &HashMap<String, String>,
     mock_base_var: Option<&str>,
+    docs_files: &[crate::e2e::fixture::FixtureDocsFileInput],
 ) -> String {
     obj.iter()
         .map(|(k, vv)| {
             let snake_key = k.to_snake_case();
-            let elixir_val = if enum_fields.contains_key(k) {
+            let pointer = format!("/{k}");
+            let elixir_val = if let Some(file) = docs_files.iter().find(|file| file.field == pointer) {
+                crate::e2e::template_env::render(
+                    "elixir/docs_file_read.jinja",
+                    minijinja::context! { path => escape_elixir(&file.path) },
+                )
+                .trim_end()
+                .to_string()
+            } else if enum_fields.contains_key(k) {
                 if let Some(s) = vv.as_str() {
                     let snake_val = s.to_snake_case();
                     format!(":{snake_val}")

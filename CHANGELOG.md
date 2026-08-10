@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Ruby and Elixir documentation snippets now read configured file inputs into typed DTO fields.
+
 - Java and Kotlin documentation snippets now read configured file inputs into byte fields of typed DTOs.
 
 - Go, C#, Dart, and PHP documentation snippets now read configured file inputs into native byte values inside typed DTOs.

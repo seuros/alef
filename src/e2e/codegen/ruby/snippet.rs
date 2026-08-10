@@ -130,6 +130,7 @@ fn render_http_snippet(fixture: &Fixture) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::e2e::config::{ArgMapping, CallOverride};
 
     #[test]
     fn renders_native_call_without_rspec() {
@@ -170,5 +171,52 @@ mod tests {
         assert!(body.contains("request.body = { 'name' => 'sample' }.to_json"), "{body}");
         assert!(body.contains(".to_json\n\nresponse ="), "{body}");
         assert!(!body.contains("expect("));
+    }
+
+    #[test]
+    fn reads_nested_typed_dto_files() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "document_input", "description": "Read a document",
+            "input": {"request": {"content": "ignored"}}, "assertions": [],
+            "docs": {"topic": "documents", "presentation": {
+                "files": [{"field": "/request/content", "path": "document.pdf"}]
+            }}
+        }))
+        .expect("fixture");
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "process".into();
+        e2e.call.module = "sample".into();
+        e2e.call.args = vec![ArgMapping {
+            name: "request".into(),
+            field: "request".into(),
+            arg_type: "json_object".into(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }];
+        e2e.call.overrides.insert(
+            "ruby".into(),
+            CallOverride {
+                options_type: Some("DocumentRequest".into()),
+                ..CallOverride::default()
+            },
+        );
+
+        let body = render_snippet_body(
+            &fixture.docs_call_fixture(),
+            &e2e,
+            &ResolvedCrateConfig::default(),
+            &[],
+            &[],
+        )
+        .expect("snippet");
+
+        assert!(
+            body.contains("DocumentRequest.new(content: File.binread('document.pdf').bytes)"),
+            "{body}"
+        );
     }
 }

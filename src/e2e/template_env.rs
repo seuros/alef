@@ -14,6 +14,14 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/typescript/typed_binding.jinja"),
     ),
     (
+        "typescript/docs_file_expression.jinja",
+        include_str!("templates/typescript/docs_file_expression.jinja"),
+    ),
+    (
+        "typescript/docs_file_assignment.jinja",
+        include_str!("templates/typescript/docs_file_assignment.jinja"),
+    ),
+    (
         "snippets/file.md.jinja",
         include_str!("templates/snippets/file.md.jinja"),
     ),
@@ -225,6 +233,14 @@ static TEMPLATES: &[(&str, &str)] = &[
     (
         "kotlin/snippet_json_object_setup.jinja",
         include_str!("templates/kotlin/snippet_json_object_setup.jinja"),
+    ),
+    (
+        "ruby/docs_file_read.jinja",
+        include_str!("templates/ruby/docs_file_read.jinja"),
+    ),
+    (
+        "elixir/docs_file_read.jinja",
+        include_str!("templates/elixir/docs_file_read.jinja"),
     ),
     ("java/pom.xml.jinja", include_str!("templates/java/pom.xml.jinja")),
     ("java/test_file.jinja", include_str!("templates/java/test_file.jinja")),

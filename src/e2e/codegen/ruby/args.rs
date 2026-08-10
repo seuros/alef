@@ -290,6 +290,7 @@ pub(super) fn build_args_and_setup(
                     // Otherwise handle regular typed objects
                     let object_type = crate::e2e::codegen::recipe::json_object_constructor_type(arg, options_type, v);
                     if let (Some(opts_type), Some(obj)) = (object_type, v.as_object()) {
+                        let docs_files = fixture.docs_files_for_arg(&arg.field);
                         let mock_base_var = if crate::e2e::codegen::value_contains_mock_url_placeholder(v) {
                             let base_var = format!("{}_mock_base_url", arg.name);
                             let env_key = crate::e2e::codegen::mock_url_env_key(fixture_id);
@@ -316,7 +317,15 @@ pub(super) fn build_args_and_setup(
                                     }
                                 }
                                 let snake_key = k.to_snake_case();
-                                let rb_val =
+                                let pointer = format!("/{k}");
+                                let rb_val = if let Some(file) = docs_files.iter().find(|file| file.field == pointer) {
+                                    crate::e2e::template_env::render(
+                                        "ruby/docs_file_read.jinja",
+                                        minijinja::context! { path => ruby_string_literal(&file.path) },
+                                    )
+                                    .trim_end()
+                                    .to_string()
+                                } else {
                                     if let (Some(base_var), Some(raw)) = (mock_base_var.as_deref(), vv.as_str()) {
                                         if raw.contains(crate::e2e::codegen::MOCK_URL_PLACEHOLDER) {
                                             format!(
@@ -329,7 +338,8 @@ pub(super) fn build_args_and_setup(
                                         }
                                     } else {
                                         json_to_ruby(vv)
-                                    };
+                                    }
+                                };
                                 Some(format!("{snake_key}: {rb_val}"))
                             })
                             .collect();
