@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- C FFI streaming iterator `_next` functions now keep their full bodies inside the panic guard, producing valid Rust.
+
 - Alef skip extraction now parses attribute structure instead of token substrings, supporting `#[alef::skip]` without
   misclassifying similarly named or feature-gated serde attributes, and positional enum/newtype fields now preserve
   field-level exclusion metadata.

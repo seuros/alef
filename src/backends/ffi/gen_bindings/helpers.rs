@@ -724,7 +724,6 @@ pub unsafe extern "C" fn {fn_next}(
         set_last_error(99, "{fn_next}: handle must not be NULL");
         return std::ptr::null_mut();
     }}
-    }})
 
     // SAFETY: caller guarantees `handle` is a non-null valid pointer produced by `{fn_start}`
     // and not yet freed. We take a shared reference for the duration of this call.
@@ -763,6 +762,7 @@ pub unsafe extern "C" fn {fn_next}(
             std::ptr::null_mut()
         }}
     }}
+    }})
 }}
 
 /// Free a stream handle created by `{fn_start}`.

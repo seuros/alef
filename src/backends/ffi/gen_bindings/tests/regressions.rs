@@ -323,6 +323,8 @@ type = "ChatRequest"
     let files = backend.generate_bindings(&api, &config).unwrap();
     let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
 
+    syn::parse_file(&lib.content).expect("streaming adapter output must be valid Rust syntax");
+
     assert!(
         lib.content.contains("MlDefaultClientChatStreamStreamHandle"),
         "handle struct must be emitted: got\n{}",
