@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Release verification now accepts Java documentation snippets that stage typed JSON before deserialization and keeps
+  enum conversion helpers warning-clean under strict Clippy.
+
 - WASM tagged-enum conversion now maps hidden or binding-excluded core variants to the binding default instead of
   trapping.
 

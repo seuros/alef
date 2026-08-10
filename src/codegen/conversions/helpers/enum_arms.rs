@@ -96,8 +96,7 @@ pub fn binding_to_core_match_arm_ext_cfg(
                 }
                 let conv = field_conversion_to_core_cfg(&f.name, &f.ty, f.optional, config);
                 let expr = if let Some(expr) = conv.strip_prefix(&format!("{}: ", f.name)) {
-                    let expr = expr.replace(&format!("val.{}", f.name), &f.name);
-                    expr
+                    expr.replace(&format!("val.{}", f.name), &f.name)
                 } else {
                     conv.strip_prefix(&format!("{}: ", f.name)).unwrap_or(&conv).to_string()
                 };

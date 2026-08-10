@@ -233,9 +233,8 @@ mod tests {
             &[],
         );
 
-        assert!(
-            body.contains("var options = JsonUtil.fromJson(\"{\\\"mode\\\":\\\"fast\\\"}\", ProcessOptions.class);")
-        );
+        assert!(body.contains("var optionsJson = \"{\\\"mode\\\":\\\"fast\\\"}\";"));
+        assert!(body.contains("var options = JsonUtil.fromJson(optionsJson, ProcessOptions.class);"));
         assert!(body.contains("dev.example.SampleService.process(\"example\", options)"));
         assert!(!body.contains("DevExampleSampleService"));
     }
