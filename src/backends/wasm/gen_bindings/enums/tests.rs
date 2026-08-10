@@ -345,6 +345,29 @@ fn gen_tagged_enum_core_to_binding_struct_variants_unchanged() {
     );
 }
 
+#[test]
+fn gen_tagged_enum_core_to_binding_hidden_variant_uses_safe_default() {
+    let mut e = make_tagged_tuple_enum();
+    e.excluded_variants.push(EnumVariant {
+        name: "Internal".to_string(),
+        fields: vec![],
+        doc: String::new(),
+        is_default: false,
+        serde_rename: None,
+        binding_excluded: true,
+        binding_exclusion_reason: Some("not part of the public binding".to_string()),
+        is_tuple: false,
+        originally_had_data_fields: false,
+        cfg: None,
+        version: Default::default(),
+    });
+
+    let result = gen_tagged_enum_core_to_binding(&e, "test_lib", "Wasm");
+
+    assert!(result.contains("_ => Self::default(),"));
+    assert!(!result.contains("panic!("));
+}
+
 /// Regression: tagged struct variants whose source field type is already `Option<T>`
 /// must preserve that option layer. The flat wasm struct stores every variant field as
 /// `Option<T>`; wrapping an already-optional core field in `Some(...)` produces

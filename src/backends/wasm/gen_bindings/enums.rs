@@ -583,11 +583,11 @@ pub(super) fn gen_tagged_enum_core_to_binding(enum_def: &EnumDef, core_import: &
             lines.push("            },".to_string());
         }
     }
-    // (e.g. variants marked `#[doc(hidden)]` or `#[alef(skip)]`).
-    lines.push(format!(
-        "            _ => ::std::panic!(\"unmapped {} variant\"),",
-        enum_def.name
-    ));
+    lines.push(
+        crate::backends::wasm::template_env::render("tagged_enum_unmapped_core_arm", minijinja::context! {})
+            .trim_end()
+            .to_string(),
+    );
     lines.push("        }".to_string());
     lines.push("    }".to_string());
     lines.push("}".to_string());

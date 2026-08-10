@@ -35,6 +35,10 @@ static TEMPLATES: &[(&str, &str)] = &[
     ),
     ("gen_free_function", include_str!("templates/gen_free_function.jinja")),
     (
+        "tagged_enum_unmapped_core_arm",
+        include_str!("templates/tagged_enum_unmapped_core_arm.jinja"),
+    ),
+    (
         "gen_instance_method",
         include_str!("templates/gen_instance_method.jinja"),
     ),

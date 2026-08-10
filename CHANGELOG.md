@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- WASM tagged-enum conversion now maps hidden or binding-excluded core variants to the binding default instead of
+  trapping.
+
 - C FFI byte-buffer ownership no longer relies on caller-controlled vector capacity metadata.
 
 - JNI and Kotlin Android generation now selects cfg-gated function variants from the target feature set before
