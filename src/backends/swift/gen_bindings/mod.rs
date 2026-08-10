@@ -409,7 +409,7 @@ impl Backend for SwiftBackend {
 
             fn collect_async_vec_named<'a>(
                 ty: &'a crate::core::ir::TypeRef,
-                names: &mut std::collections::HashSet<&'a str>,
+                names: &mut std::collections::BTreeSet<&'a str>,
             ) {
                 use crate::core::ir::TypeRef;
                 match ty {
@@ -423,7 +423,7 @@ impl Backend for SwiftBackend {
                 }
             }
 
-            let mut referenced_async_named: std::collections::HashSet<&str> = std::collections::HashSet::new();
+            let mut referenced_async_named: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
             for f in &api.functions {
                 if !f.is_async || f.binding_excluded {
                     continue;

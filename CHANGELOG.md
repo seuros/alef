@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Swift async return-type `Sendable` extensions now emit in canonical name order, keeping repeated isolated generation
+  byte-for-byte deterministic.
+
 - Kotlin/JNI opaque clients now serialize native calls with `close()`, make repeated and concurrent closes idempotent,
   and reject method or stream creation after close before entering JNI.
 
