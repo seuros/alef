@@ -1,0 +1,30 @@
+    FILE *{{ variable }}_file_{{ index }} = fopen("{{ path }}", "rb");
+    assert({{ variable }}_file_{{ index }} != NULL);
+    fseek({{ variable }}_file_{{ index }}, 0, SEEK_END);
+    long {{ variable }}_size_{{ index }} = ftell({{ variable }}_file_{{ index }});
+    rewind({{ variable }}_file_{{ index }});
+    uint8_t *{{ variable }}_bytes_{{ index }} = malloc({{ variable }}_size_{{ index }} > 0 ? (size_t){{ variable }}_size_{{ index }} : 1);
+    assert({{ variable }}_bytes_{{ index }} != NULL);
+    assert(fread({{ variable }}_bytes_{{ index }}, 1, (size_t){{ variable }}_size_{{ index }}, {{ variable }}_file_{{ index }}) == (size_t){{ variable }}_size_{{ index }});
+    fclose({{ variable }}_file_{{ index }});
+    char *{{ variable }}_bytes_json_{{ index }} = malloc((size_t){{ variable }}_size_{{ index }} * 4 + 3);
+    assert({{ variable }}_bytes_json_{{ index }} != NULL);
+    size_t {{ variable }}_offset_{{ index }} = 0;
+    {{ variable }}_bytes_json_{{ index }}[{{ variable }}_offset_{{ index }}++] = '[';
+    for (long i = 0; i < {{ variable }}_size_{{ index }}; ++i) {
+        {{ variable }}_offset_{{ index }} += (size_t)snprintf({{ variable }}_bytes_json_{{ index }} + {{ variable }}_offset_{{ index }}, 5, "%s%u", i == 0 ? "" : ",", {{ variable }}_bytes_{{ index }}[i]);
+    }
+    {{ variable }}_bytes_json_{{ index }}[{{ variable }}_offset_{{ index }}++] = ']';
+    {{ variable }}_bytes_json_{{ index }}[{{ variable }}_offset_{{ index }}] = '\0';
+    free({{ variable }}_bytes_{{ index }});
+    const char *{{ variable }}_marker_{{ index }} = "{{ marker }}";
+    const char *{{ variable }}_position_{{ index }} = strstr({{ source }}, {{ variable }}_marker_{{ index }});
+    assert({{ variable }}_position_{{ index }} != NULL);
+    size_t {{ variable }}_prefix_{{ index }} = (size_t)({{ variable }}_position_{{ index }} - {{ source }});
+    size_t {{ variable }}_json_size_{{ index }} = strlen({{ source }}) - strlen({{ variable }}_marker_{{ index }}) + strlen({{ variable }}_bytes_json_{{ index }}) + 1;
+    char *{{ output }} = malloc({{ variable }}_json_size_{{ index }});
+    assert({{ output }} != NULL);
+    snprintf({{ output }}, {{ variable }}_json_size_{{ index }}, "%.*s%s%s", (int){{ variable }}_prefix_{{ index }}, {{ source }}, {{ variable }}_bytes_json_{{ index }}, {{ variable }}_position_{{ index }} + strlen({{ variable }}_marker_{{ index }}));
+    free({{ variable }}_bytes_json_{{ index }});
+{% if source_owned %}    free((void *){{ source }});
+{% endif %}

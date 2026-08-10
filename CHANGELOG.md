@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- C documentation snippets now read configured file inputs into byte-array fields of typed DTO JSON.
+
 - Zig documentation snippets now read configured file inputs into byte-array fields of typed DTO JSON.
 
 - Swift documentation snippets now read configured file inputs into byte-array fields of typed DTOs.
