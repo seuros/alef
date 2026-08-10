@@ -15,11 +15,9 @@ pub(crate) use attributes::{
     has_derive, has_field_attr, is_pub, is_test_gated, is_thiserror_enum,
 };
 pub(crate) use enum_variants::extract_enum_variant;
-pub(crate) use field_types::{
-    build_rust_path, extract_field_type_rust_path, syn_type_is_boxed, unwrap_optional,
-};
 #[cfg(test)]
 pub(crate) use field_types::detect_core_wrapper;
+pub(crate) use field_types::{build_rust_path, extract_field_type_rust_path, syn_type_is_boxed, unwrap_optional};
 pub(crate) use fields::extract_field;
 pub(crate) use reexport_map::{ReexportKind, collect_reexport_map};
 pub(crate) use result_alias_scope::resolve_result_alias_scope;
