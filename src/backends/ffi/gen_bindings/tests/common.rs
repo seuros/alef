@@ -880,3 +880,23 @@ sources = ["src/lib.rs"]
 "#,
     )
 }
+
+pub(super) fn assert_exported_functions_are_panic_guarded(code: &str) {
+    for section in code.split("#[unsafe(no_mangle)]").skip(1) {
+        let Some(signature_end) = section.find('{') else {
+            continue;
+        };
+        let signature = &section[..signature_end];
+        if !signature.contains("extern \"C\" fn") {
+            continue;
+        }
+        let body_start = &section[signature_end + 1..];
+        assert!(
+            body_start.trim_start().starts_with("catch_ffi_panic(")
+                || body_start
+                    .trim_start()
+                    .starts_with("clear_last_error();\n    match std::panic::catch_unwind("),
+            "exported FFI function lacks a top-level panic guard: {signature}"
+        );
+    }
+}

@@ -301,12 +301,14 @@ pub unsafe extern "C" fn {fn_new}(
     vtable: *const {vtable_name},
     user_data: *const std::ffi::c_void,
 ) -> *mut {bridge_name} {{
+    catch_ffi_panic(std::ptr::null_mut(), || {{
     if vtable.is_null() {{
         return std::ptr::null_mut();
     }}
     // SAFETY: vtable is non-null (checked above); caller guarantees it is valid for this call.
     let bridge = unsafe {{ {bridge_name}::new(String::new(), *vtable, user_data) }};
     Box::into_raw(Box::new(bridge))
+    }})
 }}
 
 /// Free a `{bridge_name}` created by `{fn_new}`.
@@ -319,10 +321,12 @@ pub unsafe extern "C" fn {fn_new}(
 /// not yet been freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn {fn_free}(ptr: *mut {bridge_name}) {{
+    catch_ffi_panic((), || {{
     if !ptr.is_null() {{
         // SAFETY: ptr is non-null and was created via Box::into_raw in {fn_new}.
         drop(unsafe {{ Box::from_raw(ptr) }});
     }}
+    }})
 }}"#,
     )
 }

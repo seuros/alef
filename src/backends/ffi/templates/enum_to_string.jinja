@@ -6,6 +6,7 @@
 /// The returned string must be freed with `{{ prefix }}_free_string`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn {{ prefix }}_{{ enum_snake }}_to_string(ptr: *const {{ qualified }}) -> *mut c_char {
+    catch_ffi_panic(std::ptr::null_mut(), || {
     if ptr.is_null() {
         set_last_error(1, "Null pointer passed to {{ prefix }}_{{ enum_snake }}_to_string");
         return std::ptr::null_mut();
@@ -23,4 +24,5 @@ pub unsafe extern "C" fn {{ prefix }}_{{ enum_snake }}_to_string(ptr: *const {{ 
             std::ptr::null_mut()
         }
     }
+    })
 }

@@ -13,6 +13,7 @@ pub extern "C" fn {{ variant_fn_name }}(
     callback: extern "C" fn(*mut c_void, *const c_char) -> *mut c_char,
     context: *mut c_void{{ param_decls }}
 ) -> i32 {
+    catch_ffi_panic(1, || {
     if owner.is_null() {
         return 1; // Error: null pointer
     }
@@ -26,4 +27,5 @@ pub extern "C" fn {{ variant_fn_name }}(
     let handler: Arc<dyn {{ handler_trait_path }}> = Arc::new(bridge);
 
     // SAFETY: owner was allocated by _new() and is valid until freed.
-{{ dispatch_body }}}
+{{ dispatch_body }}    })
+}

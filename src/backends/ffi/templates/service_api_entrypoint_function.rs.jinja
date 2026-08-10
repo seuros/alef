@@ -10,6 +10,7 @@
 pub extern "C" fn {{ fn_name }}(
     owner: *mut {{ opaque_name }}{{ param_decls }}
 ) -> {{ return_type }} {
+    catch_ffi_panic({{ null_return }}, || {
     if owner.is_null() {
         return {{ null_return }};
     }
@@ -20,4 +21,5 @@ pub extern "C" fn {{ fn_name }}(
         Some(boxed) => *boxed,
         None => return {{ null_return }},
     };
-{{ runtime_block }}{{ return_body }}}
+{{ runtime_block }}{{ return_body }}    })
+}

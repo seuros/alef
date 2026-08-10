@@ -15,8 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Zig opaque and streaming handles now clear their nullable pointer before teardown, making repeated free/deinit safe and
   returning `HandleClosed` locally on use after teardown.
 
-- Generated C FFI free-function and method entrypoints now contain Rust panics, report them through the existing
-  thread-local error contract, and return the signature's established failure sentinel.
+- Every generated Rust-owned C FFI entrypoint now contains Rust panics, including constructors, destructors,
+  conversions, accessors, services, callbacks, traits, visitors, streams, bridges, and support helpers; contained
+  panics use the existing thread-local error contract and return each signature's established failure sentinel.
 
 - PHP flat data-enum tags are now read-only and JSON construction rejects unknown tags before infallible core
   conversion, preventing malformed or future variant tags from reaching generated panic arms.

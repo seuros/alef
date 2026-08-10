@@ -20,6 +20,7 @@ pub unsafe extern "C" fn {{ fn_name }}(
     {{ param }}{% if not loop.last %},{% endif %}
 {% endfor %}
 ) -> *mut {{ return_type }} {
+    catch_ffi_panic(std::ptr::null_mut(), || {
     clear_last_error();
 
 {{ param_conversions }}
@@ -30,4 +31,5 @@ pub unsafe extern "C" fn {{ fn_name }}(
             std::ptr::null_mut()
         }
     }
+    })
 }

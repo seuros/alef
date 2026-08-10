@@ -114,7 +114,7 @@ fn enum_param_local_name_uses_param_name_not_type_name() {
 fn panic_footer_uses_existing_failure_sentinel() {
     let pointer_footer =
         gen_function_wrapper_footer(&Some("*mut std::ffi::c_char".to_string()), &TypeRef::String, false);
-    assert!(pointer_footer.contains("set_panic_error();"));
+    assert!(pointer_footer.contains("AssertUnwindSafe(set_panic_error)"));
     assert!(pointer_footer.contains("std::ptr::null_mut()"));
 
     let status_footer = gen_function_wrapper_footer(&Some("i32".to_string()), &TypeRef::Unit, true);

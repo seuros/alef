@@ -2,7 +2,7 @@
     })) {
         Ok(value) => value,
         Err(_) => {
-            set_panic_error();
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(set_panic_error));
             {{ panic_return }}
         }
     }

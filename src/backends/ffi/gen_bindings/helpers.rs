@@ -590,11 +590,13 @@ pub(super) fn gen_free_bytes(prefix: &str) -> String {
 /// out-params), or be null. The len and cap values must be unchanged since the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn {prefix}_free_bytes(ptr: *mut u8, len: usize, cap: usize) {{
+    catch_ffi_panic((), || {{
     if !ptr.is_null() {{
         // SAFETY: ptr/len/cap were produced by Vec::into_raw_parts (or equivalent)
         // by this library; caller must not have mutated them.
         unsafe {{ drop(Vec::from_raw_parts(ptr, len, cap)); }}
     }}
+    }})
 }}"#,
         prefix = prefix
     )
@@ -669,6 +671,7 @@ pub unsafe extern "C" fn {fn_start}(
     client: *const {owner_ty},
     req: *const {request_type},
 ) -> *mut {handle_name} {{
+    catch_ffi_panic(std::ptr::null_mut(), || {{
     clear_last_error();
 
     if client.is_null() {{
@@ -719,6 +722,7 @@ pub unsafe extern "C" fn {fn_start}(
     }});
 
     Box::into_raw(handle)
+    }})
 }}
 
 /// Advance the stream and return a heap-allocated chunk, or null.
@@ -738,12 +742,14 @@ pub unsafe extern "C" fn {fn_start}(
 pub unsafe extern "C" fn {fn_next}(
     handle: *mut {handle_name},
 ) -> *mut {core_item} {{
+    catch_ffi_panic(std::ptr::null_mut(), || {{
     clear_last_error();
 
     if handle.is_null() {{
         set_last_error(99, "{fn_next}: handle must not be NULL");
         return std::ptr::null_mut();
     }}
+    }})
 
     // SAFETY: caller guarantees `handle` is a non-null valid pointer produced by `{fn_start}`
     // and not yet freed. We take a shared reference for the duration of this call.
@@ -793,11 +799,13 @@ pub unsafe extern "C" fn {fn_next}(
 /// not yet freed. Double-free is undefined behaviour.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn {fn_free}(handle: *mut {handle_name}) {{
+    catch_ffi_panic((), || {{
     if !handle.is_null() {{
         // SAFETY: `handle` was produced by Box::into_raw in `{fn_start}` and has not been freed.
         // Reconstructing the Box transfers ownership back to Rust, which drops it at end of scope.
         unsafe {{ drop(Box::from_raw(handle)); }}
     }}
+    }})
 }}"#,
         handle_name = handle_name,
         fn_start = fn_start,

@@ -634,7 +634,7 @@ pub(super) fn gen_opaque_static_constructor(
             method.error_type.is_some(),
         ));
         out.push('\n');
-        out.push_str("}\n");
+        out.push_str("    })\n}\n");
         return out;
     }
 
@@ -724,7 +724,7 @@ pub(super) fn gen_opaque_static_constructor(
     } else {
         out.push_str("    Box::into_raw(Box::new(result))\n");
     }
-    out.push_str("}\n");
+    out.push_str("    })\n}\n");
 
     out
 }

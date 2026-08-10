@@ -7,6 +7,7 @@
 /// The returned string must be freed with `{{ prefix }}_free_string`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn {{ prefix }}_{{ type_snake }}_to_json(ptr: *const {{ qualified }}) -> *mut c_char {
+    catch_ffi_panic(std::ptr::null_mut(), || {
     clear_last_error();
     if ptr.is_null() {
         set_last_error(1, "Null pointer passed to to_json");
@@ -27,4 +28,5 @@ pub unsafe extern "C" fn {{ prefix }}_{{ type_snake }}_to_json(ptr: *const {{ qu
             std::ptr::null_mut()
         }
     }
+    })
 }

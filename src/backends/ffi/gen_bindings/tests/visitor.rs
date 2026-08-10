@@ -166,6 +166,7 @@ fn test_visitor_callbacks_ffi_functions() {
     assert!(lib.content.contains("extern \"C\" fn htm_visitor_create"));
     assert!(lib.content.contains("extern \"C\" fn htm_visitor_free"));
     assert!(lib.content.contains("extern \"C\" fn htm_render_document_with_visitor"));
+    assert_exported_functions_are_panic_guarded(&lib.content);
 }
 
 #[test]

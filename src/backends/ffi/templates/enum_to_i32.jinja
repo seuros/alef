@@ -3,6 +3,7 @@
 /// Caller must ensure `ptr` is a valid pointer to a `c_char` or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn {{ prefix }}_{{ enum_snake }}_from_str(name: *const c_char) -> i32 {
+    catch_ffi_panic(-1, || {
     if name.is_null() {
         set_last_error(1, "Null pointer passed for enum name");
         return -1;
@@ -22,4 +23,5 @@ pub unsafe extern "C" fn {{ prefix }}_{{ enum_snake }}_from_str(name: *const c_c
             -1
         }
     }
+    })
 }

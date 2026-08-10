@@ -6,10 +6,12 @@
 /// Pointer must be a valid handle returned by this library.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn {{ prefix }}_{{ type_snake }}_{{ field_name }}({% if needs_len_out %}ptr: *const {{ qualified }}, out_len: *mut usize{% else %}ptr: *const {{ qualified }}{% endif %}) -> {{ ret_type }} {
+    catch_ffi_panic({{ null_return_value }}, || {
     if ptr.is_null() {
         return {{ null_return_value }};
     }
     // SAFETY: null check above guarantees ptr is a valid pointer.
     let obj = unsafe { &*ptr };
 {{ body }}
+    })
 }

@@ -306,6 +306,7 @@ impl {trait_path} for {pascal_prefix}Visitor {{
 pub unsafe extern "C" fn {prefix}_visitor_create(
     callbacks: *const {pascal_prefix}VisitorCallbacks,
 ) -> *mut {pascal_prefix}Visitor {{
+    catch_ffi_panic(std::ptr::null_mut(), || {{
     if callbacks.is_null() {{
         return std::ptr::null_mut();
     }}
@@ -316,6 +317,7 @@ pub unsafe extern "C" fn {prefix}_visitor_create(
         _tag_scratch: std::cell::RefCell::new(Vec::new()),
     }};
     Box::into_raw(Box::new(visitor))
+    }})
 }}
 
 /// Free a visitor handle previously returned by `{prefix}_visitor_create`.
@@ -328,10 +330,12 @@ pub unsafe extern "C" fn {prefix}_visitor_create(
 /// Passing a null pointer is safe and has no effect.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn {prefix}_visitor_free(visitor: *mut {pascal_prefix}Visitor) {{
+    catch_ffi_panic((), || {{
     if !visitor.is_null() {{
         // SAFETY: visitor was created with Box::into_raw.
         unsafe {{ drop(Box::from_raw(visitor)); }}
     }}
+    }})
 }}
 {legacy_options_setter}"#,
         prefix = prefix,
@@ -400,6 +404,7 @@ pub unsafe extern "C" fn {prefix}_options_set_visitor_handle(
     options: *mut {options_path},
     visitor: *mut {pascal_prefix}Visitor,
 ) {{
+    catch_ffi_panic((), || {{
     if options.is_null() || visitor.is_null() {{
         return;
     }}
@@ -419,6 +424,7 @@ pub unsafe extern "C" fn {prefix}_options_set_visitor_handle(
     // SAFETY: options is non-null (checked above); caller guarantees it is valid for write.
     let options_ref = unsafe {{ &mut *options }};
     options_ref.{options_field} = Some(std::sync::Arc::new(std::sync::Mutex::new(VisitorRef(visitor))));
+    }})
 }}"#,
     )
 }

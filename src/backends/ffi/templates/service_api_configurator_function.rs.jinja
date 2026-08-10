@@ -9,6 +9,7 @@
 pub extern "C" fn {{ fn_name }}(
     owner: *mut {{ opaque_name }}{{ param_decls }}
 ) -> *mut {{ opaque_name }} {
+    catch_ffi_panic(std::ptr::null_mut(), || {
     if owner.is_null() {
         return std::ptr::null_mut();
     }
@@ -23,4 +24,5 @@ pub extern "C" fn {{ fn_name }}(
         (*owner).inner = Some(Box::new(inner.{{ method_name }}({{ call_args }})));
     }
     owner
+    })
 }

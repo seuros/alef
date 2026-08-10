@@ -4,6 +4,7 @@
 /// Returned pointers must be freed with the appropriate free function.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn {{ prefix }}_{{ enum_snake }}_from_i32(value: i32) -> i32 {
+    catch_ffi_panic(-1, || {
     match value {
 {% for variant in variants %}        {{ loop.index0 }} => {{ loop.index0 }}, // {{ variant }}
 {% endfor %}        _ => {
@@ -11,4 +12,5 @@ pub unsafe extern "C" fn {{ prefix }}_{{ enum_snake }}_from_i32(value: i32) -> i
             -1
         }
     }
+    })
 }

@@ -17,10 +17,12 @@ pub struct {{ opaque_name }} {
 /// Never access the pointer after freeing it.
 #[unsafe(no_mangle)]
 pub extern "C" fn {{ new_fn_name }}() -> *mut {{ opaque_name }} {
-    let owner = {{ owner_path }}::{{ constructor_name }}();
-    Box::into_raw(Box::new({{ opaque_name }} {
-        inner: Some(Box::new(owner)),
-    }))
+    catch_ffi_panic(std::ptr::null_mut(), || {
+        let owner = {{ owner_path }}::{{ constructor_name }}();
+        Box::into_raw(Box::new({{ opaque_name }} {
+            inner: Some(Box::new(owner)),
+        }))
+    })
 }
 
 /// Free a {{ service_name }} instance allocated by {{ new_fn_name }}().
@@ -32,6 +34,7 @@ pub extern "C" fn {{ new_fn_name }}() -> *mut {{ opaque_name }} {
 /// - Safe to call even after a `Finalize` entrypoint has emptied `inner`.
 #[unsafe(no_mangle)]
 pub extern "C" fn {{ free_fn_name }}(ptr: *mut {{ opaque_name }}) {
+    catch_ffi_panic((), || {
     if !ptr.is_null() {
         // SAFETY: ptr was allocated by into_raw above;
         // we are the sole owner and this is the final drop.
@@ -39,4 +42,5 @@ pub extern "C" fn {{ free_fn_name }}(ptr: *mut {{ opaque_name }}) {
             drop(Box::from_raw(ptr));
         }
     }
+    })
 }

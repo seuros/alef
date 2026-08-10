@@ -90,6 +90,7 @@ pub unsafe extern "C" fn {fn_name}(
     options: *mut {core_import}::{options_type_name},
     visitor: *mut {handle_type},
 ) {{
+    catch_ffi_panic((), || {{
     if options.is_null() {{
         return;
     }}
@@ -123,6 +124,7 @@ pub unsafe extern "C" fn {fn_name}(
 
     // SAFETY: visitor is non-null; Arc<Mutex<_>> satisfies the configured bridge handle type.
     opts.{field_name} = Some(std::sync::Arc::new(std::sync::Mutex::new(VtableRef(visitor))));
+    }})
 }}"#,
         prefix = prefix,
         handle_type = handle_type,
@@ -191,6 +193,7 @@ pub fn gen_function_with_options_field_bridge(
 pub unsafe extern "C" fn {ffi_function_name}(
 {params}
 ) -> *mut {core_import}::{return_type_name} {{
+    catch_ffi_panic(std::ptr::null_mut(), || {{
     clear_last_error();
 {null_checks}
 {conversions}
@@ -211,6 +214,7 @@ pub unsafe extern "C" fn {ffi_function_name}(
             std::ptr::null_mut()
         }}
     }}
+    }})
 }}"#,
         prefix = prefix,
         func_name = func.name,

@@ -196,6 +196,11 @@ fn test_entrypoint_function_exists() {
 
     assert!(rs.contains("test_crate_test_service_ep_run"));
     assert!(rs.contains("tokio::runtime::Runtime"));
+    assert_eq!(
+        rs.matches("#[unsafe(no_mangle)]").count(),
+        rs.matches("catch_ffi_panic(").count(),
+        "every Rust-owned service export must have a panic guard"
+    );
 }
 
 #[test]

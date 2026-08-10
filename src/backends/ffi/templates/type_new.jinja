@@ -12,6 +12,7 @@
 /// The returned pointer is owned by the caller; free it with `{{ prefix }}_{{ type_snake }}_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn {{ prefix }}_{{ type_snake }}_new({{ params }}) -> *mut {{ qualified }} {
+    catch_ffi_panic(std::ptr::null_mut(), || {
     clear_last_error();
     match {{ body }} {
         Ok(val) => Box::into_raw(Box::new(val)),
@@ -20,4 +21,5 @@ pub unsafe extern "C" fn {{ prefix }}_{{ type_snake }}_new({{ params }}) -> *mut
             std::ptr::null_mut()
         }
     }
+    })
 }

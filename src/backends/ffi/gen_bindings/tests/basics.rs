@@ -24,6 +24,7 @@ fn test_generates_lib_rs() {
     assert!(lib.content.contains("my_lib_extract"));
     assert!(lib.content.contains("my_lib_output_format_from_i32"));
     assert!(lib.content.contains("my_lib_output_format_from_str"));
+    assert_exported_functions_are_panic_guarded(&lib.content);
 }
 
 /// Build an `ApiSurface` whose only function returns the unit-variant enum
@@ -147,6 +148,7 @@ fn test_emits_enum_to_string_for_pointer_return_enum() {
         lib.content.contains(".as_str()"),
         "to_string should call .as_str() to strip JSON quotes"
     );
+    assert_exported_functions_are_panic_guarded(&lib.content);
 }
 
 #[test]

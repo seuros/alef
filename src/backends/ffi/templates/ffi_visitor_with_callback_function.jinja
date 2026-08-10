@@ -18,6 +18,7 @@ pub unsafe extern "C" fn {{ with_visitor_fn_name }}(
 {% endfor %}
     visitor: *mut {{ pascal_prefix }}Visitor,
 ) -> *mut {{ return_type }} {
+    catch_ffi_panic(std::ptr::null_mut(), || {
     clear_last_error();
 
 {{ param_conversions }}    struct VisitorRef(*mut {{ pascal_prefix }}Visitor);
@@ -46,4 +47,5 @@ pub unsafe extern "C" fn {{ with_visitor_fn_name }}(
             std::ptr::null_mut()
         }
     }
+    })
 }

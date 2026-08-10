@@ -8,5 +8,7 @@ pub unsafe extern "C" fn {{ fn_name }}(
     callback: {{ callback_type }},
     user_data: *mut std::ffi::c_void,
 ) -> i32 {
+    catch_ffi_panic(1, || {
 {{ body_indented }}
+    })
 }

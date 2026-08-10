@@ -256,6 +256,11 @@ fn test_register_fn_generates_extern_c() {
         "unregister fn must be extern C with correct name"
     );
     assert!(code.contains("#[unsafe(no_mangle)]"), "register fn must be no_mangle");
+    assert_eq!(
+        code.matches("#[unsafe(no_mangle)]").count(),
+        code.matches("catch_ffi_panic(").count(),
+        "every Rust-owned trait bridge export must have a panic guard"
+    );
 }
 
 #[test]
