@@ -132,6 +132,105 @@ pub fn readme_snippet_references(
     references
 }
 
+/// Resolve generated snippet paths recorded by current coverage ledgers.
+///
+/// Snippet roots without a ledger are left alone so ordinary documentation files still
+/// participate in orphan detection.
+///
+/// # Errors
+///
+/// Returns an error when a discovered ledger is unreadable, stale, incomplete, or names
+/// an invalid or missing generated file.
+pub fn coverage_ledger_references(snippet_dirs: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut references = Vec::new();
+    for output_root in snippet_dirs {
+        let manifest = output_root.join(crate::e2e::snippets::COVERAGE_MANIFEST);
+        if !manifest.is_file() {
+            continue;
+        }
+        references.extend(read_coverage_ledger_references(output_root, &manifest)?);
+    }
+    references.sort();
+    references.dedup();
+    Ok(references)
+}
+
+fn read_coverage_ledger_references(output_root: &Path, manifest: &Path) -> Result<Vec<PathBuf>> {
+    let content = std::fs::read_to_string(manifest)?;
+    let ledger: crate::e2e::snippets::SnippetCoverageLedger = serde_json::from_str(&content)?;
+    if ledger.format_version != crate::e2e::snippets::COVERAGE_MANIFEST_VERSION {
+        return Err(crate::snippets::error::Error::Other(format!(
+            "stale fixture-snippet coverage manifest version {} at {}; expected {}",
+            ledger.format_version,
+            manifest.display(),
+            crate::e2e::snippets::COVERAGE_MANIFEST_VERSION
+        )));
+    }
+    if !ledger.missing.is_empty()
+        || ledger.expected.len() != ledger.generated.len() + ledger.documented_exceptions.len()
+    {
+        return Err(crate::snippets::error::Error::Other(format!(
+            "incomplete fixture-snippet coverage manifest at {}",
+            manifest.display()
+        )));
+    }
+    if ledger.generated_paths.len() != ledger.generated.len()
+        || ledger.generated_metadata.len() != ledger.generated_paths.len()
+    {
+        return Err(crate::snippets::error::Error::Other(format!(
+            "stale fixture-snippet path ledger at {}",
+            manifest.display()
+        )));
+    }
+    let metadata_paths = ledger
+        .generated_metadata
+        .iter()
+        .map(|metadata| metadata.path.as_path())
+        .collect::<BTreeSet<_>>();
+    let generated_paths = ledger
+        .generated_paths
+        .iter()
+        .map(PathBuf::as_path)
+        .collect::<BTreeSet<_>>();
+    if metadata_paths != generated_paths {
+        return Err(crate::snippets::error::Error::Other(format!(
+            "stale fixture-snippet metadata ledger at {}",
+            manifest.display()
+        )));
+    }
+    ledger
+        .generated_paths
+        .into_iter()
+        .map(|relative| {
+            validate_coverage_ledger_path(&relative)?;
+            let path = output_root.join(relative);
+            if !path.is_file() {
+                return Err(crate::snippets::error::Error::Other(format!(
+                    "fixture snippet recorded by the coverage ledger is missing: {}",
+                    path.display()
+                )));
+            }
+            Ok(path)
+        })
+        .collect()
+}
+
+fn validate_coverage_ledger_path(path: &Path) -> Result<()> {
+    let escapes_root = path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::ParentDir | std::path::Component::RootDir | std::path::Component::Prefix(_)
+        )
+    });
+    if path.as_os_str().is_empty() || path.is_absolute() || escapes_root {
+        return Err(crate::snippets::error::Error::Other(format!(
+            "fixture snippet ledger path must stay beneath its output root: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
 fn collect_readme_snippet_paths(value: &serde_json::Value, collect: &mut impl FnMut(&str)) {
     match value {
         serde_json::Value::String(path) => collect(path),
@@ -439,6 +538,10 @@ fn unknown_languages(snippet_dirs: &[PathBuf]) -> Result<Vec<UnknownLanguage>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::e2e::fixture::SideEffectClass;
+    use crate::e2e::snippets::{
+        COVERAGE_MANIFEST_VERSION, GeneratedSnippetMetadata, SnippetCoverageKey, SnippetCoverageLedger,
+    };
 
     #[test]
     fn discovers_mkdocs_include_references() {
@@ -485,6 +588,74 @@ mod tests {
         assert_eq!(report.unreferenced_snippets.len(), 1);
         assert_eq!(report.missing_language_variants.len(), 2);
         assert_eq!(report.skips_without_reason.len(), 1);
+    }
+
+    #[test]
+    fn generated_ledger_references_preserve_manual_orphan_detection() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let snippets = directory.path().join("snippets");
+        let generated = snippets.join("python/topic/generated.md");
+        let manual = snippets.join("python/topic/manual.md");
+        std::fs::create_dir_all(generated.parent().expect("generated parent")).expect("snippet directory");
+        std::fs::write(&generated, "```python\nvalue = 1\n```\n").expect("generated snippet");
+        std::fs::write(&manual, "```python\nvalue = 2\n```\n").expect("manual snippet");
+        std::fs::write(
+            snippets.join(crate::e2e::snippets::COVERAGE_MANIFEST),
+            serde_json::to_vec_pretty(&coverage_ledger(COVERAGE_MANIFEST_VERSION)).expect("coverage serializes"),
+        )
+        .expect("coverage manifest");
+
+        let references = coverage_ledger_references(std::slice::from_ref(&snippets)).expect("current ledger");
+        let report = detect_gaps(&GapConfig {
+            snippet_dirs: vec![snippets],
+            configured_references: references,
+            ..GapConfig::default()
+        })
+        .expect("gap detection");
+
+        assert_eq!(report.unreferenced_snippets, [manual]);
+    }
+
+    #[test]
+    fn stale_coverage_ledger_is_rejected() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        std::fs::write(
+            directory.path().join(crate::e2e::snippets::COVERAGE_MANIFEST),
+            serde_json::to_vec_pretty(&coverage_ledger(0)).expect("coverage serializes"),
+        )
+        .expect("coverage manifest");
+
+        let error = coverage_ledger_references(&[directory.path().to_path_buf()]).expect_err("stale ledger must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("stale fixture-snippet coverage manifest version")
+        );
+    }
+
+    fn coverage_ledger(format_version: u32) -> SnippetCoverageLedger {
+        let key = SnippetCoverageKey {
+            fixture_id: "generated".into(),
+            language: "python".into(),
+        };
+        SnippetCoverageLedger {
+            format_version,
+            generated_paths: vec![PathBuf::from("python/topic/generated.md")],
+            generated_metadata: vec![GeneratedSnippetMetadata {
+                key: key.clone(),
+                path: PathBuf::from("python/topic/generated.md"),
+                language: "python".into(),
+                target: "python".into(),
+                session: "python".into(),
+                requires: Vec::new(),
+                side_effect: SideEffectClass::Safe,
+            }],
+            expected: vec![key.clone()],
+            generated: vec![key],
+            missing: Vec::new(),
+            documented_exceptions: Vec::new(),
+        }
     }
 
     #[test]

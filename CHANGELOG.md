@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Snippet gap and audit checks now discover current generated coverage ledgers directly from configured snippet roots,
+  treating only ledger-backed generated files as references while continuing to report manual orphan snippets.
+
 - Configured C#, Java, Node, and WASM snippet validation sessions now reuse stable project workspaces, preserving
   local package linkage and compiler state across snippets instead of creating an isolated project for every block.
 

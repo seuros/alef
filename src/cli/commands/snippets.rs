@@ -454,12 +454,19 @@ fn run_parse(file: &Path) -> ExitCode {
 }
 
 fn run_audit(snippet_dirs: &[PathBuf], docs_dirs: &[PathBuf], require_frontmatter: bool) -> ExitCode {
+    let configured_references = match crate::snippets::gaps::coverage_ledger_references(snippet_dirs) {
+        Ok(references) => references,
+        Err(error) => {
+            tracing::error!("reading generated snippet coverage: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let config = AuditConfig {
         docs_dirs: docs_dirs.to_vec(),
         snippet_dirs: snippet_dirs.to_vec(),
         require_frontmatter,
         include_base_paths: docs_dirs.to_vec(),
-        configured_references: Vec::new(),
+        configured_references,
         exclude: Vec::new(),
     };
     let report = audit(&config);
@@ -508,12 +515,19 @@ fn run_gaps(
     } else {
         include_base_paths.to_vec()
     };
+    let configured_references = match crate::snippets::gaps::coverage_ledger_references(snippet_dirs) {
+        Ok(references) => references,
+        Err(error) => {
+            tracing::error!("reading generated snippet coverage: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let config = GapConfig {
         docs_dirs: docs_dirs.to_vec(),
         snippet_dirs: snippet_dirs.to_vec(),
         required_languages: required,
         include_base_paths: resolved_base_paths,
-        configured_references: Vec::new(),
+        configured_references,
         exclude: Vec::new(),
     };
     let report = match detect_gaps(&config) {

@@ -6,7 +6,6 @@
 use crate::core::backend::GeneratedFile;
 use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
-use anyhow::Context;
 use heck::ToPascalCase;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -344,9 +343,7 @@ fn validate_snippets(
         .collect::<Vec<_>>();
     let mut configured_references =
         crate::snippets::gaps::readme_snippet_references(workspace_root, config.readme.as_ref());
-    configured_references.extend(ledger_generated_references(
-        workspace_root,
-        config,
+    configured_references.extend(crate::snippets::gaps::coverage_ledger_references(
         absolute_snippet_dirs,
     )?);
 
@@ -489,100 +486,6 @@ fn validate_snippets(
     Ok(())
 }
 
-fn ledger_generated_references(
-    workspace_root: &std::path::Path,
-    config: &crate::core::config::ResolvedCrateConfig,
-    snippet_dirs: &[std::path::PathBuf],
-) -> anyhow::Result<Vec<std::path::PathBuf>> {
-    let Some(snippets) = config.e2e.as_ref().and_then(|e2e| e2e.snippets.as_ref()) else {
-        return Ok(Vec::new());
-    };
-    let output_root = workspace_root.join(&snippets.output);
-    if !snippet_dirs.iter().any(|directory| directory == &output_root) {
-        return Ok(Vec::new());
-    }
-    let manifest = output_root.join(crate::e2e::snippets::COVERAGE_MANIFEST);
-    let content = std::fs::read_to_string(&manifest).with_context(|| {
-        format!(
-            "strict fixture-snippet coverage manifest is missing: {}",
-            manifest.display()
-        )
-    })?;
-    let ledger: crate::e2e::snippets::SnippetCoverageLedger = serde_json::from_str(&content).with_context(|| {
-        format!(
-            "failed to parse fixture-snippet coverage manifest: {}",
-            manifest.display()
-        )
-    })?;
-    if ledger.format_version != crate::e2e::snippets::COVERAGE_MANIFEST_VERSION {
-        anyhow::bail!(
-            "stale fixture-snippet coverage manifest version {} at {}; expected {}",
-            ledger.format_version,
-            manifest.display(),
-            crate::e2e::snippets::COVERAGE_MANIFEST_VERSION
-        );
-    }
-    if !ledger.missing.is_empty()
-        || ledger.expected.len() != ledger.generated.len() + ledger.documented_exceptions.len()
-    {
-        anyhow::bail!("incomplete fixture-snippet coverage manifest at {}", manifest.display());
-    }
-    if ledger.generated_paths.len() != ledger.generated.len()
-        || ledger.generated_metadata.len() != ledger.generated_paths.len()
-    {
-        anyhow::bail!("stale fixture-snippet path ledger at {}", manifest.display());
-    }
-    let metadata_paths = ledger
-        .generated_metadata
-        .iter()
-        .map(|metadata| metadata.path.as_path())
-        .collect::<std::collections::BTreeSet<_>>();
-    let generated_paths = ledger
-        .generated_paths
-        .iter()
-        .map(PathBuf::as_path)
-        .collect::<std::collections::BTreeSet<_>>();
-    if metadata_paths != generated_paths {
-        anyhow::bail!("stale fixture-snippet metadata ledger at {}", manifest.display());
-    }
-    ledger
-        .generated_paths
-        .into_iter()
-        .map(|relative| {
-            validate_ledger_path(&relative)?;
-            let path = output_root.join(relative);
-            if !path.is_file() {
-                anyhow::bail!(
-                    "fixture snippet recorded by the coverage ledger is missing: {}",
-                    path.display()
-                );
-            }
-            Ok(path)
-        })
-        .collect()
-}
-
-fn validate_ledger_path(path: &std::path::Path) -> anyhow::Result<()> {
-    if path.as_os_str().is_empty() || path.is_absolute() {
-        anyhow::bail!(
-            "fixture snippet ledger path must be a non-empty relative path: {}",
-            path.display()
-        );
-    }
-    if path.components().any(|component| {
-        matches!(
-            component,
-            std::path::Component::ParentDir | std::path::Component::RootDir | std::path::Component::Prefix(_)
-        )
-    }) {
-        anyhow::bail!(
-            "fixture snippet ledger path escapes its output root: {}",
-            path.display()
-        );
-    }
-    Ok(())
-}
-
 fn parse_allowed_side_effects(configured: &[String]) -> anyhow::Result<Vec<crate::snippets::types::SideEffectClass>> {
     configured
         .iter()
@@ -626,94 +529,4 @@ fn warn_missing_explicit_sources(kind: &str, sources: &[PathBuf], workspace_root
 
 fn with_markdown_alef_header(content: &str) -> String {
     render::with_html_header(content.to_string())
-}
-
-#[cfg(test)]
-mod coverage_manifest_tests {
-    use super::*;
-    use crate::core::config::e2e::{E2eConfig, SnippetConfig};
-    use crate::e2e::fixture::SideEffectClass;
-    use crate::e2e::snippets::{
-        COVERAGE_MANIFEST_VERSION, GeneratedSnippetMetadata, SnippetCoverageKey, SnippetCoverageLedger,
-    };
-
-    #[test]
-    fn current_ledger_paths_are_authoritative_documentation_references() {
-        let root = tempfile::tempdir().expect("temporary workspace");
-        let output = root.path().join("docs/snippets");
-        let generated = output.join("python/topic/example.md");
-        std::fs::create_dir_all(generated.parent().expect("generated parent")).expect("snippet directory");
-        std::fs::write(&generated, "```python\nvalue = 1\n```\n").expect("generated snippet");
-        let ledger = ledger(COVERAGE_MANIFEST_VERSION);
-        std::fs::write(
-            output.join(crate::e2e::snippets::COVERAGE_MANIFEST),
-            serde_json::to_vec_pretty(&ledger).expect("coverage serializes"),
-        )
-        .expect("coverage manifest");
-        let config = config();
-
-        let references = ledger_generated_references(root.path(), &config, std::slice::from_ref(&output))
-            .expect("ledger is current");
-
-        assert_eq!(references, [generated]);
-    }
-
-    #[test]
-    fn stale_ledger_version_is_rejected() {
-        let root = tempfile::tempdir().expect("temporary workspace");
-        let output = root.path().join("docs/snippets");
-        std::fs::create_dir_all(&output).expect("snippet directory");
-        std::fs::write(
-            output.join(crate::e2e::snippets::COVERAGE_MANIFEST),
-            serde_json::to_vec_pretty(&ledger(0)).expect("coverage serializes"),
-        )
-        .expect("coverage manifest");
-
-        let error = ledger_generated_references(root.path(), &config(), std::slice::from_ref(&output))
-            .expect_err("stale ledger must fail");
-
-        assert!(
-            error
-                .to_string()
-                .contains("stale fixture-snippet coverage manifest version")
-        );
-    }
-
-    fn config() -> ResolvedCrateConfig {
-        ResolvedCrateConfig {
-            e2e: Some(E2eConfig {
-                snippets: Some(SnippetConfig {
-                    output: "docs/snippets".into(),
-                    languages: vec!["python".into()],
-                    ..SnippetConfig::default()
-                }),
-                ..E2eConfig::default()
-            }),
-            ..ResolvedCrateConfig::default()
-        }
-    }
-
-    fn ledger(format_version: u32) -> SnippetCoverageLedger {
-        let key = SnippetCoverageKey {
-            fixture_id: "example".into(),
-            language: "python".into(),
-        };
-        SnippetCoverageLedger {
-            format_version,
-            generated_paths: vec![PathBuf::from("python/topic/example.md")],
-            generated_metadata: vec![GeneratedSnippetMetadata {
-                key: key.clone(),
-                path: PathBuf::from("python/topic/example.md"),
-                language: "python".into(),
-                target: "python".into(),
-                session: "python".into(),
-                requires: Vec::new(),
-                side_effect: SideEffectClass::Safe,
-            }],
-            expected: vec![key.clone()],
-            generated: vec![key],
-            missing: Vec::new(),
-            documented_exceptions: Vec::new(),
-        }
-    }
 }
