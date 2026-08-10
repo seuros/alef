@@ -32,7 +32,7 @@ fn boxes_required_named_field_after_conversion() {
 fn boxes_optional_named_field_after_conversion() {
     let output = render(boxed_field(true));
 
-    assert!(output.contains("settings: self.settings.clone().map(Into::into).map(Box::new),"));
+    assert!(output.contains("settings: self.settings.clone().map(|v| Box::new(v.into())),"));
 }
 
 #[test]
