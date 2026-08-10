@@ -800,7 +800,7 @@ fn opaque_handle_with_no_methods_is_emitted() {
         "opaque handle with no methods must still be emitted as a Zig struct: {content}"
     );
     assert!(
-        content.contains("_handle: *anyopaque,"),
+        content.contains("_handle: ?*anyopaque,"),
         "opaque handle struct must have _handle field: {content}"
     );
     assert!(
@@ -1552,7 +1552,7 @@ type = "CrawlStreamRequest"
         "must emit CrawlEventStream struct type: {content}"
     );
     assert!(
-        content.contains("_handle: *c.DEMOCrawlEventStream,"),
+        content.contains("_handle: ?*c.DEMOCrawlEventStream,"),
         "struct must have _handle field with FFI stream type: {content}"
     );
     assert!(
@@ -1564,7 +1564,7 @@ type = "CrawlStreamRequest"
         "next() must return error union of optional item: {content}"
     );
     assert!(
-        content.contains("c.demo_crawl_engine_handle_crawl_stream_next(self._handle)"),
+        content.contains("c.demo_crawl_engine_handle_crawl_stream_next(handle)"),
         "next() must call _next to fetch the next chunk: {content}"
     );
     assert!(
@@ -1584,7 +1584,7 @@ type = "CrawlStreamRequest"
         "struct must have deinit() method: {content}"
     );
     assert!(
-        content.contains("c.demo_crawl_engine_handle_crawl_stream_free(self._handle)"),
+        content.contains("c.demo_crawl_engine_handle_crawl_stream_free(handle)"),
         "deinit() must call _free to release the stream handle: {content}"
     );
     assert!(
@@ -1747,7 +1747,7 @@ type = "CrawlStreamRequest"
     );
 
     assert!(
-        content.contains("c.demo_crawl_engine_handle_crawl_stream_free(self._handle);"),
+        content.contains("c.demo_crawl_engine_handle_crawl_stream_free(handle);"),
         "deinit() must call the _free FFI function: {content}"
     );
 }
