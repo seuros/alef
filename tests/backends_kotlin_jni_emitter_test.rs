@@ -356,7 +356,7 @@ fn snapshot_jni_default_client() {
     let content = &client_file.content;
 
     assert!(
-        content.contains("class DefaultClient internal constructor(internal val handle: Long) : AutoCloseable"),
+        content.contains("class DefaultClient internal constructor(handle: Long) : AutoCloseable"),
         "missing DefaultClient class with Long handle: {content}"
     );
     assert!(
@@ -636,7 +636,7 @@ fn snapshot_jni_default_client_chat_complete() {
         "missing MAPPER.writeValueAsString: {content}"
     );
     assert!(
-        content.contains("DemoBridge.nativeDefaultClientChat(handle, "),
+        content.contains("withHandle { handle -> DemoBridge.nativeDefaultClientChat(handle, "),
         "missing bridge call: {content}"
     );
     assert!(
@@ -1128,7 +1128,7 @@ fn snapshot_jni_opaque_client_methods_with_opaque_returns() {
         "TreeWalker.walk() should have TreeCursor return type"
     );
     assert!(
-        content.contains("val handle = DemoBridge.nativeTreeWalkerWalk(handle)"),
+        content.contains("val handle = withHandle { handle -> DemoBridge.nativeTreeWalkerWalk(handle) }"),
         "TreeWalker.walk() should assign bridge call result to handle variable: {content}"
     );
     assert!(
