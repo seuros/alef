@@ -270,6 +270,18 @@ static TEMPLATES: &[(&str, &str)] = &[
         "swift/docs_file_json.jinja",
         include_str!("templates/swift/docs_file_json.jinja"),
     ),
+    (
+        "zig/docs_file_read.jinja",
+        include_str!("templates/zig/docs_file_read.jinja"),
+    ),
+    (
+        "zig/docs_file_json.jinja",
+        include_str!("templates/zig/docs_file_json.jinja"),
+    ),
+    (
+        "zig/docs_json_replace.jinja",
+        include_str!("templates/zig/docs_json_replace.jinja"),
+    ),
     ("java/pom.xml.jinja", include_str!("templates/java/pom.xml.jinja")),
     ("java/test_file.jinja", include_str!("templates/java/test_file.jinja")),
     (

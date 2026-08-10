@@ -123,6 +123,14 @@ pub(super) fn build_args_and_setup(
                 // serialize the entire fixture value as a single JSON string
                 // literal rather than rendering it as a Zig array/struct.
                 if arg.arg_type == "json_object" {
+                    let docs_files = fixture.docs_files_for_arg(&arg.field);
+                    if !docs_files.is_empty() {
+                        let (lines, expression) = render_docs_json(&arg.name, v, &docs_files);
+                        setup_lines.extend(lines);
+                        parts.push(expression);
+                        setup_needs_gpa = true;
+                        continue;
+                    }
                     let json_str = serde_json::to_string(v).unwrap_or_default();
                     if crate::e2e::codegen::value_contains_mock_url_placeholder(v) {
                         let env_key = crate::e2e::codegen::mock_url_env_key(fixture_id);
@@ -167,4 +175,86 @@ pub(super) fn build_args_and_setup(
     }
 
     (setup_lines, parts.join(", "), setup_needs_gpa)
+}
+
+fn render_docs_json(
+    variable: &str,
+    value: &serde_json::Value,
+    files: &[crate::e2e::fixture::FixtureDocsFileInput],
+) -> (Vec<String>, String) {
+    let mut value = value.clone();
+    let mut reads = Vec::new();
+    for (index, file) in files.iter().enumerate() {
+        let marker = format!("__ALEF_DOC_FILE_{index}__");
+        let target = if file.field.is_empty() {
+            Some(&mut value)
+        } else {
+            value.pointer_mut(&file.field)
+        };
+        let Some(target) = target else { continue };
+        *target = serde_json::Value::String(marker.clone());
+        reads.push((index, marker, file.path.clone()));
+    }
+    let mut lines = Vec::new();
+    let mut source = format!("\"{}\"", escape_zig(&serde_json::to_string(&value).unwrap_or_default()));
+    for (index, marker, path) in reads {
+        lines.push(
+            crate::e2e::template_env::render(
+                "zig/docs_file_read.jinja",
+                minijinja::context! { variable => variable, index => index, path => escape_zig(&path) },
+            )
+            .trim_end()
+            .to_string(),
+        );
+        lines.push(
+            crate::e2e::template_env::render(
+                "zig/docs_file_json.jinja",
+                minijinja::context! { variable => variable, index => index },
+            )
+            .trim_end()
+            .to_string(),
+        );
+        let output = format!("{variable}_json_{index}");
+        lines.push(
+            crate::e2e::template_env::render(
+                "zig/docs_json_replace.jinja",
+                minijinja::context! {
+                    output => output,
+                    source => source,
+                    marker => escape_zig(&format!("\"{marker}\"")),
+                    variable => variable,
+                    index => index,
+                },
+            )
+            .trim_end()
+            .to_string(),
+        );
+        source = output;
+    }
+    (lines, source)
+}
+
+#[cfg(test)]
+mod docs_file_tests {
+    use super::render_docs_json;
+    use crate::e2e::fixture::FixtureDocsFileInput;
+
+    #[test]
+    fn nested_typed_dto_files_become_runtime_json_byte_arrays() {
+        let (lines, expression) = render_docs_json(
+            "request",
+            &serde_json::json!({"content": "ignored"}),
+            &[FixtureDocsFileInput {
+                field: "/content".into(),
+                path: "document.pdf".into(),
+            }],
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("readFileAlloc") && line.contains("document.pdf"))
+        );
+        assert!(lines.iter().any(|line| line.contains("emit_strings_as_arrays")));
+        assert_eq!(expression, "request_json_0");
+    }
 }

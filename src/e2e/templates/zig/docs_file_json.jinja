@@ -1,0 +1,2 @@
+const {{ variable }}_file_{{ index }}_json = try std.json.Stringify.valueAlloc(allocator, {{ variable }}_file_{{ index }}, .{ .emit_strings_as_arrays = true });
+defer allocator.free({{ variable }}_file_{{ index }}_json);

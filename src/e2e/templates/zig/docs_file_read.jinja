@@ -1,0 +1,2 @@
+const {{ variable }}_file_{{ index }} = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "{{ path }}", allocator, .unlimited);
+defer allocator.free({{ variable }}_file_{{ index }});

@@ -1,0 +1,2 @@
+const {{ output }} = try std.mem.replaceOwned(u8, allocator, {{ source }}, "{{ marker }}", {{ variable }}_file_{{ index }}_json);
+defer allocator.free({{ output }});
