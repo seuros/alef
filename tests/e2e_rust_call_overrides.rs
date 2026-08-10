@@ -226,7 +226,6 @@ fn extra_args_are_appended_after_configured_args() {
 
 #[test]
 fn wrap_options_in_some_combined_with_extra_args_and_returns_result() {
-    // and a fallible return that triggers `.expect("should succeed")`.
     let config = build_config(
         r#"
 wrap_options_in_some = true
@@ -240,7 +239,7 @@ returns_result = true
         "combined overrides should emit the full 3-arg call shape. Rendered:\n{rendered}"
     );
     assert!(
-        rendered.contains(".expect(\"should succeed\")"),
+        rendered.contains(".expect(\"call failed\")"),
         "returns_result = true must emit the `.expect(...)` unwrap. Rendered:\n{rendered}"
     );
 }
