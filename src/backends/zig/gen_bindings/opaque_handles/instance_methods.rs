@@ -51,6 +51,7 @@ pub(super) fn emit_opaque_method(
             return_ty => &return_ty,
         },
     ));
+    out.push_str("        const handle = self._handle orelse return error.HandleClosed;\n");
 
     let json_error_return = zig_error_type
         .as_ref()
@@ -152,16 +153,16 @@ fn method_return_type(
 
     let ret_ty_inner = zig_return_type(&method.return_type, struct_names);
     if let Some(err_ty) = zig_error_type {
-        format!("({err_ty}||error{{OutOfMemory}})!{ret_ty_inner}")
+        format!("({err_ty}||error{{OutOfMemory,HandleClosed}})!{ret_ty_inner}")
     } else if body_needs_try || body_needs_invalid_json {
         let err_set = if body_needs_invalid_json {
-            "error{OutOfMemory,InvalidJson}"
+            "error{OutOfMemory,InvalidJson,HandleClosed}"
         } else {
-            "error{OutOfMemory}"
+            "error{OutOfMemory,HandleClosed}"
         };
         format!("{err_set}!{ret_ty_inner}")
     } else {
-        ret_ty_inner
+        format!("error{{HandleClosed}}!{ret_ty_inner}")
     }
 }
 
@@ -177,7 +178,7 @@ fn method_c_call(
     let method_snake = AsSnakeCase(&method.name).to_string();
     let upper_prefix = prefix.to_uppercase();
     let c_handle = format!(
-        "@as(*c.{upper_prefix}{type_name}, @ptrCast(self._handle))",
+        "@as(*c.{upper_prefix}{type_name}, @ptrCast(handle))",
         type_name = ty.name,
     );
     let mut c_args = vec![c_handle];

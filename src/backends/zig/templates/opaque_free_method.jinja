@@ -1,4 +1,6 @@
-    /// Release the underlying FFI handle. Safe to call once per instance.
+    /// Release the underlying FFI handle. Safe to call more than once.
     pub fn free(self: *{{ type_name }}) void {
-        c.{{ prefix }}_{{ type_snake }}_free(@as(*c.{{ upper_prefix }}{{ type_name }}, @ptrCast(self._handle)));
+        const handle = self._handle orelse return;
+        self._handle = null;
+        c.{{ prefix }}_{{ type_snake }}_free(@as(*c.{{ upper_prefix }}{{ type_name }}, @ptrCast(handle)));
     }

@@ -84,7 +84,7 @@ pub(super) fn emit_opaque_streaming_method(
     };
 
     let c_handle_cast = format!(
-        "@as(*c.{upper_prefix}{type_name}, @ptrCast(self._handle))",
+        "@as(*c.{upper_prefix}{type_name}, @ptrCast(handle))",
         type_name = ty.name
     );
     out.push_str(&render(
