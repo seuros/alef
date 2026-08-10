@@ -243,3 +243,54 @@ impl SnippetValidator for RustValidator {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::snippets::types::{SnippetMetadata, SourceOrigin};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn session_manifest_links_the_configured_local_crate() {
+        if which::which("cargo").is_err() {
+            return;
+        }
+        let project = tempfile::tempdir().expect("project directory");
+        std::fs::create_dir_all(project.path().join("src")).expect("source directory");
+        let manifest = project.path().join("Cargo.toml");
+        std::fs::write(
+            &manifest,
+            "[package]\nname = \"sample-binding\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .expect("package manifest");
+        std::fs::write(project.path().join("src/lib.rs"), "pub const VALUE: usize = 1;\n").expect("package source");
+        let session = ValidationSession {
+            working_directory: project.path().to_path_buf(),
+            manifest: Some(manifest),
+            fingerprint: "neutral-project".into(),
+            env: BTreeMap::new(),
+        };
+        let snippet = Snippet {
+            id: None,
+            path: "snippet.rs".into(),
+            language: Language::Rust,
+            title: None,
+            code: "fn main() { assert_eq!(sample_binding::VALUE, 1); }".into(),
+            start_line: 1,
+            block_index: 0,
+            annotation: None,
+            metadata: SnippetMetadata::default(),
+            source_origin: SourceOrigin {
+                path: "snippet.rs".into(),
+                line: 1,
+                block_index: 0,
+            },
+        };
+
+        let (status, output) =
+            RustValidator::validate_with_context(&snippet, ValidationLevel::TypeCheck, 30, Some(&session))
+                .expect("validation runs");
+
+        assert_eq!(status, SnippetStatus::Pass, "{output:?}");
+    }
+}

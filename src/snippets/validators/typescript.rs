@@ -57,6 +57,33 @@ impl TypeScriptValidator {
                 manifest.display()
             ))
         })?;
+        let content = if manifest_value.get("compilerOptions").is_some() {
+            Self::project_overlay(directory, manifest)
+        } else {
+            Self::package_overlay(directory, manifest, &manifest_value)?
+        };
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&content).map_err(|error| {
+                crate::snippets::error::Error::Other(format!("serializing TypeScript snippet config: {error}"))
+            })?,
+        )?;
+        Ok(path)
+    }
+
+    fn project_overlay(directory: &std::path::Path, manifest: &std::path::Path) -> serde_json::Value {
+        serde_json::json!({
+            "extends": manifest,
+            "compilerOptions": { "noEmit": true },
+            "files": [directory.join("snippet.ts")]
+        })
+    }
+
+    fn package_overlay(
+        directory: &std::path::Path,
+        manifest: &std::path::Path,
+        manifest_value: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
         let package_name = manifest_value
             .get("name")
             .and_then(serde_json::Value::as_str)
@@ -70,7 +97,7 @@ impl TypeScriptValidator {
             .and_then(serde_json::Value::as_str)
             .map(|entry| package_root.join(entry))
             .unwrap_or_else(|| package_root.to_path_buf());
-        let content = serde_json::json!({
+        Ok(serde_json::json!({
             "compilerOptions": {
                 "strict": true,
                 "noEmit": true,
@@ -82,14 +109,7 @@ impl TypeScriptValidator {
                 "paths": { package_name: [declaration] }
             },
             "files": ["snippet.ts"]
-        });
-        std::fs::write(
-            &path,
-            serde_json::to_vec_pretty(&content).map_err(|error| {
-                crate::snippets::error::Error::Other(format!("serializing TypeScript snippet config: {error}"))
-            })?,
-        )?;
-        Ok(path)
+        }))
     }
 
     fn command(
@@ -219,6 +239,8 @@ impl SnippetValidator for TypeScriptValidator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::snippets::types::{SnippetMetadata, SourceOrigin};
+    use std::collections::BTreeMap;
 
     #[test]
     fn package_manifest_maps_local_declarations() {
@@ -232,5 +254,63 @@ mod tests {
             value["compilerOptions"]["paths"]["sample-binding"][0],
             package.path().join("index.d.ts").to_string_lossy().as_ref()
         );
+    }
+
+    #[test]
+    fn project_manifest_resolves_declared_local_package_and_replaces_stale_source() {
+        if which::which("tsc").is_err() {
+            return;
+        }
+        let project = tempfile::tempdir().unwrap();
+        let package = project.path().join("node_modules/sample-binding");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(
+            package.join("package.json"),
+            r#"{"name":"sample-binding","types":"index.d.ts"}"#,
+        )
+        .unwrap();
+        std::fs::write(package.join("index.d.ts"), "export declare const value: number;\n").unwrap();
+        let manifest = project.path().join("tsconfig.json");
+        std::fs::write(
+            &manifest,
+            r#"{"compilerOptions":{"strict":true,"moduleResolution":"bundler","module":"ES2022"}}"#,
+        )
+        .unwrap();
+        let session = ValidationSession {
+            working_directory: project.path().to_path_buf(),
+            manifest: Some(manifest),
+            fingerprint: "neutral-project".into(),
+            env: BTreeMap::new(),
+        };
+
+        let valid = snippet("import { value } from 'sample-binding';\nconst result: number = value;");
+        let invalid = snippet("import { value } from 'sample-binding';\nconst result: string = value;");
+        let (first, _) =
+            TypeScriptValidator::validate_with_context(&valid, ValidationLevel::TypeCheck, 30, Some(&session)).unwrap();
+        let (second, _) =
+            TypeScriptValidator::validate_with_context(&invalid, ValidationLevel::TypeCheck, 30, Some(&session))
+                .unwrap();
+
+        assert_eq!(first, SnippetStatus::Pass);
+        assert_eq!(second, SnippetStatus::Fail);
+    }
+
+    fn snippet(code: &str) -> Snippet {
+        Snippet {
+            id: None,
+            path: "snippet.ts".into(),
+            language: Language::TypeScript,
+            title: None,
+            code: code.into(),
+            start_line: 1,
+            block_index: 0,
+            annotation: None,
+            metadata: SnippetMetadata::default(),
+            source_origin: SourceOrigin {
+                path: "snippet.ts".into(),
+                line: 1,
+                block_index: 0,
+            },
+        }
     }
 }
