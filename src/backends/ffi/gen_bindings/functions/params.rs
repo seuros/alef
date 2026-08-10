@@ -3,7 +3,7 @@ use crate::core::ir::{ParamDef, TypeRef};
 use ahash::AHashSet;
 use minijinja::context;
 
-use super::super::helpers::null_return_value;
+use super::super::helpers::ffi_null_return_value;
 use super::signatures::c_symbol_component;
 
 fn type_ref_to_rust_type(ty: &TypeRef, core_import: &str) -> String {
@@ -45,6 +45,7 @@ pub(super) fn gen_param_conversion_with_enums(
     has_error: bool,
     is_bytes_result: bool,
     return_type: &TypeRef,
+    ffi_return_type: Option<&str>,
     core_import: &str,
     enum_names: &AHashSet<String>,
 ) -> String {
@@ -57,7 +58,7 @@ pub(super) fn gen_param_conversion_with_enums(
     } else if is_void_return(return_type) {
         "return;"
     } else {
-        match null_return_value(return_type) {
+        match ffi_null_return_value(return_type, ffi_return_type) {
             "()" => "return;",
             v => {
                 let ret = format!("return {};", v);

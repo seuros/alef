@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- C FFI capsule returns now use const-null failure sentinels, keeping generated Rust pointer mutability consistent.
+
 - C FFI streaming iterator `_next` functions now keep their full bodies inside the panic guard, producing valid Rust.
 
 - Alef skip extraction now parses attribute structure instead of token substrings, supporting `#[alef::skip]` without

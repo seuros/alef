@@ -98,7 +98,7 @@ fn enum_param_local_name_uses_param_name_not_type_name() {
         core_wrapper: crate::core::ir::CoreWrapper::None,
     };
 
-    let output = gen_param_conversion_with_enums(&p, false, false, &TypeRef::Unit, "sample_crate", &enum_names);
+    let output = gen_param_conversion_with_enums(&p, false, false, &TypeRef::Unit, None, "sample_crate", &enum_names);
 
     assert!(
         output.contains("let strategy_rs ="),
@@ -116,6 +116,14 @@ fn panic_footer_uses_existing_failure_sentinel() {
         gen_function_wrapper_footer(&Some("*mut std::ffi::c_char".to_string()), &TypeRef::String, false);
     assert!(pointer_footer.contains("AssertUnwindSafe(set_panic_error)"));
     assert!(pointer_footer.contains("std::ptr::null_mut()"));
+
+    let const_pointer_footer = gen_function_wrapper_footer(
+        &Some("*const sample_runtime::RawValue".to_string()),
+        &TypeRef::Named("Value".to_string()),
+        false,
+    );
+    assert!(const_pointer_footer.contains("std::ptr::null()"));
+    assert!(!const_pointer_footer.contains("std::ptr::null_mut()"));
 
     let status_footer = gen_function_wrapper_footer(&Some("i32".to_string()), &TypeRef::Unit, true);
     assert!(status_footer.contains("-1"));

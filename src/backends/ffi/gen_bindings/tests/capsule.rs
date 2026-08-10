@@ -64,7 +64,7 @@ fn capsule_api() -> ApiSurface {
             }],
             return_type: TypeRef::Named("Language".to_string()),
             is_async: false,
-            error_type: None,
+            error_type: Some("SampleError".to_string()),
             doc: "Look up a grammar by name.".to_string(),
             cfg: None,
             sanitized: false,
@@ -120,6 +120,10 @@ fn capsule_function_returns_raw_language_pointer() {
         lib.content.contains("pub unsafe extern \"C\" fn tsp_get_language("),
         "expected exported tsp_get_language symbol"
     );
+    assert!(
+        lib.content.contains("return std::ptr::null();"),
+        "capsule parameter failures must return a const null pointer"
+    );
 }
 
 #[test]
@@ -131,7 +135,7 @@ fn capsule_function_calls_into_raw_not_box() {
 
     assert!(
         lib.content
-            .contains("result.into_raw() as *const tree_sitter::ffi::TSLanguage"),
+            .contains("val.into_raw() as *const tree_sitter::ffi::TSLanguage"),
         "capsule fn must convert via into_raw() cast. Got:\n{}",
         lib.content
     );

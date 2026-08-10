@@ -4,7 +4,9 @@ use crate::core::ir::{CoreWrapper, FunctionDef, MethodDef, ReceiverKind, TypeDef
 use ahash::{AHashMap, AHashSet};
 use minijinja::context;
 
-use super::super::helpers::{gen_ffi_unimplemented_body, gen_owned_value_to_c, null_return_value};
+use super::super::helpers::{
+    ffi_null_return_value, gen_ffi_unimplemented_body, gen_owned_value_to_c, null_return_value,
+};
 use super::params::gen_param_conversion_with_enums;
 use super::return_handling::{gen_owned_c_char_to_c_with_len, return_type_needs_non_serde_named, returns_c_char};
 use super::signatures::{c_symbol_component, internal_class_component};
@@ -222,7 +224,15 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
         out.push_str(&crate::backends::ffi::template_env::render(
             "emitted_code_block.jinja",
             context! {
-                content => gen_param_conversion_with_enums(p, has_error, is_bytes_result, &method.return_type, core_import, enum_names),
+                content => gen_param_conversion_with_enums(
+                    p,
+                    has_error,
+                    is_bytes_result,
+                    &method.return_type,
+                    return_type.as_deref(),
+                    core_import,
+                    enum_names,
+                ),
             },
         ));
     }
@@ -501,9 +511,10 @@ pub(super) fn gen_function_wrapper_footer(
     let panic_return = if has_status_return && matches!(rust_return_type, TypeRef::Unit | TypeRef::Bytes) {
         "-1".to_string()
     } else {
-        return_type
-            .as_ref()
-            .map_or_else(|| "()".to_string(), |_| null_return_value(rust_return_type).to_string())
+        return_type.as_ref().map_or_else(
+            || "()".to_string(),
+            |ffi_return_type| ffi_null_return_value(rust_return_type, Some(ffi_return_type)).to_string(),
+        )
     };
     crate::backends::ffi::template_env::render(
         "function_wrapper_footer.jinja",
@@ -644,7 +655,15 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
         out.push_str(&crate::backends::ffi::template_env::render(
             "emitted_code_block.jinja",
             context! {
-                content => gen_param_conversion_with_enums(p, has_error, is_bytes_result, &func.return_type, core_import, enum_names),
+                content => gen_param_conversion_with_enums(
+                    p,
+                    has_error,
+                    is_bytes_result,
+                    &func.return_type,
+                    return_type.as_deref(),
+                    core_import,
+                    enum_names,
+                ),
             },
         ));
     }

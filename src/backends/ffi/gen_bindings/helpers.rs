@@ -222,6 +222,14 @@ pub(super) fn null_return_value(ty: &TypeRef) -> &'static str {
     }
 }
 
+pub(super) fn ffi_null_return_value<'a>(ty: &TypeRef, ffi_return_type: Option<&'a str>) -> &'a str {
+    if ffi_return_type.is_some_and(|return_type| return_type.starts_with("*const ")) {
+        "std::ptr::null()"
+    } else {
+        null_return_value(ty)
+    }
+}
+
 pub(super) fn gen_owned_value_to_c(expr: &str, ty: &TypeRef, indent: &str, _enum_names: &AHashSet<String>) -> String {
     match ty {
         TypeRef::Primitive(prim) => match prim {
