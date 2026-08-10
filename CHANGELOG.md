@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- JNI and Kotlin Android generation now selects cfg-gated function variants from the target feature set before
+  deduplication, preventing disabled APIs from referencing absent core modules.
+
 - Swift async return-type `Sendable` extensions now emit in canonical name order, keeping repeated isolated generation
   byte-for-byte deterministic.
 

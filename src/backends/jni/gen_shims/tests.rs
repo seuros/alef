@@ -177,6 +177,48 @@ namespace = "dev.sample_crate"
         );
     }
 
+    #[test]
+    fn disabled_feature_uses_available_fallback_without_referencing_gated_module() {
+        let gated = crate::core::ir::FunctionDef {
+            name: "decode_sample".into(),
+            rust_path: "demo::decoder::decode_sample".into(),
+            return_type: TypeRef::String,
+            cfg: Some("feature = \"decoder\"".into()),
+            ..Default::default()
+        };
+        let fallback = crate::core::ir::FunctionDef {
+            name: "decode_sample".into(),
+            rust_path: "demo::decode_sample".into(),
+            return_type: TypeRef::String,
+            cfg: Some("all(feature = \"mobile\", not(feature = \"decoder\"))".into()),
+            ..Default::default()
+        };
+        let gated_only = crate::core::ir::FunctionDef {
+            name: "decoder_details".into(),
+            rust_path: "demo::decoder::decoder_details".into(),
+            return_type: TypeRef::String,
+            cfg: Some("feature = \"decoder\"".into()),
+            ..Default::default()
+        };
+        let mut config = btree_fixture_config();
+        config
+            .kotlin_android
+            .as_mut()
+            .expect("fixture has Android config")
+            .features = Some(vec!["mobile".into()]);
+
+        let content = emit_lib_rs(&api_with_functions(vec![gated, fallback, gated_only]), &config);
+
+        assert!(
+            content.contains("core_crate::decode_sample()"),
+            "available fallback must be emitted: {content}"
+        );
+        assert!(
+            !content.contains("core_crate::decoder::decode_sample") && !content.contains("decoder_details"),
+            "disabled feature functions must not reference the absent core module: {content}"
+        );
+    }
+
     /// The generated `throw_jni_error` helper must use `env.throw_new(...).is_err()`
     /// and fall back to `java/lang/RuntimeException` rather than silently discarding
     /// a failed throw (which would leave the Kotlin caller with no exception pending

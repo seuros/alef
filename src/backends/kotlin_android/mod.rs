@@ -222,7 +222,7 @@ impl Backend for KotlinAndroidBackend {
         ];
 
         files.extend(gen_jni_skeleton::emit(config, &layout.package_root));
-        let deduped_api = api.with_deduped_functions();
+        let deduped_api = effective_codegen_api(api, config);
         files.extend(gen_bindings::emit(&deduped_api, config, &layout.kotlin_source_dir));
 
         apply_kotlin_post_processing(&mut files);
@@ -237,6 +237,15 @@ impl Backend for KotlinAndroidBackend {
             post_build: vec![],
         })
     }
+}
+
+fn effective_codegen_api(api: &ApiSurface, config: &ResolvedCrateConfig) -> ApiSurface {
+    let enabled_features: std::collections::HashSet<&str> = config
+        .features_for_language(Language::KotlinAndroid)
+        .iter()
+        .map(String::as_str)
+        .collect();
+    api.with_cfg_filtered_deep(&enabled_features).with_deduped_functions()
 }
 
 /// Resolved Android-AAR project paths.
@@ -410,5 +419,70 @@ mod tests {
         }];
         apply_kotlin_post_processing(&mut files);
         assert_eq!(files[0].content, "ext = 32");
+    }
+
+    #[test]
+    fn disabled_feature_functions_are_absent_from_android_facade() {
+        use crate::core::config::NewAlefConfig;
+
+        let raw: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["kotlin_android", "jni"]
+
+[[crates]]
+name = "demo"
+sources = ["src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.sample_crate"
+namespace = "dev.sample_crate"
+features = ["mobile"]
+"#,
+        )
+        .expect("fixture config parses");
+        let config = raw.resolve().expect("fixture config resolves").remove(0);
+        let function = |name: &str, rust_path: &str, cfg: &str| crate::core::ir::FunctionDef {
+            name: name.into(),
+            rust_path: rust_path.into(),
+            return_type: crate::core::ir::TypeRef::String,
+            cfg: Some(cfg.into()),
+            ..Default::default()
+        };
+        let api = crate::core::ir::ApiSurface {
+            crate_name: "demo".into(),
+            version: "0.1.0".into(),
+            functions: vec![
+                function("decode_sample", "demo::decoder::decode_sample", "feature = \"decoder\""),
+                function(
+                    "decode_sample",
+                    "demo::decode_sample",
+                    "all(feature = \"mobile\", not(feature = \"decoder\"))",
+                ),
+                function(
+                    "decoder_details",
+                    "demo::decoder::decoder_details",
+                    "feature = \"decoder\"",
+                ),
+            ],
+            ..Default::default()
+        };
+
+        let effective_api = effective_codegen_api(&api, &config);
+        let files = gen_bindings::emit(&effective_api, &config, Path::new("generated"));
+        let kotlin = files
+            .iter()
+            .filter(|file| file.path.extension().is_some_and(|extension| extension == "kt"))
+            .map(|file| file.content.as_str())
+            .collect::<String>();
+
+        assert!(
+            kotlin.contains("decodeSample"),
+            "available fallback must remain public: {kotlin}"
+        );
+        assert!(
+            !kotlin.contains("decoderDetails"),
+            "disabled feature API must be omitted: {kotlin}"
+        );
     }
 }

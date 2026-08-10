@@ -3,6 +3,12 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
     let bridge = bridge_class_name(&config.name);
     let core_crate = core_use_path(config);
     let error_class = resolve_error_class(config, &package);
+    let enabled_features: std::collections::HashSet<&str> = config
+        .features_for_language(Language::KotlinAndroid)
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let cfg_filtered_api = api.with_cfg_filtered_deep(&enabled_features);
 
     let mut out = String::new();
 
@@ -15,7 +21,7 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
         },
     ));
 
-    for trait_path in collect_trait_imports(api) {
+    for trait_path in collect_trait_imports(&cfg_filtered_api) {
         out.push_str(&format!("use {trait_path};\n"));
     }
 
@@ -58,9 +64,9 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
         })
         .collect();
 
-    // The JNI shims do not emit `#[cfg]` gates per function, so same-named cfg-variant entries
-    // (real impl + no-ORT stub fallback) would produce two `Java_*_native…` `#[no_mangle]`
-    let deduped_functions = crate::codegen::fn_dedup::dedup_same_name_functions(&api.functions);
+    // JNI exposes one native symbol per function, so select the variant compiled by the
+    // configured Android feature set before collapsing same-named real/fallback entries. ~keep
+    let deduped_functions = crate::codegen::fn_dedup::dedup_same_name_functions(&cfg_filtered_api.functions);
     let visible_functions: Vec<_> = deduped_functions
         .iter()
         .filter(|f| {
@@ -71,7 +77,7 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
         })
         .collect();
 
-    let opaque_type_names: std::collections::HashSet<&str> = api
+    let opaque_type_names: std::collections::HashSet<&str> = cfg_filtered_api
         .types
         .iter()
         .filter(|t| t.is_opaque && !t.is_trait)
@@ -94,7 +100,7 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
         );
     }
 
-    let client_types: Vec<_> = api
+    let client_types: Vec<_> = cfg_filtered_api
         .types
         .iter()
         .filter(|t| {
@@ -110,7 +116,7 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
         emit_client_shims(
             &mut out,
             ty,
-            api,
+            &cfg_filtered_api,
             config,
             &package,
             &bridge,
@@ -121,8 +127,8 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
 
     // Instance methods on value (data-class) types. These carry no handle, so the
     // shim rebuilds the receiver from JSON — see `value_method_shims.rs`.
-    let serde_type_names = value_bridge_serde_type_names(api);
-    for ty in api
+    let serde_type_names = value_bridge_serde_type_names(&cfg_filtered_api);
+    for ty in cfg_filtered_api
         .types
         .iter()
         .filter(|t| !t.is_opaque && !t.is_trait && !t.binding_excluded && !exclude_types.contains(t.name.as_str()))
@@ -149,7 +155,7 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
         emit_destructor_shim(&mut out, &free_symbol, type_name);
     }
 
-    emit_trait_bridge_shims(&mut out, config, api, &package, &bridge);
+    emit_trait_bridge_shims(&mut out, config, &cfg_filtered_api, &package, &bridge);
 
     out
 }
