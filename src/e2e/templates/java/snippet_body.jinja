@@ -16,5 +16,11 @@ public final class Example {
 {% elif returns_void %}        {{ class_name }}.{{ function_name }}({{ args }});
 {% else %}        var {{ result_var }} = {{ class_name }}.{{ function_name }}({{ args }});
 {% endif %}
+{% if not returns_void %}{% if presentation %}{% for operation in presentation %}{% if operation.kind == "show" %}        System.out.println({{ operation.expression }});
+{% elif operation.kind == "iterate" %}        for (var {{ operation.item }} : {{ operation.expression }}) {
+{% for field in operation.fields %}            System.out.println({{ field }});
+{% endfor %}        }
+{% endif %}{% endfor %}{% else %}        System.out.println({{ result_var }});
+{% endif %}{% endif %}
     }
 }

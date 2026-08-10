@@ -360,6 +360,7 @@ pub fn emit_c_doxygen(out: &mut String, doc: &str, indent: &str) {
     };
     body = strip_markdown_links(&body);
     body = wrap_bare_bracket_references(&body);
+    body = body.replace("/*", "/ *").replace("*/", "* /");
     let wrapped = word_wrap(&body, DOXYGEN_WRAP_WIDTH);
     for line in wrapped.lines() {
         out.push_str(indent);

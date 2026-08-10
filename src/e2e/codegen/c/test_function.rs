@@ -48,6 +48,21 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
     if fixture.visitor.is_some() {
         return super::visitor::render_visitor_snippet(fixture, header, prefix, e2e_config, config);
     }
+    if info.returns_void {
+        let args = if info.args.is_empty() {
+            String::new()
+        } else {
+            build_args_string_c(&fixture.input, &info.args, false, config, type_defs, fixture)
+        };
+        let body = crate::e2e::template_env::render(
+            "c/snippet_void_call.jinja",
+            minijinja::context! { function_name => info.function_name, args => args },
+        );
+        return Ok(crate::e2e::template_env::render(
+            "c/snippet_body.jinja",
+            minijinja::context! { header => header, declarations => "", body => body.trim_end() },
+        ));
+    }
     let expects_error = fixture
         .assertions
         .iter()

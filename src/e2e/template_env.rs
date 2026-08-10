@@ -47,6 +47,10 @@ static TEMPLATES: &[(&str, &str)] = &[
     ),
     ("c/snippet_body.jinja", include_str!("templates/c/snippet_body.jinja")),
     (
+        "c/snippet_void_call.jinja",
+        include_str!("templates/c/snippet_void_call.jinja"),
+    ),
+    (
         "python/pyproject.toml.jinja",
         include_str!("templates/python/pyproject.toml.jinja"),
     ),

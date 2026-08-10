@@ -418,6 +418,17 @@ fn test_emit_c_doxygen_indent_applied() {
 }
 
 #[test]
+fn emit_c_doxygen_escapes_nested_comment_delimiters() {
+    let mut out = String::new();
+    emit_c_doxygen(&mut out, "Use `image/*` or terminate with `*/`.", "");
+
+    assert!(out.contains("`image/ *`"), "{out}");
+    assert!(out.contains("`* /`"), "{out}");
+    assert!(!out.contains("/*"), "{out}");
+    assert!(!out.contains("*/"), "{out}");
+}
+
+#[test]
 fn test_render_yard_sections() {
     let sections = fixture_sections();
     let out = render_yard_sections(&sections);

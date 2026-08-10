@@ -332,7 +332,7 @@ impl E2eCodegen for CCodegen {
         type_defs: &[crate::core::ir::TypeDef],
         _enums: &[crate::core::ir::EnumDef],
     ) -> Result<String> {
-        let info = resolve_fixture_call_info(fixture, e2e_config, "c");
+        let mut info = resolve_fixture_call_info(fixture, e2e_config, "c");
         let call = e2e_config.resolve_call_for_fixture(
             fixture.call.as_deref(),
             &fixture.id,
@@ -345,7 +345,10 @@ impl E2eCodegen for CCodegen {
             .get("c")
             .and_then(|value| value.prefix.clone())
             .or_else(|| config.ffi.as_ref().and_then(|value| value.prefix.clone()))
-            .unwrap_or_default();
+            .unwrap_or_else(|| config.ffi_prefix());
+        if !prefix.is_empty() && !info.function_name.starts_with(&format!("{prefix}_")) {
+            info.function_name = format!("{prefix}_{}", info.function_name);
+        }
         let header = call
             .overrides
             .get("c")
@@ -386,6 +389,7 @@ struct ResolvedCallInfo {
     c_free_fn: Option<String>,
     c_engine_factory: Option<String>,
     result_is_option: bool,
+    returns_void: bool,
     /// When `true`, the FFI signature for this method follows the byte-buffer
     /// out-pointer pattern: `int32_t fn(this, req, uint8_t** out_ptr,
     /// uintptr_t* out_len, uintptr_t* out_cap)`. The C codegen emits out-param
@@ -419,12 +423,15 @@ fn resolve_call_info(call: &CallConfig, lang: &str) -> ResolvedCallInfo {
         .unwrap_or_default()
         .to_string();
     let client_factory = overrides.and_then(|o| o.client_factory.as_ref()).cloned();
-    let raw_c_result_type = overrides.and_then(|o| o.raw_c_result_type.clone());
+    let raw_c_result_type = overrides.and_then(|o| o.raw_c_result_type.clone()).or_else(|| {
+        (call.result_is_simple || overrides.is_some_and(|value| value.result_is_simple)).then(|| "char*".to_string())
+    });
     let c_free_fn = overrides.and_then(|o| o.c_free_fn.clone());
     let c_engine_factory = overrides.and_then(|o| o.c_engine_factory.clone());
     let result_is_option = overrides
         .and_then(|o| if o.result_is_option { Some(true) } else { None })
         .unwrap_or(call.result_is_option);
+    let returns_void = call.returns_void;
     // result_is_bytes is read from either the call-level config (preferred —
     // the byte-buffer FFI shape is identical across languages that use the
     // same FFI crate) or the per-language override (back-compat with the
@@ -441,6 +448,7 @@ fn resolve_call_info(call: &CallConfig, lang: &str) -> ResolvedCallInfo {
         c_free_fn,
         c_engine_factory,
         result_is_option,
+        returns_void,
         result_is_bytes,
         streaming: call.streaming_enabled(),
         extra_args,
@@ -726,5 +734,54 @@ mod snippet_tests {
         assert!(rendered.contains("create_engine"), "{rendered}");
         assert!(rendered.contains("sample_scrape(engine"), "{rendered}");
         assert!(rendered.contains("crawl_engine_handle_free(engine)"), "{rendered}");
+    }
+
+    #[test]
+    fn simple_result_snippet_uses_prefixed_string_api() {
+        let fixture = Fixture {
+            id: "list_formats".into(),
+            description: "List formats".into(),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "list_formats".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.result_is_simple = true;
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+
+        let rendered = CCodegen
+            .render_snippet_body(&fixture, &e2e, &config, &[], &[])
+            .expect("simple-result snippet renders");
+
+        assert!(rendered.contains("char* result = sample_list_formats();"), "{rendered}");
+        assert!(rendered.contains("sample_free_string(result);"), "{rendered}");
+        assert!(!rendered.contains("SAMPLEListFormats"), "{rendered}");
+    }
+
+    #[test]
+    fn void_result_snippet_calls_api_without_placeholder_result() {
+        let fixture = Fixture {
+            id: "clear_formats".into(),
+            description: "Clear formats".into(),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "clear_formats".into();
+        e2e.call.returns_void = true;
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+
+        let rendered = CCodegen
+            .render_snippet_body(&fixture, &e2e, &config, &[], &[])
+            .expect("void-result snippet renders");
+
+        assert!(rendered.contains("sample_clear_formats();"), "{rendered}");
+        assert!(!rendered.contains("result ="), "{rendered}");
+        assert!(!rendered.contains("_free("), "{rendered}");
     }
 }

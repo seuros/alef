@@ -70,6 +70,7 @@ pub(super) fn render_snippet_body(
         .and_then(|value| value.module.clone())
         .unwrap_or_else(|| config.java_package());
     let needs_mapper = setup_lines.iter().any(|line| line.contains("MAPPER"));
+    let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "java");
 
     crate::e2e::template_env::render(
         "java/snippet_body.jinja",
@@ -84,6 +85,7 @@ pub(super) fn render_snippet_body(
             returns_void => call.returns_void,
             needs_mapper => needs_mapper,
             fixture_id => fixture.id,
+            presentation => presentation,
         },
     )
 }
@@ -176,6 +178,41 @@ mod tests {
         assert!(body.contains("public static void main(String[] args) throws Exception"));
         assert!(!body.contains("@Test"));
         assert!(!body.contains("assert"));
+        assert!(body.contains("System.out.println(document);"));
+    }
+
+    #[test]
+    fn snippet_presents_selected_result_fields() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "list_items",
+            "description": "List items",
+            "input": null,
+            "assertions": [],
+            "docs": {
+                "topic": "items",
+                "presentation": {
+                    "operations": [{"op": "iterate", "path": "items", "item": "item", "fields": ["name"]}]
+                }
+            }
+        }))
+        .expect("fixture");
+        let body = render_snippet_body(
+            &fixture,
+            &E2eConfig {
+                call: CallConfig {
+                    function: "list_items".into(),
+                    result_var: "result".into(),
+                    ..CallConfig::default()
+                },
+                ..E2eConfig::default()
+            },
+            &ResolvedCrateConfig::default(),
+            &[],
+        );
+
+        assert!(body.contains("for (var item : result.items())"), "{body}");
+        assert!(body.contains("System.out.println(item.name());"), "{body}");
+        assert!(!body.contains("System.out.println(result);"), "{body}");
     }
 
     #[test]
