@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Swift documentation snippets now read configured file inputs into byte-array fields of typed DTOs.
+
 - R documentation snippets now read configured file inputs into raw-vector fields of typed DTOs.
 
 - Python, Rust, Node, and WASM documentation snippets now read configured file inputs into typed DTO byte fields.

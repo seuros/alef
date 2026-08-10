@@ -222,7 +222,8 @@ pub(super) fn build_args_and_setup(
                 None | Some(serde_json::Value::Null) => "{}".to_string(),
                 Some(v) => serde_json::to_string(v).unwrap_or_else(|_| "{}".to_string()),
             };
-            let escaped = escape_swift(&json_str);
+            let docs_files = fixture.docs_files_for_arg(&arg.field);
+            let json_expr = docs_json_expression(&json_str, &arg.name, &docs_files, &mut setup_lines);
 
             // Detect if config arg is unnamed (index `idx` in unnamed_arg_indices).
             // E2e wrappers keep config unnamed and receive JSON strings.
@@ -230,14 +231,14 @@ pub(super) fn build_args_and_setup(
 
             if config_is_unnamed {
                 // E2e wrapper: pass JSON string directly (positional, no label).
-                parts.push((idx, format!("\"{}\"", escaped)));
+                parts.push((idx, json_expr));
             } else {
                 // Regular binding: deserialize to an opaque object.
                 let var_name = format!("{}Obj", arg.name.to_lower_camel_case());
                 let from_json_fn = from_json_helper_for_arg(arg, options_type);
                 // Qualify with module name to avoid ambiguity when both SampleCrate and RustBridge are imported.
                 setup_lines.push(format!(
-                    "let {var_name} = try {module_name}.{from_json_fn}(\"{escaped}\")"
+                    "let {var_name} = try {module_name}.{from_json_fn}({json_expr})"
                 ));
                 parts.push((idx, var_name));
             }
@@ -406,7 +407,8 @@ pub(super) fn build_args_and_setup(
                 serde_json::Value::Null => "{}".to_string(),
                 v => serde_json::to_string(v).unwrap_or_else(|_| "{}".to_string()),
             };
-            let escaped = escape_swift(&json_str);
+            let docs_files = fixture.docs_files_for_arg(&arg.field);
+            let json_expr = docs_json_expression(&json_str, &arg.name, &docs_files, &mut setup_lines);
             let var_name = format!("_{}", arg.name.to_lower_camel_case());
             if let Some(handle_expr) = visitor_handle_expr {
                 // Use the visitor-aware helper: `{typeCamelCase}FromJsonWithVisitor(json, handle)`.
@@ -417,12 +419,12 @@ pub(super) fn build_args_and_setup(
                 let handle_var = format!("_visitorHandle_{}", var_name.trim_start_matches('_'));
                 setup_lines.push(format!("let {handle_var} = {handle_expr}"));
                 setup_lines.push(format!(
-                    "let {var_name} = try {module_name}.{with_visitor_fn}(\"{escaped}\", {handle_var})"
+                    "let {var_name} = try {module_name}.{with_visitor_fn}({json_expr}, {handle_var})"
                 ));
             } else {
                 let from_json_fn = format!("{}FromJson", type_name.to_lower_camel_case());
                 setup_lines.push(format!(
-                    "let {var_name} = try {module_name}.{from_json_fn}(\"{escaped}\")"
+                    "let {var_name} = try {module_name}.{from_json_fn}({json_expr})"
                 ));
             }
             parts.push((idx, var_name));
@@ -481,4 +483,78 @@ pub(super) fn build_args_and_setup(
         .collect::<Vec<_>>()
         .join(", ");
     (setup_lines, args_str)
+}
+
+fn docs_json_expression(
+    json: &str,
+    variable: &str,
+    files: &[crate::e2e::fixture::FixtureDocsFileInput],
+    setup_lines: &mut Vec<String>,
+) -> String {
+    if files.is_empty() {
+        return format!("\"{}\"", escape_swift(json));
+    }
+    let mut value: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+    let mut replacements = String::new();
+    for (index, file) in files.iter().enumerate() {
+        let marker = format!("__ALEF_DOC_FILE_{index}__");
+        let target = if file.field.is_empty() {
+            Some(&mut value)
+        } else {
+            value.pointer_mut(&file.field)
+        };
+        let Some(target) = target else { continue };
+        *target = serde_json::Value::String(marker.clone());
+        setup_lines.push(
+            crate::e2e::template_env::render(
+                "swift/docs_file_read.jinja",
+                minijinja::context! { variable => variable, index => index, path => escape_swift(&file.path) },
+            )
+            .trim_end()
+            .to_string(),
+        );
+        setup_lines.push(
+            crate::e2e::template_env::render(
+                "swift/docs_file_json.jinja",
+                minijinja::context! { variable => variable, index => index },
+            )
+            .trim_end()
+            .to_string(),
+        );
+        replacements.push_str(&format!(
+            ".replacingOccurrences(of: \"\\\\\\\"{marker}\\\\\\\"\", with: {variable}File{index}Json)"
+        ));
+    }
+    format!(
+        "\"{}\"{replacements}",
+        escape_swift(&serde_json::to_string(&value).unwrap_or_default())
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::docs_json_expression;
+    use crate::e2e::fixture::FixtureDocsFileInput;
+
+    #[test]
+    fn nested_typed_dto_files_become_runtime_byte_arrays() {
+        let mut setup = Vec::new();
+        let expression = docs_json_expression(
+            r#"{"content":"ignored"}"#,
+            "request",
+            &[FixtureDocsFileInput {
+                field: "/content".into(),
+                path: "document.pdf".into(),
+            }],
+            &mut setup,
+        );
+
+        assert_eq!(
+            setup[0],
+            "let requestFile0 = try Data(contentsOf: URL(fileURLWithPath: \"document.pdf\"))"
+        );
+        assert!(setup[1].contains("requestFile0.map(String.init)"));
+        assert!(expression.contains("replacingOccurrences"), "{expression}");
+        assert!(expression.contains("requestFile0Json"), "{expression}");
+    }
 }
