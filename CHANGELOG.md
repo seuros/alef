@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- C FFI byte-buffer ownership no longer relies on caller-controlled vector capacity metadata.
+
 - JNI and Kotlin Android generation now selects cfg-gated function variants from the target feature set before
   deduplication, preventing disabled APIs from referencing absent core modules.
 

@@ -1,0 +1,24 @@
+/// Free a byte buffer previously returned by this library via out-params.
+/// `ptr`, `len`, and `cap` must match the values written by the library function,
+/// or the call must pass `ptr = null` (in which case it is a no-op).
+/// # Safety
+/// Pointer must have been returned by this library (via out_ptr / out_len / out_cap
+/// out-params), and ownership must not already have been released.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn {{ prefix }}_free_bytes(ptr: *mut u8, len: usize, cap: usize) {
+    catch_ffi_panic((), || {
+        if ptr.is_null() {
+            return;
+        }
+        if len != cap {
+            set_last_error(1, "invalid byte buffer metadata: len and cap differ");
+            return;
+        }
+        // SAFETY: The library returns a Box<[u8]> allocation and reports its length
+        // as both len and cap; the caller contract preserves pointer and ownership.
+        unsafe {
+            let slice = std::ptr::slice_from_raw_parts_mut(ptr, len);
+            drop(Box::<[u8]>::from_raw(slice));
+        }
+    })
+}

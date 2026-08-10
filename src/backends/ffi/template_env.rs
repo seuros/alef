@@ -5,6 +5,7 @@ static TEMPLATES: &[(&str, &str)] = &[
     ("build_rs.jinja", include_str!("templates/build_rs.jinja")),
     ("last_error.jinja", include_str!("templates/last_error.jinja")),
     ("free_string.jinja", include_str!("templates/free_string.jinja")),
+    ("free_bytes.jinja", include_str!("templates/free_bytes.jinja")),
     ("version_fn.jinja", include_str!("templates/version_fn.jinja")),
     (
         "ffi_tokio_runtime.jinja",

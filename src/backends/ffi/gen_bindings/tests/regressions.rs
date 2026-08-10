@@ -216,16 +216,20 @@ fn test_bytes_result_return_uses_out_params_and_emits_free_bytes() {
         "function must be emitted with the correct FFI name"
     );
     assert!(
-        lib.content.contains("into_raw_parts()"),
-        "Result<Vec<u8>> success arm must use Vec::into_raw_parts()"
+        lib.content.contains("into_boxed_slice()"),
+        "Result<Vec<u8>> success arm must transfer a boxed slice"
     );
     assert!(
         lib.content.contains("fn my_lib_free_bytes("),
         "module must include my_lib_free_bytes companion function"
     );
     assert!(
-        lib.content.contains("Vec::from_raw_parts(ptr, len, cap)"),
-        "free_bytes must reconstruct and drop the Vec via Vec::from_raw_parts"
+        lib.content.contains("Box::<[u8]>::from_raw(slice)"),
+        "free_bytes must reconstruct and drop the boxed slice"
+    );
+    assert!(
+        lib.content.contains("if len != cap"),
+        "free_bytes must reject modified allocation metadata"
     );
 }
 
