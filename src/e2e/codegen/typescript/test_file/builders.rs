@@ -202,19 +202,17 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
                 // napi-rs constants are PascalCase variant names. Fixtures may
                 // use the lowercase wire form (e.g. "percent"); convert it.
                 let camel_key = snake_to_camel(key);
-                let is_enum_field =
-                    enum_fields.contains_key(key.as_str()) || enum_fields.contains_key(camel_key.as_str());
-                if is_enum_field {
+                let enum_type = enum_fields
+                    .get(key.as_str())
+                    .or_else(|| enum_fields.get(camel_key.as_str()));
+                if let Some(enum_type) = enum_type {
                     if let serde_json::Value::String(s) = &preprocessed {
-                        format!("\"{}\"", escape_js(&s.to_upper_camel_case()))
+                        format!("{enum_type}.{}", s.to_upper_camel_case())
                     } else {
                         json_to_js(&preprocessed)
                     }
                 } else {
-                    match val {
-                        serde_json::Value::Object(_) => json_to_js_camel(&preprocessed),
-                        _ => json_to_js(&preprocessed),
-                    }
+                    node_value_expression(&preprocessed, key, enum_fields)
                 }
             } else {
                 match val {
@@ -333,4 +331,62 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
     stmts.push(format!("return {var};"));
     let body = stmts.join(" ");
     format!("(() => {{ {body} }})()")
+}
+
+fn node_value_expression(
+    value: &serde_json::Value,
+    field: &str,
+    enum_fields: &std::collections::HashMap<String, String>,
+) -> String {
+    let camel_field = snake_to_camel(field);
+    if let Some(enum_type) = enum_fields.get(field).or_else(|| enum_fields.get(camel_field.as_str()))
+        && let Some(variant) = value.as_str()
+    {
+        return format!("{enum_type}.{}", variant.to_upper_camel_case());
+    }
+    match value {
+        serde_json::Value::Object(object) => {
+            let fields = object
+                .iter()
+                .map(|(name, value)| {
+                    format!(
+                        "{}: {}",
+                        snake_to_camel(name),
+                        node_value_expression(value, name, enum_fields)
+                    )
+                })
+                .collect::<Vec<_>>();
+            format!("{{ {} }}", fields.join(", "))
+        }
+        serde_json::Value::Array(values) => {
+            let values = values
+                .iter()
+                .map(|value| node_value_expression(value, "", enum_fields))
+                .collect::<Vec<_>>();
+            format!("[{}]", values.join(", "))
+        }
+        _ => json_to_js(value),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn node_typed_objects_use_importable_enum_members() {
+        let expression = ts_builder_expression(
+            serde_json::json!({"kind": "uri"}).as_object().expect("object"),
+            "DocumentInput",
+            &Default::default(),
+            "node",
+            &[("kind".into(), "InputKind".into())].into_iter().collect(),
+            &Default::default(),
+            &[],
+            &[],
+            "",
+        );
+
+        assert_eq!(expression, "{ kind: InputKind.Uri } as DocumentInput");
+    }
 }

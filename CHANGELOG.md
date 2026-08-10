@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Go documentation snippets now materialize absent typed DTO arguments as values and align native struct fields canonically.
 
+- TypeScript documentation snippets now use imported enum members and safely destructure optional result collections.
+
 - Dart and PHP documentation snippets now construct known DTO arguments with native typed constructors instead of
   JSON round trips.
 

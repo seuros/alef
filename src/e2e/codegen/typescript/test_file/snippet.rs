@@ -62,6 +62,10 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
         enum_fields.extend(value.enum_fields.clone());
         bigint_fields.extend(value.bigint_fields.iter().cloned());
     }
+    infer_enum_fields(recipe.options_type, type_defs, enums, &mut enum_fields);
+    for argument in recipe.args {
+        infer_enum_fields(argument.element_type.as_deref(), type_defs, enums, &mut enum_fields);
+    }
     let handle_config_type = override_config.and_then(|value| value.handle_config_type.as_deref());
     let (mut setup_lines, mut args) = build_args_and_setup(
         &fixture.input,
@@ -160,6 +164,41 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
             presentation => crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang),
         },
     )
+}
+
+fn infer_enum_fields(
+    type_name: Option<&str>,
+    type_defs: &[TypeDef],
+    enums: &[EnumDef],
+    fields: &mut std::collections::HashMap<String, String>,
+) {
+    let Some(type_name) = type_name else { return };
+    let mut pending = vec![type_name.to_string()];
+    let mut visited = std::collections::HashSet::new();
+    while let Some(name) = pending.pop() {
+        if !visited.insert(name.clone()) {
+            continue;
+        }
+        let Some(type_def) = type_defs.iter().find(|definition| definition.name == name) else {
+            continue;
+        };
+        for field in &type_def.fields {
+            let Some(named) = named_type(&field.ty) else { continue };
+            if enums.iter().any(|definition| definition.name == named) {
+                fields.entry(field.name.clone()).or_insert_with(|| named.to_string());
+            } else if type_defs.iter().any(|definition| definition.name == named) {
+                pending.push(named.to_string());
+            }
+        }
+    }
+}
+
+fn named_type(value: &crate::core::ir::TypeRef) -> Option<&str> {
+    match value {
+        crate::core::ir::TypeRef::Named(name) => Some(name),
+        crate::core::ir::TypeRef::Optional(inner) | crate::core::ir::TypeRef::Vec(inner) => named_type(inner),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

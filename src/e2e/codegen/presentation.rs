@@ -83,7 +83,7 @@ fn typescript_first_item(
         && let Some((source, tail)) = path.split_once("[0].")
     {
         let source = resolver.accessor(source, language, result_var);
-        return (source, "first".into(), format!("first?.{tail}"));
+        return (format!("{source} ?? []"), "first".into(), format!("first?.{tail}"));
     }
     (
         String::new(),
@@ -214,7 +214,7 @@ mod tests {
             "{rust_output}"
         );
         assert!(
-            typescript_output.contains("const [first] = result.results;"),
+            typescript_output.contains("const [first] = result.results ?? [];"),
             "{typescript_output}"
         );
         assert!(
