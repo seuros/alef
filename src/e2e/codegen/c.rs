@@ -423,9 +423,7 @@ fn resolve_call_info(call: &CallConfig, lang: &str) -> ResolvedCallInfo {
         .unwrap_or_default()
         .to_string();
     let client_factory = overrides.and_then(|o| o.client_factory.as_ref()).cloned();
-    let raw_c_result_type = overrides.and_then(|o| o.raw_c_result_type.clone()).or_else(|| {
-        (call.result_is_simple || overrides.is_some_and(|value| value.result_is_simple)).then(|| "char*".to_string())
-    });
+    let raw_c_result_type = overrides.and_then(|o| o.raw_c_result_type.clone());
     let c_free_fn = overrides.and_then(|o| o.c_free_fn.clone());
     let c_engine_factory = overrides.and_then(|o| o.c_engine_factory.clone());
     let result_is_option = overrides
@@ -747,6 +745,13 @@ mod snippet_tests {
         e2e.call.function = "list_formats".into();
         e2e.call.result_var = "result".into();
         e2e.call.result_is_simple = true;
+        e2e.call.overrides.insert(
+            "c".into(),
+            crate::core::config::e2e::CallOverride {
+                raw_c_result_type: Some("char*".into()),
+                ..Default::default()
+            },
+        );
         let config = ResolvedCrateConfig {
             name: "sample".into(),
             ..ResolvedCrateConfig::default()
@@ -759,6 +764,42 @@ mod snippet_tests {
         assert!(rendered.contains("char* result = sample_list_formats();"), "{rendered}");
         assert!(rendered.contains("sample_free_string(result);"), "{rendered}");
         assert!(!rendered.contains("SAMPLEListFormats"), "{rendered}");
+    }
+
+    #[test]
+    fn scalar_result_snippets_preserve_numeric_types_without_string_cleanup() {
+        for raw_type in ["int32_t", "bool"] {
+            let fixture = Fixture {
+                id: "count_formats".into(),
+                description: "Count formats".into(),
+                ..Fixture::default()
+            };
+            let mut e2e = E2eConfig::default();
+            e2e.call.function = "count_formats".into();
+            e2e.call.result_var = "result".into();
+            e2e.call.result_is_simple = true;
+            e2e.call.overrides.insert(
+                "c".into(),
+                crate::core::config::e2e::CallOverride {
+                    raw_c_result_type: Some(raw_type.into()),
+                    ..Default::default()
+                },
+            );
+            let config = ResolvedCrateConfig {
+                name: "sample".into(),
+                ..ResolvedCrateConfig::default()
+            };
+
+            let rendered = CCodegen
+                .render_snippet_body(&fixture, &e2e, &config, &[], &[])
+                .expect("numeric-result snippet renders");
+
+            assert!(
+                rendered.contains(&format!("{raw_type} result = sample_count_formats();")),
+                "{rendered}"
+            );
+            assert!(!rendered.contains("free_string"), "{rendered}");
+        }
     }
 
     #[test]

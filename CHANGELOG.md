@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Generated C snippets now use configured ABI prefixes, scalar and void return shapes, while Java snippets present
+- Generated C snippets now use configured ABI prefixes, explicitly typed scalar and void return shapes, while Java snippets present
   returned values and selected fields; C Doxygen output also escapes nested comment delimiters.
 
 ## [0.60.0] - 2026-08-10
