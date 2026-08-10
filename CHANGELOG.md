@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Alef scratch workspaces and caches are ignored recursively, preventing nested validation artifacts from appearing
+  as consumer repository changes.
+
 - Release verification now accepts Java documentation snippets that stage typed JSON before deserialization and keeps
   enum conversion helpers warning-clean under strict Clippy.
 
