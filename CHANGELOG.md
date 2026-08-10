@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Domain-shaped E2E fixtures now require extension-owned documentation recipes instead of falling back to generic
+  function-call generators that could emit invalid or test-harness snippets.
+
 - Snippet gap and audit checks now discover current generated coverage ledgers directly from configured snippet roots,
   treating only ledger-backed generated files as references while continuing to report manual orphan snippets.
 

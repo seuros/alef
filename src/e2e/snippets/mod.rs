@@ -350,6 +350,9 @@ fn render_snippet_body(
             return Ok(body);
         }
     }
+    if let Some(kind) = extension_owned_recipe_kind(fixture) {
+        bail!("{kind} fixture requires an extension-owned documentation recipe");
+    }
     let body = generator
         .render_snippet_body(
             fixture,
@@ -363,6 +366,16 @@ fn render_snippet_body(
         bail!("built-in `{language}` snippet recipe returned an empty body");
     }
     Ok(body)
+}
+
+fn extension_owned_recipe_kind(fixture: &Fixture) -> Option<&'static str> {
+    if fixture.http.is_some() {
+        return Some("HTTP");
+    }
+    if fixture.asyncapi.is_some() {
+        return Some("AsyncAPI");
+    }
+    fixture.websocket.as_ref().map(|_| "WebSocket")
 }
 
 fn snippet_generators(languages: &[String]) -> Result<Vec<(&str, Box<dyn E2eCodegen>)>> {
@@ -804,6 +817,39 @@ mod tests {
         assert_eq!(report.coverage.generated, report.coverage.expected);
         assert!(report.coverage.missing.is_empty());
         assert!(report.snippets[0].file.content.contains("extension_call()"));
+    }
+
+    #[test]
+    fn unclaimed_domain_fixture_is_recorded_as_missing() {
+        let mut fixture = documented_fixture();
+        fixture.asyncapi = Some(crate::e2e::fixture::AsyncApiFixture {
+            spec: serde_json::json!({"asyncapi": "3.0.0"}),
+            expected: serde_json::Value::Null,
+            validation: None,
+        });
+        let snippet_config = SnippetConfig {
+            output: "docs/snippets".into(),
+            ..SnippetConfig::default()
+        };
+        let e2e = E2eConfig::default();
+        let crate_config = ResolvedCrateConfig::default();
+        let context = SnippetRenderContext {
+            e2e: &e2e,
+            crate_config: &crate_config,
+            type_defs: &[],
+            enums: &[],
+        };
+
+        let report =
+            generate_snippet_report_with_extensions(&[fixture], &["go".into()], &snippet_config, &context, &[])
+                .expect("unclaimed domain recipe belongs in coverage report");
+
+        assert!(report.snippets.is_empty());
+        assert_eq!(report.coverage.missing.len(), 1);
+        assert_eq!(
+            report.coverage.missing[0].reason,
+            "AsyncAPI fixture requires an extension-owned documentation recipe"
+        );
     }
 
     #[test]
