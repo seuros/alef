@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Kotlin/JNI opaque clients now serialize native calls with `close()`, make repeated and concurrent closes idempotent,
+  and reject method or stream creation after close before entering JNI.
+
 - Generated C FFI free-function and method entrypoints now contain Rust panics, report them through the existing
   thread-local error contract, and return the signature's established failure sentinel.
 

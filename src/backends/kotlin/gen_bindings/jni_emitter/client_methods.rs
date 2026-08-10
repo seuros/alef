@@ -53,7 +53,7 @@ fn emit_jni_client_method(
 /// Returns a string that produces the bridge's raw return value (String, ByteArray, Unit, etc.).
 fn build_bridge_call(m: &crate::core::ir::MethodDef, bridge_name: &str, native_name: &str) -> String {
     if m.params.is_empty() {
-        return format!("{bridge_name}.{native_name}(handle)");
+        return format!("withHandle {{ handle -> {bridge_name}.{native_name}(handle) }}");
     }
     if m.params.len() == 1 && is_binary_param_type(&m.params[0].ty) {
         let p = &m.params[0];
@@ -63,7 +63,7 @@ fn build_bridge_call(m: &crate::core::ir::MethodDef, bridge_name: &str, native_n
         } else {
             param_name
         };
-        return format!("{bridge_name}.{native_name}(handle, {arg})");
+        return format!("withHandle {{ handle -> {bridge_name}.{native_name}(handle, {arg}) }}");
     }
     let request_json_expr = if m.params.len() == 1 {
         let p = &m.params[0];
@@ -84,7 +84,7 @@ fn build_bridge_call(m: &crate::core::ir::MethodDef, bridge_name: &str, native_n
             .collect();
         format!("MAPPER.writeValueAsString(mapOf({}))", map_entries.join(", "))
     };
-    format!("{bridge_name}.{native_name}(handle, {request_json_expr})")
+    format!("withHandle {{ handle -> {bridge_name}.{native_name}(handle, {request_json_expr}) }}")
 }
 
 /// Emit the method body lines (withContext wrapper, return, JSON deserialisation).

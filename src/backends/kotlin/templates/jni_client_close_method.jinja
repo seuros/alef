@@ -1,1 +1,7 @@
-    override fun close() { {{ bridge_name }}.{{ free_name }}(handle) }
+    override fun close() = synchronized(handleLock) {
+        if (nativeHandle != 0L) {
+            val handle = nativeHandle
+            nativeHandle = 0L
+            {{ bridge_name }}.{{ free_name }}(handle)
+        }
+    }

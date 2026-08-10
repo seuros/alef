@@ -5,7 +5,9 @@
             .findAndRegisterModules()
             .setPropertyNamingStrategy(com.fasterxml.jackson.databind.PropertyNamingStrategies.SNAKE_CASE)
         val streamHandle: Long = withContext(Dispatchers.IO) {
-            {{ bridge_name }}.{{ jni_start }}(handle, mapper.writeValueAsString({{ first_param_name }}))
+            withHandle { handle ->
+                {{ bridge_name }}.{{ jni_start }}(handle, mapper.writeValueAsString({{ first_param_name }}))
+            }
         }
         try {
             while (true) {

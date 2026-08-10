@@ -67,4 +67,42 @@ mod tests {
             file.content
         );
     }
+
+    #[test]
+    fn jni_client_serializes_native_calls_and_makes_close_idempotent() {
+        use crate::core::ir::{MethodDef, TypeDef, TypeRef};
+
+        let api = ApiSurface {
+            types: vec![TypeDef {
+                name: "ClientHandle".to_owned(),
+                rust_path: "sample::ClientHandle".to_owned(),
+                is_opaque: true,
+                methods: vec![MethodDef {
+                    name: "status".to_owned(),
+                    is_static: false,
+                    return_type: TypeRef::String,
+                    ..MethodDef::default()
+                }],
+                ..TypeDef::default()
+            }],
+            ..ApiSurface::default()
+        };
+        let config = ResolvedCrateConfig {
+            kotlin_android: Some(KotlinAndroidConfig::default()),
+            ..ResolvedCrateConfig::default()
+        };
+
+        let file = emit_jni_client_class(&api, &config, Some("dev.example")).expect("client class must be emitted");
+
+        assert!(file.content.contains("private val handleLock = Any()"));
+        assert!(
+            file.content
+                .contains("check(nativeHandle != 0L) { \"ClientHandle is closed\" }")
+        );
+        assert!(file.content.contains("withHandle { handle ->"));
+        assert!(file.content.contains("nativeClientHandleStatus(handle)"));
+        assert!(file.content.contains("override fun close() = synchronized(handleLock)"));
+        assert!(file.content.contains("if (nativeHandle != 0L)"));
+        assert!(file.content.contains("nativeHandle = 0L"));
+    }
 }
