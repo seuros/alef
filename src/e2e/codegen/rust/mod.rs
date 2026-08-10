@@ -204,7 +204,7 @@ impl E2eCodegen for RustE2eCodegen {
             config,
             type_defs,
             &dep_name,
-            fixture.needs_mock_server(),
+            call_fixture.needs_mock_server(),
         );
         let (imports, body, is_async) = extract_rust_snippet(&test_file)?;
         let presentation = super::presentation::resolve(&call_fixture, e2e_config, "rust");
@@ -746,10 +746,14 @@ options_type = "ChatRequest"
         let fixture: Fixture = serde_json::from_value(serde_json::json!({
             "id": "client_chat",
             "description": "send a request",
-            "input": {"model": "example-model", "messages": []},
+            "input": {"model": "example-model", "url": "$mock_url/guide", "messages": []},
+            "mock_response": {"status": 200},
             "docs": {
                 "topic": "guides",
-                "presentation": {"operations": [{"op": "show", "path": "message"}]}
+                "presentation": {
+                    "input": {"model": "example-model", "url": "https://api.example.com/guide", "messages": []},
+                    "operations": [{"op": "show", "path": "message"}]
+                }
             },
             "assertions": [{"type": "not_error"}]
         }))
@@ -767,6 +771,10 @@ options_type = "ChatRequest"
         assert!(rendered.contains("#[tokio::main]"), "{rendered}");
         assert!(!rendered.contains("#[tokio::test]"), "{rendered}");
         assert!(!rendered.contains("fn test_"), "{rendered}");
+        assert!(rendered.contains("https://api.example.com/guide"), "{rendered}");
+        assert!(!rendered.contains("MOCK_SERVER"), "{rendered}");
+        assert!(!rendered.contains("E2E_ALLOW_PRIVATE_NETWORK"), "{rendered}");
+        assert!(!rendered.contains("$mock_url"), "{rendered}");
     }
 
     #[test]

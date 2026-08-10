@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Rust documentation snippets now use public presentation inputs without leaking E2E mock-server environment or
+  private-network setup, while generated E2E tests retain their runtime harness.
+
 - Node and WASM snippet sessions now extend configured TypeScript project manifests, so declared local packages resolve
   during strict validation while stable validation workspaces still replace each snippet's source.
 
