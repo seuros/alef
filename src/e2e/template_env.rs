@@ -242,6 +242,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         "elixir/docs_file_read.jinja",
         include_str!("templates/elixir/docs_file_read.jinja"),
     ),
+    (
+        "r/docs_file_read.jinja",
+        include_str!("templates/r/docs_file_read.jinja"),
+    ),
     ("java/pom.xml.jinja", include_str!("templates/java/pom.xml.jinja")),
     ("java/test_file.jinja", include_str!("templates/java/test_file.jinja")),
     (

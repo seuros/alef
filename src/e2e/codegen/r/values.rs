@@ -33,13 +33,37 @@ fn pascal_to_snake_case(s: &str) -> String {
 /// `Vec<String>` fields like `exclude_selectors` get unboxed to scalars and
 /// serde deserialization on the Rust side fails with
 /// `invalid type: string "foo", expected a sequence`.
-pub(super) fn json_to_r_preserve_arrays(value: &serde_json::Value, lowercase_enum_values: bool) -> String {
+pub(super) fn json_to_r_preserve_arrays_with_files(
+    value: &serde_json::Value,
+    lowercase_enum_values: bool,
+    files: &[crate::e2e::fixture::FixtureDocsFileInput],
+    pointer: &str,
+) -> String {
+    if let Some(file) = files.iter().find(|file| file.field == pointer) {
+        return crate::e2e::template_env::render(
+            "r/docs_file_read.jinja",
+            minijinja::context! { path => escape_r(&file.path) },
+        )
+        .trim_end()
+        .to_string();
+    }
     match value {
         serde_json::Value::Array(arr) => {
             if arr.is_empty() {
                 "I(list())".to_string()
             } else {
-                let items: Vec<String> = arr.iter().map(|v| json_to_r(v, lowercase_enum_values)).collect();
+                let items: Vec<String> = arr
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| {
+                        json_to_r_preserve_arrays_with_files(
+                            value,
+                            lowercase_enum_values,
+                            files,
+                            &json_pointer_child(pointer, &index.to_string()),
+                        )
+                    })
+                    .collect();
                 format!("I(c({}))", items.join(", "))
             }
         }
@@ -50,7 +74,12 @@ pub(super) fn json_to_r_preserve_arrays(value: &serde_json::Value, lowercase_enu
                     format!(
                         "\"{}\" = {}",
                         escape_r(k),
-                        json_to_r_preserve_arrays(v, lowercase_enum_values)
+                        json_to_r_preserve_arrays_with_files(
+                            v,
+                            lowercase_enum_values,
+                            files,
+                            &json_pointer_child(pointer, k),
+                        )
                     )
                 })
                 .collect();
@@ -58,6 +87,10 @@ pub(super) fn json_to_r_preserve_arrays(value: &serde_json::Value, lowercase_enu
         }
         _ => json_to_r(value, lowercase_enum_values),
     }
+}
+
+fn json_pointer_child(parent: &str, segment: &str) -> String {
+    format!("{parent}/{}", segment.replace('~', "~0").replace('/', "~1"))
 }
 
 /// * `lowercase_enum_values` - If true, convert PascalCase strings to snake_case (for enum values).

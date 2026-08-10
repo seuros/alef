@@ -4,7 +4,7 @@ use crate::core::config::ResolvedCrateConfig;
 use crate::e2e::escape::escape_r;
 use crate::e2e::fixture::Fixture;
 
-use super::values::{json_to_r, json_to_r_preserve_arrays};
+use super::values::{json_to_r, json_to_r_preserve_arrays_with_files};
 
 /// Remove the named `options = …` argument (if any) from an R call-args string.
 ///
@@ -131,7 +131,8 @@ pub(super) fn build_args_string(
                     // JSON arrays. Without this, single-element vectors get
                     // unboxed to scalars (e.g. `c("foo")` → `"foo"`) and serde
                     // rejects them when deserializing `Vec<T>` fields.
-                    let r_list = json_to_r_preserve_arrays(val, true);
+                    let docs_files = fixture.docs_files_for_arg(&arg.field);
+                    let r_list = json_to_r_preserve_arrays_with_files(val, true, &docs_files, "");
                     let json_expr = if crate::e2e::codegen::value_contains_mock_url_placeholder(val) {
                         let env_key = crate::e2e::codegen::mock_url_env_key(&fixture.id);
                         let base_var = format!(".{}_mock_base_url", arg_name);
@@ -368,5 +369,55 @@ mod tests {
         );
         assert!(setup_lines.is_empty());
         assert!(teardown_block.is_empty());
+    }
+
+    #[test]
+    fn build_args_string_reads_nested_typed_dto_files() {
+        let input = json!({"request": {"content": "ignored"}});
+        let args = vec![ArgMapping {
+            name: "request".into(),
+            field: "request".into(),
+            arg_type: "json_object".into(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }];
+        let fixture: Fixture = serde_json::from_value(json!({
+            "id": "document_input", "description": "Read a document",
+            "input": input, "assertions": [],
+            "docs": {"topic": "documents", "presentation": {
+                "files": [{"field": "/request/content", "path": "document.pdf"}]
+            }}
+        }))
+        .expect("fixture");
+        let config = ResolvedCrateConfig::default();
+        let mut setup_lines = Vec::new();
+        let mut teardown_block = String::new();
+
+        let rendered = build_args_string(
+            &fixture.docs_call_fixture().input,
+            &args,
+            RArgsContext {
+                arg_name_map: None,
+                options_type: Some("DocumentRequest"),
+                fixture: &fixture.docs_call_fixture(),
+                config: &config,
+                type_defs: &[],
+                setup_lines: &mut setup_lines,
+                teardown_block: &mut teardown_block,
+            },
+        );
+
+        assert!(
+            rendered.contains("readBin(\"document.pdf\", what = \"raw\""),
+            "{rendered}"
+        );
+        assert!(
+            rendered.starts_with("request = DocumentRequest$from_json"),
+            "{rendered}"
+        );
     }
 }
