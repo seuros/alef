@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixture-generated documentation snippets now include canonical validation frontmatter without exposing test inputs or assertions.
+
 - C FFI capsule returns now use const-null failure sentinels, keeping generated Rust pointer mutability consistent.
 
 - C FFI streaming iterator `_next` functions now keep their full bodies inside the panic guard, producing valid Rust.

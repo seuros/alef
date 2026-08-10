@@ -239,7 +239,7 @@ fn generate_snippet_report_with_extensions(
                     continue;
                 }
             };
-            let content = render_snippet_markdown(&body, docs, lang);
+            let content = render_snippet_markdown(&body, fixture, docs, language, lang);
             let file = GeneratedFile {
                 path: path.clone(),
                 content,
@@ -410,15 +410,40 @@ fn generator_name(language: &str) -> &str {
     }
 }
 
-fn render_snippet_markdown(body: &str, docs: &FixtureDocs, language: DocumentationLanguage) -> String {
+fn render_snippet_markdown(
+    body: &str,
+    fixture: &Fixture,
+    docs: &FixtureDocs,
+    target: &str,
+    language: DocumentationLanguage,
+) -> String {
+    let snippet_id = format!("fixture_{target}_{}", fixture.id);
+    let requires = serde_json::to_string(&fixture.requirements).unwrap_or_else(|_| "[]".to_string());
     crate::e2e::template_env::render(
         "snippets/file.md.jinja",
         minijinja::context! {
             description => docs.description.as_deref(),
             fence => language.code_fence(),
-            title => language.display_name(), body => body,
+            id => snippet_id,
+            language => language.canonical_name(),
+            level => "syntax",
+            requires => requires,
+            side_effect => side_effect_name(docs.side_effects),
+            target => target,
+            title => language.display_name(),
+            body => body,
         },
     )
+}
+
+fn side_effect_name(side_effect: SideEffectClass) -> &'static str {
+    match side_effect {
+        SideEffectClass::Safe => "safe",
+        SideEffectClass::Network => "network",
+        SideEffectClass::Process => "process",
+        SideEffectClass::Install => "install",
+        SideEffectClass::Server => "server",
+    }
 }
 
 fn validate_requirements(fixture: &Fixture) -> Result<()> {
@@ -716,14 +741,15 @@ mod tests {
 
         for (target_language, binding_language, canonical_name, output_slug) in cases {
             let language = DocumentationLanguage::Binding(binding_language);
-            let rendered = render_snippet_markdown("example()", &docs, language);
+            let fixture = documented_fixture();
+            let rendered = render_snippet_markdown("example()", &fixture, &docs, target_language, language);
             let path = snippet_path("docs/snippets", &docs, "example", target_language, language)
                 .expect("snippet path is valid");
 
             assert_eq!(
                 rendered,
                 format!(
-                    "```{canonical_name} title=\"{}\"\nexample()\n```\n",
+                    "---\nid: fixture_{target_language}_extension_owned\nlanguage: {canonical_name}\ntarget: {target_language}\nlevel: syntax\nrequires: []\nside_effect: safe\n---\n\n```{canonical_name} title=\"{}\"\nexample()\n```\n",
                     language.display_name()
                 )
             );
@@ -775,11 +801,15 @@ mod tests {
 
         let rendered = render_snippet_markdown(
             "backend_call()",
+            &documented_fixture(),
             &docs,
+            "python",
             DocumentationLanguage::Binding(Language::Python),
         );
 
-        assert_eq!(rendered, "```python title=\"Python\"\nbackend_call()\n```\n");
+        assert!(rendered.starts_with("---\nid: fixture_python_extension_owned\nlanguage: python\ntarget: python\n"));
+        assert!(rendered.contains("requires: []\nside_effect: network\n---"));
+        assert!(rendered.ends_with("```python title=\"Python\"\nbackend_call()\n```\n"));
         assert!(!rendered.contains("Backend-owned body"));
         assert!(!rendered.contains("Example"));
     }
