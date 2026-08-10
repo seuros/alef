@@ -64,22 +64,9 @@ struct HttpExpectedResponse {
 struct HttpFixture {
     expected_response: HttpExpectedResponse,
 }
+"####;
 
-#[derive(Debug, Deserialize)]
-struct Fixture {
-    docs: None,
-    requirements: Vec::new(),
-    id: String,
-    #[serde(default)]
-    mock_response: Option<MockResponse>,
-    #[serde(default)]
-    http: Option<HttpFixture>,
-    /// Route-array fixture schema:
-    /// `input.mock_responses[i] = { path?, status_code, headers, body_inline | body_file }`.
-    #[serde(default)]
-    input: Option<serde_json::Value>,
-}
-
+const BINARY_AFTER_FIXTURE_SOURCE: &str = r####"
 /// A single resolved mock response with its serving path.
 struct ResolvedRoute {
     /// The namespaced path under which this route is registered in the shared server,
@@ -428,6 +415,11 @@ fn serve_test_document(request_path: &str) -> Option<Response> {
 pub fn render_mock_server_binary() -> String {
     let mut out = hash::header(CommentStyle::DoubleSlash);
     out.push_str(BINARY_INTRO_SOURCE);
+    out.push_str(&crate::e2e::template_env::render(
+        "rust/mock_server_fixture.rs.jinja",
+        minijinja::context! {},
+    ));
+    out.push_str(BINARY_AFTER_FIXTURE_SOURCE);
     out.push_str(render_runtime_server_source());
     out.push_str(render_route_loading_source());
     out.push_str(BINARY_ENTRYPOINT_SOURCE);

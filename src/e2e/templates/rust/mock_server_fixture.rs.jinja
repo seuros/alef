@@ -1,0 +1,13 @@
+#[derive(Debug, Deserialize)]
+struct Fixture {
+    id: String,
+    #[serde(default)]
+    mock_response: Option<MockResponse>,
+    #[serde(default)]
+    http: Option<HttpFixture>,
+    /// Route-array fixture schema:
+    /// `input.mock_responses[i] = { path?, status_code, headers, body_inline | body_file }`.
+    #[serde(default)]
+    input: Option<serde_json::Value>,
+}
+

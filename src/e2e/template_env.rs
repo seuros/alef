@@ -22,6 +22,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/rust/docs_json_file.rs.jinja"),
     ),
     (
+        "rust/mock_server_fixture.rs.jinja",
+        include_str!("templates/rust/mock_server_fixture.rs.jinja"),
+    ),
+    (
         "typescript/typed_binding.jinja",
         include_str!("templates/typescript/typed_binding.jinja"),
     ),

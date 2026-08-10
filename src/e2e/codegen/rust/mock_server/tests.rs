@@ -15,6 +15,12 @@ fn render_mock_server_binary_contains_main() {
 }
 
 #[test]
+fn render_mock_server_binary_is_valid_rust() {
+    let out = render_mock_server_binary();
+    syn::parse_file(&out).expect("generated mock server must parse as Rust");
+}
+
+#[test]
 fn render_mock_server_binary_spawn_before_print() {
     let out = render_mock_server_binary();
     // The shared server must be spawned (and every listener probed for
