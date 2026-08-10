@@ -1,6 +1,7 @@
 use crate::core::ir::{ParamDef, TypeRef};
 use ahash::AHashSet;
 
+use super::orchestration::gen_function_wrapper_footer;
 use super::params::gen_param_conversion_with_enums;
 use super::return_handling::return_type_needs_non_serde_named;
 
@@ -107,4 +108,15 @@ fn enum_param_local_name_uses_param_name_not_type_name() {
         output.contains("redaction_strategy_from_i32_rs(strategy)"),
         "enum helper must receive the FFI param name (strategy), got:\n{output}"
     );
+}
+
+#[test]
+fn panic_footer_uses_existing_failure_sentinel() {
+    let pointer_footer =
+        gen_function_wrapper_footer(&Some("*mut std::ffi::c_char".to_string()), &TypeRef::String, false);
+    assert!(pointer_footer.contains("set_panic_error();"));
+    assert!(pointer_footer.contains("std::ptr::null_mut()"));
+
+    let status_footer = gen_function_wrapper_footer(&Some("i32".to_string()), &TypeRef::Unit, true);
+    assert!(status_footer.contains("-1"));
 }

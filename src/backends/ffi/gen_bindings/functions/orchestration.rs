@@ -174,7 +174,11 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
             &format!("{type_name}::{method_name}"),
             has_error || is_bytes_result,
         ));
-        out.push_str("\n}");
+        out.push_str(&gen_function_wrapper_footer(
+            &return_type,
+            &method.return_type,
+            has_error || is_bytes_result,
+        ));
         return out;
     }
 
@@ -481,8 +485,30 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
         }
     }
 
-    out.push_str("\n}");
+    out.push_str(&gen_function_wrapper_footer(
+        &return_type,
+        &method.return_type,
+        has_error || is_bytes_result,
+    ));
     out
+}
+
+pub(super) fn gen_function_wrapper_footer(
+    return_type: &Option<String>,
+    rust_return_type: &TypeRef,
+    has_status_return: bool,
+) -> String {
+    let panic_return = if has_status_return && matches!(rust_return_type, TypeRef::Unit | TypeRef::Bytes) {
+        "-1".to_string()
+    } else {
+        return_type
+            .as_ref()
+            .map_or_else(|| "()".to_string(), |_| null_return_value(rust_return_type).to_string())
+    };
+    crate::backends::ffi::template_env::render(
+        "function_wrapper_footer.jinja",
+        context! { panic_return => panic_return },
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -599,7 +625,11 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
             func_name,
             has_error || is_bytes_result,
         ));
-        out.push_str("\n}");
+        out.push_str(&gen_function_wrapper_footer(
+            &return_type,
+            &func.return_type,
+            has_error || is_bytes_result,
+        ));
         return out;
     }
 
@@ -861,6 +891,10 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
         }
     }
 
-    out.push_str("\n}");
+    out.push_str(&gen_function_wrapper_footer(
+        &return_type,
+        &func.return_type,
+        has_error || is_bytes_result,
+    ));
     out
 }

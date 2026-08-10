@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated C FFI free-function and method entrypoints now contain Rust panics, report them through the existing
+  thread-local error contract, and return the signature's established failure sentinel.
+
+- PHP flat data-enum tags are now read-only and JSON construction rejects unknown tags before infallible core
+  conversion, preventing malformed or future variant tags from reaching generated panic arms.
+
 - Rust documentation snippets now use public presentation inputs without leaking E2E mock-server environment or
   private-network setup, while generated E2E tests retain their runtime harness.
 

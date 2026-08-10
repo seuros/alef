@@ -130,6 +130,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/free_function_header.jinja"),
     ),
     (
+        "function_wrapper_footer.jinja",
+        include_str!("templates/function_wrapper_footer.jinja"),
+    ),
+    (
         "null_check_self_ref.jinja",
         include_str!("templates/null_check_self_ref.jinja"),
     ),

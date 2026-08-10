@@ -232,11 +232,20 @@ pub(crate) fn gen_flat_data_enum_methods(
     let mut impl_builder = ImplBuilder::new(&enum_def.name);
     impl_builder.add_attr("php_impl");
 
-    let from_json = "#[php(name = \"from_json\")]\npub fn from_json(json: String) -> PhpResult<Self> {\n    \
-        serde_json::from_str(&json)\n        \
-        .map_err(|e| PhpException::default(e.to_string()))\n\
-        }"
-    .to_string();
+    let allowed_tags = enum_def
+        .variants
+        .iter()
+        .map(|variant| format!("{:?}", variant_tag_value(variant, enum_def)))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    let from_json = crate::backends::php::template_env::render(
+        "php_flat_enum_from_json.jinja",
+        minijinja::context! {
+            enum_name => &enum_def.name,
+            tag_field => tag_field,
+            allowed_tags => allowed_tags,
+        },
+    );
     impl_builder.add_method(&from_json);
 
     for ctor in gen_flat_data_enum_variant_constructors(

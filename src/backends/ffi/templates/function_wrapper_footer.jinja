@@ -1,0 +1,9 @@
+
+    })) {
+        Ok(value) => value,
+        Err(_) => {
+            set_panic_error();
+            {{ panic_return }}
+        }
+    }
+}

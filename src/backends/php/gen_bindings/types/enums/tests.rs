@@ -316,8 +316,10 @@ mod escape_php_reserved_constant_tests {
 
 #[cfg(test)]
 mod flat_data_enum_from_impls_tests {
-    use super::super::gen_flat_data_enum_from_impls;
+    use super::super::{gen_flat_data_enum, gen_flat_data_enum_from_impls, gen_flat_data_enum_methods};
+    use crate::backends::php::type_map::PhpMapper;
     use crate::core::ir::{EnumDef, EnumVariant};
+    use ahash::AHashSet;
 
     /// Constructs a minimal EnumDef for testing.
     fn make_enum(name: &str, serde_tag: Option<&str>, has_default_variant: bool, has_excluded: bool) -> EnumDef {
@@ -396,5 +398,37 @@ mod flat_data_enum_from_impls_tests {
             !generated.contains("_ => module::SimpleEnum::default()"),
             "Should NOT emit default() fallback when core type has no visible Default impl; got:\n{generated}"
         );
+    }
+
+    #[test]
+    fn flat_enum_tag_is_read_only_and_json_is_allowlisted() {
+        let enum_def = make_enum("Message", Some("kind"), false, false);
+        let mapper = PhpMapper {
+            enum_names: AHashSet::new(),
+            data_enum_names: AHashSet::from_iter(["Message".to_string()]),
+            untagged_data_enum_names: AHashSet::new(),
+            json_string_enum_names: AHashSet::new(),
+        };
+        let generated_struct = gen_flat_data_enum(&enum_def, &mapper, None);
+        let empty = AHashSet::new();
+        let generated_methods = gen_flat_data_enum_methods(&enum_def, &mapper, &empty, &empty, &empty, "crate");
+
+        assert!(
+            !generated_struct.contains("#[php(prop"),
+            "tag must not be writable from PHP"
+        );
+        assert!(
+            generated_struct.contains("kind_tag: String"),
+            "tag remains available to generated conversions"
+        );
+        assert!(
+            generated_methods.contains("matches!(value.kind_tag.as_str(),"),
+            "{generated_methods}"
+        );
+        assert!(
+            generated_methods.contains("\"Variant1\" | \"Variant2\""),
+            "{generated_methods}"
+        );
+        assert!(generated_methods.contains("return Err(PhpException::default(format!("));
     }
 }
