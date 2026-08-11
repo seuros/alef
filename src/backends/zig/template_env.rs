@@ -218,6 +218,14 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/thunk_if_fallible.jinja"),
     ),
     (
+        "thunk_owned_string_result.jinja",
+        include_str!("templates/thunk_owned_string_result.jinja"),
+    ),
+    (
+        "thunk_error_result.jinja",
+        include_str!("templates/thunk_error_result.jinja"),
+    ),
+    (
         "thunk_if_ok_result.jinja",
         include_str!("templates/thunk_if_ok_result.jinja"),
     ),

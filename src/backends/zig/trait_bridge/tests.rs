@@ -439,6 +439,33 @@ fn make_vtable_fallible_method_returns_i32_error_code() {
 }
 
 #[test]
+fn make_vtable_owns_callback_strings_and_reports_errors() {
+    let trait_def = make_trait_def(
+        "Renderer",
+        vec![make_method("render", vec![], TypeRef::String, Some("RenderError"))],
+    );
+    let mut out = String::new();
+
+    emit_make_vtable(
+        "Renderer",
+        false,
+        &trait_def,
+        &std::collections::HashSet::new(),
+        &mut out,
+        &[],
+    );
+
+    assert!(out.contains("std.heap.c_allocator.dupeZ(u8, std.mem.span(value))"));
+    assert!(out.contains("std.heap.c_allocator.free(std.mem.span(ptr))"));
+    assert!(out.contains("std.fmt.allocPrintSentinel("));
+    assert!(out.contains("@errorName(err)"));
+    assert!(
+        out.contains("else {\n                        std.heap.c_allocator.free(_owned_result);"),
+        "an absent out_result slot must not leak the callback result: {out}"
+    );
+}
+
+#[test]
 fn make_vtable_primitive_return_passes_through() {
     let trait_def = make_trait_def(
         "Counter",

@@ -1,6 +1,6 @@
         .free_string = struct {
             fn thunk(ptr: [*c]u8) callconv(.c) void {
-                _ = ptr;
+                if (ptr != null) std.heap.c_allocator.free(std.mem.span(ptr));
             }
         }.thunk,
         .free_user_data = struct {

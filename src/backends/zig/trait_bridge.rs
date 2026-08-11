@@ -261,6 +261,7 @@ pub fn emit_make_vtable(
                             minijinja::context! {
                                 ok_binding => &ok_binding,
                                 is_string_like => true,
+                                has_out_error => true,
                             },
                         ));
                         success_path_diverges = true;
@@ -278,9 +279,10 @@ pub fn emit_make_vtable(
                 out.push_str("                    return 0;\n");
             }
             out.push_str("                } else |err| {\n");
-            out.push_str("                    _ = err;\n");
-            out.push_str("                    if (out_error) |ptr| ptr.* = null; // caller checks error code\n");
-            out.push_str("                    return 1;\n");
+            out.push_str(&crate::backends::zig::template_env::render(
+                "thunk_error_result.jinja",
+                minijinja::context! {},
+            ));
             out.push_str("                }\n");
         } else if is_infallible_complex {
             out.push_str("                const ");
@@ -290,12 +292,13 @@ pub fn emit_make_vtable(
             out.push('(');
             out.push_str(&args_str);
             out.push_str(");\n");
-            out.push_str("                if (out_result) |ptr| {\n");
-            out.push_str("                    ptr.* = @constCast(");
-            out.push_str(ok_binding);
-            out.push_str(");\n");
-            out.push_str("                }\n");
-            out.push_str("                return 0;\n");
+            out.push_str(&crate::backends::zig::template_env::render(
+                "thunk_owned_string_result.jinja",
+                minijinja::context! {
+                    ok_binding => &ok_binding,
+                    has_out_error => false,
+                },
+            ));
         } else {
             match &method.return_type {
                 TypeRef::Unit => {

@@ -1,8 +1,5 @@
 {% if is_string_like -%}
-                    // String-like return type ([*c]const u8): already a C string pointer.
-                    // Use directly without JSON formatting (zig 0.16 stringify can't handle [*c]const u8).
-                    if (out_result) |ptr| ptr.* = @constCast({{ ok_binding }});
-                    return 0;
+{% include "thunk_owned_string_result.jinja" %}
 {% else -%}
                     // Complex return type: serialize the host value to JSON and hand back a
                     // NUL-terminated C string. The caller owns the returned pointer and must

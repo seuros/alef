@@ -1,0 +1,10 @@
+                    if (out_error) |ptr| {
+                        const _error = std.fmt.allocPrintSentinel(
+                            std.heap.c_allocator,
+                            "{s}",
+                            .{@errorName(err)},
+                            0,
+                        ) catch null;
+                        ptr.* = if (_error) |value| @ptrCast(value.ptr) else null;
+                    }
+                    return 1;
