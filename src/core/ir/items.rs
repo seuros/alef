@@ -400,6 +400,9 @@ pub struct EnumDef {
     /// Serde tag property name for internally tagged enums (from `#[serde(tag = "...")]`)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serde_tag: Option<String>,
+    /// Serde content property name for adjacently tagged enums (from `#[serde(content = "...")]`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serde_content: Option<String>,
     /// True when the enum has `#[serde(untagged)]`.
     /// Absence of `serde_tag` does NOT imply untagged — it means externally-tagged (the serde
     /// default). Only set this when the attribute is explicitly present on the Rust type.
@@ -724,6 +727,7 @@ mod tests {
             has_serde: _,                // gates Codable/serde-bridge conformance emission
             has_default: _,              // gates delegating `impl Default` emission
             serde_tag: _,                // internally-tagged enum property name
+            serde_content: _,            // adjacently-tagged enum payload property name
             serde_untagged: _,           // untagged-enum handling
             serde_rename_all: _,         // variant renaming strategy
             binding_excluded: _,         // excludes the enum from generated surfaces

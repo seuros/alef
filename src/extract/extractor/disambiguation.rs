@@ -270,6 +270,7 @@ mod tests {
             cfg: None,
             is_copy: false,
             has_serde: false,
+            serde_content: None,
             serde_tag: None,
             serde_untagged: false,
             serde_rename_all: None,

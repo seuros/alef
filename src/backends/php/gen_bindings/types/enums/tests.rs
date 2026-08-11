@@ -43,6 +43,7 @@ mod variant_constructor_tests {
                     ],
                 ),
             ],
+            serde_content: None,
             serde_tag: Some("type".to_string()),
             ..Default::default()
         }
@@ -95,6 +96,7 @@ mod variant_constructor_tests {
                 "Llm",
                 vec![field("llm", TypeRef::Named("LlmConfig".to_string()))],
             )],
+            serde_content: None,
             serde_tag: Some("type".to_string()),
             ..Default::default()
         };
@@ -117,6 +119,7 @@ mod variant_constructor_tests {
             name: "CrawlEvent".to_string(),
             rust_path: "test_lib::CrawlEvent".to_string(),
             variants: vec![variant("Page", vec![boxed])],
+            serde_content: None,
             serde_tag: Some("type".to_string()),
             ..Default::default()
         };
@@ -133,6 +136,7 @@ mod variant_constructor_tests {
             name: "Blob".to_string(),
             rust_path: "test_lib::Blob".to_string(),
             variants: vec![variant("Raw", vec![field("data", TypeRef::Bytes)])],
+            serde_content: None,
             serde_tag: Some("type".to_string()),
             ..Default::default()
         };
@@ -147,6 +151,7 @@ mod variant_constructor_tests {
             name: "Payload".to_string(),
             rust_path: "test_lib::Payload".to_string(),
             variants: vec![variant("Doc", vec![field("body", TypeRef::Json)])],
+            serde_content: None,
             serde_tag: Some("type".to_string()),
             ..Default::default()
         };
@@ -173,6 +178,7 @@ mod variant_constructor_tests {
                     TypeRef::Vec(Box::new(TypeRef::Named("Item".to_string()))),
                 )],
             )],
+            serde_content: None,
             serde_tag: Some("type".to_string()),
             ..Default::default()
         };
@@ -198,6 +204,7 @@ mod variant_constructor_tests {
                 "Fill",
                 vec![field("color", TypeRef::Named("Color".to_string()))],
             )],
+            serde_content: None,
             serde_tag: Some("type".to_string()),
             ..Default::default()
         };
@@ -222,6 +229,7 @@ mod variant_constructor_tests {
                 "Big",
                 vec![field("count", TypeRef::Primitive(PrimitiveType::U64))],
             )],
+            serde_content: None,
             serde_tag: Some("type".to_string()),
             ..Default::default()
         };
@@ -248,6 +256,7 @@ mod variant_constructor_tests {
                 excluded,
                 variant("Real", vec![field("value", TypeRef::String)]),
             ],
+            serde_content: None,
             serde_tag: Some("type".to_string()),
             ..Default::default()
         };
@@ -286,6 +295,7 @@ mod variant_constructor_tests {
             name: "UnitOnly".to_string(),
             rust_path: "test_lib::UnitOnly".to_string(),
             variants: vec![variant("A", vec![]), variant("B", vec![])],
+            serde_content: None,
             serde_tag: Some("type".to_string()),
             ..Default::default()
         };
@@ -349,6 +359,7 @@ mod flat_data_enum_from_impls_tests {
         EnumDef {
             name: name.to_string(),
             rust_path: format!("module::{}", name),
+            serde_content: None,
             serde_tag: serde_tag.map(|s| s.to_string()),
             variants,
             excluded_variants,

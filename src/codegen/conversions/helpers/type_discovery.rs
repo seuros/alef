@@ -156,6 +156,7 @@ mod tests {
                 fields,
                 ..Default::default()
             }],
+            serde_content: None,
             serde_tag: Some("type".to_string()),
             ..Default::default()
         }

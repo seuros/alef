@@ -232,6 +232,7 @@ gem_name = "my_gem"
         ],
         methods: vec![],
         doc: String::new(),
+        serde_content: None,
         serde_tag: None,
         serde_rename_all: None,
         serde_untagged: false,

@@ -289,6 +289,7 @@ mod tests {
             methods: vec![],
             doc: String::new(),
             cfg: None,
+            serde_content: None,
             serde_tag: None,
             serde_untagged: false,
             serde_rename_all: None,

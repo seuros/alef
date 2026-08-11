@@ -58,6 +58,7 @@ fn make_enum(
         cfg: None,
         is_copy: false,
         has_serde: true,
+        serde_content: None,
         serde_tag: serde_tag.map(str::to_string),
         serde_untagged,
         serde_rename_all: serde_rename_all.map(str::to_string),

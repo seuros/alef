@@ -20,6 +20,7 @@ fn data_enum_emits_variant_constructors_through_pyo3_mapper() {
     let def = EnumDef {
         name: "EmbeddingModelType".to_string(),
         rust_path: "crate::EmbeddingModelType".to_string(),
+        serde_content: None,
         serde_tag: Some("type".to_string()),
         has_serde: true,
         variants: vec![

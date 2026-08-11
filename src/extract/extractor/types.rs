@@ -36,17 +36,17 @@ fn has_serde_untagged(attrs: &[syn::Attribute]) -> bool {
 
 /// Extract `tag` value from `#[serde(tag = "...")]` or
 /// `#[cfg_attr(..., serde(tag = "..."))]` attributes on enums.
-fn extract_serde_tag(attrs: &[syn::Attribute]) -> Option<String> {
+fn extract_serde_name_value(attrs: &[syn::Attribute], key: &str) -> Option<String> {
     for attr in attrs {
         let tokens = if let Ok(list) = attr.meta.require_list() {
             format!("{}", list.tokens)
         } else {
             continue;
         };
-        if let Some(pos) = tokens.find("tag") {
+        if let Some(pos) = tokens.find(key) {
             let rest = &tokens[pos..];
-            let after_tag = &rest[3..];
-            if !after_tag.starts_with('=') && !after_tag.trim_start().starts_with('=') {
+            let after_key = &rest[key.len()..];
+            if !after_key.starts_with('=') && !after_key.trim_start().starts_with('=') {
                 continue;
             }
             if let Some(eq_pos) = rest.find('=') {
@@ -61,6 +61,14 @@ fn extract_serde_tag(attrs: &[syn::Attribute]) -> Option<String> {
         }
     }
     None
+}
+
+fn extract_serde_tag(attrs: &[syn::Attribute]) -> Option<String> {
+    extract_serde_name_value(attrs, "tag")
+}
+
+fn extract_serde_content(attrs: &[syn::Attribute]) -> Option<String> {
+    extract_serde_name_value(attrs, "content")
 }
 
 /// Extract a public struct into a `TypeDef`.
@@ -168,6 +176,7 @@ pub(crate) fn extract_enum(item: &syn::ItemEnum, crate_name: &str, module_path: 
 
     let rust_path = build_rust_path(crate_name, module_path, &name);
     let serde_tag = extract_serde_tag(&item.attrs);
+    let serde_content = extract_serde_content(&item.attrs);
     let serde_untagged = has_serde_untagged(&item.attrs);
     let serde_rename_all = extract_serde_rename_all(&item.attrs);
     let is_copy = has_derive(item.attrs.as_slice(), "Copy");
@@ -184,6 +193,7 @@ pub(crate) fn extract_enum(item: &syn::ItemEnum, crate_name: &str, module_path: 
         doc,
         cfg,
         serde_tag,
+        serde_content,
         serde_untagged,
         serde_rename_all,
         is_copy,

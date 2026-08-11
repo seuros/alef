@@ -53,6 +53,7 @@ fn enum_def(name: &str, variants: Vec<EnumVariant>) -> EnumDef {
         is_copy: false,
         has_serde: true,
         has_default: false,
+        serde_content: None,
         serde_tag: Some("type".to_string()),
         serde_untagged: false,
         serde_rename_all: None,

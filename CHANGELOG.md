@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Enum extraction now preserves Serde `content` metadata for adjacently tagged wire representations.
+
 - Kotlin documentation snippets now import configured packages, shorten fully-qualified facade names, and only use
   coroutine entry points for asynchronous calls.
 

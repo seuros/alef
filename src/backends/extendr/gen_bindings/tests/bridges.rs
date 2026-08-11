@@ -36,6 +36,7 @@ fn shape_enum() -> EnumDef {
                 ],
             ),
         ],
+        serde_content: None,
         serde_tag: Some("type".to_string()),
         ..Default::default()
     }
@@ -68,6 +69,7 @@ fn casts_remapped_primitive_back_to_core() {
             "Big",
             vec![field("count", TypeRef::Primitive(PrimitiveType::U64))],
         )],
+        serde_content: None,
         serde_tag: Some("type".to_string()),
         ..Default::default()
     };
@@ -91,6 +93,7 @@ fn skips_variant_constructor_with_named_dto_field() {
             variant("Llm", vec![field("llm", TypeRef::Named("LlmConfig".to_string()))]),
             variant("Tag", vec![field("name", TypeRef::String)]),
         ],
+        serde_content: None,
         serde_tag: Some("type".to_string()),
         ..Default::default()
     };
@@ -130,6 +133,7 @@ fn skips_variant_constructor_when_any_field_is_unconstructible() {
             ),
             variant("Ping", vec![field("seq", TypeRef::Primitive(PrimitiveType::U32))]),
         ],
+        serde_content: None,
         serde_tag: Some("type".to_string()),
         ..Default::default()
     };
@@ -165,6 +169,7 @@ fn skips_unit_tuple_and_excluded_variants() {
             excluded,
             variant("Real", vec![field("value", TypeRef::String)]),
         ],
+        serde_content: None,
         serde_tag: Some("type".to_string()),
         ..Default::default()
     };
@@ -209,6 +214,7 @@ fn casts_optional_remapped_primitive_back_to_core() {
         name: "Bounded".to_string(),
         rust_path: "test_lib::Bounded".to_string(),
         variants: vec![variant("Limit", vec![max_field])],
+        serde_content: None,
         serde_tag: Some("type".to_string()),
         ..Default::default()
     };

@@ -71,6 +71,7 @@ fn plain_data_enum_in_input_type_struct_gets_binding_to_core_impl() {
                 ..Default::default()
             },
         ],
+        serde_content: None,
         serde_tag: None,
         serde_untagged: false,
         ..Default::default()
@@ -258,6 +259,7 @@ fn sanitized_field_test_enum(ty: TypeRef, optional: bool) -> EnumDef {
             }],
             ..Default::default()
         }],
+        serde_content: None,
         serde_tag: Some("node_type".to_string()),
         serde_rename_all: Some("snake_case".to_string()),
         ..Default::default()
@@ -296,6 +298,7 @@ fn tagged_enum_conversions_use_serde_wire_names() {
                 ..Default::default()
             },
         ],
+        serde_content: None,
         serde_tag: Some("node_type".to_string()),
         serde_rename_all: Some("snake_case".to_string()),
         ..Default::default()
@@ -425,6 +428,7 @@ fn core_to_binding_uses_shorthand_for_self_assigned_optional_field() {
             }],
             ..Default::default()
         }],
+        serde_content: None,
         serde_tag: Some("type".to_string()),
         serde_rename_all: Some("snake_case".to_string()),
         ..Default::default()
@@ -460,6 +464,7 @@ fn core_to_binding_keeps_expr_form_when_conversion_is_required() {
             }],
             ..Default::default()
         }],
+        serde_content: None,
         serde_tag: Some("type".to_string()),
         serde_rename_all: Some("snake_case".to_string()),
         ..Default::default()

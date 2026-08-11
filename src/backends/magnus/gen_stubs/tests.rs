@@ -60,6 +60,7 @@ fn enum_def(name: &str, variants: Vec<EnumVariant>) -> EnumDef {
         is_copy: false,
         has_serde: true,
         has_default: false,
+        serde_content: None,
         serde_tag: None,
         serde_untagged: false,
         serde_rename_all: None,
@@ -101,6 +102,7 @@ fn emits_singleton_constructor_per_struct_variant() {
 #[test]
 fn tagged_data_enum_emits_no_singleton_constructors() {
     let tagged = EnumDef {
+        serde_content: None,
         serde_tag: Some("type".to_string()),
         ..shape_enum()
     };

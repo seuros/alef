@@ -119,6 +119,7 @@ fn test_gen_elixir_enum_module_data_enum_with_payload_derived_names() {
         is_copy: false,
         has_serde: false,
         has_default: false,
+        serde_content: None,
         serde_tag: None,
         serde_untagged: false,
         serde_rename_all: None,
@@ -214,6 +215,7 @@ fn test_gen_elixir_enum_module_with_serde_rename_special_chars() {
         is_copy: false,
         has_serde: false,
         has_default: false,
+        serde_content: None,
         serde_tag: None,
         serde_untagged: false,
         serde_rename_all: None,
@@ -338,6 +340,7 @@ fn test_gen_elixir_enum_module_resolves_known_payload_types() {
         is_copy: false,
         has_serde: false,
         has_default: false,
+        serde_content: None,
         serde_tag: None,
         serde_untagged: false,
         serde_rename_all: None,
@@ -398,6 +401,7 @@ mod variant_constructors {
                     ],
                 ),
             ],
+            serde_content: None,
             serde_tag: Some("type".to_string()),
             ..Default::default()
         }
@@ -432,6 +436,7 @@ mod variant_constructors {
                 excluded,
                 variant("Real", vec![field("value", TypeRef::String)]),
             ],
+            serde_content: None,
             serde_tag: Some("type".to_string()),
             ..Default::default()
         };
@@ -481,6 +486,7 @@ mod variant_constructors {
             name: "Marker".to_string(),
             rust_path: "test_lib::Marker".to_string(),
             variants: vec![variant("End", vec![field("at", TypeRef::String)])],
+            serde_content: None,
             serde_tag: Some("type".to_string()),
             ..Default::default()
         };
@@ -494,6 +500,7 @@ mod variant_constructors {
             name: "Marker".to_string(),
             rust_path: "test_lib::Marker".to_string(),
             variants: vec![variant("End", vec![field("at", TypeRef::String)])],
+            serde_content: None,
             serde_tag: Some("type".to_string()),
             ..Default::default()
         };
@@ -517,6 +524,7 @@ mod variant_constructors {
             name: "Token".to_string(),
             rust_path: "test_lib::Token".to_string(),
             variants: vec![renamed],
+            serde_content: None,
             serde_tag: Some("type".to_string()),
             ..Default::default()
         };

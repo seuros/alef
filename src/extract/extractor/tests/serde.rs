@@ -126,6 +126,25 @@ fn test_internally_tagged_enum_preserves_named_value_fields() {
 }
 
 #[test]
+fn test_adjacently_tagged_enum_preserves_tag_and_content_names() {
+    let source = r#"
+        #[derive(serde::Serialize, serde::Deserialize)]
+        #[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
+        pub enum OperationResult {
+            Continue,
+            Custom(String),
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let enum_def = surface.enums.first().expect("OperationResult should be extracted");
+
+    assert_eq!(enum_def.serde_tag.as_deref(), Some("kind"));
+    assert_eq!(enum_def.serde_content.as_deref(), Some("payload"));
+    assert_eq!(enum_def.serde_rename_all.as_deref(), Some("snake_case"));
+}
+
+#[test]
 fn test_enum_rename_all_under_cfg_attr_any_is_honoured() {
     // Regression for the html-to-markdown `TierStrategy` bug: `rename_all` living inside
     // `#[cfg_attr(any(...), serde(rename_all = "..."))]` used to be invisible to Alef's

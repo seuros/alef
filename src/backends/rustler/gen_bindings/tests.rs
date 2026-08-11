@@ -227,6 +227,7 @@ fn tagged_enum_api_surface() -> ApiSurface {
         is_copy: false,
         has_serde: true,
         has_default: false,
+        serde_content: None,
         serde_tag: Some("type".to_string()),
         serde_untagged: false,
         serde_rename_all: Some("camelCase".to_string()),
