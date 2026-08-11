@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Run the configured E2E formatter pipeline on cached test-app outputs so formatter and configuration updates converge
+  without requiring a clean regeneration.
+
 - Generated API examples now emit valid empty-map literals for Elixir and R, parameter fallback text is complete for
   unnamed values, and generated package READMEs carry generated-file headers.
 

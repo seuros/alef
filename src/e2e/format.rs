@@ -84,6 +84,33 @@ pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) {
     }
 }
 
+/// Format files restored from the generation-stage cache.
+///
+/// Cached paths are absolute while e2e generation records paths relative to the
+/// consumer root. Rebuilding the lightweight file descriptors keeps cache hits on
+/// the same formatter path as fresh generation, including custom format commands
+/// and executable-bit restoration. ~keep
+pub fn run_formatters_for_cached_paths(paths: &[PathBuf], base_dir: &Path, e2e_config: &E2eConfig) {
+    let output_is_absolute = Path::new(e2e_config.effective_output()).is_absolute();
+    let files: Vec<GeneratedFile> = paths
+        .iter()
+        .filter_map(|path| {
+            let formatter_path = if output_is_absolute {
+                path.clone()
+            } else {
+                path.strip_prefix(base_dir).ok()?.to_path_buf()
+            };
+            let content = std::fs::read_to_string(path).unwrap_or_default();
+            Some(GeneratedFile {
+                path: formatter_path,
+                content,
+                generated_header: true,
+            })
+        })
+        .collect();
+    run_formatters(&files, e2e_config);
+}
+
 /// Run a best-effort shell command; log non-success as a warning.
 fn run_shell(cmd: &str, lang: &str) {
     match std::process::Command::new("sh").args(["-c", cmd]).status() {
@@ -181,6 +208,25 @@ mod tests {
             );
         } else {
             assert_eq!(formatted, "x=1", "without poly the file must be left untouched");
+        }
+    }
+
+    #[test]
+    fn cached_paths_use_the_same_formatter_pipeline() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = dir.path().join("e2e-out");
+        std::fs::create_dir_all(out.join("python")).unwrap();
+        let py = out.join("python/main.py");
+        std::fs::write(&py, "x=1").unwrap();
+
+        let e2e_config = e2e_config_for(&out);
+        run_formatters_for_cached_paths(std::slice::from_ref(&py), dir.path(), &e2e_config);
+
+        let formatted = std::fs::read_to_string(&py).unwrap();
+        if which::which("poly").is_ok() {
+            assert_eq!(formatted, "x = 1\n");
+        } else {
+            assert_eq!(formatted, "x=1");
         }
     }
 

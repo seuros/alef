@@ -112,8 +112,19 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let api = pipeline::extract(e2e_crate, config_path, false)?;
                         let ir_json = serde_json::to_string(&api)?;
                         let cache_key = if registry { "e2e-registry" } else { "e2e" };
+                        let effective_e2e_config;
+                        let e2e_ref = if registry {
+                            let mut cloned = this_e2e_config.clone();
+                            cloned.dep_mode = crate::core::config::e2e::DependencyMode::Registry;
+                            effective_e2e_config = cloned;
+                            &effective_e2e_config
+                        } else {
+                            this_e2e_config
+                        };
                         let stage_hash = cache::compute_stage_hash(&ir_json, cache_key, &config_toml, &fixture_hash);
                         if cache::is_stage_cached(&e2e_crate.name, cache_key, &stage_hash) {
+                            let cached_paths = cache::read_stage_paths(&e2e_crate.name, cache_key);
+                            crate::e2e::format::run_formatters_for_cached_paths(&cached_paths, &base_dir, e2e_ref);
                             if let Some(snippets) = &this_e2e_config.snippets {
                                 let coverage_path = base_dir
                                     .join(&snippets.output)
@@ -123,17 +134,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             tracing::info!("E2E tests up to date (cached)");
                             continue;
                         }
-                        let effective_e2e_config;
-                        let e2e_ref = if registry {
-                            let mut cloned = this_e2e_config.clone();
-                            cloned.dep_mode = crate::core::config::e2e::DependencyMode::Registry;
-                            effective_e2e_config = cloned;
+                        if registry {
                             tracing::info!("Generating e2e test apps (registry mode)...");
-                            &effective_e2e_config
                         } else {
                             tracing::info!("Generating e2e test suites...");
-                            this_e2e_config
-                        };
+                        }
                         let languages = lang.as_deref();
                         let files = crate::e2e::generate_e2e(
                             e2e_crate,
@@ -369,6 +374,8 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let cache_key = "test-apps";
                         let stage_hash = cache::compute_stage_hash(&ir_json, cache_key, &config_toml, &fixture_hash);
                         if !clean && cache::is_stage_cached(&e2e_crate.name, cache_key, &stage_hash) {
+                            let cached_paths = cache::read_stage_paths(&e2e_crate.name, cache_key);
+                            crate::e2e::format::run_formatters_for_cached_paths(&cached_paths, &base_dir, e2e_ref);
                             tracing::info!("Test apps up to date (cached)");
                             continue;
                         }

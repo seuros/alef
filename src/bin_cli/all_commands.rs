@@ -278,7 +278,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     let e2e_stage_hash = cache::compute_stage_hash(&ir_json, "e2e", &config_toml, &fixture_hash);
                     if !clean && cache::is_stage_cached(&resolved_cfg.name, "e2e", &e2e_stage_hash) {
                         tracing::info!("  [e2e] up to date (skipping)");
-                        for path in cache::read_stage_paths(&resolved_cfg.name, "e2e") {
+                        let cached_paths = cache::read_stage_paths(&resolved_cfg.name, "e2e");
+                        crate::e2e::format::run_formatters_for_cached_paths(&cached_paths, &base_dir, e2e_config);
+                        for path in cached_paths {
                             current_gen_paths.insert(path);
                         }
                     } else {
@@ -311,7 +313,15 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         cache::compute_stage_hash(&ir_json, "test-apps", &config_toml, &fixture_hash);
                     if !clean && cache::is_stage_cached(&resolved_cfg.name, "test-apps", &test_apps_stage_hash) {
                         tracing::info!("  [test-apps] up to date (skipping)");
-                        for path in cache::read_stage_paths(&resolved_cfg.name, "test-apps") {
+                        let cached_paths = cache::read_stage_paths(&resolved_cfg.name, "test-apps");
+                        let mut registry_e2e_config = e2e_config.clone();
+                        registry_e2e_config.dep_mode = crate::core::config::e2e::DependencyMode::Registry;
+                        crate::e2e::format::run_formatters_for_cached_paths(
+                            &cached_paths,
+                            &base_dir,
+                            &registry_e2e_config,
+                        );
+                        for path in cached_paths {
                             current_gen_paths.insert(path);
                         }
                     } else {
