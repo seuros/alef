@@ -12,6 +12,7 @@
    - call_expr: the function call expression
    - expects_error: bool
    - exception_class: exception class name to catch
+   - declared_error_check: string containing the rendered declared-value assertion, or empty
    - client_factory_setup: client factory setup code (or empty string)
    - has_usable_assertion: bool - whether there's a result to assert on
    - result_var: result variable name
@@ -32,7 +33,11 @@
 {{ client_factory_setup }}
 {% endif %}
 {% if return_type == "async Task" %}
+{% if declared_error_check %}
+        var thrown = await Assert.ThrowsAnyAsync<{{ exception_class }}>(async () =>
+{% else %}
         await Assert.ThrowsAnyAsync<{{ exception_class }}>(async () =>
+{% endif %}
         {
 {% for line in setup_lines %}
             {{ line }}
@@ -43,14 +48,24 @@
             await {{ call_target }}.{{ call_expr }};
 {% endif %}
         });
+{% if declared_error_check %}
+{{ declared_error_check }}
+{% endif %}
+{% else %}
+{% if declared_error_check %}
+        var thrown = Assert.ThrowsAny<{{ exception_class }}>(() =>
 {% else %}
         Assert.ThrowsAny<{{ exception_class }}>(() =>
+{% endif %}
         {
 {% for line in setup_lines %}
             {{ line }}
 {% endfor %}
             {{ call_target }}.{{ call_expr }};
         });
+{% if declared_error_check %}
+{{ declared_error_check }}
+{% endif %}
 {% endif %}
     }
 {%- else %}

@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - E2E and registry test-app generation now fails when a configured formatter is unavailable or exits unsuccessfully,
   preventing noncanonical generated output from being reported as successful.
 
+- Generated Java and C# E2E error tests now assert the error value a fixture declares, matching it against either the
+  thrown exception's message or its type name. The existing expected exception type is unchanged; only the value check
+  is added.
+
 - Generated Kotlin and Kotlin Android E2E tests now dispatch streaming `owner_type` adapters as instance methods on the
   owner handle rather than as static facade calls, so the generated sources compile. The Kotlin backend had never
   ported the branch the Java backend already implements.

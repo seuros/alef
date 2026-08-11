@@ -371,3 +371,30 @@ fn test_csharp_facade_class_name_is_computed_correctly() {
     let with_converter = format!("{}Converter", stripped);
     assert_eq!(with_converter, "SampleProcessorConverter");
 }
+
+#[test]
+fn declared_error_value_check_returns_none_without_a_declared_value() {
+    assert_eq!(super::declared_error_value_check(None), None);
+}
+
+#[test]
+fn declared_error_value_check_asserts_message_or_type_name() {
+    let check = super::declared_error_value_check(Some("BadRequest")).expect("expected a rendered check");
+    assert!(
+        check.contains("thrown.Message != null && thrown.Message.Contains(\"BadRequest\")"),
+        "got: {check}"
+    );
+    assert!(
+        check.contains("thrown.GetType().Name.Contains(\"BadRequest\")"),
+        "got: {check}"
+    );
+}
+
+#[test]
+fn declared_error_value_check_escapes_quotes_and_backslashes() {
+    let check = super::declared_error_value_check(Some("bad \"field\" \\ value")).expect("expected a rendered check");
+    assert!(
+        check.contains("bad \\\"field\\\" \\\\ value"),
+        "expected escaped literal, got: {check}"
+    );
+}

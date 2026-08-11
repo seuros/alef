@@ -39,6 +39,24 @@ fn find_default_options_literal(args_str: &str, opts_type: &str) -> Option<usize
     args_str.find(&needle)
 }
 
+/// Render the xUnit assertion that checks a declared `error` fixture value against
+/// either the thrown exception's message or its type name.
+///
+/// ~keep Mirrors the Rust/Python/Go/Java backends' disjunction (see
+/// `crate::e2e::codegen::declared_error_value`): fixture authors name either a message
+/// substring (config-validation fixtures) or a type-name prefix (API-error fixtures) in
+/// the assertion's value, never both conventions at once. Checking `.Message` OR
+/// `.GetType().Name` lets this single code path serve both, without narrowing the
+/// existing fixed `exception_class` the test already asserts is thrown.
+fn declared_error_value_check(declared: Option<&str>) -> Option<String> {
+    let declared = declared?;
+    let escaped = escape_csharp(declared);
+    Some(format!(
+        "        Assert.True(thrown.Message != null && thrown.Message.Contains(\"{escaped}\") \
+|| thrown.GetType().Name.Contains(\"{escaped}\"), \"expected error to match: {escaped}\");"
+    ))
+}
+
 pub struct CSharpCodegen;
 
 impl E2eCodegen for CSharpCodegen {
@@ -851,6 +869,8 @@ fn render_test_method(
         }
     }
 
+    let declared_error_check = declared_error_value_check(crate::e2e::codegen::declared_error_value(fixture));
+
     let ctx = minijinja::context! {
         is_skipped => false,
         expects_error => expects_error,
@@ -862,6 +882,7 @@ fn render_test_method(
         setup_lines => setup_lines.clone(),
         call_expr => call_expr,
         exception_class => exception_class,
+        declared_error_check => declared_error_check,
         client_factory_setup => client_factory_setup,
         has_usable_assertion => !expects_error && !returns_void,
         result_var => result_var,

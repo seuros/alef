@@ -7,6 +7,7 @@
    - setup_lines: list of setup line strings (e.g., handle creation)
    - throws_clause: " throws Exception" or ""
    - expects_error: boolean
+   - declared_error_check: string containing the rendered declared-value assertion, or empty
    - call_expr: the complete function call expression
    - result_var: result variable name
    - returns_void: bool — whether the call returns void (Rust `()` / `Result<(),E>`)
@@ -23,7 +24,11 @@
         // invalid enum value like `"purpose":"invalid-purpose"`). Mirrors
         // the C# `Assert.ThrowsAnyAsync(() => client.X(Type.FromJson(...)))`
         // pattern.
+{% if declared_error_check %}
+        Exception thrown = assertThrows(Exception.class, () -> {
+{% else %}
         assertThrows(Exception.class, () -> {
+{% endif %}
 {% if builder_expressions %}
 {{ builder_expressions }}
 {% endif %}
@@ -32,6 +37,9 @@
 {% endfor %}
             {{ call_expr }};
         });
+{% if declared_error_check %}
+{{ declared_error_check }}
+{% endif %}
 {% else %}
 {% if builder_expressions %}
 {{ builder_expressions }}

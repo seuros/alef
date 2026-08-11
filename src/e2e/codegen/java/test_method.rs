@@ -12,6 +12,23 @@ use super::http::render_http_test_method;
 use super::values::{java_builder_expression, json_to_java};
 use super::visitor::{apply_java_visitor_arg, build_java_visitor, java_visitor_binding};
 
+/// Render the JUnit assertion that checks a declared `error` fixture value against
+/// either the thrown exception's message or its simple class name.
+///
+/// ~keep Mirrors the Rust/Python/Go backends' disjunction (see
+/// `crate::e2e::codegen::declared_error_value`): fixture authors name either a message
+/// substring (config-validation fixtures) or a type-name prefix (API-error fixtures) in
+/// the assertion's value, never both conventions at once. Checking `getMessage()` OR
+/// the exception's simple class name lets this single code path serve both.
+fn declared_error_value_check(declared: Option<&str>) -> Option<String> {
+    let declared = declared?;
+    let escaped = escape_java(declared);
+    Some(format!(
+        "        assertTrue(thrown.getMessage() != null && thrown.getMessage().contains(\"{escaped}\") \
+|| thrown.getClass().getSimpleName().contains(\"{escaped}\"), \"expected error to match: {escaped}\");"
+    ))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_test_method(
     out: &mut String,
@@ -421,6 +438,8 @@ pub(super) fn render_test_method(
         String::new()
     };
 
+    let declared_error_check = declared_error_value_check(crate::e2e::codegen::declared_error_value(fixture));
+
     let rendered = crate::e2e::template_env::render(
         "java/test_method.jinja",
         minijinja::context! {
@@ -430,6 +449,7 @@ pub(super) fn render_test_method(
             setup_lines => combined_setup,
             throws_clause => throws_clause,
             expects_error => expects_error,
+            declared_error_check => declared_error_check,
             call_expr => call_expr,
             result_var => result_var,
             returns_void => call_config.returns_void,
@@ -439,4 +459,36 @@ pub(super) fn render_test_method(
         },
     );
     out.push_str(&rendered);
+}
+
+#[cfg(test)]
+mod declared_error_value_check_tests {
+    use super::declared_error_value_check;
+
+    #[test]
+    fn no_declared_value_produces_no_check() {
+        assert_eq!(declared_error_value_check(None), None);
+    }
+
+    #[test]
+    fn declared_value_checks_message_or_class_name() {
+        let check = declared_error_value_check(Some("BadRequest")).expect("expected a rendered check");
+        assert!(
+            check.contains("thrown.getMessage() != null && thrown.getMessage().contains(\"BadRequest\")"),
+            "got: {check}"
+        );
+        assert!(
+            check.contains("thrown.getClass().getSimpleName().contains(\"BadRequest\")"),
+            "got: {check}"
+        );
+    }
+
+    #[test]
+    fn declared_value_with_quotes_and_backslashes_is_escaped() {
+        let check = declared_error_value_check(Some("bad \"field\" \\ value")).expect("expected a rendered check");
+        assert!(
+            check.contains("bad \\\"field\\\" \\\\ value"),
+            "expected escaped literal, got: {check}"
+        );
+    }
 }
