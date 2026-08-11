@@ -394,6 +394,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/ffi_vtable_error_check.jinja"),
     ),
     (
+        "ffi_vtable_infallible_error_check.jinja",
+        include_str!("templates/ffi_vtable_infallible_error_check.jinja"),
+    ),
+    (
         "ffi_vtable_not_initialised_msg.jinja",
         include_str!("templates/ffi_vtable_not_initialised_msg.jinja"),
     ),

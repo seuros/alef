@@ -334,6 +334,17 @@ impl FfiBridgeGenerator {
             ));
         }
 
+        if !has_error && needs_result_out {
+            out.push_str(&crate::backends::ffi::template_env::render(
+                "ffi_vtable_infallible_error_check.jinja",
+                minijinja::context! {
+                    name => name,
+                    wrapper => spec.wrapper_name(),
+                    vtable_expr => "self.vtable",
+                },
+            ));
+        }
+
         if has_error {
             let error_return = make_err("msg".to_string());
             out.push_str(&crate::backends::ffi::template_env::render(
@@ -628,6 +639,22 @@ mod tests {
             "fallible method must return Err on failure (inside_closure=true)"
         );
         assert!(body.contains("_out_error"), "must use out_error param");
+    }
+
+    #[test]
+    fn call_body_infallible_complex_method_consumes_host_error() {
+        let generator = make_generator();
+        let bridge_cfg = make_bridge_cfg();
+        let method = make_method("render", TypeRef::String, false);
+        let trait_def = make_trait_def("TestTrait", vec![method.clone()]);
+        let spec = make_simple_trait_spec(&trait_def, &bridge_cfg);
+
+        let body = generator.gen_vtable_call_body(&method, &spec, false);
+
+        assert!(body.contains("if _rc != 0"));
+        assert!(body.contains("CStr::from_ptr(_out_error)"));
+        assert!(body.contains("free_fn(_out_error)"));
+        assert!(body.contains("host callback failed; returning default"));
     }
 
     #[test]
