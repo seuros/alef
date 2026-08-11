@@ -95,6 +95,28 @@ fn make_bridge_cfg(trait_name: &str, super_trait: Option<&str>) -> TraitBridgeCo
 }
 
 #[test]
+fn options_visitor_uses_symbols_emitted_by_ffi_backend() {
+    let trait_def = make_trait_def("HtmlVisitor", vec![make_method("visit", vec![], TypeRef::Unit, None)]);
+    let mut bridge_cfg = make_bridge_cfg("HtmlVisitor", None);
+    bridge_cfg.bind_via = crate::core::config::BridgeBinding::OptionsField;
+    bridge_cfg.type_alias = Some("VisitorHandle".to_string());
+
+    let mut out = String::new();
+    emit_trait_bridge(
+        "sample",
+        "SampleError",
+        &bridge_cfg,
+        &trait_def,
+        &HashSet::new(),
+        &mut out,
+    );
+
+    assert!(out.contains("html_visitor_handle_from_callbacks(callbacks: c.SampleVisitorCallbacks)"));
+    assert!(out.contains("return c.sample_visitor_create(&_cb);"));
+    assert!(!out.contains("sample_html_visitor_handle_from_callbacks"));
+}
+
+#[test]
 fn trait_vtable_includes_free_string_and_status_lifecycle_callbacks() {
     let trait_def = make_trait_def("Backend", vec![make_method("run", vec![], TypeRef::Unit, None)]);
     let bridge_cfg = make_bridge_cfg("Backend", Some("Plugin"));

@@ -63,6 +63,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Attaching a visitor to an FFI options handle now transfers ownership into one synchronized object, preventing multiple
   independent mutexes from aliasing the same mutable visitor; Go wrappers honor the transfer.
 
+- Zig options-field visitor helpers now call the actual generated visitor constructor with the correct callback and
+  handle types instead of emitting a phantom trait-specific symbol and mismatched free contract.
+
 - Snippet gap and audit commands now discover complete coverage ledgers beneath configured snippet roots, so generated
   output directories are trusted without hiding orphaned handwritten snippets.
 

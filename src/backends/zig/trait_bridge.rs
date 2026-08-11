@@ -546,13 +546,10 @@ pub fn emit_trait_bridge(
             out.push('\n');
         }
     } else {
-        let ctor_fn = format!("c.{prefix}_{snake}_handle_from_callbacks");
+        let ctor_fn = format!("c.{prefix}_visitor_create");
         if let Some(handle_type) = bridge_cfg.type_alias.as_deref() {
-            let callbacks_type = format!(
-                "c.{}{}VisitorCallbacks",
-                prefix.to_uppercase(),
-                prefix.to_upper_camel_case()
-            );
+            let callbacks_type = format!("c.{}VisitorCallbacks", prefix.to_upper_camel_case());
+            let native_handle_type = format!("c.{}Visitor", prefix.to_upper_camel_case());
             out.push_str(&crate::backends::zig::template_env::render(
                 "trait_options_handle_from_vtable.jinja",
                 minijinja::context! {
@@ -562,6 +559,7 @@ pub fn emit_trait_bridge(
                     snake => snake,
                     callbacks_type => callbacks_type,
                     ctor_fn => ctor_fn,
+                    native_handle_type => native_handle_type,
                 },
             ));
         }
