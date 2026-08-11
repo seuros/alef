@@ -73,6 +73,7 @@ mod tests {
         let mut call = CallConfig {
             function: "load_document".into(),
             result_var: "document".into(),
+            r#async: true,
             ..CallConfig::default()
         };
         call.overrides.insert(

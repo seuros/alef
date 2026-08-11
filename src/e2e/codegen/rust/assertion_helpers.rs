@@ -465,16 +465,16 @@ mod tests {
     }
 
     #[test]
-    fn render_equals_assertion_string_produces_trim_call() {
+    fn render_equals_assertion_string_uses_to_string() {
         let resolver = empty_resolver();
         let assertion = make_assertion("equals", None, Some(serde_json::Value::String("hello".into())));
         let mut out = String::new();
         render_equals_assertion(&mut out, &assertion, "result", false, &resolver);
-        assert!(out.contains(".trim()"), "got: {out}");
+        assert!(out.contains("result.to_string()"), "got: {out}");
     }
 
     /// When a field is `Option<String>` (NOT display_as_text) and not pre-unwrapped,
-    /// the assertion must use `.as_deref().unwrap_or("").trim()` — not `map(|v| v.to_string())`.
+    /// the assertion must use `.as_deref().unwrap_or("")` — not `map(|v| v.to_string())`.
     /// This guards against regression where the DAT path is taken for plain strings.
     #[test]
     fn render_equals_assertion_plain_optional_string_uses_as_deref_not_to_string() {
@@ -491,7 +491,7 @@ mod tests {
         let mut out = String::new();
         // is_unwrapped=false simulates result_is_vec=true where the pre-unwrap pass is skipped.
         render_equals_assertion(&mut out, &assertion, "result.content", false, &resolver);
-        assert!(out.contains(".as_deref().unwrap_or(\"\").trim()"), "got: {out}");
+        assert!(out.contains(".as_deref().unwrap_or(\"\")"), "got: {out}");
         assert!(
             !out.contains("to_string"),
             "plain optional string should NOT use to_string(); got: {out}"
@@ -499,7 +499,7 @@ mod tests {
     }
 
     /// When the field is `Option<AssistantContent>` (display_as_text) and not pre-unwrapped,
-    /// the assertion must use `.as_ref().map(|v| v.to_string()).unwrap_or_default().trim()`
+    /// the assertion must use `.as_ref().map(|v| v.to_string()).unwrap_or_default()`
     /// so that `AssistantContent` (which implements `Display` but NOT `Deref<Target=str>`)
     /// compiles correctly.
     #[test]
@@ -515,7 +515,7 @@ mod tests {
         render_equals_assertion(&mut out, &assertion, "result.content", false, &resolver);
         // Must use .to_string() path via Display, NOT .as_deref() which requires Deref<Target=str>.
         assert!(
-            out.contains(".as_ref().map(|v| v.to_string()).unwrap_or_default().trim()"),
+            out.contains(".as_ref().map(|v| v.to_string()).unwrap_or_default()"),
             "display_as_text field must use map(|v| v.to_string()) path; got: {out}"
         );
         assert!(
@@ -538,7 +538,7 @@ mod tests {
         // is_unwrapped=true — the pre-unwrap pass already produced a local `_content: String`.
         render_equals_assertion(&mut out, &assertion, "_content", true, &resolver);
         // Should use the regular to_string() path for an already-unwrapped value.
-        assert!(out.contains("to_string().as_str().trim()"), "got: {out}");
+        assert!(out.contains("_content.to_string()"), "got: {out}");
         assert!(
             !out.contains("as_deref"),
             "unwrapped field must NOT emit as_deref(); got: {out}"

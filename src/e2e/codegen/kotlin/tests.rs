@@ -53,7 +53,7 @@ fn assertion_enum_optional_uses_safe_get_value_then_or_empty() {
         false,
     );
     assert!(
-        out.contains("result.choices().first().finishReason()?.getValue().orEmpty().trim()"),
+        out.contains("result.choices().first().finishReason()?.getValue().orEmpty()"),
         "expected enum-optional safe-call pattern, got: {out}"
     );
     assert!(
@@ -161,7 +161,7 @@ fn assertion_enum_non_optional_uses_plain_get_value() {
         false,
     );
     assert!(
-        out.contains("result.choices().first().finishReason().getValue().trim()"),
+        out.contains("result.choices().first().finishReason().getValue()"),
         "expected plain .getValue() for non-optional enum, got: {out}"
     );
 }
