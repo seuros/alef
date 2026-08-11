@@ -264,6 +264,7 @@ fn generate_snippet_report_with_extensions(
                 }
             };
             let content = render_snippet_markdown(&body, fixture, docs, language, lang);
+            let requirements = snippet_requirements(fixture, language);
             let file = GeneratedFile {
                 path: path.clone(),
                 content,
@@ -274,7 +275,7 @@ fn generate_snippet_report_with_extensions(
                 fixture_id: fixture.id.clone(),
                 fixture_source: fixture.source.clone(),
                 language: language.to_string(),
-                requirements: fixture.requirements.clone(),
+                requirements: requirements.clone(),
                 side_effects: docs.side_effects,
             };
             if generated.insert(path.clone(), snippet).is_some() {
@@ -291,7 +292,7 @@ fn generate_snippet_report_with_extensions(
                 language: lang.canonical_name().to_string(),
                 target: language.to_string(),
                 session: language.to_string(),
-                requires: fixture.requirements.clone(),
+                requires: requirements,
                 side_effect: docs.side_effects,
             });
             coverage.generated.push(key);
@@ -440,7 +441,8 @@ fn render_snippet_markdown(
     language: DocumentationLanguage,
 ) -> String {
     let snippet_id = format!("fixture_{target}_{}", fixture.id);
-    let requires = serde_json::to_string(&fixture.requirements).unwrap_or_else(|_| "[]".to_string());
+    let requirements = snippet_requirements(fixture, target);
+    let requires = serde_json::to_string(&requirements).unwrap_or_else(|_| "[]".to_string());
     crate::e2e::template_env::render(
         "snippets/file.md.jinja",
         minijinja::context! {
@@ -456,6 +458,14 @@ fn render_snippet_markdown(
             body => body,
         },
     )
+}
+
+fn snippet_requirements(fixture: &Fixture, target: &str) -> Vec<String> {
+    let mut requirements = fixture.requirements.clone();
+    if target == "rust" && fixture.visitor.is_some() && !requirements.iter().any(|value| value == "feature:visitor") {
+        requirements.push("feature:visitor".to_string());
+    }
+    requirements
 }
 
 fn side_effect_name(side_effect: SideEffectClass) -> &'static str {
@@ -1148,5 +1158,16 @@ mod tests {
             report.coverage.missing[0].reason,
             "fixture has no documentation metadata"
         );
+    }
+
+    #[test]
+    fn rust_visitor_snippets_declare_the_required_feature() {
+        let mut fixture = documented_fixture();
+        fixture.visitor = Some(crate::e2e::fixture::VisitorSpec {
+            callbacks: BTreeMap::new(),
+        });
+
+        assert_eq!(snippet_requirements(&fixture, "rust"), ["feature:visitor"]);
+        assert!(snippet_requirements(&fixture, "java").is_empty());
     }
 }

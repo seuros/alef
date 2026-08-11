@@ -778,6 +778,15 @@ options_type = "ChatRequest"
     }
 
     #[test]
+    fn raw_literal_handles_backticks_and_blank_line_after_fence() {
+        let input = "<pre><code>```rust\nlet value = r#\"sample\"#;\n```\n\nnext</code></pre>";
+        let literal = crate::e2e::escape::rust_raw_string(input);
+        let expression = syn::parse_str::<syn::Expr>(&literal).expect("generated raw literal parses");
+        assert!(matches!(expression, syn::Expr::Lit(_)), "{literal}");
+        assert!(literal.starts_with("r##\""), "{literal}");
+    }
+
+    #[test]
     fn emit_test_backend_rust_generates_struct_and_arc_expr() {
         use crate::core::config::TraitBridgeConfig;
         use crate::core::ir::TypeRef;

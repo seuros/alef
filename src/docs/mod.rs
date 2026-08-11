@@ -425,6 +425,12 @@ fn validate_snippets(
                     if language == crate::snippets::types::Language::Unknown {
                         anyhow::bail!("unknown docs.snippets session target `{target}`");
                     }
+                    let mut rust_features = session.rust_features.clone();
+                    if language == crate::snippets::types::Language::Rust {
+                        rust_features.extend(config.features.iter().cloned());
+                        rust_features.sort();
+                        rust_features.dedup();
+                    }
                     Ok((
                         normalized,
                         crate::snippets::session::SessionSpec {
@@ -433,7 +439,7 @@ fn validate_snippets(
                             manifest: session.manifest.as_ref().map(|path| workspace_root.join(path)),
                             before: session.before.clone(),
                             env: session.env.clone(),
-                            rust_features: session.rust_features.clone(),
+                            rust_features,
                             rust_dependencies: session.rust_dependencies.clone(),
                         },
                     ))
