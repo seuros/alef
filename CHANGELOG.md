@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Snippet gap and audit commands now discover complete coverage ledgers beneath configured snippet roots, so generated
+  output directories are trusted without hiding orphaned handwritten snippets.
+
 - Generated FFI and JNI crate roots now contain Rust 2024 unsafe implementation lints, allowing consumers to inherit
   strict workspace lint policy without warnings from generated glue.
 

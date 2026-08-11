@@ -143,12 +143,38 @@ pub fn readme_snippet_references(
 /// an invalid or missing generated file.
 pub fn coverage_ledger_references(snippet_dirs: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let mut references = Vec::new();
-    for output_root in snippet_dirs {
-        let manifest = output_root.join(crate::e2e::snippets::COVERAGE_MANIFEST);
-        if !manifest.is_file() {
-            continue;
+    for snippet_root in snippet_dirs {
+        let mut manifests = WalkDir::new(snippet_root)
+            .follow_links(false)
+            .into_iter()
+            .map(|entry| {
+                entry.map_err(|error| {
+                    crate::snippets::error::Error::Other(format!(
+                        "walking snippet root {} for coverage ledgers: {error}",
+                        snippet_root.display()
+                    ))
+                })
+            })
+            .filter_map(|entry| match entry {
+                Ok(entry)
+                    if entry.file_type().is_file() && entry.file_name() == crate::e2e::snippets::COVERAGE_MANIFEST =>
+                {
+                    Some(Ok(entry.into_path()))
+                }
+                Ok(_) => None,
+                Err(error) => Some(Err(error)),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        manifests.sort();
+        for manifest in manifests {
+            let output_root = manifest.parent().ok_or_else(|| {
+                crate::snippets::error::Error::Other(format!(
+                    "coverage ledger has no output root: {}",
+                    manifest.display()
+                ))
+            })?;
+            references.extend(read_coverage_ledger_references(output_root, &manifest)?);
         }
-        references.extend(read_coverage_ledger_references(output_root, &manifest)?);
     }
     references.sort();
     references.dedup();
@@ -577,13 +603,15 @@ mod tests {
     fn generated_ledger_references_preserve_manual_orphan_detection() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let snippets = directory.path().join("snippets");
-        let generated = snippets.join("python/topic/generated.md");
+        let generated_root = snippets.join("generated");
+        let generated = generated_root.join("python/topic/generated.md");
         let manual = snippets.join("python/topic/manual.md");
         std::fs::create_dir_all(generated.parent().expect("generated parent")).expect("snippet directory");
+        std::fs::create_dir_all(manual.parent().expect("manual parent")).expect("manual snippet directory");
         std::fs::write(&generated, "```python\nvalue = 1\n```\n").expect("generated snippet");
         std::fs::write(&manual, "```python\nvalue = 2\n```\n").expect("manual snippet");
         std::fs::write(
-            snippets.join(crate::e2e::snippets::COVERAGE_MANIFEST),
+            generated_root.join(crate::e2e::snippets::COVERAGE_MANIFEST),
             serde_json::to_vec_pretty(&coverage_ledger(COVERAGE_MANIFEST_VERSION)).expect("coverage serializes"),
         )
         .expect("coverage manifest");
@@ -597,6 +625,28 @@ mod tests {
         .expect("gap detection");
 
         assert_eq!(report.unreferenced_snippets, [manual]);
+    }
+
+    #[test]
+    fn nested_coverage_ledger_rejects_paths_outside_its_output_root() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let snippets = directory.path().join("snippets");
+        let generated_root = snippets.join("generated");
+        std::fs::create_dir_all(&generated_root).expect("generated snippet directory");
+        std::fs::write(snippets.join("outside.md"), "```python\nvalue = 1\n```\n").expect("outside snippet");
+        let mut ledger = coverage_ledger(COVERAGE_MANIFEST_VERSION);
+        let outside = PathBuf::from("../outside.md");
+        ledger.generated_paths[0] = outside.clone();
+        ledger.generated_metadata[0].path = outside;
+        std::fs::write(
+            generated_root.join(crate::e2e::snippets::COVERAGE_MANIFEST),
+            serde_json::to_vec_pretty(&ledger).expect("coverage serializes"),
+        )
+        .expect("coverage manifest");
+
+        let error = coverage_ledger_references(&[snippets]).expect_err("outside path must fail");
+
+        assert!(error.to_string().contains("must stay beneath its output root"));
     }
 
     #[test]
