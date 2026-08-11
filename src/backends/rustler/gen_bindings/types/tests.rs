@@ -233,6 +233,17 @@ fn test_gen_enum_data_uses_nif_tagged_enum() {
     );
 }
 
+#[test]
+fn data_enum_emits_adjacent_serde_representation() {
+    let mut enum_def = data_enum();
+    enum_def.serde_tag = Some("type".to_string());
+    enum_def.serde_content = Some("output".to_string());
+
+    let result = gen_enum(&enum_def, "SampleCrate");
+
+    assert!(result.contains(r#"#[serde(tag = "type", content = "output""#));
+}
+
 /// Data enums with tuple variants containing Named types should use flat NifStruct.
 #[test]
 fn test_gen_enum_tuple_named_uses_nif_struct() {

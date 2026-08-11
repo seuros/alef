@@ -16,9 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Elixir documentation snippets now place visitor callbacks inside the conversion options argument.
+
 - Dart documentation snippets now import and initialize the generated Rust library and dispose it on every exit path.
 
 - Enum extraction now preserves Serde `content` metadata for adjacently tagged wire representations.
+
+- Generated Ruby and Elixir bridge enums now retain adjacent Serde tag/content shapes, including tuple payloads.
 
 - Kotlin documentation snippets now import configured packages, shorten fully-qualified facade names, and only use
   coroutine entry points for asynchronous calls.

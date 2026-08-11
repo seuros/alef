@@ -71,6 +71,7 @@ pub fn gen_enum(enum_def: &EnumDef) -> String {
             enum_name => &enum_def.name,
             has_data => has_data,
             serde_tag => &enum_def.serde_tag,
+            serde_content => &enum_def.serde_content,
             serde_untagged => enum_def.serde_untagged,
             serde_rename_all => &enum_def.serde_rename_all,
             variants => &variants,

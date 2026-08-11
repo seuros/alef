@@ -175,6 +175,19 @@ fn gen_enum_keeps_bare_string_for_externally_tagged_enum() {
 }
 
 #[test]
+fn gen_enum_emits_adjacent_serde_representation() {
+    let mut enum_def = make_data_enum("OperationResult", Some("type"));
+    enum_def.serde_content = Some("output".to_string());
+    enum_def.variants[1].is_tuple = true;
+    enum_def.variants[1].fields[0].name = "_0".to_string();
+
+    let code = gen_enum(&enum_def);
+
+    assert!(code.contains(r#"#[serde(tag = "type", content = "output")]"#));
+    assert!(code.contains("Jpeg(String)"));
+}
+
+#[test]
 fn gen_struct_emits_magnus_wrap_attribute() {
     let typ = make_typedef("Config", vec![make_field("value", TypeRef::String, false)]);
     let mapper = crate::backends::magnus::type_map::MagnusMapper;

@@ -68,11 +68,7 @@ pub(super) fn render_snippet_body(
     );
     if let Some(visitor) = &fixture.visitor {
         let visitor_arg = super::visitor::build_elixir_visitor(&mut setup_lines, visitor);
-        args = [args, visitor_arg]
-            .into_iter()
-            .filter(|value| !value.is_empty())
-            .collect::<Vec<_>>()
-            .join(", ");
+        args = inject_visitor_into_options(&mut setup_lines, &args, &visitor_arg);
     }
     if !recipe.extra_args.is_empty() {
         args = [args, recipe.extra_args.join(", ")]
@@ -94,6 +90,19 @@ pub(super) fn render_snippet_body(
             expects_error => expects_error,
         },
     ))
+}
+
+fn inject_visitor_into_options(setup_lines: &mut Vec<String>, args: &str, visitor: &str) -> String {
+    let parts = args.split(", ").collect::<Vec<_>>();
+    match parts.as_slice() {
+        [input, "nil"] => format!("{input}, %{{visitor: {visitor}}}"),
+        [input, options] => {
+            setup_lines.push(format!("{options} = Map.put({options}, :visitor, {visitor})"));
+            format!("{input}, {options}")
+        }
+        [input] => format!("{input}, %{{visitor: {visitor}}}"),
+        _ => args.to_string(),
+    }
 }
 
 fn render_http_snippet(fixture: &Fixture) -> Result<String> {
@@ -141,6 +150,20 @@ fn render_http_snippet(fixture: &Fixture) -> Result<String> {
 mod tests {
     use super::*;
     use crate::e2e::config::{ArgMapping, CallOverride};
+
+    #[test]
+    fn nests_visitor_in_options_argument() {
+        let mut setup = Vec::new();
+        assert_eq!(
+            inject_visitor_into_options(&mut setup, "html, nil", "visitor"),
+            "html, %{visitor: visitor}"
+        );
+        assert_eq!(
+            inject_visitor_into_options(&mut setup, "html, options", "visitor"),
+            "html, options"
+        );
+        assert_eq!(setup, ["options = Map.put(options, :visitor, visitor)"]);
+    }
 
     #[test]
     fn renders_native_call_without_exunit() {
