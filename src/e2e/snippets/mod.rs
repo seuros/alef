@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
+pub(crate) mod ledger_paths;
 pub mod migration;
 mod recipe_policy;
 

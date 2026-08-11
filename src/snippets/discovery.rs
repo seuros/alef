@@ -82,20 +82,19 @@ fn load_ledger_metadata(directory: &Path) -> Result<HashMap<PathBuf, crate::e2e:
         .iter()
         .map(|metadata| metadata.path.clone())
         .collect();
-    if expected != actual
-        || actual.iter().any(|path| {
-            path.as_os_str().is_empty()
-                || path.is_absolute()
-                || path
-                    .components()
-                    .any(|component| matches!(component, std::path::Component::ParentDir))
-                || !directory.join(path).is_file()
-        })
-    {
+    if expected != actual {
         return Err(crate::snippets::error::Error::Other(format!(
             "invalid fixture-snippet metadata ledger at {}",
             manifest.display()
         )));
+    }
+    for path in &actual {
+        crate::e2e::snippets::ledger_paths::resolve_tracked_path(directory, path).map_err(|_| {
+            crate::snippets::error::Error::Other(format!(
+                "invalid fixture-snippet metadata ledger at {}",
+                manifest.display()
+            ))
+        })?;
     }
     Ok(ledger
         .generated_metadata

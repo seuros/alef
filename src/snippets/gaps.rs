@@ -202,8 +202,7 @@ fn read_coverage_ledger_references(output_root: &Path, manifest: &Path) -> Resul
         .generated_paths
         .into_iter()
         .map(|relative| {
-            validate_coverage_ledger_path(&relative)?;
-            let path = output_root.join(relative);
+            let path = crate::e2e::snippets::ledger_paths::resolve_tracked_path(output_root, &relative)?;
             if !path.is_file() {
                 return Err(crate::snippets::error::Error::Other(format!(
                     "fixture snippet recorded by the coverage ledger is missing: {}",
@@ -213,22 +212,6 @@ fn read_coverage_ledger_references(output_root: &Path, manifest: &Path) -> Resul
             Ok(path)
         })
         .collect()
-}
-
-fn validate_coverage_ledger_path(path: &Path) -> Result<()> {
-    let escapes_root = path.components().any(|component| {
-        matches!(
-            component,
-            std::path::Component::ParentDir | std::path::Component::RootDir | std::path::Component::Prefix(_)
-        )
-    });
-    if path.as_os_str().is_empty() || path.is_absolute() || escapes_root {
-        return Err(crate::snippets::error::Error::Other(format!(
-            "fixture snippet ledger path must stay beneath its output root: {}",
-            path.display()
-        )));
-    }
-    Ok(())
 }
 
 fn collect_readme_snippet_paths(value: &serde_json::Value, collect: &mut impl FnMut(&str)) {

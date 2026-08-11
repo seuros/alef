@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Snippet coverage ledgers now reject tracked files that resolve outside their configured generated root, including
+  symlink escapes.
+
 - Rust documentation snippet validation now checks compatible uncached cells as binaries in one Cargo invocation,
   while retaining per-cell diagnostics, cache entries, session isolation, and deterministic result ordering.
 
