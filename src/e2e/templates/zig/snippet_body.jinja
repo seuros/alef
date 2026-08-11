@@ -2,5 +2,8 @@ const std = @import("std");
 const {{ module }} = @import("{{ module }}");
 
 pub fn main() !void {
+{% if body_is_indented %}{{ body }}
+{% else %}
 {{ body | indent(4, true) }}
+{% endif %}
 }

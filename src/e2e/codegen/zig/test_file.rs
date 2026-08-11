@@ -81,6 +81,7 @@ pub(super) fn render_test_file(
                 ffi_prefix,
                 config,
                 type_defs,
+                true,
             );
         }
         let _ = writeln!(out);
@@ -132,6 +133,7 @@ fn render_test_fn(
     ffi_prefix: &str,
     config: &crate::core::config::ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    wrap_as_test: bool,
 ) {
     // Resolve per-fixture call config.
     let call_config = e2e_config.resolve_call_for_fixture(
@@ -295,11 +297,13 @@ fn render_test_fn(
                     .is_some_and(|f| !f.is_empty() && field_resolver.is_valid_for_result(f))
         });
 
-    let _ = writeln!(out, "test \"{test_name}\" {{");
-    let _ = writeln!(out, "    // {description}");
-    let _ = writeln!(out, "    suppress_abort();");
-    if !e2e_config.env.is_empty() {
-        let _ = writeln!(out, "    allow_private_network();");
+    if wrap_as_test {
+        let _ = writeln!(out, "test \"{test_name}\" {{");
+        let _ = writeln!(out, "    // {description}");
+        let _ = writeln!(out, "    suppress_abort();");
+        if !e2e_config.env.is_empty() {
+            let _ = writeln!(out, "    allow_private_network();");
+        }
     }
 
     // Visitor fixtures bypass the high-level `convert(html, options)` wrapper
@@ -321,9 +325,12 @@ fn render_test_fn(
             &fixture.assertions,
             expects_error,
             field_resolver,
+            wrap_as_test,
         );
-        let _ = writeln!(out, "}}");
-        let _ = writeln!(out);
+        if wrap_as_test {
+            let _ = writeln!(out, "}}");
+            let _ = writeln!(out);
+        }
         return;
     }
 
@@ -597,6 +604,8 @@ fn render_test_fn(
                     for assertion in &fixture.assertions {
                         render_json_assertion(out, assertion, result_var, field_resolver, false);
                     }
+                } else {
+                    let _ = writeln!(out, "    std.debug.print(\"{{s}}\\n\", .{{_result_json}});");
                 }
             }
         } else if any_emits_code {
@@ -623,7 +632,9 @@ fn render_test_fn(
         }
     }
 
-    let _ = writeln!(out, "}}");
+    if wrap_as_test {
+        let _ = writeln!(out, "}}");
+    }
 }
 
 pub(super) fn render_snippet_body(
@@ -664,16 +675,10 @@ pub(super) fn render_snippet_body(
         ffi_prefix,
         config,
         type_defs,
+        false,
     );
-    let body_line_count = test.lines().count().saturating_sub(3);
     let body = test
         .lines()
-        .skip(2)
-        .take(body_line_count)
-        .filter(|line| !line.trim_start().starts_with("suppress_abort()"))
-        .filter(|line| !line.trim_start().starts_with("allow_private_network()"))
-        .filter(|line| fixture.visitor.is_some() || !line.trim_start().starts_with("defer "))
-        .map(|line| line.strip_prefix("    ").unwrap_or(line))
         .map(|line| line.replace(" catch {", " catch |err| {"))
         .map(|line| {
             line.replace(
@@ -685,7 +690,7 @@ pub(super) fn render_snippet_body(
         .join("\n");
     Ok(crate::e2e::template_env::render(
         "zig/snippet_body.jinja",
-        minijinja::context! { module => module_name, body => body },
+        minijinja::context! { module => module_name, body => body, body_is_indented => true },
     ))
 }
 
@@ -709,6 +714,7 @@ mod snippet_tests {
         assert!(!rendered.contains("test \""));
         assert!(!rendered.contains("defer "));
         assert!(rendered.contains("pub fn main() !void"));
+        assert!(!rendered.contains("testing."));
     }
 
     #[test]
@@ -749,6 +755,8 @@ mod snippet_tests {
         assert!(rendered.contains("pub fn main() !void"));
         assert!(rendered.contains("_visitor"));
         assert!(!rendered.contains("test \""));
+        assert!(!rendered.contains("testing."));
+        assert!(!rendered.contains("\n    }\n}"), "{rendered}");
     }
 
     #[test]

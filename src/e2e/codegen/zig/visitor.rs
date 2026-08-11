@@ -82,6 +82,7 @@ pub(super) fn emit_visitor_test_body(
     assertions: &[Assertion],
     expects_error: bool,
     field_resolver: &FieldResolver,
+    use_test_assertions: bool,
 ) {
     // Allocator for the JSON-parse of the result blob (and any helper allocs).
     let _ = writeln!(out, "    var gpa: std.heap.DebugAllocator(.{{}}) = .init;");
@@ -159,12 +160,19 @@ pub(super) fn emit_visitor_test_body(
     );
 
     if expects_error {
-        // Error-path: _result null OR last error code non-zero.
-        let _ = writeln!(
-            out,
-            "    try testing.expect(_result == null or {module_name}.c.{last_error_code}() != 0);",
-            last_error_code = symbols.last_error_code
-        );
+        if use_test_assertions {
+            let _ = writeln!(
+                out,
+                "    try testing.expect(_result == null or {module_name}.c.{last_error_code}() != 0);",
+                last_error_code = symbols.last_error_code
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "    if (_result != null and {module_name}.c.{last_error_code}() == 0) return error.ExpectedCallFailure;",
+                last_error_code = symbols.last_error_code
+            );
+        }
         let _ = writeln!(
             out,
             "    if (_result) |r| {module_name}.c.{result_free}(r);",
@@ -173,7 +181,11 @@ pub(super) fn emit_visitor_test_body(
         return;
     }
 
-    let _ = writeln!(out, "    try testing.expect(_result != null);");
+    if use_test_assertions {
+        let _ = writeln!(out, "    try testing.expect(_result != null);");
+    } else {
+        let _ = writeln!(out, "    if (_result == null) return error.CallFailed;");
+    }
     let _ = writeln!(
         out,
         "    defer {module_name}.c.{result_free}(_result.?);",
@@ -278,6 +290,7 @@ mod zig_visitor_tests {
             &[],
             false,
             &resolver,
+            true,
         );
 
         assert!(content.contains("sample.c.abc_render_options_from_json"));
