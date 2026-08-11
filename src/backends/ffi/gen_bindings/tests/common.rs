@@ -892,11 +892,11 @@ pub(super) fn assert_exported_functions_are_panic_guarded(code: &str) {
             continue;
         }
         let body_start = &section[signature_end + 1..];
+        let body_start = body_start.trim_start();
         assert!(
-            body_start.trim_start().starts_with("catch_ffi_panic(")
-                || body_start
-                    .trim_start()
-                    .starts_with("clear_last_error();\n    match std::panic::catch_unwind("),
+            body_start.starts_with("catch_ffi_panic(")
+                || body_start.starts_with("catch_ffi_panic_preserving_error(")
+                || body_start.starts_with("clear_last_error();\n    match std::panic::catch_unwind("),
             "exported FFI function lacks a top-level panic guard: {signature}"
         );
     }

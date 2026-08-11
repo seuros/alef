@@ -233,10 +233,8 @@ mod tests {
         );
         let service = render("service_header.rs.jinja", minijinja::context! {});
         for output in [header, service] {
-            assert!(
-                output.contains("#![allow(unsafe_op_in_unsafe_fn, unsafe_attr_outside_unsafe)]"),
-                "{output}"
-            );
+            assert!(output.contains("unsafe_op_in_unsafe_fn"), "{output}");
+            assert!(output.contains("unsafe_attr_outside_unsafe"), "{output}");
         }
     }
 }

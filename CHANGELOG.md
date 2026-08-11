@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Emit every `not_contains` value in generated E2E assertions when fixtures use the plural `values` form.
+- Keep FFI panic-guard and JNI unsafe-lint audits aligned with generated output.
 
 ## [0.60.1] - 2026-08-11
 
