@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Rust documentation snippet validation now checks compatible uncached cells as binaries in one Cargo invocation,
+  while retaining per-cell diagnostics, cache entries, session isolation, and deterministic result ordering.
+
 - Documentation snippets for expected-error fixtures now render idiomatic executable failure handling in C#, Dart,
   Elixir, Go, Java, Kotlin, Python, and Ruby instead of presenting failing calls as successful examples.
 

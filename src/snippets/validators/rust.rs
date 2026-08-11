@@ -1,13 +1,121 @@
+use crate::snippets::cache::ValidationCache;
 use crate::snippets::error::Result;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
 use crate::snippets::validators::{SnippetValidator, run_command};
 use std::io::Write;
+use std::path::Path;
 use tempfile::TempDir;
 
 pub struct RustValidator;
 
 impl RustValidator {
+    fn validate_batch_with_context(
+        snippets: &[&Snippet],
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Result<Vec<(SnippetStatus, Option<String>)>> {
+        let dir = match session {
+            Some(session) => session.temp_dir()?,
+            None => TempDir::new()?,
+        };
+        let bin_dir = dir.path().join("src/bin");
+        std::fs::create_dir_all(&bin_dir)?;
+        std::fs::write(dir.path().join("Cargo.toml"), Self::cargo_manifest(session)?)?;
+
+        let filenames = snippets
+            .iter()
+            .map(|snippet| {
+                let stable_id = ValidationCache::key(snippet, level, session.map(|value| value.fingerprint.as_str()));
+                format!("snippet_{stable_id}.rs")
+            })
+            .collect::<Vec<_>>();
+        for (snippet, filename) in snippets.iter().zip(&filenames) {
+            std::fs::write(bin_dir.join(filename), Self::wrap_if_fragment(&snippet.code))?;
+        }
+
+        let mut command = std::process::Command::new("cargo");
+        command
+            .args(["check", "--bins", "--keep-going", "--message-format=json"])
+            .current_dir(dir.path());
+        if let Some(session) = session {
+            session.apply_environment(&mut command);
+        }
+        let (success, output) = run_command(&mut command, timeout_secs)?;
+        Ok(Self::batch_results(&filenames, success, &output))
+    }
+
+    fn batch_results(filenames: &[String], success: bool, output: &str) -> Vec<(SnippetStatus, Option<String>)> {
+        let mut diagnostics = vec![Vec::new(); filenames.len()];
+        let mut unmatched = Vec::new();
+        for line in output.lines() {
+            let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else {
+                if !line.trim().is_empty() {
+                    unmatched.push(line.to_string());
+                }
+                continue;
+            };
+            if message.get("reason").and_then(serde_json::Value::as_str) != Some("compiler-message") {
+                continue;
+            }
+            if message
+                .get("message")
+                .and_then(|value| value.get("level"))
+                .and_then(serde_json::Value::as_str)
+                != Some("error")
+            {
+                continue;
+            }
+            let Some(rendered) = message
+                .get("message")
+                .and_then(|value| value.get("rendered"))
+                .and_then(serde_json::Value::as_str)
+            else {
+                continue;
+            };
+            let spans = message
+                .get("message")
+                .and_then(|value| value.get("spans"))
+                .and_then(serde_json::Value::as_array);
+            let index = spans.and_then(|spans| {
+                spans.iter().find_map(|span| {
+                    let path = span.get("file_name")?.as_str()?;
+                    filenames.iter().position(|filename| {
+                        Path::new(path)
+                            .file_name()
+                            .is_some_and(|name| name == std::ffi::OsStr::new(filename))
+                    })
+                })
+            });
+            match index {
+                Some(index) => diagnostics[index].push(rendered.to_string()),
+                None => unmatched.push(rendered.to_string()),
+            }
+        }
+        let has_snippet_diagnostic = diagnostics.iter().any(|messages| !messages.is_empty());
+        let fallback = (!success && !has_snippet_diagnostic).then(|| {
+            if unmatched.is_empty() {
+                "cargo check failed without a snippet-specific diagnostic".to_string()
+            } else {
+                unmatched.join("\n")
+            }
+        });
+        diagnostics
+            .into_iter()
+            .map(|messages| {
+                if messages.is_empty() {
+                    match &fallback {
+                        Some(message) => (SnippetStatus::Fail, Some(message.clone())),
+                        None => (SnippetStatus::Pass, None),
+                    }
+                } else {
+                    (SnippetStatus::Fail, Some(messages.join("\n")))
+                }
+            })
+            .collect()
+    }
+
     fn validate_with_context(
         snippet: &Snippet,
         level: ValidationLevel,
@@ -236,6 +344,17 @@ impl SnippetValidator for RustValidator {
         Self::validate_with_context(snippet, level, timeout_secs, session)
     }
 
+    fn validate_batch_in_session(
+        &self,
+        snippets: &[&Snippet],
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Option<Result<Vec<(SnippetStatus, Option<String>)>>> {
+        (level != ValidationLevel::Run)
+            .then(|| Self::validate_batch_with_context(snippets, level, timeout_secs, session))
+    }
+
     fn max_level(&self) -> ValidationLevel {
         ValidationLevel::Run
     }
@@ -405,5 +524,71 @@ mod tests {
         );
 
         assert!(RustValidator::additional_dependencies(&session).is_err());
+    }
+
+    #[test]
+    fn maps_json_diagnostics_to_the_owning_binary() {
+        let filenames = vec!["snippet_first.rs".to_string(), "snippet_second.rs".to_string()];
+        let output = serde_json::json!({
+            "reason": "compiler-message",
+            "message": {
+                "level": "error",
+                "rendered": "error: unknown value",
+                "spans": [{"file_name": "src/bin/snippet_second.rs"}]
+            }
+        })
+        .to_string();
+
+        let results = RustValidator::batch_results(&filenames, false, &output);
+
+        assert_eq!(results[0].0, SnippetStatus::Pass);
+        assert_eq!(results[1].0, SnippetStatus::Fail);
+        assert_eq!(results[1].1.as_deref(), Some("error: unknown value"));
+    }
+
+    #[test]
+    fn validates_multiple_bins_in_one_batch() {
+        if which::which("cargo").is_err() {
+            return;
+        }
+        let first = snippet("fn main() { let value: usize = 1; assert_eq!(value, 1); }");
+        let second = snippet("fn main() { let value: usize = \"wrong\"; }");
+
+        let results = RustValidator::validate_batch_with_context(
+            &[&first, &second],
+            ValidationLevel::TypeCheck,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
+            None,
+        )
+        .expect("batch validation runs");
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, SnippetStatus::Pass, "{:?}", results[0].1);
+        assert_eq!(results[1].0, SnippetStatus::Fail);
+        assert!(
+            results[1]
+                .1
+                .as_deref()
+                .is_some_and(|message| message.contains("mismatched types"))
+        );
+    }
+
+    fn snippet(code: &str) -> Snippet {
+        Snippet {
+            id: None,
+            path: "guide.md".into(),
+            language: Language::Rust,
+            title: None,
+            code: code.into(),
+            start_line: 1,
+            block_index: 0,
+            annotation: None,
+            metadata: SnippetMetadata::default(),
+            source_origin: SourceOrigin {
+                path: "guide.md".into(),
+                line: 1,
+                block_index: 0,
+            },
+        }
     }
 }

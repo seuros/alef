@@ -58,6 +58,15 @@ pub trait SnippetValidator: Send + Sync {
         }
         self.validate(snippet, level, timeout_secs)
     }
+    fn validate_batch_in_session(
+        &self,
+        _snippets: &[&Snippet],
+        _level: ValidationLevel,
+        _timeout_secs: u64,
+        _session: Option<&ValidationSession>,
+    ) -> Option<Result<Vec<(SnippetStatus, Option<String>)>>> {
+        None
+    }
     fn max_level(&self) -> ValidationLevel;
 
     fn is_dependency_error(&self, _error_output: &str) -> bool {
@@ -104,7 +113,7 @@ impl ValidatorRegistry {
         registry
     }
 
-    fn register(&mut self, validator: Box<dyn SnippetValidator>) {
+    pub(crate) fn register(&mut self, validator: Box<dyn SnippetValidator>) {
         self.validators.insert(validator.language(), validator);
     }
 
