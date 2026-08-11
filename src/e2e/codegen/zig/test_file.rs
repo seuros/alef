@@ -265,11 +265,6 @@ fn render_test_fn(
         .assertions
         .iter()
         .any(|a| assertion_emits_code(a, field_resolver));
-    let any_non_error_emits_code = fixture
-        .assertions
-        .iter()
-        .filter(|a| a.assertion_type != "error")
-        .any(|a| assertion_emits_code(a, field_resolver));
 
     // Pre-compute streaming-virtual path conditions.
     let has_streaming_virtual_assertions = fixture.assertions.iter().any(|a| {
@@ -343,8 +338,7 @@ fn render_test_fn(
     // non-streaming assertions that require JSON parsing via parseFromSlice.
     let needs_gpa = setup_needs_gpa
         || streaming_path_has_non_streaming
-        || (!uses_streaming_virtual_path && result_is_json_struct && !expects_error && any_happy_emits_code)
-        || (!uses_streaming_virtual_path && result_is_json_struct && expects_error && any_non_error_emits_code);
+        || (!uses_streaming_virtual_path && result_is_json_struct && !expects_error && any_happy_emits_code);
     if needs_gpa {
         let _ = writeln!(out, "    var gpa: std.heap.DebugAllocator(.{{}}) = .init;");
         let _ = writeln!(out, "    defer _ = gpa.deinit();");
@@ -378,65 +372,21 @@ fn render_test_fn(
     };
 
     if expects_error {
-        // Error-path test: use error union syntax `!T` and try-catch.
-        // Async functions execute via tokio::runtime::block_on in the FFI shim,
-        // so the call site is synchronous from Zig's perspective.
-        if result_is_json_struct {
-            let _ = writeln!(
-                out,
-                "    const _result_json = {call_prefix}.{function_name}({args_str}) catch {{"
-            );
-        } else {
-            let _ = writeln!(
-                out,
-                "    const result = {call_prefix}.{function_name}({args_str}) catch {{"
-            );
-        }
-        let _ = writeln!(out, "        try testing.expect(true); // Error occurred as expected");
-        let _ = writeln!(out, "        return;");
-        let _ = writeln!(out, "    }};");
-        // Whether any non-error assertion will emit code that references `result`.
-        // If not, we must explicitly discard `result` to satisfy Zig's
-        // strict-unused-locals rule.
-        let any_emits_code = fixture
-            .assertions
-            .iter()
-            .filter(|a| a.assertion_type != "error")
-            .any(|a| assertion_emits_code(a, field_resolver));
-        if result_is_json_struct && any_emits_code {
-            let _ = writeln!(out, "    defer std.heap.c_allocator.free(_result_json);");
-            let _ = writeln!(
-                out,
-                "    var _parsed = try std.json.parseFromSlice(std.json.Value, allocator, _result_json, .{{}});"
-            );
-            let _ = writeln!(out, "    defer _parsed.deinit();");
-            let _ = writeln!(out, "    const {result_var} = &_parsed.value;");
-            let _ = writeln!(out, "    // Perform success assertions if any");
-            for assertion in &fixture.assertions {
-                if assertion.assertion_type != "error" {
-                    render_json_assertion(out, assertion, result_var, field_resolver, false);
-                }
-            }
-        } else if result_is_json_struct {
-            let _ = writeln!(out, "    _ = _result_json;");
-        } else if any_emits_code {
-            let _ = writeln!(out, "    // Perform success assertions if any");
-            for assertion in &fixture.assertions {
-                if assertion.assertion_type != "error" {
-                    render_assertion(
-                        out,
-                        assertion,
-                        result_var,
-                        field_resolver,
-                        enum_fields,
-                        result_is_option,
-                        result_is_simple,
-                    );
-                }
-            }
-        } else {
-            let _ = writeln!(out, "    _ = result;");
-        }
+        // Error-path test: the call must fail. `if (expr) |_| {...} else |_| {...}`
+        // captures both arms of the error union explicitly, so an unexpected success
+        // fails the test via `return error.TestUnexpectedResult`. The previous shape —
+        // `... catch { try testing.expect(true); return; }` — could never fail: on
+        // success the catch block simply never ran and execution fell through, and
+        // `expect(true)` inside the catch was a tautology on error. ~keep
+        //
+        // The success arm discards its capture (`|_|`) rather than binding `result`,
+        // since a fixture asserting `error` has nothing meaningful to check once the
+        // call has already failed the test by succeeding. A specific expected error
+        // (once threaded through from the fixture) can replace the generic `else |_|`
+        // arm with `testing.expectError(error.Foo, ...)` without touching this shape.
+        let _ = writeln!(out, "    if ({call_prefix}.{function_name}({args_str})) |_| {{");
+        let _ = writeln!(out, "        return error.TestUnexpectedResult;");
+        let _ = writeln!(out, "    }} else |_| {{}}");
     } else if fixture.assertions.is_empty() {
         // No assertions: emit a call to verify compilation.
         if result_is_json_struct {
@@ -677,13 +627,15 @@ pub(super) fn render_snippet_body(
         type_defs,
         false,
     );
+    // The test-mode error path captures the failure with a discarded `else |_|` arm
+    // (nothing to report inside `test { ... }`). The snippet is a runnable `main`,
+    // so swap in a named capture that prints the caught error instead. ~keep
     let body = test
         .lines()
-        .map(|line| line.replace(" catch {", " catch |err| {"))
         .map(|line| {
             line.replace(
-                "try testing.expect(true); // Error occurred as expected",
-                "std.debug.print(\"call failed as expected: {s}\\n\", .{@errorName(err)});",
+                "else |_| {}",
+                "else |err| { std.debug.print(\"call failed as expected: {s}\\n\", .{@errorName(err)}); }",
             )
         })
         .collect::<Vec<_>>()
@@ -718,7 +670,7 @@ mod snippet_tests {
     }
 
     #[test]
-    fn expected_error_snippet_uses_error_union_catch() {
+    fn expected_error_snippet_prints_caught_error_name() {
         let mut fixture = Fixture {
             id: "invalid".into(),
             description: "Invalid".into(),
@@ -732,8 +684,9 @@ mod snippet_tests {
         e2e.call.function = "parse".into();
         let rendered = render_snippet_body(&fixture, &e2e, "sample", "sample", &ResolvedCrateConfig::default(), &[])
             .expect("snippet renders");
-        assert!(rendered.contains("catch |err|"));
+        assert!(rendered.contains("else |err|"));
         assert!(rendered.contains("call failed as expected"));
+        assert!(rendered.contains("return error.TestUnexpectedResult"));
         assert!(!rendered.contains("testing.expect"));
     }
 
@@ -775,5 +728,114 @@ mod snippet_tests {
 
         assert!(rendered.contains("stream_items"), "{rendered}");
         assert!(rendered.contains("pub fn main() !void"));
+    }
+}
+
+#[cfg(test)]
+mod expects_error_fails_on_unexpected_success_tests {
+    use super::*;
+
+    fn error_fixture() -> Fixture {
+        let mut fixture = Fixture {
+            id: "invalid_input".into(),
+            description: "Rejects invalid input".into(),
+            ..Fixture::default()
+        };
+        fixture.assertions.push(crate::e2e::fixture::Assertion {
+            assertion_type: "error".into(),
+            ..Default::default()
+        });
+        fixture
+    }
+
+    #[test]
+    fn error_path_test_fails_zig_test_on_unexpected_success_for_non_json_result() {
+        let fixture = error_fixture();
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "parse".into();
+        let rendered = render_test_file(
+            "error",
+            &[&fixture],
+            &e2e,
+            "parse",
+            "result",
+            &[],
+            "sample",
+            "sample",
+            &ResolvedCrateConfig::default(),
+            &[],
+        );
+
+        // The old shape `catch { try testing.expect(true); return; }` never fails:
+        // on success the catch body simply doesn't run and the tautological
+        // `expect(true)` can't fail either. Assert the actual failing construct
+        // is present, not merely the absence of the old text.
+        assert!(
+            rendered.contains("if (sample.parse()) |_| {"),
+            "expected error-union if/else on the call, got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("return error.TestUnexpectedResult;"),
+            "success arm must fail the test, got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("} else |_| {}"),
+            "error arm must be reachable and not swallow via `catch`, got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("expect(true)"),
+            "vacuous assertion must be gone:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains(" catch {"),
+            "must not fall through a swallowing catch:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn error_path_test_fails_zig_test_on_unexpected_success_for_json_struct_result() {
+        let fixture = error_fixture();
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "parse".into();
+        e2e.call.overrides.insert(
+            "zig".into(),
+            crate::core::config::e2e::CallOverride {
+                result_is_json_struct: true,
+                ..Default::default()
+            },
+        );
+        let rendered = render_test_file(
+            "error",
+            &[&fixture],
+            &e2e,
+            "parse",
+            "result",
+            &[],
+            "sample",
+            "sample",
+            &ResolvedCrateConfig::default(),
+            &[],
+        );
+
+        assert!(
+            rendered.contains("if (sample.parse()) |_| {"),
+            "expected error-union if/else on the call, got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("return error.TestUnexpectedResult;"),
+            "success arm must fail the test, got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("} else |_| {}"),
+            "error arm must be reachable and not swallow via `catch`, got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("expect(true)"),
+            "vacuous assertion must be gone:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains(" catch {"),
+            "must not fall through a swallowing catch:\n{rendered}"
+        );
     }
 }

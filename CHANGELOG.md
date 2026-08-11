@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated Zig E2E error tests now fail when the call unexpectedly succeeds. The previous shape wrapped the call in
+  `catch { try testing.expect(true); return; }`, so a successful call skipped the catch entirely and the test passed
+  having asserted nothing, while `expect(true)` was a tautology on the error path.
+
 - Run the configured E2E formatter pipeline on cached test-app outputs so formatter and configuration updates converge
   without requiring a clean regeneration.
 
