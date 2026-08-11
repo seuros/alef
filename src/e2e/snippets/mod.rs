@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
 pub mod migration;
+mod recipe_policy;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SnippetInclusion {
@@ -350,7 +351,7 @@ fn render_snippet_body(
             return Ok(body);
         }
     }
-    if let Some(kind) = extension_owned_recipe_kind(fixture) {
+    if let Some(kind) = recipe_policy::extension_owned_recipe_kind(fixture) {
         bail!("{kind} fixture requires an extension-owned documentation recipe");
     }
     let body = generator
@@ -366,16 +367,6 @@ fn render_snippet_body(
         bail!("built-in `{language}` snippet recipe returned an empty body");
     }
     Ok(body)
-}
-
-fn extension_owned_recipe_kind(fixture: &Fixture) -> Option<&'static str> {
-    if fixture.http.is_some() {
-        return Some("HTTP");
-    }
-    if fixture.asyncapi.is_some() {
-        return Some("AsyncAPI");
-    }
-    fixture.websocket.as_ref().map(|_| "WebSocket")
 }
 
 fn snippet_generators(languages: &[String]) -> Result<Vec<(&str, Box<dyn E2eCodegen>)>> {
