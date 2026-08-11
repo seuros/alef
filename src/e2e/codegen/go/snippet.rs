@@ -65,7 +65,13 @@ pub(super) fn render_snippet_body(
         })
         .map(|value| value.name.as_str())
         .collect();
-    let options_ptr = override_config.map(|value| value.options_ptr).unwrap_or(false);
+    let options_ptr = override_config.is_some_and(|value| value.options_ptr)
+        || call.overrides.get(lang).is_some_and(|value| value.options_ptr)
+        || e2e_config
+            .call
+            .overrides
+            .get(lang)
+            .is_some_and(|value| value.options_ptr);
     let options_type = recipe.options_type.or_else(|| {
         e2e_config
             .call
@@ -390,5 +396,47 @@ mod tests {
         assert!(!body.contains("pkg.Process(payload, nil)"), "{body}");
         assert!(!body.contains("json.Unmarshal"), "{body}");
         assert!(!body.contains("encoding/json"), "{body}");
+    }
+
+    #[test]
+    fn snippet_honors_shared_options_pointer_and_prints_fields() {
+        let mut fixture = fixture();
+        fixture.input = serde_json::json!({ "options": {} });
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "convert".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.args = vec![crate::e2e::config::ArgMapping {
+            name: "options".into(),
+            field: "options".into(),
+            arg_type: "json_object".into(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }];
+        e2e.call.overrides.insert(
+            "go".into(),
+            crate::e2e::config::CallOverride {
+                module: Some("github.com/example/sample".into()),
+                options_type: Some("SampleConfig".into()),
+                options_ptr: true,
+                ..Default::default()
+            },
+        );
+        let rendered = render_snippet_body(
+            &fixture,
+            &e2e,
+            &ResolvedCrateConfig::default(),
+            &[TypeDef {
+                name: "SampleConfig".into(),
+                ..TypeDef::default()
+            }],
+            &[],
+        );
+
+        assert!(rendered.contains("&options"), "{rendered}");
+        assert!(rendered.contains("fmt.Printf(\"%+v\\n\", result)"), "{rendered}");
     }
 }

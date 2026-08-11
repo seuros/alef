@@ -218,6 +218,14 @@ pub fn write_lang_hash(crate_name: &str, lang: &str, lang_hash: &str, output_pat
     Ok(())
 }
 
+/// Replace a language manifest after every generation phase has contributed
+/// its files. The language hash itself remains unchanged.
+pub fn write_lang_manifest(crate_name: &str, lang: &str, output_paths: &[PathBuf]) -> anyhow::Result<()> {
+    let dir = hashes_dir(crate_name);
+    fs::create_dir_all(&dir)?;
+    write_manifest(&dir.join(format!("{lang}.manifest")), output_paths)
+}
+
 /// Compute hash for a generation stage (stubs, docs, readme, scaffold, e2e).
 /// `extra` allows including additional content (e.g., fixture files for e2e).
 /// The alef binary's identity is included so that locally rebuilt binaries
@@ -288,11 +296,13 @@ pub fn write_stage_hash(
 
 /// Write a manifest of output file paths (one per line).
 fn write_manifest(manifest_path: &Path, output_paths: &[PathBuf]) -> anyhow::Result<()> {
-    let content: String = output_paths
-        .iter()
-        .map(|p| p.to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("\n");
+    let mut paths: Vec<_> = output_paths.iter().map(|p| p.to_string_lossy()).collect();
+    paths.sort_unstable();
+    paths.dedup();
+    let mut content = paths.join("\n");
+    if !content.is_empty() {
+        content.push('\n');
+    }
     fs::write(manifest_path, content)?;
     Ok(())
 }
@@ -302,10 +312,10 @@ fn write_manifest(manifest_path: &Path, output_paths: &[PathBuf]) -> anyhow::Res
 /// or if all listed files exist. Returns false if any file is missing.
 fn outputs_exist(manifest_path: &Path) -> bool {
     match fs::read_to_string(manifest_path) {
-        Ok(content) => content
-            .lines()
-            .filter(|line| !line.is_empty())
-            .all(|line| Path::new(line).exists()),
+        Ok(content) => {
+            let mut paths = content.lines().filter(|line| !line.is_empty()).peekable();
+            paths.peek().is_some() && paths.all(|line| Path::new(line).exists())
+        }
         Err(_) => true,
     }
 }
@@ -451,5 +461,27 @@ mod tests {
         assert_eq!(ir_cache_dir("crate-a"), Path::new(CACHE_DIR).join("crate-a"));
         assert_eq!(ir_cache_dir("crate-b"), Path::new(CACHE_DIR).join("crate-b"));
         assert_ne!(ir_cache_dir("crate-a"), ir_cache_dir("crate-b"));
+    }
+
+    #[test]
+    fn manifest_is_sorted_deduplicated_and_newline_terminated() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let manifest = directory.path().join("rust.manifest");
+        let alpha = directory.path().join("alpha.rs");
+        let beta = directory.path().join("beta.rs");
+
+        write_manifest(&manifest, &[beta.clone(), alpha.clone(), beta.clone()]).expect("write manifest");
+
+        let content = std::fs::read_to_string(manifest).expect("read manifest");
+        assert_eq!(content, format!("{}\n{}\n", alpha.display(), beta.display()));
+    }
+
+    #[test]
+    fn empty_manifest_is_not_a_cache_hit() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let manifest = directory.path().join("rust.manifest");
+        std::fs::write(&manifest, "").expect("write empty manifest");
+
+        assert!(!outputs_exist(&manifest));
     }
 }

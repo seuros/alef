@@ -423,7 +423,12 @@ pub(super) fn build_args_and_setup(
                             );
                         }
                         setup_lines.push(format!("{} := {}", arg.name, literal.replace('\n', "\n\t")));
-                        parts.push(arg.name.clone());
+                        let arg_expr = if Some(opts_type) == options_type && options_ptr {
+                            format!("&{}", arg.name)
+                        } else {
+                            arg.name.clone()
+                        };
+                        parts.push(arg_expr);
                         continue;
                     }
                     if is_empty_obj {

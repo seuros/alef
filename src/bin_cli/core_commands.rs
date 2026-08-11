@@ -77,6 +77,15 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let sources_hash = cache::sources_hash(&resolved_cfg.sources)?;
 
                 let mut current_gen_paths = std::collections::HashSet::new();
+                let mut language_output_paths: std::collections::HashMap<_, std::collections::HashSet<_>> = files
+                    .iter()
+                    .map(|(language, generated)| {
+                        (
+                            *language,
+                            generated.iter().map(|file| base_dir.join(&file.path)).collect(),
+                        )
+                    })
+                    .collect();
                 let mut changed_languages: std::collections::HashSet<crate::core::config::Language> =
                     std::collections::HashSet::new();
 
@@ -124,6 +133,12 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                                 current_gen_paths.insert(base_dir.join(&file.path));
                             }
                         }
+                        for (language, generated) in &svc_files {
+                            language_output_paths
+                                .entry(*language)
+                                .or_default()
+                                .extend(generated.iter().map(|file| base_dir.join(&file.path)));
+                        }
                         let svc_count = pipeline::write_files(&svc_files, &base_dir)?;
                         tracing::info!("Generated {svc_count} service API files");
                         any_written = true;
@@ -157,6 +172,12 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             for file in files {
                                 current_gen_paths.insert(base_dir.join(&file.path));
                             }
+                        }
+                        for (language, generated) in &public_api_files {
+                            language_output_paths
+                                .entry(*language)
+                                .or_default()
+                                .extend(generated.iter().map(|file| base_dir.join(&file.path)));
                         }
 
                         if !api_match || clean {
@@ -196,6 +217,12 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         for file in files {
                             current_gen_paths.insert(base_dir.join(&file.path));
                         }
+                    }
+                    for (language, generated) in &stub_files {
+                        language_output_paths
+                            .entry(*language)
+                            .or_default()
+                            .extend(generated.iter().map(|file| base_dir.join(&file.path)));
                     }
 
                     if !stubs_match || clean {
@@ -248,6 +275,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                 let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
+                for (language, paths) in language_output_paths {
+                    let paths: Vec<_> = paths.into_iter().collect();
+                    cache::write_lang_manifest(&resolved_cfg.name, &language.to_string(), &paths)?;
+                }
 
                 if let Err(e) = pipeline::sync_versions(resolved_cfg, config_path, None, true, true, None) {
                     tracing::warn!("version sync failed: {e}");
@@ -672,7 +703,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 .collect();
 
             let stale = verify_walk_multi(&base_dir, &all_inputs_hashes)?;
-            let hash_inconsistency = detect_hash_inconsistency(&base_dir, crates_to_process.len());
 
             let mut all_version_mismatches: Vec<String> = Vec::new();
             for resolved_cfg in &crates_to_process {
@@ -687,27 +717,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 }
             }
 
-            if stale.is_empty() && !has_version_issues && hash_inconsistency.is_none() {
+            if stale.is_empty() && !has_version_issues {
                 crate::bin_cli::output::line("All bindings and versions are up to date.");
             } else {
-                if let Some(inconsistency) = &hash_inconsistency {
-                    crate::bin_cli::output::line(format_args!(
-                        "Hash-inconsistent tree: {} distinct alef:hash values across {} crate(s) — partial regeneration detected:",
-                        inconsistency.groups.len(),
-                        inconsistency.crate_count
-                    ));
-                    for (hash, paths) in &inconsistency.groups {
-                        crate::bin_cli::output::line(format_args!("  {hash}  ({} file(s))", paths.len()));
-                        if tracing::enabled!(tracing::Level::DEBUG) {
-                            for path in paths {
-                                crate::bin_cli::output::line(format_args!("    {path}"));
-                            }
-                        }
-                    }
-                    crate::bin_cli::output::line(
-                        "Regenerate the whole workspace (e.g. `alef all --clean`) so every file shares one hash.",
-                    );
-                }
                 if !stale.is_empty() {
                     crate::bin_cli::output::line("Stale bindings detected:");
                     for s in &stale {

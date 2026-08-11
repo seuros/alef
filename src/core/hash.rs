@@ -320,10 +320,8 @@ fn normalize_source_path(path: &std::path::Path) -> String {
 
 /// Compute the per-file verify hash that alef embeds in each generated file.
 ///
-/// Kept for internal use by tests that verify the old content-derived hash
-/// semantics. New callers should use [`compute_inputs_hash`].
-///
-/// `sources_hash` comes from [`compute_sources_hash`]. `content` is the file
+/// `sources_hash` may be the output of [`compute_sources_hash`] or the canonical
+/// generation-input fingerprint from [`compute_inputs_hash`]. `content` is the file
 /// content; any pre-existing `alef:hash:` line is stripped before hashing so
 /// the function is idempotent.
 #[doc(hidden)]

@@ -134,11 +134,9 @@ pub fn write_files(files: &[(Language, Vec<GeneratedFile>)], base_dir: &Path) ->
 /// Inject the per-file `alef:hash:` line into every alef-headered file in
 /// `paths`. Run *after* every formatter (`format_generated`, `fmt_post_generate`).
 ///
-/// The embedded hash is a **generation-inputs fingerprint** computed by
-/// [`hash::compute_inputs_hash`] from the alef revision, the Rust source
-/// fingerprint (`sources_hash`), and the raw `alef.toml` bytes. It does **not**
-/// depend on the emitted file content, so post-generation formatter rewrites
-/// (rustfmt, ruff, rumdl-fmt, oxfmt, …) never invalidate it.
+/// The embedded hash covers the generation inputs and the final formatted file
+/// body. Running this after all formatters makes manual output edits detectable
+/// without treating Alef's own formatting pass as drift.
 ///
 /// Files that don't carry the alef header marker (scaffold-once Cargo.toml,
 /// composer.json, gemspec, package.json, lockfiles) are skipped — alef has
@@ -165,7 +163,8 @@ pub fn finalize_hashes(
         }
 
         let stripped = hash::strip_hash_line(&content);
-        let final_content = hash::inject_hash_line(&stripped, &inputs_hash);
+        let file_hash = hash::compute_file_hash(&inputs_hash, &stripped);
+        let final_content = hash::inject_hash_line(&stripped, &file_hash);
 
         if final_content == content {
             return Ok(());

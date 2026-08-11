@@ -28,6 +28,6 @@ func main() {
   {{- "\tif err != nil {\n\t\tpanic(err)\n\t}" }}
 {% endif %}
 {% if not returns_void and not expects_error %}
-  {{- "\t" }}fmt.Println({{ result_var }})
+  {{- "\t" }}fmt.Printf("%+v\n", {{ result_var }})
 {% endif %}
 }
