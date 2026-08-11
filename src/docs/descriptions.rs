@@ -242,6 +242,10 @@ pub(crate) fn snake_to_readable(name: &str) -> String {
 /// Generate a human-readable parameter description from its name and type
 /// when no explicit doc comment or `# Arguments` entry exists.
 pub(crate) fn generate_param_description(name: &str, ty: &TypeRef) -> String {
+    if name.trim().is_empty() {
+        return "The value".to_string();
+    }
+
     let article = match name {
         "config" | "configuration" => return "The configuration options".to_string(),
         "options" | "opts" => return "The options to use".to_string(),
@@ -315,6 +319,11 @@ mod tests {
         );
         assert_eq!(generate_field_description("size", &ty), "Size in bytes");
         assert_eq!(generate_field_description("count", &ty), "Number of items");
+    }
+
+    #[test]
+    fn empty_parameter_name_has_a_complete_fallback_description() {
+        assert_eq!(generate_param_description("", &TypeRef::String), "The value");
     }
 
     #[test]

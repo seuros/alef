@@ -261,7 +261,7 @@ fn render_template_readme(
     Ok(Some(GeneratedFile {
         path,
         content,
-        generated_header: false,
+        generated_header: true,
     }))
 }
 

@@ -782,6 +782,7 @@ pub(crate) fn extract_param_docs(doc: &str) -> std::collections::HashMap<String,
     let mut map = std::collections::HashMap::new();
     let mut in_args = false;
     let mut in_code_block = false;
+    let mut current_param: Option<String> = None;
 
     for line in doc.lines() {
         if line.trim_start().starts_with("```") {
@@ -795,22 +796,39 @@ pub(crate) fn extract_param_docs(doc: &str) -> std::collections::HashMap<String,
         if line.starts_with('#') {
             let header = line.trim_start_matches('#').trim().to_lowercase();
             in_args = matches!(header.as_str(), "arguments" | "args" | "parameters" | "params");
+            current_param = None;
             continue;
         }
 
         if in_args {
-            let trimmed = line.trim_start_matches(['*', '-', ' ']);
-            let parsed = trimmed
-                .find(" - ")
-                .map(|pos| (pos, 3))
-                .or_else(|| trimmed.find(": ").map(|pos| (pos, 2)));
-            if let Some((sep_pos, sep_len)) = parsed {
-                let raw_name = trimmed[..sep_pos].trim();
+            let trimmed = line.trim();
+            let item = trimmed
+                .strip_prefix('*')
+                .or_else(|| trimmed.strip_prefix('-'))
+                .or_else(|| trimmed.strip_prefix('+'))
+                .map(str::trim_start);
+            if let Some(item) = item {
+                let parsed = item
+                    .find(" - ")
+                    .map(|position| (position, 3))
+                    .or_else(|| item.find(": ").map(|position| (position, 2)));
+                let Some((separator, separator_len)) = parsed else {
+                    current_param = None;
+                    continue;
+                };
+                let raw_name = item[..separator].trim();
                 let param_name = raw_name.trim_matches('`');
-                let desc = trimmed[sep_pos + sep_len..].trim();
+                let desc = item[separator + separator_len..].trim();
                 if !param_name.is_empty() && !desc.is_empty() {
                     map.insert(param_name.to_string(), desc.to_string());
+                    current_param = Some(param_name.to_string());
                 }
+            } else if !trimmed.is_empty()
+                && let Some(param_name) = current_param.as_ref()
+                && let Some(description) = map.get_mut(param_name)
+            {
+                description.push(' ');
+                description.push_str(trimmed);
             }
         }
     }

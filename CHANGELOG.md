@@ -16,6 +16,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated API examples now emit valid empty-map literals for Elixir and R, parameter fallback text is complete for
+  unnamed values, and generated package READMEs carry generated-file headers.
+
+- Generated reference pages now omit members gated by `cfg(test)` even when a binding enables an umbrella `full`
+  feature.
+
+- Generated Markdown tables now preserve square brackets inside code spans while escaping brackets that would form
+  reference links, avoiding malformed API type cells.
+
+- Generated parameter documentation now retains multiline rustdoc `# Arguments` descriptions and accepts all
+  CommonMark unordered-list markers.
+
 - C and Zig documentation snippet sessions now accept configured native include directories, and Swift validation
   tolerates SwiftPM binary directories that have not been created yet.
 

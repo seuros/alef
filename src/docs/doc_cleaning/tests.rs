@@ -88,6 +88,17 @@ fn test_extract_param_docs() {
 }
 
 #[test]
+fn test_extract_param_docs_preserves_continuation_lines_and_plus_bullets() {
+    let doc = "Summary.\n\n# Arguments\n\n+ `source` - First line.\n  Continued details.\n+ `mode`: Selection mode.\n\n# Returns\n\nA result.";
+    let params = extract_param_docs(doc);
+    assert_eq!(
+        params.get("source").map(String::as_str),
+        Some("First line. Continued details.")
+    );
+    assert_eq!(params.get("mode").map(String::as_str), Some("Selection mode."));
+}
+
+#[test]
 fn test_clean_doc_empty_string_all_languages() {
     for lang in [Language::Python, Language::Go, Language::Node, Language::Rust] {
         assert_eq!(clean_doc("", lang), "", "empty doc for {lang:?} must stay empty");

@@ -306,7 +306,7 @@ See the [LICENSE]({repository}/blob/main/LICENSE) file in the root repository.
     Ok(GeneratedFile {
         path,
         content,
-        generated_header: false,
+        generated_header: true,
     })
 }
 

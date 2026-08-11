@@ -436,7 +436,7 @@ fn sample_named_value(name: &str, lang: Language, ffi_prefix: &str) -> String {
         }
         Language::Node | Language::Wasm | Language::Java | Language::Csharp | Language::Php => format!("new {ty}()"),
         Language::Ruby => format!("{ty}.new"),
-        Language::Elixir | Language::R => "%{{}}".to_string(),
+        Language::Elixir | Language::R => "%{}".to_string(),
         Language::Go => format!("{ty}{{}}"),
         Language::Rust => format!("{ty}::default()"),
         Language::Ffi | Language::C | Language::Jni => "NULL".to_string(),

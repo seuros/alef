@@ -32,12 +32,15 @@ pub fn cfg_feature_satisfied(cfg: Option<&str>, enabled_features: &HashSet<&str>
         return true;
     };
 
-    if enabled_features.contains("full") {
-        return true;
-    }
-
     // Indeterminate (target predicate) => keep the item. ~keep
-    cfg_expr_satisfied(cfg_str, enabled_features).unwrap_or(true)
+    let full_satisfies_features = enabled_features.contains("full") && !cfg_contains_test_predicate(cfg_str);
+    cfg_expr_satisfied(cfg_str, enabled_features, full_satisfies_features).unwrap_or(true)
+}
+
+fn cfg_contains_test_predicate(cfg_str: &str) -> bool {
+    cfg_str
+        .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+        .any(|token| token == "test")
 }
 
 /// Three-valued evaluation of a normalised cfg predicate.
@@ -48,20 +51,24 @@ pub fn cfg_feature_satisfied(cfg: Option<&str>, enabled_features: &HashSet<&str>
 /// indeterminate result with standard Kleene logic so, for example,
 /// `all(feature = "x", target_arch = "wasm32")` is `Some(false)` when `x` is
 /// off (short-circuit) but `None` when `x` is on.
-fn cfg_expr_satisfied(cfg_str: &str, enabled_features: &HashSet<&str>) -> Option<bool> {
+fn cfg_expr_satisfied(cfg_str: &str, enabled_features: &HashSet<&str>, full_satisfies_features: bool) -> Option<bool> {
     let normalized = cfg_str.trim().replace(" (", "(");
     let cfg_str = normalized.as_str();
 
     if let Some(rest) = cfg_str.strip_prefix("feature = \"")
         && let Some(feature_name) = rest.strip_suffix('"')
     {
-        return Some(enabled_features.contains(feature_name));
+        return Some(full_satisfies_features || enabled_features.contains(feature_name));
+    }
+
+    if cfg_str == "test" {
+        return Some(false);
     }
 
     if let Some(inner) = cfg_str.strip_prefix("any(").and_then(|s| s.strip_suffix(')')) {
         let mut saw_indeterminate = false;
         for cond in split_cfg_operands(inner) {
-            match cfg_expr_satisfied(&cond, enabled_features) {
+            match cfg_expr_satisfied(&cond, enabled_features, full_satisfies_features) {
                 Some(true) => return Some(true),
                 Some(false) => {}
                 None => saw_indeterminate = true,
@@ -73,7 +80,7 @@ fn cfg_expr_satisfied(cfg_str: &str, enabled_features: &HashSet<&str>) -> Option
     if let Some(inner) = cfg_str.strip_prefix("all(").and_then(|s| s.strip_suffix(')')) {
         let mut saw_indeterminate = false;
         for cond in split_cfg_operands(inner) {
-            match cfg_expr_satisfied(&cond, enabled_features) {
+            match cfg_expr_satisfied(&cond, enabled_features, full_satisfies_features) {
                 Some(false) => return Some(false),
                 Some(true) => {}
                 None => saw_indeterminate = true,
@@ -83,7 +90,7 @@ fn cfg_expr_satisfied(cfg_str: &str, enabled_features: &HashSet<&str>) -> Option
     }
 
     if let Some(inner) = cfg_str.strip_prefix("not(").and_then(|s| s.strip_suffix(')')) {
-        return cfg_expr_satisfied(inner.trim(), enabled_features).map(|value| !value);
+        return cfg_expr_satisfied(inner.trim(), enabled_features, full_satisfies_features).map(|value| !value);
     }
 
     // Unrecognised leaf (e.g. `target_arch = "..."`): indeterminate. ~keep
@@ -433,6 +440,34 @@ mod tests {
 
         let filtered = surface.with_cfg_filtered_deep(&features(&["full"]));
         assert_eq!(filtered.types[0].fields.len(), 1);
+    }
+
+    #[test]
+    fn with_cfg_filtered_deep_drops_test_only_members_under_full() {
+        use crate::core::ir::EnumVariant;
+
+        let mut strategy = en("Strategy", None);
+        strategy.variants = vec![
+            EnumVariant {
+                name: "Stable".to_string(),
+                ..EnumVariant::default()
+            },
+            EnumVariant {
+                name: "HarnessOnly".to_string(),
+                cfg: Some("any(test, feature = \"testkit\")".to_string()),
+                ..EnumVariant::default()
+            },
+        ];
+        let mut surface = ApiSurface::default();
+        surface.enums.push(strategy);
+
+        let filtered = surface.with_cfg_filtered_deep(&features(&["full"]));
+        let variant_names: Vec<&str> = filtered.enums[0]
+            .variants
+            .iter()
+            .map(|variant| variant.name.as_str())
+            .collect();
+        assert_eq!(variant_names, vec!["Stable"]);
     }
 
     #[test]
