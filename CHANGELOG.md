@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Ruby documentation snippets now require the load-path entry instead of the hyphenated gem distribution name.
+
 - Zig documentation snippets now render directly as executable bodies, retain owned-result cleanup, and avoid test-only
   aliases and unmatched delimiters.
 
