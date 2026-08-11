@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Extendr integration-test fixtures now include adjacent Serde content metadata, restoring full-suite compilation.
+
 - E2E and registry test-app generation now fails when a configured formatter is unavailable or exits unsuccessfully,
   preventing noncanonical generated output from being reported as successful.
 
