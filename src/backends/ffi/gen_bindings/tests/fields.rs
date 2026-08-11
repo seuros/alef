@@ -369,6 +369,12 @@ result_type = "WalkOutcome"
         !lib.content.contains("visitor: *mut SynSyntaxWalkerBridge"),
         "options-field setter must not require the trait-bridge handle when visitor_callbacks is enabled"
     );
+    assert!(
+        !lib.content.contains("SynSyntaxWalkerBridge"),
+        "legacy visitor callbacks must not ship an unattached generic bridge with an independent destructor"
+    );
+    assert!(!lib.content.contains("syn_syntax_walker_bridge_new"));
+    assert!(!lib.content.contains("syn_syntax_walker_bridge_free"));
 }
 
 #[test]

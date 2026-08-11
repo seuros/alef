@@ -101,6 +101,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Infallible complex-return trait callbacks now consume and free host `out_error` diagnostics before returning a safe
   default on non-zero callback status.
 
+- Options-field visitor callbacks no longer emit an unattached generic trait bridge whose public destructor could free
+  shared host state independently of the live visitor handle.
+
 - Attaching a visitor to an FFI options handle now transfers ownership into one synchronized object, preventing multiple
   independent mutexes from aliasing the same mutable visitor; Go wrappers honor the transfer.
 

@@ -625,6 +625,9 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
         let error_constructor = config.error_constructor_expr();
         let plugin_error_constructor = config.ffi_plugin_error_constructor();
         for bridge_cfg in &config.trait_bridges {
+            if visitor_callbacks_enabled && bridge_cfg.bind_via == crate::core::config::BridgeBinding::OptionsField {
+                continue;
+            }
             if let Some(trait_def) = trait_map.get(bridge_cfg.trait_name.as_str()) {
                 let bridge_code = crate::backends::ffi::trait_bridge::gen_trait_bridge(
                     trait_def,
