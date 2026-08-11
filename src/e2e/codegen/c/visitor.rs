@@ -147,11 +147,12 @@ pub(super) fn render_visitor_test_file(
         let _ = writeln!(out, "    assert(_result != NULL && \"visitor call failed\");");
         let _ = writeln!(out);
 
-        // Serialise result to JSON and extract the content field.
-        let _ = writeln!(out, "    char* _json = {prefix}_{result_type_snake}_to_json(_result);");
-        let _ = writeln!(out, "    assert(_json != NULL && \"result to_json failed\");");
-        let _ = writeln!(out, "    char* _content = alef_json_get_string(_json, \"content\");");
-        let _ = writeln!(out);
+        if !fixture.assertions.is_empty() {
+            let _ = writeln!(out, "    char* _json = {prefix}_{result_type_snake}_to_json(_result);");
+            let _ = writeln!(out, "    assert(_json != NULL && \"result to_json failed\");");
+            let _ = writeln!(out, "    char* _content = alef_json_get_string(_json, \"content\");");
+            let _ = writeln!(out);
+        }
 
         // Emit assertions (only contains/not_contains; visitor fixtures use only these).
         for assertion in &fixture.assertions {
@@ -186,8 +187,10 @@ pub(super) fn render_visitor_test_file(
         let _ = writeln!(out);
 
         // Free in reverse allocation order.
-        let _ = writeln!(out, "    free(_content);");
-        let _ = writeln!(out, "    {prefix}_free_string(_json);");
+        if !fixture.assertions.is_empty() {
+            let _ = writeln!(out, "    free(_content);");
+            let _ = writeln!(out, "    {prefix}_free_string(_json);");
+        }
         let _ = writeln!(out, "    {prefix}_{result_type_snake}_free(_result);");
         let _ = writeln!(out, "    {prefix}_{options_type_snake}_free(_options);");
         let _ = writeln!(out, "    {prefix}_visitor_free(_visitor);");
@@ -208,7 +211,9 @@ pub(super) fn render_visitor_snippet(
     e2e_config: &E2eConfig,
     config: &ResolvedCrateConfig,
 ) -> anyhow::Result<String> {
-    let rendered = render_visitor_test_file(&[fixture], header, prefix, e2e_config, config);
+    let mut snippet_fixture = fixture.clone();
+    snippet_fixture.assertions.clear();
+    let rendered = render_visitor_test_file(&[&snippet_fixture], header, prefix, e2e_config, config);
     let function_marker = format!("void test_{}(void) {{", sanitize_ident(&fixture.id));
     let function_start = rendered
         .find(&function_marker)
@@ -680,6 +685,8 @@ mod visitor_tests {
         assert!(content.contains("int main(void)"));
         assert!(!content.contains("test_runner.h"));
         assert!(!content.contains("void test_custom_names"));
+        assert!(!content.contains("alef_json_get_string"));
+        assert!(!content.contains("krz_render_output_to_json"));
     }
 
     #[test]

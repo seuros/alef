@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- C visitor documentation snippets now use only public binding APIs and omit test-harness JSON assertion helpers.
+
 - Elixir documentation snippets now place visitor callbacks inside the conversion options argument.
 
 - Dart documentation snippets now import and initialize the generated Rust library and dispose it on every exit path.
