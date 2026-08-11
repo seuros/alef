@@ -43,6 +43,27 @@ pub(crate) fn render_snippet_body(
     let options_type = recipe
         .options_type
         .or_else(|| recipe.compatible_options_type(&["kotlin", "kotlin_android", "java", "csharp"]));
+
+    // Streaming owner_type adapters are facade-exposed as INSTANCE methods on
+    // the owner handle (`engine.streamItems(req)`), not as static facade
+    // methods — mirrors the test-generation path in test_method.rs and the
+    // Java e2e backend. The docs snippet must show the same real call shape
+    // callers will actually write, so it is wrong here for the same reason it
+    // was wrong in the generated tests.
+    let adapter = config.adapters.iter().find(|a| a.name == call.function.as_str());
+    let is_streaming_owner_adapter = adapter.is_some_and(|a| {
+        matches!(a.pattern, crate::core::config::extras::AdapterPattern::Streaming) && a.owner_type.is_some()
+    });
+    let streaming_owner_handle: Option<String> = if is_streaming_owner_adapter {
+        recipe
+            .args
+            .iter()
+            .find(|a| a.arg_type == "handle")
+            .map(|a| a.name.clone())
+    } else {
+        None
+    };
+
     let (setup_lines, mut args) = build_args_and_setup(
         &fixture.input,
         recipe.args,
@@ -54,6 +75,7 @@ pub(crate) fn render_snippet_body(
             kotlin_android_style,
             config,
             type_defs,
+            owner_handle_is_receiver: streaming_owner_handle.is_some(),
         },
     );
     let mut setup_lines = setup_lines
@@ -95,6 +117,21 @@ pub(crate) fn render_snippet_body(
         .iter()
         .any(|assertion| assertion.assertion_type == "error");
 
+    // The template renders the call as `{{ class_name }}.{{ function_name }}(...)`
+    // (or, with `client_factory`, constructs a client via
+    // `{{ class_name }}.{{ client_factory }}(...)` first and then calls
+    // `client.{{ function_name }}(...)`). For a flat-call streaming owner_type
+    // adapter, substitute the owner handle's variable name for `class_name` so
+    // the call renders as the real instance-method invocation. `client_factory`
+    // fixtures already dispatch on `client`, not `class_name`, so this
+    // substitution is scoped to the flat-call path where it actually changes
+    // the rendered call target.
+    let call_target_class_name = if client_factory.is_none() {
+        streaming_owner_handle.unwrap_or(class_name)
+    } else {
+        class_name
+    };
+
     crate::e2e::template_env::render(
         "kotlin/snippet_body.jinja",
         minijinja::context! {
@@ -102,7 +139,7 @@ pub(crate) fn render_snippet_body(
             needs_mapper => needs_mapper,
             setup_lines => setup_lines,
             client_factory => client_factory.map(ToLowerCamelCase::to_lower_camel_case),
-            class_name => class_name,
+            class_name => call_target_class_name,
             function_name => function_name,
             args => args,
             result_var => call.result_var,

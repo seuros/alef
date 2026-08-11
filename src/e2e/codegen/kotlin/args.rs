@@ -27,6 +27,14 @@ pub(super) struct KotlinArgsContext<'a> {
     pub(super) kotlin_android_style: bool,
     pub(super) config: &'a ResolvedCrateConfig,
     pub(super) type_defs: &'a [crate::core::ir::TypeDef],
+    /// True for a streaming `owner_type` adapter, where the facade exposes the
+    /// call as an instance method on the handle rather than as a positional
+    /// argument to a static/client call (`engine.streamItems(req)`, not
+    /// `Facade.streamItems(engine, req)`). Mirrors
+    /// `JavaArgsContext::owner_handle_is_receiver`: the handle's construction
+    /// line is still emitted, only its presence in the positional argument
+    /// list is skipped. ~keep
+    pub(super) owner_handle_is_receiver: bool,
 }
 
 pub(super) fn build_args_and_setup(
@@ -42,6 +50,7 @@ pub(super) fn build_args_and_setup(
         kotlin_android_style,
         config,
         type_defs,
+        owner_handle_is_receiver,
     } = context;
     if args.is_empty() {
         return (Vec::new(), String::new());
@@ -91,6 +100,12 @@ pub(super) fn build_args_and_setup(
                 } else {
                     setup_lines.push(format!("val {} = {class_name}.{constructor_name}(null)", arg.name,));
                 }
+            }
+            // For a streaming owner_type adapter the handle is the instance-method
+            // receiver, not a positional argument — emit its construction but omit
+            // it from the call's argument list.
+            if owner_handle_is_receiver {
+                continue;
             }
             parts.push(arg.name.clone());
             continue;

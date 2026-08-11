@@ -261,6 +261,23 @@ pub(super) fn render_test_method(
     };
     let enum_fields: &HashSet<String> = &effective_enum_fields;
 
+    // Streaming owner_type adapters are facade-exposed as INSTANCE methods on the
+    // owner handle (`engine.streamItems(req)`), not as static/client facade
+    // methods — mirrors the Java e2e backend (java/test_method.rs), which
+    // deliberately emits no static/client streaming methods for these adapters.
+    // Capture the owner handle variable so the call is rendered as an
+    // instance-method invocation instead of falling through to the flat-function
+    // (or client-factory) call style.
+    let adapter = config.adapters.iter().find(|a| a.name == call_config.function.as_str());
+    let is_streaming_owner_adapter = adapter.is_some_and(|a| {
+        matches!(a.pattern, crate::core::config::extras::AdapterPattern::Streaming) && a.owner_type.is_some()
+    });
+    let streaming_owner_handle: Option<String> = if is_streaming_owner_adapter {
+        args.iter().find(|a| a.arg_type == "handle").map(|a| a.name.clone())
+    } else {
+        None
+    };
+
     let _ = writeln!(out, "    @Test");
     if client_factory.is_some() || kotlin_android_style {
         let _ = writeln!(out, "    fun test{method_name}() = runBlocking {{");
@@ -339,6 +356,7 @@ pub(super) fn render_test_method(
             kotlin_android_style,
             config,
             type_defs,
+            owner_handle_is_receiver: streaming_owner_handle.is_some(),
         },
     );
 
@@ -355,6 +373,9 @@ pub(super) fn render_test_method(
         let mock_url_expr = format!(
             "System.getProperty(\"mockServer.{fixture_id}\", (System.getProperty(\"mockServerUrl\", System.getenv(\"MOCK_SERVER_URL\") ?: \"\") ?: \"\") + \"/fixtures/{fixture_id}\")"
         );
+        // For a streaming owner_type adapter the call is dispatched on the owner
+        // handle instance, not on the mock-backed `client` the factory constructs.
+        let call_receiver = streaming_owner_handle.as_deref().unwrap_or("client");
         if expects_error {
             // Wrap setup + client construction + call in assertFailsWith so
             // validation errors thrown during request construction
@@ -368,9 +389,9 @@ pub(super) fn render_test_method(
                 } else {
                     ".asSequence().toList()"
                 };
-                format!("client.{function_name}({args_str}){collect_suffix}")
+                format!("{call_receiver}.{function_name}({args_str}){collect_suffix}")
             } else {
-                format!("client.{function_name}({args_str})")
+                format!("{call_receiver}.{function_name}({args_str})")
             };
             let _ = writeln!(out, "        assertFailsWith<Exception> {{");
             for line in &deser_lines {
@@ -402,7 +423,10 @@ pub(super) fn render_test_method(
             out,
             "        val client = {class_name_for_call}.{factory}(apiKey = \"test-key\", baseUrl = {mock_url_expr})"
         );
-        let _ = writeln!(out, "        val {result_var} = client.{function_name}({args_str})");
+        let _ = writeln!(
+            out,
+            "        val {result_var} = {call_receiver}.{function_name}({args_str})"
+        );
         if !collect_snippet.is_empty() {
             let _ = writeln!(out, "        {collect_snippet}");
         }
@@ -426,7 +450,10 @@ pub(super) fn render_test_method(
         return;
     }
 
-    // Flat-function call style (no client_factory).
+    // Flat-function call style (no client_factory). For a streaming owner_type
+    // adapter the call is an instance method on the owner handle rather than a
+    // static facade call.
+    let call_receiver = streaming_owner_handle.as_deref().unwrap_or(class_name_for_call);
     if expects_error {
         // Wrap setup + call in assertFailsWith so validation errors thrown
         // during engine creation are also caught (mirrors Java's assertThrows).
@@ -437,7 +464,7 @@ pub(super) fn render_test_method(
         for line in &setup_lines {
             let _ = writeln!(out, "            {line}");
         }
-        let _ = writeln!(out, "            {class_name_for_call}.{function_name}({args_str})");
+        let _ = writeln!(out, "            {call_receiver}.{function_name}({args_str})");
         let _ = writeln!(out, "        }}");
         // Trailing Unit — see comment in the client-factory branch above.
         let _ = writeln!(out, "        Unit");
@@ -451,7 +478,7 @@ pub(super) fn render_test_method(
 
     let _ = writeln!(
         out,
-        "        val {result_var} = {class_name_for_call}.{function_name}({args_str})"
+        "        val {result_var} = {call_receiver}.{function_name}({args_str})"
     );
 
     if !collect_snippet.is_empty() {
@@ -475,4 +502,166 @@ pub(super) fn render_test_method(
     }
 
     let _ = writeln!(out, "    }}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::config::extras::{AdapterConfig, AdapterPattern};
+    use crate::e2e::config::{ArgMapping, CallConfig};
+
+    fn handle_arg(name: &str) -> ArgMapping {
+        ArgMapping {
+            name: name.to_string(),
+            field: format!("input.{name}"),
+            arg_type: "handle".to_string(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }
+    }
+
+    fn string_arg(name: &str) -> ArgMapping {
+        ArgMapping {
+            name: name.to_string(),
+            field: format!("input.{name}"),
+            arg_type: "string".to_string(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }
+    }
+
+    /// Synthetic streaming `owner_type` adapter for `function_name`, matching
+    /// the shape declared by `[[crates.adapters]]` in `alef.toml`.
+    fn streaming_owner_adapter(function_name: &str, owner_type: &str) -> AdapterConfig {
+        AdapterConfig {
+            name: function_name.to_string(),
+            pattern: AdapterPattern::Streaming,
+            core_path: format!("test_core::{function_name}"),
+            params: Vec::new(),
+            returns: None,
+            error_type: None,
+            owner_type: Some(owner_type.to_string()),
+            item_type: Some("Item".to_string()),
+            gil_release: false,
+            trait_name: None,
+            trait_method: None,
+            detect_async: false,
+            request_type: None,
+            skip_languages: Vec::new(),
+        }
+    }
+
+    fn render(call: CallConfig, adapters: Vec<AdapterConfig>) -> String {
+        let fixture = Fixture {
+            id: "call_fixture".to_string(),
+            description: "call fixture".to_string(),
+            input: serde_json::json!({ "handle": {}, "url": "https://example.com" }),
+            ..Fixture::default()
+        };
+        let e2e_config = E2eConfig {
+            call,
+            ..E2eConfig::default()
+        };
+        let config = ResolvedCrateConfig {
+            adapters,
+            ..ResolvedCrateConfig::default()
+        };
+        let mut out = String::new();
+        render_test_method(
+            &mut out,
+            &fixture,
+            "Facade",
+            "",
+            "",
+            &[],
+            None,
+            false,
+            &e2e_config,
+            &std::collections::HashMap::new(),
+            false,
+            &config,
+            &[],
+        );
+        out
+    }
+
+    /// A streaming call routed through a `[[crates.adapters]]` entry with
+    /// `owner_type` set must be rendered as an instance method on the owner
+    /// handle (`handle.streamItems(...)`), never as a static facade call that
+    /// passes the handle as a positional argument. Mirrors the Java e2e
+    /// backend's `streaming_owner_handle` behavior (java/test_method.rs).
+    #[test]
+    fn streaming_owner_type_adapter_uses_handle_as_instance_receiver() {
+        let call = CallConfig {
+            function: "stream_items".to_string(),
+            result_var: "result".to_string(),
+            args: vec![handle_arg("handle"), string_arg("url")],
+            ..CallConfig::default()
+        };
+        let out = render(call, vec![streaming_owner_adapter("stream_items", "Engine")]);
+
+        assert!(
+            out.contains("val result = handle.streamItems(\"https://example.com\")"),
+            "expected an instance call on the owner handle, got:\n{out}"
+        );
+        assert!(
+            !out.contains("Facade.streamItems"),
+            "must not emit a static facade call for a streaming owner_type adapter, got:\n{out}"
+        );
+        assert!(
+            out.contains("val handle = Facade.createHandle(null)"),
+            "the handle's construction line must still be emitted, got:\n{out}"
+        );
+        assert!(
+            !out.contains("streamItems(handle, "),
+            "the handle must not also appear as a positional argument, got:\n{out}"
+        );
+    }
+
+    /// Regression guard: a call with no adapter entry (or an adapter that is
+    /// not both `Streaming` and `owner_type`-bearing) must keep the plain
+    /// static-facade call shape, with the handle passed positionally.
+    #[test]
+    fn non_owner_type_call_keeps_static_facade_call_with_handle_positional() {
+        let call = CallConfig {
+            function: "do_thing".to_string(),
+            result_var: "result".to_string(),
+            args: vec![handle_arg("handle"), string_arg("url")],
+            ..CallConfig::default()
+        };
+
+        // No adapters at all.
+        let out_no_adapter = render(call.clone(), Vec::new());
+        assert!(
+            out_no_adapter.contains("val result = Facade.doThing(handle, \"https://example.com\")"),
+            "expected an unchanged static facade call, got:\n{out_no_adapter}"
+        );
+
+        // A non-streaming adapter for the same function must not trigger the
+        // instance-receiver path either.
+        let mut non_streaming = streaming_owner_adapter("do_thing", "Engine");
+        non_streaming.pattern = AdapterPattern::SyncFunction;
+        let out_sync = render(call.clone(), vec![non_streaming]);
+        assert!(
+            out_sync.contains("val result = Facade.doThing(handle, \"https://example.com\")"),
+            "a non-streaming adapter must not switch to an instance receiver, got:\n{out_sync}"
+        );
+
+        // A streaming adapter with no owner_type must not trigger it either.
+        let mut streaming_no_owner = streaming_owner_adapter("do_thing", "Engine");
+        streaming_no_owner.owner_type = None;
+        let out_no_owner = render(call, vec![streaming_no_owner]);
+        assert!(
+            out_no_owner.contains("val result = Facade.doThing(handle, \"https://example.com\")"),
+            "a streaming adapter without owner_type must not switch to an instance receiver, got:\n{out_no_owner}"
+        );
+    }
 }
