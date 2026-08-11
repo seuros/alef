@@ -59,6 +59,19 @@ fn test_generate_bindings_output_path_is_nif_not_rustler() {
     );
 }
 
+#[test]
+fn generated_elixir_api_does_not_expose_environment_mutation() {
+    let config = test_config();
+    let api = test_api();
+    let backend = RustlerBackend;
+
+    let native_files = backend.generate_bindings(&api, &config).unwrap();
+    assert!(native_files.iter().all(|file| !file.content.contains("set_env")));
+
+    let public_files = backend.generate_public_api(&api, &config).unwrap();
+    assert!(public_files.iter().all(|file| !file.content.contains("def set_env")));
+}
+
 /// The `crate:` field in native.ex must match the `[package] name` in the scaffold's Cargo.toml.
 /// Both must be `{app_name}_nif` so rustler_precompiled can locate the shared library.
 #[test]

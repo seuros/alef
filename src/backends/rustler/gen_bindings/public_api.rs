@@ -5,7 +5,6 @@ use crate::backends::rustler::gen_bindings::public_api_args::{
     emit_tagged_enum_encoder, json_encode_param_indices, keyword_nif_arg, nif_arg, tagged_enum_param_map,
 };
 use crate::backends::rustler::gen_bindings::public_api_delegates::append_trait_bridge_delegates;
-use crate::backends::rustler::gen_bindings::public_api_patches::patch_native_stub_module;
 use crate::backends::rustler::gen_bindings::public_files::{self, PublicFileContext};
 use crate::backends::rustler::template_env;
 use crate::core::backend::GeneratedFile;
@@ -817,8 +816,6 @@ pub(super) fn generate_public_api(
         content,
         generated_header: false,
     });
-
-    patch_native_stub_module(&mut files, config);
 
     Ok(files)
 }

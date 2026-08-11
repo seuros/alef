@@ -517,13 +517,6 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
         builder.add_item(&gen_from_json_nif(typ, &core_import));
     }
 
-    builder.add_item(
-        "#[rustler::nif]\npub fn set_env(key: String, value: String) -> bool {\n    \
-         // SAFETY: called once from the e2e harness during setup before extraction\n    \
-         // NIFs run on other scheduler threads, so no concurrent env access.\n    \
-         unsafe { std::env::set_var(&key, &value); }\n    true\n}\n",
-    );
-
     builder.add_item(&gen_nif_init(api, config, &exclude_functions, &exclude_types));
 
     let content = builder.build();
