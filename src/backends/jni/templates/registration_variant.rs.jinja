@@ -9,6 +9,7 @@ pub extern "system" fn {{ symbol }}(
     handler: JObject,
     {{ free_params_decl }}
 ) -> jint {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
     // Validate owner handle
     if owner_handle == 0 {
         return 1; // Error: null pointer
@@ -52,4 +53,5 @@ pub extern "system" fn {{ symbol }}(
         Ok(_) => 0, // Success
         Err(_) => 5, // Error: registration failed
     }
+    })).unwrap_or(6)
 }

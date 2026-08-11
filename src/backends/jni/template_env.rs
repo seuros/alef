@@ -216,6 +216,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn destructor_template_contains_panics() {
+        let output = render(
+            "destructor_shim.rs.jinja",
+            minijinja::context! { symbol => "Java_dev_sample_free", type_name => "Sample" },
+        );
+
+        assert!(output.contains("std::panic::catch_unwind"));
+    }
+
+    #[test]
     fn crate_headers_contain_implementation_only_unsafe_lints() {
         let header = render(
             "lib_header.rs.jinja",

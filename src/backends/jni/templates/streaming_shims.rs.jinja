@@ -83,7 +83,9 @@ pub unsafe extern "system" fn {{ free_sym }}(
     _class: JClass,
     stream_handle: jlong,
 ) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
     if stream_handle == 0 { return; }
     // SAFETY: stream_handle was produced by the matching Start shim.
     unsafe { let _ = Box::from_raw(stream_handle as *mut {{ stream_handle_type }}); }
+    }));
 }

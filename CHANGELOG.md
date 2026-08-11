@@ -84,6 +84,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Generated cbindgen configuration now maps correctly escaped Rust feature predicates to prefixed C macros so
   feature-gated declarations remain guarded in public headers.
 
+- Generated JNI service lifecycle, registration, and destructor entry points now catch Rust panics before they can
+  unwind across the JVM ABI boundary.
+
 - Attaching a visitor to an FFI options handle now transfers ownership into one synchronized object, preventing multiple
   independent mutexes from aliasing the same mutable visitor; Go wrappers honor the transfer.
 

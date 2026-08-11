@@ -641,6 +641,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn rust_output_contains_panic_guards_for_service_entrypoints() {
+        let surface = make_fixture_surface();
+        let config = make_test_config();
+        let output = gen_service_rs(&surface, &config);
+
+        assert!(
+            output.matches("std::panic::catch_unwind").count() >= 4,
+            "every generated service constructor, destructor, registration, and entrypoint must catch panics: {output}"
+        );
+        assert!(
+            output.contains("std::panic::AssertUnwindSafe"),
+            "JNI panic guards must accept service owners and JNI handles: {output}"
+        );
+    }
+
     /// `gen_service_rs` emits the handler bridge impl with async dispatch.
     #[test]
     fn rust_output_contains_handler_bridge_impl() {

@@ -9,6 +9,7 @@ pub extern "system" fn {{ symbol }}(
     _class: JClass,
     owner_handle: jlong{{ params_decl }}
 ) -> jlong {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
     // Validate owner handle
     if owner_handle == 0 {
         return 0; // Error: null pointer
@@ -28,4 +29,5 @@ pub extern "system" fn {{ symbol }}(
         // Finalize returns the transformed result; caller decides what to do with it
         owner_handle
     }
+    })).unwrap_or(0)
 }

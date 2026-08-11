@@ -9,6 +9,7 @@ pub extern "system" fn {{ symbol }}(
     _class: JClass,
     owner_handle: jlong{{ params_decl }}
 ) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
     // Validate owner handle
     if owner_handle == 0 {
         return;
@@ -26,4 +27,5 @@ pub extern "system" fn {{ symbol }}(
 
         let _ = rt.block_on(owner_ref.{{ ep_method }}({{ call_args }}));
     }
+    }));
 }
