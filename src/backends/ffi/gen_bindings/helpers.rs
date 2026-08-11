@@ -490,7 +490,7 @@ fn cbindgen_feature_defines(api: &crate::core::ir::ApiSurface, prefix_upper: &st
                 })
                 .collect::<String>();
             (
-                format!("feature = \"{feature}\""),
+                format!(r#"feature = \"{feature}\""#),
                 format!("{prefix_upper}_FEATURE_{macro_name}"),
             )
         })
