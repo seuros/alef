@@ -380,6 +380,7 @@ pub(super) fn gen_cbindgen_toml(
     exclude_types: &std::collections::BTreeSet<String>,
 ) -> String {
     let prefix_upper = prefix.to_uppercase();
+    let feature_defines = cbindgen_feature_defines(api, &prefix_upper);
 
     let capsule_used_as_opaque: std::collections::HashSet<&str> = api
         .types
@@ -457,9 +458,58 @@ pub(super) fn gen_cbindgen_toml(
         minijinja::context! {
             prefix_upper => &prefix_upper,
             after_includes => &after_includes,
+            feature_defines => feature_defines,
             export_exclude => exclude_types.iter().cloned().collect::<Vec<_>>(),
         },
     )
+}
+
+fn cbindgen_feature_defines(api: &crate::core::ir::ApiSurface, prefix_upper: &str) -> Vec<(String, String)> {
+    let mut cfgs = api
+        .types
+        .iter()
+        .filter_map(|item| item.cfg.as_deref())
+        .chain(api.enums.iter().filter_map(|item| item.cfg.as_deref()))
+        .chain(api.functions.iter().filter_map(|item| item.cfg.as_deref()))
+        .chain(api.services.iter().filter_map(|item| item.cfg.as_deref()));
+    let mut features = std::collections::BTreeSet::new();
+    for cfg in &mut cfgs {
+        collect_cfg_feature_names(cfg, &mut features);
+    }
+    features
+        .into_iter()
+        .map(|feature| {
+            let macro_name = feature
+                .chars()
+                .map(|character| {
+                    if character.is_ascii_alphanumeric() {
+                        character.to_ascii_uppercase()
+                    } else {
+                        '_'
+                    }
+                })
+                .collect::<String>();
+            (
+                format!("feature = \"{feature}\""),
+                format!("{prefix_upper}_FEATURE_{macro_name}"),
+            )
+        })
+        .collect()
+}
+
+fn collect_cfg_feature_names<'a>(cfg: &'a str, features: &mut std::collections::BTreeSet<&'a str>) {
+    const FEATURE_PREFIX: &str = "feature = \"";
+    let mut remainder = cfg;
+    while let Some(start) = remainder.find(FEATURE_PREFIX) {
+        let value = &remainder[start + FEATURE_PREFIX.len()..];
+        let Some(end) = value.find('"') else {
+            return;
+        };
+        if end > 0 {
+            features.insert(&value[..end]);
+        }
+        remainder = &value[end + 1..];
+    }
 }
 
 fn bare_rust_type_name(name: &str) -> Option<String> {

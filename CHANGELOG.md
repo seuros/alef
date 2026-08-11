@@ -69,6 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Visitor callback payloads now use their reported byte length and an allocator-matched host destructor instead of
   reconstructing host allocations with Rust's global allocator; Go, C#, and Java callback tables provide the destructor.
 
+- Generated cbindgen configuration now maps Rust feature predicates to prefixed C macros so feature-gated declarations
+  remain guarded in public headers.
+
 - Attaching a visitor to an FFI options handle now transfers ownership into one synchronized object, preventing multiple
   independent mutexes from aliasing the same mutable visitor; Go wrappers honor the transfer.
 

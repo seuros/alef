@@ -9,6 +9,9 @@ after_includes = {{ after_includes }}
 {% endif %}
 [defines]
 "target_os = windows" = "SKIF_WINDOWS"
+{% for cfg, macro_name in feature_defines %}
+"{{ cfg }}" = "{{ macro_name }}"
+{% endfor %}
 
 [export]
 prefix = "{{ prefix_upper }}"

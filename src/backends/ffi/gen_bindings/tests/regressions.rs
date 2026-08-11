@@ -5,6 +5,48 @@ use crate::core::backend::Backend;
 use crate::core::ir::*;
 
 #[test]
+fn cbindgen_maps_feature_gates_to_header_macros() {
+    let config = resolved_one(
+        r#"
+[workspace]
+languages = ["ffi"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+
+[crates.ffi]
+prefix = "sample"
+"#,
+    );
+    let mut api = ApiSurface {
+        crate_name: "sample-lib".to_string(),
+        version: "1.0.0".to_string(),
+        ..ApiSurface::default()
+    };
+    api.functions.push(FunctionDef {
+        name: "render".to_string(),
+        rust_path: "sample_lib::render".to_string(),
+        cfg: Some(r#"all(feature = "document-render", feature = "native")"#.to_string()),
+        ..FunctionDef::default()
+    });
+
+    let files = FfiBackend.generate_bindings(&api, &config).unwrap();
+    let cbindgen = files.iter().find(|file| file.path.ends_with("cbindgen.toml")).unwrap();
+
+    assert!(
+        cbindgen
+            .content
+            .contains(r#""feature = \"document-render\"" = "SAMPLE_FEATURE_DOCUMENT_RENDER""#)
+    );
+    assert!(
+        cbindgen
+            .content
+            .contains(r#""feature = \"native\"" = "SAMPLE_FEATURE_NATIVE""#)
+    );
+}
+
+#[test]
 fn test_legacy_visitor_callbacks_use_configured_function_signature() {
     let config = resolved_one(
         r#"
