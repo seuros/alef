@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated FFI and JNI crate roots now contain Rust 2024 unsafe implementation lints, allowing consumers to inherit
+  strict workspace lint policy without warnings from generated glue.
+
 - Managed TOML scaffold manifests now carry Alef provenance, preserve unknown user tables during structured refresh,
   and participate in `alef diff`; write-once scaffold seeds remain untouched.
 

@@ -86,6 +86,11 @@ result_type = "VisitResult"
     let files = backend.generate_bindings(&api, &config).unwrap();
     let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
 
+    assert!(
+        lib.content
+            .contains("#![allow(unsafe_op_in_unsafe_fn, unsafe_attr_outside_unsafe)]"),
+        "generated FFI crate must contain implementation-only unsafe lints"
+    );
     assert!(lib.content.contains("fn doc_render_document("));
     assert!(lib.content.contains("fn doc_render_document_with_visitor("));
     assert!(lib.content.contains("settings: *const my_lib::RenderSettings"));

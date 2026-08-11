@@ -210,3 +210,23 @@ fn make_env() -> Environment<'static> {
     }
     env
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crate_headers_contain_implementation_only_unsafe_lints() {
+        let header = render(
+            "lib_header.rs.jinja",
+            minijinja::context! { core_crate => "sample", error_class => "SampleError", crate_attributes => Vec::<String>::new() },
+        );
+        let service = render("service_header.rs.jinja", minijinja::context! {});
+        for output in [header, service] {
+            assert!(
+                output.contains("#![allow(unsafe_op_in_unsafe_fn, unsafe_attr_outside_unsafe)]"),
+                "{output}"
+            );
+        }
+    }
+}
