@@ -68,17 +68,21 @@ fn emit_r_visitor_method(out: &mut String, method_name: &str, action: &CallbackA
     let _ = writeln!(out, "    {method_name} = function({params}) {{");
     match action {
         CallbackAction::Skip => {
-            let _ = writeln!(out, "      \"Skip\"");
+            let _ = writeln!(out, "      \"{}\"", action.wire_name());
         }
         CallbackAction::Continue => {
-            let _ = writeln!(out, "      \"Continue\"");
+            let _ = writeln!(out, "      \"{}\"", action.wire_name());
         }
         CallbackAction::PreserveHtml => {
-            let _ = writeln!(out, "      \"PreserveHtml\"");
+            let _ = writeln!(out, "      \"{}\"", action.wire_name());
         }
         CallbackAction::Custom { output } => {
             let escaped = escape_r(output);
-            let _ = writeln!(out, "      list(Custom = \"{escaped}\")");
+            let _ = writeln!(
+                out,
+                "      list(type = \"{}\", output = \"{escaped}\")",
+                action.wire_name()
+            );
         }
         CallbackAction::CustomTemplate { template, return_form } => {
             let r_expr = r_template_to_paste0(template);
@@ -87,10 +91,32 @@ fn emit_r_visitor_method(out: &mut String, method_name: &str, action: &CallbackA
                     let _ = writeln!(out, "      {r_expr}");
                 }
                 TemplateReturnForm::Dict => {
-                    let _ = writeln!(out, "      list(Custom = {r_expr})");
+                    let _ = writeln!(out, "      list(type = \"{}\", output = {r_expr})", action.wire_name());
                 }
             }
         }
     }
     let _ = writeln!(out, "    }},");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn visitor_actions_use_canonical_wire_shape() {
+        let mut continued = String::new();
+        emit_r_visitor_method(&mut continued, "visit_text", &CallbackAction::Continue);
+        assert!(continued.contains(r#""continue""#));
+
+        let mut custom = String::new();
+        emit_r_visitor_method(
+            &mut custom,
+            "visit_text",
+            &CallbackAction::Custom {
+                output: "replacement".to_string(),
+            },
+        );
+        assert!(custom.contains(r#"list(type = "custom", output = "replacement")"#));
+    }
 }

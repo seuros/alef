@@ -76,6 +76,18 @@ pub enum CallbackAction {
     },
 }
 
+impl CallbackAction {
+    /// Canonical serde action tag consumed by every generated visitor bridge.
+    pub fn wire_name(&self) -> &'static str {
+        match self {
+            Self::Skip => "skip",
+            Self::Continue => "continue",
+            Self::PreserveHtml => "preserve_html",
+            Self::Custom { .. } | Self::CustomTemplate { .. } => "custom",
+        }
+    }
+}
+
 /// A single e2e test fixture.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
