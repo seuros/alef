@@ -72,6 +72,7 @@ pub fn generate_e2e(
     languages: Option<&[String]>,
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) -> Result<Vec<GeneratedFile>> {
     let fixtures_dir = Path::new(&e2e_config.fixtures);
     let fixtures = load_fixtures(fixtures_dir)
@@ -200,6 +201,7 @@ pub fn generate_e2e(
             config,
             type_defs,
             enums,
+            functions,
         )?;
         report_snippet_coverage(&report.coverage);
         let coverage_content =

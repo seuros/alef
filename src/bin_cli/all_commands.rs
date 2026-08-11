@@ -283,7 +283,14 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         }
                     } else {
                         tracing::info!("Generating e2e test suites...");
-                        let files = crate::e2e::generate_e2e(resolved_cfg, e2e_config, None, &api.types, &api.enums)?;
+                        let files = crate::e2e::generate_e2e(
+                            resolved_cfg,
+                            e2e_config,
+                            None,
+                            &api.types,
+                            &api.enums,
+                            &api.functions,
+                        )?;
                         e2e_count = pipeline::write_scaffold_files_with_overwrite(&files, &base_dir, true)?;
                         crate::e2e::format::run_formatters(&files, e2e_config);
 
@@ -313,8 +320,14 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         registry_e2e_config.dep_mode = crate::core::config::e2e::DependencyMode::Registry;
                         let registry_e2e_ref = &registry_e2e_config;
 
-                        let files =
-                            crate::e2e::generate_e2e(resolved_cfg, registry_e2e_ref, None, &api.types, &api.enums)?;
+                        let files = crate::e2e::generate_e2e(
+                            resolved_cfg,
+                            registry_e2e_ref,
+                            None,
+                            &api.types,
+                            &api.enums,
+                            &api.functions,
+                        )?;
                         let test_apps_count = pipeline::write_scaffold_files_with_overwrite(&files, &base_dir, true)?;
                         e2e_count += test_apps_count;
                         crate::e2e::format::run_formatters(&files, registry_e2e_ref);

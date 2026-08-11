@@ -227,6 +227,18 @@ pub trait E2eCodegen: Send + Sync {
         )
     }
 
+    fn render_snippet_body_with_functions(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[TypeDef],
+        enums: &[EnumDef],
+        _functions: &[crate::core::ir::FunctionDef],
+    ) -> Result<String> {
+        self.render_snippet_body(fixture, e2e_config, config, type_defs, enums)
+    }
+
     /// Language name for display and directory naming.
     fn language_name(&self) -> &'static str;
 }

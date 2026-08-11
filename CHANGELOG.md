@@ -31,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - C documentation snippets now construct whole-input typed DTO handles from the public JSON API, preserve file-backed
   byte inputs, and free owned handles instead of omitting required arguments or passing placeholder nulls.
 
+- Standalone C documentation snippets now construct every JSON argument with its declared ABI type and derive opaque
+  return handles from extracted function metadata instead of call-name guesses or shared placeholder option types.
+
 - Rust documentation snippet validation now checks compatible uncached cells as binaries in one Cargo invocation,
   while retaining per-cell diagnostics, cache entries, session isolation, and deterministic result ordering.
 

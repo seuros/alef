@@ -288,7 +288,7 @@ pub(super) fn emit_nested_accessor(
 pub(super) fn build_args_string_c(
     input: &serde_json::Value,
     args: &[crate::e2e::config::ArgMapping],
-    has_options_handle: bool,
+    typed_arg_handles: &HashMap<String, String>,
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
     fixture: &Fixture,
@@ -338,8 +338,8 @@ pub(super) fn build_args_string_c(
             v => {
                 // For json_object args, use the options_handle pointer
                 // instead of the raw JSON string.
-                if arg.arg_type == "json_object" && has_options_handle {
-                    parts.push("options_handle".to_string())
+                if let Some(handle) = typed_arg_handles.get(&arg.name) {
+                    parts.push(handle.clone())
                 } else {
                     parts.push(json_to_c(v))
                 }

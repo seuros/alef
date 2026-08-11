@@ -87,6 +87,7 @@ struct SnippetRenderContext<'a> {
     crate_config: &'a ResolvedCrateConfig,
     type_defs: &'a [TypeDef],
     enums: &'a [EnumDef],
+    functions: &'a [crate::core::ir::FunctionDef],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,14 +124,22 @@ pub fn generate_snippets(
     crate_config: &ResolvedCrateConfig,
     type_defs: &[TypeDef],
     enums: &[EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) -> Result<Vec<GeneratedFile>> {
-    Ok(
-        generate_snippet_report(fixtures, languages, e2e, snippets, crate_config, type_defs, enums)?
-            .snippets
-            .into_iter()
-            .map(|snippet| snippet.file)
-            .collect(),
-    )
+    Ok(generate_snippet_report(
+        fixtures,
+        languages,
+        e2e,
+        snippets,
+        crate_config,
+        type_defs,
+        enums,
+        functions,
+    )?
+    .snippets
+    .into_iter()
+    .map(|snippet| snippet.file)
+    .collect())
 }
 
 pub fn generate_snippet_artifacts(
@@ -141,8 +150,19 @@ pub fn generate_snippet_artifacts(
     crate_config: &ResolvedCrateConfig,
     type_defs: &[TypeDef],
     enums: &[EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) -> Result<Vec<GeneratedSnippet>> {
-    Ok(generate_snippet_report(fixtures, languages, e2e, snippets, crate_config, type_defs, enums)?.snippets)
+    Ok(generate_snippet_report(
+        fixtures,
+        languages,
+        e2e,
+        snippets,
+        crate_config,
+        type_defs,
+        enums,
+        functions,
+    )?
+    .snippets)
 }
 
 pub fn generate_snippet_report(
@@ -153,6 +173,7 @@ pub fn generate_snippet_report(
     crate_config: &ResolvedCrateConfig,
     type_defs: &[TypeDef],
     enums: &[EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) -> Result<SnippetGenerationReport> {
     crate::with_extensions(|extensions| {
         let context = SnippetRenderContext {
@@ -160,6 +181,7 @@ pub fn generate_snippet_report(
             crate_config,
             type_defs,
             enums,
+            functions,
         };
         generate_snippet_report_with_extensions(fixtures, languages, snippets, &context, extensions)
     })
@@ -363,12 +385,13 @@ fn render_snippet_body(
         bail!("{kind} fixture requires an extension-owned documentation recipe");
     }
     let body = generator
-        .render_snippet_body(
+        .render_snippet_body_with_functions(
             fixture,
             context.e2e,
             context.crate_config,
             context.type_defs,
             context.enums,
+            context.functions,
         )
         .map_err(|error| anyhow::anyhow!("built-in `{language}` snippet recipe is incompatible: {error:#}"))?;
     if body.trim().is_empty() {
@@ -831,6 +854,7 @@ mod tests {
             crate_config: &crate_config,
             type_defs: &[],
             enums: &[],
+            functions: &[],
         };
 
         let report = generate_snippet_report_with_extensions(
@@ -867,6 +891,7 @@ mod tests {
             crate_config: &crate_config,
             type_defs: &[],
             enums: &[],
+            functions: &[],
         };
 
         let report =
@@ -903,6 +928,7 @@ mod tests {
             crate_config: &crate_config,
             type_defs: &[],
             enums: &[],
+            functions: &[],
         };
 
         let report = generate_snippet_report_with_extensions(
@@ -936,6 +962,7 @@ mod tests {
             crate_config: &crate_config,
             type_defs: &[],
             enums: &[],
+            functions: &[],
         };
 
         let report = generate_snippet_report_with_extensions(
@@ -1004,6 +1031,7 @@ mod tests {
             crate_config: &crate_config,
             type_defs: &[],
             enums: &[],
+            functions: &[],
         };
 
         let report = generate_snippet_report_with_extensions(
@@ -1042,6 +1070,7 @@ mod tests {
             crate_config: &crate_config,
             type_defs: &[],
             enums: &[],
+            functions: &[],
         };
 
         let report =
@@ -1068,6 +1097,7 @@ mod tests {
             crate_config: &crate_config,
             type_defs: &[],
             enums: &[],
+            functions: &[],
         };
 
         for language in ["brew", "homebrew"] {
@@ -1105,6 +1135,7 @@ mod tests {
             crate_config: &crate_config,
             type_defs: &[],
             enums: &[],
+            functions: &[],
         };
 
         let report =

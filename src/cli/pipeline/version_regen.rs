@@ -83,7 +83,7 @@ pub(super) fn regenerate_test_apps_after_sync(
 
     let api = extract(&fresh_config, config_path, false)?;
 
-    let generated = crate::e2e::generate_e2e(&fresh_config, e2e_ref, None, &api.types, &api.enums)?;
+    let generated = crate::e2e::generate_e2e(&fresh_config, e2e_ref, None, &api.types, &api.enums, &api.functions)?;
     if generated.is_empty() {
         return Ok(0);
     }

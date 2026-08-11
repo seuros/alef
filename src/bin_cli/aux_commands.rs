@@ -135,7 +135,14 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             this_e2e_config
                         };
                         let languages = lang.as_deref();
-                        let files = crate::e2e::generate_e2e(e2e_crate, e2e_ref, languages, &api.types, &api.enums)?;
+                        let files = crate::e2e::generate_e2e(
+                            e2e_crate,
+                            e2e_ref,
+                            languages,
+                            &api.types,
+                            &api.enums,
+                            &api.functions,
+                        )?;
                         let sources_hash = cache::sources_hash(&e2e_crate.sources)?;
                         let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
                         let count = pipeline::write_scaffold_files_with_overwrite(&files, &base_dir, true)?;
@@ -197,6 +204,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         resolved_cfg,
                         &api.types,
                         &api.enums,
+                        &api.functions,
                     )?;
                     let entries = crate::e2e::snippets::migration::compare_root(
                         &existing_root,
@@ -367,7 +375,14 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                         tracing::info!("Generating registry-mode test apps...");
                         let languages = lang.as_deref();
-                        let files = crate::e2e::generate_e2e(e2e_crate, e2e_ref, languages, &api.types, &api.enums)?;
+                        let files = crate::e2e::generate_e2e(
+                            e2e_crate,
+                            e2e_ref,
+                            languages,
+                            &api.types,
+                            &api.enums,
+                            &api.functions,
+                        )?;
                         let sources_hash = cache::sources_hash(&e2e_crate.sources)?;
                         let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
                         let count = pipeline::write_scaffold_files_with_overwrite(&files, &base_dir, true)?;

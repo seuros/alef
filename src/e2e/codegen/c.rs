@@ -332,50 +332,72 @@ impl E2eCodegen for CCodegen {
         type_defs: &[crate::core::ir::TypeDef],
         _enums: &[crate::core::ir::EnumDef],
     ) -> Result<String> {
-        let mut info = resolve_fixture_call_info(fixture, e2e_config, "c");
-        let call = e2e_config.resolve_call_for_fixture(
-            fixture.call.as_deref(),
-            &fixture.id,
-            &fixture.resolved_category(),
-            &fixture.tags,
-            &fixture.input,
-        );
-        let prefix = call
-            .overrides
-            .get("c")
-            .and_then(|value| value.prefix.clone())
-            .or_else(|| config.ffi.as_ref().and_then(|value| value.prefix.clone()))
-            .unwrap_or_else(|| config.ffi_prefix());
-        if !prefix.is_empty() && !info.function_name.starts_with(&format!("{prefix}_")) {
-            info.function_name = format!("{prefix}_{}", info.function_name);
-        }
-        let header = call
-            .overrides
-            .get("c")
-            .and_then(|value| value.header.clone())
-            .unwrap_or_else(|| config.ffi_header_name());
-        let resolver = FieldResolver::new(
-            e2e_config.effective_fields(call),
-            e2e_config.effective_fields_optional(call),
-            e2e_config.effective_result_fields(call),
-            e2e_config.effective_fields_array(call),
-            e2e_config.effective_fields_method_calls(call),
-        );
-        test_function::render_snippet_body(test_function::SnippetContext {
-            fixture,
-            e2e_config,
-            header: &header,
-            prefix: &prefix,
-            info: &info,
-            field_resolver: &resolver,
-            config,
-            type_defs,
-        })
+        render_c_snippet(fixture, e2e_config, config, type_defs, &[])
+    }
+
+    fn render_snippet_body_with_functions(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        _enums: &[crate::core::ir::EnumDef],
+        functions: &[crate::core::ir::FunctionDef],
+    ) -> Result<String> {
+        render_c_snippet(fixture, e2e_config, config, type_defs, functions)
     }
 
     fn language_name(&self) -> &'static str {
         "c"
     }
+}
+
+fn render_c_snippet(
+    fixture: &Fixture,
+    e2e_config: &E2eConfig,
+    config: &ResolvedCrateConfig,
+    type_defs: &[crate::core::ir::TypeDef],
+    functions: &[crate::core::ir::FunctionDef],
+) -> Result<String> {
+    let mut info = resolve_fixture_call_info(fixture, e2e_config, "c", functions);
+    let call = e2e_config.resolve_call_for_fixture(
+        fixture.call.as_deref(),
+        &fixture.id,
+        &fixture.resolved_category(),
+        &fixture.tags,
+        &fixture.input,
+    );
+    let prefix = call
+        .overrides
+        .get("c")
+        .and_then(|value| value.prefix.clone())
+        .or_else(|| config.ffi.as_ref().and_then(|value| value.prefix.clone()))
+        .unwrap_or_else(|| config.ffi_prefix());
+    if !prefix.is_empty() && !info.function_name.starts_with(&format!("{prefix}_")) {
+        info.function_name = format!("{prefix}_{}", info.function_name);
+    }
+    let header = call
+        .overrides
+        .get("c")
+        .and_then(|value| value.header.clone())
+        .unwrap_or_else(|| config.ffi_header_name());
+    let resolver = FieldResolver::new(
+        e2e_config.effective_fields(call),
+        e2e_config.effective_fields_optional(call),
+        e2e_config.effective_result_fields(call),
+        e2e_config.effective_fields_array(call),
+        e2e_config.effective_fields_method_calls(call),
+    );
+    test_function::render_snippet_body(test_function::SnippetContext {
+        fixture,
+        e2e_config,
+        header: &header,
+        prefix: &prefix,
+        info: &info,
+        field_resolver: &resolver,
+        config,
+        type_defs,
+    })
 }
 
 /// Resolve per-call-config C-specific settings for a given call config and lang.
@@ -403,7 +425,7 @@ struct ResolvedCallInfo {
     extra_args: Vec<String>,
 }
 
-fn resolve_call_info(call: &CallConfig, lang: &str) -> ResolvedCallInfo {
+fn resolve_call_info(call: &CallConfig, lang: &str, functions: &[crate::core::ir::FunctionDef]) -> ResolvedCallInfo {
     let overrides = call.overrides.get(lang);
     let function_name = overrides
         .and_then(|o| o.function.as_ref())
@@ -416,6 +438,7 @@ fn resolve_call_info(call: &CallConfig, lang: &str) -> ResolvedCallInfo {
     let result_type_name = overrides
         .and_then(|o| o.result_type.as_ref())
         .cloned()
+        .or_else(|| resolve_ir_result_type(call, functions))
         .unwrap_or_else(|| call.function.to_pascal_case());
     let options_type_name = overrides
         .and_then(|o| o.options_type.as_deref())
@@ -453,12 +476,29 @@ fn resolve_call_info(call: &CallConfig, lang: &str) -> ResolvedCallInfo {
     }
 }
 
+fn resolve_ir_result_type(call: &CallConfig, functions: &[crate::core::ir::FunctionDef]) -> Option<String> {
+    let function = functions.iter().find(|function| function.name == call.function)?;
+    match &function.return_type {
+        crate::core::ir::TypeRef::Named(name) => Some(name.clone()),
+        crate::core::ir::TypeRef::Optional(inner) => match inner.as_ref() {
+            crate::core::ir::TypeRef::Named(name) => Some(name.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Resolve call info for a fixture, with fallback to default call's client_factory.
 ///
 /// Named call configs (e.g. `[e2e.calls.embed]`) may not repeat the `client_factory`
 /// setting. We fall back to the default `[e2e.call]` override's client_factory so that
 /// all methods on the same client use the same pattern.
-fn resolve_fixture_call_info(fixture: &Fixture, e2e_config: &E2eConfig, lang: &str) -> ResolvedCallInfo {
+fn resolve_fixture_call_info(
+    fixture: &Fixture,
+    e2e_config: &E2eConfig,
+    lang: &str,
+    functions: &[crate::core::ir::FunctionDef],
+) -> ResolvedCallInfo {
     let call = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
         &fixture.id,
@@ -466,7 +506,7 @@ fn resolve_fixture_call_info(fixture: &Fixture, e2e_config: &E2eConfig, lang: &s
         &fixture.tags,
         &fixture.input,
     );
-    let mut info = resolve_call_info(call, lang);
+    let mut info = resolve_call_info(call, lang, functions);
 
     let default_overrides = e2e_config.call.overrides.get(lang);
 
@@ -497,7 +537,7 @@ fn c_visitor_fixture_has_typed_call(fixture: &Fixture, e2e_config: &E2eConfig) -
         &fixture.tags,
         &fixture.input,
     );
-    let info = resolve_call_info(call, "c");
+    let info = resolve_call_info(call, "c", &[]);
     let has_function = call
         .overrides
         .get("c")
@@ -511,6 +551,8 @@ mod call_patterns;
 mod docs_input;
 mod project;
 mod runner;
+#[cfg(test)]
+mod snippet_regressions;
 mod streaming;
 mod test_function;
 mod visitor;
@@ -561,7 +603,7 @@ fn render_test_file(
             );
         }
 
-        let call_info = resolve_fixture_call_info(fixture, e2e_config, lang);
+        let call_info = resolve_fixture_call_info(fixture, e2e_config, lang, &[]);
 
         // Effective enum fields for this fixture: merge global e2e_config.fields_enum
         // (HashSet) with the per-call C override's enum_fields (HashMap keys). This
@@ -734,101 +776,6 @@ mod snippet_tests {
         assert!(rendered.contains("create_engine"), "{rendered}");
         assert!(rendered.contains("sample_scrape(engine"), "{rendered}");
         assert!(rendered.contains("crawl_engine_handle_free(engine)"), "{rendered}");
-    }
-
-    #[test]
-    fn whole_input_typed_file_snippet_constructs_and_owns_the_public_handle() {
-        let fixture: Fixture = serde_json::from_value(serde_json::json!({
-            "id": "document_input",
-            "description": "Process a document",
-            "input": {
-                "extract_input": {"kind": "bytes", "content": [1, 2, 3]},
-                "mock_responses": []
-            },
-            "docs": {
-                "topic": "guides",
-                "presentation": {
-                    "files": [{"field": "/extract_input/content", "path": "document.bin"}]
-                }
-            }
-        }))
-        .expect("fixture");
-        let mut e2e = E2eConfig::default();
-        e2e.call.function = "sample_process".into();
-        e2e.call.options_type = Some("DocumentInput".into());
-        e2e.call.overrides.insert(
-            "c".into(),
-            crate::core::config::e2e::CallOverride {
-                header: Some("sample_ffi.h".into()),
-                result_type: Some("DocumentResult".into()),
-                ..Default::default()
-            },
-        );
-        e2e.call.args.push(crate::e2e::config::ArgMapping {
-            name: "input".into(),
-            field: "input".into(),
-            arg_type: "json_object".into(),
-            optional: false,
-            owned: true,
-            element_type: None,
-            go_type: None,
-            vec_inner_is_ref: false,
-            trait_name: None,
-        });
-        let config = ResolvedCrateConfig {
-            name: "sample".into(),
-            ..ResolvedCrateConfig::default()
-        };
-
-        let rendered = CCodegen
-            .render_snippet_body(&fixture, &e2e, &config, &[], &[])
-            .expect("typed file snippet renders");
-
-        assert!(rendered.contains("fopen(\"document.bin\", \"rb\")"), "{rendered}");
-        assert!(
-            rendered.contains("sample_document_input_from_json(input_json_0)"),
-            "{rendered}"
-        );
-        assert!(rendered.contains("sample_process(options_handle)"), "{rendered}");
-        assert!(
-            rendered.contains("sample_document_input_free(options_handle)"),
-            "{rendered}"
-        );
-        assert!(!rendered.contains("mock_responses"), "{rendered}");
-        assert!(!rendered.contains("sample_process(NULL)"), "{rendered}");
-
-        let Some(compiler) = ["cc", "clang", "gcc"]
-            .into_iter()
-            .find(|candidate| which::which(candidate).is_ok())
-        else {
-            return;
-        };
-        let directory = tempfile::tempdir().expect("temporary C snippet directory");
-        std::fs::write(
-            directory.path().join("sample_ffi.h"),
-            concat!(
-                "typedef struct SAMPLEDocumentInput SAMPLEDocumentInput;\n",
-                "typedef struct SAMPLEDocumentResult SAMPLEDocumentResult;\n",
-                "SAMPLEDocumentInput *sample_document_input_from_json(const char *json);\n",
-                "void sample_document_input_free(SAMPLEDocumentInput *input);\n",
-                "SAMPLEDocumentResult *sample_process(SAMPLEDocumentInput *input);\n",
-                "void sample_document_result_free(SAMPLEDocumentResult *result);\n",
-            ),
-        )
-        .expect("write neutral C header");
-        let source = directory.path().join("snippet.c");
-        std::fs::write(&source, &rendered).expect("write generated C snippet");
-        let output = std::process::Command::new(compiler)
-            .args(["-std=c11", "-fsyntax-only", "-Wall", "-Werror", "-I"])
-            .arg(directory.path())
-            .arg(&source)
-            .output()
-            .expect("run C compiler");
-        assert!(
-            output.status.success(),
-            "generated C snippet failed to compile:\n{}\n{rendered}",
-            String::from_utf8_lossy(&output.stderr)
-        );
     }
 
     #[test]

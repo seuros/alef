@@ -69,7 +69,7 @@ pub(super) fn render_visitor_test_file(
             &fixture.tags,
             &fixture.input,
         );
-        let call_info = resolve_call_info(call_config, "c");
+        let call_info = resolve_call_info(call_config, "c", &[]);
         let function_name = call_info.function_name.as_str();
         let options_type_name = call_info.options_type_name.as_str();
         let options_type_snake = options_type_name.to_snake_case();

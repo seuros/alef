@@ -53,7 +53,7 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         let args = if info.args.is_empty() {
             String::new()
         } else {
-            build_args_string_c(&fixture.input, &info.args, false, config, type_defs, fixture)
+            build_args_string_c(&fixture.input, &info.args, &HashMap::new(), config, type_defs, fixture)
         };
         let body = crate::e2e::template_env::render(
             "c/snippet_void_call.jinja",
@@ -779,7 +779,8 @@ pub(super) fn render_test_function(
     let prefixed_fn = function_name.to_string();
 
     // For json_object args, emit a from_json call to construct the options handle.
-    let mut has_options_handle = false;
+    let mut typed_arg_handles = HashMap::new();
+    let mut typed_arg_cleanup = Vec::new();
     for arg in args {
         if arg.arg_type == "json_object" {
             let val = crate::e2e::codegen::resolve_field(&fixture.input, &arg.field);
@@ -795,20 +796,34 @@ pub(super) fn render_test_function(
                     documentation_snippet,
                 );
                 out.push_str(&docs_setup);
-                let upper = prefix.to_uppercase();
-                let options_type_pascal = options_type_name;
-                let options_type_snake = options_type_name.to_snake_case();
-                let _ = writeln!(
-                    out,
-                    "    {upper}{options_type_pascal}* options_handle = {prefix}_{options_type_snake}_from_json({json_expr});"
-                );
+                let Some(type_name) = arg
+                    .element_type
+                    .as_deref()
+                    .or_else(|| (!options_type_name.is_empty()).then_some(options_type_name))
+                else {
+                    continue;
+                };
+                let type_snake = type_name.to_snake_case();
+                let handle = format!("{}_handle", sanitize_ident(&arg.name));
+                out.push_str(&crate::e2e::template_env::render(
+                    "c/typed_handle.jinja",
+                    minijinja::context! {
+                        prefix_upper => prefix.to_uppercase(),
+                        type_name => type_name,
+                        handle => handle,
+                        prefix => prefix,
+                        type_snake => type_snake,
+                        json_expression => json_expr,
+                    },
+                ));
                 out.push_str(&docs_cleanup);
-                has_options_handle = true;
+                typed_arg_handles.insert(arg.name.clone(), handle.clone());
+                typed_arg_cleanup.push((handle, type_snake));
             }
         }
     }
 
-    let args_str = build_args_string_c(&fixture.input, args, has_options_handle, config, type_defs, fixture);
+    let args_str = build_args_string_c(&fixture.input, args, &typed_arg_handles, config, type_defs, fixture);
 
     // Host-capsule passthrough: a free function whose result type is a configured
     // capsule (e.g. `get_language` → `const TSLanguage *`) returns a borrowed,
@@ -824,10 +839,7 @@ pub(super) fn render_test_function(
             out,
             "    const {c_return_type} *{result_var} = {prefixed_fn}({args_str});"
         );
-        if has_options_handle {
-            let options_type_snake = options_type_name.to_snake_case();
-            let _ = writeln!(out, "    {prefix}_{options_type_snake}_free(options_handle);");
-        }
+        render_typed_arg_cleanup(out, prefix, &typed_arg_cleanup);
         if expects_error {
             let _ = writeln!(out, "    assert({result_var} == NULL && \"expected call to fail\");");
         } else {
@@ -842,10 +854,7 @@ pub(super) fn render_test_function(
             out,
             "    {prefix_upper}{result_type_name}* {result_var} = {prefixed_fn}({args_str});"
         );
-        if has_options_handle {
-            let options_type_snake = options_type_name.to_snake_case();
-            let _ = writeln!(out, "    {prefix}_{options_type_snake}_free(options_handle);");
-        }
+        render_typed_arg_cleanup(out, prefix, &typed_arg_cleanup);
         let _ = writeln!(out, "    assert({result_var} == NULL && \"expected call to fail\");");
         let _ = writeln!(out, "}}");
         return;
@@ -999,11 +1008,17 @@ pub(super) fn render_test_function(
             let _ = writeln!(out, "    {prefix}_{snake_type}_free({handle_var});");
         }
     }
-    if has_options_handle {
-        let options_type_snake = options_type_name.to_snake_case();
-        let _ = writeln!(out, "    {prefix}_{options_type_snake}_free(options_handle);");
-    }
+    render_typed_arg_cleanup(out, prefix, &typed_arg_cleanup);
     let result_type_snake = result_type_name.to_snake_case();
     let _ = writeln!(out, "    {prefix}_{result_type_snake}_free({result_var});");
     let _ = writeln!(out, "}}");
+}
+
+fn render_typed_arg_cleanup(out: &mut String, prefix: &str, handles: &[(String, String)]) {
+    for (handle, type_snake) in handles {
+        out.push_str(&crate::e2e::template_env::render(
+            "c/typed_handle_free.jinja",
+            minijinja::context! { prefix => prefix, type_snake => type_snake, handle => handle },
+        ));
+    }
 }
