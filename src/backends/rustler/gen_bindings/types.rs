@@ -63,7 +63,7 @@ pub(super) fn gen_struct(
         out.push_str(&template_env::render(
             "rust_struct_field.jinja",
             minijinja::context! {
-                name => &field.name,
+                name => crate::codegen::naming::internal_rust_identifier(&field.name),
                 type => &field_type,
             },
         ));
@@ -174,7 +174,8 @@ fn gen_rustler_flat_data_enum(enum_def: &EnumDef, module_prefix: &str) -> String
         },
     ));
 
-    let discriminator_field = enum_def.serde_tag.as_deref().unwrap_or("format_type");
+    let discriminator_field =
+        crate::codegen::naming::internal_rust_identifier(enum_def.serde_tag.as_deref().unwrap_or("format_type"));
     out.push_str(&template_env::render(
         "flat_enum_discriminator_field.jinja",
         minijinja::context! {
@@ -252,7 +253,8 @@ fn gen_rustler_flat_data_enum(enum_def: &EnumDef, module_prefix: &str) -> String
 pub(super) fn gen_rustler_flat_data_enum_from_core(enum_def: &EnumDef, core_import: &str) -> String {
     let name = &enum_def.name;
     let core_path = crate::codegen::conversions::core_enum_path(enum_def, core_import);
-    let discriminator = enum_def.serde_tag.as_deref().unwrap_or("format_type");
+    let discriminator =
+        crate::codegen::naming::internal_rust_identifier(enum_def.serde_tag.as_deref().unwrap_or("format_type"));
     let mut out = String::with_capacity(512);
 
     out.push_str(&template_env::render(
@@ -346,7 +348,8 @@ pub(super) fn gen_rustler_flat_data_enum_from_core(enum_def: &EnumDef, core_impo
 pub(super) fn gen_rustler_flat_data_enum_to_core(enum_def: &EnumDef, core_import: &str) -> String {
     let name = &enum_def.name;
     let core_path = crate::codegen::conversions::core_enum_path(enum_def, core_import);
-    let discriminator = enum_def.serde_tag.as_deref().unwrap_or("format_type");
+    let discriminator =
+        crate::codegen::naming::internal_rust_identifier(enum_def.serde_tag.as_deref().unwrap_or("format_type"));
     let mut out = String::with_capacity(512);
 
     out.push_str(&template_env::render(
@@ -486,7 +489,11 @@ pub(super) fn gen_enum(enum_def: &EnumDef, module_prefix: &str) -> String {
                     out.push_str(&template_env::render(
                         "nif_tagged_enum_variant_field_line.jinja",
                         minijinja::context! {
-                            field_line => format!("{}: {},", field.name, field_type),
+                            field_line => format!(
+                                "{}: {},",
+                                crate::codegen::naming::internal_rust_identifier(&field.name),
+                                field_type,
+                            ),
                         },
                     ));
                 }

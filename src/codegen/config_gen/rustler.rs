@@ -39,7 +39,7 @@ pub fn gen_rustler_kwargs_constructor_with_exclude(
             };
 
             minijinja::context! {
-                name => field.name.clone(),
+                name => crate::codegen::naming::internal_rust_identifier(&field.name),
                 assignment => assignment,
             }
         })
@@ -85,7 +85,7 @@ pub fn gen_rustler_kwargs_constructor(typ: &TypeDef, _type_mapper: &dyn Fn(&Type
             };
 
             minijinja::context! {
-                name => field.name.clone(),
+                name => crate::codegen::naming::internal_rust_identifier(&field.name),
                 assignment => assignment,
             }
         })
