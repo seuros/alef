@@ -440,7 +440,7 @@ pub fn render_assertion_with_streaming(
             }
         }
         "not_contains" => {
-            if let Some(val) = &assertion.value {
+            for val in assertion.expected_values() {
                 let expected = value_to_rust_string(val);
                 let line = format!(
                     "    assert!(!{field_access}.contains({expected}), \"expected NOT to contain: {{}}\", {expected});"
@@ -716,6 +716,41 @@ mod tests {
         );
         assert!(out.contains("result.contains("), "got: {out}");
         assert!(!out.contains("format!(\"{{:?}}\""), "got: {out}");
+    }
+
+    #[test]
+    fn render_not_contains_emits_each_plural_value() {
+        let resolver = empty_resolver();
+        let assertion = Assertion {
+            assertion_type: "not_contains".into(),
+            field: Some("content".into()),
+            values: Some(vec![
+                serde_json::json!("unsafe markup"),
+                serde_json::json!("unsafe handler"),
+            ]),
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            "sample",
+            "sample",
+            false,
+            &[],
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            false,
+            None,
+        );
+
+        assert!(out.contains("unsafe markup"), "got: {out}");
+        assert!(out.contains("unsafe handler"), "got: {out}");
+        assert_eq!(out.matches("assert!(!").count(), 2, "got: {out}");
     }
 
     #[test]

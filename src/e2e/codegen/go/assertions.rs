@@ -487,7 +487,7 @@ pub(super) fn render_assertion(
             }
         }
         "not_contains" => {
-            if let Some(expected) = &assertion.value {
+            for expected in assertion.expected_values() {
                 let go_val = json_to_go(expected);
                 let resolved_field = assertion.field.as_deref().unwrap_or("");
                 let resolved_name = field_resolver.resolve(resolved_field);

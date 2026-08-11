@@ -388,7 +388,7 @@ pub(super) fn render_assertion(
             }
         }
         "not_contains" => {
-            if let Some(expected) = &assertion.value {
+            for expected in assertion.expected_values() {
                 let elixir_val = json_to_elixir(expected);
                 if field_is_array && expected.is_string() {
                     let _ = writeln!(

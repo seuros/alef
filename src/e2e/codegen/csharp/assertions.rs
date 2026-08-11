@@ -525,7 +525,7 @@ pub(super) fn render_assertion(
             }
         }
         "not_contains" => {
-            if let Some(expected) = &assertion.value {
+            for expected in assertion.expected_values() {
                 let cs_val = json_to_csharp(expected);
 
                 let rendered = crate::e2e::template_env::render(

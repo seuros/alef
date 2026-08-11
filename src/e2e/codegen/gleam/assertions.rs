@@ -474,7 +474,7 @@ pub(super) fn render_assertion(
             }
         }
         "not_contains" => {
-            if let Some(expected) = &assertion.value {
+            for expected in assertion.expected_values() {
                 let gleam_val = json_to_gleam(expected);
                 let _ = writeln!(
                     out,

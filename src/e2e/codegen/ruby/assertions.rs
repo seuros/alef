@@ -359,7 +359,7 @@ pub(super) fn render_assertion(
             }
         }
         "not_contains" => {
-            if let Some(expected) = &assertion.value {
+            for expected in assertion.expected_values() {
                 let rb_val = json_to_ruby(expected);
                 let rendered = crate::e2e::template_env::render(
                     "ruby/assertion.jinja",

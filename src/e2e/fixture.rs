@@ -702,6 +702,16 @@ pub struct Assertion {
     pub return_type: Option<String>,
 }
 
+impl Assertion {
+    pub(crate) fn expected_values(&self) -> Vec<&serde_json::Value> {
+        self.values
+            .as_ref()
+            .map(|values| values.iter().collect())
+            .or_else(|| self.value.as_ref().map(|value| vec![value]))
+            .unwrap_or_default()
+    }
+}
+
 /// A group of fixtures sharing the same category.
 #[derive(Debug, Clone)]
 pub struct FixtureGroup {
@@ -1303,5 +1313,30 @@ mod tests {
                 path: "document.pdf".into(),
             }]
         );
+    }
+
+    #[test]
+    fn assertion_expected_values_supports_plural_and_singular_forms() {
+        let plural: Assertion = serde_json::from_value(serde_json::json!({
+            "type": "not_contains",
+            "field": "content",
+            "values": ["unsafe markup", "unsafe handler"]
+        }))
+        .expect("plural assertion");
+        let singular: Assertion = serde_json::from_value(serde_json::json!({
+            "type": "not_contains",
+            "field": "content",
+            "value": "unsafe markup"
+        }))
+        .expect("singular assertion");
+
+        assert_eq!(
+            plural.expected_values(),
+            vec![
+                &serde_json::json!("unsafe markup"),
+                &serde_json::json!("unsafe handler")
+            ]
+        );
+        assert_eq!(singular.expected_values(), vec![&serde_json::json!("unsafe markup")]);
     }
 }

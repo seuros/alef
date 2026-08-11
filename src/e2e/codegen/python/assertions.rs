@@ -341,7 +341,7 @@ fn render_standard_assertion(
             }
         }
         "not_contains" => {
-            if let Some(val) = &assertion.value {
+            for val in assertion.expected_values() {
                 let expected = value_to_python_string(val);
                 let cmp_expr =
                     python_contains_expr(field_access, &expected, field_is_enum, field_is_array, val.is_string());

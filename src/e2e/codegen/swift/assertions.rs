@@ -538,7 +538,7 @@ pub(super) fn render_assertion(
             }
         }
         "not_contains" => {
-            if let Some(expected) = &assertion.value {
+            for expected in assertion.expected_values() {
                 let swift_val = json_to_swift(expected);
                 // []. traversal: "links[].url" → XCTAssertFalse(array.contains(where:))
                 let traversal_handled = if let Some(f) = assertion.field.as_deref() {

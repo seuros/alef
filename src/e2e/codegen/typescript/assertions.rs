@@ -480,7 +480,7 @@ fn render_standard_assertion(
             }
         }
         "not_contains" => {
-            if let Some(expected) = &assertion.value {
+            for expected in assertion.expected_values() {
                 let js_val = json_to_js(expected);
                 let rendered = crate::e2e::template_env::render(
                     "typescript/assertion.jinja",

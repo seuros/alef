@@ -440,7 +440,7 @@ pub(super) fn render_assertion(
             }
         }
         "not_contains" => {
-            if let Some(expected) = &assertion.value {
+            for expected in assertion.expected_values() {
                 let kotlin_val = super::values::json_to_kotlin(expected);
                 if field_is_collection {
                     let _ = writeln!(

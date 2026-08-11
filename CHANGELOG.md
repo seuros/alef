@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Emit every `not_contains` value in generated E2E assertions when fixtures use the plural `values` form.
+
+## [0.60.1] - 2026-08-11
+
 ### Changed
 
 - `alef verify` now fails on stale bindings or version drift by default; use `--report-only` for advisory output. The
