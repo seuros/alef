@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Go documentation snippets now emit visitor implementations and pass visitor-backed options to binding calls.
+
 - Java documentation snippets now construct configured visitors and attach them through generated options builders.
 
 - C# documentation snippets now instantiate configured visitor implementations and attach them to conversion options.

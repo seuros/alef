@@ -79,7 +79,7 @@ pub(super) fn render_snippet_body(
             .get(lang)
             .and_then(|value| value.options_type.as_deref())
     });
-    let (package_decls, setup_lines, mut args) = build_args_and_setup(
+    let (mut package_decls, mut setup_lines, mut args) = build_args_and_setup(
         &fixture.input,
         recipe.args,
         import_alias,
@@ -93,6 +93,26 @@ pub(super) fn render_snippet_body(
         enums,
         true,
     );
+    if let Some(visitor_spec) = &fixture.visitor
+        && let Some(options_type) =
+            options_type.or_else(|| crate::e2e::codegen::recipe::trait_bridge_options_type(config))
+    {
+        let struct_name = super::visitors::visitor_struct_name(&fixture.id);
+        let binding = super::visitors::resolve_go_visitor_binding(config, type_defs, visitor_spec, import_alias);
+        let mut declaration = String::new();
+        super::visitors::emit_go_visitor_struct(
+            &mut declaration,
+            &struct_name,
+            visitor_spec,
+            import_alias,
+            binding.as_ref(),
+        );
+        package_decls.push(declaration);
+        setup_lines.push(format!("visitor := &{struct_name}{{}}"));
+        setup_lines.push(format!("opts := &{import_alias}.{options_type}{{}}"));
+        setup_lines.push("opts.Visitor = visitor".to_string());
+        args = replace_go_options(&args);
+    }
     if !recipe.extra_args.is_empty() {
         let extras = recipe.extra_args.join(", ");
         args = if args.is_empty() {
@@ -178,6 +198,16 @@ pub(super) fn render_snippet_body(
     .to_string()
 }
 
+fn replace_go_options(args: &str) -> String {
+    if let Some(prefix) = args.strip_suffix(", nil") {
+        format!("{prefix}, opts")
+    } else if args.is_empty() {
+        "opts".to_string()
+    } else {
+        format!("{args}, opts")
+    }
+}
+
 fn snippet_setup_line(line: String) -> String {
     line.lines()
         .map(|part| {
@@ -194,6 +224,12 @@ fn snippet_setup_line(line: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visitor_options_replace_nil_argument() {
+        assert_eq!(replace_go_options("html, nil"), "html, opts");
+        assert_eq!(replace_go_options("html"), "html, opts");
+    }
     use crate::e2e::config::{CallConfig, CallOverride};
 
     fn fixture() -> Fixture {
