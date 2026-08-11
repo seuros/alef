@@ -1,3 +1,4 @@
+use super::test_case::escape_js_regex_literal;
 use super::visitor::WasmVisitorBinding;
 use super::*;
 use crate::core::ir::{FieldDef, PrimitiveType};
@@ -901,4 +902,103 @@ fn derive_nested_types_resolves_duplicate_names_deterministically_by_rust_path()
     // `crate::module_a::Config` sorts before `crate::module_b::Config`, so the
     // tie always breaks toward module_a regardless of input order.
     assert_eq!(derived_forward.get("nested"), Some(&"WasmConfig".to_string()));
+}
+
+fn error_fixture(id: &str, error_value: Option<serde_json::Value>) -> Fixture {
+    let assertion = crate::e2e::fixture::Assertion {
+        assertion_type: "error".to_string(),
+        value: error_value,
+        ..Default::default()
+    };
+    Fixture {
+        id: id.to_string(),
+        category: Some("thing".to_string()),
+        description: "declared-error fixture".to_string(),
+        input: serde_json::json!({}),
+        assertions: vec![assertion],
+        ..Default::default()
+    }
+}
+
+fn render_error_fixture(fixture: &Fixture) -> String {
+    let mut e2e_config = E2eConfig::default();
+    e2e_config.call.function = "doThing".to_string();
+    let config = crate::core::config::ResolvedCrateConfig::default();
+    let fixtures = vec![fixture];
+
+    render_test_file(
+        "node",
+        "thing",
+        &fixtures,
+        "",
+        "my-lib",
+        "doThing",
+        &[],
+        None,
+        None,
+        &e2e_config,
+        &[],
+        &[],
+        "",
+        &config,
+    )
+}
+
+#[test]
+fn error_assertion_without_declared_value_keeps_plain_reject_matcher() {
+    let fixture = error_fixture("thing_fails", None);
+    let output = render_error_fixture(&fixture);
+
+    assert!(
+        output.contains("\t\t}).rejects.toThrow();\n"),
+        "no declared error value must keep the unchanged `.rejects.toThrow()` form;\n{output}"
+    );
+    assert!(
+        !output.contains("toSatisfy"),
+        "no declared error value must not emit a toSatisfy matcher;\n{output}"
+    );
+}
+
+#[test]
+fn error_assertion_with_declared_value_checks_message_or_name() {
+    let fixture = error_fixture("thing_fails_with_bad_request", Some(serde_json::json!("BadRequest")));
+    let output = render_error_fixture(&fixture);
+
+    assert!(
+        !output.contains("\t\t}).rejects.toThrow();\n"),
+        "a declared error value must replace the unconditional `.rejects.toThrow()`;\n{output}"
+    );
+    assert!(
+        output.contains("}).rejects.toSatisfy((error) => {"),
+        "a declared error value must switch to the toSatisfy matcher;\n{output}"
+    );
+    assert!(
+        output.contains("return /BadRequest/.test(_message) || /BadRequest/.test(_name);"),
+        "the matcher must check the declared value against EITHER the message OR the name;\n{output}"
+    );
+}
+
+#[test]
+fn error_assertion_value_with_regex_metacharacters_is_escaped() {
+    let fixture = error_fixture("thing_fails_with_metachars", Some(serde_json::json!("field(a.b)+")));
+    let output = render_error_fixture(&fixture);
+
+    assert!(
+        output.contains(r"return /field\(a\.b\)\+/.test(_message) || /field\(a\.b\)\+/.test(_name);"),
+        "regex metacharacters in the declared value must be escaped so the pattern \
+         matches the value literally rather than as a regex;\n{output}"
+    );
+}
+
+#[test]
+fn escape_js_regex_literal_escapes_metacharacters_and_delimiter() {
+    assert_eq!(escape_js_regex_literal("plain"), "plain");
+    assert_eq!(
+        escape_js_regex_literal(r"a.b*c+d?e^f$g{h}i(j)k|l[m]n\o/p"),
+        r"a\.b\*c\+d\?e\^f\$g\{h\}i\(j\)k\|l\[m\]n\\o\/p"
+    );
+    assert_eq!(
+        escape_js_regex_literal("line1\nline2\ttab\rcr"),
+        r"line1\nline2\ttab\rcr"
+    );
 }

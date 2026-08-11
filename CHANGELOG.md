@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated TypeScript and WebAssembly E2E error tests now assert the error value a fixture declares, matching it
+  against either the error's message or its `name`. `.rejects.toThrow(regex)` only inspects the message, so the
+  disjunction is expressed with a `toSatisfy` predicate; declared values are escaped for regex-literal context.
+
 - Generated Go E2E error tests now assert the error value a fixture declares, matching it against either the error's
   message or its concrete type, instead of only checking that some error occurred.
 

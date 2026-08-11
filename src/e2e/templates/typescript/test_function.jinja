@@ -12,6 +12,9 @@
    - await_kw: "await " (or empty string)
    - assertions_body: string containing all rendered assertions
    - expects_error: bool
+   - error_value_regex: optional string — JS regex literal (e.g. "/foo\(bar\)/")
+       matching a declared error assertion value. Checked against EITHER the
+       thrown error's message OR its `name`. Absent means "throws anything".
    - is_streaming_error_call: bool — streaming function called with error fixture;
        drain with `for await` so the lazy NAPI stream surfaces the error
    - skip_reason: optional string reason for skipping the test
@@ -46,7 +49,15 @@
 {% else %}
 			await {{ call_expr }};
 {% endif %}
+{% if error_value_regex %}
+		}).rejects.toSatisfy((error) => {
+				const _message = error instanceof Error ? error.message : String(error);
+				const _name = error instanceof Error ? error.name : "";
+				return {{ error_value_regex }}.test(_message) || {{ error_value_regex }}.test(_name);
+			});
+{% else %}
 		}).rejects.toThrow();
+{% endif %}
 	}, {{ timeout_ms }});
 {%- else %}
 	it("{{ test_name }}: {{ description }}", {{ async_kw }}() => {

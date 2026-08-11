@@ -1,5 +1,28 @@
 use super::*;
 
+/// Escape a string so it matches itself literally when embedded as the body of a
+/// JS/TS regex literal (`/…/`), rather than being interpreted as a regex pattern.
+///
+/// Escapes the standard JS regex metacharacters, the `/` delimiter (which would
+/// otherwise terminate the literal early), and control characters that cannot
+/// appear raw inside a regex literal.
+pub(in crate::e2e::codegen::typescript::test_file) fn escape_js_regex_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' | '.' | '*' | '+' | '?' | '^' | '$' | '{' | '}' | '(' | ')' | '|' | '[' | ']' | '/' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
     out: &mut String,
@@ -170,6 +193,17 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
 
     let expects_error = fixture.assertions.iter().any(|a| a.assertion_type == "error");
 
+    // A declared error value is matched against EITHER the thrown error's message
+    // OR its `name`/type — the same disjunction the Rust and Python generators use
+    // (see `crate::e2e::codegen::declared_error_value` doc comment). Building a
+    // regex literal from the raw value would let regex metacharacters in the
+    // fixture's declared string (e.g. `.`, `(`, `)`) change what the pattern
+    // matches, so the value is escaped to match itself literally.
+    let error_value_regex = expects_error
+        .then(|| crate::e2e::codegen::declared_error_value(fixture))
+        .flatten()
+        .map(|value| format!("/{}/", escape_js_regex_literal(value)));
+
     // Build client setup
     let has_mock = fixture.mock_response.is_some() || fixture.http.is_some();
     let api_key_var = fixture.env.as_ref().and_then(|e| e.api_key_var.as_deref());
@@ -313,6 +347,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
         collect_snippet => collect_snippet,
         assertions_body => assertions_body,
         expects_error => expects_error,
+        error_value_regex => error_value_regex,
         is_streaming_error_call => is_streaming_error_call,
         lang => lang,
         skip_reason => skip_reason,
