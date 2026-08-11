@@ -108,6 +108,7 @@ fn make_visit_result() -> EnumDef {
         is_copy: false,
         has_serde: true,
         serde_tag: None,
+        serde_content: None,
         serde_untagged: false,
         serde_rename_all: Some("snake_case".to_string()),
         binding_excluded: false,

@@ -509,6 +509,7 @@ fn result_enum(name: &str, variants: Vec<EnumVariant>, serde_rename_all: Option<
         is_copy: false,
         has_serde: true,
         serde_tag: None,
+        serde_content: None,
         serde_untagged: false,
         serde_rename_all: serde_rename_all.map(str::to_string),
         binding_excluded: false,

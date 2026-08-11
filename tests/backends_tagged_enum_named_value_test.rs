@@ -39,6 +39,7 @@ fn tagged_enum_surface() -> ApiSurface {
             name: "MatchRule".to_owned(),
             rust_path: "fixture_core::MatchRule".to_owned(),
             serde_tag: Some("kind".to_owned()),
+            serde_content: None,
             serde_rename_all: Some("snake_case".to_owned()),
             has_serde: true,
             variants: vec![

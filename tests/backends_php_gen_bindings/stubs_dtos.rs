@@ -552,6 +552,7 @@ fn test_unit_enums_emit_native_php_81_backed_enums() {
             has_serde: false,
             has_default: false,
             serde_tag: None,
+            serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
             binding_excluded: false,

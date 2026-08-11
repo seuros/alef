@@ -611,6 +611,7 @@ fn test_options_py_imports_data_enums_as_native_classes() {
             has_serde: true,
             has_default: false,
             serde_tag: Some("type".to_string()),
+            serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
             binding_excluded: false,

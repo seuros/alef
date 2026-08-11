@@ -106,6 +106,7 @@ fn make_image_output_format_enum() -> EnumDef {
         is_copy: false,
         has_serde: true,
         serde_tag: None,
+        serde_content: None,
         serde_untagged: false,
         serde_rename_all: None,
         binding_excluded: false,

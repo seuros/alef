@@ -252,6 +252,7 @@ fn unit_enum_emits_enum_class() {
             doc: String::new(),
             cfg: None,
             serde_tag: None,
+            serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
 
@@ -1348,6 +1349,7 @@ fn short_sealed_class_variant_emits_single_line() {
         doc: String::new(),
         cfg: None,
         serde_tag: None,
+        serde_content: None,
         serde_untagged: false,
         serde_rename_all: None,
         is_copy: false,
@@ -1391,6 +1393,7 @@ fn long_sealed_class_variant_emits_multi_line() {
         doc: String::new(),
         cfg: None,
         serde_tag: None,
+        serde_content: None,
         serde_untagged: false,
         serde_rename_all: None,
         is_copy: false,

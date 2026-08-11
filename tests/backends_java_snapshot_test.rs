@@ -323,6 +323,7 @@ fn print_generated_java_code() {
             has_serde: false,
             has_default: false,
             serde_tag: None,
+            serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
             binding_excluded: false,

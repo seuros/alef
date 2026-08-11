@@ -466,6 +466,7 @@ fn unit_only_enum_emits_lower_camel_cases() {
             doc: String::new(),
             cfg: None,
             serde_tag: None,
+            serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
 
@@ -537,6 +538,7 @@ fn data_bearing_enum_emits_associated_values() {
             doc: String::new(),
             cfg: None,
             serde_tag: None,
+            serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
 
@@ -621,6 +623,7 @@ fn unit_enum_escapes_swift_keyword_variants_with_backticks() {
             doc: String::new(),
             cfg: None,
             serde_tag: None,
+            serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
 
@@ -717,6 +720,7 @@ fn data_variant_serde_enum_with_bridge_safe_fields_emits_codable() {
             doc: String::new(),
             cfg: None,
             serde_tag: Some("type".into()),
+            serde_content: None,
             serde_untagged: false,
             serde_rename_all: Some("lowercase".into()),
             is_copy: false,
@@ -797,6 +801,7 @@ fn data_variant_serde_enum_with_opaque_field_falls_back_to_rust_bridge_from_json
             doc: String::new(),
             cfg: None,
             serde_tag: None,
+            serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
             is_copy: false,

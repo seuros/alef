@@ -200,6 +200,7 @@ fn test_trait_bridge_enum_return_type_emitted_as_concrete_type() {
         has_serde: false,
         has_default: false,
         serde_tag: None,
+        serde_content: None,
         serde_untagged: false,
         serde_rename_all: None,
         binding_excluded: false,

@@ -240,6 +240,7 @@ fn simple_enum_def() -> EnumDef {
         is_copy: false,
         has_serde: false,
         serde_tag: None,
+        serde_content: None,
         serde_untagged: false,
         serde_rename_all: None,
         binding_excluded: false,

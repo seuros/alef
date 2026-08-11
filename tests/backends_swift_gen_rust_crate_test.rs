@@ -104,6 +104,7 @@ fn make_enum(name: &str, variants: Vec<&str>) -> EnumDef {
         doc: String::new(),
         cfg: None,
         serde_tag: None,
+        serde_content: None,
         serde_untagged: false,
         serde_rename_all: None,
 
@@ -790,6 +791,7 @@ fn lib_rs_struct_with_tagged_enum_field_serializes_to_json() {
         doc: String::new(),
         cfg: None,
         serde_tag: Some("type".to_string()),
+        serde_content: None,
         serde_untagged: false,
         serde_rename_all: None,
         is_copy: false,
@@ -2543,6 +2545,7 @@ fn make_tagged_enum(name: &str, variants: Vec<(&str, Vec<&str>)>) -> EnumDef {
         doc: String::new(),
         cfg: None,
         serde_tag: None,
+        serde_content: None,
         serde_untagged: false,
         serde_rename_all: None,
         is_copy: false,

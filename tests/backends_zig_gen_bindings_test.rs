@@ -600,6 +600,7 @@ fn enum_emits_zig_enum_or_union() {
             doc: String::new(),
             cfg: None,
             serde_tag: None,
+            serde_content: None,
             serde_untagged: false,
             serde_rename_all: None,
 

@@ -72,6 +72,7 @@ fn make_enum(name: &str, variants: Vec<EnumVariant>, serde_tag: Option<String>) 
         is_copy: false,
         has_serde: true,
         serde_tag,
+        serde_content: None,
         serde_untagged: false,
         serde_rename_all: None,
         binding_excluded: false,
