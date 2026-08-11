@@ -80,6 +80,44 @@ prefix = "sample"
 }
 
 #[test]
+fn ffi_entrypoints_clear_stale_errors_but_error_accessors_preserve_them() {
+    let config = resolved_one(
+        r#"
+[workspace]
+languages = ["ffi"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+
+[crates.ffi]
+prefix = "sample"
+"#,
+    );
+    let api = ApiSurface {
+        crate_name: "sample-lib".to_string(),
+        version: "1.0.0".to_string(),
+        ..ApiSurface::default()
+    };
+
+    let files = FfiBackend.generate_bindings(&api, &config).unwrap();
+    let lib = files.iter().find(|file| file.path.ends_with("lib.rs")).unwrap();
+
+    assert!(
+        lib.content
+            .contains("fn catch_ffi_panic<T>(fallback: T, body: impl FnOnce() -> T) -> T {\n    clear_last_error();")
+    );
+    assert!(
+        lib.content
+            .contains("catch_ffi_panic_preserving_error(ALEF_FFI_PANIC_ERROR, || LAST_ERROR_CODE.with_borrow")
+    );
+    assert!(
+        lib.content
+            .contains("catch_ffi_panic_preserving_error(std::ptr::null(), || LAST_ERROR_CONTEXT.with_borrow")
+    );
+}
+
+#[test]
 fn test_legacy_visitor_callbacks_use_configured_function_signature() {
     let config = resolved_one(
         r#"

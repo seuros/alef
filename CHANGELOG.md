@@ -106,6 +106,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Options-field visitor callbacks no longer emit an unattached generic trait bridge whose public destructor could free
   shared host state independently of the live visitor handle.
 
+- Every generated FFI entry point now clears stale thread-local error state before execution, while error and return
+  metadata accessors preserve the state they report.
+
 - Attaching a visitor to an FFI options handle now transfers ownership into one synchronized object, preventing multiple
   independent mutexes from aliasing the same mutable visitor; Go wrappers honor the transfer.
 

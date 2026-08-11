@@ -23,6 +23,11 @@ fn set_panic_error() {
 }
 
 fn catch_ffi_panic<T>(fallback: T, body: impl FnOnce() -> T) -> T {
+    clear_last_error();
+    catch_ffi_panic_preserving_error(fallback, body)
+}
+
+fn catch_ffi_panic_preserving_error<T>(fallback: T, body: impl FnOnce() -> T) -> T {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
         Ok(value) => value,
         Err(_) => {
@@ -46,7 +51,7 @@ fn last_return_len() -> usize {
 /// This function does not allocate and returns no owned pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn {{ prefix }}_last_error_code() -> i32 {
-    catch_ffi_panic(ALEF_FFI_PANIC_ERROR, || LAST_ERROR_CODE.with_borrow(|c| *c))
+    catch_ffi_panic_preserving_error(ALEF_FFI_PANIC_ERROR, || LAST_ERROR_CODE.with_borrow(|c| *c))
 }
 
 /// Return the last error message. The pointer is borrowed and valid until the next FFI call on this thread.
@@ -55,7 +60,7 @@ pub unsafe extern "C" fn {{ prefix }}_last_error_code() -> i32 {
 /// The returned pointer is borrowed from thread-local storage and must NOT be freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn {{ prefix }}_last_error_context() -> *const c_char {
-    catch_ffi_panic(std::ptr::null(), || LAST_ERROR_CONTEXT.with_borrow(|ctx| {
+    catch_ffi_panic_preserving_error(std::ptr::null(), || LAST_ERROR_CONTEXT.with_borrow(|ctx| {
         ctx.as_ref().map_or(std::ptr::null(), |c| c.as_ptr())
     }))
 }

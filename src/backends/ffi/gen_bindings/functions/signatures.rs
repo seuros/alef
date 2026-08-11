@@ -140,11 +140,11 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function_len_companion(
     out.push_str(") -> usize {\n");
 
     if will_be_unimplemented {
-        out.push_str("    catch_ffi_panic(0, || 0)\n}");
+        out.push_str("    catch_ffi_panic_preserving_error(0, || 0)\n}");
         return out;
     }
 
-    out.push_str("    catch_ffi_panic(0, last_return_len)\n");
+    out.push_str("    catch_ffi_panic_preserving_error(0, last_return_len)\n");
     out.push_str("\n}");
     out
 }
