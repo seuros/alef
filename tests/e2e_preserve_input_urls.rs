@@ -254,34 +254,47 @@ fn generated_backends_preserve_scalar_and_list_urls() {
             true,
             serde_json::json!({ "url": HOSTILE_URL }),
         );
-        for raw in hostile_sequences_for(language) {
+        for required in required_escapes_for(language) {
             assert!(
-                !hostile.contains(raw),
-                "{language} emitted `{raw}` unescaped — the literal can interpolate or \
-                 break out of its quoting:\n{hostile}"
+                hostile.contains(required),
+                "{language} did not escape `{required}` — the emitted literal can \
+                 interpolate or break out of its quoting:\n{hostile}"
             );
         }
     }
 }
 
-/// A URL carrying every metacharacter the emitters have historically mishandled:
-/// shell command substitution, Ruby/Elixir `#{}`, Swift `\(`, Kotlin/PHP/Dart `$`,
-/// and a bare double quote.
+/// A URL carrying the metacharacters the emitters have historically mishandled:
+/// shell command substitution, Ruby/Elixir `#{}`, Kotlin/PHP `$`, and a double quote.
 const HOSTILE_URL: &str = "http://127.0.0.1:9/?a=$(id)&b=#{2}&c=\"q\"";
 
-/// The raw sequences that must never survive into `language`'s emitted literal.
+/// Escape sequences that MUST appear in `language`'s emitted literal for [`HOSTILE_URL`].
 ///
-/// ~keep Deliberately per-language rather than one global list: `#{` is inert in a
-/// Python or Go literal and asserting on it there would fail a correct emitter, while
-/// `$` is genuinely dangerous in Kotlin, PHP and Dart. A single list would have to be
-/// the intersection, which is close to empty and would test nothing.
-fn hostile_sequences_for(language: &str) -> &'static [&'static str] {
+/// ~keep Asserting on the *presence of the escape* rather than the *absence of the raw
+/// character*, because the raw character is unavoidable: `"` delimits string literals in
+/// most of these languages, so "output contains a quote" is true of every correct file
+/// and tests nothing. What distinguishes correct from broken is whether the quote coming
+/// **from the URL** was escaped, which `\"` witnesses.
+///
+/// Per-language, not global, because the right answer depends on the quoting style the
+/// emitter chose: Ruby and Dart wrap these values in single quotes, where `"` needs no
+/// escape and demanding one would fail a correct emitter. Their interpolation triggers
+/// are inert in single quotes for the same reason, so they assert nothing here and are
+/// covered by the round-trip assertions above.
+fn required_escapes_for(language: &str) -> &'static [&'static str] {
     match language {
-        "ruby" | "elixir" => &["#{", "\""],
-        "kotlin" | "php" | "dart" => &["$(", "\""],
-        "swift" => &["\\(", "\""],
-        // Remaining languages have no string interpolation in a plain literal; an
-        // unescaped double quote is still a break-out in every one of them.
-        _ => &["\""],
+        // Single-quoted literals: nothing in HOSTILE_URL is special.
+        "ruby" | "dart" => &[],
+        // Go emits a backtick raw string, in which no character in HOSTILE_URL is
+        // special. Assert that form explicitly — `go_string_literal` falls back to a
+        // quoted, escaped literal only when the value itself contains a backtick, so
+        // seeing the raw form here is the correct outcome, not a missing escape.
+        "go" => &["`http://127.0.0.1:9/?a=$(id)&b=#{2}&c=\"q\"`"],
+        // Double-quoted, and `#{` would interpolate.
+        "elixir" => &["\\\"", "\\#"],
+        // Double-quoted, and a bare `$` starts a template expression.
+        "kotlin" | "php" => &["\\\"", "\\$"],
+        // Double-quoted, no interpolation in a plain literal.
+        _ => &["\\\""],
     }
 }
