@@ -34,6 +34,7 @@ pub(super) fn build_args_and_setup(
     extra_args: &[String],
     options_type: Option<&str>,
     options_via: &str,
+    preserve_input_urls: bool,
 ) -> Option<(Vec<String>, String)> {
     if args.is_empty() && extra_args.is_empty() {
         return Some((Vec::new(), String::new()));
@@ -82,10 +83,43 @@ pub(super) fn build_args_and_setup(
                 continue;
             }
             "mock_url" => {
+                if let Some(url) = crate::e2e::codegen::preserved_url_literal(
+                    preserve_input_urls,
+                    val.unwrap_or(&serde_json::Value::Null),
+                ) {
+                    parts.push(format!("\"{}\"", escape_gleam(url)));
+                    continue;
+                }
                 // Resolve the mock server base URL at runtime via envoy, then append the fixture path.
                 let name = &arg.name;
                 setup_lines.push(format!(
                     "let {name} = case envoy.get(\"MOCK_SERVER_URL\") {{ Ok(base) -> base <> \"/fixtures/{fixture_id}\" Error(_) -> \"http://localhost:8080/fixtures/{fixture_id}\" }}"
+                ));
+                parts.push(name.clone());
+                continue;
+            }
+            "mock_url_list" => {
+                let value = crate::e2e::codegen::resolve_urls_field(input, &arg.field);
+                if let Some(urls) = crate::e2e::codegen::preserved_url_list(preserve_input_urls, value) {
+                    let values = urls
+                        .iter()
+                        .map(|url| format!("\"{}\"", escape_gleam(url)))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    parts.push(format!("[{values}]"));
+                    continue;
+                }
+                let name = &arg.name;
+                let values = value
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(|path| format!("base <> \"{}\"", escape_gleam(path)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                setup_lines.push(format!(
+                    "let {name} = case envoy.get(\"MOCK_SERVER_URL\") {{ Ok(base) -> [{values}] Error(_) -> [] }}"
                 ));
                 parts.push(name.clone());
                 continue;

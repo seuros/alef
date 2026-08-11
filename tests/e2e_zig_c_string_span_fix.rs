@@ -39,6 +39,7 @@ fn make_fixture_with_assertions(id: &str, assertions: Vec<Assertion>) -> Fixture
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
     }
 }
 

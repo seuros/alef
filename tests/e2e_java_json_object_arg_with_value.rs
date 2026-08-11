@@ -53,6 +53,7 @@ fn make_extract_fixture() -> Fixture {
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
     }
 }
 

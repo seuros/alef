@@ -89,25 +89,43 @@ pub(super) fn render_engine_factory_test_function(
         let _ = writeln!(out, "    assert(engine != NULL && \"failed to create engine\");");
     }
 
-    // --- URL construction: prefer per-fixture MOCK_SERVER_<UPPER_ID> (for fixtures
-    // that need host-root routes like /robots.txt or /sitemap.xml), fall back to
-    // MOCK_SERVER_URL/fixtures/<id> for the common case. ---
-    let fixture_env_key = format!("MOCK_SERVER_{}", fixture_id.to_uppercase());
-    let _ = writeln!(out, "    const char* mock_per_fixture = getenv(\"{fixture_env_key}\");");
-    let _ = writeln!(out, "    const char* mock_base = getenv(\"MOCK_SERVER_URL\");");
-    let _ = writeln!(out, "    char url[2048];");
-    let _ = writeln!(out, "    if (mock_per_fixture && mock_per_fixture[0] != '\\0') {{");
-    let _ = writeln!(out, "        snprintf(url, sizeof(url), \"%s\", mock_per_fixture);");
-    let _ = writeln!(out, "    }} else {{");
-    let _ = writeln!(
-        out,
-        "        assert(mock_base != NULL && \"MOCK_SERVER_URL must be set\");"
+    // --- URL construction ---
+    // ~keep This emitter is convention-based: it has no `ArgMapping`, so unlike the
+    // other backends it cannot consult a `mock_url` arg's declared field and reads
+    // `input.url` directly, the same way it already reads `input.config` and
+    // `input.actions` above. `url` stays a `char[2048]` in both branches so nothing
+    // downstream has to care which one produced it.
+    let preserved_url = crate::e2e::codegen::preserved_url_literal(
+        fixture.preserve_input_urls,
+        crate::e2e::codegen::resolve_field(&fixture.input, "input.url"),
     );
-    let _ = writeln!(
-        out,
-        "        snprintf(url, sizeof(url), \"%s/fixtures/{fixture_id}\", mock_base);"
-    );
-    let _ = writeln!(out, "    }}");
+    if let Some(url) = preserved_url {
+        // The fixture's own address is the subject of the test; the mock server
+        // lookup is skipped entirely so no env var can override it.
+        let url_escaped = escape_c(url);
+        let _ = writeln!(out, "    char url[2048];");
+        let _ = writeln!(out, "    snprintf(url, sizeof(url), \"%s\", \"{url_escaped}\");");
+    } else {
+        // Prefer per-fixture MOCK_SERVER_<UPPER_ID> (for fixtures that need host-root
+        // routes like /robots.txt or /sitemap.xml), fall back to
+        // MOCK_SERVER_URL/fixtures/<id> for the common case.
+        let fixture_env_key = format!("MOCK_SERVER_{}", fixture_id.to_uppercase());
+        let _ = writeln!(out, "    const char* mock_per_fixture = getenv(\"{fixture_env_key}\");");
+        let _ = writeln!(out, "    const char* mock_base = getenv(\"MOCK_SERVER_URL\");");
+        let _ = writeln!(out, "    char url[2048];");
+        let _ = writeln!(out, "    if (mock_per_fixture && mock_per_fixture[0] != '\\0') {{");
+        let _ = writeln!(out, "        snprintf(url, sizeof(url), \"%s\", mock_per_fixture);");
+        let _ = writeln!(out, "    }} else {{");
+        let _ = writeln!(
+            out,
+            "        assert(mock_base != NULL && \"MOCK_SERVER_URL must be set\");"
+        );
+        let _ = writeln!(
+            out,
+            "        snprintf(url, sizeof(url), \"%s/fixtures/{fixture_id}\", mock_base);"
+        );
+        let _ = writeln!(out, "    }}");
+    }
 
     // --- actions argument (interact and similar 3-arg engine-factory calls) ---
     // When the fixture input contains an "actions" key (interaction fixtures), the FFI
@@ -408,12 +426,16 @@ pub(super) fn render_bytes_test_function(
                     request_handle_vars.push((arg.name.clone(), var_name));
                 }
             }
-            "string" => {
+            "string" | "mock_url" => {
                 // Pass string args (e.g. file_id for file_content) directly as
                 // C string literals.
                 let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
                 let val = fixture.input.get(field);
                 let expr = match val {
+                    Some(serde_json::Value::String(s)) if arg.arg_type == "mock_url" && fixture.preserve_input_urls => {
+                        format!("\"{}\"", escape_c(s))
+                    }
+                    _ if arg.arg_type == "mock_url" => "base_url".to_string(),
                     Some(serde_json::Value::String(s)) => format!("\"{}\"", escape_c(s)),
                     Some(serde_json::Value::Null) | None if arg.optional => "NULL".to_string(),
                     Some(v) => serde_json::to_string(v).unwrap_or_else(|_| "NULL".to_string()),

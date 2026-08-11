@@ -62,6 +62,7 @@ fn error_fixture_with_mock() -> FixtureGroup {
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         }],
     }
 }

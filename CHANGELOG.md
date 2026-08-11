@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- E2E fixtures can opt into preserving declared `mock_url` and `mock_url_list` values verbatim across generated
+  language tests, so URL-policy and SSRF regressions exercise the address declared by the fixture rather than a
+  substituted mock-server URL.
+
 - Integration-test enum fixtures now initialize adjacent Serde content metadata, restoring full-suite compilation.
 
 - E2E and registry test-app generation now fails when a configured formatter is unavailable or exits unsuccessfully,

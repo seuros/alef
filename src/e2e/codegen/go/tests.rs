@@ -32,6 +32,7 @@ fn make_fixture(id: &str) -> Fixture {
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
         assertions: vec![Assertion {
             assertion_type: "not_error".to_string(),
             ..Default::default()
@@ -121,6 +122,7 @@ fn handle_config_deserialization_uses_resolved_options_type() {
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
     };
     let data_enum_names = std::collections::HashSet::new();
     let (package_decls, setup, args_str) = build_args_and_setup(
@@ -335,6 +337,7 @@ fn test_indexed_element_prefix_guard_uses_array_not_element() {
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
         assertions: vec![
             Assertion {
                 assertion_type: "not_error".to_string(),
@@ -436,6 +439,7 @@ fn test_result_is_simple_contains_binds_result_and_emits_imports() {
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
         assertions: vec![Assertion {
             assertion_type: "contains".to_string(),
             field: Some("result".to_string()),
@@ -631,6 +635,7 @@ fn test_go_plain_optional_string_uses_string_deref_not_text_accessor() {
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
         visitor: None,
         args: vec![],
         assertion_recipes: vec![],
@@ -712,6 +717,7 @@ fn test_go_display_as_text_optional_uses_text_accessor_not_string_deref() {
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
         visitor: None,
         args: vec![],
         assertion_recipes: vec![],

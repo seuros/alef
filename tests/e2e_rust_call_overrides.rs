@@ -84,6 +84,7 @@ fn build_fixture_with_assertions(id: &str, assertions: Vec<Assertion>) -> Fixtur
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         }],
     }
 }
@@ -173,6 +174,7 @@ fn build_fixture() -> FixtureGroup {
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         }],
     }
 }

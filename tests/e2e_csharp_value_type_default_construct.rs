@@ -50,6 +50,7 @@ fn make_fixture_omit_config(id: &str) -> Fixture {
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
     }
 }
 

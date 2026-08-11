@@ -60,6 +60,7 @@ fn fixture(id: &str, language: &str) -> Fixture {
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
     }
 }
 

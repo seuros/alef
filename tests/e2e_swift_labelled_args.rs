@@ -80,6 +80,7 @@ fn swift_emits_labelled_arguments_on_free_function_calls() {
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
     };
 
     let groups = vec![FixtureGroup {
@@ -169,6 +170,7 @@ name = "SampleLanguagePack"
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
     };
 
     let groups = vec![FixtureGroup {

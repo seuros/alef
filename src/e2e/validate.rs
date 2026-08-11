@@ -181,6 +181,32 @@ pub fn validate_fixtures_semantic(
                 }
             }
         }
+
+        // Check 5: `preserve_input_urls` set on a fixture with nothing to preserve.
+        //
+        // ~keep An inert flag is the exact failure this option exists to prevent: the
+        // author believes the fixture's own address reaches the call, while every
+        // backend keeps substituting the mock server and the test quietly proves
+        // something else. Neither serde nor the JSON schema rejects an unknown fixture
+        // key, so a typo elsewhere in the fixture surfaces here or nowhere.
+        if fixture.preserve_input_urls {
+            let has_url_arg = fixture
+                .resolved_args(call_config)
+                .iter()
+                .any(|arg| matches!(arg.arg_type.as_str(), "mock_url" | "mock_url_list"));
+            if !has_url_arg {
+                errors.push(ValidationError {
+                    file: fixture.source.clone(),
+                    message: format!(
+                        "fixture '{}' sets preserve_input_urls but call '{}' has no mock_url or \
+                         mock_url_list argument, so the flag has no effect",
+                        fixture.id,
+                        fixture.call.as_deref().unwrap_or("<default>")
+                    ),
+                    severity: Severity::Error,
+                });
+            }
+        }
     }
 
     // Check 3: empty categories (all fixtures skipped for all languages)
@@ -457,6 +483,7 @@ mod tests {
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         }
     }
 
@@ -497,6 +524,32 @@ mod tests {
         let config = make_e2e_config(vec![("embed", CallConfig::default())]);
         let errors = validate_fixtures_semantic(&fixtures, &config, &["rust".to_string()]);
         assert!(!errors.iter().any(|e| e.message.contains("unknown call")));
+    }
+
+    #[test]
+    fn preserve_input_urls_requires_mock_url_argument() {
+        let mut fixture = make_fixture("literal_url", "literal_url.json", None, None);
+        fixture.preserve_input_urls = true;
+        let errors = validate_fixtures_semantic(&[fixture], &make_e2e_config(vec![]), &["rust".to_string()]);
+        assert!(errors.iter().any(|error| error.message.contains("flag has no effect")));
+    }
+
+    #[test]
+    fn preserve_input_urls_accepts_scalar_and_list_url_arguments() {
+        for arg_type in ["mock_url", "mock_url_list"] {
+            let mut fixture = make_fixture("literal_url", "literal_url.json", None, None);
+            fixture.preserve_input_urls = true;
+            fixture.args = vec![
+                serde_json::from_value(serde_json::json!({
+                    "name": "urls",
+                    "field": "input.urls",
+                    "type": arg_type
+                }))
+                .expect("argument mapping should deserialize"),
+            ];
+            let errors = validate_fixtures_semantic(&[fixture], &make_e2e_config(vec![]), &["rust".to_string()]);
+            assert!(!errors.iter().any(|error| error.message.contains("flag has no effect")));
+        }
     }
 
     #[test]
@@ -648,6 +701,7 @@ mod tests {
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         };
         let call = CallConfig {
             function: "extract_bytes".to_string(),
@@ -723,6 +777,7 @@ mod tests {
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         };
         let call = CallConfig {
             function: "chat".to_string(),
@@ -786,6 +841,7 @@ mod tests {
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         };
         let call = CallConfig {
             function: "extract_batch".to_string(),
@@ -845,6 +901,7 @@ mod tests {
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         };
         let mut config = make_e2e_config(vec![]);
         config.exclude_categories = HashSet::from(["budget".to_string()]);

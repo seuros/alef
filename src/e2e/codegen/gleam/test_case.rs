@@ -120,6 +120,7 @@ pub(super) fn render_test_case(
         &extra_args,
         options_type,
         options_via,
+        fixture.preserve_input_urls,
     );
 
     let _ = writeln!(out, "// {description}");

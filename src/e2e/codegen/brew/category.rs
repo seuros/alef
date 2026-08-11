@@ -234,6 +234,18 @@ fn build_cli_command(
     for arg in args {
         match arg.arg_type.as_str() {
             "mock_url" => {
+                if let Some(url) = crate::e2e::codegen::preserved_url_literal(
+                    fixture.preserve_input_urls,
+                    crate::e2e::codegen::resolve_field(&fixture.input, &arg.field),
+                ) {
+                    // ~keep Single quotes, not double. `escape_shell` neutralises `'` for a
+                    // single-quoted context, and only single quotes suppress `$` and
+                    // backtick expansion. Wrapping its output in double quotes — as the
+                    // relative-path branch below must, to expand `${MOCK_SERVER_*}` — would
+                    // let a fixture URL containing `$(...)` execute when the test runs.
+                    parts.push(format!("'{}'", escape_shell(url)));
+                    continue;
+                }
                 // Positional URL argument.
                 //
                 // Prefer the per-fixture `MOCK_SERVER_<FIXTURE_ID>` env var when set —
@@ -263,7 +275,7 @@ fn build_cli_command(
                 if let Some(urls_array) = urls_value.as_array() {
                     for url_value in urls_array {
                         if let Some(path) = url_value.as_str() {
-                            if path.starts_with("http") {
+                            if fixture.preserve_input_urls || path.starts_with("http") {
                                 // Absolute URL — emit verbatim (shell-quoted).
                                 parts.push(format!("\"{}\"", escape_shell(path)));
                             } else {

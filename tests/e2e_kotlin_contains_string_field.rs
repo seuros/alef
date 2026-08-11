@@ -81,6 +81,7 @@ fn make_fixture_with_contains_on_string() -> FixtureGroup {
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         }],
     }
 }
@@ -235,6 +236,7 @@ type = "json_object"
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         }],
     }];
 

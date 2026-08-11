@@ -208,6 +208,60 @@ pub(crate) fn declared_error_value(fixture: &crate::e2e::fixture::Fixture) -> Op
         .and_then(serde_json::Value::as_str)
 }
 
+/// The literal URL a `mock_url` argument must be given verbatim, if any.
+///
+/// ~keep `preserve` is the fixture's `preserve_input_urls` flag and `value` is the
+/// already-resolved `input.<field>` the emitter holds — every `mock_url` branch
+/// receives that value today and discards it in favour of the mock server address.
+/// Backends must consult this *before* binding the mock server and fall through
+/// unchanged on `None`, because substituting the mock address silently rewrites the
+/// subject of any test whose point is the address itself.
+pub(crate) fn preserved_url_literal(preserve: bool, value: &serde_json::Value) -> Option<&str> {
+    if !preserve {
+        return None;
+    }
+    value.as_str()
+}
+
+/// The literal URL list a `mock_url_list` argument must be given verbatim, if any.
+///
+/// ~keep The list counterpart of [`preserved_url_literal`]. `value` is whatever the
+/// backend already resolved (via [`resolve_urls_field`], so `batch_urls` ↔ `urls`
+/// aliasing still applies). A list containing any non-string entry yields `None`
+/// rather than a partially-preserved list: dropping an element silently would weaken
+/// the test in precisely the way the substitution being replaced does.
+pub(crate) fn preserved_url_list(preserve: bool, value: &serde_json::Value) -> Option<Vec<&str>> {
+    if !preserve {
+        return None;
+    }
+    value.as_array()?.iter().map(serde_json::Value::as_str).collect()
+}
+
+#[cfg(test)]
+mod preserved_url_tests {
+    use super::{preserved_url_list, preserved_url_literal};
+
+    #[test]
+    fn scalar_url_is_preserved_only_when_requested() {
+        let value = serde_json::json!("http://127.0.0.1/private");
+        assert_eq!(preserved_url_literal(true, &value), Some("http://127.0.0.1/private"));
+        assert_eq!(preserved_url_literal(false, &value), None);
+    }
+
+    #[test]
+    fn url_list_is_preserved_atomically() {
+        let value = serde_json::json!(["http://host-a.test/", "file:///tmp/example"]);
+        assert_eq!(
+            preserved_url_list(true, &value),
+            Some(vec!["http://host-a.test/", "file:///tmp/example"])
+        );
+        assert_eq!(
+            preserved_url_list(true, &serde_json::json!(["https://host.test", 7])),
+            None
+        );
+    }
+}
+
 /// Trait for per-language e2e test code generation.
 pub trait E2eCodegen: Send + Sync {
     /// Generate all e2e test project files for this language.

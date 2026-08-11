@@ -124,6 +124,7 @@ fn build_fixture_with_http() -> FixtureGroup {
             }),
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         }],
     }
 }
@@ -260,6 +261,7 @@ prefix = "htm"
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         }],
     }];
 

@@ -82,6 +82,7 @@ mod tests {
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         };
         let mut out = String::new();
         let emitted = render_ws_test(&mut out, &StubRenderer, &fixture);

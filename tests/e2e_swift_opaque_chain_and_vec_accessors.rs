@@ -179,6 +179,7 @@ fn make_fixture(id: &str, assertion_type: &str, field: &str, value: serde_json::
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
     }
 }
 

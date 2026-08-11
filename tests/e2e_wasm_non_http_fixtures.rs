@@ -80,6 +80,7 @@ fn smoke_fixture() -> FixtureGroup {
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         }],
     }
 }

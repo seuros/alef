@@ -53,6 +53,7 @@ fn make_chat_fixture(id: &str) -> Fixture {
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
     }
 }
 
@@ -95,6 +96,7 @@ fn make_chat_fixture_with_field_assertion(id: &str, field: &str, expected: &str)
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
     }
 }
 
@@ -305,6 +307,7 @@ fn make_streaming_fixture(id: &str) -> Fixture {
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
     }
 }
 

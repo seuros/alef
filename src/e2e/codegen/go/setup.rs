@@ -184,7 +184,11 @@ pub(super) fn build_args_and_setup(
 
     for arg in args {
         if arg.arg_type == "mock_url" {
-            if fixture.has_host_root_route() {
+            let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
+            let value = input.get(field).unwrap_or(&serde_json::Value::Null);
+            if let Some(url) = crate::e2e::codegen::preserved_url_literal(fixture.preserve_input_urls, value) {
+                setup_lines.push(format!("{} := {}", arg.name, go_string_literal(url)));
+            } else if fixture.has_host_root_route() {
                 let env_key = format!("MOCK_SERVER_{}", fixture_id.to_uppercase());
                 setup_lines.push(format!("{} := os.Getenv(\"{env_key}\")", arg.name));
                 setup_lines.push(format!(
@@ -205,6 +209,14 @@ pub(super) fn build_args_and_setup(
             let env_key = format!("MOCK_SERVER_{}", fixture_id.to_uppercase());
             let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
             let val = input.get(field).unwrap_or(&serde_json::Value::Null);
+            let var_name = &arg.name;
+
+            if let Some(urls) = crate::e2e::codegen::preserved_url_list(fixture.preserve_input_urls, val) {
+                let literals: Vec<String> = urls.iter().map(|url| go_string_literal(url)).collect();
+                setup_lines.push(format!("{var_name} := []string{{{}}}", literals.join(", ")));
+                parts.push(var_name.to_string());
+                continue;
+            }
 
             let paths: Vec<String> = if let Some(arr) = val.as_array() {
                 arr.iter().filter_map(|v| v.as_str().map(go_string_literal)).collect()
@@ -213,7 +225,6 @@ pub(super) fn build_args_and_setup(
             };
 
             let paths_literal = paths.join(", ");
-            let var_name = &arg.name;
 
             setup_lines.push(format!(
                 "{var_name}Base := os.Getenv(\"{env_key}\")\n\tif {var_name}Base == \"\" {{\n\t\t{var_name}Base = os.Getenv(\"MOCK_SERVER_URL\") + \"/fixtures/{fixture_id}\"\n\t}}"

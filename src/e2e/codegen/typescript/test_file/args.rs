@@ -53,14 +53,19 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
 
     for (idx, arg) in args.iter().enumerate() {
         if arg.arg_type == "mock_url" {
-            let url_expr = if fixture.has_host_root_route() {
-                format!(
-                    "process.env.MOCK_SERVER_{} ?? `${{process.env.MOCK_SERVER_URL}}/fixtures/{fixture_id}`",
-                    fixture_id.to_uppercase()
-                )
-            } else {
-                format!("`${{process.env.MOCK_SERVER_URL}}/fixtures/{fixture_id}`")
-            };
+            let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
+            let value = input.get(field).unwrap_or(&serde_json::Value::Null);
+            let url_expr =
+                if let Some(url) = crate::e2e::codegen::preserved_url_literal(fixture.preserve_input_urls, value) {
+                    format!("\"{}\"", escape_js(url))
+                } else if fixture.has_host_root_route() {
+                    format!(
+                        "process.env.MOCK_SERVER_{} ?? `${{process.env.MOCK_SERVER_URL}}/fixtures/{fixture_id}`",
+                        fixture_id.to_uppercase()
+                    )
+                } else {
+                    format!("`${{process.env.MOCK_SERVER_URL}}/fixtures/{fixture_id}`")
+                };
             setup_lines.push(format!("const {} = {url_expr};", arg.name));
             parts.push(arg.name.clone());
             continue;
@@ -82,6 +87,17 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
             } else {
                 crate::e2e::codegen::resolve_urls_field(input, &arg.field).clone()
             };
+            let name = &arg.name;
+            if let Some(urls) = crate::e2e::codegen::preserved_url_list(fixture.preserve_input_urls, &val) {
+                let literals = urls
+                    .iter()
+                    .map(|url| format!("\"{}\"", escape_js(url)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                setup_lines.push(format!("const {name} = [{literals}];"));
+                parts.push(name.clone());
+                continue;
+            }
             let paths: Vec<String> = if let Some(arr) = val.as_array() {
                 arr.iter()
                     .filter_map(|v| v.as_str().map(|s| format!("\"{}\"", escape_js(s))))
@@ -90,7 +106,6 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
                 Vec::new()
             };
             let paths_literal = paths.join(", ");
-            let name = &arg.name;
             setup_lines.push(format!(
                 "const {name}Base = process.env.MOCK_SERVER_{env_upper} ?? `${{process.env.MOCK_SERVER_URL}}/fixtures/{fixture_id}`;"
             ));

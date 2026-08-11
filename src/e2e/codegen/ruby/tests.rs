@@ -25,6 +25,7 @@ mod trait_bridge_tests {
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
             assertions: vec![],
             visitor: None,
             args: vec![],
@@ -383,6 +384,7 @@ mod gemfile_tests {
             }),
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         };
 
         let groups = vec![FixtureGroup {

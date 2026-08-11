@@ -640,6 +640,7 @@ fn http_only_test_file_with_json_body_emits_decompress_helper() {
         }),
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
     };
 
     let fixtures = vec![&fixture];
@@ -778,6 +779,7 @@ fn multipart_param_with_json_object_body_does_not_emit_boundary_content_type() {
         }),
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
     };
 
     let mut out = String::new();
@@ -853,6 +855,7 @@ fn multipart_synthesized_body_emits_boundary_content_type() {
         }),
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
     };
 
     let mut out = String::new();

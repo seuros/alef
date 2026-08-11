@@ -60,6 +60,7 @@ fn make_simple_fixture() -> FixtureGroup {
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
             visitor: None,
             args: vec![],
             assertion_recipes: vec![],

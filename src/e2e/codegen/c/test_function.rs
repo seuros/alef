@@ -351,7 +351,19 @@ pub(super) fn render_test_function(
                     }
                     request_handle_vars.push((arg.name.clone(), var_name));
                 }
-            } else if arg.arg_type == "string" {
+            // ~keep A `mock_url` arg joins the string branch ONLY when the fixture opted
+            // into verbatim URLs and a string actually resolved. Admitting every
+            // `mock_url` here would change the default path, which previously never
+            // reached this branch at all — the fallthrough emitted a mock-server
+            // identifier that is not declared on every code path through this emitter.
+            } else if arg.arg_type == "string"
+                || (arg.arg_type == "mock_url"
+                    && crate::e2e::codegen::preserved_url_literal(
+                        fixture.preserve_input_urls,
+                        crate::e2e::codegen::resolve_field(&fixture.input, &arg.field),
+                    )
+                    .is_some())
+            {
                 // String arg: read fixture input, emit as a C string literal inline.
                 let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
                 let val = fixture.input.get(field);

@@ -42,6 +42,7 @@ fn make_fixture(id: &str) -> Fixture {
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
     }
 }
 
@@ -178,6 +179,7 @@ args = [{ name = "name", field = "language", type = "string" }]
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
     };
 
     let groups = vec![FixtureGroup {

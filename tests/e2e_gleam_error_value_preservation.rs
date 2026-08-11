@@ -42,6 +42,7 @@ fn fixture(id: &str, value: Option<&str>) -> Fixture {
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
     }
 }
 

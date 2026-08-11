@@ -150,6 +150,7 @@ fn make_contains_fixture(id: &str, field: &str, value: &str) -> Fixture {
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
     }
 }
 

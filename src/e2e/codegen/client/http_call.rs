@@ -367,6 +367,7 @@ mod tests {
             }),
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         }
     }
 

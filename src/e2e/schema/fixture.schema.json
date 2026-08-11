@@ -71,6 +71,11 @@
           "type": "object",
           "description": "Input data passed to the function under test. Fields map to args via [e2e.call.args] config"
         },
+        "preserve_input_urls": {
+          "type": "boolean",
+          "default": false,
+          "description": "Pass this fixture's declared URLs to the call verbatim instead of substituting the mock server address. mock_url and mock_url_list args otherwise ignore input.url/input.urls entirely, which silently rewrites the subject of any test whose point is the address itself (SSRF policy, scheme rejection, host parsing). Opt in per fixture; there is deliberately no absolute-URL heuristic"
+        },
         "config": {
           "description": "Optional fixture-level config mirrored into input.config before code generation"
         },

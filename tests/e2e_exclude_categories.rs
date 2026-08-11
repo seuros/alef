@@ -34,6 +34,7 @@ fn make_fixture(id: &str, category: Option<&str>, source: &str) -> Fixture {
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
     }
 }
 

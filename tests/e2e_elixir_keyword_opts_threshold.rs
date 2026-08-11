@@ -74,6 +74,7 @@ fn fixture_with_input(input: serde_json::Value) -> FixtureGroup {
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         }],
     }
 }

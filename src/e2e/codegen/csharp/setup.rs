@@ -75,6 +75,19 @@ pub(super) fn build_args_and_setup(
         }
 
         if arg.arg_type == "mock_url" {
+            let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
+            let value = input.get(field).unwrap_or(&serde_json::Value::Null);
+            if let Some(url) = crate::e2e::codegen::preserved_url_literal(fixture.preserve_input_urls, value) {
+                setup_lines.push(format!("var {} = \"{}\";", arg.name, escape_csharp(url)));
+                if let Some(req_type) = adapter_request_type {
+                    let req_var = format!("{}Req", arg.name);
+                    setup_lines.push(format!("var {req_var} = new {req_type} {{ Url = {} }};", arg.name));
+                    parts.push(req_var);
+                } else {
+                    parts.push(arg.name.clone());
+                }
+                continue;
+            }
             if fixture.has_host_root_route() {
                 let env_key = format!("MOCK_SERVER_{}", fixture_id.to_uppercase());
                 setup_lines.push(format!(
@@ -117,6 +130,16 @@ pub(super) fn build_args_and_setup(
             } else {
                 crate::e2e::codegen::resolve_urls_field(input, &arg.field).clone()
             };
+            if let Some(urls) = crate::e2e::codegen::preserved_url_list(fixture.preserve_input_urls, &val) {
+                let literals: Vec<String> = urls.iter().map(|url| format!("\"{}\"", escape_csharp(url))).collect();
+                let name = &arg.name;
+                setup_lines.push(format!(
+                    "var {name} = new System.Collections.Generic.List<string>(new string[] {{ {} }});",
+                    literals.join(", ")
+                ));
+                parts.push(name.clone());
+                continue;
+            }
             let paths: Vec<String> = if let Some(arr) = val.as_array() {
                 arr.iter()
                     .filter_map(|v| v.as_str().map(|s| format!("\"{}\"", escape_csharp(s))))

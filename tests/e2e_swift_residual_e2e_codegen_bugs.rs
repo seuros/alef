@@ -136,6 +136,7 @@ fn make_fixture(id: &str, assertion: Assertion) -> Fixture {
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
     }
 }
 

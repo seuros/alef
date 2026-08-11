@@ -63,6 +63,7 @@ fn fixture_with_no_assertions() -> FixtureGroup {
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         }],
     }
 }
@@ -100,6 +101,7 @@ fn fixture_with_assertions() -> FixtureGroup {
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         }],
     }
 }

@@ -74,14 +74,19 @@ pub(super) fn build_args_and_setup(
 
         if arg.arg_type == "mock_url" {
             let fixture_id = &fixture.id;
-            let url_expr = if fixture.has_host_root_route() {
-                format!(
-                    "os.environ.get('MOCK_SERVER_{}') or os.environ['MOCK_SERVER_URL'] + '/fixtures/{fixture_id}'",
-                    fixture_id.to_uppercase()
-                )
-            } else {
-                format!("os.environ['MOCK_SERVER_URL'] + '/fixtures/{fixture_id}'")
-            };
+            let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
+            let value = fixture.input.get(field).unwrap_or(&serde_json::Value::Null);
+            let url_expr =
+                if let Some(url) = crate::e2e::codegen::preserved_url_literal(fixture.preserve_input_urls, value) {
+                    format!("\"{}\"", crate::e2e::escape::escape_python(url))
+                } else if fixture.has_host_root_route() {
+                    format!(
+                        "os.environ.get('MOCK_SERVER_{}') or os.environ['MOCK_SERVER_URL'] + '/fixtures/{fixture_id}'",
+                        fixture_id.to_uppercase()
+                    )
+                } else {
+                    format!("os.environ['MOCK_SERVER_URL'] + '/fixtures/{fixture_id}'")
+                };
             arg_bindings.push(format!("    {var_name} = {url_expr}"));
             kwarg_exprs.push(var_name.to_string());
             continue;
@@ -102,6 +107,16 @@ pub(super) fn build_args_and_setup(
             // Extract path strings from fixture input array.
             // Try both the declared field and common aliases (batch_urls, urls, etc.)
             let field_value = crate::e2e::codegen::resolve_urls_field(&fixture.input, &arg.field);
+            if let Some(urls) = crate::e2e::codegen::preserved_url_list(fixture.preserve_input_urls, field_value) {
+                let urls = urls
+                    .iter()
+                    .map(|url| format!("\"{}\"", crate::e2e::escape::escape_python(url)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                arg_bindings.push(format!("    {var_name} = [{urls}]"));
+                kwarg_exprs.push(var_name.to_string());
+                continue;
+            }
             let paths: Vec<String> = if let Some(arr) = field_value.as_array() {
                 arr.iter()
                     .filter_map(|v| {
@@ -285,6 +300,7 @@ mod tests {
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
             assertions: Vec::new(),
             call: None,
             skip: None,

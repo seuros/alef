@@ -121,6 +121,22 @@ pub struct Fixture {
     /// Input data passed to the function under test.
     #[serde(default)]
     pub input: serde_json::Value,
+    /// Pass this fixture's declared URLs to the call verbatim instead of substituting
+    /// the mock server address.
+    ///
+    /// ~keep `mock_url` and `mock_url_list` arguments normally ignore `input.url` /
+    /// `input.urls` entirely and bind the per-fixture mock server address, because
+    /// almost every fixture wants a live server to talk to. A minority of fixtures
+    /// are testing the address *itself* — SSRF policy, scheme rejection, host parsing
+    /// — and for those the substitution silently replaces the subject of the test, so
+    /// several fixtures declaring different addresses all end up exercising one
+    /// trivial case and passing for the wrong reason.
+    ///
+    /// This is opt-in per fixture rather than inferred: an "is it absolute?" heuristic
+    /// would reclassify existing fixtures that legitimately declare an absolute URL
+    /// next to a mock server, changing their meaning without anyone editing them.
+    #[serde(default)]
+    pub preserve_input_urls: bool,
     /// Optional mock HTTP response for testing HTTP clients.
     #[serde(default)]
     pub mock_response: Option<MockResponse>,
@@ -398,6 +414,7 @@ impl Default for Fixture {
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         }
     }
 }

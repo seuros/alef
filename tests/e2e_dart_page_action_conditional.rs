@@ -38,6 +38,7 @@ fn make_fixture(id: &str, input: serde_json::Value) -> Fixture {
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
     }
 }
 

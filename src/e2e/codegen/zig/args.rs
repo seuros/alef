@@ -22,6 +22,12 @@ pub(super) fn build_args_and_setup(
     for arg in args {
         if arg.arg_type == "mock_url" {
             let name = arg.name.clone();
+            let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
+            let value = input.get(field).unwrap_or(&serde_json::Value::Null);
+            if let Some(url) = crate::e2e::codegen::preserved_url_literal(fixture.preserve_input_urls, value) {
+                parts.push(format!("\"{}\"", escape_zig(url)));
+                continue;
+            }
             let id_upper = fixture_id.to_uppercase();
             setup_lines.push(format!(
                 "const {name} = if (std.c.getenv(\"MOCK_SERVER_{id_upper}\")) |_pf| try std.fmt.allocPrint(allocator, \"{{s}}\", .{{std.mem.span(_pf)}}) else try std.fmt.allocPrint(allocator, \"{{s}}/fixtures/{fixture_id}\", .{{if (std.c.getenv(\"MOCK_SERVER_URL\")) |v| std.mem.span(v) else \"http://localhost:8080\"}});"
@@ -30,6 +36,19 @@ pub(super) fn build_args_and_setup(
             parts.push(name);
             setup_needs_gpa = true;
             continue;
+        }
+
+        if arg.arg_type == "mock_url_list" {
+            let value = crate::e2e::codegen::resolve_urls_field(input, &arg.field);
+            if let Some(urls) = crate::e2e::codegen::preserved_url_list(fixture.preserve_input_urls, value) {
+                let values = urls
+                    .iter()
+                    .map(|url| format!("\"{}\"", escape_zig(url)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                parts.push(format!("&[_][]const u8{{{values}}}"));
+                continue;
+            }
         }
 
         // Handle args (engine handle): serialize config to JSON string literal, or null.

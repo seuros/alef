@@ -109,6 +109,7 @@ fn build_function_call_fixture(id: &str) -> FixtureGroup {
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         }],
     }
 }
@@ -204,6 +205,7 @@ result_is_simple = true
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         }],
     }];
     let files = RustE2eCodegen
@@ -296,6 +298,7 @@ result_is_simple = true
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         }],
     }];
     let files = RustE2eCodegen
@@ -386,6 +389,7 @@ result_is_simple = true
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         }],
     }];
     let files = RustE2eCodegen
@@ -511,6 +515,7 @@ function = "process"
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         }],
     };
 

@@ -86,6 +86,7 @@ mod tests {
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
             assertions: vec![crate::e2e::fixture::Assertion {
                 assertion_type: "error".to_string(),
                 field: None,

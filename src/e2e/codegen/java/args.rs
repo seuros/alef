@@ -45,7 +45,11 @@ pub(super) fn build_args_and_setup(
 
     for arg in args {
         if arg.arg_type == "mock_url" {
-            if fixture.has_host_root_route() {
+            let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
+            let value = input.get(field).unwrap_or(&serde_json::Value::Null);
+            if let Some(url) = crate::e2e::codegen::preserved_url_literal(fixture.preserve_input_urls, value) {
+                setup_lines.push(format!("String {} = \"{}\";", arg.name, escape_java(url)));
+            } else if fixture.has_host_root_route() {
                 setup_lines.push(format!(
                     "String {} = System.getProperty(\"mockServer.{fixture_id}\", System.getProperty(\"mockServerUrl\", System.getenv(\"MOCK_SERVER_URL\")) + \"/fixtures/{fixture_id}\");",
                     arg.name,
@@ -73,8 +77,25 @@ pub(super) fn build_args_and_setup(
             // env var first, then `MOCK_SERVER_URL/fixtures/<id>`. Emitted as a typed
             // `java.util.List<String>` so it matches the binding signature.
             let env_key = format!("MOCK_SERVER_{}", fixture_id.to_uppercase());
-            let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
-            let val = input.get(field).unwrap_or(&serde_json::Value::Null);
+            let val = crate::e2e::codegen::resolve_urls_field(input, &arg.field);
+            let name = &arg.name;
+
+            if let Some(urls) = crate::e2e::codegen::preserved_url_list(fixture.preserve_input_urls, val) {
+                let literals: Vec<String> = urls.iter().map(|url| format!("\"{}\"", escape_java(url))).collect();
+                setup_lines.push(format!(
+                    "java.util.List<String> {name} = java.util.List.of({});",
+                    literals.join(", ")
+                ));
+                if let Some(req_type) = adapter_request_type {
+                    let req_var = format!("{}Req", arg.name);
+                    setup_lines.push(format!("var {req_var} = new {req_type}({});", arg.name));
+                    parts.push(req_var);
+                } else {
+                    parts.push(name.clone());
+                }
+                continue;
+            }
+
             let paths: Vec<String> = if let Some(arr) = val.as_array() {
                 arr.iter()
                     .filter_map(|v| v.as_str().map(|s| format!("\"{}\"", escape_java(s))))
@@ -83,7 +104,6 @@ pub(super) fn build_args_and_setup(
                 Vec::new()
             };
             let paths_literal = paths.join(", ");
-            let name = &arg.name;
             // Per-fixture mock-server URL resolution order:
             //   1. System.getProperty("mockServer.<fixture_id>") - populated by
             //      MockServerListener from the mock-server's MOCK_SERVERS=

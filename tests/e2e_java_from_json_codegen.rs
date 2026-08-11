@@ -53,6 +53,7 @@ fn make_smoke_fixture(id: &str) -> Fixture {
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
     }
 }
 

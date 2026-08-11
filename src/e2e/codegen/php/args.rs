@@ -83,7 +83,11 @@ pub(super) fn build_args_and_setup(
 
     for (idx, arg) in args.iter().enumerate() {
         if arg.arg_type == "mock_url" {
-            if fixture.has_host_root_route() {
+            let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
+            let value = input.get(field).unwrap_or(&serde_json::Value::Null);
+            if let Some(url) = crate::e2e::codegen::preserved_url_literal(fixture.preserve_input_urls, value) {
+                setup_lines.push(format!("${} = \"{}\";", arg.name, escape_php(url)));
+            } else if fixture.has_host_root_route() {
                 let env_key = format!("MOCK_SERVER_{}", fixture_id.to_uppercase());
                 setup_lines.push(format!(
                     "${} = getenv('{env_key}') ?: getenv('MOCK_SERVER_URL') . '/fixtures/{fixture_id}';",
@@ -118,6 +122,19 @@ pub(super) fn build_args_and_setup(
             } else {
                 crate::e2e::codegen::resolve_urls_field(input, &arg.field).clone()
             };
+            let name = &arg.name;
+            if let Some(urls) = crate::e2e::codegen::preserved_url_list(fixture.preserve_input_urls, &val) {
+                let literals: Vec<String> = urls.iter().map(|url| format!("\"{}\"", escape_php(url))).collect();
+                setup_lines.push(format!("${name} = [{}];", literals.join(", ")));
+                if let Some(req_type) = adapter_request_type {
+                    let req_var = format!("${name}_req");
+                    setup_lines.push(format!("{req_var} = new {req_type}(${name});"));
+                    parts.push(req_var);
+                } else {
+                    parts.push(format!("${name}"));
+                }
+                continue;
+            }
             let paths: Vec<String> = if let Some(arr) = val.as_array() {
                 arr.iter()
                     .filter_map(|v| v.as_str().map(|s| format!("\"{}\"", escape_php(s))))
@@ -126,7 +143,6 @@ pub(super) fn build_args_and_setup(
                 Vec::new()
             };
             let paths_literal = paths.join(", ");
-            let name = &arg.name;
             setup_lines.push(format!(
                 "${name}_base = getenv('{env_key}') ?: getenv('MOCK_SERVER_URL') . '/fixtures/{fixture_id}';"
             ));

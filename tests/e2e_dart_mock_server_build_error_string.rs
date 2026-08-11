@@ -60,6 +60,7 @@ fn make_http_fixture(id: &str, description: &str) -> Fixture {
         }),
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
     }
 }
 

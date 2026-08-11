@@ -79,6 +79,7 @@ fn make_mock_server_fixture() -> FixtureGroup {
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         }],
     }
 }
@@ -188,6 +189,7 @@ fn test_go_main_test_fixture_has_http_fixtures_not_mock_server() {
             }),
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         }],
     }];
 

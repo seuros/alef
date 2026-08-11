@@ -50,6 +50,7 @@ fn make_fixture_with_string_array() -> FixtureGroup {
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
         }],
     }
 }

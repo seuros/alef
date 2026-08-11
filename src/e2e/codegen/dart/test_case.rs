@@ -229,7 +229,13 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
         match arg_def.arg_type.as_str() {
             "mock_url" => {
                 let name = arg_def.name.clone();
-                setup_lines.push(format!(r#"final {name} = _fixtureUrl("{fixture_id}");"#));
+                let field = arg_def.field.strip_prefix("input.").unwrap_or(&arg_def.field);
+                let value = fixture.input.get(field).unwrap_or(&serde_json::Value::Null);
+                if let Some(url) = crate::e2e::codegen::preserved_url_literal(fixture.preserve_input_urls, value) {
+                    setup_lines.push(format!("final {name} = '{}';", escape_dart(url)));
+                } else {
+                    setup_lines.push(format!(r#"final {name} = _fixtureUrl("{fixture_id}");"#));
+                }
                 // For streaming adapters with a request_type, wrap the URL in the request constructor.
                 if let Some(ref req_type) = adapter_request_type {
                     let req_var = format!("{}Req", name);
@@ -285,10 +291,13 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
             "mock_url_list" => {
                 // List<String> of URLs: each element is either a bare path (`/seed1`) — prefixed
                 // with the SUT URL at runtime — or an absolute URL kept as-is.
-                let field = arg_def.field.strip_prefix("input.").unwrap_or(&arg_def.field);
-                let val = fixture.input.get(field).unwrap_or(&serde_json::Value::Null);
+                let val = crate::e2e::codegen::resolve_urls_field(&fixture.input, &arg_def.field);
+                let preserved_urls = crate::e2e::codegen::preserved_url_list(fixture.preserve_input_urls, val);
+                let is_preserved = preserved_urls.is_some();
 
-                let paths: Vec<String> = if let Some(arr) = val.as_array() {
+                let paths: Vec<String> = if let Some(urls) = preserved_urls {
+                    urls.into_iter().map(|url| format!("'{}'", escape_dart(url))).collect()
+                } else if let Some(arr) = val.as_array() {
                     arr.iter()
                         .filter_map(|v| v.as_str())
                         .map(|s| format!("'{}'", escape_dart(s)))
@@ -300,10 +309,14 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                 let var_name = &arg_def.name;
                 let paths_literal = paths.join(", ");
 
-                setup_lines.push(format!(r#"final {var_name}Base = _fixtureUrl("{fixture_id}");"#));
-                setup_lines.push(format!(
-                    r#"final {var_name} = <String>[{paths_literal}].map((p) => p.startsWith('http') ? p : {var_name}Base + p).toList();"#
-                ));
+                if is_preserved {
+                    setup_lines.push(format!("final {var_name} = <String>[{paths_literal}];"));
+                } else {
+                    setup_lines.push(format!(r#"final {var_name}Base = _fixtureUrl("{fixture_id}");"#));
+                    setup_lines.push(format!(
+                        r#"final {var_name} = <String>[{paths_literal}].map((p) => p.startsWith('http') ? p : {var_name}Base + p).toList();"#
+                    ));
+                }
 
                 // For streaming adapters with a request_type, wrap the URL list in the request constructor.
                 if let Some(ref req_type) = adapter_request_type {

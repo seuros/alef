@@ -49,6 +49,7 @@ fn make_fixture(id: &str, assertion_type: &str, field: &str) -> Fixture {
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
     }
 }
 

@@ -46,8 +46,13 @@ pub fn render_rust_arg(
     handle_config_type: Option<&str>,
     docs_files: &[FixtureDocsFileInput],
     vec_inner_is_ref: bool,
+    preserve_input_urls: bool,
 ) -> (Vec<String>, String) {
     if arg_type == "mock_url" {
+        if let Some(url) = crate::e2e::codegen::preserved_url_literal(preserve_input_urls, value) {
+            let lines = vec![format!("let {name} = {}.to_string();", rust_raw_string(url))];
+            return (lines, format!("&{name}"));
+        }
         // Prefer the per-fixture `MOCK_SERVER_<FIXTURE_ID>` env var when set (host-root
         // fixtures get their own listener — robots.txt and sitemap.xml must live at the
         // host root). Fall back to `MOCK_SERVER_URL/fixtures/<id>` for the common case.
@@ -58,6 +63,15 @@ pub fn render_rust_arg(
         return (lines, format!("&{name}"));
     }
     if arg_type == "mock_url_list" {
+        if let Some(urls) = crate::e2e::codegen::preserved_url_list(preserve_input_urls, value) {
+            let literals: Vec<String> = urls.iter().map(|url| rust_raw_string(url)).collect();
+            let lines = vec![format!(
+                "let {name}: Vec<String> = [{}].into_iter().map(str::to_string).collect();",
+                literals.join(", ")
+            )];
+            let expr = if owned { name.to_string() } else { format!("&{name}") };
+            return (lines, expr);
+        }
         // Vec<String> of URLs: each element is either a bare path (`/seed1`) — prefixed
         // with the per-fixture mock-server URL at runtime — or an absolute URL kept as-is.
         // Mirrors the `mock_url` resolution: `MOCK_SERVER_<FIXTURE_ID>` first, then
@@ -582,6 +596,7 @@ mod tests {
             Some("SessionConfig"),
             &[],
             false,
+            false,
         );
 
         assert_eq!(expr, "&session");
@@ -608,6 +623,7 @@ mod tests {
             None,
             &[],
             true,
+            false,
         );
 
         assert_eq!(expr, "&names_refs");
@@ -631,6 +647,7 @@ mod tests {
             false,
             None,
             &[],
+            false,
             false,
         );
 
@@ -656,6 +673,7 @@ mod tests {
             None,
             &[],
             false,
+            false,
         );
 
         assert_eq!(expr, "input");
@@ -680,6 +698,7 @@ mod tests {
             false,
             None,
             &[],
+            false,
             false,
         );
 
@@ -709,6 +728,7 @@ mod tests {
                 path: "document.pdf".into(),
             }],
             false,
+            false,
         );
 
         assert_eq!(expression, "content");
@@ -737,6 +757,7 @@ mod tests {
                 field: "/bytes".into(),
                 path: "document.pdf".into(),
             }],
+            false,
             false,
         );
 

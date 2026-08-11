@@ -209,6 +209,7 @@ pub fn render_test_function(
             resolve_handle_config_type(arg, call_recipe.options_type, type_defs).as_deref(),
             &fixture.docs_files_for_arg(&arg.field),
             arg.vec_inner_is_ref,
+            fixture.preserve_input_urls,
         );
         // Add explicit type annotation to json_object bindings so Rust can resolve
         // `Default::default()` and `serde_json::from_value(…)` without a trailing

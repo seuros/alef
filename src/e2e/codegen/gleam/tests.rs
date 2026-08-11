@@ -110,6 +110,7 @@ fn build_args_with_json_object_wrapper_substitutes_placeholder() {
         &[],
         None,
         "default",
+        false,
     ) else {
         panic!("expected Some result from build_args_and_setup");
     };
@@ -149,6 +150,7 @@ fn build_args_without_json_object_wrapper_returns_none_for_skip() {
         &[],
         None,
         "default",
+        false,
     );
     assert!(
         result.is_none(),

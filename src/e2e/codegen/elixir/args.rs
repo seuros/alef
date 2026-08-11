@@ -81,7 +81,11 @@ pub(super) fn build_args_and_setup(
 
     for arg in args {
         if arg.arg_type == "mock_url" {
-            if fixture.has_host_root_route() {
+            let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
+            let value = input.get(field).unwrap_or(&serde_json::Value::Null);
+            if let Some(url) = crate::e2e::codegen::preserved_url_literal(fixture.preserve_input_urls, value) {
+                setup_lines.push(format!("{} = \"{}\"", arg.name, escape_elixir(url)));
+            } else if fixture.has_host_root_route() {
                 let env_key = format!("MOCK_SERVER_{}", fixture_id.to_uppercase());
                 setup_lines.push(format!(
                     "{} = System.get_env(\"{env_key}\") || (System.get_env(\"MOCK_SERVER_URL\") || \"\") <> \"/fixtures/{fixture_id}\"",
@@ -110,9 +114,16 @@ pub(super) fn build_args_and_setup(
             // first, then `MOCK_SERVER_URL/fixtures/<id>`. Without this branch the
             // codegen falls back to a JSON-array literal of bare relative paths and
             // the Rust HTTP client rejects them.
-            let env_key = format!("MOCK_SERVER_{}", fixture_id.to_uppercase());
             let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
             let val = input.get(field).unwrap_or(&serde_json::Value::Null);
+            let name = &arg.name;
+            if let Some(urls) = crate::e2e::codegen::preserved_url_list(fixture.preserve_input_urls, val) {
+                let literals: Vec<String> = urls.iter().map(|url| format!("\"{}\"", escape_elixir(url))).collect();
+                setup_lines.push(format!("{name} = [{}]", literals.join(", ")));
+                parts.push(name.clone());
+                continue;
+            }
+            let env_key = format!("MOCK_SERVER_{}", fixture_id.to_uppercase());
             let paths: Vec<String> = if let Some(arr) = val.as_array() {
                 arr.iter()
                     .filter_map(|v| v.as_str().map(|s| format!("\"{}\"", escape_elixir(s))))
@@ -121,7 +132,6 @@ pub(super) fn build_args_and_setup(
                 Vec::new()
             };
             let paths_literal = paths.join(", ");
-            let name = &arg.name;
             setup_lines.push(format!(
                 "{name}_base = System.get_env(\"{env_key}\") || ((System.get_env(\"MOCK_SERVER_URL\") || \"\") <> \"/fixtures/{fixture_id}\")"
             ));

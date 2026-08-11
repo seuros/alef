@@ -84,6 +84,7 @@ mod plugin_trait_stub_generation {
             http: None,
             asyncapi: None,
             websocket: None,
+            preserve_input_urls: false,
             assertions: vec![],
             visitor: None,
             args: vec![],

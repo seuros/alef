@@ -80,6 +80,7 @@ fn fields_array_binding_emitted_before_count_min_assertion_for_non_streaming_fix
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
         category: None,
     };
 
@@ -174,6 +175,7 @@ fn result_is_simple_count_assertion_binds_to_result_variable() {
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
         category: None,
     };
 
@@ -256,6 +258,7 @@ fn handle_config_import_uses_resolved_options_type() {
         http: None,
         asyncapi: None,
         websocket: None,
+        preserve_input_urls: false,
         category: Some("sessions".to_string()),
     };
     let cfg: crate::core::config::NewAlefConfig = toml::from_str(
