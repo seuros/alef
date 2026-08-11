@@ -1,0 +1,12 @@
+package {{ package_name }}.e2e
+
+import org.junit.jupiter.api.Disabled
+import org.junit.jupiter.api.Test
+
+class ExcludedBindingsTest {
+{% for fixture in fixtures %}
+    @Test
+    @Disabled("{{ reason }}")
+    fun {{ fixture }}() {}
+{% endfor %}
+}

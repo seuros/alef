@@ -397,15 +397,15 @@ pub(super) fn render_assertion(
             if let Some(expected) = &assertion.value {
                 let go_val = json_to_go(expected);
                 if expected.is_string() {
-                    let trimmed_field = if is_optional && !field_expr.starts_with("len(") {
-                        format!("strings.TrimSpace(string(*{field_expr}))")
+                    let string_field = if is_optional && !field_expr.starts_with("len(") {
+                        format!("string(*{field_expr})")
                     } else {
-                        format!("strings.TrimSpace(string({field_expr}))")
+                        format!("string({field_expr})")
                     };
                     if is_optional && !field_expr.starts_with("len(") {
-                        let _ = writeln!(out_ref, "\tif {field_expr} != nil && {trimmed_field} != {go_val} {{");
+                        let _ = writeln!(out_ref, "\tif {field_expr} == nil || {string_field} != {go_val} {{");
                     } else {
-                        let _ = writeln!(out_ref, "\tif {trimmed_field} != {go_val} {{");
+                        let _ = writeln!(out_ref, "\tif {string_field} != {go_val} {{");
                     }
                 } else if is_optional && !field_expr.starts_with("len(") {
                     let _ = writeln!(out_ref, "\tif {field_expr} != nil && {deref_field_expr} != {go_val} {{");
@@ -434,13 +434,14 @@ pub(super) fn render_assertion(
                     format!("string({field_expr})")
                 };
                 if is_opt {
-                    let _ = writeln!(out_ref, "\tif {field_expr} != nil {{");
-                    let _ = writeln!(out_ref, "\tif !strings.Contains({field_for_contains}, {go_val}) {{");
+                    let _ = writeln!(
+                        out_ref,
+                        "\tif {field_expr} == nil || !strings.Contains({field_for_contains}, {go_val}) {{"
+                    );
                     let _ = writeln!(
                         out_ref,
                         "\t\tt.Errorf(\"expected to contain %s, got %v\", {go_val}, {field_expr})"
                     );
-                    let _ = writeln!(out_ref, "\t}}");
                     let _ = writeln!(out_ref, "\t}}");
                 } else {
                     let _ = writeln!(out_ref, "\tif !strings.Contains({field_for_contains}, {go_val}) {{");
@@ -471,10 +472,11 @@ pub(super) fn render_assertion(
                         format!("string({field_expr})")
                     };
                     if is_opt {
-                        let _ = writeln!(out_ref, "\tif {field_expr} != nil {{");
-                        let _ = writeln!(out_ref, "\tif !strings.Contains({field_for_contains}, {go_val}) {{");
+                        let _ = writeln!(
+                            out_ref,
+                            "\tif {field_expr} == nil || !strings.Contains({field_for_contains}, {go_val}) {{"
+                        );
                         let _ = writeln!(out_ref, "\t\tt.Errorf(\"expected to contain %s\", {go_val})");
-                        let _ = writeln!(out_ref, "\t}}");
                         let _ = writeln!(out_ref, "\t}}");
                     } else {
                         let _ = writeln!(out_ref, "\tif !strings.Contains({field_for_contains}, {go_val}) {{");

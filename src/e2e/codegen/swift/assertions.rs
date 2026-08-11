@@ -338,22 +338,7 @@ pub(super) fn render_assertion(
             if let Some(expected) = &assertion.value {
                 let swift_val = json_to_swift(expected);
                 if expected.is_string() {
-                    if field_is_enum {
-                        // Enum fields: `to_string()` (snake_case) returns RustString;
-                        // `.toString()` converts it to a Swift String.
-                        // `string_expr` already incorporates this call chain.
-                        let trim_expr =
-                            format!("{string_expr}.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)");
-                        let _ = writeln!(out, "        XCTAssertEqual({trim_expr}, {swift_val})");
-                    } else {
-                        // For optional strings (String?), use ?? to coalesce before trimming.
-                        // `.toString()` converts RustString → Swift String before calling
-                        // `.trimmingCharacters`, which requires a concrete String type.
-                        // string_expr already incorporates field_is_optional via ?.toString() ?? "".
-                        let trim_expr =
-                            format!("{string_expr}.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)");
-                        let _ = writeln!(out, "        XCTAssertEqual({trim_expr}, {swift_val})");
-                    }
+                    let _ = writeln!(out, "        XCTAssertEqual({string_expr}, {swift_val})");
                 } else {
                     // For numeric fields, cast the expected value to match the field's type (e.g., UInt).
                     let cast_swift_val = swift_numeric_literal_cast(&field_expr, &swift_val);
@@ -628,9 +613,15 @@ pub(super) fn render_assertion(
             };
             if !traversal_not_empty_handled {
                 if bare_result_is_option {
-                    let _ = writeln!(out, "        XCTAssertNotNil({result_var}, \"expected non-nil value\")");
+                    let _ = writeln!(
+                        out,
+                        "        XCTAssertFalse({string_expr}.isEmpty, \"expected non-empty value\")"
+                    );
                 } else if field_is_optional {
-                    let _ = writeln!(out, "        XCTAssertNotNil({field_expr}, \"expected non-nil value\")");
+                    let _ = writeln!(
+                        out,
+                        "        XCTAssertFalse({string_expr}.isEmpty, \"expected non-empty value\")"
+                    );
                 } else if field_is_array {
                     let _ = writeln!(
                         out,

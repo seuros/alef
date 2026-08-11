@@ -29,7 +29,7 @@
 {%- if not skipped_reason %}
 {% if assertion_type == "equals" -%}
 {% if is_string_val -%}
-        Assert.Equal({{ cs_val }}, {{ field_expr }}!.Trim());
+        Assert.Equal({{ cs_val }}, {{ field_expr }});
 {% elif is_bool_true -%}
         Assert.True({{ field_expr }});
 {% elif is_bool_false -%}
@@ -40,10 +40,10 @@
         Assert.Equal({{ cs_val }}, {{ field_expr }});
 {% endif %}
 {% elif assertion_type == "contains" -%}
-        Assert.Contains({{ cs_val }}, {{ field_as_str }}.ToLower());
+        Assert.Contains({{ cs_val }}, {{ field_as_str }});
 {% elif assertion_type == "contains_all" -%}
 {% for val in values_cs_lower -%}
-        Assert.Contains({{ val }}, {{ field_as_str }}.ToLower());
+        Assert.Contains({{ val }}, {{ field_as_str }});
 {% endfor %}
 {% elif assertion_type == "not_contains" -%}
         Assert.DoesNotContain({{ cs_val }}, {{ field_as_str }});

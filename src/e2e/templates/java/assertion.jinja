@@ -3,7 +3,7 @@
 {#- value: null in fixture; the Optional wrapper should be empty (underlying @Nullable was null) -#}
         assertTrue({{ field_expr|replace(".orElse(\"\")", "")|replace(".map(Number::longValue).orElse(0L)", "")|replace(".orElse(0L)", "") }}.isEmpty(), "expected null");
 {%- elif is_string_val -%}
-        assertEquals({{ java_val }}, {{ string_expr }}.trim());
+        assertEquals({{ java_val }}, {{ string_expr }});
 {%- elif is_numeric_val and ".orElse(\"\")" in field_expr -%}
         assertEquals({{ java_val }}, {{ field_expr|replace(".orElse(\"\")", ".map(Number::longValue).orElse(0L)") }});
 {%- else -%}
@@ -32,7 +32,11 @@
 {%- endif -%}
 {%- endfor -%}
 {%- elif assertion_type == "not_empty" -%}
+{%- if "Optional.ofNullable" in field_expr -%}
+        assertTrue({{ field_expr }}.filter(value -> !value.toString().isEmpty()).isPresent(), "expected non-empty value");
+{%- else -%}
         assertFalse({{ field_expr }}.isEmpty(), "expected non-empty value");
+{%- endif -%}
 {%- elif assertion_type == "is_empty" -%}
         assertTrue({{ field_expr }}.isEmpty(), "expected empty value");
 {%- elif assertion_type == "contains_any" -%}

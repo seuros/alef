@@ -201,16 +201,13 @@ pub(super) fn render_assertion_dart(
                     })
                     .unwrap_or(false);
 
-                // Match the rust codegen's behaviour: trim both sides for string equality
-                // so trailing-newline differences between generated text output and the
-                // fixture's expected value don't produce false positives.
                 if expected.is_string() {
                     if is_enum_field {
                         // For enum fields, use _alefE2eText to normalize the enum value to its
                         // serde wire format before comparison.
                         let _ = writeln!(
                             out,
-                            "    expect(_alefE2eText({field_accessor}).trim(), equals({dart_val}.toString().trim()));"
+                            "    expect(_alefE2eText({field_accessor}), equals({dart_val}.toString()));"
                         );
                     } else if is_display_as_text {
                         // For display-as-text types (e.g. AssistantContent), use .text() accessor
@@ -229,26 +226,23 @@ pub(super) fn render_assertion_dart(
                         if is_optional {
                             let _ = writeln!(
                                 out,
-                                "    expect(({field_accessor}?.text() ?? '').trim(), equals({dart_val}.toString().trim()));"
+                                "    expect(({field_accessor}?.text() ?? ''), equals({dart_val}.toString()));"
                             );
                         } else {
                             let _ = writeln!(
                                 out,
-                                "    expect({field_accessor}.text().trim(), equals({dart_val}.toString().trim()));"
+                                "    expect({field_accessor}.text(), equals({dart_val}.toString()));"
                             );
                         }
                     } else {
                         // When result_is_simple is true and the field_accessor is nullable (e.g. String?),
                         // use null-coalescing operator (?? '') to handle null gracefully.
                         let safe_accessor = if result_is_simple && assertion.field.is_none() {
-                            format!("({field_accessor} ?? '').toString().trim()")
+                            format!("({field_accessor} ?? '').toString()")
                         } else {
-                            format!("{field_accessor}.toString().trim()")
+                            format!("{field_accessor}.toString()")
                         };
-                        let _ = writeln!(
-                            out,
-                            "    expect({safe_accessor}, equals({dart_val}.toString().trim()));"
-                        );
+                        let _ = writeln!(out, "    expect({safe_accessor}, equals({dart_val}.toString()));");
                     }
                 } else {
                     let _ = writeln!(out, "    expect({field_accessor}, equals({dart_val}));");
@@ -397,7 +391,7 @@ pub(super) fn render_assertion_dart(
             if is_collection {
                 let _ = writeln!(out, "    expect({field_accessor}, isNotEmpty);");
             } else {
-                let _ = writeln!(out, "    expect({field_accessor}, isNotNull);");
+                let _ = writeln!(out, "    expect({field_accessor}?.toString(), isNotEmpty);");
             }
         }
         "is_empty" => {

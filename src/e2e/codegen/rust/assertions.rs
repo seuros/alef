@@ -423,7 +423,7 @@ pub fn render_assertion_with_streaming(
             if let Some(val) = &assertion.value {
                 let expected = value_to_rust_string(val);
                 let line = format!(
-                    "    assert!(format!(\"{{:?}}\", {field_access}).contains({expected}), \"expected to contain: {{}}\", {expected});"
+                    "    assert!({field_access}.contains({expected}), \"expected to contain: {{}}\", {expected});"
                 );
                 let _ = writeln!(out, "{line}");
             }
@@ -433,7 +433,7 @@ pub fn render_assertion_with_streaming(
                 for val in values {
                     let expected = value_to_rust_string(val);
                     let line = format!(
-                        "    assert!(format!(\"{{:?}}\", {field_access}).contains({expected}), \"expected to contain: {{}}\", {expected});"
+                        "    assert!({field_access}.contains({expected}), \"expected to contain: {{}}\", {expected});"
                     );
                     let _ = writeln!(out, "{line}");
                 }
@@ -443,7 +443,7 @@ pub fn render_assertion_with_streaming(
             if let Some(val) = &assertion.value {
                 let expected = value_to_rust_string(val);
                 let line = format!(
-                    "    assert!(!format!(\"{{:?}}\", {field_access}).contains({expected}), \"expected NOT to contain: {{}}\", {expected});"
+                    "    assert!(!{field_access}.contains({expected}), \"expected NOT to contain: {{}}\", {expected});"
                 );
                 let _ = writeln!(out, "{line}");
             }
@@ -691,6 +691,31 @@ mod tests {
             None,
         );
         assert!(out.contains("is_err()"), "got: {out}");
+    }
+
+    #[test]
+    fn render_contains_assertion_uses_raw_string_content() {
+        let resolver = empty_resolver();
+        let assertion = make_assertion("contains", None, Some(serde_json::json!("line\n\"quoted\"\\path")));
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            "sample",
+            "sample",
+            false,
+            &[],
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            false,
+            None,
+        );
+        assert!(out.contains("result.contains("), "got: {out}");
+        assert!(!out.contains("format!(\"{{:?}}\""), "got: {out}");
     }
 
     #[test]

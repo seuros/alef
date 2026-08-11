@@ -172,6 +172,31 @@ pub(super) fn generate(
     }
     let test_base = test_base.join("e2e");
 
+    let visitor_is_excluded = config
+        .kotlin_android
+        .as_ref()
+        .is_some_and(|android| android.exclude_functions.iter().any(|name| name == "visitor"));
+    let excluded_visitor_fixtures: Vec<String> = groups
+        .iter()
+        .flat_map(|group| group.fixtures.iter())
+        .filter(|fixture| fixture.visitor.is_some() && visitor_is_excluded)
+        .map(|fixture| sanitize_filename(&fixture.id))
+        .collect();
+    if !excluded_visitor_fixtures.is_empty() {
+        files.push(GeneratedFile {
+            path: test_base.join("ExcludedBindingsTest.kt"),
+            content: crate::e2e::template_env::render(
+                "kotlin_android/excluded_fixtures.kt.jinja",
+                minijinja::context! {
+                    package_name => kotlin_pkg_id.clone(),
+                    fixtures => excluded_visitor_fixtures,
+                    reason => "visitor is excluded by crates.kotlin_android.exclude_functions",
+                },
+            ),
+            generated_header: true,
+        });
+    }
+
     if needs_mock_server {
         files.push(GeneratedFile {
             path: test_base.join("MockServerListener.kt"),
@@ -225,7 +250,7 @@ pub(super) fn generate(
             .fixtures
             .iter()
             .filter(|f| crate::e2e::codegen::should_include_fixture(f, lang, e2e_config))
-            .filter(|f| f.visitor.is_none())
+            .filter(|fixture| !(fixture.visitor.is_some() && visitor_is_excluded))
             .collect();
 
         if active.is_empty() {

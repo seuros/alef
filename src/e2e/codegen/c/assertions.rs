@@ -475,7 +475,7 @@ pub(super) fn render_assertion(
                 } else if expected.is_string() {
                     let _ = writeln!(
                         out,
-                        "    assert(str_trim_eq({field_expr}, {c_val}) == 0 && \"equals assertion failed\");"
+                        "    assert({field_expr} != NULL && strcmp({field_expr}, {c_val}) == 0 && \"equals assertion failed\");"
                     );
                 } else if field_is_map_access && expected.is_boolean() {
                     let lit = match expected.as_bool() {
@@ -531,7 +531,7 @@ pub(super) fn render_assertion(
                 let c_val = json_to_c(expected);
                 let _ = writeln!(
                     out,
-                    "    assert(({field_expr} == NULL || strstr({field_expr}, {c_val}) == NULL) && \"expected NOT to contain substring\");"
+                    "    assert({field_expr} != NULL && strstr({field_expr}, {c_val}) == NULL && \"expected non-null value without substring\");"
                 );
             }
         }

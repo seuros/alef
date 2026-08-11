@@ -17,8 +17,6 @@ pub(super) fn render_equals_assertion(
 ) {
     if let Some(val) = &assertion.value {
         let expected = value_to_rust_string(val);
-        // For string equality, trim trailing whitespace to handle trailing newlines
-        // from the converter.
         if val.is_string() {
             // When the field is Optional<String> and was NOT pre-unwrapped to a local
             // var (e.g. inside a result_is_vec iteration where the call-site unwrap
@@ -43,19 +41,19 @@ pub(super) fn render_equals_assertion(
                 // Optional non-String content field not yet pre-unwrapped: use Display via
                 // `.as_ref().map(|v| v.to_string())` so the inner type need not impl
                 // `Deref<Target=str>`.
-                format!("{field_access}.as_ref().map(|v| v.to_string()).unwrap_or_default().trim()")
+                format!("{field_access}.as_ref().map(|v| v.to_string()).unwrap_or_default()")
             } else if is_opt_str_not_unwrapped {
                 // Optional string-like field that wasn't pre-unwrapped: use `.as_deref()`
                 // when the inner type is `String`; for inner types that impl Display we
                 // can also do `.as_ref().map(ToString::to_string)`. Default to as_deref
                 // which is the common String case — types without Display (rare) need
                 // a separate fixture-level path resolution to land on a string child.
-                format!("{field_access}.as_deref().unwrap_or(\"\").trim()")
+                format!("{field_access}.as_deref().unwrap_or(\"\")")
             } else {
                 // Non-optional string-like field: rely on Display impl via `.to_string()`.
                 // This is correct for `String`, `&str`, and `Cow<str>` — Debug would
                 // wrap them in extra quotes and break literal comparison.
-                format!("{field_access}.to_string().as_str().trim()")
+                format!("{field_access}.to_string()")
             };
             let _ = writeln!(
                 out,

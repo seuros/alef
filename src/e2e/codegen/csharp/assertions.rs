@@ -496,17 +496,7 @@ pub(super) fn render_assertion(
         }
         "contains" => {
             if let Some(expected) = &assertion.value {
-                // Lowercase both expected and actual so that enum fields (where .ToString()
-                // returns the PascalCase C# member name like "Anchor") correctly match
-                // fixture snake_case values like "anchor".  String fields are unaffected
-                // because lowercasing both sides preserves substring matches.
-                // List/complex fields use JsonSerializer.Serialize() since List<T>.ToString()
-                // returns the type name, not the contents.
-                let lower_expected = expected.as_str().map(|s| s.to_lowercase());
-                let cs_val = lower_expected
-                    .as_deref()
-                    .map(|s| format!("\"{}\"", escape_csharp(s)))
-                    .unwrap_or_else(|| json_to_csharp(expected));
+                let cs_val = json_to_csharp(expected);
 
                 let rendered = crate::e2e::template_env::render(
                     "csharp/assertion.jinja",
@@ -521,16 +511,7 @@ pub(super) fn render_assertion(
         }
         "contains_all" => {
             if let Some(values) = &assertion.values {
-                let values_cs_lower: Vec<String> = values
-                    .iter()
-                    .map(|val| {
-                        let lower_val = val.as_str().map(|s| s.to_lowercase());
-                        lower_val
-                            .as_deref()
-                            .map(|s| format!("\"{}\"", escape_csharp(s)))
-                            .unwrap_or_else(|| json_to_csharp(val))
-                    })
-                    .collect();
+                let values_cs_lower: Vec<String> = values.iter().map(json_to_csharp).collect();
 
                 let rendered = crate::e2e::template_env::render(
                     "csharp/assertion.jinja",

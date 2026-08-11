@@ -391,7 +391,7 @@ pub(super) fn render_assertion(
                     super::values::json_to_kotlin(expected)
                 };
                 if expected.is_string() {
-                    let _ = writeln!(out, "        assertEquals({kotlin_val}, {string_expr}.trim())");
+                    let _ = writeln!(out, "        assertEquals({kotlin_val}, {string_expr})");
                 } else {
                     let _ = writeln!(out, "        assertEquals({kotlin_val}, {nonnull_field_expr})");
                 }
@@ -473,12 +473,12 @@ pub(super) fn render_assertion(
             if bare_result_is_option && !kotlin_android_style {
                 let _ = writeln!(
                     out,
-                    "        assertTrue({field_expr}.isPresent, \"expected non-empty value\")"
+                    "        assertTrue({field_expr}.filter {{ it.toString().isNotEmpty() }}.isPresent, \"expected non-empty value\")"
                 );
             } else if bare_result_is_option || field_is_optional {
                 let _ = writeln!(
                     out,
-                    "        assertTrue({field_expr} != null, \"expected non-empty value\")"
+                    "        assertTrue({field_expr}?.toString()?.isNotEmpty() == true, \"expected non-empty value\")"
                 );
             } else {
                 let _ = writeln!(

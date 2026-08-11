@@ -2,6 +2,10 @@ use minijinja::Environment;
 
 static TEMPLATES: &[(&str, &str)] = &[
     (
+        "kotlin_android/excluded_fixtures.kt.jinja",
+        include_str!("templates/kotlin_android/excluded_fixtures.kt.jinja"),
+    ),
+    (
         "python/snippet_body.py.jinja",
         include_str!("templates/python/snippet_body.py.jinja"),
     ),
