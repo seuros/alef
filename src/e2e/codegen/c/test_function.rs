@@ -9,6 +9,7 @@ use heck::ToSnakeCase;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 
+use super::docs_input::render_c_docs_json;
 use super::{
     build_args_string_c, emit_nested_accessor, infer_opaque_handle_type, is_primitive_c_type, is_skipped_c_field,
     json_to_c, render_assertion, render_bytes_test_function, render_c_diagnostic_skip,
@@ -67,6 +68,11 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         .assertions
         .iter()
         .any(|assertion| assertion.assertion_type == "error");
+    let result_var = if call.result_var.is_empty() {
+        "result"
+    } else {
+        &call.result_var
+    };
     let mut call_fixture = fixture.clone();
     if !expects_error {
         call_fixture.assertions.clear();
@@ -77,7 +83,7 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         &call_fixture,
         prefix,
         &info.function_name,
-        &call.result_var,
+        result_var,
         &info.args,
         field_resolver,
         e2e_config.effective_fields_c_types(call),
@@ -94,8 +100,9 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         &info.extra_args,
         config,
         type_defs,
+        true,
     );
-    let failure_check = format!("if ({} != NULL) {{ return EXIT_FAILURE; }}", call.result_var);
+    let failure_check = format!("if ({result_var} != NULL) {{ return EXIT_FAILURE; }}");
     let body_line_count = function.lines().count().saturating_sub(3);
     let body = function
         .lines()
@@ -144,6 +151,7 @@ pub(super) fn render_test_function(
     extra_args: &[String],
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    documentation_snippet: bool,
 ) {
     let fn_name = sanitize_ident(&fixture.id);
     let description = &fixture.description;
@@ -310,19 +318,17 @@ pub(super) fn render_test_function(
                 let request_type_snake = request_type_pascal.to_snake_case();
                 let var_name = format!("{request_type_snake}_handle");
 
-                let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
-                let json_val = if field.is_empty() || field == "input" {
-                    Some(&fixture.input)
-                } else {
-                    fixture.input.get(field)
-                };
+                let json_val = crate::e2e::codegen::resolve_field(&fixture.input, &arg.field);
 
-                if let Some(val) = json_val
-                    && !val.is_null()
-                {
+                if !json_val.is_null() {
+                    let val = json_val;
                     let normalized = transform_json_keys_for_language(val, "snake_case");
-                    let (docs_setup, json_expr, docs_cleanup) =
-                        render_c_docs_json(&arg.name, &normalized, &fixture.docs_files_for_arg(&arg.field));
+                    let (docs_setup, json_expr, docs_cleanup) = render_c_docs_json(
+                        &arg.name,
+                        &normalized,
+                        &fixture.docs_files_for_arg(&arg.field),
+                        documentation_snippet,
+                    );
                     out.push_str(&docs_setup);
                     let _ = writeln!(
                         out,
@@ -776,16 +782,18 @@ pub(super) fn render_test_function(
     let mut has_options_handle = false;
     for arg in args {
         if arg.arg_type == "json_object" {
-            let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
-            if let Some(val) = fixture.input.get(field)
-                && !val.is_null()
-            {
+            let val = crate::e2e::codegen::resolve_field(&fixture.input, &arg.field);
+            if !val.is_null() {
                 // Fixture keys are camelCase; generated FFI from_json helpers
                 // deserialize into Rust types using serde's configured casing.
                 // Normalize keys before serializing.
                 let normalized = transform_json_keys_for_language(val, "snake_case");
-                let (docs_setup, json_expr, docs_cleanup) =
-                    render_c_docs_json(&arg.name, &normalized, &fixture.docs_files_for_arg(&arg.field));
+                let (docs_setup, json_expr, docs_cleanup) = render_c_docs_json(
+                    &arg.name,
+                    &normalized,
+                    &fixture.docs_files_for_arg(&arg.field),
+                    documentation_snippet,
+                );
                 out.push_str(&docs_setup);
                 let upper = prefix.to_uppercase();
                 let options_type_pascal = options_type_name;
@@ -998,75 +1006,4 @@ pub(super) fn render_test_function(
     let result_type_snake = result_type_name.to_snake_case();
     let _ = writeln!(out, "    {prefix}_{result_type_snake}_free({result_var});");
     let _ = writeln!(out, "}}");
-}
-
-fn render_c_docs_json(
-    variable: &str,
-    value: &serde_json::Value,
-    files: &[crate::e2e::fixture::FixtureDocsFileInput],
-) -> (String, String, String) {
-    if files.is_empty() {
-        let json = serde_json::to_string(value).unwrap_or_default();
-        return (String::new(), format!("\"{}\"", escape_c(&json)), String::new());
-    }
-    let mut value = value.clone();
-    let mut reads = Vec::new();
-    for (index, file) in files.iter().enumerate() {
-        let marker = format!("__ALEF_DOC_FILE_{index}__");
-        let target = if file.field.is_empty() {
-            Some(&mut value)
-        } else {
-            value.pointer_mut(&file.field)
-        };
-        let Some(target) = target else { continue };
-        *target = serde_json::Value::String(marker.clone());
-        reads.push((index, marker, file.path.clone()));
-    }
-    let base = serde_json::to_string(&value).unwrap_or_default();
-    let mut setup = crate::e2e::template_env::render(
-        "c/docs_json_base.jinja",
-        minijinja::context! { variable => variable, json => escape_c(&base) },
-    );
-    let mut source = format!("{variable}_json_base");
-    for (index, marker, path) in reads {
-        let output = format!("{variable}_json_{index}");
-        setup.push_str(&crate::e2e::template_env::render(
-            "c/docs_file_replace.jinja",
-            minijinja::context! {
-                variable => variable,
-                index => index,
-                path => escape_c(&path),
-                marker => escape_c(&format!("\"{marker}\"")),
-                source => source,
-                source_owned => index > 0,
-                output => output,
-            },
-        ));
-        source = output;
-    }
-    let cleanup =
-        crate::e2e::template_env::render("c/docs_json_cleanup.jinja", minijinja::context! { variable => source });
-    (setup, source, cleanup)
-}
-
-#[cfg(test)]
-mod docs_file_tests {
-    use super::render_c_docs_json;
-    use crate::e2e::fixture::FixtureDocsFileInput;
-
-    #[test]
-    fn nested_typed_dto_files_become_runtime_json_byte_arrays() {
-        let (setup, expression, cleanup) = render_c_docs_json(
-            "request",
-            &serde_json::json!({"content": "ignored"}),
-            &[FixtureDocsFileInput {
-                field: "/content".into(),
-                path: "document.pdf".into(),
-            }],
-        );
-        assert!(setup.contains("fopen(\"document.pdf\", \"rb\")"), "{setup}");
-        assert!(setup.contains("snprintf"), "{setup}");
-        assert_eq!(expression, "request_json_0");
-        assert!(cleanup.contains("free(request_json_0)"));
-    }
 }

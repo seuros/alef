@@ -508,6 +508,7 @@ fn c_visitor_fixture_has_typed_call(fixture: &Fixture, e2e_config: &E2eConfig) -
 
 mod assertions;
 mod call_patterns;
+mod docs_input;
 mod project;
 mod runner;
 mod streaming;
@@ -618,6 +619,7 @@ fn render_test_file(
             &call_info.extra_args,
             config,
             type_defs,
+            false,
         );
         if i + 1 < fixtures.len() {
             let _ = writeln!(out);
@@ -732,6 +734,101 @@ mod snippet_tests {
         assert!(rendered.contains("create_engine"), "{rendered}");
         assert!(rendered.contains("sample_scrape(engine"), "{rendered}");
         assert!(rendered.contains("crawl_engine_handle_free(engine)"), "{rendered}");
+    }
+
+    #[test]
+    fn whole_input_typed_file_snippet_constructs_and_owns_the_public_handle() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "document_input",
+            "description": "Process a document",
+            "input": {
+                "extract_input": {"kind": "bytes", "content": [1, 2, 3]},
+                "mock_responses": []
+            },
+            "docs": {
+                "topic": "guides",
+                "presentation": {
+                    "files": [{"field": "/extract_input/content", "path": "document.bin"}]
+                }
+            }
+        }))
+        .expect("fixture");
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "sample_process".into();
+        e2e.call.options_type = Some("DocumentInput".into());
+        e2e.call.overrides.insert(
+            "c".into(),
+            crate::core::config::e2e::CallOverride {
+                header: Some("sample_ffi.h".into()),
+                result_type: Some("DocumentResult".into()),
+                ..Default::default()
+            },
+        );
+        e2e.call.args.push(crate::e2e::config::ArgMapping {
+            name: "input".into(),
+            field: "input".into(),
+            arg_type: "json_object".into(),
+            optional: false,
+            owned: true,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        });
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+
+        let rendered = CCodegen
+            .render_snippet_body(&fixture, &e2e, &config, &[], &[])
+            .expect("typed file snippet renders");
+
+        assert!(rendered.contains("fopen(\"document.bin\", \"rb\")"), "{rendered}");
+        assert!(
+            rendered.contains("sample_document_input_from_json(input_json_0)"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("sample_process(options_handle)"), "{rendered}");
+        assert!(
+            rendered.contains("sample_document_input_free(options_handle)"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("mock_responses"), "{rendered}");
+        assert!(!rendered.contains("sample_process(NULL)"), "{rendered}");
+
+        let Some(compiler) = ["cc", "clang", "gcc"]
+            .into_iter()
+            .find(|candidate| which::which(candidate).is_ok())
+        else {
+            return;
+        };
+        let directory = tempfile::tempdir().expect("temporary C snippet directory");
+        std::fs::write(
+            directory.path().join("sample_ffi.h"),
+            concat!(
+                "typedef struct SAMPLEDocumentInput SAMPLEDocumentInput;\n",
+                "typedef struct SAMPLEDocumentResult SAMPLEDocumentResult;\n",
+                "SAMPLEDocumentInput *sample_document_input_from_json(const char *json);\n",
+                "void sample_document_input_free(SAMPLEDocumentInput *input);\n",
+                "SAMPLEDocumentResult *sample_process(SAMPLEDocumentInput *input);\n",
+                "void sample_document_result_free(SAMPLEDocumentResult *result);\n",
+            ),
+        )
+        .expect("write neutral C header");
+        let source = directory.path().join("snippet.c");
+        std::fs::write(&source, &rendered).expect("write generated C snippet");
+        let output = std::process::Command::new(compiler)
+            .args(["-std=c11", "-fsyntax-only", "-Wall", "-Werror", "-I"])
+            .arg(directory.path())
+            .arg(&source)
+            .output()
+            .expect("run C compiler");
+        assert!(
+            output.status.success(),
+            "generated C snippet failed to compile:\n{}\n{rendered}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]

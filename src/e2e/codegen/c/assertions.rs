@@ -328,19 +328,17 @@ pub(super) fn build_args_string_c(
             continue;
         }
 
-        let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
-        let val = input.get(field);
+        let val = crate::e2e::codegen::resolve_field(input, &arg.field);
         match val {
-            // Field missing entirely and optional → pass NULL.
-            None if arg.optional => parts.push("NULL".to_string()),
-            // Field missing and required → skip (caller error, but don't crash).
-            None => {}
             // Explicit null on optional arg → pass NULL.
-            Some(v) if v.is_null() && arg.optional => parts.push("NULL".to_string()),
-            Some(v) => {
+            v if v.is_null() && arg.optional => parts.push("NULL".to_string()),
+            // Missing required fields resolve to null; skip them so malformed
+            // fixture configuration does not crash generation.
+            v if v.is_null() => {}
+            v => {
                 // For json_object args, use the options_handle pointer
                 // instead of the raw JSON string.
-                if arg.arg_type == "json_object" && has_options_handle && !v.is_null() {
+                if arg.arg_type == "json_object" && has_options_handle {
                     parts.push("options_handle".to_string())
                 } else {
                     parts.push(json_to_c(v))

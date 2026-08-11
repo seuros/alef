@@ -379,16 +379,10 @@ pub(super) fn render_bytes_test_function(
                 let request_type_snake = request_type_pascal.to_snake_case();
                 let var_name = format!("{request_type_snake}_handle");
 
-                let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
-                let json_val = if field.is_empty() || field == "input" {
-                    Some(&fixture.input)
-                } else {
-                    fixture.input.get(field)
-                };
+                let json_val = crate::e2e::codegen::resolve_field(&fixture.input, &arg.field);
 
-                if let Some(val) = json_val
-                    && !val.is_null()
-                {
+                if !json_val.is_null() {
+                    let val = json_val;
                     let normalized = transform_json_keys_for_language(val, "snake_case");
                     let json_str = serde_json::to_string(&normalized).unwrap_or_default();
                     let escaped = escape_c(&json_str);
