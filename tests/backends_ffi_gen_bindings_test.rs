@@ -911,7 +911,7 @@ ffi = "crates/mylib-ffi/src/"
         "_len companion must not clear the primary call's error state"
     );
     assert!(
-        len_fn_snippet.contains("catch_ffi_panic(0, last_return_len)"),
+        len_fn_snippet.contains("catch_ffi_panic_preserving_error(0, last_return_len)"),
         "_len companion must read the recorded length through the panic boundary"
     );
 }
