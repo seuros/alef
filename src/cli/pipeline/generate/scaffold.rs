@@ -114,15 +114,23 @@ pub fn write_scaffold_files_with_overwrite(
             debug!("  wrote (binary): {}", full_path.display());
             continue;
         }
-        let content = if file.path == Path::new(POLY_CONFIG) && full_path.exists() {
+        let content = if (file.path == Path::new(POLY_CONFIG)
+            || file.generated_header && file.path.extension().is_some_and(|extension| extension == "toml"))
+            && full_path.exists()
+        {
             let existing = std::fs::read_to_string(&full_path)
                 .with_context(|| format!("failed to read existing {}", full_path.display()))?;
-            merge_poly_config(&existing, &file.content)
+            merge_managed_toml(&existing, &file.content)
                 .with_context(|| format!("failed to merge existing {}", full_path.display()))?
         } else {
             file.content.clone()
         };
         let normalized = normalize_content(&full_path, &content);
+        let normalized = if file.generated_header {
+            super::write::ensure_generated_header(&full_path, &normalized)
+        } else {
+            normalized
+        };
         if let Ok(existing) = std::fs::read_to_string(&full_path) {
             let existing_body = crate::core::hash::strip_hash_line(&existing);
             let normalized_body = crate::core::hash::strip_hash_line(&normalized);
@@ -147,7 +155,7 @@ pub fn write_scaffold_files_with_overwrite(
 /// Repo-root poly config, emitted by the scaffold pass.
 const POLY_CONFIG: &str = "poly.toml";
 
-fn merge_poly_config(existing: &str, generated: &str) -> anyhow::Result<String> {
+pub(super) fn merge_managed_toml(existing: &str, generated: &str) -> anyhow::Result<String> {
     let mut existing_doc = existing.parse::<toml_edit::DocumentMut>()?;
     let generated_doc = generated.parse::<toml_edit::DocumentMut>()?;
     merge_tables(existing_doc.as_table_mut(), generated_doc.as_table());

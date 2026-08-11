@@ -736,8 +736,13 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let api = pipeline::extract(resolved_cfg, config_path, false)?;
                 let bindings = pipeline::generate(&api, resolved_cfg, &languages, true, config_path)?;
                 let stubs = pipeline::generate_stubs(&api, resolved_cfg, &languages)?;
+                let scaffold = pipeline::scaffold(&api, resolved_cfg, &languages, config_path)?;
                 all_diffs.extend(pipeline::diff_files(&bindings, &base_dir)?);
                 all_diffs.extend(pipeline::diff_files(&stubs, &base_dir)?);
+                all_diffs.extend(pipeline::diff_files(
+                    &[(crate::core::config::Language::Rust, scaffold)],
+                    &base_dir,
+                )?);
             }
 
             if all_diffs.is_empty() {

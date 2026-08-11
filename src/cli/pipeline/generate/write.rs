@@ -10,7 +10,7 @@ use tracing::debug;
 
 const HASH_HEADER_SCAN_LINES: usize = 10;
 
-fn ensure_generated_header(path: &Path, content: &str) -> String {
+pub(super) fn ensure_generated_header(path: &Path, content: &str) -> String {
     let has_marker = content
         .lines()
         .take(HASH_HEADER_SCAN_LINES)

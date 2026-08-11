@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Managed TOML scaffold manifests now carry Alef provenance, preserve unknown user tables during structured refresh,
+  and participate in `alef diff`; write-once scaffold seeds remain untouched.
+
 - Snippet coverage ledgers now reject tracked files that resolve outside their configured generated root, including
   symlink escapes.
 

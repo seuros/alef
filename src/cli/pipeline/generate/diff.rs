@@ -22,7 +22,20 @@ pub fn diff_files(files: &[(Language, Vec<GeneratedFile>)], base_dir: &Path) -> 
             let full_path = base_dir.join(&file.path);
             let existing = std::fs::read_to_string(&full_path).unwrap_or_default();
             let is_rust = file.path.extension().is_some_and(|ext| ext == "rs");
-            let generated = normalize_content(&file.path, &file.content);
+            let generated_content = if file.generated_header
+                && file.path.extension().is_some_and(|extension| extension == "toml")
+                && !existing.is_empty()
+            {
+                super::scaffold::merge_managed_toml(&existing, &file.content).unwrap_or_else(|_| file.content.clone())
+            } else {
+                file.content.clone()
+            };
+            let generated = normalize_content(&file.path, &generated_content);
+            let generated = if file.generated_header {
+                super::write::ensure_generated_header(&file.path, &generated)
+            } else {
+                generated
+            };
             let on_disk = if is_rust {
                 format_rust_content(&full_path, &existing)
             } else {
