@@ -37,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Generated Go and Node bindings now preserve adjacent enum tag/content fields and reject unknown Go discriminants.
 
+- Generated Node bindings now export adjacent enum unit values and payload factories through runtime namespaces.
+
 - Generated Ruby and Elixir bridge enums now retain adjacent Serde tag/content shapes, including tuple payloads.
 
 - Generated TypeScript visitor snippets now use lowercase wire actions, adjacent custom payloads, and trait-order code

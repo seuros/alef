@@ -348,6 +348,53 @@ pub(super) fn gen_tagged_enum_as_object(enum_def: &EnumDef, prefix: &str, has_se
         })
         .collect();
 
+    if enum_def.serde_content.is_some() {
+        let variants: Vec<minijinja::Value> = enum_def
+            .variants
+            .iter()
+            .map(|variant| {
+                let wire_value = crate::codegen::naming::wire_variant_value(
+                    &variant.name,
+                    variant.serde_rename.as_deref(),
+                    enum_def.serde_rename_all.as_deref(),
+                );
+                let payload_type = variant
+                    .fields
+                    .first()
+                    .map(|field| mapper.map_type(&field.ty).to_string());
+                let rust_name = crate::codegen::naming::internal_rust_identifier(&format!(
+                    "{}_{}",
+                    crate::codegen::naming::pascal_to_snake(&enum_def.name),
+                    crate::codegen::naming::to_python_name(&wire_value),
+                ));
+                minijinja::context! {
+                    variant_name => variant.name.clone(),
+                    rust_name,
+                    wire_value,
+                    payload_type,
+                    has_payload => payload_type.is_some(),
+                }
+            })
+            .collect();
+        lines.push(String::new());
+        lines.push(
+            crate::backends::napi::template_env::render(
+                "adjacent_enum_namespace.rs.jinja",
+                minijinja::context! {
+                    enum_name => enum_def.name.clone(),
+                    binding_name => format!("{prefix}{}", enum_def.name),
+                    tag_field => format!("{tag_field}_tag"),
+                    content_field => crate::codegen::naming::to_python_name(
+                        enum_def.serde_content.as_deref().expect("adjacent content is present"),
+                    ),
+                    variants,
+                },
+            )
+            .trim_end()
+            .to_string(),
+        );
+    }
+
     lines.join("\n")
 }
 
@@ -790,5 +837,9 @@ mod tests {
         assert!(output.contains("pub type_tag: String"));
         assert!(output.contains("pub output: Option<String>"));
         assert!(!output.contains("pub custom: Option<String>"));
+        assert!(output.contains("#[napi(namespace = \"Action\", getter, js_name = \"Continue\")]"));
+        assert!(output.contains("#[napi(namespace = \"Action\", js_name = \"Custom\")]"));
+        assert!(output.contains("pub fn action_custom(output: String) -> JsAction"));
+        assert!(output.contains("output: Some(output)"));
     }
 }

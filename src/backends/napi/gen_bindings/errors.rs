@@ -291,6 +291,23 @@ pub(super) fn gen_dts(
                     }
                     lines.push(format!("export type {} =", e.name));
                     lines.extend(member_lines);
+                    if e.serde_content.is_some() {
+                        lines.push(format!("export declare const {}: {{", e.name));
+                        for variant in &e.variants {
+                            if let Some(field) = variant.fields.first() {
+                                lines.push(format!(
+                                    "  {}({}: {}): {};",
+                                    variant.name,
+                                    e.serde_content.as_deref().expect("adjacent content is present"),
+                                    dts_type(&field.ty, no_prefix),
+                                    e.name
+                                ));
+                            } else {
+                                lines.push(format!("  readonly {}: {};", variant.name, e.name));
+                            }
+                        }
+                        lines.push("};".to_string());
+                    }
                 } else {
                     lines.push(format!("export declare enum {} {{", e.name));
                     for variant in &e.variants {
@@ -587,7 +604,7 @@ pub(super) fn dts_return_type_capsule(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::ir::{ParamDef, TypeDef, TypeRef};
+    use crate::core::ir::{EnumVariant, FieldDef, ParamDef, TypeDef, TypeRef};
 
     fn make_param(name: &str, optional: bool) -> ParamDef {
         ParamDef {
@@ -706,6 +723,49 @@ mod tests {
             ..Default::default()
         }];
         assert!(trait_bridge_requires_plugin_name(&typ, &bridges));
+    }
+
+    #[test]
+    fn adjacent_enum_dts_declares_runtime_namespace() {
+        let api = ApiSurface {
+            enums: vec![EnumDef {
+                name: "Action".to_string(),
+                serde_tag: Some("type".to_string()),
+                serde_content: Some("output".to_string()),
+                serde_rename_all: Some("snake_case".to_string()),
+                variants: vec![
+                    EnumVariant {
+                        name: "Skip".to_string(),
+                        ..Default::default()
+                    },
+                    EnumVariant {
+                        name: "Custom".to_string(),
+                        fields: vec![FieldDef {
+                            name: "_0".to_string(),
+                            ty: TypeRef::String,
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let dts = gen_dts(
+            &api,
+            "",
+            &Default::default(),
+            &[],
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+        );
+        assert!(dts.contains("| { type: 'custom'; output: string }"));
+        assert!(dts.contains("export declare const Action: {"));
+        assert!(dts.contains("readonly Skip: Action;"));
+        assert!(dts.contains("Custom(output: string): Action;"));
     }
 
     #[test]
