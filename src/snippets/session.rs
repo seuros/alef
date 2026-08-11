@@ -11,6 +11,7 @@ pub struct SessionSpec {
     pub manifest: Option<PathBuf>,
     pub before: Vec<String>,
     pub env: BTreeMap<String, String>,
+    pub include_paths: Vec<PathBuf>,
     pub rust_features: Vec<String>,
     pub rust_dependencies: BTreeMap<String, crate::core::config::output::DocsSnippetRustDependencyConfig>,
 }
@@ -21,6 +22,7 @@ pub struct ValidationSession {
     pub manifest: Option<PathBuf>,
     pub fingerprint: String,
     pub env: BTreeMap<String, String>,
+    pub include_paths: Vec<PathBuf>,
     pub rust_features: Vec<String>,
     pub rust_dependencies: BTreeMap<String, crate::core::config::output::DocsSnippetRustDependencyConfig>,
 }
@@ -101,6 +103,7 @@ fn prepare_session(spec: &SessionSpec, timeout_secs: u64) -> Result<ValidationSe
         manifest: spec.manifest.clone(),
         fingerprint: session_fingerprint(spec)?,
         env: spec.env.clone(),
+        include_paths: spec.include_paths.clone(),
         rust_features: spec.rust_features.clone(),
         rust_dependencies: spec.rust_dependencies.clone(),
     };
@@ -138,6 +141,9 @@ fn session_fingerprint(spec: &SessionSpec) -> Result<String> {
     for (name, value) in &spec.env {
         hasher.update(name.as_bytes());
         hasher.update(value.as_bytes());
+    }
+    for path in &spec.include_paths {
+        hasher.update(path.to_string_lossy().as_bytes());
     }
     for feature in &spec.rust_features {
         hasher.update(feature.as_bytes());
@@ -209,6 +215,7 @@ mod tests {
                 manifest: None,
                 before: vec![format!("test ! -e prepared && touch {}", marker.display())],
                 env: BTreeMap::new(),
+                include_paths: Vec::new(),
                 rust_features: Vec::new(),
                 rust_dependencies: BTreeMap::new(),
             },
@@ -232,6 +239,7 @@ mod tests {
                 manifest: Some(directory.path().join("missing.json")),
                 before: Vec::new(),
                 env: BTreeMap::new(),
+                include_paths: Vec::new(),
                 rust_features: Vec::new(),
                 rust_dependencies: BTreeMap::new(),
             },
@@ -254,6 +262,7 @@ mod tests {
                 manifest: None,
                 before: vec!["test \"$ALEF_SESSION_CACHE\" = configured".into()],
                 env: BTreeMap::from([("ALEF_SESSION_CACHE".into(), "configured".into())]),
+                include_paths: Vec::new(),
                 rust_features: Vec::new(),
                 rust_dependencies: BTreeMap::new(),
             },
@@ -271,6 +280,28 @@ mod tests {
     }
 
     #[test]
+    fn include_paths_contribute_to_the_session_fingerprint() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let base = SessionSpec {
+            language: Language::C,
+            working_directory: directory.path().to_path_buf(),
+            manifest: None,
+            before: Vec::new(),
+            env: BTreeMap::new(),
+            include_paths: vec![directory.path().join("include")],
+            rust_features: Vec::new(),
+            rust_dependencies: BTreeMap::new(),
+        };
+        let mut changed = base.clone();
+        changed.include_paths = vec![directory.path().join("vendor/include")];
+
+        assert_ne!(
+            session_fingerprint(&base).expect("base fingerprint"),
+            session_fingerprint(&changed).expect("changed fingerprint")
+        );
+    }
+
+    #[test]
     fn reuses_a_stable_workspace_for_a_prepared_session() {
         let directory = tempfile::tempdir().expect("temp directory");
         let session = ValidationSession {
@@ -278,6 +309,7 @@ mod tests {
             manifest: None,
             fingerprint: "neutral-fixture".into(),
             env: BTreeMap::new(),
+            include_paths: Vec::new(),
             rust_features: Vec::new(),
             rust_dependencies: BTreeMap::new(),
         };
@@ -301,6 +333,7 @@ mod tests {
             manifest: None,
             fingerprint: "neutral-fixture".into(),
             env: BTreeMap::new(),
+            include_paths: Vec::new(),
             rust_features: Vec::new(),
             rust_dependencies: BTreeMap::new(),
         };

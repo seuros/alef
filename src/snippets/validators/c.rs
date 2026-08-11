@@ -110,6 +110,7 @@ impl SnippetValidator for CValidator {
             .and_then(std::path::Path::parent)
             .unwrap_or(&session.working_directory);
         command.arg("-I").arg(include_directory);
+        apply_include_paths(&mut command, &session.include_paths);
         if level == ValidationLevel::Syntax {
             command.arg("-fsyntax-only");
         }
@@ -148,6 +149,12 @@ impl SnippetValidator for CValidator {
             || output.contains("undeclared identifier")
             || output.contains("implicit declaration")
             || output.contains("unknown type name")
+    }
+}
+
+fn apply_include_paths(command: &mut std::process::Command, include_paths: &[std::path::PathBuf]) {
+    for include_path in include_paths {
+        command.arg("-I").arg(include_path);
     }
 }
 
@@ -196,5 +203,22 @@ mod tests {
         let s = snippet("int main(void) { @@@ }\n");
         let (status, _) = v.validate(&s, ValidationLevel::Syntax, 30).unwrap();
         assert_eq!(status, SnippetStatus::Fail);
+    }
+
+    #[test]
+    fn session_include_paths_are_passed_to_c_compiler() {
+        let mut command = std::process::Command::new("cc");
+        apply_include_paths(
+            &mut command,
+            &[
+                std::path::PathBuf::from("include"),
+                std::path::PathBuf::from("vendor/include"),
+            ],
+        );
+
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            ["-I", "include", "-I", "vendor/include"]
+        );
     }
 }

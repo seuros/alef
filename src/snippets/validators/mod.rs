@@ -26,6 +26,9 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::io::Write;
 
+pub type SnippetValidation = (SnippetStatus, Option<String>);
+pub type BatchValidation = Vec<SnippetValidation>;
+
 pub trait SnippetValidator: Send + Sync {
     fn language(&self) -> Language;
     fn is_available(&self) -> bool;
@@ -37,19 +40,14 @@ pub trait SnippetValidator: Send + Sync {
     /// # Errors
     ///
     /// Returns an error when the validator cannot execute its underlying toolchain.
-    fn validate(
-        &self,
-        snippet: &Snippet,
-        level: ValidationLevel,
-        timeout_secs: u64,
-    ) -> Result<(SnippetStatus, Option<String>)>;
+    fn validate(&self, snippet: &Snippet, level: ValidationLevel, timeout_secs: u64) -> Result<SnippetValidation>;
     fn validate_in_session(
         &self,
         snippet: &Snippet,
         level: ValidationLevel,
         timeout_secs: u64,
         session: Option<&ValidationSession>,
-    ) -> Result<(SnippetStatus, Option<String>)> {
+    ) -> Result<SnippetValidation> {
         if session.is_some() {
             return Err(crate::snippets::error::Error::Other(format!(
                 "{} validator does not support binding-aware sessions",
@@ -64,7 +62,7 @@ pub trait SnippetValidator: Send + Sync {
         _level: ValidationLevel,
         _timeout_secs: u64,
         _session: Option<&ValidationSession>,
-    ) -> Option<Result<Vec<(SnippetStatus, Option<String>)>>> {
+    ) -> Option<Result<BatchValidation>> {
         None
     }
     fn max_level(&self) -> ValidationLevel;

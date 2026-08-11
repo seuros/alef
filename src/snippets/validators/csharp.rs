@@ -187,6 +187,7 @@ mod tests {
             manifest: Some(project.join("LocalFixture.csproj")),
             fingerprint: "fixture".into(),
             env: BTreeMap::from([("DOTNET_CLI_TELEMETRY_OPTOUT".into(), "1".into())]),
+            include_paths: Vec::new(),
             rust_features: Vec::new(),
             rust_dependencies: BTreeMap::new(),
         };

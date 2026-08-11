@@ -95,6 +95,12 @@ pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config
 
 type BatchKey = (crate::snippets::types::Language, Option<String>, ValidationLevel);
 
+struct ValidationOutcome {
+    status: SnippetStatus,
+    message: Option<String>,
+    duration_ms: u64,
+}
+
 fn validate_batches(
     snippets: &[Snippet],
     registry: &ValidatorRegistry,
@@ -149,9 +155,11 @@ fn validate_batches(
                 config,
                 session,
                 level,
-                status,
-                message,
-                duration_ms,
+                ValidationOutcome {
+                    status,
+                    message,
+                    duration_ms,
+                },
             ));
         }
     }
@@ -326,9 +334,11 @@ fn validate_one(
         config,
         session,
         effective_level,
-        status,
-        message,
-        duration_ms,
+        ValidationOutcome {
+            status,
+            message,
+            duration_ms,
+        },
     )
 }
 
@@ -338,10 +348,13 @@ fn finalize_result(
     config: &RunnerConfig,
     session: Option<&crate::snippets::session::ValidationSession>,
     effective_level: ValidationLevel,
-    mut status: SnippetStatus,
-    message: Option<String>,
-    duration_ms: u64,
+    outcome: ValidationOutcome,
 ) -> ValidationResult {
+    let ValidationOutcome {
+        mut status,
+        message,
+        duration_ms,
+    } = outcome;
     if status == SnippetStatus::Fail
         && effective_level == ValidationLevel::Syntax
         && let Some(error_output) = &message
@@ -535,6 +548,7 @@ mod tests {
                     manifest: None,
                     fingerprint: "node".into(),
                     env: Default::default(),
+                    include_paths: Vec::new(),
                     rust_features: Vec::new(),
                     rust_dependencies: Default::default(),
                 },
@@ -546,6 +560,7 @@ mod tests {
                     manifest: None,
                     fingerprint: "wasm".into(),
                     env: Default::default(),
+                    include_paths: Vec::new(),
                     rust_features: Vec::new(),
                     rust_dependencies: Default::default(),
                 },
@@ -586,6 +601,7 @@ mod tests {
             manifest: None,
             before: Vec::new(),
             env: Default::default(),
+            include_paths: Vec::new(),
             rust_features: Vec::new(),
             rust_dependencies: Default::default(),
         };

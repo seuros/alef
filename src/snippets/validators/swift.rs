@@ -119,12 +119,35 @@ fn swift_module_directories(session: &ValidationSession) -> Result<Vec<std::path
         ));
     }
     let binary_directory = std::path::PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+    swift_module_directories_in(&binary_directory)
+}
+
+fn swift_module_directories_in(binary_directory: &std::path::Path) -> Result<Vec<std::path::PathBuf>> {
     let mut directories = vec![binary_directory.join("Modules")];
-    for entry in std::fs::read_dir(&binary_directory)? {
+    let Ok(entries) = std::fs::read_dir(binary_directory) else {
+        return Ok(directories);
+    };
+    for entry in entries {
         let path = entry?.path();
         if path.join("module.modulemap").is_file() || path.join("include/module.modulemap").is_file() {
             directories.push(path);
         }
     }
     Ok(directories)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_swiftpm_bin_directory_is_not_an_io_error() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let missing = directory.path().join("not-built");
+
+        assert_eq!(
+            swift_module_directories_in(&missing).expect("missing bin directory is tolerated"),
+            vec![missing.join("Modules")]
+        );
+    }
 }

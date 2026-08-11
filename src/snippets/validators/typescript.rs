@@ -277,6 +277,7 @@ mod tests {
             manifest: Some(manifest),
             fingerprint: "neutral-project".into(),
             env: BTreeMap::new(),
+            include_paths: Vec::new(),
             rust_features: Vec::new(),
             rust_dependencies: BTreeMap::new(),
         };

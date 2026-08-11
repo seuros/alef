@@ -467,6 +467,9 @@ pub struct DocsSnippetSessionConfig {
     /// Environment variables applied to setup and validation commands.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Native include directories, resolved relative to the repository root.
+    #[serde(default)]
+    pub include_paths: Vec<PathBuf>,
     /// Cargo features enabled on the local Rust package dependency.
     #[serde(default)]
     pub rust_features: Vec<String>,

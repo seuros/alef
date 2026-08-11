@@ -77,6 +77,7 @@ impl SnippetValidator for ZigValidator {
         } else {
             command.arg(&file);
         }
+        apply_include_paths(&mut command, &session.include_paths);
         session.apply(&mut command);
         let (success, output) = run_command(&mut command, timeout_secs)?;
         Ok(if success {
@@ -88,6 +89,12 @@ impl SnippetValidator for ZigValidator {
 
     fn is_dependency_error(&self, output: &str) -> bool {
         output.contains("unable to find") || output.contains("@import")
+    }
+}
+
+fn apply_include_paths(command: &mut std::process::Command, include_paths: &[std::path::PathBuf]) {
+    for include_path in include_paths {
+        command.arg("-I").arg(include_path);
     }
 }
 
@@ -131,5 +138,22 @@ mod tests {
         let (name, source) = zig_package_module(&manifest).unwrap();
         assert_eq!(name, "sample_binding");
         assert_eq!(source, directory.path().join("src/root.zig"));
+    }
+
+    #[test]
+    fn session_include_paths_are_passed_to_zig() {
+        let mut command = std::process::Command::new("zig");
+        apply_include_paths(
+            &mut command,
+            &[
+                std::path::PathBuf::from("include"),
+                std::path::PathBuf::from("vendor/include"),
+            ],
+        );
+
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            ["-I", "include", "-I", "vendor/include"]
+        );
     }
 }

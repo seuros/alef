@@ -1800,6 +1800,14 @@
           "description": "Environment variables applied to setup and validation commands.",
           "type": "object"
         },
+        "include_paths": {
+          "default": [],
+          "description": "Native include directories, resolved relative to the repository root.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "manifest": {
           "default": null,
           "description": "Optional local package manifest, resolved relative to the repository root.",

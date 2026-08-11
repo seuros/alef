@@ -132,6 +132,7 @@ mod tests {
             manifest: Some(project.join("pubspec.yaml")),
             fingerprint: "fixture".into(),
             env: BTreeMap::new(),
+            include_paths: Vec::new(),
             rust_features: Vec::new(),
             rust_dependencies: BTreeMap::new(),
         };

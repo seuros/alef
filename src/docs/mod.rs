@@ -439,6 +439,11 @@ fn validate_snippets(
                             manifest: session.manifest.as_ref().map(|path| workspace_root.join(path)),
                             before: session.before.clone(),
                             env: session.env.clone(),
+                            include_paths: session
+                                .include_paths
+                                .iter()
+                                .map(|path| workspace_root.join(path))
+                                .collect(),
                             rust_features,
                             rust_dependencies: session.rust_dependencies.clone(),
                         },

@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- C and Zig documentation snippet sessions now accept configured native include directories, and Swift validation
+  tolerates SwiftPM binary directories that have not been created yet.
+
 - Kotlin documentation snippets now implement configured visitor callbacks and attach them to conversion options.
 
 - Rust documentation snippets now preserve raw-string delimiters and declare visitor feature requirements; docs

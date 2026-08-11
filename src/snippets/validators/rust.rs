@@ -425,6 +425,7 @@ mod tests {
             manifest: Some(manifest),
             fingerprint: "neutral-project".into(),
             env: BTreeMap::new(),
+            include_paths: Vec::new(),
             rust_features: Vec::new(),
             rust_dependencies: BTreeMap::new(),
         };
@@ -470,6 +471,7 @@ mod tests {
             manifest: Some(manifest),
             fingerprint: "neutral-project".into(),
             env: BTreeMap::new(),
+            include_paths: Vec::new(),
             rust_features: vec!["network".into()],
             rust_dependencies: BTreeMap::new(),
         };
@@ -485,6 +487,7 @@ mod tests {
             manifest: None,
             fingerprint: "neutral-project".into(),
             env: BTreeMap::new(),
+            include_paths: Vec::new(),
             rust_features: Vec::new(),
             rust_dependencies: BTreeMap::new(),
         };
@@ -511,6 +514,7 @@ mod tests {
             manifest: None,
             fingerprint: "neutral-project".into(),
             env: BTreeMap::new(),
+            include_paths: Vec::new(),
             rust_features: Vec::new(),
             rust_dependencies: BTreeMap::new(),
         };

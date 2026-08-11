@@ -377,6 +377,7 @@ fn configured_sessions(
             manifest: session.manifest.as_ref().map(|path| root.join(path)),
             before: session.before.clone(),
             env: session.env.clone(),
+            include_paths: session.include_paths.iter().map(|path| root.join(path)).collect(),
             rust_features: session.rust_features.clone(),
             rust_dependencies: session.rust_dependencies.clone(),
         };
