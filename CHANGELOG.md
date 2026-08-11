@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `alef verify` now fails on stale bindings or version drift by default; use `--report-only` for advisory output. The
+  deprecated `--exit-code` flag remains accepted as a no-op for compatibility.
+
 - Development version advanced to 0.60.1 for the strict snippet-validation and migration fixes.
 
 ### Fixed

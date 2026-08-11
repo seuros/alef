@@ -652,7 +652,8 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             Ok(None)
         }
         Commands::Verify {
-            exit_code,
+            exit_code: _,
+            report_only,
             compile: _,
             lint: _,
             lang: _,
@@ -718,8 +719,8 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         }
                     }
                 }
-                if exit_code {
-                    process::exit(1);
+                if !report_only {
+                    anyhow::bail!("generated bindings or versions are out of date");
                 }
             }
             Ok(None)

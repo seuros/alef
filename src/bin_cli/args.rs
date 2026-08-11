@@ -178,9 +178,12 @@ pub(crate) enum Commands {
     },
     /// Verify bindings are up to date and API surface parity.
     Verify {
-        /// Exit with code 1 if any binding is stale (CI mode).
-        #[arg(long)]
+        /// Deprecated compatibility flag; verification now fails by default.
+        #[arg(long, hide = true)]
         exit_code: bool,
+        /// Report drift without returning a failure status.
+        #[arg(long)]
+        report_only: bool,
         /// Also run compilation check.
         #[arg(long)]
         compile: bool,
@@ -535,5 +538,29 @@ mod tests {
         assert_eq!(existing_root, PathBuf::from("docs/handwritten"));
         assert_eq!(lang, Some(vec!["python".into(), "rust".into()]));
         assert!(json);
+    }
+
+    #[test]
+    fn verify_is_strict_by_default_and_accepts_compatibility_flags() {
+        let strict = Cli::try_parse_from(["alef", "verify"]).expect("strict verify command");
+        let Commands::Verify {
+            exit_code, report_only, ..
+        } = strict.command
+        else {
+            panic!("expected verify command");
+        };
+        assert!(!exit_code);
+        assert!(!report_only);
+
+        let compatible =
+            Cli::try_parse_from(["alef", "verify", "--exit-code", "--report-only"]).expect("compatible verify command");
+        let Commands::Verify {
+            exit_code, report_only, ..
+        } = compatible.command
+        else {
+            panic!("expected verify command");
+        };
+        assert!(exit_code);
+        assert!(report_only);
     }
 }
