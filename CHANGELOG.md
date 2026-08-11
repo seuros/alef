@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Enum extraction now preserves Serde `content` metadata for adjacently tagged wire representations.
 
+- Generated Go and Node bindings now preserve adjacent enum tag/content fields and reject unknown Go discriminants.
+
 - Generated Ruby and Elixir bridge enums now retain adjacent Serde tag/content shapes, including tuple payloads.
 
 - Generated TypeScript visitor snippets now use lowercase wire actions, adjacent custom payloads, and trait-order code

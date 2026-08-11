@@ -28,6 +28,37 @@ fn simple_field(name: &str, ty: TypeRef) -> FieldDef {
 }
 
 #[test]
+fn adjacent_tagged_enum_preserves_tag_and_content() {
+    let enum_def = EnumDef {
+        name: "Action".to_string(),
+        serde_tag: Some("type".to_string()),
+        serde_content: Some("output".to_string()),
+        serde_rename_all: Some("snake_case".to_string()),
+        variants: vec![
+            EnumVariant {
+                name: "Continue".to_string(),
+                ..Default::default()
+            },
+            EnumVariant {
+                name: "Custom".to_string(),
+                fields: vec![simple_field("_0", TypeRef::String)],
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    let out = super::enums::gen_enum_type(&enum_def, &[]);
+    assert!(out.contains("Type string `json:\"type\"`"));
+    assert!(out.contains("Output *string `json:\"output,omitempty\"`"));
+    assert!(out.contains("func NewActionContinue() Action"));
+    assert!(out.contains("func NewActionCustom(output string) Action"));
+    assert!(out.contains("case \"continue\":"));
+    assert!(out.contains("case \"custom\":"));
+    assert!(out.contains("unknown Action type"));
+}
+
+#[test]
 fn test_is_tuple_field_detects_positional_names() {
     let positional = simple_field("_0", TypeRef::String);
     assert!(is_tuple_field(&positional));

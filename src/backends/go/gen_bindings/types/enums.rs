@@ -12,6 +12,10 @@ pub(in crate::backends::go::gen_bindings) fn gen_enum_type(enum_def: &EnumDef, t
         return gen_unit_enum_type(enum_def);
     }
 
+    if enum_def.serde_tag.is_some() && enum_def.serde_content.is_some() {
+        return gen_adjacent_tagged_enum_type(enum_def);
+    }
+
     let all_data_fields_are_tuple = enum_def
         .variants
         .iter()
@@ -34,6 +38,54 @@ pub(in crate::backends::go::gen_bindings) fn gen_enum_type(enum_def: &EnumDef, t
     } else {
         gen_data_enum_type(enum_def)
     }
+}
+
+fn gen_adjacent_tagged_enum_type(enum_def: &EnumDef) -> String {
+    let go_enum_name = go_type_name(&enum_def.name);
+    let tag_name = enum_def.serde_tag.as_deref().expect("adjacent tag is present");
+    let content_name = enum_def.serde_content.as_deref().expect("adjacent content is present");
+    let tag_field = to_go_name(tag_name);
+    let content_field = to_go_name(content_name);
+    let payload_types: std::collections::BTreeSet<String> = enum_def
+        .variants
+        .iter()
+        .filter_map(|variant| variant.fields.first().map(|field| go_type(&field.ty).into_owned()))
+        .collect();
+    let homogeneous_payload_type = (payload_types.len() == 1)
+        .then(|| payload_types.first().cloned())
+        .flatten();
+    let variants: Vec<minijinja::Value> = enum_def
+        .variants
+        .iter()
+        .map(|variant| {
+            let wire_value = crate::codegen::naming::wire_variant_value(
+                &variant.name,
+                variant.serde_rename.as_deref(),
+                enum_def.serde_rename_all.as_deref(),
+            );
+            let constructor = format!("New{go_enum_name}{}", to_go_name(&variant.name));
+            let payload_type = variant.fields.first().map(|field| go_type(&field.ty).into_owned());
+            minijinja::context! {
+                wire_value,
+                constructor,
+                payload_type,
+                has_payload => payload_type.is_some(),
+            }
+        })
+        .collect();
+
+    crate::backends::go::template_env::render(
+        "adjacent_tagged_enum.jinja",
+        context! {
+            go_enum_name,
+            tag_name,
+            content_name,
+            tag_field,
+            content_field,
+            homogeneous_payload_type,
+            variants,
+        },
+    )
 }
 
 /// Returns true if this enum should be emitted as a `json.RawMessage` passthrough

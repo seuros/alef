@@ -270,7 +270,16 @@ pub(super) fn gen_dts(
                         );
                         let mut obj_fields: Vec<String> = vec![format!("{tag_field}: '{tag_value}'")];
                         for field in &variant.fields {
-                            let js_name = to_node_name(&field.name);
+                            let js_name = if e.serde_content.is_some()
+                                && crate::codegen::conversions::is_tuple_variant(&variant.fields)
+                            {
+                                e.serde_content
+                                    .as_deref()
+                                    .expect("adjacent content is present")
+                                    .to_string()
+                            } else {
+                                to_node_name(&field.name)
+                            };
                             let ts_ty = dts_type(&field.ty, no_prefix);
                             if matches!(field.ty, TypeRef::Optional(_)) {
                                 obj_fields.push(format!("{js_name}?: {ts_ty}"));

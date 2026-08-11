@@ -49,6 +49,22 @@ pub(super) fn tagged_enum_field_js_name(variant: &EnumVariant, field: &FieldDef)
     crate::codegen::naming::to_node_name(&field.name)
 }
 
+pub(super) fn tagged_enum_binding_field_name(enum_def: &EnumDef, variant: &EnumVariant, field: &FieldDef) -> String {
+    if enum_def.serde_content.is_some() && variant.fields.len() == 1 && tagged_enum_field_is_tuple(field) {
+        return crate::codegen::naming::to_python_name(
+            enum_def.serde_content.as_deref().expect("adjacent content is present"),
+        );
+    }
+    tagged_enum_field_name(variant, field)
+}
+
+fn tagged_enum_binding_field_js_name(enum_def: &EnumDef, variant: &EnumVariant, field: &FieldDef) -> String {
+    if enum_def.serde_content.is_some() && variant.fields.len() == 1 && tagged_enum_field_is_tuple(field) {
+        return enum_def.serde_content.clone().expect("adjacent content is present");
+    }
+    tagged_enum_field_js_name(variant, field)
+}
+
 /// Collect synthesized variant-data field names emitted on the binding struct for tagged enums
 /// where a variant carries a single-tuple Named field. These are the per-variant optional
 /// properties (e.g. `excel: Option<JsExcelMetadata>`) added on top of the discriminator and
@@ -64,7 +80,7 @@ pub(super) fn variant_data_field_names(enum_def: &EnumDef) -> Vec<String> {
             continue;
         }
         if matches!(&field.ty, TypeRef::Named(_)) {
-            names.push(tagged_enum_field_name(v, field));
+            names.push(tagged_enum_binding_field_name(enum_def, v, field));
         }
     }
     names
@@ -245,7 +261,7 @@ pub(super) fn gen_tagged_enum_as_object(enum_def: &EnumDef, prefix: &str, has_se
             if tagged_enum_field_is_tuple(field) && matches!(&field.ty, TypeRef::Named(_)) {
                 continue;
             }
-            let field_name = tagged_enum_field_name(variant, field);
+            let field_name = tagged_enum_binding_field_name(enum_def, variant, field);
             if seen_fields.insert(field_name.clone()) {
                 let field_type = if (field.sanitized || mixed_named_fields.contains(&field_name))
                     && matches!(&field.ty, TypeRef::Named(_))
@@ -254,7 +270,7 @@ pub(super) fn gen_tagged_enum_as_object(enum_def: &EnumDef, prefix: &str, has_se
                 } else {
                     mapper.map_type(&field.ty).to_string()
                 };
-                let js_name = tagged_enum_field_js_name(variant, field);
+                let js_name = tagged_enum_binding_field_js_name(enum_def, variant, field);
                 if js_name != field_name {
                     lines.push(format!("    #[napi(js_name = \"{js_name}\")]"));
                     // When js_name differs from field_name, add #[serde(rename)] for serialization
@@ -276,9 +292,9 @@ pub(super) fn gen_tagged_enum_as_object(enum_def: &EnumDef, prefix: &str, has_se
             return;
         }
         if let TypeRef::Named(inner_type_name) = &field.ty {
-            let field_name = tagged_enum_field_name(v, field);
+            let field_name = tagged_enum_binding_field_name(enum_def, v, field);
             let binding_type = format!("{prefix}{inner_type_name}");
-            let js_name = tagged_enum_field_js_name(v, field);
+            let js_name = tagged_enum_binding_field_js_name(enum_def, v, field);
             if js_name != field_name {
                 lines.push(format!("    #[napi(js_name = \"{js_name}\")]"));
                 // When js_name differs from field_name, add #[serde(rename)] for serialization
@@ -398,7 +414,7 @@ pub(super) fn tagged_enum_binding_struct_fields<'a>(
 #[allow(clippy::print_stderr)] // test-only debug output ~keep
 mod tests {
     use super::gen_enum;
-    use crate::core::ir::{EnumDef, EnumVariant};
+    use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeRef};
 
     fn make_simple_enum(name: &str, variants: &[&str]) -> EnumDef {
         EnumDef {
@@ -743,5 +759,36 @@ mod tests {
             escaped_count > 0 && unescaped_count == 0,
             "enum variant doc should contain escaped * / but no bare */:\nactual:\n{result}"
         );
+    }
+
+    #[test]
+    fn adjacent_tagged_enum_uses_shared_content_field() {
+        let enum_def = EnumDef {
+            name: "Action".to_string(),
+            variants: vec![
+                EnumVariant {
+                    name: "Continue".to_string(),
+                    ..Default::default()
+                },
+                EnumVariant {
+                    name: "Custom".to_string(),
+                    fields: vec![FieldDef {
+                        name: "_0".to_string(),
+                        ty: TypeRef::String,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ],
+            serde_tag: Some("type".to_string()),
+            serde_content: Some("output".to_string()),
+            serde_rename_all: Some("snake_case".to_string()),
+            ..Default::default()
+        };
+
+        let output = gen_enum(&enum_def, "Js", true);
+        assert!(output.contains("pub type_tag: String"));
+        assert!(output.contains("pub output: Option<String>"));
+        assert!(!output.contains("pub custom: Option<String>"));
     }
 }

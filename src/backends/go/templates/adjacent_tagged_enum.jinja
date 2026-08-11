@@ -1,0 +1,37 @@
+type {{ go_enum_name }} struct {
+	{{ tag_field }} string `json:"{{ tag_name }}"`
+	{{ content_field }} {% if homogeneous_payload_type %}*{{ homogeneous_payload_type }}{% else %}any{% endif %} `json:"{{ content_name }},omitempty"`
+}
+
+{% for variant in variants %}
+{% if variant.has_payload %}
+func {{ variant.constructor }}({{ content_field | lower }} {{ variant.payload_type }}) {{ go_enum_name }} {
+	return {{ go_enum_name }}{ {{ tag_field }}: "{{ variant.wire_value }}", {{ content_field }}: {% if homogeneous_payload_type %}&{% endif %}{{ content_field | lower }} }
+}
+{% else %}
+func {{ variant.constructor }}() {{ go_enum_name }} {
+	return {{ go_enum_name }}{ {{ tag_field }}: "{{ variant.wire_value }}" }
+}
+{% endif %}
+{% endfor %}
+func (value *{{ go_enum_name }}) UnmarshalJSON(data []byte) error {
+	type wireValue {{ go_enum_name }}
+	var decoded wireValue
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	switch decoded.{{ tag_field }} {
+{% for variant in variants %}
+	case "{{ variant.wire_value }}":
+{% if variant.has_payload %}
+		if decoded.{{ content_field }} == nil {
+			return fmt.Errorf("missing {{ content_name }} for {{ go_enum_name }} variant %q", decoded.{{ tag_field }})
+		}
+{% endif %}
+{% endfor %}
+	default:
+		return fmt.Errorf("unknown {{ go_enum_name }} {{ tag_name }} %q", decoded.{{ tag_field }})
+	}
+	*value = {{ go_enum_name }}(decoded)
+	return nil
+}

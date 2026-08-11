@@ -440,6 +440,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/tagged_union_struct_header.jinja"),
     ),
     (
+        "adjacent_tagged_enum.jinja",
+        include_str!("templates/adjacent_tagged_enum.jinja"),
+    ),
+    (
         "data_enum_interface.jinja",
         include_str!("templates/data_enum_interface.jinja"),
     ),

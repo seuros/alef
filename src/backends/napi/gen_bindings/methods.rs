@@ -11,7 +11,7 @@ use crate::{
 };
 
 use super::enums::{
-    tagged_enum_binding_struct_fields, tagged_enum_field_is_tuple, tagged_enum_field_name,
+    tagged_enum_binding_field_name, tagged_enum_binding_struct_fields, tagged_enum_field_is_tuple,
     tagged_enum_mixed_named_fields, variant_data_field_names,
 };
 use super::functions::{core_prim_str, needs_napi_cast};
@@ -106,7 +106,7 @@ pub(super) fn gen_tagged_enum_binding_to_core(
                     .fields
                     .iter()
                     .map(|f| {
-                        let binding_field_name = tagged_enum_field_name(variant, f);
+                        let binding_field_name = tagged_enum_binding_field_name(enum_def, variant, f);
                         let has_binding = fields_with_binding_struct.contains(f.name.as_str());
                         let is_single_tuple_named = variant.fields.len() == 1
                             && tagged_enum_field_is_tuple(f)
@@ -268,7 +268,7 @@ pub(super) fn gen_tagged_enum_core_to_binding(
                 if tagged_enum_field_is_tuple(f) && matches!(&f.ty, crate::core::ir::TypeRef::Named(_)) {
                     continue;
                 }
-                fields.insert(tagged_enum_field_name(v, f));
+                fields.insert(tagged_enum_binding_field_name(enum_def, v, f));
             }
         }
         fields.into_iter().collect()
@@ -288,7 +288,7 @@ pub(super) fn gen_tagged_enum_core_to_binding(
             let this_synth_field = if variant.fields.len() == 1 {
                 let field = &variant.fields[0];
                 if tagged_enum_field_is_tuple(field) && matches!(&field.ty, crate::core::ir::TypeRef::Named(_)) {
-                    Some(tagged_enum_field_name(variant, field))
+                    Some(tagged_enum_binding_field_name(enum_def, variant, field))
                 } else {
                     None
                 }
@@ -314,13 +314,13 @@ pub(super) fn gen_tagged_enum_core_to_binding(
                 let variant_field_map: std::collections::BTreeMap<String, &crate::core::ir::FieldDef> = variant
                     .fields
                     .iter()
-                    .map(|f| (tagged_enum_field_name(variant, f), f))
+                    .map(|f| (tagged_enum_binding_field_name(enum_def, variant, f), f))
                     .collect();
                 let destructured: Vec<String> = variant
                     .fields
                     .iter()
                     .map(|f| {
-                        let binding_field_name = tagged_enum_field_name(variant, f);
+                        let binding_field_name = tagged_enum_binding_field_name(enum_def, variant, f);
                         if f.sanitized && sanitized_field_to_binding_expr("_", &f.ty).is_none() {
                             if is_tuple {
                                 format!("_{binding_field_name}")
@@ -392,7 +392,7 @@ pub(super) fn gen_tagged_enum_core_to_binding(
                 for sf in &synth_field_names {
                     if this_synth_field.as_deref() == Some(sf.as_str()) {
                         let field = &variant.fields[0];
-                        let var_name = tagged_enum_field_name(variant, field);
+                        let var_name = tagged_enum_binding_field_name(enum_def, variant, field);
                         let is_boxed = field.is_boxed;
                         if is_boxed {
                             field_inits.push(format!("{sf}: Some((*{var_name}).into())"));
