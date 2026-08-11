@@ -302,6 +302,157 @@ fn test_file_renders_no_env_block_when_env_empty() {
     );
 }
 
+/// An `error` assertion with a declared `value` must check both the caught
+/// error's description and its dynamic type name, since fixture authors use
+/// either convention (a message-only field name or a type-name prefix).
+#[test]
+fn test_file_error_assertion_with_declared_value_checks_message_and_type() {
+    use crate::core::config::ResolvedCrateConfig;
+    use crate::e2e::config::E2eConfig;
+    use crate::e2e::fixture::{Assertion, Fixture};
+
+    let mut e2e_config = E2eConfig::default();
+    e2e_config.call.function = "parseThing".into();
+
+    let mut fixture = Fixture {
+        id: "invalid_thing".into(),
+        description: "Invalid thing raises".into(),
+        ..Fixture::default()
+    };
+    fixture.assertions.push(Assertion {
+        assertion_type: "error".into(),
+        value: Some(serde_json::json!("ThingNotFound")),
+        ..Default::default()
+    });
+
+    let output = super::test_file::render_test_file(
+        "smoke",
+        &[&fixture],
+        &e2e_config,
+        "TestModule",
+        "TestCase",
+        "parseThing",
+        "result",
+        &[],
+        false,
+        None,
+        &Default::default(),
+        &ResolvedCrateConfig::default(),
+        &[],
+        false,
+        &[],
+    );
+
+    assert!(
+        output.contains("String(describing: error)"),
+        "expected error description capture, got:\n{output}"
+    );
+    assert!(
+        output.contains("String(describing: type(of: error))"),
+        "expected error type-name capture, got:\n{output}"
+    );
+    assert!(
+        output.contains(
+            "XCTAssertTrue(_errorMessage.contains(\"ThingNotFound\") || _errorType.contains(\"ThingNotFound\")"
+        ),
+        "expected a disjunctive message-or-type check against the declared value, got:\n{output}"
+    );
+    // The success-path failure call is untouched by this feature.
+    assert!(output.contains("XCTFail(\"expected to throw\")"));
+}
+
+/// With no declared `value` on the `error` assertion, output must be
+/// byte-identical to the pre-existing "catch anything" behavior.
+#[test]
+fn test_file_error_assertion_without_declared_value_is_byte_identical() {
+    use crate::core::config::ResolvedCrateConfig;
+    use crate::e2e::config::E2eConfig;
+    use crate::e2e::fixture::{Assertion, Fixture};
+
+    let mut e2e_config = E2eConfig::default();
+    e2e_config.call.function = "parseThing".into();
+
+    let mut fixture = Fixture {
+        id: "invalid_thing".into(),
+        description: "Invalid thing raises".into(),
+        ..Fixture::default()
+    };
+    fixture.assertions.push(Assertion {
+        assertion_type: "error".into(),
+        ..Default::default()
+    });
+
+    let output = super::test_file::render_test_file(
+        "smoke",
+        &[&fixture],
+        &e2e_config,
+        "TestModule",
+        "TestCase",
+        "parseThing",
+        "result",
+        &[],
+        false,
+        None,
+        &Default::default(),
+        &ResolvedCrateConfig::default(),
+        &[],
+        false,
+        &[],
+    );
+
+    assert!(!output.contains("String(describing: error)"));
+    assert!(output.contains("        } catch {\n            // success\n        }"));
+}
+
+/// Declared error values containing Swift string-interpolation and escape
+/// characters (`"`, `\`, backslash-escapes) must be escaped via the shared
+/// `escape_swift` helper, not hand-rolled, so the emitted literal stays valid.
+#[test]
+fn test_file_error_assertion_escapes_declared_value_for_swift_string_literal() {
+    use crate::core::config::ResolvedCrateConfig;
+    use crate::e2e::config::E2eConfig;
+    use crate::e2e::fixture::{Assertion, Fixture};
+
+    let mut e2e_config = E2eConfig::default();
+    e2e_config.call.function = "parseThing".into();
+
+    let mut fixture = Fixture {
+        id: "invalid_thing".into(),
+        description: "Invalid thing raises".into(),
+        ..Fixture::default()
+    };
+    fixture.assertions.push(Assertion {
+        assertion_type: "error".into(),
+        value: Some(serde_json::json!("bad \"field\" \\ value")),
+        ..Default::default()
+    });
+
+    let output = super::test_file::render_test_file(
+        "smoke",
+        &[&fixture],
+        &e2e_config,
+        "TestModule",
+        "TestCase",
+        "parseThing",
+        "result",
+        &[],
+        false,
+        None,
+        &Default::default(),
+        &ResolvedCrateConfig::default(),
+        &[],
+        false,
+        &[],
+    );
+
+    let expected_escaped = crate::e2e::codegen::swift::values::escape_swift("bad \"field\" \\ value");
+    let expected_snippet = format!("_errorMessage.contains(\"{expected_escaped}\")");
+    assert!(
+        output.contains(&expected_snippet),
+        "expected escaped literal snippet `{expected_snippet}` in:\n{output}"
+    );
+}
+
 /// Regression test: verify that app harness generates valid Swift multi-line
 /// string literals. The bug was that template trim settings ate the newline
 /// between `"""` and the first JSON chunk, producing invalid syntax like

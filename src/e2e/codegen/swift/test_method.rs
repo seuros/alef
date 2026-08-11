@@ -12,7 +12,32 @@ use std::fmt::Write as _;
 use super::args::build_args_and_setup;
 use super::assertions::render_assertion;
 use super::empty_field_accessor_map;
-use super::values::{resolve_streaming_adapter, swift_call_result_type, swift_client_factory_call};
+use super::values::{escape_swift, resolve_streaming_adapter, swift_call_result_type, swift_client_factory_call};
+
+/// Emit the `catch` block for an `error`-asserting test, closing the `do { … }` it follows.
+///
+/// ~keep When the fixture declares an expected error value, the check must match either
+/// the caught error's description or its dynamic type name — never message-only — per the
+/// shared contract in `declared_error_value`. With no declared value, output is byte-identical
+/// to the old unconditional `// success` stub so untouched fixtures never see a diff.
+fn render_error_catch_block(out: &mut String, declared_error: Option<&str>) {
+    let _ = writeln!(out, "        }} catch {{");
+    match declared_error {
+        Some(expected) => {
+            let escaped = escape_swift(expected);
+            let _ = writeln!(out, "            let _errorMessage = String(describing: error)");
+            let _ = writeln!(out, "            let _errorType = String(describing: type(of: error))");
+            let _ = writeln!(
+                out,
+                "            XCTAssertTrue(_errorMessage.contains(\"{escaped}\") || _errorType.contains(\"{escaped}\"), \"expected error to mention \\\"{escaped}\\\", got message: \\(_errorMessage), type: \\(_errorType)\")"
+            );
+        }
+        None => {
+            let _ = writeln!(out, "            // success");
+        }
+    }
+    let _ = writeln!(out, "        }}");
+}
 
 // ---------------------------------------------------------------------------
 // Function-call test rendering
@@ -97,6 +122,7 @@ pub(super) fn render_test_method(
     let method_name = fixture.id.to_upper_camel_case();
     let description = &fixture.description;
     let expects_error = fixture.assertions.iter().any(|a| a.assertion_type == "error");
+    let declared_error = crate::e2e::codegen::declared_error_value(fixture);
     let is_async = call_overrides.and_then(|o| o.r#async).unwrap_or(call_config.r#async);
 
     // Streaming detection (call-level `streaming` opt-out is honored).
@@ -354,9 +380,7 @@ pub(super) fn render_test_method(
             }
             let _ = writeln!(out, "            _ = {call_expr}");
             let _ = writeln!(out, "            XCTFail(\"expected to throw\")");
-            let _ = writeln!(out, "        }} catch {{");
-            let _ = writeln!(out, "            // success");
-            let _ = writeln!(out, "        }}");
+            render_error_catch_block(out, declared_error);
         } else {
             // Synchronous: emit setup outside (it's expected to succeed) and
             // wrap only the throwing call in XCTAssertThrowsError. If setup
@@ -373,9 +397,7 @@ pub(super) fn render_test_method(
             }
             let _ = writeln!(out, "            _ = {call_expr}");
             let _ = writeln!(out, "            XCTFail(\"expected to throw\")");
-            let _ = writeln!(out, "        }} catch {{");
-            let _ = writeln!(out, "            // success");
-            let _ = writeln!(out, "        }}");
+            render_error_catch_block(out, declared_error);
         }
         let _ = writeln!(out, "    }}");
         return;

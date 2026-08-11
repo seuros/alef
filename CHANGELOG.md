@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - E2E and registry test-app generation now fails when a configured formatter is unavailable or exits unsuccessfully,
   preventing noncanonical generated output from being reported as successful.
 
+- Generated Swift and Dart E2E error tests now assert the error value a fixture declares, matching it against either
+  the error's description or its runtime type name. Swift's `catch` accepted any error and Dart used
+  `throwsA(anything)`, so neither could distinguish the declared error from any other failure.
+
 - Generated Java and C# E2E error tests now assert the error value a fixture declares, matching it against either the
   thrown exception's message or its type name. The existing expected exception type is unchanged; only the value check
   is added.

@@ -492,7 +492,8 @@ pub(super) fn render_assertion_dart(
             // success.
         }
         "error" => {
-            // Handled at the test method level via throwsA(anything).
+            // ~keep Handled at the test method level, via `dart_error_matcher` in
+            // `test_case.rs` (throwsA(anything) or a declared-value predicate matcher).
         }
         "method_result" => {
             if let Some(method) = &assertion.method {

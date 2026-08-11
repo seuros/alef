@@ -271,3 +271,132 @@ fn dart_emit_setenv_forces_overwrite_and_checks_return_code() {
         "must throw StateError on non-zero return code, got:\n{output}"
     );
 }
+
+/// An `error` assertion with a declared `value` must produce a `throwsA`
+/// predicate matcher that checks both the caught error's `toString()` and its
+/// `runtimeType.toString()`, since fixture authors use either a message-only
+/// field name or a type-name prefix.
+#[test]
+fn dart_error_assertion_with_declared_value_checks_message_and_type() {
+    use crate::e2e::fixture::Assertion;
+
+    let mut fixture = make_fixture("invalid_thing");
+    fixture.assertions.push(Assertion {
+        assertion_type: "error".into(),
+        value: Some(serde_json::json!("ThingNotFound")),
+        ..Default::default()
+    });
+
+    let mut e2e_config = crate::e2e::config::E2eConfig::default();
+    e2e_config.call.function = "parseThing".into();
+
+    let config = crate::core::config::ResolvedCrateConfig::default();
+    let dart_first_class_map = crate::e2e::field_access::DartFirstClassMap::default();
+
+    let output = super::test_file::render_test_file(
+        "smoke",
+        &[&fixture],
+        &e2e_config,
+        "dart",
+        "samplecli",
+        "RustLib",
+        "RustLibBridge",
+        &dart_first_class_map,
+        &[],
+        &config,
+        &[],
+        &[],
+    );
+
+    assert!(
+        output.contains(
+            "throwsA(predicate((e) => e.toString().contains('ThingNotFound') || e.runtimeType.toString().contains('ThingNotFound')))"
+        ),
+        "expected a disjunctive message-or-type predicate matcher against the declared value, got:\n{output}"
+    );
+    assert!(
+        !output.contains("throwsA(anything)"),
+        "declared value must replace the anything-matcher, got:\n{output}"
+    );
+}
+
+/// With no declared `value` on the `error` assertion, output must be
+/// byte-identical to the pre-existing `throwsA(anything)` behavior.
+#[test]
+fn dart_error_assertion_without_declared_value_is_byte_identical() {
+    use crate::e2e::fixture::Assertion;
+
+    let mut fixture = make_fixture("invalid_thing");
+    fixture.assertions.push(Assertion {
+        assertion_type: "error".into(),
+        ..Default::default()
+    });
+
+    let mut e2e_config = crate::e2e::config::E2eConfig::default();
+    e2e_config.call.function = "parseThing".into();
+
+    let config = crate::core::config::ResolvedCrateConfig::default();
+    let dart_first_class_map = crate::e2e::field_access::DartFirstClassMap::default();
+
+    let output = super::test_file::render_test_file(
+        "smoke",
+        &[&fixture],
+        &e2e_config,
+        "dart",
+        "samplecli",
+        "RustLib",
+        "RustLibBridge",
+        &dart_first_class_map,
+        &[],
+        &config,
+        &[],
+        &[],
+    );
+
+    assert!(output.contains("throwsA(anything)"));
+    assert!(!output.contains("predicate((e)"));
+}
+
+/// Declared error values containing Dart string-interpolation and escape
+/// characters (`'`, `\`, `$`) must be escaped via the shared `escape_dart`
+/// helper, not hand-rolled, so the emitted literal stays a valid single-quoted
+/// Dart string.
+#[test]
+fn dart_error_assertion_escapes_declared_value_for_dart_string_literal() {
+    use crate::e2e::fixture::Assertion;
+
+    let mut fixture = make_fixture("invalid_thing");
+    fixture.assertions.push(Assertion {
+        assertion_type: "error".into(),
+        value: Some(serde_json::json!("bad 'field' \\ $value")),
+        ..Default::default()
+    });
+
+    let mut e2e_config = crate::e2e::config::E2eConfig::default();
+    e2e_config.call.function = "parseThing".into();
+
+    let config = crate::core::config::ResolvedCrateConfig::default();
+    let dart_first_class_map = crate::e2e::field_access::DartFirstClassMap::default();
+
+    let output = super::test_file::render_test_file(
+        "smoke",
+        &[&fixture],
+        &e2e_config,
+        "dart",
+        "samplecli",
+        "RustLib",
+        "RustLibBridge",
+        &dart_first_class_map,
+        &[],
+        &config,
+        &[],
+        &[],
+    );
+
+    let expected_escaped = super::values::escape_dart("bad 'field' \\ $value");
+    let expected_snippet = format!("e.toString().contains('{expected_escaped}')");
+    assert!(
+        output.contains(&expected_snippet),
+        "expected escaped literal snippet `{expected_snippet}` in:\n{output}"
+    );
+}

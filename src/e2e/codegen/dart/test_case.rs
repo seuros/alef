@@ -14,6 +14,27 @@ use super::values::{escape_dart, mime_from_extension, type_name_to_create_from_j
 
 const COMPATIBLE_OPTIONS_TYPE_LANGS: &[&str] = &["csharp", "c", "go", "java", "php", "python", "r"];
 
+/// Build the `throwsA(...)` matcher expression for an `error`-asserting test.
+///
+/// ~keep flutter_rust_bridge 2.x decodes Rust errors as raw String values (see the
+/// `throwsA(anything)` rationale above), so a declared expectation can't rely on a typed
+/// exception hierarchy. Checking `toString()` OR `runtimeType.toString()` mirrors the
+/// message-or-type disjunction other backends use (`declared_error_value`'s contract):
+/// config-validation fixtures name text that only appears in the message, API-error
+/// fixtures name a type prefix that only appears in the runtime type. With no declared
+/// value this returns the original `throwsA(anything)` unchanged.
+fn dart_error_matcher(declared_error: Option<&str>) -> String {
+    match declared_error {
+        Some(expected) => {
+            let escaped = escape_dart(expected);
+            format!(
+                "throwsA(predicate((e) => e.toString().contains('{escaped}') || e.runtimeType.toString().contains('{escaped}')))"
+            )
+        }
+        None => "throwsA(anything)".to_string(),
+    }
+}
+
 pub(super) struct DartTestCaseContext<'a> {
     pub(super) e2e_config: &'a E2eConfig,
     pub(super) lang: &'a str,
@@ -114,6 +135,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
     let _is_async = call_overrides.and_then(|o| o.r#async).unwrap_or(call_config.r#async);
 
     let expects_error = fixture.assertions.iter().any(|a| a.assertion_type == "error");
+    let declared_error = crate::e2e::codegen::declared_error_value(fixture);
     let is_streaming =
         crate::e2e::codegen::streaming_assertions::resolve_is_streaming(fixture, call_config.streaming_enabled());
     // `result_is_simple = true` means the dart return is a scalar/bytes value
@@ -926,7 +948,8 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
         } else {
             let _ = writeln!(out, "      return {receiver}.{function_name}({args_str});");
         }
-        let _ = writeln!(out, "    }}(), throwsA(anything));");
+        let matcher = dart_error_matcher(declared_error);
+        let _ = writeln!(out, "    }}(), {matcher});");
     } else if expects_error {
         // No setup lines, direct call — same throwsA(anything) rationale as above.
         if let Some(extra) = &extra_setup {
@@ -934,15 +957,16 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                 let _ = writeln!(out, "    {line}");
             }
         }
+        let matcher = dart_error_matcher(declared_error);
         if is_streaming {
             let _ = writeln!(
                 out,
-                "    await expectLater({receiver}.{function_name}({args_str}).toList(), throwsA(anything));"
+                "    await expectLater({receiver}.{function_name}({args_str}).toList(), {matcher});"
             );
         } else {
             let _ = writeln!(
                 out,
-                "    await expectLater({receiver}.{function_name}({args_str}), throwsA(anything));"
+                "    await expectLater({receiver}.{function_name}({args_str}), {matcher});"
             );
         }
     } else {

@@ -907,7 +907,8 @@ pub(super) fn render_assertion(
             // Already handled by the call succeeding without exception.
         }
         "error" => {
-            // Handled at the test method level.
+            // ~keep Handled at the test method level, via `render_error_catch_block`
+            // in `test_method.rs` (plain success catch or a declared-value check).
         }
         "method_result" => {
             let _ = writeln!(out, "        // method_result assertions not yet implemented for Swift");
