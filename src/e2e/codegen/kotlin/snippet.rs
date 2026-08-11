@@ -196,4 +196,52 @@ mod tests {
         assert!(body.contains("Base64.getEncoder().encodeToString"), "{body}");
         assert!(body.contains("DocumentRequest::class.java"), "{body}");
     }
+
+    #[test]
+    fn snippet_deserializes_generic_typed_dto_without_file_metadata() {
+        let fixture = Fixture {
+            id: "document_input".into(),
+            description: "Process a document".into(),
+            input: serde_json::json!({"kind": "uri", "uri": "document.txt"}),
+            ..Fixture::default()
+        };
+        let mut call = CallConfig {
+            function: "process".into(),
+            args: vec![crate::e2e::config::ArgMapping {
+                name: "input".into(),
+                field: "input".into(),
+                arg_type: "json_object".into(),
+                optional: false,
+                owned: false,
+                element_type: None,
+                go_type: None,
+                vec_inner_is_ref: false,
+                trait_name: None,
+            }],
+            ..CallConfig::default()
+        };
+        call.overrides.insert(
+            "kotlin_android".into(),
+            CallOverride {
+                options_type: Some("DocumentInput".into()),
+                ..CallOverride::default()
+            },
+        );
+
+        let body = render_snippet_body(
+            &fixture,
+            &E2eConfig {
+                call,
+                ..E2eConfig::default()
+            },
+            &ResolvedCrateConfig::default(),
+            &[],
+            true,
+        );
+
+        assert!(body.contains("val input = MAPPER.readValue("), "{body}");
+        assert!(body.contains("DocumentInput::class.java"), "{body}");
+        assert!(body.contains(".process(input)"), "{body}");
+        assert!(body.contains("jacksonObjectMapper"), "{body}");
+    }
 }

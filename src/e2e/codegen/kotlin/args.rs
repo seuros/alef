@@ -311,12 +311,9 @@ pub(super) fn build_args_and_setup(
                 if arg.arg_type == "json_object" {
                     if let Some(opts_type) = options_type {
                         let files = fixture.docs_files_for_arg(&arg.field);
-                        if !files.is_empty() {
-                            let mut json_value = v.clone();
-                            let file_reads = prepare_docs_file_reads(&mut json_value, &files);
-                            append_docs_file_setup(&mut setup_lines, &arg.name, &json_value, opts_type, &file_reads);
-                        }
-                        // Pre-deserialized variable via options_type
+                        let mut json_value = v.clone();
+                        let file_reads = prepare_docs_file_reads(&mut json_value, &files);
+                        append_docs_file_setup(&mut setup_lines, &arg.name, &json_value, opts_type, &file_reads);
                         parts.push(arg.name.clone());
                     } else {
                         // Infer the config type and deserialize

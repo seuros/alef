@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed Kotlin documentation snippets referencing undeclared typed input variables when fixtures do not define file presentation metadata.
+
 - Snippet session regressions now use isolated .NET restore state and tolerate cold Windows toolchains without
   weakening validation.
 
