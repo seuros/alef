@@ -35,6 +35,7 @@ pub(super) fn render_engine_factory_test_function(
     config_type: &str,
     expects_error: bool,
     raw_c_result_type: Option<&str>,
+    type_defs: &[crate::core::ir::TypeDef],
 ) {
     let prefix_upper = prefix.to_uppercase();
     let config_snake = config_type.to_snake_case();
@@ -231,6 +232,7 @@ pub(super) fn render_engine_factory_test_function(
                     &mut intermediate_handles,
                     result_type_name,
                     f,
+                    type_defs,
                 );
                 if let Some(returned_type) = leaf_result {
                     // Could be a primitive type (primitive_locals) or opaque handle type

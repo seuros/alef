@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Standalone C documentation snippets now construct every JSON argument with its declared ABI type and derive opaque
   return handles from extracted function metadata instead of call-name guesses or shared placeholder option types.
 
+- Nested C result accessors now infer optional opaque handle types from extracted struct fields when no explicit
+  `fields_c_types` override is needed, avoiding generation-time panics for authoritative IR shapes.
+
 - Rust documentation snippet validation now checks compatible uncached cells as binaries in one Cargo invocation,
   while retaining per-cell diagnostics, cache entries, session isolation, and deterministic result ordering.
 

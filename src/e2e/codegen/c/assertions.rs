@@ -35,6 +35,7 @@ pub(super) fn emit_nested_accessor(
     intermediate_handles: &mut Vec<(String, String)>,
     result_type_name: &str,
     raw_field: &str,
+    type_defs: &[crate::core::ir::TypeDef],
 ) -> Option<String> {
     let segments: Vec<&str> = resolved.split('.').collect();
     let prefix_upper = prefix.to_uppercase();
@@ -220,8 +221,12 @@ pub(super) fn emit_nested_accessor(
         } else {
             // Intermediate field — check if it's a char* (JSON string/array) or an opaque handle.
             let lookup_key = format!("{current_snake_type}.{seg_snake}");
-            let return_type_pascal = match fields_c_types.get(&lookup_key) {
-                Some(t) => t.clone(),
+            let return_type_pascal = match fields_c_types
+                .get(&lookup_key)
+                .cloned()
+                .or_else(|| resolve_intermediate_type(&current_snake_type, &seg_snake, type_defs))
+            {
+                Some(return_type) => return_type,
                 None => {
                     // No silent fallback: deriving the C type from the field name only
                     // works when the Rust return type is the literal PascalCase of the
@@ -280,6 +285,21 @@ pub(super) fn emit_nested_accessor(
         }
     }
     None
+}
+
+fn resolve_intermediate_type(
+    parent_snake: &str,
+    field_snake: &str,
+    type_defs: &[crate::core::ir::TypeDef],
+) -> Option<String> {
+    let parent = type_defs
+        .iter()
+        .find(|type_def| type_def.name.to_snake_case() == parent_snake)?;
+    let field = parent
+        .fields
+        .iter()
+        .find(|field| field.name.to_snake_case() == field_snake)?;
+    super::named_type(&field.ty).map(str::to_string)
 }
 
 /// Build the C argument string for the function call.
@@ -908,5 +928,55 @@ fn build_c_method_call(
         format!("{ffi_prefix}_{method_name}({result_var})")
     } else {
         format!("{ffi_prefix}_{method_name}({result_var}, {extra_args})")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::ir::{FieldDef, TypeDef, TypeRef};
+
+    #[test]
+    fn nested_optional_handle_type_comes_from_ir_when_config_mapping_is_absent() {
+        let types = [
+            TypeDef {
+                name: "ExtractionResult".into(),
+                fields: vec![FieldDef {
+                    name: "summary".into(),
+                    ty: TypeRef::Optional(Box::new(TypeRef::Named("ExtractionSummary".into()))),
+                    ..FieldDef::default()
+                }],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "ExtractionSummary".into(),
+                fields: vec![FieldDef {
+                    name: "processed".into(),
+                    ty: TypeRef::Primitive(crate::core::ir::PrimitiveType::U64),
+                    ..FieldDef::default()
+                }],
+                ..TypeDef::default()
+            },
+        ];
+        let mut output = String::new();
+        let mut handles = Vec::new();
+
+        emit_nested_accessor(
+            &mut output,
+            "sample",
+            "summary.processed",
+            "summary_processed",
+            "result",
+            &HashMap::from([("extraction_summary.processed".into(), "uint64_t".into())]),
+            &HashSet::new(),
+            &mut handles,
+            "ExtractionResult",
+            "summary.processed",
+            &types,
+        );
+
+        assert!(output.contains("SAMPLEExtractionSummary* summary_handle"), "{output}");
+        assert!(output.contains("sample_extraction_result_summary(result)"), "{output}");
+        assert!(output.contains("uint64_t summary_processed"), "{output}");
     }
 }

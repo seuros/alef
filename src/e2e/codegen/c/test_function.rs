@@ -220,6 +220,7 @@ pub(super) fn render_test_function(
             config_type,
             expects_error,
             raw_c_result_type,
+            type_defs,
         );
         return;
     }
@@ -489,6 +490,7 @@ pub(super) fn render_test_function(
                         &mut intermediate_handles,
                         result_type_name,
                         f,
+                        type_defs,
                     );
                     if let Some(prim) = leaf_primitive {
                         primitive_locals.insert(local_var.clone(), prim);
@@ -917,6 +919,7 @@ pub(super) fn render_test_function(
                     &mut intermediate_handles,
                     result_type_name,
                     f,
+                    type_defs,
                 );
                 if let Some(returned_type) = leaf_result {
                     // Could be a primitive type (primitive_locals) or opaque handle type
