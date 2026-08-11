@@ -562,6 +562,13 @@ pub(super) fn render_assertion(
             let _ = writeln!(out, "  {field_expr} |> should.equal(False)");
         }
         "not_error" => {}
+        // ~keep Unreachable by construction: `expects_error` in test_case.rs is true
+        // whenever any assertion is type "error", and both call-emission branches there
+        // (`client_factory` and plain) return immediately after `emit_error_assertion`,
+        // before the assertions loop that calls render_assertion is ever reached — so
+        // `result_var` here is always the already-unwrapped Ok value, never the error
+        // this assertion type names. The declared error value is preserved at the call
+        // sites in test_case.rs (`emit_error_assertion`), not here.
         "error" => {}
         "greater_than" => {
             if let Some(val) = &assertion.value {

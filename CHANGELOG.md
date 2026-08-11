@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - E2E and registry test-app generation now fails when a configured formatter is unavailable or exits unsuccessfully,
   preventing noncanonical generated output from being reported as successful.
 
+- Generated Elixir E2E validation tests now call the operation under test when engine creation succeeds, instead of
+  stopping after asserting `{:error, _}` on creation. Fixtures whose error is raised per-request rather than at
+  construction previously asserted nothing and could never fail.
+
+- Generated Elixir and Gleam E2E error tests now assert the error value a fixture declares, matching the reason's
+  `inspect` rendering so a plain message and a typed atom or struct are both covered by one check.
+
 - Generated Swift and Dart E2E error tests now assert the error value a fixture declares, matching it against either
   the error's description or its runtime type name. Swift's `catch` accepted any error and Dart used
   `throwsA(anything)`, so neither could distinguish the declared error from any other failure.

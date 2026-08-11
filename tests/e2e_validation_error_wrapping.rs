@@ -10,7 +10,7 @@
 //! - Ruby:   `expect { setup_lines; call_expr }.to raise_error`
 //! - PHP:    `$this->expectException(...); setup_lines; call_expr;`
 //! - C#:     `Assert.ThrowsAnyAsync<Exc>(async () => { setup_lines; await call_expr; })`
-//! - Elixir: `assert {:error, _} = Module.create_engine(config)` (no separate call)
+//! - Elixir: `case Module.create_engine(config) do {:error, r} -> assert ...; {:ok, engine} -> assert {:error, r} = Module.scrape(engine, url) end`
 //! - Go:     `engine, createErr := pkg.CreateEngine(&cfg); assert.Error(t, createErr); return`
 //! - Rust:   `let engine_result = create_engine(...); let result = match engine_result { Err(e) => Err(e), Ok(engine) => { scrape(...).await } }; assert!(result.is_err(), ...)`
 
@@ -184,22 +184,37 @@ fn csharp_validation_setup_lines_are_inside_throws_lambda() {
 }
 
 #[test]
-fn elixir_validation_emits_error_assertion_on_engine_creation() {
+fn elixir_validation_asserts_error_on_creation_or_on_the_call() {
     let content = generate_content(&ElixirCodegen, "elixir");
 
     assert!(
-        content.contains("assert {:error, _} ="),
-        "error assertion pattern missing:\n{content}"
+        content.contains("case DemoCrawler.create_engine("),
+        "creation must be matched with `case` so both outcomes are handled:\n{content}"
     );
 
     assert!(
-        content.contains("assert {:error, _} =") && content.contains("create_engine"),
-        "assert {{:error, _}} must wrap create_engine:\n{content}"
+        content.contains("{:error, __reason} ->"),
+        "the creation-failed branch must bind the reason to assert on it:\n{content}"
     );
 
+    // ~keep The anti-vacuity check. The generator used to stop after asserting
+    // `{:error, _}` on create_engine, so any fixture whose error is raised
+    // per-request rather than at construction asserted nothing and could never
+    // fail. Creation succeeding must therefore fall through to the operation and
+    // assert the error there, matching the Go and Rust shapes above.
+    let ok_branch = content
+        .find("{:ok, engine} ->")
+        .expect("creation-succeeded branch missing — the vacuous single-assert shape is back");
+    let call_pos = content
+        .find("DemoCrawler.scrape(engine,")
+        .expect("the operation under test is never called — assertion is vacuous");
     assert!(
-        !content.contains("{:ok, engine}"),
-        "{{:ok, engine}} = ... pattern found — would crash on validation fixture:\n{content}"
+        call_pos > ok_branch,
+        "the operation must be called inside the creation-succeeded branch:\n{content}"
+    );
+    assert!(
+        content[ok_branch..].contains("assert {:error, __reason} ="),
+        "the operation's result must be asserted to be an error:\n{content}"
     );
 }
 

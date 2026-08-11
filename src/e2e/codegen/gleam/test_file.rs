@@ -161,6 +161,13 @@ pub(super) fn render_test_file(
                     needed_modules.insert("string");
                 }
                 "greater_than" | "less_than" | "greater_than_or_equal" | "less_than_or_equal" => {}
+                "error" => {
+                    // A declared error value emits `string.inspect` + `string.contains` in
+                    // the generated test — see `emit_error_assertion` in test_case.rs.
+                    if crate::e2e::codegen::declared_error_value(fixture).is_some() {
+                        needed_modules.insert("string");
+                    }
+                }
                 _ => {}
             }
             if needs_case_expr && let Some(f) = &assertion.field {

@@ -552,6 +552,13 @@ pub(super) fn render_assertion(
             }
         }
         "not_error" => {}
+        // ~keep Unreachable by construction: `expects_error` in test_case.rs is true
+        // whenever any assertion is type "error", and every such fixture returns early
+        // (validation_creation_failure or the plain expects_error branch) before the
+        // assertions loop that calls render_assertion is ever reached — so `result_var`
+        // here is always the already-unwrapped Ok value, never the error tuple this
+        // assertion type names. The declared error value is preserved at the two call
+        // sites in test_case.rs (`emit_error_assertion`), not here.
         "error" => {}
         other => {
             panic!("Elixir e2e generator: unsupported assertion type: {other}");

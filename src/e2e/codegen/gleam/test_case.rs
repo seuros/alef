@@ -1,7 +1,8 @@
 //! Gleam fixture test-case renderer.
 
+use crate::e2e::codegen::declared_error_value;
 use crate::e2e::config::E2eConfig;
-use crate::e2e::escape::sanitize_ident;
+use crate::e2e::escape::{escape_gleam, sanitize_ident};
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Fixture;
 use heck::ToSnakeCase;
@@ -10,6 +11,28 @@ use std::fmt::Write as FmtWrite;
 
 use super::args::build_args_and_setup;
 use super::assertions::render_assertion;
+
+/// Emit an error assertion for a call expression, closing the enclosing test function.
+///
+/// ~keep `string.inspect/1` renders any Gleam value as text (a String reason's quoted
+/// content, or a custom error type's constructor name and fields), so a single substring
+/// check against it enforces the same message-OR-type disjunction the other language
+/// backends apply explicitly — Gleam bindings return `Result(_, String)` for some crates
+/// and a custom error enum for others, and this works for both without per-crate typing.
+fn emit_error_assertion(out: &mut String, call_expr: &str, declared_value: Option<&str>) {
+    if let Some(value) = declared_value {
+        let escaped = escape_gleam(value);
+        let _ = writeln!(out, "  let __result = {call_expr}");
+        let _ = writeln!(out, "  let assert Error(__reason) = __result");
+        let _ = writeln!(
+            out,
+            "  should.be_true(string.contains(string.inspect(__reason), \"{escaped}\"))"
+        );
+    } else {
+        let _ = writeln!(out, "  {call_expr} |> should.be_error()");
+    }
+    let _ = writeln!(out, "}}");
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_test_case(
@@ -141,16 +164,16 @@ pub(super) fn render_test_case(
             format!("client, {args_str}")
         };
         if expects_error {
-            let _ = writeln!(out, "  {module_path}.{function_name}({full_args}) |> should.be_error()");
-            let _ = writeln!(out, "}}");
+            let call_expr = format!("{module_path}.{function_name}({full_args})");
+            emit_error_assertion(out, &call_expr, declared_error_value(fixture));
             return;
         }
         let _ = writeln!(out, "  let {result_var} = {module_path}.{function_name}({full_args})");
         None
     } else {
         if expects_error {
-            let _ = writeln!(out, "  {module_path}.{function_name}({args_str}) |> should.be_error()");
-            let _ = writeln!(out, "}}");
+            let call_expr = format!("{module_path}.{function_name}({args_str})");
+            emit_error_assertion(out, &call_expr, declared_error_value(fixture));
             return;
         }
         let _ = writeln!(out, "  let {result_var} = {module_path}.{function_name}({args_str})");

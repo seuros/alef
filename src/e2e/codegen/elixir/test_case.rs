@@ -1,8 +1,9 @@
 //! Elixir ordinary function-call e2e test rendering.
 
 use crate::core::config::ResolvedCrateConfig;
+use crate::e2e::codegen::declared_error_value;
 use crate::e2e::config::E2eConfig;
-use crate::e2e::escape::sanitize_ident;
+use crate::e2e::escape::{escape_elixir, sanitize_ident};
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Fixture;
 use std::collections::HashMap;
@@ -11,6 +12,24 @@ use std::fmt::Write as _;
 use super::args::build_args_and_setup;
 use super::assertions::render_assertion;
 use super::visitor::build_elixir_visitor;
+
+/// Emit an `assert {:error, _}` check for a call expression under `indent`.
+///
+/// ~keep When a declared error value exists, `inspect/1` is used rather than
+/// `to_string/1` because the reason may not implement `String.Chars` (an atom
+/// or struct). `inspect/1` renders a String reason as its quoted message text
+/// and an atom/struct reason as its type/variant name, so a single substring
+/// check enforces the same message-OR-type disjunction the other language
+/// backends apply explicitly (see `declared_error_value` in codegen/mod.rs).
+fn emit_error_assertion(out: &mut String, indent: &str, call_expr: &str, declared_value: Option<&str>) {
+    if let Some(value) = declared_value {
+        let escaped = escape_elixir(value);
+        let _ = writeln!(out, "{indent}assert {{:error, __reason}} = {call_expr}");
+        let _ = writeln!(out, "{indent}assert String.contains?(inspect(__reason), \"{escaped}\")");
+    } else {
+        let _ = writeln!(out, "{indent}assert {{:error, _}} = {call_expr}");
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_test_case(
@@ -309,32 +328,65 @@ pub(super) fn render_test_case(
         let _ = writeln!(out, "      else");
     }
 
-    // Validation-category fixtures: engine/handle creation itself is expected to fail.
-    // Transform the first `{:ok, _} = ...` setup line into `assert {:error, _} = ...`
-    // and stop emission there, since the rest of the test body would be unreachable.
+    // Validation-category fixtures may fail either at engine/handle construction (bad
+    // config) or per-request on the operation under test (e.g. an SSRF policy checked
+    // against the target URL, not the config). We cannot know which applies from the
+    // fixture alone, so both must be exercised: attempt creation, and only if it
+    // succeeds go on to call the operation and assert the error there. ~keep A version
+    // that always stopped after asserting `{:error, _}` on creation made every
+    // per-request-error validation fixture vacuously pass (the operation was never
+    // called) — see the elixir-only `skip` on crawlberg's `validation_ssrf_*` fixtures,
+    // which documents this exact bug and is meant to be lifted once this is fixed.
     if validation_creation_failure {
-        let mut emitted_error_assertion = false;
-        for line in &cleaned_setup_lines {
-            if !emitted_error_assertion && line.starts_with("{:ok,") {
-                if let Some(rhs) = line.split_once('=').map(|x| x.1) {
-                    let rhs = rhs.trim();
-                    let _ = writeln!(out, "      assert {{:error, _}} = {rhs}");
-                    emitted_error_assertion = true;
-                } else {
-                    let _ = writeln!(out, "      {line}");
-                }
-            } else {
+        let declared_value = declared_error_value(fixture);
+        let handle_arg_name = resolved_args.iter().find(|a| a.arg_type == "handle").map(|a| &a.name);
+        let create_line_idx = handle_arg_name.and_then(|name| {
+            let prefix = format!("{{:ok, {name}}}");
+            cleaned_setup_lines.iter().position(|line| line.starts_with(&prefix))
+        });
+
+        if let Some(idx) = create_line_idx {
+            for line in &cleaned_setup_lines[..idx] {
                 let _ = writeln!(out, "      {line}");
             }
-        }
-        if !emitted_error_assertion {
+            let line = &cleaned_setup_lines[idx];
+            let rhs = line.split_once('=').map(|(_, r)| r.trim()).unwrap_or(line.as_str());
+            let bound_var = handle_arg_name.expect("create_line_idx is Some only when handle_arg_name is Some");
+
+            let _ = writeln!(out, "      case {rhs} do");
+            let _ = writeln!(out, "        {{:error, __reason}} ->");
+            if let Some(value) = declared_value {
+                let escaped = escape_elixir(value);
+                let _ = writeln!(
+                    out,
+                    "          assert String.contains?(inspect(__reason), \"{escaped}\")"
+                );
+            } else {
+                let _ = writeln!(out, "          :ok");
+            }
+            let _ = writeln!(out, "        {{:ok, {bound_var}}} ->");
+            for line in &cleaned_setup_lines[idx + 1..] {
+                let _ = writeln!(out, "          {line}");
+            }
             let call_invocation = if effective_args.is_empty() {
                 format!("{module_path}.{function_name}()")
             } else {
                 format!("{module_path}.{function_name}({effective_args})")
             };
-            let _ = writeln!(out, "      assert {{:error, _}} = {call_invocation}");
+            emit_error_assertion(out, "          ", &call_invocation, declared_value);
+            let _ = writeln!(out, "      end");
+        } else {
+            for line in &cleaned_setup_lines {
+                let _ = writeln!(out, "      {line}");
+            }
+            let call_invocation = if effective_args.is_empty() {
+                format!("{module_path}.{function_name}()")
+            } else {
+                format!("{module_path}.{function_name}({effective_args})")
+            };
+            emit_error_assertion(out, "      ", &call_invocation, declared_value);
         }
+
         if needs_api_key_skip {
             let _ = writeln!(out, "      end");
         }
@@ -373,7 +425,7 @@ pub(super) fn render_test_case(
         } else {
             format!("{module_path}.{function_name}({effective_args})")
         };
-        let _ = writeln!(out, "      assert {{:error, _}} = {call_invocation}");
+        emit_error_assertion(out, "      ", &call_invocation, declared_error_value(fixture));
         if needs_api_key_skip {
             let _ = writeln!(out, "      end");
         }
