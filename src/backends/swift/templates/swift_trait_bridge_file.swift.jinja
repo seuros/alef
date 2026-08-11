@@ -8,6 +8,7 @@ import RustBridge
 /// Protocol for outbound `{{ trait_name }}` implementations.
 /// Conform your Swift class or struct to this protocol to implement
 /// a Rust trait from the host side.
+/// Implementations may be invoked concurrently and must synchronize mutable state.
 public protocol {{ protocol }}: SwiftPluginBridge {
 {{ protocol_methods }}}
 

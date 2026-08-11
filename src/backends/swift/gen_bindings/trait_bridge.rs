@@ -671,6 +671,7 @@ mod tests {
             content.contains("protocol SwiftDocumentExtractorBridge: SwiftPluginBridge"),
             "protocol must be emitted with SwiftPluginBridge inheritance, got:\n{content}"
         );
+        assert!(content.contains("may be invoked concurrently and must synchronize mutable state"));
         assert!(
             content.contains("final class SwiftDocumentExtractorAdapter"),
             "adapter class must be emitted, got:\n{content}"

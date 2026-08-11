@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Generated FFI accessors no longer expose borrowed non-clone fields as owned handles that callers could invalidly free.
 
+- Generated Swift trait protocols now document their concurrency contract, and their Rust `Send`/`Sync` assertions carry
+  explicit safety invariants.
+
 - Snippet gap and audit commands now discover complete coverage ledgers beneath configured snippet roots, so generated
   output directories are trusted without hiding orphaned handwritten snippets.
 
