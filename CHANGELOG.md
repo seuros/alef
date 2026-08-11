@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Kotlin documentation snippets now import configured packages, shorten fully-qualified facade names, and only use
+  coroutine entry points for asynchronous calls.
+
 - PHP documentation snippets now enable strict types and load Composer dependencies before using generated classes.
 
 - Ruby documentation snippets now require the load-path entry instead of the hyphenated gem distribution name.
