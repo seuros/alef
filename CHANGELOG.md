@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Harness-only trait bridge fixtures now require extension-owned public documentation recipes instead of publishing internal test
   stubs, including when the test backend argument comes from global call configuration.
 
-- Fixed Kotlin documentation snippets referencing undeclared typed input variables when fixtures do not define file presentation metadata.
+- Fixed Kotlin documentation snippets referencing undeclared typed input variables when fixtures do not define file presentation metadata;
+  DTO JSON now uses centralized nested serde wire names and an idiomatic local mapper name.
 
 - Snippet session regressions now use isolated .NET restore state and tolerate cold Windows toolchains without
   weakening validation.

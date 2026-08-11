@@ -3,7 +3,7 @@ import {{ package_name }}.*
 {% endif %}
 
 fun main() {% if is_async %}= kotlinx.coroutines.runBlocking {% endif %}{
-{% if needs_mapper %}    val MAPPER = jacksonObjectMapper()
+{% if needs_mapper %}    val mapper = jacksonObjectMapper()
 {% endif %}
 {% for line in setup_lines %}    {{ line }}
 {% endfor %}

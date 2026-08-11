@@ -313,6 +313,7 @@ pub(super) fn build_args_and_setup(
                         let files = fixture.docs_files_for_arg(&arg.field);
                         let mut json_value = v.clone();
                         let file_reads = prepare_docs_file_reads(&mut json_value, &files);
+                        json_value = normalize_typed_json(&json_value, opts_type, type_defs);
                         append_docs_file_setup(&mut setup_lines, &arg.name, &json_value, opts_type, &file_reads);
                         parts.push(arg.name.clone());
                     } else {
@@ -458,6 +459,64 @@ pub(super) fn build_args_and_setup(
     }
 
     (setup_lines, parts.join(", "))
+}
+
+fn normalize_typed_json(
+    value: &serde_json::Value,
+    type_name: &str,
+    type_defs: &[crate::core::ir::TypeDef],
+) -> serde_json::Value {
+    let Some(type_def) = type_defs.iter().find(|candidate| candidate.name == type_name) else {
+        return crate::e2e::codegen::transform_json_keys_for_language(value, "snake_case");
+    };
+    let Some(object) = value.as_object() else {
+        return value.clone();
+    };
+    let mut normalized = serde_json::Map::new();
+    for (key, field_value) in object {
+        let field = type_def.fields.iter().find(|field| {
+            field.name == *key
+                || crate::codegen::naming::wire_field_name(
+                    &field.name,
+                    field.serde_rename.as_deref(),
+                    type_def.serde_rename_all.as_deref(),
+                ) == *key
+        });
+        let Some(field) = field else {
+            normalized.insert(key.clone(), field_value.clone());
+            continue;
+        };
+        let wire_name = crate::codegen::naming::wire_field_name(
+            &field.name,
+            field.serde_rename.as_deref(),
+            type_def.serde_rename_all.as_deref(),
+        );
+        normalized.insert(wire_name, normalize_typed_value(field_value, &field.ty, type_defs));
+    }
+    serde_json::Value::Object(normalized)
+}
+
+fn normalize_typed_value(
+    value: &serde_json::Value,
+    field_type: &crate::core::ir::TypeRef,
+    type_defs: &[crate::core::ir::TypeDef],
+) -> serde_json::Value {
+    match field_type {
+        crate::core::ir::TypeRef::Named(name) => normalize_typed_json(value, name, type_defs),
+        crate::core::ir::TypeRef::Optional(inner) => normalize_typed_value(value, inner, type_defs),
+        crate::core::ir::TypeRef::Vec(inner) => serde_json::Value::Array(
+            value
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|item| normalize_typed_value(item, inner, type_defs))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        ),
+        _ => value.clone(),
+    }
 }
 
 fn prepare_docs_file_reads(

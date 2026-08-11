@@ -53,6 +53,10 @@ pub(crate) fn render_snippet_body(
             type_defs,
         },
     );
+    let setup_lines = setup_lines
+        .into_iter()
+        .map(|line| line.replace("MAPPER", "mapper"))
+        .collect::<Vec<_>>();
     if !recipe.extra_args.is_empty() {
         args = if args.is_empty() {
             recipe.extra_args.join(", ")
@@ -67,7 +71,7 @@ pub(crate) fn render_snippet_body(
             .get(lang)
             .and_then(|value| value.client_factory.as_deref())
     });
-    let needs_mapper = setup_lines.iter().any(|line| line.contains("MAPPER"));
+    let needs_mapper = setup_lines.iter().any(|line| line.contains("mapper"));
     let is_async = client_factory.is_some() || kotlin_android_style || call.r#async;
     let package_name = if kotlin_android_style {
         config
@@ -239,9 +243,83 @@ mod tests {
             true,
         );
 
-        assert!(body.contains("val input = MAPPER.readValue("), "{body}");
+        assert!(body.contains("val input = mapper.readValue("), "{body}");
         assert!(body.contains("DocumentInput::class.java"), "{body}");
         assert!(body.contains(".process(input)"), "{body}");
         assert!(body.contains("jacksonObjectMapper"), "{body}");
+    }
+
+    #[test]
+    fn snippet_uses_nested_centralized_wire_names() {
+        let fixture = Fixture {
+            id: "document_input".into(),
+            description: "Process a document".into(),
+            input: serde_json::json!({"request_id": "one", "details": {"page_count": 2}}),
+            ..Fixture::default()
+        };
+        let mut call = CallConfig {
+            function: "process".into(),
+            args: vec![crate::e2e::config::ArgMapping {
+                name: "input".into(),
+                field: "input".into(),
+                arg_type: "json_object".into(),
+                optional: false,
+                owned: false,
+                element_type: None,
+                go_type: None,
+                vec_inner_is_ref: false,
+                trait_name: None,
+            }],
+            ..CallConfig::default()
+        };
+        call.overrides.insert(
+            "kotlin_android".into(),
+            CallOverride {
+                options_type: Some("DocumentInput".into()),
+                ..CallOverride::default()
+            },
+        );
+        let type_defs = vec![
+            crate::core::ir::TypeDef {
+                name: "DocumentInput".into(),
+                fields: vec![
+                    crate::core::ir::FieldDef {
+                        name: "request_id".into(),
+                        serde_rename: Some("request-id".into()),
+                        ..Default::default()
+                    },
+                    crate::core::ir::FieldDef {
+                        name: "details".into(),
+                        ty: crate::core::ir::TypeRef::Named("DocumentDetails".into()),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            crate::core::ir::TypeDef {
+                name: "DocumentDetails".into(),
+                serde_rename_all: Some("camelCase".into()),
+                fields: vec![crate::core::ir::FieldDef {
+                    name: "page_count".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ];
+
+        let body = render_snippet_body(
+            &fixture,
+            &E2eConfig {
+                call,
+                ..E2eConfig::default()
+            },
+            &ResolvedCrateConfig::default(),
+            &type_defs,
+            true,
+        );
+
+        assert!(body.contains(r#"\"request-id\":\"one\""#), "{body}");
+        assert!(body.contains(r#"\"pageCount\":2"#), "{body}");
+        assert!(body.contains("val mapper = jacksonObjectMapper()"), "{body}");
     }
 }
