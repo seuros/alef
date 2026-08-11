@@ -4,6 +4,9 @@
    - test_name: sanitized fixture ID
    - description: fixture description as a Ruby string literal (already quoted)
    - expects_error: bool
+   - raise_error_clause: the `raise_error(...)` matcher expression, fully rendered
+     (plain `raise_error(RuntimeError)` when no error value is declared, or that plus
+     a message/class-name block when one is)
    - setup_lines: list of setup line strings
    - call_expr: the function call expression
    - result_var: variable to store result
@@ -46,7 +49,7 @@
       {{ line }}
 {% endfor %}
       {{ call_expr }}
-    }.to raise_error(RuntimeError)
+    }.to {{ raise_error_clause }}
 {% else %}
 {% for line in setup_lines %}
     {{ line }}

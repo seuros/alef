@@ -9,6 +9,25 @@ use std::fmt::Write as FmtWrite;
 
 use super::{args, assertions, visitor};
 
+/// Render the R `expect_error(...)`/`tryCatch` block for an `error`-asserting test.
+///
+/// ~keep With no declared value this returns output byte-identical to the bare
+/// `expect_error(fn(args))` call. testthat's `expect_error(regexp=, class=)`
+/// combine with AND semantics, so they can't express the message-or-class-name
+/// disjunction other backends use (see `declared_error_value`'s doc comment);
+/// a manual `tryCatch` is required instead.
+fn render_r_error_check(function_name: &str, final_args: &str, declared_error: Option<&str>) -> String {
+    match declared_error {
+        Some(value) => {
+            let pattern = crate::e2e::escape::r_regex_literal(value);
+            format!(
+                "  tryCatch({{\n    {function_name}({final_args})\n    fail(\"expected an error to be thrown\")\n  }}, error = function(e) {{\n    expect_true(grepl({pattern}, conditionMessage(e)) || grepl({pattern}, paste(class(e), collapse = \" \")))\n  }})"
+            )
+        }
+        None => format!("  expect_error({function_name}({final_args}))"),
+    }
+}
+
 pub(super) fn render_test_case(
     out: &mut String,
     fixture: &Fixture,
@@ -133,7 +152,12 @@ pub(super) fn render_test_case(
         for line in &setup_lines {
             let _ = writeln!(out, "  {line}");
         }
-        let _ = writeln!(out, "  expect_error({function_name}({final_args}))");
+        let error_check = render_r_error_check(
+            &function_name,
+            &final_args,
+            crate::e2e::codegen::declared_error_value(fixture),
+        );
+        let _ = writeln!(out, "{error_check}");
         let _ = writeln!(out, "}})");
         return;
     }
@@ -189,4 +213,35 @@ pub(super) fn render_test_case(
     }
 
     let _ = writeln!(out, "}})");
+}
+
+#[cfg(test)]
+mod render_r_error_check_tests {
+    use super::render_r_error_check;
+
+    #[test]
+    fn no_declared_value_is_byte_identical_to_bare_expect_error() {
+        assert_eq!(
+            render_r_error_check("extract_bytes", "data", None),
+            "  expect_error(extract_bytes(data))"
+        );
+    }
+
+    #[test]
+    fn declared_value_adds_message_or_class_name_check() {
+        let check = render_r_error_check("extract_bytes", "data", Some("BadRequest"));
+        assert_eq!(
+            check,
+            "  tryCatch({\n    extract_bytes(data)\n    fail(\"expected an error to be thrown\")\n  }, error = function(e) {\n    expect_true(grepl(\"BadRequest\", conditionMessage(e)) || grepl(\"BadRequest\", paste(class(e), collapse = \" \")))\n  })"
+        );
+    }
+
+    #[test]
+    fn declared_value_with_regex_metacharacters_is_escaped() {
+        let check = render_r_error_check("extract_bytes", "data", Some("field.name[0]"));
+        assert!(
+            check.contains("\"field\\\\.name\\\\[0\\\\]\""),
+            "expected escaped regex literal, got: {check}"
+        );
+    }
 }

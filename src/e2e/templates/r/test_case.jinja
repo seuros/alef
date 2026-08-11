@@ -3,7 +3,7 @@ test_that("{{ test_name }}: {{ description }}", {
   {{ line }}
 {%- endfor %}
 {%- if expects_error %}
-  expect_error({{ function_name }}({{ final_args }}))
+{{ error_check }}
 {%- else %}
   {% if result_is_simple %}{{ result_var }} <- {{ function_name }}({{ final_args }})
   {%- else %}{{ result_var }} <- jsonlite::fromJSON({{ function_name }}({{ final_args }}), simplifyVector = FALSE)

@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::core::config::ResolvedCrateConfig;
 use crate::e2e::config::E2eConfig;
-use crate::e2e::escape::{ruby_string_literal, sanitize_ident};
+use crate::e2e::escape::{ruby_regex_literal, ruby_string_literal, sanitize_ident};
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::{Assertion, Fixture};
 
@@ -13,6 +13,26 @@ use super::assertions::render_assertion;
 use super::spec_file::has_usable_assertion;
 use super::values::json_to_ruby;
 use super::visitor::build_ruby_visitor;
+
+/// Build the RSpec `raise_error(...)` matcher expression for an `error`-asserting test.
+///
+/// ~keep With no declared value this returns the original bare `raise_error(RuntimeError)`
+/// unchanged, byte-for-byte, for fixtures predating this check. When a value is declared,
+/// checking `error.message` OR `error.class.name` against the same regex mirrors the
+/// message-or-type disjunction other backends use (see `declared_error_value`'s doc
+/// comment): config-validation fixtures name text that only appears in the message,
+/// API-error fixtures name a type prefix that only appears in the class name.
+pub(super) fn render_raise_error_clause(declared_error: Option<&str>) -> String {
+    match declared_error {
+        Some(value) => {
+            let regex = ruby_regex_literal(value);
+            format!(
+                "raise_error(RuntimeError) {{ |error|\n      expect(error.message =~ {regex} || error.class.name =~ {regex}).to be_truthy\n    }}"
+            )
+        }
+        None => "raise_error(RuntimeError)".to_string(),
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_chat_stream_example(
@@ -404,6 +424,8 @@ pub(super) fn render_example(
     let has_not_error = fixture.assertions.iter().any(|a| a.assertion_type == "not_error");
     let is_only_not_error = has_not_error && !has_usable && !expects_error;
 
+    let raise_error_clause = render_raise_error_clause(crate::e2e::codegen::declared_error_value(fixture));
+
     // Detect clear operations and emit post-clear list assertion
     let is_clear_op = function_name.ends_with("_clear");
     let post_clear_list_call = if is_clear_op {
@@ -419,6 +441,7 @@ pub(super) fn render_example(
             test_name => test_name,
             description => description_literal,
             expects_error => expects_error,
+            raise_error_clause => raise_error_clause,
             setup_lines => setup_lines,
             call_expr => call_expr,
             result_var => result_var,
@@ -437,4 +460,32 @@ pub(super) fn render_example(
             teardown_lines => teardown_lines,
         },
     )
+}
+
+#[cfg(test)]
+mod raise_error_clause_tests {
+    use super::render_raise_error_clause;
+
+    #[test]
+    fn no_declared_value_is_byte_identical_to_bare_raise_error() {
+        assert_eq!(render_raise_error_clause(None), "raise_error(RuntimeError)");
+    }
+
+    #[test]
+    fn declared_value_adds_message_or_class_name_check() {
+        let clause = render_raise_error_clause(Some("BadRequest"));
+        assert_eq!(
+            clause,
+            "raise_error(RuntimeError) { |error|\n      expect(error.message =~ /BadRequest/ || error.class.name =~ /BadRequest/).to be_truthy\n    }"
+        );
+    }
+
+    #[test]
+    fn declared_value_with_regex_metacharacters_is_escaped() {
+        let clause = render_raise_error_clause(Some("field.name[0]"));
+        assert!(
+            clause.contains("/field\\.name\\[0\\]/"),
+            "expected escaped regex literal, got: {clause}"
+        );
+    }
 }

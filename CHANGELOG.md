@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - E2E and registry test-app generation now fails when a configured formatter is unavailable or exits unsuccessfully,
   preventing noncanonical generated output from being reported as successful.
 
+- Generated Ruby, PHP, R and Homebrew E2E error tests now assert the error value a fixture declares, matching it
+  against either the error's message or its class name. PHPUnit's `expectException*` and testthat's `expect_error`
+  combine message and class with AND, so both emit an explicit try/catch to express the disjunction.
+
+- Generated Homebrew E2E error tests no longer interpolate the declared value inside a double-quoted `echo`, where a
+  value containing `$` or a backtick would have been expanded by the shell.
+
 - Generated Elixir E2E validation tests now call the operation under test when engine creation succeeds, instead of
   stopping after asserting `{:error, _}` on creation. Fixtures whose error is raised per-request rather than at
   construction previously asserted nothing and could never fail.

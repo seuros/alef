@@ -1,11 +1,56 @@
 use crate::core::config::ResolvedCrateConfig;
 use crate::e2e::config::E2eConfig;
+use crate::e2e::escape::{escape_php_single, php_pcre_literal};
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Fixture;
 use heck::ToLowerCamelCase;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as FmtWrite;
 
 use super::{args, assertions, stubs, types, visitor};
+
+/// Render the PHP test-method body for an `error`-asserting fixture.
+///
+/// ~keep With no declared value this returns output byte-identical to the
+/// pre-existing `expectException` idiom. PHPUnit's `expectException*` family
+/// only ever inspects the thrown exception's message, so matching the
+/// message-or-class-name disjunction other backends use (see
+/// `declared_error_value`'s doc comment) requires a manual try/catch instead
+/// of `expectExceptionMessageMatches`.
+fn render_error_test_body(setup_lines: &[String], call_expr: &str, declared_error: Option<&str>) -> String {
+    let mut out = String::new();
+    match declared_error {
+        Some(value) => {
+            let pattern = php_pcre_literal(value);
+            // The failure message is its own single-quoted PHP string literal, separate
+            // from `pattern` (itself already a quoted `'/.../'` literal). Interpolating
+            // `pattern` directly here would nest one single-quoted string inside another
+            // and produce invalid PHP — escape the raw declared value for this string
+            // instead of reusing the pre-quoted PCRE literal.
+            let message_value = escape_php_single(value);
+            out.push_str("        try {\n");
+            for line in setup_lines {
+                let _ = writeln!(out, "            {line}");
+            }
+            let _ = writeln!(out, "            {call_expr};");
+            out.push_str("            $this->fail('Expected an exception to be thrown');\n");
+            out.push_str("        } catch (\\Exception $e) {\n");
+            let _ = writeln!(
+                out,
+                "            $this->assertTrue(preg_match({pattern}, $e->getMessage()) === 1 || preg_match({pattern}, get_class($e)) === 1, 'expected exception message or class name to match {message_value}');"
+            );
+            out.push_str("        }");
+        }
+        None => {
+            out.push_str("        $this->expectException(\\Exception::class);\n");
+            for line in setup_lines {
+                let _ = writeln!(out, "        {line}");
+            }
+            let _ = write!(out, "        {call_expr};");
+        }
+    }
+    out
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_test_method(
@@ -348,6 +393,12 @@ pub(super) fn render_test_method(
         assertions_body.push_str("        $this->assertTrue(is_array($chunks), 'expected drained chunks list');\n");
     }
 
+    let error_test_body = if expects_error {
+        render_error_test_body(&setup_lines, &call_expr, crate::e2e::codegen::declared_error_value(fixture))
+    } else {
+        String::new()
+    };
+
     let rendered = crate::e2e::template_env::render(
         "php/test_method.jinja",
         minijinja::context! {
@@ -356,6 +407,7 @@ pub(super) fn render_test_method(
             client_factory => client_factory,
             setup_lines => setup_lines,
             expects_error => expects_error,
+            error_test_body => error_test_body,
             skip_test => fixture.assertions.is_empty(),
             has_usable_assertions => has_usable_assertions || is_streaming,
             call_expr => call_expr,
@@ -367,4 +419,79 @@ pub(super) fn render_test_method(
         },
     );
     out.push_str(&rendered);
+}
+
+#[cfg(test)]
+mod error_test_body_tests {
+    use super::render_error_test_body;
+
+    #[test]
+    fn no_declared_value_is_byte_identical_to_expect_exception() {
+        let body = render_error_test_body(&["$options = new Options();".to_string()], "Client::create($options)", None);
+        assert_eq!(
+            body,
+            "        $this->expectException(\\Exception::class);\n        $options = new Options();\n        Client::create($options);"
+        );
+    }
+
+    #[test]
+    fn declared_value_adds_message_or_class_name_check() {
+        let body = render_error_test_body(&[], "Client::create()", Some("BadRequest"));
+        assert_eq!(
+            body,
+            "        try {\n            Client::create();\n            $this->fail('Expected an exception to be thrown');\n        } catch (\\Exception $e) {\n            $this->assertTrue(preg_match('/BadRequest/', $e->getMessage()) === 1 || preg_match('/BadRequest/', get_class($e)) === 1, 'expected exception message or class name to match BadRequest');\n        }"
+        );
+    }
+
+    #[test]
+    fn declared_value_with_regex_metacharacters_is_escaped() {
+        let body = render_error_test_body(&[], "Client::create()", Some("field.name[0]"));
+        assert!(
+            body.contains("'/field\\\\.name\\\\[0\\\\]/'"),
+            "expected escaped PCRE literal, got: {body}"
+        );
+    }
+
+    /// Regression test for a real bug: embedding the already-quoted PCRE literal
+    /// (`'/max_depth/'`) directly inside the message's own single-quoted string
+    /// closes that string early and leaves a bare `/max_depth/` followed by `''`
+    /// — a PHP syntax error. Assert the message argument is exactly one balanced
+    /// single-quoted PHP string, not merely that it contains the right substrings
+    /// (string-content assertions alone did not catch this).
+    #[test]
+    fn declared_value_message_argument_is_a_well_formed_php_single_quoted_literal() {
+        let body = render_error_test_body(&[], "Client::create()", Some("max_depth"));
+        let message_start = body
+            .find("'expected exception message or class name to match")
+            .expect("message argument must be present");
+        let message = &body[message_start..];
+        // The message argument runs up to the closing `)` of assertTrue(...); — find
+        // the terminating `'` that precedes it.
+        let message_end = message.find("');").expect("message argument must be closed and followed by ');'");
+        let literal = &message[..=message_end];
+        // Strip PHP's `\'` escape sequences before counting quote boundaries, so an
+        // escaped quote inside the literal doesn't look like a premature terminator.
+        let quote_count = literal.replace("\\'", "").matches('\'').count();
+        assert_eq!(
+            quote_count, 2,
+            "message argument must be a single balanced single-quoted PHP string, got: {literal}"
+        );
+        assert!(
+            literal.contains("max_depth"),
+            "failure message should still name the expected pattern: {literal}"
+        );
+        assert!(
+            !literal.contains("'/max_depth/'"),
+            "must not embed the pre-quoted PCRE literal inside the message string: {literal}"
+        );
+    }
+
+    #[test]
+    fn declared_value_with_single_quote_is_escaped_in_message() {
+        let body = render_error_test_body(&[], "Client::create()", Some("it's bad"));
+        assert!(
+            body.contains("match it\\'s bad')"),
+            "expected escaped single quote in message, got: {body}"
+        );
+    }
 }

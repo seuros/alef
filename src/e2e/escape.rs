@@ -162,6 +162,36 @@ pub fn escape_php(s: &str) -> String {
         .replace('\t', "\\t")
 }
 
+/// Escape a string for embedding in a single-quoted PHP string literal.
+/// Single-quoted PHP strings only interpret `\\` and `\'`.
+pub fn escape_php_single(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+/// Build a PHP single-quoted PCRE pattern literal (`'/pattern/'`) matching `value` literally.
+///
+/// Escapes PCRE metacharacters (`. ^ $ * + ? ( ) [ ] { } |  \`) plus the `/`
+/// delimiter, then escapes the resulting pattern text for a PHP single-quoted
+/// string: every backslash introduced by the PCRE escaping must be doubled
+/// (single-quoted PHP only collapses `\\` to one backslash — everything else
+/// passes through unmodified) before quotes are escaped, or the pattern
+/// arrives at `preg_match` with half its escapes stripped.
+pub fn php_pcre_literal(value: &str) -> String {
+    let mut pattern = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if matches!(
+            ch,
+            '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '\\' | '/'
+        ) {
+            pattern.push('\\');
+        }
+        pattern.push(ch);
+    }
+    let delimited = format!("/{pattern}/");
+    let php_escaped = delimited.replace('\\', "\\\\").replace('\'', "\\'");
+    format!("'{php_escaped}'")
+}
+
 /// Escape a string for embedding in a double-quoted Ruby string literal.
 pub fn escape_ruby(s: &str) -> String {
     s.replace('\\', "\\\\")
@@ -176,6 +206,26 @@ pub fn escape_ruby(s: &str) -> String {
 /// Single-quoted Ruby strings only interpret `\\` and `\'`.
 pub fn escape_ruby_single(s: &str) -> String {
     s.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+/// Build a Ruby regex literal (`/pattern/`) matching `value` literally.
+///
+/// Escapes Ruby regex metacharacters (`. ^ $ * + ? ( ) [ ] { } |  \`) plus the
+/// `/` delimiter itself, so any characters in `value` — including regex
+/// metacharacters a fixture author didn't intend as regex syntax — are matched
+/// as plain text rather than interpreted as pattern syntax.
+pub fn ruby_regex_literal(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if matches!(
+            ch,
+            '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '\\' | '/'
+        ) {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    format!("/{escaped}/")
 }
 
 /// Convert a `{param}` template string to a Ruby double-quoted string with `#{param}` interpolation.
@@ -333,6 +383,27 @@ pub fn escape_r(s: &str) -> String {
         .replace('\t', "\\t")
 }
 
+/// Build a quoted R regex-pattern string literal (`"pattern"`) matching `value` literally.
+///
+/// Escapes POSIX/PCRE regex metacharacters (`. ^ $ * + ? ( ) [ ] { } |  \`), then
+/// runs the result through [`escape_r`] for double-quoted R string embedding.
+/// The backslashes introduced by the regex escaping must themselves be doubled —
+/// R double-quoted strings only recognize `\\` and `\"` — or `grepl()`/`regexp=`
+/// receive a pattern with half its escapes stripped.
+pub fn r_regex_literal(value: &str) -> String {
+    let mut pattern = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if matches!(
+            ch,
+            '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '\\'
+        ) {
+            pattern.push('\\');
+        }
+        pattern.push(ch);
+    }
+    format!("\"{}\"", escape_r(&pattern))
+}
+
 /// Escape a string for embedding in a C string literal.
 pub fn escape_c(s: &str) -> String {
     s.replace('\\', "\\\\")
@@ -450,6 +521,54 @@ pub fn escape_zig(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escape_php_single_escapes_backslash_and_quote_only() {
+        assert_eq!(escape_php_single("it's a \\test"), "it\\'s a \\\\test");
+    }
+
+    #[test]
+    fn php_pcre_literal_wraps_plain_value_in_slashes() {
+        assert_eq!(php_pcre_literal("BadRequest"), "'/BadRequest/'");
+    }
+
+    #[test]
+    fn php_pcre_literal_escapes_metacharacters_with_doubled_backslashes() {
+        assert_eq!(php_pcre_literal("field.name[0]"), "'/field\\\\.name\\\\[0\\\\]/'");
+        assert_eq!(php_pcre_literal("1/2"), "'/1\\\\/2/'");
+    }
+
+    #[test]
+    fn php_pcre_literal_escapes_single_quotes() {
+        assert_eq!(php_pcre_literal("user's"), "'/user\\'s/'");
+    }
+
+    #[test]
+    fn r_regex_literal_wraps_plain_value_in_double_quotes() {
+        assert_eq!(r_regex_literal("BadRequest"), "\"BadRequest\"");
+    }
+
+    #[test]
+    fn r_regex_literal_escapes_metacharacters_with_doubled_backslashes() {
+        assert_eq!(r_regex_literal("field.name[0]"), "\"field\\\\.name\\\\[0\\\\]\"");
+    }
+
+    #[test]
+    fn r_regex_literal_escapes_double_quotes() {
+        assert_eq!(r_regex_literal("say \"hi\""), "\"say \\\"hi\\\"\"");
+    }
+
+    #[test]
+    fn ruby_regex_literal_wraps_plain_value_in_slashes() {
+        assert_eq!(ruby_regex_literal("BadRequest"), "/BadRequest/");
+    }
+
+    #[test]
+    fn ruby_regex_literal_escapes_metacharacters() {
+        assert_eq!(ruby_regex_literal("field.name[0]"), "/field\\.name\\[0\\]/");
+        assert_eq!(ruby_regex_literal("a+b*c?"), "/a\\+b\\*c\\?/");
+        assert_eq!(ruby_regex_literal("1/2"), "/1\\/2/");
+    }
 
     /// Go raw string literals (backticks) cannot contain NUL bytes — gofmt rejects them.
     /// Strings with NUL must fall back to a double-quoted interpreted literal with `\x00`.

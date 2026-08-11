@@ -6,6 +6,9 @@
    - client_factory: client factory call (or empty string)
    - setup_lines: list of setup line strings
    - expects_error: boolean
+   - error_test_body: fully-rendered test body for the `expects_error` branch (plain
+     `expectException(\Exception::class)` when no error value is declared, or a
+     try/catch checking message-or-class-name when one is)
    - skip_test: boolean (for unskipped non-assertions)
    - has_usable_assertions: boolean
    - call_expr: the complete function call expression
@@ -21,11 +24,7 @@
         {{ client_factory }}
 {% endif %}
 {%- if expects_error %}
-        $this->expectException(\Exception::class);
-{%- for line in setup_lines %}
-        {{ line }}
-{% endfor %}
-        {{ call_expr }};
+{{ error_test_body }}
 {%- elif skip_test %}
 {%- for line in setup_lines %}
         {{ line }}
