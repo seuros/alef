@@ -130,6 +130,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
+    const TOOLCHAIN_TEST_TIMEOUT_SECS: u64 = 120;
+
     #[test]
     fn session_manifest_is_used_as_a_real_classpath() {
         if which::which("kotlinc").is_err() {
@@ -147,8 +149,12 @@ mod tests {
             .arg(&source)
             .args(["-d"])
             .arg(&library)
-            .status()
-            .expect("kotlinc runs");
+            .status();
+        let compiled = match compiled {
+            Ok(status) => status,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => panic!("kotlinc runs: {error}"),
+        };
         assert!(compiled.success());
         let session = ValidationSession {
             working_directory: root.path().to_path_buf(),
@@ -162,7 +168,7 @@ mod tests {
         let (status, output) = KotlinValidator::validate_with_context(
             &snippet("import localfixture.Values\nfun main() { println(Values.value) }"),
             ValidationLevel::TypeCheck,
-            30,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
             Some(&session),
         )
         .expect("validation runs");

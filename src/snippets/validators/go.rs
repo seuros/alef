@@ -183,6 +183,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
+    const TOOLCHAIN_TEST_TIMEOUT_SECS: u64 = 120;
+
     #[test]
     fn session_manifest_resolves_a_local_module_outside_the_working_directory() {
         if which::which("go").is_err() {
@@ -209,9 +211,13 @@ mod tests {
             rust_dependencies: BTreeMap::new(),
         };
 
-        let (status, output) =
-            GoValidator::validate_with_context(&snippet, ValidationLevel::TypeCheck, 30, Some(&session))
-                .expect("validation runs");
+        let (status, output) = GoValidator::validate_with_context(
+            &snippet,
+            ValidationLevel::TypeCheck,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
+            Some(&session),
+        )
+        .expect("validation runs");
         assert_eq!(status, SnippetStatus::Pass, "{output:?}");
     }
 

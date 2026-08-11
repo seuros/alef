@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Snippet session regressions now use isolated .NET restore state and tolerate cold Windows toolchains without
+  weakening validation.
+
 - Snippet validation sessions now integrate configured package manifests and toolchain roots across Rust, TypeScript,
   Go, C#, Java, Kotlin, Dart, Python, Swift, and Zig, with isolated absolute caches and explicit Rust dependencies.
 

@@ -51,6 +51,7 @@ impl CsharpValidator {
             }
         }
         command.current_dir(&directory);
+        Self::configure_dotnet_environment(&mut command, &directory)?;
         if let Some(session) = session {
             session.apply_environment(&mut command);
         }
@@ -92,6 +93,22 @@ impl CsharpValidator {
             "no target framework in {}",
             manifest.display()
         )))
+    }
+
+    fn configure_dotnet_environment(command: &mut std::process::Command, directory: &std::path::Path) -> Result<()> {
+        for (name, path) in [
+            ("DOTNET_CLI_HOME", directory.join(".dotnet")),
+            ("NUGET_PACKAGES", directory.join(".nuget/packages")),
+        ] {
+            std::fs::create_dir_all(&path).map_err(|error| {
+                crate::snippets::error::Error::Other(format!(
+                    "creating isolated .NET directory {}: {error}",
+                    path.display()
+                ))
+            })?;
+            command.env(name, path);
+        }
+        Ok(())
     }
 
     fn is_dependency_error_text(output: &str) -> bool {
@@ -143,6 +160,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
+    const TOOLCHAIN_TEST_TIMEOUT_SECS: u64 = 120;
+
     #[test]
     fn session_manifest_adds_a_real_project_reference() {
         if which::which("dotnet").is_err() {
@@ -175,7 +194,7 @@ mod tests {
         let (status, output) = CsharpValidator::validate_with_context(
             &snippet("using LocalFixture; System.Console.WriteLine(Values.Value);"),
             ValidationLevel::TypeCheck,
-            60,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
             Some(&session),
         )
         .expect("validation runs");

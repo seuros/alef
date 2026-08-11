@@ -285,6 +285,8 @@ mod tests {
     use crate::snippets::types::{SnippetMetadata, SourceOrigin};
     use std::collections::BTreeMap;
 
+    const TOOLCHAIN_TEST_TIMEOUT_SECS: u64 = 120;
+
     #[test]
     fn session_manifest_links_the_configured_local_crate() {
         if which::which("cargo").is_err() {
@@ -324,9 +326,13 @@ mod tests {
             },
         };
 
-        let (status, output) =
-            RustValidator::validate_with_context(&snippet, ValidationLevel::TypeCheck, 30, Some(&session))
-                .expect("validation runs");
+        let (status, output) = RustValidator::validate_with_context(
+            &snippet,
+            ValidationLevel::TypeCheck,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
+            Some(&session),
+        )
+        .expect("validation runs");
 
         assert_eq!(status, SnippetStatus::Pass, "{output:?}");
     }
