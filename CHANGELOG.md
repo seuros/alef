@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- C# documentation snippets now instantiate configured visitor implementations and attach them to conversion options.
+
 - C visitor documentation snippets now use only public binding APIs and omit test-harness JSON assertion helpers.
 
 - Elixir documentation snippets now place visitor callbacks inside the conversion options argument.
@@ -55,6 +57,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Generated E2E assertions now preserve raw and whitespace-sensitive string semantics, enforce case-sensitive C#
   containment, validate content for `not_empty`, and fail null values instead of allowing vacuous matches.
+
+- Snippet validation sessions now accept repository-relative native include paths, allowing Zig and C bindings that
+  import generated C headers to compile without project-specific validator behavior.
+
+- Swift snippet validation no longer reports an internal I/O error when SwiftPM's reported binary directory has not
+  been materialized yet.
 
 - Generated Elixir NIFs no longer expose a process-wide environment mutation helper, avoiding unsafe concurrent
   `setenv` access from BEAM scheduler threads.

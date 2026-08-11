@@ -45,7 +45,7 @@ pub(super) fn render_snippet_body(
         .filter(|value| *value != "from_json");
     let mut visitor_declarations = Vec::new();
     let mut teardown_lines = Vec::new();
-    let (setup_lines, mut args) = super::setup::build_args_and_setup(
+    let (mut setup_lines, mut args) = super::setup::build_args_and_setup(
         &fixture.input,
         recipe.args,
         &class_name,
@@ -61,6 +61,21 @@ pub(super) fn render_snippet_body(
         &mut visitor_declarations,
         &mut teardown_lines,
     );
+    if let Some(visitor_spec) = &fixture.visitor {
+        let visitor_config = super::visitor::resolve_csharp_visitor_config(config, overrides, type_defs, visitor_spec);
+        let visitor = super::visitor::build_csharp_visitor(
+            &mut setup_lines,
+            &mut visitor_declarations,
+            &fixture.id,
+            visitor_spec,
+            &visitor_config,
+        );
+        let options_type = options_type
+            .or_else(|| crate::e2e::codegen::recipe::trait_bridge_options_type(config))
+            .unwrap_or("Options");
+        setup_lines.push(format!("var options = new {options_type} {{ Visitor = {visitor} }};"));
+        args = replace_or_append_options(&args, options_type);
+    }
     if !recipe.extra_args.is_empty() {
         args = if args.is_empty() {
             recipe.extra_args.join(", ")
@@ -114,14 +129,45 @@ pub(super) fn render_snippet_body(
             needs_collections => needs_collections,
             fixture_id => fixture.id,
             expects_error => expects_error,
+            visitor_declarations => visitor_declarations,
         },
     )
+}
+
+fn replace_or_append_options(args: &str, options_type: &str) -> String {
+    if let Some(prefix) = args.strip_suffix(", null") {
+        return format!("{prefix}, options");
+    }
+    let default_options = format!("new {options_type}()");
+    if args == default_options {
+        return "options".to_string();
+    }
+    if let Some(prefix) = args.strip_suffix(&format!(", {default_options}")) {
+        return format!("{prefix}, options");
+    }
+    if args.is_empty() {
+        "options".to_string()
+    } else {
+        format!("{args}, options")
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::e2e::config::{CallConfig, CallOverride};
+
+    #[test]
+    fn visitor_options_replace_the_placeholder_argument() {
+        assert_eq!(
+            replace_or_append_options("html, null", "ConversionOptions"),
+            "html, options"
+        );
+        assert_eq!(
+            replace_or_append_options("html, new ConversionOptions()", "ConversionOptions"),
+            "html, options"
+        );
+    }
 
     #[test]
     fn snippet_keeps_async_native_call_without_xunit_harness() {

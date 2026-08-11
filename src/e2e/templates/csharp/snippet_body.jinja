@@ -30,3 +30,6 @@ catch (Exception error)
 }
 throw new InvalidOperationException("expected call to fail");
 {% endif %}
+{% for declaration in visitor_declarations %}
+{{ declaration }}
+{% endfor %}
