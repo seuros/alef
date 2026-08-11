@@ -612,6 +612,33 @@ pub(super) fn render_test_function(
         // Declare result variable.
         let _ = writeln!(out, "    {raw_type} {result_var} = {function_name}({args_str});");
 
+        // ~keep: early-return mirrors the client-factory/legacy opaque-handle
+        // paths' expects_error handling so success-path assertions/cleanup below
+        // never run for an error fixture.
+        if expects_error {
+            match raw_type {
+                "char*" => {
+                    let _ = writeln!(out, "    assert({result_var} == NULL && \"expected call to fail\");");
+                }
+                "int32_t" => {
+                    let _ = writeln!(out, "    assert({result_var} < 0 && \"expected call to fail\");");
+                }
+                // ~keep uintptr_t and any other configured raw_c_result_type (bool,
+                // uint64_t, size_t, ...): raw_c_result_type is free-form config, not a
+                // closed set, so fall back to the always-present last_error_code symbol.
+                // A no-op arm here would be a silently-passing error test — the exact
+                // bug this block exists to fix.
+                _ => {
+                    let _ = writeln!(
+                        out,
+                        "    assert({prefix}_last_error_code() != 0 && \"expected call to fail\");"
+                    );
+                }
+            }
+            let _ = writeln!(out, "}}");
+            return;
+        }
+
         // not_error assertion.
         let has_not_error = fixture.assertions.iter().any(|a| a.assertion_type == "not_error");
         if has_not_error {

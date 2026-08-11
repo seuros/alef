@@ -871,6 +871,186 @@ mod snippet_tests {
     }
 
     #[test]
+    fn raw_result_error_snippet_fails_on_unexpected_success() {
+        // Before the fix, a fixture with only an "error" assertion against a
+        // raw_c_result_type function (char*/int32_t/uintptr_t) emitted no check
+        // at all — the generated test always passed regardless of outcome.
+        // The snippet renderer converts the underlying `assert(...)` into a
+        // hard `if (...) { return EXIT_FAILURE; }` guard; assert that guard is
+        // now present (and keyed on the result var) for every raw result type.
+        for raw_type in ["char*", "int32_t", "uintptr_t"] {
+            let mut fixture = Fixture {
+                id: "invalid_input".into(),
+                description: "Invalid input".into(),
+                ..Fixture::default()
+            };
+            fixture.assertions.push(crate::e2e::fixture::Assertion {
+                assertion_type: "error".into(),
+                ..Default::default()
+            });
+            let mut e2e = E2eConfig::default();
+            e2e.call.function = "parse_input".into();
+            e2e.call.result_var = "result".into();
+            e2e.call.result_is_simple = true;
+            e2e.call.overrides.insert(
+                "c".into(),
+                crate::core::config::e2e::CallOverride {
+                    raw_c_result_type: Some(raw_type.into()),
+                    ..Default::default()
+                },
+            );
+            let config = ResolvedCrateConfig {
+                name: "sample".into(),
+                ..ResolvedCrateConfig::default()
+            };
+
+            let rendered = CCodegen
+                .render_snippet_body(&fixture, &e2e, &config, &[], &[])
+                .expect("raw-result error snippet renders");
+
+            assert!(
+                rendered.contains("if (result != NULL) { return EXIT_FAILURE; }"),
+                "raw_type={raw_type}: {rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn raw_result_test_function_asserts_failure_per_result_type() {
+        // Direct test of the real e2e-test-file emitter (render_test_function),
+        // which is where the defect lived: for raw_c_result_type functions
+        // (char*/int32_t/uintptr_t), an "error"-only fixture previously emitted
+        // no assertion at all, so a call that unexpectedly SUCCEEDED still made
+        // the generated test pass. Assert the exact failing construct per type.
+        let cases: &[(&str, &str)] = &[
+            ("char*", "assert(result == NULL && \"expected call to fail\");"),
+            ("int32_t", "assert(result < 0 && \"expected call to fail\");"),
+            (
+                "uintptr_t",
+                "assert(sample_last_error_code() != 0 && \"expected call to fail\");",
+            ),
+        ];
+        for (raw_type, expected_assert) in cases {
+            let mut fixture = Fixture {
+                id: "invalid_input".into(),
+                description: "Invalid input".into(),
+                ..Fixture::default()
+            };
+            fixture.assertions.push(crate::e2e::fixture::Assertion {
+                assertion_type: "error".into(),
+                ..Default::default()
+            });
+            let config = ResolvedCrateConfig {
+                name: "sample".into(),
+                ..ResolvedCrateConfig::default()
+            };
+            let field_resolver = FieldResolver::new(
+                &HashMap::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+            );
+
+            let mut out = String::new();
+            render_test_function(
+                &mut out,
+                &fixture,
+                "sample",
+                "sample_parse_input",
+                "result",
+                &[],
+                &field_resolver,
+                &HashMap::new(),
+                &HashSet::new(),
+                "Result",
+                "",
+                None,
+                Some(raw_type),
+                None,
+                None,
+                false,
+                false,
+                None,
+                &[],
+                &config,
+                &[],
+                false,
+            );
+
+            assert!(
+                out.contains(expected_assert),
+                "raw_type={raw_type}: expected `{expected_assert}` in:\n{out}"
+            );
+            assert!(
+                !out.contains("expected call to succeed"),
+                "raw_type={raw_type}: unexpected success-path assertion in:\n{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn raw_result_test_function_falls_back_to_last_error_code_for_unmodeled_raw_types() {
+        // raw_c_result_type is a free-form config string (bool, uint64_t, size_t, ...),
+        // not a closed char*/int32_t/uintptr_t set. A fixture using any type outside
+        // that trio must still emit a failing check via the always-present
+        // last_error_code FFI symbol — not silently emit nothing.
+        for raw_type in ["bool", "uint64_t", "size_t"] {
+            let mut fixture = Fixture {
+                id: "invalid_input".into(),
+                description: "Invalid input".into(),
+                ..Fixture::default()
+            };
+            fixture.assertions.push(crate::e2e::fixture::Assertion {
+                assertion_type: "error".into(),
+                ..Default::default()
+            });
+            let config = ResolvedCrateConfig {
+                name: "sample".into(),
+                ..ResolvedCrateConfig::default()
+            };
+            let field_resolver = FieldResolver::new(
+                &HashMap::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+            );
+
+            let mut out = String::new();
+            render_test_function(
+                &mut out,
+                &fixture,
+                "sample",
+                "sample_parse_input",
+                "result",
+                &[],
+                &field_resolver,
+                &HashMap::new(),
+                &HashSet::new(),
+                "Result",
+                "",
+                None,
+                Some(raw_type),
+                None,
+                None,
+                false,
+                false,
+                None,
+                &[],
+                &config,
+                &[],
+                false,
+            );
+
+            assert!(
+                out.contains("assert(sample_last_error_code() != 0 && \"expected call to fail\");"),
+                "raw_type={raw_type}: expected last_error_code fallback assert in:\n{out}"
+            );
+        }
+    }
+
+    #[test]
     fn void_result_snippet_calls_api_without_placeholder_result() {
         let fixture = Fixture {
             id: "clear_formats".into(),

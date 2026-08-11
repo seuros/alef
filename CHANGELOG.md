@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated C E2E error tests now fail when the call unexpectedly succeeds. Fixtures whose call used a
+  `raw_c_result_type` emitted no error check at all, so the test passed regardless of outcome. Unmodeled result types
+  fall back to asserting a non-zero `last_error_code()` rather than emitting nothing.
+
 - Generated Zig E2E error tests now fail when the call unexpectedly succeeds. The previous shape wrapped the call in
   `catch { try testing.expect(true); return; }`, so a successful call skipped the catch entirely and the test passed
   having asserted nothing, while `expect(true)` was a tautology on the error path.
