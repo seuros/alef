@@ -394,7 +394,11 @@ pub(super) fn render_test_method(
     }
 
     let error_test_body = if expects_error {
-        render_error_test_body(&setup_lines, &call_expr, crate::e2e::codegen::declared_error_value(fixture))
+        render_error_test_body(
+            &setup_lines,
+            &call_expr,
+            crate::e2e::codegen::declared_error_value(fixture),
+        )
     } else {
         String::new()
     };
@@ -427,7 +431,11 @@ mod error_test_body_tests {
 
     #[test]
     fn no_declared_value_is_byte_identical_to_expect_exception() {
-        let body = render_error_test_body(&["$options = new Options();".to_string()], "Client::create($options)", None);
+        let body = render_error_test_body(
+            &["$options = new Options();".to_string()],
+            "Client::create($options)",
+            None,
+        );
         assert_eq!(
             body,
             "        $this->expectException(\\Exception::class);\n        $options = new Options();\n        Client::create($options);"
@@ -467,7 +475,9 @@ mod error_test_body_tests {
         let message = &body[message_start..];
         // The message argument runs up to the closing `)` of assertTrue(...); — find
         // the terminating `'` that precedes it.
-        let message_end = message.find("');").expect("message argument must be closed and followed by ');'");
+        let message_end = message
+            .find("');")
+            .expect("message argument must be closed and followed by ');'");
         let literal = &message[..=message_end];
         // Strip PHP's `\'` escape sequences before counting quote boundaries, so an
         // escaped quote inside the literal doesn't look like a premature terminator.
