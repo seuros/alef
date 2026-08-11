@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Go documentation snippets now honor shared pointer-option configuration and print structured result fields.
+
 - Generated E2E assertions now preserve raw and whitespace-sensitive string semantics, enforce case-sensitive C#
   containment, validate content for `not_empty`, and fail null values instead of allowing vacuous matches.
 
