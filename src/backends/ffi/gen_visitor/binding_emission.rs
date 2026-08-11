@@ -184,6 +184,8 @@ pub struct {pascal_prefix}Context {{
 pub struct {pascal_prefix}VisitorCallbacks {{
     /// Arbitrary caller context forwarded to every callback.
     pub user_data: *mut std::ffi::c_void,
+    /// Releases callback-owned strings with the allocator that created them.
+    pub free_string: Option<unsafe extern "C" fn(*mut std::ffi::c_char)>,
 {struct_fields}}}
 
 // SAFETY: The `user_data` pointer is the caller's responsibility. We require
@@ -230,6 +232,8 @@ impl std::fmt::Debug for {pascal_prefix}Visitor {{
 unsafe fn decode_visit_result(
     code: i32,
     custom_ptr: *mut std::ffi::c_char,
+    custom_len: usize,
+    free_string: Option<unsafe extern "C" fn(*mut std::ffi::c_char)>,
 ) -> {result_path} {{
     use {result_path} as VisitorResult;
     match code {{
@@ -244,6 +248,7 @@ unsafe fn decode_visit_result(
 /// of this function call.
 unsafe fn call_with_ctx<F>(
     ctx: &{context_path},
+    free_string: Option<unsafe extern "C" fn(*mut std::ffi::c_char)>,
     callback: F,
 ) -> {result_path}
 where
@@ -264,8 +269,8 @@ where
 
     let code = callback(&c_ctx, &mut out_custom, &mut out_len);
 
-    // SAFETY: decode_visit_result takes ownership of out_custom when non-null.
-    unsafe {{ decode_visit_result(code, out_custom) }}
+    // SAFETY: the callback supplies a buffer valid for out_len bytes and its matching destructor.
+    unsafe {{ decode_visit_result(code, out_custom, out_len, free_string) }}
 }}
 
 /// Convert an `Option<&str>` to a C pointer: non-null CString when `Some`, null when `None`.

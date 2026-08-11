@@ -43,6 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Generated Swift trait protocols now document their concurrency contract, and their Rust `Send`/`Sync` assertions carry
   explicit safety invariants.
 
+- Visitor callback payloads now use their reported byte length and an allocator-matched host destructor instead of
+  reconstructing host allocations with Rust's global allocator; Go, C#, and Java callback tables provide the destructor.
+
 - Snippet gap and audit commands now discover complete coverage ledgers beneath configured snippet roots, so generated
   output directories are trusted without hiding orphaned handwritten snippets.
 

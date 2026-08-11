@@ -99,7 +99,7 @@ pub fn gen_visitor_bridge(out: &mut String, trait_name: &str, trait_def: &TypeDe
 
     let bridge = format!("{trait_pascal}Bridge");
     let num_methods = trait_def.methods.len();
-    let slot_count = num_methods + 1;
+    let slot_count = num_methods + 2;
 
     let mut delegate_decls = String::new();
     let mut write_slots = String::new();
@@ -109,7 +109,7 @@ pub fn gen_visitor_bridge(out: &mut String, trait_name: &str, trait_def: &TypeDe
         let pascal = to_csharp_name(&method.name);
         let fn_name = format!("{pascal}Fn");
         let cb_name = format!("{pascal}Callback");
-        let slot = idx + 1;
+        let slot = idx + 2;
 
         let rest: Vec<&crate::core::ir::ParamDef> = method.params.iter().skip(1).collect();
 
@@ -147,7 +147,7 @@ pub fn gen_visitor_bridge(out: &mut String, trait_name: &str, trait_def: &TypeDe
 /// I{trait_pascal} implementation.
 ///
 /// ABI (Path 1, the canonical visitor callbacks struct shared with Go and Java):
-/// the unmanaged block is `user_data` followed by one function pointer per visit
+/// the unmanaged block is `user_data`, an allocator-matched string destructor, then one function pointer per visit
 /// method. Each callback receives `(ctx, user_data, ...params..., out_custom, out_len)`
 /// and returns an i32 visit-result code (0=Continue, 1=Custom, 2=Skip,
 /// 3=PreserveHtml, 4=Error). For Custom/Error the callback writes a heap C string
@@ -158,7 +158,7 @@ public sealed class {bridge} : IDisposable {{
 
     internal readonly I{trait_pascal} _impl;
     private readonly GCHandle _implHandle;
-    // Pointer to the unmanaged HtmVisitorCallbacks struct (user_data + {num_methods} fn pointers).
+    // Pointer to the unmanaged HtmVisitorCallbacks struct.
     internal IntPtr _vtable;
     private bool _disposed;
     // Keep all delegates alive for the lifetime of the bridge: Rust holds raw function
@@ -175,7 +175,7 @@ public sealed class {bridge} : IDisposable {{
     internal static int _nextBridgeId = 1;
     internal static readonly object _registryLock = new();
 
-    // Number of pointer-sized slots: user_data + {num_methods} visit-method function pointers.
+    // Number of pointer-sized slots: user_data + free_string + {num_methods} callbacks.
     private const int CallbackSlotCount = {slot_count};
 
     // Mirror of the FFI `HtmContext` repr(C) struct.
@@ -190,6 +190,9 @@ public sealed class {bridge} : IDisposable {{
     }}
 
     // --- Callback delegate signatures (ctx, user_data, ...params..., out_custom, out_len) ---
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void FreeStringFn(IntPtr value);
 
 {delegate_decls}
     public {bridge}(I{trait_pascal} impl) {{
@@ -213,8 +216,13 @@ public sealed class {bridge} : IDisposable {{
         _vtable = Marshal.AllocHGlobal(IntPtr.Size * CallbackSlotCount);
         // Slot 0: user_data — the registry id callbacks use to recover this bridge.
         Marshal.WriteIntPtr(_vtable, 0, _bridgeId);
-        // Slots 1..{num_methods}: function pointers, in HtmVisitorCallbacks field order.
+        WriteSlot(1, new FreeStringFn(FreeString));
+        // Remaining slots: function pointers, in HtmVisitorCallbacks field order.
 {write_slots}    }}
+
+    private static unsafe void FreeString(IntPtr value) {{
+        NativeMemory.Free((void*)value);
+    }}
 
     private void IncrementCallbackRef() {{
         lock (_registryLock) {{

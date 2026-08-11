@@ -217,7 +217,7 @@ fn wrap_java_file(package: &str, imports: Vec<String>, content: String) -> Strin
 fn gen_visitor_bridge(package: &str, visitor: &VisitorGeneration) -> String {
     let header = hash::header(CommentStyle::DoubleSlash);
 
-    let num_fields = visitor.callbacks.len() + 1;
+    let num_fields = visitor.callbacks.len() + 2;
     let num_callbacks = visitor.callbacks.len();
 
     let num_chunks = visitor.callbacks.chunks(CHUNK_SIZE).count();
@@ -526,6 +526,8 @@ pub(super) mod tests {
         );
         assert!(out.contains("Arena.ofConfined()"), "must use confined Arena");
         assert!(out.contains("LINKER.upcallStub("), "must register upcall stubs");
+        assert!(out.contains("freeCallbackString"));
+        assert!(out.contains("callbackAllocations.remove(value.address())"));
     }
 
     #[test]

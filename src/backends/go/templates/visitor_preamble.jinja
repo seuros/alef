@@ -10,10 +10,13 @@ package {{ pkg_name }}
 extern int32_t {{ spec.export_name }}({{ spec.c_sig }});
 {% endfor -%}
 
+static void freeVisitorString(char* value) { free(value); }
+
 static {{ callbacks_c_type }} makeVisitorCallbacks(void* userData) {
     {{ callbacks_c_type }} cb;
     memset(&cb, 0, sizeof(cb));
     cb.user_data = userData;
+    cb.free_string = freeVisitorString;
 {% for spec in callbacks -%}
     cb.{{ spec.c_field }} = {{ spec.export_name }};
 {% endfor -%}
