@@ -351,7 +351,14 @@ fn render_snippet_body(
             return Ok(body);
         }
     }
-    if let Some(kind) = recipe_policy::extension_owned_recipe_kind(fixture) {
+    let call = context.e2e.resolve_call_for_fixture(
+        fixture.call.as_deref(),
+        &fixture.id,
+        &fixture.resolved_category(),
+        &fixture.tags,
+        &fixture.input,
+    );
+    if let Some(kind) = recipe_policy::extension_owned_recipe_kind(fixture, fixture.resolved_args(call)) {
         bail!("{kind} fixture requires an extension-owned documentation recipe");
     }
     let body = generator

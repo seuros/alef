@@ -1,6 +1,9 @@
 use crate::e2e::fixture::Fixture;
 
-pub(super) fn extension_owned_recipe_kind(fixture: &Fixture) -> Option<&'static str> {
+pub(super) fn extension_owned_recipe_kind(
+    fixture: &Fixture,
+    resolved_args: &[crate::core::config::e2e::ArgMapping],
+) -> Option<&'static str> {
     if fixture.http.is_some() {
         return Some("HTTP");
     }
@@ -10,8 +13,7 @@ pub(super) fn extension_owned_recipe_kind(fixture: &Fixture) -> Option<&'static 
     if fixture.websocket.is_some() {
         return Some("WebSocket");
     }
-    fixture
-        .args
+    resolved_args
         .iter()
         .any(|argument| argument.arg_type == "test_backend")
         .then_some("test-backend")
@@ -41,7 +43,10 @@ mod tests {
             ..Fixture::default()
         };
 
-        assert_eq!(extension_owned_recipe_kind(&fixture), Some("test-backend"));
+        assert_eq!(
+            extension_owned_recipe_kind(&fixture, &fixture.args),
+            Some("test-backend")
+        );
     }
 
     #[test]
@@ -52,6 +57,28 @@ mod tests {
             ..Fixture::default()
         };
 
-        assert_eq!(extension_owned_recipe_kind(&fixture), None);
+        assert_eq!(extension_owned_recipe_kind(&fixture, &[]), None);
+    }
+
+    #[test]
+    fn call_level_test_backend_requires_public_extension_recipe() {
+        let fixture = Fixture {
+            id: "register_processor".into(),
+            description: "Register a processor".into(),
+            ..Fixture::default()
+        };
+        let call_args = vec![ArgMapping {
+            name: "processor".into(),
+            field: "processor".into(),
+            arg_type: "test_backend".into(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: Some("Processor".into()),
+        }];
+
+        assert_eq!(extension_owned_recipe_kind(&fixture, &call_args), Some("test-backend"));
     }
 }
