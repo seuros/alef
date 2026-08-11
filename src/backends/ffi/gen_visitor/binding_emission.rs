@@ -389,12 +389,13 @@ fn gen_legacy_options_setter(
     trait_path: &str,
     visitor_ref_methods: &str,
 ) -> String {
+    let _ = (trait_path, visitor_ref_methods);
     format!(
         r#"
 /// Attach a visitor to an options handle before calling `{prefix}_convert`.
 ///
 /// The visitor will be invoked during conversion via the normal `{prefix}_convert` path.
-/// The `visitor` pointer must remain valid until after `{prefix}_convert` returns.
+/// This function consumes the `visitor` handle. Do not free or reuse it after attachment.
 ///
 /// Passing `null` for either argument is a no-op.
 ///
@@ -402,8 +403,7 @@ fn gen_legacy_options_setter(
 ///
 /// `options` must be a non-null pointer returned by `{prefix}_conversion_options_from_json`,
 /// valid for write access.  `visitor` must be a non-null pointer returned by
-/// `{prefix}_visitor_create`, or null.  Both must remain valid for the duration of any
-/// subsequent `{prefix}_convert` call.
+/// `{prefix}_visitor_create`, or null. Ownership transfers to `options` on success.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn {prefix}_options_set_visitor_handle(
     options: *mut {options_path},
@@ -413,22 +413,11 @@ pub unsafe extern "C" fn {prefix}_options_set_visitor_handle(
     if options.is_null() || visitor.is_null() {{
         return;
     }}
-    struct VisitorRef(*mut {pascal_prefix}Visitor);
-    impl std::fmt::Debug for VisitorRef {{
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{
-            f.debug_struct("VisitorRef").finish_non_exhaustive()
-        }}
-    }}
-    // SAFETY: VisitorRef is a thin wrapper around a raw pointer to {pascal_prefix}Visitor which
-    // is itself Send + Sync. The caller guarantees the pointer remains valid during conversion.
-    unsafe impl Send for VisitorRef {{}}
-    // SAFETY: see Send impl above.
-    unsafe impl Sync for VisitorRef {{}}
-    impl {trait_path} for VisitorRef {{
-{visitor_ref_methods}    }}
     // SAFETY: options is non-null (checked above); caller guarantees it is valid for write.
     let options_ref = unsafe {{ &mut *options }};
-    options_ref.{options_field} = Some(std::sync::Arc::new(std::sync::Mutex::new(VisitorRef(visitor))));
+    // SAFETY: ownership of the unique visitor handle transfers to this options value.
+    let visitor = unsafe {{ *Box::from_raw(visitor) }};
+    options_ref.{options_field} = Some(std::sync::Arc::new(std::sync::Mutex::new(visitor)));
     }})
 }}"#,
     )

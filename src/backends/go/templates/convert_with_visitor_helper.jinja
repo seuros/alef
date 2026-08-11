@@ -1,75 +1,30 @@
-// {{ helper_name }} calls the FFI function with visitor support.
-func {{ helper_name }}({{ helper_params }}) (*{{ result_type }}, error) {
+// {{ helper_name }} calls the FFI function with visitor support. func {{ helper_name }}({{ helper_params }}) (*{{
+  result_type
+}}, error) {
 {{ helper_setup }}
 
-	var cOptions *C.{{ conversion_options_type }}
-	if {{ options_var }} != nil {
-		optionsBytes, err := json.Marshal({{ options_var }})
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal options: %w", err)
-		}
-		optionsJSON := C.CString(string(optionsBytes))
-		defer C.free(unsafe.Pointer(optionsJSON))
-		cOptions = C.{{ fn_options_from_json }}(optionsJSON)
-		if cOptions == nil {
-			if err := lastError(); err != nil {
-				return nil, err
-			}
-			return nil, fmt.Errorf("failed to decode {{ options_type }}")
-		}
-		defer C.{{ fn_options_free }}(cOptions)
-	}
-	if cOptions == nil {
-		// Allocate a default options struct so we can attach the visitor.
-		defaultJSON := C.CString("{}")
-		cOptions = C.{{ fn_options_from_json }}(defaultJSON)
-		C.free(unsafe.Pointer(defaultJSON))
-		if cOptions == nil {
-			if err := lastError(); err != nil {
-				return nil, err
-			}
-			return nil, fmt.Errorf("failed to create default {{ options_type }}")
-		}
-		defer C.{{ fn_options_free }}(cOptions)
-	}
-
-	// Register visitor and build the C callbacks struct via the static C helper.
-	// The visitor ID is forwarded as user_data to every callback so the
-	// trampolines can look the visitor up at dispatch time.
-	id := registerVisitor(visitor)
-	defer unregisterVisitor(id)
-	cb := C.makeVisitorCallbacks(unsafe.Pointer(id))
-
-	// {{ fn_visitor_create }} copies the callbacks struct into an opaque handle
-	// whose memory layout matches what {{ fn_convert }} dispatches against. No
-	// pointer cast — this is the canonical visitor-handle ABI.
-	visitorHandle := C.{{ fn_visitor_create }}(&cb)
-	if visitorHandle == nil {
-		return nil, fmt.Errorf("failed to create visitor handle")
-	}
-	defer C.{{ fn_visitor_free }}(visitorHandle)
-
-	// Attach the visitor handle to the options struct so convert() picks it up.
-	C.{{ fn_options_set_visitor }}(cOptions, visitorHandle)
-
-	ptr := C.{{ fn_convert }}({{ helper_call_args }})
-	if ptr == nil {
-		if err := lastError(); err != nil {
-			return nil, err
-		}
-		return nil, fmt.Errorf("conversion returned nil")
-	}
-	defer C.{{ fn_result_free }}(ptr)
-
-	jsonPtr := C.{{ fn_result_to_json }}(ptr)
-	if jsonPtr == nil {
-		return nil, fmt.Errorf("conversion result serialisation failed")
-	}
-	defer C.free(unsafe.Pointer(jsonPtr))
-
-	var result {{ result_type }}
-	if err := json.Unmarshal([]byte(C.GoString(jsonPtr)), &result); err != nil {
-		return nil, fmt.Errorf("failed to decode {{ result_type }}: %w", err)
-	}
-	return &result, nil
-}
+var cOptions *C.{{ conversion_options_type }}
+if {{ options_var }} != nil { optionsBytes, err := json.Marshal({{ options_var }}) if err != nil { return nil,
+fmt.Errorf("failed to marshal options: %w", err) } optionsJSON := C.CString(string(optionsBytes)) defer
+C.free(unsafe.Pointer(optionsJSON)) cOptions = C.{{ fn_options_from_json }}(optionsJSON) if cOptions == nil { if err :=
+lastError(); err != nil { return nil, err } return nil, fmt.Errorf("failed to decode {{ options_type }}") } defer C.{{
+  fn_options_free
+}}(cOptions) } if cOptions == nil { // Allocate a default options struct so we can attach the visitor. defaultJSON :=
+C.CString("{}") cOptions = C.{{ fn_options_from_json }}(defaultJSON) C.free(unsafe.Pointer(defaultJSON)) if cOptions ==
+nil { if err := lastError(); err != nil { return nil, err } return nil, fmt.Errorf("failed to create default {{
+  options_type
+}}") } defer C.{{ fn_options_free }}(cOptions) } // Register visitor and build the C callbacks struct via the static C
+helper. // The visitor ID is forwarded as user_data to every callback so the // trampolines can look the visitor up at
+dispatch time. id := registerVisitor(visitor) defer unregisterVisitor(id) cb :=
+C.makeVisitorCallbacks(unsafe.Pointer(id)) // {{ fn_visitor_create }} copies the callbacks struct into an opaque handle
+// whose memory layout matches what {{ fn_convert }} dispatches against. No // pointer cast — this is the canonical
+visitor-handle ABI. visitorHandle := C.{{ fn_visitor_create }}(&cb) if visitorHandle == nil { return nil,
+fmt.Errorf("failed to create visitor handle") } // Attach transfers ownership of visitorHandle to the options struct.
+C.{{ fn_options_set_visitor }}(cOptions, visitorHandle) ptr := C.{{ fn_convert }}({{ helper_call_args }}) if ptr == nil
+{ if err := lastError(); err != nil { return nil, err } return nil, fmt.Errorf("conversion returned nil") } defer C.{{
+  fn_result_free
+}}(ptr) jsonPtr := C.{{ fn_result_to_json }}(ptr) if jsonPtr == nil { return nil, fmt.Errorf("conversion result
+serialisation failed") } defer C.free(unsafe.Pointer(jsonPtr)) var result {{ result_type }}
+if err := json.Unmarshal([]byte(C.GoString(jsonPtr)), &result); err != nil { return nil, fmt.Errorf("failed to decode {{
+  result_type
+}}: %w", err) } return &result, nil }

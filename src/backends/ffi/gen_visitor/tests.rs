@@ -147,6 +147,8 @@ fn visitor_bindings_use_trait_name_and_callback_count_from_ir() {
     assert!(code.contains("pub free_string: Option<unsafe extern \"C\" fn(*mut std::ffi::c_char)>"));
     assert!(code.contains("from_raw_parts(custom_ptr.cast::<u8>(), custom_len)"));
     assert!(code.contains("free(custom_ptr)"));
+    assert!(code.contains("*Box::from_raw(visitor)"));
+    assert!(!code.contains("VisitorRef(*mut"));
     assert!(!code.contains("fn md_convert_with_visitor"));
     assert!(!code.contains("all 42 HtmlVisitor methods"));
     assert!(!code.contains("dyn HtmlVisitor + Send"));
