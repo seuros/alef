@@ -188,7 +188,12 @@ pub(crate) fn gen_native_lib(
         function_handles.push(handle_code);
     }
 
-    {
+    let has_bytes_results = api.functions.iter().any(is_bytes_result)
+        || api
+            .types
+            .iter()
+            .any(|typ| typ.methods.iter().any(is_bytes_result_method));
+    if has_bytes_results {
         let free_bytes_name = format!("{}_free_bytes", prefix);
         let handle_name = format!("{}_FREE_BYTES", prefix.to_uppercase());
         let handle_code = crate::backends::java::template_env::render(

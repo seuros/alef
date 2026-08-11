@@ -619,4 +619,18 @@ mod tests {
 
         assert_eq!(function_names, vec!["list_document_extractors"]);
     }
+
+    #[test]
+    fn native_library_omits_free_bytes_without_a_producer() {
+        let output = gen_native_lib(
+            &ApiSurface::default(),
+            &ResolvedCrateConfig::default(),
+            "dev.sample",
+            "sample",
+            false,
+        );
+
+        assert!(!output.contains("SAMPLE_FREE_BYTES"));
+        assert!(!output.contains("sample_free_bytes"));
+    }
 }

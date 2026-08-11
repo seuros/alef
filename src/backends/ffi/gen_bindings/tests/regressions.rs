@@ -47,6 +47,39 @@ prefix = "sample"
 }
 
 #[test]
+fn ffi_omits_free_bytes_without_an_out_param_producer() {
+    let config = resolved_one(
+        r#"
+[workspace]
+languages = ["ffi"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+
+[crates.ffi]
+prefix = "sample"
+"#,
+    );
+    let api = ApiSurface {
+        crate_name: "sample-lib".to_string(),
+        version: "1.0.0".to_string(),
+        functions: vec![FunctionDef {
+            name: "render".to_string(),
+            rust_path: "sample_lib::render".to_string(),
+            return_type: TypeRef::String,
+            ..FunctionDef::default()
+        }],
+        ..ApiSurface::default()
+    };
+
+    let files = FfiBackend.generate_bindings(&api, &config).unwrap();
+    let lib = files.iter().find(|file| file.path.ends_with("lib.rs")).unwrap();
+
+    assert!(!lib.content.contains("fn sample_free_bytes("));
+}
+
+#[test]
 fn test_legacy_visitor_callbacks_use_configured_function_signature() {
     let config = resolved_one(
         r#"

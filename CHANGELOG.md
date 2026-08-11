@@ -92,6 +92,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Generated Zig trait callbacks now copy returned strings into allocator-matched storage, free undispatched results,
   release callback strings through the matching allocator, and return owned error text through `out_error`.
 
+- FFI and Java bindings now omit `free_bytes` when no generated API can produce its allocation metadata, preventing
+  unrelated pointers from being mistaken for byte-result allocations.
+
 - Attaching a visitor to an FFI options handle now transfers ownership into one synchronized object, preventing multiple
   independent mutexes from aliasing the same mutable visitor; Go wrappers honor the transfer.
 
