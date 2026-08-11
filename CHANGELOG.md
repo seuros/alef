@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Generated Elixir NIFs no longer expose a process-wide environment mutation helper, avoiding unsafe concurrent
   `setenv` access from BEAM scheduler threads.
 
+- Generated Go wrappers no longer free marshalled value receivers after an owned-receiver FFI method consumes them.
+
 - Snippet gap and audit commands now discover complete coverage ledgers beneath configured snippet roots, so generated
   output directories are trusted without hiding orphaned handwritten snippets.
 

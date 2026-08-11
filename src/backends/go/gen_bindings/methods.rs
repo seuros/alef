@@ -311,6 +311,7 @@ pub(super) fn gen_method_wrapper(
                     from_json_err_action => &from_json_err_action,
                     ffi_prefix => ffi_prefix,
                     type_snake => &type_snake,
+                    receiver_is_consumed => matches!(method.receiver, Some(crate::core::ir::ReceiverKind::Owned)),
                 },
             ));
             if c_params.is_empty() {

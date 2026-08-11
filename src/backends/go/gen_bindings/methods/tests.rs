@@ -1,5 +1,5 @@
 use super::*;
-use crate::core::ir::{CoreWrapper, FieldDef, MethodDef, ParamDef, PrimitiveType, TypeDef, TypeRef};
+use crate::core::ir::{CoreWrapper, FieldDef, MethodDef, ParamDef, PrimitiveType, ReceiverKind, TypeDef, TypeRef};
 
 fn opaque_type(name: &str) -> TypeDef {
     TypeDef {
@@ -49,6 +49,27 @@ fn simple_method(name: &str, return_type: TypeRef, is_static: bool) -> MethodDef
         binding_exclusion_reason: None,
         version: Default::default(),
     }
+}
+
+#[test]
+fn owned_receiver_is_not_freed_after_ffi_consumes_it() {
+    let mut typ = opaque_type("Example");
+    typ.is_opaque = false;
+    let mut method = simple_method("into_owned", TypeRef::Named("Example".to_string()), false);
+    method.receiver = Some(ReceiverKind::Owned);
+
+    let generated = gen_method_wrapper(
+        &typ,
+        &method,
+        "sample",
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+    );
+
+    assert!(generated.contains("C.sample_example_into_owned(cRecv)"));
+    assert!(!generated.contains("defer C.sample_example_free(cRecv)"));
 }
 
 fn simple_param(name: &str, ty: TypeRef) -> ParamDef {
