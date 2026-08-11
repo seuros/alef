@@ -82,11 +82,16 @@ pub(super) fn render_snippet_body(
             .join(", ");
     }
     let call_expr = format!("{module}.{function}({args})");
+    let expects_error = fixture
+        .assertions
+        .iter()
+        .any(|assertion| assertion.assertion_type == "error");
     Ok(crate::e2e::template_env::render(
         "elixir/snippet_body.jinja",
         minijinja::context! {
             setup_lines => setup_lines, call_expr => call_expr, result_var => call.result_var,
             returns_void => call.returns_void, is_streaming => is_streaming,
+            expects_error => expects_error,
         },
     ))
 }
@@ -150,6 +155,26 @@ mod tests {
         let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[]).unwrap();
         assert!(body.contains("Sample.load_document()"));
         assert!(!body.contains("assert"));
+    }
+
+    #[test]
+    fn renders_expected_error_as_an_executable_example() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "invalid_input", "description": "Reject invalid input", "input": null,
+            "assertions": [{"type": "error"}]
+        }))
+        .expect("fixture");
+        let body = render_snippet_body(
+            &fixture,
+            &E2eConfig::default(),
+            &ResolvedCrateConfig::default(),
+            &[],
+            &[],
+        )
+        .expect("snippet");
+
+        assert!(body.contains("rescue\n  error ->"), "{body}");
+        assert!(body.contains("else\n  _ -> raise \"expected call to fail\""), "{body}");
     }
 
     #[test]

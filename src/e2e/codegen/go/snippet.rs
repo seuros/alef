@@ -124,6 +124,10 @@ pub(super) fn render_snippet_body(
             .iter()
             .any(|arg| matches!(arg.arg_type.as_str(), "json_object" | "bytes"))
         || client_factory.is_some();
+    let expects_error = fixture
+        .assertions
+        .iter()
+        .any(|assertion| assertion.assertion_type == "error");
     let mut standard_imports = std::collections::BTreeSet::new();
     let setup_lines: Vec<String> = setup_lines.into_iter().map(snippet_setup_line).collect();
     let joined_setup = setup_lines.join("\n");
@@ -137,8 +141,11 @@ pub(super) fn render_snippet_body(
     if joined_setup.contains("strings.") {
         standard_imports.insert("strings");
     }
-    if !call.returns_void || joined_setup.contains("fmt.") {
+    if !call.returns_void || expects_error || joined_setup.contains("fmt.") {
         standard_imports.insert("fmt");
+    }
+    if expects_error {
+        standard_imports.insert("os");
     }
     let mut imports = standard_imports
         .into_iter()
@@ -158,6 +165,7 @@ pub(super) fn render_snippet_body(
             package_decls => package_decls, setup_lines => setup_lines, client_setup => client_setup,
             call_expr => call_expr, result_var => call.result_var, returns_error => returns_error,
             returns_void => call.returns_void,
+            expects_error => expects_error,
         },
     )
     .trim_end()
@@ -228,6 +236,20 @@ mod tests {
         assert!(body.contains("document, err := pkg.LoadDocument()"));
         assert!(!body.contains("testing"));
         assert!(!body.contains("assert."));
+    }
+
+    #[test]
+    fn snippet_renders_expected_error_as_an_executable_example() {
+        let mut fixture = fixture();
+        fixture.assertions = serde_json::from_value(serde_json::json!([{"type": "error"}])).expect("assertions");
+        let mut e2e = E2eConfig::default();
+        e2e.call.module = "example.com/sample".into();
+        e2e.call.returns_result = true;
+        let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[]);
+
+        assert!(body.contains("_, err := pkg."), "{body}");
+        assert!(body.contains("if err == nil"), "{body}");
+        assert!(body.contains("expected call to fail"), "{body}");
     }
 
     #[test]

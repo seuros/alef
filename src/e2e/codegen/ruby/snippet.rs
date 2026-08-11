@@ -75,12 +75,17 @@ pub(super) fn render_snippet_body(
         .unwrap_or_else(|| config.name.replace('-', "_"));
     let is_streaming =
         crate::e2e::codegen::streaming_assertions::resolve_is_streaming(fixture, call.streaming_enabled());
+    let expects_error = fixture
+        .assertions
+        .iter()
+        .any(|assertion| assertion.assertion_type == "error");
     Ok(crate::e2e::template_env::render(
         "ruby/snippet_body.jinja",
         minijinja::context! {
             package => package, receiver => receiver, setup_lines => setup_lines, client_factory => client_factory,
             call_receiver => call_receiver, function => function, args => args, result_var => call.result_var,
             returns_void => call.returns_void, is_streaming => is_streaming,
+            expects_error => expects_error,
         },
     ))
 }
@@ -145,6 +150,26 @@ mod tests {
         let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[]).unwrap();
         assert!(body.contains("Sample.load_document()"));
         assert!(!body.contains("expect("));
+    }
+
+    #[test]
+    fn renders_expected_error_as_an_executable_example() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "invalid_input", "description": "Reject invalid input", "input": null,
+            "assertions": [{"type": "error"}]
+        }))
+        .expect("fixture");
+        let body = render_snippet_body(
+            &fixture,
+            &E2eConfig::default(),
+            &ResolvedCrateConfig::default(),
+            &[],
+            &[],
+        )
+        .expect("snippet");
+
+        assert!(body.contains("rescue StandardError => error"), "{body}");
+        assert!(body.contains("raise \"expected call to fail\""), "{body}");
     }
 
     #[test]

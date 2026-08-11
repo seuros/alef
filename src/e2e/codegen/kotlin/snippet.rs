@@ -82,6 +82,10 @@ pub(crate) fn render_snippet_body(
     } else {
         config.kotlin_package()
     };
+    let expects_error = fixture
+        .assertions
+        .iter()
+        .any(|assertion| assertion.assertion_type == "error");
 
     crate::e2e::template_env::render(
         "kotlin/snippet_body.jinja",
@@ -97,6 +101,7 @@ pub(crate) fn render_snippet_body(
             returns_void => call.returns_void,
             is_async => is_async,
             fixture_id => fixture.id,
+            expects_error => expects_error,
         },
     )
 }
@@ -144,6 +149,24 @@ mod tests {
         assert!(body.contains("fun main()"));
         assert!(!body.contains("@Test"));
         assert!(!body.contains("assert"));
+    }
+
+    #[test]
+    fn snippet_renders_expected_error_as_an_executable_example() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "invalid_input", "description": "Reject invalid input", "input": null,
+            "assertions": [{"type": "error"}]
+        }))
+        .expect("fixture");
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "process".into();
+        let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], false);
+
+        assert!(body.contains("catch (error: Exception)"), "{body}");
+        assert!(
+            body.contains("throw AssertionError(\"expected call to fail\")"),
+            "{body}"
+        );
     }
 
     #[test]

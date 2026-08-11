@@ -6,7 +6,13 @@
 {% if is_async %}async def main() -> None:
 {% else %}def main() -> None:
 {% endif %}
-{% for line in body %}    {{ line }}
+{% if expects_error %}    try:
+{% for line in body %}        {{ line }}
+{% endfor %}    except Exception as error:
+        print(f"Call failed as expected: {error}")
+    else:
+        raise AssertionError("expected call to fail")
+{% else %}{% for line in body %}    {{ line }}
 {% endfor %}
 {% for operation in presentation %}
 {% if operation.kind == "show" %}    print({{ operation.expression }})
@@ -14,6 +20,7 @@
 {% for field in operation.fields %}        print({{ field }})
 {% endfor %}{% endif %}
 {% endfor %}
+{% endif %}
 
 {% if is_async %}asyncio.run(main())
 {% else %}main()

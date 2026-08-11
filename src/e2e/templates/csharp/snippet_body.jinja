@@ -8,6 +8,9 @@ using {{ namespace }};
 
 {% if needs_json %}var ConfigOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
 {% endif %}
+{% if expects_error %}try
+{
+{% endif %}
 {% for line in setup_lines %}{{ line }}
 {% endfor %}
 {% if client_factory %}var baseUrl = (Environment.GetEnvironmentVariable("MOCK_SERVER_URL") ?? string.Empty) +
@@ -18,4 +21,12 @@ using {{ namespace }};
   {% endif %}
 {% elif returns_void %}{% if is_async %}await {% endif %}{{ class_name }}.{{ function_name }}({{ args }});
 {% else %}var {{ result_var }} = {% if is_async %}await {% endif %}{{ class_name }}.{{ function_name }}({{ args }});
+{% endif %}
+{% if expects_error %}}
+catch (Exception error)
+{
+    Console.Error.WriteLine($"Call failed as expected: {error.Message}");
+    return;
+}
+throw new InvalidOperationException("expected call to fail");
 {% endif %}

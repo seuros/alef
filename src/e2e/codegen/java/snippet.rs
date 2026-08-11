@@ -71,6 +71,10 @@ pub(super) fn render_snippet_body(
         .unwrap_or_else(|| config.java_package());
     let needs_mapper = setup_lines.iter().any(|line| line.contains("MAPPER"));
     let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "java");
+    let expects_error = fixture
+        .assertions
+        .iter()
+        .any(|assertion| assertion.assertion_type == "error");
 
     crate::e2e::template_env::render(
         "java/snippet_body.jinja",
@@ -86,6 +90,7 @@ pub(super) fn render_snippet_body(
             needs_mapper => needs_mapper,
             fixture_id => fixture.id,
             presentation => presentation,
+            expects_error => expects_error,
         },
     )
 }
@@ -179,6 +184,22 @@ mod tests {
         assert!(!body.contains("@Test"));
         assert!(!body.contains("assert"));
         assert!(body.contains("System.out.println(document);"));
+    }
+
+    #[test]
+    fn snippet_renders_expected_error_as_an_executable_example() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "invalid_input", "description": "Reject invalid input", "input": null,
+            "assertions": [{"type": "error"}]
+        }))
+        .expect("fixture");
+        let body = render_snippet_body(&fixture, &E2eConfig::default(), &ResolvedCrateConfig::default(), &[]);
+
+        assert!(body.contains("catch (Exception error)"), "{body}");
+        assert!(
+            body.contains("throw new AssertionError(\"expected call to fail\")"),
+            "{body}"
+        );
     }
 
     #[test]

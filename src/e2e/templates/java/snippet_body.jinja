@@ -6,6 +6,8 @@ public final class Example {
     public static void main(String[] args) throws Exception {
 {% if needs_mapper %}        var MAPPER = new ObjectMapper();
 {% endif %}
+{% if expects_error %}        try {
+{% endif %}
 {% for line in setup_lines %}        {{ line }}
 {% endfor %}
 {% if client_factory %}        var baseUrl = System.getenv().getOrDefault("MOCK_SERVER_URL", "") + "/fixtures/{{ fixture_id }}";
@@ -22,5 +24,11 @@ public final class Example {
 {% endfor %}        }
 {% endif %}{% endfor %}{% else %}        System.out.println({{ result_var }});
 {% endif %}{% endif %}
+{% if expects_error %}        } catch (Exception error) {
+            System.err.println("Call failed as expected: " + error.getMessage());
+            return;
+        }
+        throw new AssertionError("expected call to fail");
+{% endif %}
     }
 }

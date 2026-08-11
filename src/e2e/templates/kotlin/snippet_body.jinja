@@ -5,6 +5,8 @@ import {{ package_name }}.*
 fun main() {% if is_async %}= kotlinx.coroutines.runBlocking {% endif %}{
 {% if needs_mapper %}    val mapper = jacksonObjectMapper()
 {% endif %}
+{% if expects_error %}    try {
+{% endif %}
 {% for line in setup_lines %}    {{ line }}
 {% endfor %}
 {% if client_factory %}    val baseUrl = (System.getenv("MOCK_SERVER_URL") ?: "") + "/fixtures/{{ fixture_id }}"
@@ -14,5 +16,11 @@ fun main() {% if is_async %}= kotlinx.coroutines.runBlocking {% endif %}{
 {% endif %}    client.close()
 {% elif returns_void %}    {{ class_name }}.{{ function_name }}({{ args }})
 {% else %}    val {{ result_var }} = {{ class_name }}.{{ function_name }}({{ args }})
+{% endif %}
+{% if expects_error %}    } catch (error: Exception) {
+        System.err.println("Call failed as expected: ${error.message}")
+        return{% if is_async %}@runBlocking{% endif %}
+    }
+    throw AssertionError("expected call to fail")
 {% endif %}
 }

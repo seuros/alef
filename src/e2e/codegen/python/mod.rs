@@ -143,6 +143,10 @@ impl super::E2eCodegen for PythonE2eCodegen {
         enums: &[crate::core::ir::EnumDef],
     ) -> Result<String> {
         let mut call_fixture = fixture.docs_call_fixture();
+        let expects_error = call_fixture
+            .assertions
+            .iter()
+            .any(|assertion| assertion.assertion_type == "error");
         call_fixture.assertions.clear();
         let test_file = render_test_file(
             &fixture.resolved_category(),
@@ -158,6 +162,7 @@ impl super::E2eCodegen for PythonE2eCodegen {
             "python/snippet_body.py.jinja",
             minijinja::context! {
                 imports => imports, body => body, is_async => is_async, presentation => presentation,
+                expects_error => expects_error,
             },
         ))
     }
@@ -501,6 +506,30 @@ headingStyle = "HeadingStyle"
         assert!(rendered.contains("def main() -> None:"), "{rendered}");
         assert!(!rendered.contains("pytest"), "{rendered}");
         assert!(!rendered.contains("def test_"), "{rendered}");
+    }
+
+    #[test]
+    fn snippet_body_renders_expected_error_as_an_executable_example() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "invalid_input", "description": "Reject invalid input", "input": null,
+            "assertions": [{"type": "error"}]
+        }))
+        .expect("fixture");
+        let rendered = PythonE2eCodegen
+            .render_snippet_body(
+                &fixture,
+                &E2eConfig::default(),
+                &ResolvedCrateConfig::default(),
+                &[],
+                &[],
+            )
+            .expect("snippet");
+
+        assert!(rendered.contains("except Exception as error:"), "{rendered}");
+        assert!(
+            rendered.contains("raise AssertionError(\"expected call to fail\")"),
+            "{rendered}"
+        );
     }
 
     #[test]

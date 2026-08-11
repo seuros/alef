@@ -14,6 +14,10 @@ pub(super) fn render_snippet_body(
     if fixture.is_http_test() {
         return render_http_snippet(fixture);
     }
+    let expects_error = fixture
+        .assertions
+        .iter()
+        .any(|assertion| assertion.assertion_type == "error");
     let mut fixture_without_assertions = fixture.clone();
     fixture_without_assertions.assertions.clear();
     let bridge_class = config.dart_bridge_class_name();
@@ -44,12 +48,13 @@ pub(super) fn render_snippet_body(
     let needs_json = statements
         .iter()
         .any(|statement| statement.contains("jsonDecode(") || statement.contains("jsonEncode("));
-    let needs_io = statements.iter().any(|statement| statement.contains("File("));
+    let needs_io = expects_error || statements.iter().any(|statement| statement.contains("File("));
     Ok(crate::e2e::template_env::render(
         "dart/snippet_body.jinja",
         minijinja::context! {
             package => package, module => module, statements => statements, needs_json => needs_json,
             needs_io => needs_io,
+            expects_error => expects_error,
         },
     ))
 }
@@ -134,6 +139,26 @@ mod tests {
         assert!(body.contains("Future<void> main() async"));
         assert!(!body.contains("test("));
         assert!(!body.contains("expect("));
+    }
+
+    #[test]
+    fn renders_expected_error_as_an_executable_example() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "invalid_input", "description": "Reject invalid input", "input": null,
+            "assertions": [{"type": "error"}]
+        }))
+        .expect("fixture");
+        let body = render_snippet_body(
+            &fixture,
+            &E2eConfig::default(),
+            &ResolvedCrateConfig::default(),
+            &[],
+            &[],
+        )
+        .expect("snippet");
+
+        assert!(body.contains("catch (error)"), "{body}");
+        assert!(body.contains("throw StateError('expected call to fail')"), "{body}");
     }
 
     #[test]

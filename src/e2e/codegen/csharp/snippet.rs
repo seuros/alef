@@ -87,12 +87,16 @@ pub(super) fn render_snippet_body(
         || ["register_", "unregister_", "clear_"]
             .iter()
             .any(|prefix| call.function.starts_with(prefix));
+    let expects_error = fixture
+        .assertions
+        .iter()
+        .any(|assertion| assertion.assertion_type == "error");
     let needs_json = setup_lines.iter().any(|line| line.contains("JsonSerializer")) || args.contains("JsonSerializer");
-    let needs_system = client_factory.is_some() || setup_lines.iter().any(|line| line.contains("Environment."));
+    let needs_system =
+        expects_error || client_factory.is_some() || setup_lines.iter().any(|line| line.contains("Environment."));
     let needs_collections = setup_lines
         .iter()
         .any(|line| line.contains("List<") || line.contains("Dictionary<"));
-
     crate::e2e::template_env::render(
         "csharp/snippet_body.jinja",
         minijinja::context! {
@@ -109,6 +113,7 @@ pub(super) fn render_snippet_body(
             needs_system => needs_system,
             needs_collections => needs_collections,
             fixture_id => fixture.id,
+            expects_error => expects_error,
         },
     )
 }
@@ -153,6 +158,28 @@ mod tests {
         assert!(!body.contains("using System;"));
         assert!(!body.contains("[Fact]"));
         assert!(!body.contains("Assert."));
+    }
+
+    #[test]
+    fn snippet_renders_expected_error_as_an_executable_example() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "invalid_input", "description": "Reject invalid input", "input": null,
+            "assertions": [{"type": "error"}]
+        }))
+        .expect("fixture");
+        let body = render_snippet_body(
+            &fixture,
+            &E2eConfig::default(),
+            &ResolvedCrateConfig::default(),
+            &[],
+            &[],
+        );
+
+        assert!(body.contains("catch (Exception error)"), "{body}");
+        assert!(
+            body.contains("throw new InvalidOperationException(\"expected call to fail\")"),
+            "{body}"
+        );
     }
 
     #[test]

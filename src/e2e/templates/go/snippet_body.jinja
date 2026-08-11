@@ -17,14 +17,17 @@ func main() {
 {% if returns_void %}
   {{- "\t" }}err := {{ call_expr }}
 {% elif returns_error %}
-  {{- "\t" }}{{ result_var }}, err := {{ call_expr }}
+  {{- "\t" }}{% if expects_error %}_{% else %}{{ result_var }}{% endif %}, err := {{ call_expr }}
 {% else %}
   {{- "\t" }}{{ result_var }} := {{ call_expr }}
 {% endif %}
-{% if returns_error or returns_void %}
+{% if expects_error %}
+  {{- "\tif err == nil {\n\t\tpanic(\"expected call to fail\")\n\t}\n" }}
+  {{- "\tfmt.Fprintf(os.Stderr, \"Call failed as expected: %v\\n\", err)" }}
+{% elif returns_error or returns_void %}
   {{- "\tif err != nil {\n\t\tpanic(err)\n\t}" }}
 {% endif %}
-{% if not returns_void %}
+{% if not returns_void and not expects_error %}
   {{- "\t" }}fmt.Println({{ result_var }})
 {% endif %}
 }

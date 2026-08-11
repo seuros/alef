@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Documentation snippets for expected-error fixtures now render idiomatic executable failure handling in C#, Dart,
+  Elixir, Go, Java, Kotlin, Python, and Ruby instead of presenting failing calls as successful examples.
+
 - Harness-only trait bridge fixtures now require extension-owned public documentation recipes instead of publishing internal test
   stubs, including when the test backend argument comes from global call configuration.
 
