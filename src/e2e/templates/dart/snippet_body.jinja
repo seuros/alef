@@ -3,18 +3,24 @@
 {% if needs_io %}import 'dart:io';
 {% endif %}
 import 'package:{{ package }}/{{ module }}.dart';
+import 'package:{{ package }}/src/{{ bridge_module }}/frb_generated.dart' show RustLib;
 Future<void> main() async {
-{% if expects_error %}  try {
+  await RustLib.init();
+  try {
+{% if expects_error %}    try {
 {% for statement in statements %}
-    {{ statement }}
-{% endfor %}  } catch (error) {
-    stderr.writeln('Call failed as expected: $error');
-    return;
-  }
-  throw StateError('expected call to fail');
+      {{ statement }}
+{% endfor %}    } catch (error) {
+      stderr.writeln('Call failed as expected: $error');
+      return;
+    }
+    throw StateError('expected call to fail');
 {% else %}
 {% for statement in statements %}
-  {{ statement }}
+    {{ statement }}
 {% endfor %}
 {% endif %}
+  } finally {
+    RustLib.dispose();
+  }
 }

@@ -45,6 +45,7 @@ pub(super) fn render_snippet_body(
         .and_then(|value| value.name)
         .unwrap_or_else(|| config.dart_pubspec_name());
     let module = config.name.replace('-', "_");
+    let bridge_module = format!("{module}_bridge_generated");
     let needs_json = statements
         .iter()
         .any(|statement| statement.contains("jsonDecode(") || statement.contains("jsonEncode("));
@@ -52,7 +53,8 @@ pub(super) fn render_snippet_body(
     Ok(crate::e2e::template_env::render(
         "dart/snippet_body.jinja",
         minijinja::context! {
-            package => package, module => module, statements => statements, needs_json => needs_json,
+            package => package, module => module, bridge_module => bridge_module,
+            statements => statements, needs_json => needs_json,
             needs_io => needs_io,
             expects_error => expects_error,
         },
@@ -137,6 +139,9 @@ mod tests {
         let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[]).unwrap();
         assert!(body.contains("loadDocument()"));
         assert!(body.contains("Future<void> main() async"));
+        assert!(body.contains("show RustLib"));
+        assert!(body.contains("await RustLib.init()"));
+        assert!(body.contains("RustLib.dispose()"));
         assert!(!body.contains("test("));
         assert!(!body.contains("expect("));
     }
