@@ -180,10 +180,8 @@ fn api_with_named_field(field_type: &str, is_clone: bool) -> ApiSurface {
     }
 }
 
-/// Non-Clone opaque Named-type fields must not emit `.clone()` in the
-/// generated field accessor — the accessor should use a raw pointer cast instead.
 #[test]
-fn test_named_field_non_clone_no_clone_call() {
+fn test_named_field_non_clone_does_not_return_borrow_as_owned() {
     let api = api_with_named_field("LanguageRegistry", false);
     let config = sample_config();
     let backend = FfiBackend;
@@ -196,6 +194,8 @@ fn test_named_field_non_clone_no_clone_call() {
         "non-Clone opaque Named field must not emit .clone() in accessor:\n{}",
         lib.content
     );
+    assert!(lib.content.contains("std::ptr::null_mut()"));
+    assert!(!lib.content.contains("as *const _ as *mut _"));
 }
 
 /// Clone-capable Named-type fields must still emit `.clone()` in the accessor.

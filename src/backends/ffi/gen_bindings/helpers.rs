@@ -52,8 +52,7 @@ fn copy_expr(expr: &str) -> String {
 /// `enum_names` is the set of IR enum type names — Copy in our codegen, so we use
 /// the copy path instead of `.clone()` (avoids `clippy::clone_on_copy`).
 /// `clone_names` is the set of IR named-type names that implement `Clone`.
-/// For `Named` types **not** in `clone_names` (non-Clone opaques), a raw pointer
-/// cast is emitted so the accessor compiles without requiring `Clone`.
+/// `Named` types outside `clone_names` cannot be returned as owned handles safely.
 pub(super) fn gen_value_to_c(
     expr: &str,
     ty: &TypeRef,
