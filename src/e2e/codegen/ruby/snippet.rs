@@ -73,6 +73,7 @@ pub(super) fn render_snippet_body(
         .resolve_package(lang)
         .and_then(|value| value.name)
         .unwrap_or_else(|| config.name.replace('-', "_"));
+    let require_path = package.replace('-', "_");
     let is_streaming =
         crate::e2e::codegen::streaming_assertions::resolve_is_streaming(fixture, call.streaming_enabled());
     let expects_error = fixture
@@ -82,7 +83,7 @@ pub(super) fn render_snippet_body(
     Ok(crate::e2e::template_env::render(
         "ruby/snippet_body.jinja",
         minijinja::context! {
-            package => package, receiver => receiver, setup_lines => setup_lines, client_factory => client_factory,
+            require_path => require_path, receiver => receiver, setup_lines => setup_lines, client_factory => client_factory,
             call_receiver => call_receiver, function => function, args => args, result_var => call.result_var,
             returns_void => call.returns_void, is_streaming => is_streaming,
             expects_error => expects_error,
@@ -150,6 +151,29 @@ mod tests {
         let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[]).unwrap();
         assert!(body.contains("Sample.load_document()"));
         assert!(!body.contains("expect("));
+    }
+
+    #[test]
+    fn renders_ruby_require_path_instead_of_hyphenated_gem_name() {
+        let fixture = Fixture {
+            id: "sample".into(),
+            description: "Sample".into(),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "load_document".into();
+        e2e.call.module = "sample".into();
+        e2e.packages.insert(
+            "ruby".into(),
+            crate::e2e::config::PackageRef {
+                name: Some("sample-tools".into()),
+                ..Default::default()
+            },
+        );
+
+        let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[]).unwrap();
+        assert!(body.contains("require \"sample_tools\""), "{body}");
+        assert!(!body.contains("require \"sample-tools\""), "{body}");
     }
 
     #[test]
