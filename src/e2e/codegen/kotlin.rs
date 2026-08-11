@@ -25,6 +25,7 @@ mod stubs;
 mod test_file;
 mod test_method;
 mod values;
+mod visitor;
 
 #[cfg(test)]
 mod tests;

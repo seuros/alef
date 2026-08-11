@@ -56,10 +56,15 @@ pub(crate) fn render_snippet_body(
             type_defs,
         },
     );
-    let setup_lines = setup_lines
+    let mut setup_lines = setup_lines
         .into_iter()
         .map(|line| line.replace("MAPPER", "mapper"))
         .collect::<Vec<_>>();
+    if let Some(visitor) = &fixture.visitor
+        && let Some(visitor_args) = super::visitor::attach_visitor(&mut setup_lines, &args, visitor, config, type_defs)
+    {
+        args = visitor_args;
+    }
     if !recipe.extra_args.is_empty() {
         args = if args.is_empty() {
             recipe.extra_args.join(", ")

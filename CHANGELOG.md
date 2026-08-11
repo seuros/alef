@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Kotlin documentation snippets now implement configured visitor callbacks and attach them to conversion options.
+
 - Rust documentation snippets now preserve raw-string delimiters and declare visitor feature requirements; docs
   validation enables the crate's configured Rust features for local snippet sessions.
 
