@@ -800,14 +800,7 @@ impl Backend for WasmBackend {
         let mut content = builder.build();
         content = fix_dropped_payload_enum_option_fields(content);
 
-        for bridge in &config.trait_bridges {
-            if let Some(field_name) = bridge.resolved_options_field() {
-                let param_name = bridge.param_name.as_deref().unwrap_or(field_name);
-                let pattern = format!(".{}({}.as_ref().map(|v| &v.inner))", field_name, param_name);
-                let replacement = format!(".{}(None)", field_name);
-                content = content.replace(&pattern, &replacement);
-            }
-        }
+        content = forward_trait_bridge_builder_fields(content, &config.trait_bridges);
 
         for bridge in &config.trait_bridges {
             if bridge.bind_via != crate::core::config::BridgeBinding::OptionsField {
@@ -880,6 +873,21 @@ impl Backend for WasmBackend {
             post_build: vec![],
         })
     }
+}
+
+fn forward_trait_bridge_builder_fields(
+    mut content: String,
+    trait_bridges: &[crate::core::config::TraitBridgeConfig],
+) -> String {
+    for bridge in trait_bridges {
+        if let Some(field_name) = bridge.resolved_options_field() {
+            let param_name = bridge.param_name.as_deref().unwrap_or(field_name);
+            let pattern = format!(".{}({}.as_ref().map(|v| &v.inner))", field_name, param_name);
+            let replacement = format!(".{}({}.map(|v| (*v.inner).clone()))", field_name, param_name);
+            content = content.replace(&pattern, &replacement);
+        }
+    }
+    content
 }
 
 #[cfg(test)]

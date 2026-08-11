@@ -1,9 +1,9 @@
 use super::{
-    WasmBackend, cargo::gen_cargo_toml, fix_dropped_payload_enum_option_fields,
+    WasmBackend, cargo::gen_cargo_toml, fix_dropped_payload_enum_option_fields, forward_trait_bridge_builder_fields,
     types_needing_self_delegation_reverse_impl,
 };
 use crate::core::backend::Backend;
-use crate::core::config::{NewAlefConfig, ResolvedCrateConfig};
+use crate::core::config::{BridgeBinding, NewAlefConfig, ResolvedCrateConfig, TraitBridgeConfig};
 use crate::core::ir::{ApiSurface, FieldDef, MethodDef, PrimitiveType, ReceiverKind, TypeDef, TypeRef};
 
 fn empty_api() -> ApiSurface {
@@ -335,6 +335,27 @@ fn test_visitor_field_substitution_in_post_process() {
         !content.contains("visitor: Default::default(),\n            ..Default::default()"),
         "Unreplaced visitor: Default::default() with 12 spaces still present"
     );
+}
+
+#[test]
+fn trait_bridge_builder_field_forwards_the_handle() {
+    let bridge = TraitBridgeConfig {
+        trait_name: "Renderer".to_string(),
+        param_name: Some("renderer".to_string()),
+        bind_via: BridgeBinding::OptionsField,
+        options_type: Some("RenderOptions".to_string()),
+        options_field: Some("renderer".to_string()),
+        ..Default::default()
+    };
+    let content = "core_options.renderer(renderer.as_ref().map(|v| &v.inner));".to_string();
+
+    let generated = forward_trait_bridge_builder_fields(content, &[bridge]);
+
+    assert_eq!(
+        generated,
+        "core_options.renderer(renderer.map(|v| (*v.inner).clone()));"
+    );
+    assert!(!generated.contains(".renderer(None)"));
 }
 
 #[test]

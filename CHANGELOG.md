@@ -32,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Generated Python and R visitor snippets now serialize callback actions with canonical lowercase wire tags and the
   adjacent `output` payload expected by visitor bridges.
 
+- Generated WASM options-field visitor bridges now forward configured visitor handles instead of replacing them with
+  `None` in input builders.
+
 - Generated E2E assertions now preserve raw and whitespace-sensitive string semantics, enforce case-sensitive C#
   containment, validate content for `not_empty`, and fail null values instead of allowing vacuous matches.
 
