@@ -32,6 +32,9 @@ pub(crate) fn render_snippet_body(
     let class_name = overrides
         .and_then(|value| value.class.as_deref())
         .unwrap_or(&config.name)
+        .rsplit('.')
+        .next()
+        .unwrap_or(&config.name)
         .to_upper_camel_case();
     let function_name = overrides
         .and_then(|value| value.function.as_deref())
@@ -72,7 +75,7 @@ pub(crate) fn render_snippet_body(
             .and_then(|value| value.client_factory.as_deref())
     });
     let needs_mapper = setup_lines.iter().any(|line| line.contains("mapper"));
-    let is_async = client_factory.is_some() || kotlin_android_style || call.r#async;
+    let is_async = client_factory.is_some() || call.r#async;
     let package_name = if kotlin_android_style {
         config
             .kotlin_android
@@ -149,6 +152,44 @@ mod tests {
         assert!(body.contains("fun main()"));
         assert!(!body.contains("@Test"));
         assert!(!body.contains("assert"));
+    }
+
+    #[test]
+    fn android_snippet_uses_simple_class_name_and_sync_main() {
+        let mut call = CallConfig {
+            function: "convert".into(),
+            result_var: "result".into(),
+            ..CallConfig::default()
+        };
+        call.overrides.insert(
+            "kotlin_android".into(),
+            CallOverride {
+                class: Some("dev.sample.SampleApi".into()),
+                ..CallOverride::default()
+            },
+        );
+        let mut config = ResolvedCrateConfig::default();
+        config.kotlin_android = Some(crate::core::config::KotlinAndroidConfig {
+            package: Some("dev.sample".into()),
+            ..Default::default()
+        });
+
+        let body = render_snippet_body(
+            &fixture(),
+            &E2eConfig {
+                call,
+                ..E2eConfig::default()
+            },
+            &config,
+            &[],
+            true,
+        );
+
+        assert!(body.contains("import dev.sample.*"), "{body}");
+        assert!(body.contains("SampleApi.convert()"), "{body}");
+        assert!(body.contains("fun main() {"), "{body}");
+        assert!(!body.contains("runBlocking"), "{body}");
+        assert!(!body.contains("DevSampleSampleApi"), "{body}");
     }
 
     #[test]
