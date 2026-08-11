@@ -395,23 +395,28 @@ fn push_poly_elixir_excludes(args: &mut Vec<String>) {
 /// reformats (`run_tests.php`, `download_ffi.sh`, `mvnw`, `gradlew`, …) — which
 /// poly's own `file-safety` lint then rejects on the next commit.
 pub(crate) fn poly_format(paths: &[PathBuf], config_start: &Path) {
+    if let Err(error) = poly_format_strict(paths, config_start) {
+        warn!("poly fmt failed (non-fatal): {error}");
+    }
+}
+
+pub(crate) fn poly_format_strict(paths: &[PathBuf], config_start: &Path) -> anyhow::Result<()> {
     if paths.is_empty() {
-        return;
+        return Ok(());
     }
     if !is_tool_available("poly") {
-        warn!("poly not found on PATH (skipping post-generation formatting)");
-        return;
+        anyhow::bail!("poly not found on PATH; generated output cannot be formatted");
     }
     let executable_modes = snapshot_executable_modes(paths);
     let mut args: Vec<String> = vec!["fmt".to_owned(), "--fix".to_owned()];
     args.extend(paths.iter().map(|path| path.to_string_lossy().into_owned()));
     push_poly_elixir_excludes(&mut args);
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    match run_poly_formatter(&arg_refs, config_start) {
-        Ok(()) => debug!("poly fmt over {} path(s) ok", paths.len()),
-        Err(e) => warn!("poly fmt failed (non-fatal): {e}"),
-    }
+    let result = run_poly_formatter(&arg_refs, config_start);
     restore_executable_modes(&executable_modes);
+    result?;
+    debug!("poly fmt over {} path(s) ok", paths.len());
+    Ok(())
 }
 
 fn run_poly_formatter(args: &[&str], work_dir: &Path) -> anyhow::Result<()> {

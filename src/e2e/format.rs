@@ -4,8 +4,8 @@
 //! the same tool the main generate pipeline uses (see `cli::pipeline::format`).
 //! For each language directory that had files generated, `run_formatters` runs a
 //! single `poly fmt --fix` pass, which formats every language poly supports
-//! (Python via ruff, JS/TS/JSON via oxc, Rust via rustfmt, Go via gofmt, …). A
-//! missing `poly` binary is a best-effort no-op.
+//! (Python via ruff, JS/TS/JSON via oxc, Rust via rustfmt, Go via gofmt, …).
+//! Missing or failing formatters abort generation.
 //!
 //! Two escape hatches remain:
 //! * a per-language `E2eConfig.format` override (`sh -c`, with `{dir}` expanded)
@@ -15,6 +15,7 @@
 
 use crate::core::backend::GeneratedFile;
 use crate::e2e::config::E2eConfig;
+use anyhow::Context as _;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tracing::warn;
@@ -24,9 +25,9 @@ use tracing::warn;
 /// E2e files are written to `{output}/{lang}/...`, so the language is the first
 /// path component after the output prefix. For each language directory: a user
 /// `E2eConfig.format[lang]` override runs as a shell command (`{dir}` expanded);
-/// otherwise poly formats the directory in-process. Failures are logged as
-/// warnings and never abort the process.
-pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) {
+/// otherwise poly formats the directory in-process. Formatter failures abort
+/// generation.
+pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) -> anyhow::Result<()> {
     let output_prefix = Path::new(e2e_config.effective_output());
     let languages: HashSet<String> = files
         .iter()
@@ -45,7 +46,7 @@ pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) {
         if let Some(custom) = e2e_config.format.get(lang.as_str()) {
             let cmd = custom.replace("{dir}", &dir);
             tracing::debug!("Formatting {lang}: {cmd}");
-            run_shell(&cmd, lang);
+            run_shell(&cmd, lang)?;
             continue;
         }
 
@@ -53,12 +54,12 @@ pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) {
         // from `dir_path` for a `poly.toml` (falling back to poly's zero-config
         // defaults when none is found).
         tracing::debug!("Formatting {lang} with poly: {dir}");
-        crate::cli::pipeline::poly_format(std::slice::from_ref(&dir_path), &dir_path);
+        crate::cli::pipeline::poly_format_strict(std::slice::from_ref(&dir_path), &dir_path)?;
 
         // Residual: `go mod tidy` populates `go.sum` from `go.mod` (poly cannot —
         // it is dependency resolution, not formatting) so the Go suite builds.
         if lang == "go" {
-            run_go_mod_tidy(&dir);
+            run_go_mod_tidy(&dir)?;
         }
 
         // Residual: `mix format` is the SOLE formatter for `.ex`/`.exs` — the poly
@@ -66,7 +67,7 @@ pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) {
         // this the generated Elixir suite is never formatted at all and ships with
         // the emitter's unwrapped long lines.
         if lang == "elixir" {
-            run_mix_format(&dir);
+            run_mix_format(&dir)?;
         }
     }
 
@@ -82,6 +83,7 @@ pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) {
             warn!("failed to restore exec bit on {}: {e}", file.path.display());
         }
     }
+    Ok(())
 }
 
 /// Format files restored from the generation-stage cache.
@@ -90,7 +92,11 @@ pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) {
 /// consumer root. Rebuilding the lightweight file descriptors keeps cache hits on
 /// the same formatter path as fresh generation, including custom format commands
 /// and executable-bit restoration. ~keep
-pub fn run_formatters_for_cached_paths(paths: &[PathBuf], base_dir: &Path, e2e_config: &E2eConfig) {
+pub fn run_formatters_for_cached_paths(
+    paths: &[PathBuf],
+    base_dir: &Path,
+    e2e_config: &E2eConfig,
+) -> anyhow::Result<()> {
     let output_is_absolute = Path::new(e2e_config.effective_output()).is_absolute();
     let files: Vec<GeneratedFile> = paths
         .iter()
@@ -108,32 +114,31 @@ pub fn run_formatters_for_cached_paths(paths: &[PathBuf], base_dir: &Path, e2e_c
             })
         })
         .collect();
-    run_formatters(&files, e2e_config);
+    run_formatters(&files, e2e_config)
 }
 
-/// Run a best-effort shell command; log non-success as a warning.
-fn run_shell(cmd: &str, lang: &str) {
+fn run_shell(cmd: &str, lang: &str) -> anyhow::Result<()> {
     match std::process::Command::new("sh").args(["-c", cmd]).status() {
-        Ok(s) if s.success() => {}
-        Ok(s) => warn!("Formatter for {lang} exited with {s}: {cmd}"),
-        Err(e) => warn!("Failed to run formatter for {lang}: {e}"),
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => anyhow::bail!("formatter for {lang} exited with {status}: {cmd}"),
+        Err(error) => Err(error).with_context(|| format!("failed to run formatter for {lang}: {cmd}")),
     }
 }
 
-/// Populate `go.sum` from `go.mod` in the e2e Go directory. Best-effort.
-fn run_go_mod_tidy(dir: &str) {
+/// Populate `go.sum` from `go.mod` in the e2e Go directory.
+fn run_go_mod_tidy(dir: &str) -> anyhow::Result<()> {
     let cmd = format!("(cd {dir} && go mod tidy)");
-    run_shell(&cmd, "go");
+    run_shell(&cmd, "go")
 }
 
-/// Format `.ex`/`.exs` in the e2e Elixir directory with `mix format`. Best-effort.
+/// Format `.ex`/`.exs` in the e2e Elixir directory with `mix format`.
 ///
 /// Must run from `dir` so mix reads that project's own `.formatter.exs` (emitted
 /// alongside `mix.exs`) — a bare `mix format` has no `inputs:` without it. That
 /// file deliberately omits `import_deps`, so this needs no prior `mix deps.get`.
-fn run_mix_format(dir: &str) {
+fn run_mix_format(dir: &str) -> anyhow::Result<()> {
     let cmd = format!("(cd {dir} && mix format)");
-    run_shell(&cmd, "elixir");
+    run_shell(&cmd, "elixir")
 }
 
 #[cfg(test)]
@@ -171,16 +176,15 @@ mod tests {
         }];
 
         assert!(!sentinel.exists());
-        run_formatters(&files, &e2e_config);
+        run_formatters(&files, &e2e_config).unwrap();
         assert!(
             sentinel.exists(),
             "user override command must run with {{dir}} expanded"
         );
     }
 
-    /// The default path shells out to `poly fmt --fix`. When `poly` is installed a
-    /// badly-spaced Python file ends up ruff-formatted; when it is absent the pass
-    /// is a best-effort no-op (file untouched, no panic).
+    /// The default path shells out to `poly fmt --fix` and rejects an unavailable
+    /// formatter instead of accepting noncanonical output.
     #[test]
     fn default_path_formats_python_with_poly() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -198,17 +202,39 @@ mod tests {
             generated_header: false,
         }];
 
-        run_formatters(&files, &e2e_config);
-
-        let formatted = std::fs::read_to_string(&py).unwrap();
         if which::which("poly").is_ok() {
+            run_formatters(&files, &e2e_config).unwrap();
+            let formatted = std::fs::read_to_string(&py).unwrap();
             assert_eq!(
                 formatted, "x = 1\n",
                 "with poly installed, `poly fmt --fix` must reformat the e2e Python file"
             );
         } else {
-            assert_eq!(formatted, "x=1", "without poly the file must be left untouched");
+            assert!(run_formatters(&files, &e2e_config).is_err());
         }
+    }
+
+    #[test]
+    fn unavailable_configured_formatter_aborts_generation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = dir.path().join("e2e-out");
+        std::fs::create_dir_all(out.join("python")).unwrap();
+        let py = out.join("python/main.py");
+        std::fs::write(&py, "x = 1\n").unwrap();
+
+        let mut e2e_config = e2e_config_for(&out);
+        e2e_config.format.insert(
+            "python".to_owned(),
+            "alef_formatter_that_does_not_exist {dir}".to_owned(),
+        );
+        let files = vec![GeneratedFile {
+            path: py,
+            content: "x = 1\n".to_owned(),
+            generated_header: false,
+        }];
+
+        let error = run_formatters(&files, &e2e_config).expect_err("missing formatter must fail generation");
+        assert!(error.to_string().contains("formatter for python exited"));
     }
 
     #[test]
@@ -220,13 +246,12 @@ mod tests {
         std::fs::write(&py, "x=1").unwrap();
 
         let e2e_config = e2e_config_for(&out);
-        run_formatters_for_cached_paths(std::slice::from_ref(&py), dir.path(), &e2e_config);
-
-        let formatted = std::fs::read_to_string(&py).unwrap();
         if which::which("poly").is_ok() {
+            run_formatters_for_cached_paths(std::slice::from_ref(&py), dir.path(), &e2e_config).unwrap();
+            let formatted = std::fs::read_to_string(&py).unwrap();
             assert_eq!(formatted, "x = 1\n");
         } else {
-            assert_eq!(formatted, "x=1");
+            assert!(run_formatters_for_cached_paths(std::slice::from_ref(&py), dir.path(), &e2e_config).is_err());
         }
     }
 
@@ -256,7 +281,7 @@ mod tests {
             generated_header: false,
         }];
 
-        run_formatters(&files, &e2e_config);
+        run_formatters(&files, &e2e_config).unwrap();
 
         let mode = std::fs::metadata(&script).unwrap().permissions().mode();
         assert!(
@@ -293,10 +318,10 @@ mod tests {
             generated_header: false,
         }];
 
-        run_formatters(&files, &e2e_config);
-
+        let result = run_formatters(&files, &e2e_config);
         let formatted = std::fs::read_to_string(&test_file).unwrap();
-        if which::which("mix").is_ok() {
+        if which::which("poly").is_ok() && which::which("mix").is_ok() {
+            result.unwrap();
             assert_ne!(
                 formatted, unformatted,
                 "with mix installed, the elixir residual must reformat the over-long call"
@@ -306,6 +331,7 @@ mod tests {
                 "mix must wrap the over-long call onto its own line, got:\n{formatted}"
             );
         } else {
+            assert!(result.is_err());
             assert_eq!(formatted, unformatted, "without mix the file must be left untouched");
         }
     }
@@ -327,7 +353,11 @@ mod tests {
             generated_header: false,
         }];
 
-        // Must complete without panicking.
-        run_formatters(&files, &e2e_config);
+        let result = run_formatters(&files, &e2e_config);
+        if which::which("poly").is_ok() {
+            result.unwrap();
+        } else {
+            assert!(result.is_err());
+        }
     }
 }

@@ -279,7 +279,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     if !clean && cache::is_stage_cached(&resolved_cfg.name, "e2e", &e2e_stage_hash) {
                         tracing::info!("  [e2e] up to date (skipping)");
                         let cached_paths = cache::read_stage_paths(&resolved_cfg.name, "e2e");
-                        crate::e2e::format::run_formatters_for_cached_paths(&cached_paths, &base_dir, e2e_config);
+                        crate::e2e::format::run_formatters_for_cached_paths(&cached_paths, &base_dir, e2e_config)?;
                         for path in cached_paths {
                             current_gen_paths.insert(path);
                         }
@@ -294,7 +294,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             &api.functions,
                         )?;
                         e2e_count = pipeline::write_scaffold_files_with_overwrite(&files, &base_dir, true)?;
-                        crate::e2e::format::run_formatters(&files, e2e_config);
+                        crate::e2e::format::run_formatters(&files, e2e_config)?;
 
                         let output_paths: Vec<PathBuf> = files.iter().map(|f| base_dir.join(&f.path)).collect();
                         let path_set: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
@@ -320,7 +320,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             &cached_paths,
                             &base_dir,
                             &registry_e2e_config,
-                        );
+                        )?;
                         for path in cached_paths {
                             current_gen_paths.insert(path);
                         }
@@ -340,7 +340,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         )?;
                         let test_apps_count = pipeline::write_scaffold_files_with_overwrite(&files, &base_dir, true)?;
                         e2e_count += test_apps_count;
-                        crate::e2e::format::run_formatters(&files, registry_e2e_ref);
+                        crate::e2e::format::run_formatters(&files, registry_e2e_ref)?;
 
                         let output_paths: Vec<PathBuf> = files.iter().map(|f| base_dir.join(&f.path)).collect();
                         let path_set: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();

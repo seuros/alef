@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- E2E and registry test-app generation now fails when a configured formatter is unavailable or exits unsuccessfully,
+  preventing noncanonical generated output from being reported as successful.
+
 - Generated TypeScript and WebAssembly E2E error tests now assert the error value a fixture declares, matching it
   against either the error's message or its `name`. `.rejects.toThrow(regex)` only inspects the message, so the
   disjunction is expressed with a `toSatisfy` predicate; declared values are escaped for regex-literal context.
