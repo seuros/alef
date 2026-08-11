@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Go documentation snippets now honor shared pointer-option configuration and print structured result fields.
 
+- Generated-file manifests are deterministic and newline-terminated, empty manifests invalidate the cache, and
+  `alef verify` now detects edits to individual generated file bodies.
+
+- Rustler binding structs now raw-escape Rust keyword field names such as `type`, including constructors and tagged
+  enum conversions.
+
+- Generated Python and R visitor snippets now serialize callback actions with canonical lowercase wire tags and the
+  adjacent `output` payload expected by visitor bridges.
+
 - Generated E2E assertions now preserve raw and whitespace-sensitive string semantics, enforce case-sensitive C#
   containment, validate content for `not_empty`, and fail null values instead of allowing vacuous matches.
 
