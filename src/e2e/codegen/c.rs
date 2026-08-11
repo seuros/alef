@@ -459,12 +459,28 @@ fn resolve_call_info(call: &CallConfig, lang: &str, functions: &[crate::core::ir
     // pattern used by Java / PHP / etc.).
     let result_is_bytes = call.result_is_bytes || overrides.is_some_and(|o| o.result_is_bytes);
     let extra_args = overrides.map(|o| o.extra_args.clone()).unwrap_or_default();
+    let mut args = call.args.clone();
+    if let Some(function) = functions.iter().find(|function| function.name == call.function) {
+        for (index, arg) in args.iter_mut().enumerate() {
+            if arg.element_type.is_some() || arg.arg_type != "json_object" {
+                continue;
+            }
+            let parameter = function
+                .params
+                .iter()
+                .find(|parameter| parameter.name == arg.name)
+                .or_else(|| function.params.get(index));
+            arg.element_type = parameter
+                .and_then(|parameter| named_type(&parameter.ty))
+                .map(str::to_string);
+        }
+    }
     ResolvedCallInfo {
         function_name,
         result_type_name,
         options_type_name,
         client_factory,
-        args: call.args.clone(),
+        args,
         raw_c_result_type,
         c_free_fn,
         c_engine_factory,
@@ -473,6 +489,14 @@ fn resolve_call_info(call: &CallConfig, lang: &str, functions: &[crate::core::ir
         result_is_bytes,
         streaming: call.streaming_enabled(),
         extra_args,
+    }
+}
+
+fn named_type(type_ref: &crate::core::ir::TypeRef) -> Option<&str> {
+    match type_ref {
+        crate::core::ir::TypeRef::Named(name) => Some(name),
+        crate::core::ir::TypeRef::Optional(inner) | crate::core::ir::TypeRef::Vec(inner) => named_type(inner),
+        _ => None,
     }
 }
 

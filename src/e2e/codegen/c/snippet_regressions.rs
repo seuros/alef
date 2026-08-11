@@ -1,5 +1,5 @@
 use super::*;
-use crate::core::ir::{FunctionDef, TypeRef};
+use crate::core::ir::{FunctionDef, ParamDef, TypeRef};
 
 fn json_arg(name: &str, field: &str, element_type: &str) -> crate::e2e::config::ArgMapping {
     crate::e2e::config::ArgMapping {
@@ -102,7 +102,10 @@ fn multiple_typed_args_and_ir_return_shape_match_the_public_abi() {
     e2e.call.options_type = Some("ObsoleteOptions".into());
     e2e.call.args = vec![
         json_arg("source", "input.source", "SourceInput"),
-        json_arg("settings", "input.settings", "ConvertSettings"),
+        crate::e2e::config::ArgMapping {
+            element_type: None,
+            ..json_arg("settings", "input.settings", "ConvertSettings")
+        },
     ];
     e2e.call.overrides.insert(
         "c".into(),
@@ -113,6 +116,18 @@ fn multiple_typed_args_and_ir_return_shape_match_the_public_abi() {
     );
     let functions = [FunctionDef {
         name: "convert".into(),
+        params: vec![
+            ParamDef {
+                name: "source".into(),
+                ty: TypeRef::Named("SourceInput".into()),
+                ..ParamDef::default()
+            },
+            ParamDef {
+                name: "settings".into(),
+                ty: TypeRef::Optional(Box::new(TypeRef::Named("ConvertSettings".into()))),
+                ..ParamDef::default()
+            },
+        ],
         return_type: TypeRef::Named("ConversionReceipt".into()),
         ..FunctionDef::default()
     }];
