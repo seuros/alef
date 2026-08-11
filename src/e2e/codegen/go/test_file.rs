@@ -20,6 +20,14 @@ pub(super) struct GoTestFileContext<'a> {
     pub(super) enums: &'a [crate::core::ir::EnumDef],
 }
 
+/// Whether a fixture's `error` assertion declares a value, meaning the generated
+/// `expects_error` branch will emit `fmt.Sprintf` and therefore requires the `fmt`
+/// import — independent of the pre-existing visitor `CustomTemplate` heuristic.
+fn fixture_needs_fmt_for_declared_error_value(fixture: &Fixture) -> bool {
+    fixture.assertions.iter().any(|a| a.assertion_type == "error")
+        && crate::e2e::codegen::declared_error_value(fixture).is_some()
+}
+
 pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], context: GoTestFileContext<'_>) -> String {
     let GoTestFileContext {
         go_module_path,
@@ -159,7 +167,7 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], context: G
                 }
             })
         })
-    });
+    }) || fixtures.iter().any(|f| fixture_needs_fmt_for_declared_error_value(f));
 
     let needs_strings = fixtures.iter().any(|f| {
         if !emits_executable_test(f) {
@@ -301,4 +309,48 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], context: G
         out.push('\n');
     }
     out
+}
+
+#[cfg(test)]
+mod fmt_import_tests {
+    use super::fixture_needs_fmt_for_declared_error_value;
+    use crate::e2e::fixture::{Assertion, Fixture};
+
+    fn error_fixture(value: Option<serde_json::Value>) -> Fixture {
+        Fixture {
+            assertions: vec![Assertion {
+                assertion_type: "error".to_string(),
+                field: None,
+                value,
+                values: None,
+                method: None,
+                check: None,
+                args: None,
+                return_type: None,
+            }],
+            ..Fixture::default()
+        }
+    }
+
+    #[test]
+    fn declared_error_value_requires_fmt_import() {
+        let fixture = error_fixture(Some(serde_json::Value::String("SomeExpectedError".to_string())));
+
+        assert!(fixture_needs_fmt_for_declared_error_value(&fixture));
+    }
+
+    #[test]
+    fn undeclared_error_value_does_not_require_fmt_import() {
+        let fixture = error_fixture(None);
+
+        assert!(!fixture_needs_fmt_for_declared_error_value(&fixture));
+    }
+
+    #[test]
+    fn non_error_assertion_does_not_require_fmt_import() {
+        let mut fixture = error_fixture(Some(serde_json::Value::String("SomeExpectedError".to_string())));
+        fixture.assertions[0].assertion_type = "contains".to_string();
+
+        assert!(!fixture_needs_fmt_for_declared_error_value(&fixture));
+    }
 }

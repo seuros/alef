@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated Go E2E error tests now assert the error value a fixture declares, matching it against either the error's
+  message or its concrete type, instead of only checking that some error occurred.
+
 - Generated C E2E error tests now fail when the call unexpectedly succeeds. Fixtures whose call used a
   `raw_c_result_type` emitted no error check at all, so the test passed regardless of outcome. Unmodeled result types
   fall back to asserting a non-zero `last_error_code()` rather than emitting nothing.

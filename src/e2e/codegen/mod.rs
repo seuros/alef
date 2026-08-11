@@ -191,6 +191,23 @@ pub(crate) fn mock_url_env_key(fixture_id: &str) -> String {
     format!("MOCK_SERVER_{}", fixture_id.to_uppercase())
 }
 
+/// The error text an `error` assertion declares, if any.
+///
+/// ~keep Backends must match this against the rendered message **or** the exception/
+/// variant name, never message-only. Fixture authors use both conventions: config
+/// validation fixtures name a field that appears in user-facing message text and never
+/// in a type name, while API-error fixtures name a type prefix such as `Authentication`
+/// that never appears in the message. The disjunction is what lets one codegen path
+/// serve both, and narrowing it silently breaks whichever convention it drops.
+pub(crate) fn declared_error_value(fixture: &crate::e2e::fixture::Fixture) -> Option<&str> {
+    fixture
+        .assertions
+        .iter()
+        .find(|assertion| assertion.assertion_type == "error")
+        .and_then(|assertion| assertion.value.as_ref())
+        .and_then(serde_json::Value::as_str)
+}
+
 /// Trait for per-language e2e test code generation.
 pub trait E2eCodegen: Send + Sync {
     /// Generate all e2e test project files for this language.

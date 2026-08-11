@@ -12,6 +12,34 @@ use super::client;
 use super::setup::build_args_and_setup;
 use super::visitors::visitor_struct_name;
 
+/// Emit the message-or-type-name check for a fixture's declared `error` assertion value.
+///
+/// No-op when `declared` is `None`, leaving the `expects_error` branch's output unchanged
+/// from before this check existed.
+///
+/// ~keep Mirrors the Rust/Python backends' disjunction (see
+/// `crate::e2e::codegen::declared_error_value`): fixture authors name either a message
+/// substring (config-validation fixtures) or a type-name prefix (API-error fixtures) in
+/// the assertion's value, never both conventions at once. Checking `err.Error()` OR
+/// `fmt.Sprintf("%T", err)` lets this single code path serve both.
+fn emit_declared_error_value_assertion(out: &mut String, declared: Option<&str>) {
+    let Some(declared) = declared else {
+        return;
+    };
+    let expected = go_string_literal(declared);
+    let _ = writeln!(out, "\tif err != nil {{");
+    let _ = writeln!(
+        out,
+        "\t\tif !strings.Contains(err.Error(), {expected}) && !strings.Contains(fmt.Sprintf(\"%T\", err), {expected}) {{"
+    );
+    let _ = writeln!(
+        out,
+        "\t\t\tt.Errorf(\"expected error to match %s, got message=%q type=%T\", {expected}, err.Error(), err)"
+    );
+    let _ = writeln!(out, "\t\t}}");
+    let _ = writeln!(out, "\t}}");
+}
+
 /// Map a trait name to its Clear* function name.
 /// E.g., "DocumentExtractor" -> "ClearDocumentExtractors"
 fn clear_function_for_trait(trait_name: &str) -> Option<String> {
@@ -333,6 +361,7 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
         let _ = writeln!(out, "\tif err == nil {{");
         let _ = writeln!(out, "\t\tt.Errorf(\"expected an error, but call succeeded\")");
         let _ = writeln!(out, "\t}}");
+        emit_declared_error_value_assertion(out, crate::e2e::codegen::declared_error_value(fixture));
         emit_trait_bridge_cleanup(out, fixture, base_function_name, import_alias);
         let _ = writeln!(out, "}}");
         return;
@@ -870,5 +899,49 @@ impl client::TestClientRenderer for GoTestClientRenderer {
             let _ = writeln!(out, "\t\t}}");
             let _ = writeln!(out, "\t}}");
         }
+    }
+}
+
+#[cfg(test)]
+mod declared_error_value_tests {
+    use super::emit_declared_error_value_assertion;
+
+    #[test]
+    fn declared_value_emits_message_or_type_check() {
+        let mut out = String::new();
+
+        emit_declared_error_value_assertion(&mut out, Some("SomeExpectedError"));
+
+        assert_eq!(
+            out,
+            "\tif err != nil {\n\
+             \t\tif !strings.Contains(err.Error(), `SomeExpectedError`) && !strings.Contains(fmt.Sprintf(\"%T\", err), `SomeExpectedError`) {\n\
+             \t\t\tt.Errorf(\"expected error to match %s, got message=%q type=%T\", `SomeExpectedError`, err.Error(), err)\n\
+             \t\t}\n\
+             \t}\n"
+        );
+    }
+
+    #[test]
+    fn no_declared_value_emits_nothing() {
+        let mut out = String::new();
+
+        emit_declared_error_value_assertion(&mut out, None);
+
+        assert_eq!(out, "", "no declared error value must leave output unchanged");
+        assert!(!out.contains("strings."), "must not reference strings package");
+        assert!(!out.contains("fmt."), "must not reference fmt package");
+    }
+
+    #[test]
+    fn declared_value_is_escaped_for_go_string_literal() {
+        let mut out = String::new();
+
+        emit_declared_error_value_assertion(&mut out, Some("contains \"quotes\" and a backtick `"));
+
+        assert!(
+            out.contains("\"contains \\\"quotes\\\" and a backtick `\""),
+            "expected escaped double-quoted literal, got: {out}"
+        );
     }
 }
