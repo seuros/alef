@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Zig documentation snippets now render directly as executable bodies, retain owned-result cleanup, and avoid test-only
+  aliases and unmatched delimiters.
+
 - Go documentation snippets now honor shared pointer-option configuration and print structured result fields.
 
 - Generated-file manifests are deterministic and newline-terminated, empty manifests invalidate the cache, and
