@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated E2E assertions now preserve raw and whitespace-sensitive string semantics, enforce case-sensitive C#
+  containment, validate content for `not_empty`, and fail null values instead of allowing vacuous matches.
+
 - Generated Elixir NIFs no longer expose a process-wide environment mutation helper, avoiding unsafe concurrent
   `setenv` access from BEAM scheduler threads.
 
