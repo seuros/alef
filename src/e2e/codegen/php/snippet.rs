@@ -216,6 +216,24 @@ mod tests {
     }
 
     #[test]
+    fn renders_strict_executable_with_composer_autoload() {
+        let fixture = Fixture {
+            id: "sample".into(),
+            description: "Sample".into(),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "load_document".into();
+        let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[]).unwrap();
+
+        assert!(body.contains("declare(strict_types=1);"), "{body}");
+        assert!(
+            body.contains("require_once __DIR__ . '/vendor/autoload.php';"),
+            "{body}"
+        );
+    }
+
+    #[test]
     fn expected_error_snippet_handles_the_exception() {
         let mut fixture = Fixture {
             id: "invalid".into(),
