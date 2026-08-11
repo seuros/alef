@@ -52,6 +52,7 @@ pub(crate) fn gen_native_lib(
             !b.exclude_languages
                 .contains(&crate::core::config::Language::Java.to_string())
         })
+        .filter(|bridge| !(has_visitor_pattern && bridge.bind_via == BridgeBinding::OptionsField))
         .flat_map(|b| {
             let trait_snake = b.trait_name.to_snake_case();
             let trait_upper = trait_snake.to_uppercase();
@@ -367,6 +368,9 @@ pub(crate) fn gen_native_lib(
             .exclude_languages
             .contains(&crate::core::config::Language::Java.to_string())
         {
+            continue;
+        }
+        if has_visitor_pattern && bridge_cfg.bind_via == BridgeBinding::OptionsField {
             continue;
         }
 

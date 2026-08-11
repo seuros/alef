@@ -279,6 +279,8 @@ pub fn gen_native_methods_visitor(
     use minijinja::Value;
 
     let fn_options_set = format!("{prefix}_options_set_{options_field}");
+    let fn_visitor_create = format!("{prefix}_visitor_create");
+    let fn_visitor_free = format!("{prefix}_visitor_free");
     let bridge_name = crate::codegen::naming::csharp_type_name(trait_name) + "Bridge";
     let options_name = crate::codegen::naming::csharp_type_name(options_type);
     let field_name = crate::codegen::naming::to_csharp_name(options_field);
@@ -288,6 +290,8 @@ pub fn gen_native_methods_visitor(
         "native_methods_visitor.jinja",
         Value::from_serialize(serde_json::json!({
             "fn_options_set": fn_options_set,
+            "fn_visitor_create": fn_visitor_create,
+            "fn_visitor_free": fn_visitor_free,
             "bridge_name": bridge_name,
             "options_name": options_name,
             "field_name": field_name,
@@ -296,7 +300,6 @@ pub fn gen_native_methods_visitor(
 
     let _ = namespace;
     let _ = lib_name;
-    let _ = prefix;
     let _ = trait_name;
     out
 }
@@ -433,7 +436,7 @@ fn named_type_name(ty: &crate::core::ir::TypeRef) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{callback_specs_from_trait, gen_visitor_files};
+    use super::{callback_specs_from_trait, gen_native_methods_visitor, gen_visitor_files};
     use crate::core::config::TraitBridgeConfig;
     use crate::core::ir::{
         ApiSurface, EnumDef, EnumVariant, FieldDef, MethodDef, ParamDef, PrimitiveType, ReceiverKind, TypeDef, TypeRef,
@@ -475,6 +478,22 @@ mod tests {
         let files = gen_visitor_files("Sample", &api, &bridge_cfg, trait_def);
 
         assert!(files.is_empty());
+    }
+
+    #[test]
+    fn native_visitor_methods_use_configured_ffi_symbols() {
+        let output = gen_native_methods_visitor(
+            "Sample",
+            "sample_native",
+            "sample",
+            "MarkupVisitor",
+            "RenderOptions",
+            "renderer",
+        );
+
+        assert!(output.contains("EntryPoint = \"sample_visitor_create\""));
+        assert!(output.contains("EntryPoint = \"sample_visitor_free\""));
+        assert!(!output.contains("htm_"));
     }
 
     #[test]

@@ -633,4 +633,24 @@ mod tests {
         assert!(!output.contains("SAMPLE_FREE_BYTES"));
         assert!(!output.contains("sample_free_bytes"));
     }
+
+    #[test]
+    fn native_library_uses_legacy_visitor_symbols_without_phantom_registry_handles() {
+        let config = ResolvedCrateConfig {
+            trait_bridges: vec![TraitBridgeConfig {
+                trait_name: "MarkupVisitor".to_string(),
+                bind_via: BridgeBinding::OptionsField,
+                options_type: Some("RenderOptions".to_string()),
+                options_field: Some("renderer".to_string()),
+                ..TraitBridgeConfig::default()
+            }],
+            ..ResolvedCrateConfig::default()
+        };
+        let output = gen_native_lib(&ApiSurface::default(), &config, "dev.sample", "sample", true);
+
+        assert!(output.contains("sample_visitor_create"));
+        assert!(output.contains("sample_visitor_free"));
+        assert!(!output.contains("sample_register_markup_visitor"));
+        assert!(!output.contains("SAMPLE_REGISTER_MARKUP_VISITOR"));
+    }
 }

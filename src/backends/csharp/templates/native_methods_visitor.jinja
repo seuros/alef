@@ -1,10 +1,10 @@
 
     // Visitor FFI ({{ bridge_name }})
-    [DllImport(LibName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "htm_visitor_create")]
-    internal static extern IntPtr HtmVisitorCreate(IntPtr callbacksPtr);
+    [DllImport(LibName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "{{ fn_visitor_create }}")]
+    internal static extern IntPtr VisitorCreate(IntPtr callbacksPtr);
 
-    [DllImport(LibName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "htm_visitor_free")]
-    internal static extern void HtmVisitorFree(IntPtr visitor);
+    [DllImport(LibName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "{{ fn_visitor_free }}")]
+    internal static extern void VisitorFree(IntPtr visitor);
 
     [DllImport(LibName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "{{ fn_options_set }}")]
     internal static extern void {{ options_name }}Set{{ field_name }}(IntPtr options, IntPtr visitor);

@@ -426,12 +426,19 @@ pub(super) fn gen_native_methods(
     ));
     out.push_str("    internal static extern void FreeString(IntPtr ptr);\n\n");
 
-    let free_bytes_entry = format!("{prefix}_free_bytes");
-    out.push_str(&render(
-        "dll_import_attr.jinja",
-        minijinja::context! { entry_point => &free_bytes_entry },
-    ));
-    out.push_str("    internal static extern void FreeBytes(IntPtr ptr, UIntPtr len, UIntPtr cap);\n");
+    let has_bytes_results = api.functions.iter().any(is_bytes_result_func)
+        || api
+            .types
+            .iter()
+            .any(|typ| typ.methods.iter().any(is_bytes_result_method));
+    if has_bytes_results {
+        let free_bytes_entry = format!("{prefix}_free_bytes");
+        out.push_str(&render(
+            "dll_import_attr.jinja",
+            minijinja::context! { entry_point => &free_bytes_entry },
+        ));
+        out.push_str("    internal static extern void FreeBytes(IntPtr ptr, UIntPtr len, UIntPtr cap);\n");
+    }
 
     if has_visitor_callbacks {
         out.push('\n');
@@ -456,6 +463,9 @@ pub(super) fn gen_native_methods(
 
         let bridges: Vec<_> = trait_bridges
             .iter()
+            .filter(|config| {
+                !(has_visitor_callbacks && config.bind_via == crate::core::config::BridgeBinding::OptionsField)
+            })
             .filter_map(|config| {
                 let trait_name = config.trait_name.clone();
                 trait_defs
