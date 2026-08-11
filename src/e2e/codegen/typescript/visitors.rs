@@ -31,7 +31,7 @@ pub(super) fn emit_typescript_visitor_method(out: &mut String, method_name: &str
         "visit_link" => "ctx: any, href: any, text: any, title: any",
         "visit_image" => "ctx: any, src: any, alt: any, title: any",
         "visit_heading" => "ctx: any, level: any, text: any, id: any",
-        "visit_code_block" => "ctx: any, lang: any, code: any",
+        "visit_code_block" => "ctx: any, code: any, lang: any",
         "visit_code_inline"
         | "visit_strong"
         | "visit_emphasis"
@@ -111,7 +111,7 @@ mod tests {
     fn emit_typescript_visitor_method_skip_returns_skip() {
         let mut out = String::new();
         emit_typescript_visitor_method(&mut out, "visit_text", &CallbackAction::Skip);
-        assert!(out.contains("return \"Skip\""), "got: {out}");
+        assert!(out.contains("return \"skip\""), "got: {out}");
     }
 
     #[test]
@@ -119,5 +119,26 @@ mod tests {
         let mut out = String::new();
         emit_typescript_visitor_method(&mut out, "visit_list_item", &CallbackAction::Continue);
         assert!(out.contains("visitListItem"), "got: {out}");
+    }
+
+    #[test]
+    fn emit_typescript_visitor_method_uses_adjacent_custom_payload() {
+        let mut out = String::new();
+        emit_typescript_visitor_method(
+            &mut out,
+            "visit_code_block",
+            &CallbackAction::Custom {
+                output: "replacement".to_string(),
+            },
+        );
+
+        assert!(
+            out.contains("visitCodeBlock(ctx: any, code: any, lang: any)"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains(r#"return { type: "custom", output: "replacement" };"#),
+            "got: {out}"
+        );
     }
 }
