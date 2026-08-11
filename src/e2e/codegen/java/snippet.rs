@@ -49,6 +49,12 @@ pub(super) fn render_snippet_body(
         },
     );
     setup_lines.splice(0..0, render_json_object_setup(fixture, recipe.args, options_type));
+    if let Some(visitor_spec) = &fixture.visitor
+        && let Some(binding) = super::visitor::java_visitor_binding(config, type_defs, Some(visitor_spec), options_type)
+    {
+        let visitor = super::visitor::build_java_visitor(&mut setup_lines, visitor_spec, &class_name, &binding);
+        args = super::visitor::apply_java_visitor_arg(&mut setup_lines, &args, recipe.args, &visitor, &binding);
+    }
     if !recipe.extra_args.is_empty() {
         args = if args.is_empty() {
             recipe.extra_args.join(", ")
