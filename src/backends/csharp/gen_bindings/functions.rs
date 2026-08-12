@@ -9,11 +9,19 @@ use heck::{ToLowerCamelCase, ToSnakeCase};
 use std::collections::{HashMap, HashSet};
 
 fn ffi_handle_type_names(api: &ApiSurface) -> HashSet<&str> {
-    api.types
+    let mut names: HashSet<&str> = api
+        .types
         .iter()
         .filter(|typ| !typ.is_trait)
         .map(|typ| typ.name.as_str())
-        .collect()
+        .collect();
+    names.extend(
+        api.enums
+            .iter()
+            .filter(|enum_def| enum_def.variants.iter().any(|variant| !variant.fields.is_empty()))
+            .map(|enum_def| enum_def.name.as_str()),
+    );
+    names
 }
 
 /// Map a Rust FFI type string to the C# P/Invoke parameter declaration.
@@ -666,16 +674,27 @@ pub(super) fn gen_pinvoke_for_method(c_name: &str, cs_name: &str, method: &Metho
 #[cfg(test)]
 mod tests {
     use super::ffi_handle_type_names;
-    use crate::core::ir::{ApiSurface, EnumDef, TypeDef};
+    use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, FieldDef, TypeDef};
 
     #[test]
     fn ffi_handle_types_exclude_traits_and_enums() {
         let api = ApiSurface {
             types: vec![type_def("RenderOptions", false), type_def("MarkupVisitor", true)],
-            enums: vec![EnumDef {
-                name: "NodeKind".to_string(),
-                ..EnumDef::default()
-            }],
+            enums: vec![
+                EnumDef {
+                    name: "NodeKind".to_string(),
+                    ..EnumDef::default()
+                },
+                EnumDef {
+                    name: "CrawlEvent".to_string(),
+                    variants: vec![EnumVariant {
+                        name: "Progress".to_string(),
+                        fields: vec![FieldDef::default()],
+                        ..EnumVariant::default()
+                    }],
+                    ..EnumDef::default()
+                },
+            ],
             ..ApiSurface::default()
         };
 
@@ -684,6 +703,7 @@ mod tests {
         assert!(names.contains("RenderOptions"));
         assert!(!names.contains("MarkupVisitor"));
         assert!(!names.contains("NodeKind"));
+        assert!(names.contains("CrawlEvent"));
     }
 
     fn type_def(name: &str, is_trait: bool) -> TypeDef {
