@@ -7,6 +7,7 @@ pub struct FieldResolver {
     pub(super) optional_fields: HashSet<String>,
     pub(super) result_fields: HashSet<String>,
     pub(super) array_fields: HashSet<String>,
+    pub(super) enum_fields: HashSet<String>,
     pub(super) method_calls: HashSet<String>,
     /// Fields whose `Option<T>` inner type is a display/content union (e.g. `RichTextContent`)
     /// rather than a plain `String`. Language generators that would otherwise emit

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated Rust E2E assertions now use declared collection and enum field metadata for textual containment checks,
+  avoiding invalid string arguments to `Vec<Named>::contains` and nonexistent enum `contains` methods.
+
 - E2E formatting now resolves generated language directories before changing the formatter working directory,
   preventing relative paths from becoming nonexistent doubled paths while rejecting formatter engine failures that
   older Poly versions only reported as warnings.

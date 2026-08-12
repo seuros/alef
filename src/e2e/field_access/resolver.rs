@@ -24,6 +24,7 @@ impl FieldResolver {
             optional_fields: optional.clone(),
             result_fields: result_fields.clone(),
             array_fields: array_fields.clone(),
+            enum_fields: HashSet::new(),
             method_calls: method_calls.clone(),
             error_field_aliases: HashMap::new(),
             php_getter_map: PhpGetterMap::default(),
@@ -51,6 +52,7 @@ impl FieldResolver {
             optional_fields: optional.clone(),
             result_fields: result_fields.clone(),
             array_fields: array_fields.clone(),
+            enum_fields: HashSet::new(),
             method_calls: method_calls.clone(),
             error_field_aliases: error_field_aliases.clone(),
             php_getter_map: PhpGetterMap::default(),
@@ -88,6 +90,7 @@ impl FieldResolver {
             optional_fields: optional.clone(),
             result_fields: result_fields.clone(),
             array_fields: array_fields.clone(),
+            enum_fields: HashSet::new(),
             method_calls: method_calls.clone(),
             error_field_aliases: error_field_aliases.clone(),
             php_getter_map,
@@ -131,6 +134,7 @@ impl FieldResolver {
             optional_fields: optional.clone(),
             result_fields: result_fields.clone(),
             array_fields: array_fields.clone(),
+            enum_fields: HashSet::new(),
             method_calls: method_calls.clone(),
             error_field_aliases: error_field_aliases.clone(),
             php_getter_map: PhpGetterMap::default(),
@@ -158,6 +162,7 @@ impl FieldResolver {
             optional_fields: optional.clone(),
             result_fields: result_fields.clone(),
             array_fields: array_fields.clone(),
+            enum_fields: HashSet::new(),
             method_calls: method_calls.clone(),
             error_field_aliases: error_field_aliases.clone(),
             php_getter_map: PhpGetterMap::default(),
@@ -183,6 +188,11 @@ impl FieldResolver {
     /// object stringification (`string(*ptr)`, `Objects::toString()`, `.ToString()`).
     pub fn with_display_as_text_fields(mut self, fields: HashSet<String>) -> Self {
         self.display_as_text_fields = fields;
+        self
+    }
+
+    pub fn with_enum_fields(mut self, fields: HashSet<String>) -> Self {
+        self.enum_fields = fields;
         self
     }
 
@@ -396,6 +406,10 @@ impl FieldResolver {
     /// Check if a resolved field is an array/Vec type.
     pub fn is_array(&self, field: &str) -> bool {
         self.array_fields.contains(field)
+    }
+
+    pub fn is_enum(&self, field: &str) -> bool {
+        self.enum_fields.contains(field) || self.enum_fields.contains(self.resolve(field))
     }
 
     /// Check if a field name is the root of a collection type (i.e., the field

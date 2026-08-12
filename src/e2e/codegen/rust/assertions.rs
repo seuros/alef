@@ -397,6 +397,9 @@ pub fn render_assertion_with_streaming(
         }
         _ => effective_result_var,
     };
+    let field_uses_textual_debug = assertion.field.as_deref().is_some_and(|field| {
+        field_resolver.is_enum(field) || field_resolver.is_array(field) || field_resolver.is_collection_root(field)
+    });
 
     match assertion.assertion_type.as_str() {
         "error" => {
@@ -422,9 +425,15 @@ pub fn render_assertion_with_streaming(
         "contains" => {
             if let Some(val) = &assertion.value {
                 let expected = value_to_rust_string(val);
-                let line = format!(
-                    "    assert!({field_access}.contains({expected}), \"expected to contain: {{}}\", {expected});"
-                );
+                let line = if field_uses_textual_debug {
+                    format!(
+                        "    assert!(format!(\"{{:?}}\", {field_access}).to_lowercase().contains(&{expected}.to_lowercase()), \"expected to contain: {{}}\", {expected});"
+                    )
+                } else {
+                    format!(
+                        "    assert!({field_access}.contains({expected}), \"expected to contain: {{}}\", {expected});"
+                    )
+                };
                 let _ = writeln!(out, "{line}");
             }
         }
@@ -857,5 +866,55 @@ mod tests {
             out.contains("len() >= 2"),
             "min_length 2 should emit len() >= 2; got: {out}"
         );
+    }
+
+    #[test]
+    fn contains_uses_declared_collection_and_enum_types() {
+        let result_fields = HashSet::from(["cookies".to_string(), "link_type".to_string()]);
+        let array_fields = HashSet::from(["cookies".to_string()]);
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &result_fields,
+            &array_fields,
+            &HashSet::new(),
+        )
+        .with_enum_fields(HashSet::from(["link_type".to_string()]));
+        let mut assertions = String::new();
+        for (field, expected) in [("cookies", "domain_cookie"), ("link_type", "anchor")] {
+            render_assertion(
+                &mut assertions,
+                &make_assertion("contains", Some(field), Some(serde_json::json!(expected))),
+                "result",
+                "sample",
+                "sample",
+                false,
+                &[],
+                &resolver,
+                false,
+                false,
+                false,
+                false,
+                false,
+                None,
+            );
+        }
+        assert_eq!(assertions.matches("format!(\"{:?}\"").count(), 2, "got: {assertions}");
+
+        let source = format!(
+            "#[derive(Debug)] struct CookieInfo {{ name: &'static str }}\n#[derive(Debug)] enum LinkType {{ Anchor }}\nstruct ResultValue {{ cookies: Vec<CookieInfo>, link_type: LinkType }}\nfn main() {{ let result = ResultValue {{ cookies: vec![CookieInfo {{ name: \"domain_cookie\" }}], link_type: LinkType::Anchor }};\n{assertions}}}\n"
+        );
+        let directory = tempfile::tempdir().expect("temporary compile directory");
+        let source_path = directory.path().join("assertions.rs");
+        std::fs::write(&source_path, source).expect("write generated assertion source");
+        let output = std::process::Command::new("rustc")
+            .arg("--edition=2024")
+            .arg("--emit=metadata")
+            .arg(&source_path)
+            .arg("-o")
+            .arg(directory.path().join("assertions.rmeta"))
+            .output()
+            .expect("run rustc");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     }
 }
