@@ -143,6 +143,7 @@ fn emit_function_shim(
                     context! {
                         name => rust_name,
                         type_path => type_path,
+                        ret_null => err_null,
                     },
                 ));
                 call_args.push_str(&rust_name);

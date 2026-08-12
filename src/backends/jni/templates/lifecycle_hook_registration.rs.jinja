@@ -7,6 +7,10 @@ pub unsafe extern "system" fn {{ symbol }}(
     owner_handle: jni::sys::jlong,
     callback: jni::objects::JObject,
 ) -> jni::sys::jint {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    if owner_handle == 0 {
+        return -1;
+    }
     catch_exc_and_return!(env; {
         let owner_ref = &*(owner_handle as *const {{ opaque_name }});
         let env = env;
@@ -31,4 +35,5 @@ pub unsafe extern "system" fn {{ symbol }}(
 
         0
     })
+    })).unwrap_or(-1)
 }

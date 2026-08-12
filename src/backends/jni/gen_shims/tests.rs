@@ -461,4 +461,58 @@ exclude_types = ["Loader"]
             "a non-excluded sibling client must keep its shims: {content}"
         );
     }
+
+    #[test]
+    fn synchronous_function_body_is_panic_contained() {
+        let function = crate::core::ir::FunctionDef {
+            name: "normalize".into(),
+            rust_path: "demo::normalize".into(),
+            params: vec![crate::core::ir::ParamDef {
+                name: "input".into(),
+                ty: TypeRef::String,
+                is_ref: true,
+                ..Default::default()
+            }],
+            return_type: TypeRef::String,
+            ..Default::default()
+        };
+        let content = emit_lib_rs(&api_with_functions(vec![function]), &btree_fixture_config());
+        syn::parse_file(&content).expect("generated JNI crate must parse as Rust");
+        let function_body = content
+            .split("Java_dev_sample_1crate_DemoBridge_nativeNormalize")
+            .nth(1)
+            .expect("nativeNormalize shim");
+
+        assert!(function_body.contains("run_or_throw(env, |env|"), "{function_body}");
+        let boundary = function_body.find("run_or_throw(env, |env|").expect("panic boundary");
+        let core_call = function_body.find("core_crate::normalize").expect("core call");
+        assert!(
+            boundary < core_call,
+            "panic boundary must precede the core call: {function_body}"
+        );
+    }
+
+    #[test]
+    fn opaque_receiver_is_rejected_before_reference_construction() {
+        let method = crate::core::ir::MethodDef {
+            name: "status".into(),
+            return_type: TypeRef::String,
+            receiver: Some(crate::core::ir::ReceiverKind::Ref),
+            ..Default::default()
+        };
+        let content = emit_lib_rs(&api_with_client_methods(vec![method]), &btree_fixture_config());
+        syn::parse_file(&content).expect("generated JNI crate must parse as Rust");
+        let method_body = content
+            .split("nativeLoaderStatus")
+            .nth(1)
+            .expect("nativeLoaderStatus shim");
+        let zero_check = method_body.find("if handle == 0").expect("zero-handle check");
+        let reference = method_body.find("&*(handle as *const").expect("receiver reference");
+
+        assert!(method_body.contains("run_or_throw(env, |env|"), "{method_body}");
+        assert!(
+            zero_check < reference,
+            "zero check must precede reference construction: {method_body}"
+        );
+    }
 }

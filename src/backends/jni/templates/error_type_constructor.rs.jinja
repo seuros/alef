@@ -7,6 +7,7 @@ pub unsafe extern "system" fn {{ symbol }}(
     _class: jni::objects::JClass,
     message: jni::objects::JString,
 ) -> jni::objects::JObject {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
     catch_exc_and_return!(env; {
         let msg: String = env.get_string(&message)?.into();
 
@@ -31,4 +32,5 @@ pub unsafe extern "system" fn {{ symbol }}(
 
         instance.into()
     })
+    })).unwrap_or_else(|_| jni::objects::JObject::null())
 }

@@ -216,13 +216,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn destructor_template_contains_panics() {
+    fn destructor_template_uses_jni_panic_boundary() {
         let output = render(
             "destructor_shim.rs.jinja",
             minijinja::context! { symbol => "Java_dev_sample_free", type_name => "Sample" },
         );
 
-        assert!(output.contains("std::panic::catch_unwind"));
+        assert!(output.contains("run_or_throw(env, |_env|"));
     }
 
     #[test]

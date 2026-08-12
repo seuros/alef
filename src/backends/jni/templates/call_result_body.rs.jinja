@@ -1,8 +1,6 @@
 {% if has_error %}
 {% if is_async %}
-    let Some(result) = run_or_throw(env, std::panic::AssertUnwindSafe(|| {{ async_call_expr }})) else {
-        return {{ ret_null }};
-    };
+    let result = {{ async_call_expr }};
 {% else %}
     let result = {{ call_expr }};
 {% endif %}
@@ -16,11 +14,13 @@
     }
 {% else %}
 {% if is_async %}
-    let Some(v) = run_or_throw(env, std::panic::AssertUnwindSafe(|| {{ async_call_expr }})) else {
-        return {{ ret_null }};
-    };
+    let v = {{ async_call_expr }};
 {% else %}
     let v = {{ call_expr }};
 {% endif %}
 {{ value_body }}{% endif %}
+    }) else {
+        return {{ ret_null }};
+    };
+    __jni_result
 }

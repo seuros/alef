@@ -1,3 +1,7 @@
+    if {{ name }} == 0 {
+        throw_jni_error(env, "native handle `{{ name }}` must not be zero");
+        return {{ ret_null }};
+    }
     // SAFETY: {{ name }} was allocated by the matching constructor shim and
     // remains valid until the destructor shim is called.
     let {{ name }}: &{{ type_path }} = unsafe { &*({{ name }} as *const {{ type_path }}) };

@@ -43,9 +43,9 @@ fn throw_jni_error(env: &mut Env<'_>, msg: &str) {
 
 fn run_or_throw<T, F>(env: &mut Env<'_>, f: F) -> Option<T>
 where
-    F: FnOnce() -> T + std::panic::UnwindSafe,
+    F: FnOnce(&mut Env<'_>) -> T,
 {
-    match std::panic::catch_unwind(f) {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(env))) {
         Ok(v) => Some(v),
         Err(payload) => {
             let msg = payload.downcast_ref::<String>().cloned()

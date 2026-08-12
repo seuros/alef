@@ -10,6 +10,7 @@ pub unsafe extern "system" fn {{ symbol }}(
     // SAFETY: env is a valid EnvUnowned passed by the JVM for this native call frame.
     let mut __jni_attach_guard = unsafe { jni::AttachGuard::from_unowned(env.as_raw()) };
     let env = __jni_attach_guard.borrow_env_mut();
+    let Some(()) = run_or_throw(env, |env| {
 
     // Trait bridge registration: create a global reference to the impl object,
     // extract the trait name, and call the core registration function.
@@ -38,4 +39,7 @@ pub unsafe extern "system" fn {{ symbol }}(
     let _ = env;  // Suppress unused warning
     let _ = global_impl;  // Hold global reference for lifetime
     let _ = name;  // For now, just accept the name without registration
+    }) else {
+        return;
+    };
 }

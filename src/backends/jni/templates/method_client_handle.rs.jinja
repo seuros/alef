@@ -1,3 +1,7 @@
+    if handle == 0 {
+        throw_jni_error(env, "native handle must not be zero");
+        return {{ ret_null }};
+    }
     // SAFETY: handle was allocated by the matching constructor shim and remains
     // valid until nativeFree is called. The Kotlin AutoCloseable.close() guarantee
     // ensures the handle outlives this call.

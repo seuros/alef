@@ -72,6 +72,7 @@ fn emit_method_shim(
             receiver_owned => receiver_owned,
             receiver_is_mut => receiver_is_mut,
             type_name => type_name,
+            ret_null => ret_null,
         },
     ));
 
