@@ -232,7 +232,12 @@ fn extract_rust_snippet(rendered: &str) -> Result<(Vec<&str>, Vec<&str>, bool)> 
         .copied()
         .filter(|line| line.starts_with("use ") && !line.contains("common::"))
         .collect();
-    let body = lines[signature + 1..lines.len().saturating_sub(1)]
+    let function_end = lines[signature + 1..]
+        .iter()
+        .position(|line| *line == "}")
+        .map(|offset| signature + 1 + offset)
+        .ok_or_else(|| anyhow::anyhow!("generated Rust fixture function was not closed"))?;
+    let body = lines[signature + 1..function_end]
         .iter()
         .copied()
         .filter_map(|line| match line.strip_prefix("    ") {
@@ -803,6 +808,7 @@ options_type = "ChatRequest"
             "\"#;\n",
             "    let _ = process(source);\n",
             "}\n",
+            "}\n",
         );
 
         let (_, body, _) = extract_rust_snippet(rendered).expect("snippet extracts");
@@ -810,6 +816,7 @@ options_type = "ChatRequest"
 
         assert!(body.contains("def greet(name):"), "{body}");
         assert!(body.contains("import os"), "{body}");
+        assert!(!body.lines().any(|line| line == "}"), "{body}");
         syn::parse_file(&format!("fn main() {{\n{body}\n}}")).expect("generated snippet body parses");
     }
 
