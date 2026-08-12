@@ -650,6 +650,33 @@ mod snippet_tests {
     }
 
     #[test]
+    fn json_result_snippet_consumes_and_frees_the_result() {
+        let fixture = Fixture {
+            id: "process".into(),
+            description: "Process".into(),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "process".into();
+        e2e.call.overrides.insert(
+            "zig".into(),
+            crate::e2e::config::CallOverride {
+                result_is_json_struct: true,
+                ..Default::default()
+            },
+        );
+
+        let rendered = render_snippet_body(&fixture, &e2e, "sample", "sample", &ResolvedCrateConfig::default(), &[])
+            .expect("snippet renders");
+
+        assert!(
+            rendered.contains("const _result_json = try sample.process()"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("free(_result_json)"), "{rendered}");
+    }
+
+    #[test]
     fn generated_tests_preserve_abort_failures() {
         let fixture = Fixture {
             id: "count".into(),

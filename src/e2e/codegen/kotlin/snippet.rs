@@ -235,6 +235,73 @@ mod tests {
     }
 
     #[test]
+    fn android_snippet_declares_typed_config_without_coroutine_wrapper() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "process_source",
+            "description": "Process source",
+            "input": {
+                "source_code": "fn main() {}",
+                "config": {"language": "rust"}
+            }
+        }))
+        .expect("fixture parses");
+        let mut call = CallConfig {
+            function: "process".into(),
+            result_var: "result".into(),
+            args: vec![
+                crate::e2e::config::ArgMapping {
+                    name: "source".into(),
+                    field: "source_code".into(),
+                    arg_type: "string".into(),
+                    optional: false,
+                    owned: false,
+                    element_type: None,
+                    go_type: None,
+                    vec_inner_is_ref: false,
+                    trait_name: None,
+                },
+                crate::e2e::config::ArgMapping {
+                    name: "config".into(),
+                    field: "config".into(),
+                    arg_type: "json_object".into(),
+                    optional: false,
+                    owned: false,
+                    element_type: None,
+                    go_type: None,
+                    vec_inner_is_ref: false,
+                    trait_name: None,
+                },
+            ],
+            ..CallConfig::default()
+        };
+        call.overrides.insert(
+            "java".into(),
+            CallOverride {
+                options_type: Some("ProcessConfig".into()),
+                ..Default::default()
+            },
+        );
+
+        let mut config = ResolvedCrateConfig::default();
+        config.name = "sample_api".into();
+        let body = render_snippet_body(
+            &fixture,
+            &E2eConfig {
+                call,
+                ..E2eConfig::default()
+            },
+            &config,
+            &[],
+            true,
+        );
+
+        assert!(body.contains("val config = mapper.readValue"), "{body}");
+        assert!(body.contains("ProcessConfig::class.java"), "{body}");
+        assert!(body.contains("SampleApi.process(\"fn main() {}\", config)"), "{body}");
+        assert!(!body.contains("runBlocking"), "{body}");
+    }
+
+    #[test]
     fn snippet_renders_expected_error_as_an_executable_example() {
         let fixture: Fixture = serde_json::from_value(serde_json::json!({
             "id": "invalid_input", "description": "Reject invalid input", "input": null,

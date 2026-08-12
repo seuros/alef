@@ -235,8 +235,11 @@ fn extract_rust_snippet(rendered: &str) -> Result<(Vec<&str>, Vec<&str>, bool)> 
     let body = lines[signature + 1..lines.len().saturating_sub(1)]
         .iter()
         .copied()
-        .filter_map(|line| line.strip_prefix("    "))
-        .filter(|line| !line.trim_start().starts_with("//"))
+        .filter_map(|line| match line.strip_prefix("    ") {
+            Some(indented) if indented.trim_start().starts_with("//") => None,
+            Some(indented) => Some(indented),
+            None => Some(line),
+        })
         .collect();
     Ok((imports, body, lines[signature].starts_with("async fn ")))
 }
@@ -784,6 +787,30 @@ options_type = "ChatRequest"
         let expression = syn::parse_str::<syn::Expr>(&literal).expect("generated raw literal parses");
         assert!(matches!(expression, syn::Expr::Lit(_)), "{literal}");
         assert!(literal.starts_with("r##\""), "{literal}");
+    }
+
+    #[test]
+    fn snippet_extraction_preserves_multiline_raw_literal_contents() {
+        let rendered = concat!(
+            "use sample::process;\n",
+            "\n",
+            "fn test_multiline() {\n",
+            "    let source = r#\"# A comment\n",
+            "def greet(name):\n",
+            "    return name\n",
+            "\n",
+            "import os\n",
+            "\"#;\n",
+            "    let _ = process(source);\n",
+            "}\n",
+        );
+
+        let (_, body, _) = extract_rust_snippet(rendered).expect("snippet extracts");
+        let body = body.join("\n");
+
+        assert!(body.contains("def greet(name):"), "{body}");
+        assert!(body.contains("import os"), "{body}");
+        syn::parse_file(&format!("fn main() {{\n{body}\n}}")).expect("generated snippet body parses");
     }
 
     #[test]

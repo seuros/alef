@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated Rust documentation snippets now preserve every line inside multiline raw string literals instead of
+  dropping unindented literal contents and emitting malformed source.
+
 - Generated Java bindings now honor explicit native-library path overrides before bundled resources and report every
   missing ABI symbol, the exported count, and the loaded path in one eager startup diagnostic.
 
