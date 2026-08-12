@@ -205,6 +205,7 @@ pub fn generate_e2e(
             functions,
         )?;
         report_snippet_coverage(&report.coverage);
+        ensure_snippet_coverage_complete(&report.coverage)?;
         let coverage_content =
             serde_json::to_string_pretty(&report.coverage).context("failed to serialize snippet coverage manifest")?;
         all_files.push(GeneratedFile {
@@ -221,7 +222,7 @@ pub fn generate_e2e(
 pub fn report_cached_snippet_coverage(path: &Path) -> Result<()> {
     let coverage = coverage_cache::read_coverage_manifest(path)?;
     report_snippet_coverage(&coverage);
-    Ok(())
+    ensure_snippet_coverage_complete(&coverage)
 }
 
 fn report_snippet_coverage(coverage: &snippets::SnippetCoverageLedger) {
@@ -230,5 +231,58 @@ fn report_snippet_coverage(coverage: &snippets::SnippetCoverageLedger) {
             "snippet coverage missing for fixture `{}` language `{}`: {}",
             missing.key.fixture_id, missing.key.language, missing.reason
         );
+    }
+}
+
+fn ensure_snippet_coverage_complete(coverage: &snippets::SnippetCoverageLedger) -> Result<()> {
+    let Some(first) = coverage.missing.first() else {
+        return Ok(());
+    };
+    bail!(
+        "snippet generation has {} undocumented coverage gap(s); first missing recipe is fixture `{}` language `{}`: {}",
+        coverage.missing.len(),
+        first.key.fixture_id,
+        first.key.language,
+        first.reason
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn undocumented_missing_recipe_fails_generation() {
+        let coverage = snippets::SnippetCoverageLedger {
+            missing: vec![snippets::MissingSnippet {
+                key: snippets::SnippetCoverageKey {
+                    fixture_id: "create_record".into(),
+                    language: "go".into(),
+                },
+                reason: "built-in `go` snippet recipe has no function identity".into(),
+            }],
+            ..Default::default()
+        };
+
+        let error = ensure_snippet_coverage_complete(&coverage).expect_err("missing recipe must fail closed");
+        assert!(error.to_string().contains("create_record"));
+        assert!(error.to_string().contains("go"));
+    }
+
+    #[test]
+    fn documented_exceptions_do_not_fail_generation() {
+        let coverage = snippets::SnippetCoverageLedger {
+            documented_exceptions: vec![snippets::DocumentedSnippetException {
+                key: snippets::SnippetCoverageKey {
+                    fixture_id: "stream_records".into(),
+                    language: "swift".into(),
+                },
+                reason: "streaming recipe is documented separately".into(),
+                reference: "docs/streaming.md".into(),
+            }],
+            ..Default::default()
+        };
+
+        ensure_snippet_coverage_complete(&coverage).expect("documented exception is intentional");
     }
 }

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **snippets**: fail E2E generation when an expected documentation snippet has no compatible built-in or
+  extension recipe, including cached coverage manifests, instead of warning and crediting an incomplete corpus.
+
 ## [0.60.2] - 2026-08-12
 
 ### Fixed
