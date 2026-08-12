@@ -109,6 +109,10 @@ mod test_helper_tests {
             output.contains("System.put_env(\"DEBUG_MODE\", \"false\")"),
             "must set DEBUG_MODE, got:\n{output}"
         );
+        assert!(
+            !output.contains(".Native.set_env"),
+            "test helpers must not call an unexported set_env NIF, got:\n{output}"
+        );
 
         // Keys must appear in alphabetical order
         let allow_pos = output
