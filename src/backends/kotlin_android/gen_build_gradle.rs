@@ -50,7 +50,7 @@ pub fn emit(config: &ResolvedCrateConfig) -> String {
     let artifact_id = aar_artifact_id(config);
     let resolved_version = config.resolved_version().unwrap_or_else(|| "0.0.0".to_string());
     let version_placeholder = resolved_version.as_str();
-    let jni_crate_path = config.jni_crate_path();
+    let jni_manifest_workspace_path = format!("crates/{}-jni/Cargo.toml", config.jni_crate_base());
     let jni_lib_name = config.jni_lib_name();
 
     let capsule_deps: String = {
@@ -193,9 +193,16 @@ dependencies {{
 // Set alef.skipHostJni=true to disable this (e.g., in publish-only builds).
 tasks.register("buildHostJni", Exec::class) {{
     if (project.properties["alef.skipHostJni"] != "true") {{
-        val jniCargoPath = "{jni_crate_path}/Cargo.toml"
-        description = "Build host-platform JNI library from {jni_crate_path}"
-        commandLine("cargo", "build", "--release", "--manifest-path", jniCargoPath)
+        val configuredManifest = project.findProperty("alef.jniManifestPath") as String?
+        val jniManifest = configuredManifest?.let(::file) ?: generateSequence(projectDir) {{ it.parentFile }}
+            .map {{ it.resolve("{jni_manifest_workspace_path}") }}
+            .firstOrNull {{ it.isFile }}
+            ?: throw GradleException(
+                "Cannot locate {jni_manifest_workspace_path} from $projectDir; " +
+                    "set -Palef.jniManifestPath=/absolute/path/to/Cargo.toml"
+            )
+        description = "Build host-platform JNI library from $jniManifest"
+        commandLine("cargo", "build", "--release", "--manifest-path", jniManifest.absolutePath)
         errorOutput = System.err
     }} else {{
         description = "Build host JNI (disabled via alef.skipHostJni=true)"
@@ -213,8 +220,14 @@ tasks.register("copyHostJni", Copy::class) {{
             System.getProperty("os.name").lowercase().contains("win") -> "windows"
             else -> "linux"
         }}
-        val jniCratePath = file("{jni_crate_path}")
-        val buildDir = jniCratePath.resolve("target/release")
+        val configuredManifest = project.findProperty("alef.jniManifestPath") as String?
+        val jniManifest = configuredManifest?.let(::file) ?: generateSequence(projectDir) {{ it.parentFile }}
+            .map {{ it.resolve("{jni_manifest_workspace_path}") }}
+            .firstOrNull {{ it.isFile }}
+            ?: throw GradleException("Cannot locate {jni_manifest_workspace_path} from $projectDir")
+        val workspaceRoot = jniManifest.parentFile.parentFile.parentFile
+        val buildDir = (project.findProperty("native.lib.path") as String?)?.let(::file)
+            ?: workspaceRoot.resolve("target/release")
 
         // Map host platform to library filename
         val libName = when (hostPlatform) {{
@@ -401,6 +414,24 @@ description = "Test library"
         assert!(
             gradle.contains("alef.skipHostJni"),
             "Gradle should mention alef.skipHostJni opt-out"
+        );
+        assert!(
+            gradle.contains(r#"generateSequence(projectDir) { it.parentFile }"#)
+                && gradle.contains(r#"it.resolve("crates/test-lib-jni/Cargo.toml")"#),
+            "Gradle should locate the JNI manifest independently of configured output depth"
+        );
+        assert!(
+            gradle.contains(r#"project.findProperty("alef.jniManifestPath")"#),
+            "Gradle should allow an explicit JNI manifest override"
+        );
+        assert!(
+            gradle.contains(r#"workspaceRoot.resolve("target/release")"#)
+                && gradle.contains(r#"project.findProperty("native.lib.path")"#),
+            "Gradle should read host artifacts from the Cargo workspace target directory"
+        );
+        assert!(
+            !gradle.contains(r#"jniCratePath.resolve("target/release")"#),
+            "Gradle must not assume a per-crate Cargo target directory"
         );
     }
 

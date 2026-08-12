@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **kotlin-android**: locate the configured JNI crate by walking from the generated Gradle project, accept an
+  explicit manifest override, and copy host libraries from the Cargo workspace target directory.
+
 ### Fixed
 
 - Made Rust and Kotlin containment assertions respect the effective result type, including complex arrays and
