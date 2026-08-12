@@ -21,5 +21,8 @@ fn manual_debug_impl_is_not_exposed_as_binding_methods() {
         .find(|item| item.name == "ServiceConfig")
         .expect("ServiceConfig should be extracted");
 
-    assert!(config.methods.is_empty(), "Debug::fmt must not become a public binding method");
+    assert!(
+        config.methods.is_empty(),
+        "Debug::fmt must not become a public binding method"
+    );
 }

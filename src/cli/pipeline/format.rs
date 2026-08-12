@@ -421,9 +421,7 @@ pub(crate) fn poly_format_strict(paths: &[PathBuf], config_start: &Path) -> anyh
 
 fn run_poly_formatter(args: &[&str], work_dir: &Path) -> anyhow::Result<()> {
     let output = Command::new("poly").args(args).current_dir(work_dir).output()?;
-    if poly_format_exit_code_is_success(output.status.code())
-        && !poly_format_output_reports_failure(&output.stderr)
-    {
+    if poly_format_exit_code_is_success(output.status.code()) && !poly_format_output_reports_failure(&output.stderr) {
         return Ok(());
     }
     Err(formatter_failure(&output))

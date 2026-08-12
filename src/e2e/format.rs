@@ -29,8 +29,7 @@ use tracing::warn;
 /// generation.
 pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) -> anyhow::Result<()> {
     let output_prefix = Path::new(e2e_config.effective_output());
-    let current_dir =
-        std::env::current_dir().context("failed to resolve formatter working directory")?;
+    let current_dir = std::env::current_dir().context("failed to resolve formatter working directory")?;
     let languages: HashSet<String> = files
         .iter()
         .filter_map(|f| {
@@ -97,12 +96,7 @@ fn resolve_formatter_directory(path: &Path, current_dir: &Path) -> anyhow::Resul
     };
     absolute_path
         .canonicalize()
-        .with_context(|| {
-            format!(
-                "generated formatter path does not exist: {}",
-                absolute_path.display()
-            )
-        })
+        .with_context(|| format!("generated formatter path does not exist: {}", absolute_path.display()))
 }
 
 /// Format files restored from the generation-stage cache.
@@ -178,8 +172,7 @@ mod tests {
         let output = directory.path().join("e2e").join("python");
         std::fs::create_dir_all(&output).expect("create formatter target");
 
-        let resolved = resolve_formatter_directory(Path::new("e2e/python"), directory.path())
-            .expect("resolve path");
+        let resolved = resolve_formatter_directory(Path::new("e2e/python"), directory.path()).expect("resolve path");
 
         assert!(resolved.is_absolute());
         assert_eq!(resolved, output.canonicalize().expect("canonical output"));
