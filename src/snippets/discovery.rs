@@ -321,6 +321,36 @@ mod tests {
     }
 
     #[test]
+    fn bare_fence_has_no_implicit_validation_limit() {
+        let directory = tempfile::tempdir().expect("temporary snippet directory");
+        let path = directory.path().join("example.md");
+        std::fs::write(&path, "```rust\nlet value = 1;\n```\n").expect("write bare snippet");
+
+        let snippets = discover_snippets(&[directory.path().to_path_buf()], None).expect("discover bare snippet");
+
+        assert_eq!(snippets.len(), 1);
+        assert_eq!(snippets[0].annotation, None);
+    }
+
+    #[test]
+    fn frontmatter_level_overrides_inline_annotation() {
+        let directory = tempfile::tempdir().expect("temporary snippet directory");
+        let path = directory.path().join("example.md");
+        std::fs::write(
+            &path,
+            "---\nlevel: typecheck\n---\n<!-- snippet:syntax-only -->\n```rust\nlet value = 1;\n```\n",
+        )
+        .expect("write annotated snippet");
+
+        let snippets = discover_snippets(&[directory.path().to_path_buf()], None).expect("discover annotated snippet");
+
+        assert_eq!(
+            snippets[0].annotation.as_ref().map(|value| value.kind),
+            Some(SnippetAnnotationKind::TypeCheckOnly)
+        );
+    }
+
+    #[test]
     fn generated_markdown_is_enriched_from_authoritative_ledger() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let relative = PathBuf::from("wasm/topic/example.md");

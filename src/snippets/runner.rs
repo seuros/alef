@@ -188,16 +188,26 @@ fn batch_level(
         return None;
     }
     if let Some(annotation) = &snippet.annotation
-        && (annotation.kind == SnippetAnnotationKind::Skip
-            || annotation.kind == SnippetAnnotationKind::SyntaxOnly && config.level > ValidationLevel::Syntax
-            || annotation.kind == SnippetAnnotationKind::CompileOnly && config.level > ValidationLevel::Compile
-            || annotation.kind == SnippetAnnotationKind::TypeCheckOnly && config.level > ValidationLevel::TypeCheck)
+        && annotation.kind == SnippetAnnotationKind::Skip
     {
         return None;
     }
     let validator = registry.get(snippet.language)?;
-    let level = config.level.min(validator.max_level());
+    let level = effective_validation_level(snippet, config.level).min(validator.max_level());
     validator.is_available_at(level).then_some(level)
+}
+
+fn effective_validation_level(snippet: &Snippet, requested: ValidationLevel) -> ValidationLevel {
+    let limit = snippet
+        .annotation
+        .as_ref()
+        .and_then(|annotation| match annotation.kind {
+            SnippetAnnotationKind::SyntaxOnly => Some(ValidationLevel::Syntax),
+            SnippetAnnotationKind::CompileOnly => Some(ValidationLevel::Compile),
+            SnippetAnnotationKind::TypeCheckOnly => Some(ValidationLevel::TypeCheck),
+            SnippetAnnotationKind::Skip => None,
+        });
+    limit.map_or(requested, |level| requested.min(level))
 }
 
 fn session_for<'a>(
@@ -265,36 +275,6 @@ fn validate_one(
                     0,
                 );
             }
-            SnippetAnnotationKind::SyntaxOnly if config.level > ValidationLevel::Syntax => {
-                return result(
-                    snippet,
-                    SnippetStatus::Skip,
-                    config.level,
-                    ValidationLevel::Syntax,
-                    Some("annotation limits to syntax-only".to_string()),
-                    0,
-                );
-            }
-            SnippetAnnotationKind::CompileOnly if config.level > ValidationLevel::Compile => {
-                return result(
-                    snippet,
-                    SnippetStatus::Skip,
-                    config.level,
-                    ValidationLevel::Compile,
-                    Some("annotation limits to compile-only".to_string()),
-                    0,
-                );
-            }
-            SnippetAnnotationKind::TypeCheckOnly if config.level > ValidationLevel::TypeCheck => {
-                return result(
-                    snippet,
-                    SnippetStatus::Skip,
-                    config.level,
-                    ValidationLevel::TypeCheck,
-                    Some("annotation limits to typecheck-only".to_string()),
-                    0,
-                );
-            }
             _ => {}
         }
     }
@@ -310,7 +290,7 @@ fn validate_one(
         );
     };
 
-    let effective_level = config.level.min(validator.max_level());
+    let effective_level = effective_validation_level(snippet, config.level).min(validator.max_level());
     if !validator.is_available_at(effective_level) {
         return result(
             snippet,
@@ -544,6 +524,26 @@ mod tests {
         assert_eq!(
             side_effect_rejection(&snippet, &run).as_deref(),
             Some("side effect class network is not allowed")
+        );
+    }
+
+    #[test]
+    fn annotations_cap_validation_instead_of_skipping_it() {
+        let mut snippet = network_snippet();
+        snippet.annotation = Some(crate::snippets::types::SnippetAnnotation {
+            kind: SnippetAnnotationKind::SyntaxOnly,
+            reason: None,
+        });
+
+        assert_eq!(
+            effective_validation_level(&snippet, ValidationLevel::TypeCheck),
+            ValidationLevel::Syntax
+        );
+
+        snippet.annotation = None;
+        assert_eq!(
+            effective_validation_level(&snippet, ValidationLevel::TypeCheck),
+            ValidationLevel::TypeCheck
         );
     }
 
