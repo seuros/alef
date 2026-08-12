@@ -332,3 +332,34 @@ fn flatten_json_field_forces_builder_emission_below_auto_threshold() {
         "record field must still carry @JsonAnyGetter for serialization"
     );
 }
+
+#[test]
+fn opaque_handle_close_is_idempotent_and_rejects_post_close_use() {
+    let typ = TypeDef {
+        name: "ResourceHandle".to_string(),
+        rust_path: "sample_crate::ResourceHandle".to_string(),
+        original_rust_path: "sample_crate::ResourceHandle".to_string(),
+        is_opaque: true,
+        ..Default::default()
+    };
+    let out = gen_opaque_handle_class(
+        "dev.sample_crate",
+        &typ,
+        "sample",
+        &[],
+        "SampleRs",
+        &AHashSet::default(),
+        &AHashSet::default(),
+        &AHashSet::default(),
+    );
+
+    assert!(out.contains("private MemorySegment handle;"), "{out}");
+    assert!(out.contains("synchronized MemorySegment handle()"), "{out}");
+    assert!(
+        out.contains("throw new IllegalStateException(\"ResourceHandle is closed\")"),
+        "{out}"
+    );
+    assert!(out.contains("public synchronized void close()"), "{out}");
+    assert!(out.contains("handle = MemorySegment.NULL;"), "{out}");
+    assert!(out.contains("invoke(handleToFree)"), "{out}");
+}

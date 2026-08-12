@@ -10,7 +10,7 @@
                 throw new {{ exception_class }}("{{ method_name }}: failed to marshal request", (Throwable) null);
             }
             try {
-                streamHandle = (MemorySegment) NativeLib.{{ start_handle }}.invoke(this.handle, requestPtr);
+                streamHandle = (MemorySegment) NativeLib.{{ start_handle }}.invoke(handle(), requestPtr);
             } finally {
                 NativeLib.{{ req_free }}.invoke(requestPtr);
             }

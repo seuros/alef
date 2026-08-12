@@ -364,7 +364,7 @@ fn gen_instance_method(
         frees
     };
 
-    let mut call_args_full = vec!["this.handle".to_string()];
+    let mut call_args_full = vec!["handle()".to_string()];
     call_args_full.extend(call_args);
     let args_joined = call_args_full.join(", ");
 
