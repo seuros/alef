@@ -284,6 +284,58 @@ default_features = false
         assert!(content.contains("core_crate::decoder::decoder_details()"));
     }
 
+    #[test]
+    fn streaming_kotlin_declarations_have_matching_jni_exports() {
+        use crate::core::config::extras::{AdapterConfig, AdapterParam, AdapterPattern};
+        use crate::core::ir::{MethodDef, ReceiverKind, TypeDef};
+
+        let mut config = btree_fixture_config();
+        config.adapters.push(AdapterConfig {
+            name: "stream_items".to_string(),
+            pattern: AdapterPattern::Streaming,
+            core_path: "demo::Engine::stream_items".to_string(),
+            params: vec![AdapterParam {
+                name: "request".to_string(),
+                ty: "demo::StreamRequest".to_string(),
+                optional: false,
+            }],
+            returns: None,
+            error_type: None,
+            owner_type: Some("Engine".to_string()),
+            item_type: Some("StreamItem".to_string()),
+            gil_release: false,
+            trait_name: None,
+            trait_method: None,
+            detect_async: false,
+            request_type: None,
+            skip_languages: Vec::new(),
+        });
+        let api = crate::core::ir::ApiSurface {
+            crate_name: "demo".to_string(),
+            types: vec![TypeDef {
+                name: "Engine".to_string(),
+                rust_path: "demo::Engine".to_string(),
+                is_opaque: true,
+                methods: vec![MethodDef {
+                    name: "status".to_string(),
+                    receiver: Some(ReceiverKind::Ref),
+                    return_type: TypeRef::String,
+                    ..MethodDef::default()
+                }],
+                ..TypeDef::default()
+            }],
+            ..crate::core::ir::ApiSurface::default()
+        };
+        let kotlin = crate::backends::kotlin::emit_jni_bridge_object(&api, &config).content;
+        let rust = emit_lib_rs(&api, &config);
+
+        for suffix in ["Start", "Next", "Free"] {
+            let method = format!("nativeEngineStreamItems{suffix}");
+            assert!(kotlin.contains(&format!("external fun {method}(")), "{kotlin}");
+            assert!(rust.contains(&method), "missing JNI export for {method}: {rust}");
+        }
+    }
+
     /// The generated `throw_jni_error` helper must use `env.throw_new(...).is_err()`
     /// and fall back to `java/lang/RuntimeException` rather than silently discarding
     /// a failed throw (which would leave the Kotlin caller with no exception pending

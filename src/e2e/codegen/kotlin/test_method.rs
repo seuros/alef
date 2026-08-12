@@ -173,6 +173,15 @@ pub(super) fn render_test_method(
     // call-level default. When set the function returns `T?` and bare-result
     // emptiness assertions must use a null-check instead of `.isEmpty()`.
     let result_is_option = call_overrides.is_some_and(|o| o.result_is_option) || call_config.result_is_option;
+    let adapter = config
+        .adapters
+        .iter()
+        .find(|adapter| adapter.name == call_config.function);
+    let streaming_request = adapter.and_then(|adapter| {
+        matches!(adapter.pattern, crate::core::config::extras::AdapterPattern::Streaming)
+            .then(|| adapter.params.first())
+            .flatten()
+    });
 
     let method_name = fixture.id.to_upper_camel_case();
     let description = &fixture.description;
@@ -201,16 +210,18 @@ pub(super) fn render_test_method(
     // Uses `resolve_field` so that `field = "input"` resolves to the whole fixture
     // input (and not a nested key called "input"), matching dart/swift behavior.
     // Also include tests with array element types, which are deserialized inline.
-    let needs_deser = args.iter().any(|arg| {
-        let val = crate::e2e::codegen::resolve_field(&fixture.input, &arg.field);
-        arg.arg_type == "json_object"
-            && !val.is_null()
-            && crate::e2e::codegen::recipe::json_object_constructor_type(arg, options_type, val).is_some()
-    }) || args.iter().any(|arg| {
-        arg.arg_type == "json_object"
-            && arg.element_type.is_some()
-            && !crate::e2e::codegen::resolve_field(&fixture.input, &arg.field).is_null()
-    });
+    let needs_deser = streaming_request.is_some()
+        || args.iter().any(|arg| {
+            let val = crate::e2e::codegen::resolve_field(&fixture.input, &arg.field);
+            arg.arg_type == "json_object"
+                && !val.is_null()
+                && crate::e2e::codegen::recipe::json_object_constructor_type(arg, options_type, val).is_some()
+        })
+        || args.iter().any(|arg| {
+            arg.arg_type == "json_object"
+                && arg.element_type.is_some()
+                && !crate::e2e::codegen::resolve_field(&fixture.input, &arg.field).is_null()
+        });
 
     // Merge per-call kotlin enum_fields (HashMap key = field path, value = enum type name)
     // into the global fields_enum set so that call-specific enum-typed result fields
@@ -269,7 +280,6 @@ pub(super) fn render_test_method(
     // Capture the owner handle variable so the call is rendered as an
     // instance-method invocation instead of falling through to the flat-function
     // (or client-factory) call style.
-    let adapter = config.adapters.iter().find(|a| a.name == call_config.function.as_str());
     let is_streaming_owner_adapter = adapter.is_some_and(|a| {
         matches!(a.pattern, crate::core::config::extras::AdapterPattern::Streaming) && a.owner_type.is_some()
     });
@@ -346,9 +356,14 @@ pub(super) fn render_test_method(
         }
     }
 
-    let (setup_lines, args_str) = build_args_and_setup(
+    let call_args: Vec<_> = if streaming_owner_handle.is_some() && streaming_request.is_some() {
+        args.iter().filter(|arg| arg.arg_type == "handle").cloned().collect()
+    } else {
+        args.to_vec()
+    };
+    let (mut setup_lines, mut args_str) = build_args_and_setup(
         &fixture.input,
-        args,
+        &call_args,
         KotlinArgsContext {
             fixture,
             class_name,
@@ -360,6 +375,19 @@ pub(super) fn render_test_method(
             owner_handle_is_receiver: streaming_owner_handle.is_some(),
         },
     );
+    if streaming_owner_handle.is_some()
+        && let Some(request) = streaming_request
+    {
+        let request_name = request.name.to_lower_camel_case();
+        let request_type = request.ty.rsplit("::").next().unwrap_or(&request.ty);
+        let normalized = crate::e2e::codegen::transform_json_keys_for_language(&fixture.input, "snake_case");
+        let request_json = serde_json::to_string(&normalized).unwrap_or_default();
+        setup_lines.push(format!(
+            "val {request_name} = MAPPER.readValue(\"{}\", {request_type}::class.java)",
+            crate::e2e::escape::escape_kotlin(&request_json),
+        ));
+        args_str = request_name;
+    }
 
     // When client_factory is set, emit client-object instantiation + instance method call.
     // The factory name is a function on the Kotlin facade object
@@ -510,7 +538,7 @@ pub(super) fn render_test_method(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::config::extras::{AdapterConfig, AdapterPattern};
+    use crate::core::config::extras::{AdapterConfig, AdapterParam, AdapterPattern};
     use crate::e2e::config::{ArgMapping, CallConfig};
 
     fn handle_arg(name: &str) -> ArgMapping {
@@ -666,5 +694,46 @@ mod tests {
             out_no_owner.contains("val result = Facade.doThing(handle, \"https://example.com\")"),
             "a streaming adapter without owner_type must not switch to an instance receiver, got:\n{out_no_owner}"
         );
+    }
+
+    #[test]
+    fn streaming_owner_call_builds_declared_request_type() {
+        let call = CallConfig {
+            function: "stream_items".to_string(),
+            result_var: "result".to_string(),
+            args: vec![handle_arg("engine"), string_arg("url")],
+            ..CallConfig::default()
+        };
+        let mut adapter = streaming_owner_adapter("stream_items", "Engine");
+        adapter.params.push(AdapterParam {
+            name: "request".to_string(),
+            ty: "sample::StreamRequest".to_string(),
+            optional: false,
+        });
+        let generated = render(call, vec![adapter]);
+        assert!(generated.contains("MAPPER.readValue("), "got:\n{generated}");
+        assert!(generated.contains("StreamRequest::class.java"), "got:\n{generated}");
+        assert!(generated.contains("engine.streamItems(request)"), "got:\n{generated}");
+        assert!(!generated.contains("engine.streamItems(\"https://example.com\")"));
+
+        let statements = generated
+            .lines()
+            .filter(|line| line.contains("val request =") || line.contains("val result ="))
+            .map(str::trim)
+            .collect::<Vec<_>>()
+            .join("\n    ");
+        let source = format!(
+            "data class StreamRequest(val url: String = \"\")\nclass Engine {{ fun streamItems(request: StreamRequest): List<String> = listOf(request.url) }}\nobject MAPPER {{ fun <T : Any> readValue(value: String, type: Class<T>): T = type.getDeclaredConstructor().newInstance() }}\nfun main() {{\n    val engine = Engine()\n    {statements}\n}}\n"
+        );
+        let directory = tempfile::tempdir().expect("temporary Kotlin compile directory");
+        let source_path = directory.path().join("Assertions.kt");
+        std::fs::write(&source_path, source).expect("write generated Kotlin source");
+        let output = std::process::Command::new("kotlinc")
+            .arg(&source_path)
+            .arg("-d")
+            .arg(directory.path().join("assertions.jar"))
+            .output()
+            .expect("run kotlinc");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     }
 }

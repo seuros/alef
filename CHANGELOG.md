@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Kotlin E2E generation now constructs streaming adapters' declared request DTOs instead of passing primitive fixture
+  arguments to typed owner methods, and cross-checks streaming native declarations against generated JNI exports.
+
 - Generated Rust E2E assertions now use declared collection and enum field metadata for textual containment checks,
   avoiding invalid string arguments to `Vec<Named>::contains` and nonexistent enum `contains` methods.
 
