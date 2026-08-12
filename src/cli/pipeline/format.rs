@@ -421,7 +421,9 @@ pub(crate) fn poly_format_strict(paths: &[PathBuf], config_start: &Path) -> anyh
 
 fn run_poly_formatter(args: &[&str], work_dir: &Path) -> anyhow::Result<()> {
     let output = Command::new("poly").args(args).current_dir(work_dir).output()?;
-    if poly_format_exit_code_is_success(output.status.code()) {
+    if poly_format_exit_code_is_success(output.status.code())
+        && !poly_format_output_reports_failure(&output.stderr)
+    {
         return Ok(());
     }
     Err(formatter_failure(&output))
@@ -429,6 +431,10 @@ fn run_poly_formatter(args: &[&str], work_dir: &Path) -> anyhow::Result<()> {
 
 fn poly_format_exit_code_is_success(exit_code: Option<i32>) -> bool {
     matches!(exit_code, Some(0 | 1))
+}
+
+fn poly_format_output_reports_failure(stderr: &[u8]) -> bool {
+    String::from_utf8_lossy(stderr).contains("format failed:")
 }
 
 /// Directory names the executable-mode snapshot never descends into. They hold

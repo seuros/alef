@@ -614,6 +614,16 @@ fn poly_format_accepts_clean_and_reformatted_exit_codes() {
     assert!(!poly_format_exit_code_is_success(None));
 }
 
+#[test]
+fn poly_format_rejects_engine_failures_even_when_poly_exits_successfully() {
+    assert!(poly_format_output_reports_failure(
+        b"WARN format failed: parser rejected generated.py path=generated.py"
+    ));
+    assert!(!poly_format_output_reports_failure(
+        b"WARN generated file was not rewritten without --fix-generated"
+    ));
+}
+
 /// poly rewrites changed files via atomic rename, which resets the mode to `0644`.
 /// `poly_format` must put the executable bit back, or every regen strips it from
 /// the generated shebang scripts and poly's own `file-safety` lint rejects the
