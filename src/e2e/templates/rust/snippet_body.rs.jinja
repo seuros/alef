@@ -5,7 +5,7 @@
 async fn main() {
 {% else %}fn main() {
 {% endif %}
-{% for line in body %}    {{ line }}
+{% for line in body %}{{ line }}
 {% endfor %}
 {% for operation in presentation %}
 {% if operation.kind == "show" %}    println!("{:?}", {{ operation.expression }});

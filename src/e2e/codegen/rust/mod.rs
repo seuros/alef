@@ -240,11 +240,7 @@ fn extract_rust_snippet(rendered: &str) -> Result<(Vec<&str>, Vec<&str>, bool)> 
     let body = lines[signature + 1..function_end]
         .iter()
         .copied()
-        .filter_map(|line| match line.strip_prefix("    ") {
-            Some(indented) if indented.trim_start().starts_with("//") => None,
-            Some(indented) => Some(indented),
-            None => Some(line),
-        })
+        .filter(|line| !line.trim_start().starts_with("//"))
         .collect();
     Ok((imports, body, lines[signature].starts_with("async fn ")))
 }
@@ -816,6 +812,7 @@ options_type = "ChatRequest"
 
         assert!(body.contains("def greet(name):"), "{body}");
         assert!(body.contains("import os"), "{body}");
+        assert!(body.contains("\ndef greet(name):"), "{body}");
         assert!(!body.lines().any(|line| line == "}"), "{body}");
         syn::parse_file(&format!("fn main() {{\n{body}\n}}")).expect("generated snippet body parses");
     }
