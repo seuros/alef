@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated Ruby bindings now use tuple constructor and match syntax for adjacently tagged positional enum variants.
+
 - Kotlin assertions over optional JSON scalar fields now stringify safely instead of invoking string-only extensions
   on `Any?` values.
 

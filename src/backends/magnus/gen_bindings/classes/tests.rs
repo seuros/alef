@@ -185,6 +185,24 @@ fn gen_enum_emits_adjacent_serde_representation() {
 
     assert!(code.contains(r#"#[serde(tag = "type", content = "output")]"#));
     assert!(code.contains("Jpeg(String)"));
+    assert!(code.contains("Self::Jpeg(_0) => Some(_0)"), "{code}");
+    assert!(!code.contains("Self::Jpeg { _0 }"), "{code}");
+    syn::parse_file(&code).unwrap_or_else(|error| panic!("generated Rust must parse: {error}\n{code}"));
+}
+
+#[test]
+fn adjacent_tuple_default_uses_tuple_constructor_syntax() {
+    let mut enum_def = make_data_enum("OperationResult", Some("type"));
+    enum_def.serde_content = Some("output".to_string());
+    enum_def.variants[1].is_tuple = true;
+    enum_def.variants[1].is_default = true;
+    enum_def.variants[1].fields[0].name = "_0".to_string();
+
+    let code = gen_enum(&enum_def);
+
+    assert!(code.contains("Self::Jpeg(Default::default())"), "{code}");
+    assert!(!code.contains("Self::Jpeg { _0:"), "{code}");
+    syn::parse_file(&code).unwrap_or_else(|error| panic!("generated Rust must parse: {error}\n{code}"));
 }
 
 #[test]

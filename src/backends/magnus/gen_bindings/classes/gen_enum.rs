@@ -25,7 +25,7 @@ pub fn gen_enum(enum_def: &EnumDef) -> String {
             .unwrap_or_else(|| enum_def.variants.first().unwrap());
         if default.fields.is_empty() {
             String::new()
-        } else if enum_def.serde_untagged && default.is_tuple {
+        } else if emits_tuple_variant(enum_def, default) {
             let field_defaults: Vec<&str> = default.fields.iter().map(|_| "Default::default()").collect();
             format!("({})", field_defaults.join(", "))
         } else {
@@ -60,6 +60,7 @@ pub fn gen_enum(enum_def: &EnumDef) -> String {
                 serde_rename => &variant.serde_rename,
                 fields => &fields,
                 is_tuple => variant.is_tuple,
+                emits_as_tuple => emits_tuple_variant(enum_def, variant),
                 snake_name => crate::codegen::naming::pascal_to_snake(&variant.name),
             }
         })
@@ -80,6 +81,10 @@ pub fn gen_enum(enum_def: &EnumDef) -> String {
             first_variant_default => &first_variant_default,
         },
     )
+}
+
+fn emits_tuple_variant(enum_def: &EnumDef, variant: &crate::core::ir::EnumVariant) -> bool {
+    variant.is_tuple && (enum_def.serde_untagged || enum_def.serde_content.is_some())
 }
 
 /// Map a field type to a Rust type suitable for serde deserialization in data enums.
