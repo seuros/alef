@@ -88,6 +88,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/register_fn_body.jinja"),
     ),
     (
+        "return_len_companion_body.jinja",
+        include_str!("templates/return_len_companion_body.jinja"),
+    ),
+    (
         "c_string_conversion.jinja",
         include_str!("templates/c_string_conversion.jinja"),
     ),

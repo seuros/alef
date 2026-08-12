@@ -5,6 +5,7 @@ use crate::core::ir::{CoreWrapper, EnumDef, FieldDef, TypeDef, TypeRef};
 use ahash::{AHashMap, AHashSet};
 use minijinja::context;
 
+use super::field_ownership::field_accessor_ownership_lines;
 use super::helpers::{gen_ffi_unimplemented_body, gen_value_to_c, null_return_value};
 
 fn is_primitive_c_type_override(c_type: &str) -> bool {
@@ -201,6 +202,13 @@ pub(super) fn gen_field_accessor(
         override_is_opaque_handle,
         override_type_name.as_deref(),
     );
+    let ownership_lines = field_accessor_ownership_lines(
+        &effective_ty,
+        prefix,
+        enum_names,
+        clone_names,
+        override_type_name.as_deref(),
+    );
 
     crate::backends::ffi::template_env::render(
         "field_accessor_header.jinja",
@@ -215,6 +223,7 @@ pub(super) fn gen_field_accessor(
             null_return_value => null_ret,
             body => body,
             source_cfg => typ.cfg.as_deref().unwrap_or(""),
+            ownership_lines => ownership_lines,
         },
     )
 }
@@ -619,6 +628,7 @@ pub(super) fn gen_opaque_static_constructor(
             ffi_fn_name => ffi_fn_name.clone(),
             ffi_params => ffi_params.join(",\n"),
             return_qualified => return_qualified.clone(),
+            source_cfg => typ.cfg.as_deref().unwrap_or(""),
         },
     ));
 

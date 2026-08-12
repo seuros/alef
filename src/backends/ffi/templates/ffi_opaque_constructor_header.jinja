@@ -1,3 +1,6 @@
+{% if source_cfg -%}
+#[cfg({{ source_cfg }})]
+{% endif -%}
 {{ allow_clippy }}#[unsafe(no_mangle)]
 pub unsafe extern "C" fn {{ ffi_fn_name }}(
 {{ ffi_params }}

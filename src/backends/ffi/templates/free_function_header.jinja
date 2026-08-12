@@ -15,4 +15,7 @@ pub unsafe extern "C" fn {{ fn_name }}(
 {% endfor -%}
 ){% if return_type %} -> {{ return_type }}{% endif %} {
     clear_last_error();
+{% if return_len_key %}
+    set_last_return_len("{{ return_len_key }}", 0);
+{% endif %}
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

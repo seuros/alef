@@ -6,4 +6,5 @@ mod doxygen;
 mod fields;
 mod methods;
 mod regressions;
+mod security;
 mod visitor;

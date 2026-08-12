@@ -2,6 +2,9 @@
 #[cfg({{ source_cfg }})]
 {% endif -%}
 /// Get the `{{ field_name }}` field from a `{{ type_name }}`.
+{% for ownership_line in ownership_lines -%}
+/// {{ ownership_line }}
+{% endfor -%}
 /// # Safety
 /// Pointer must be a valid handle returned by this library.
 #[unsafe(no_mangle)]

@@ -5,20 +5,32 @@
 {%- elif type_class == "string" %}
   {{ indent }}match CString::new({{ expr }}.to_string()) {
   {{ indent }} Ok(cs) => cs.into_raw(),
-  {{ indent }} Err(_) => std::ptr::null_mut(),
+  {{ indent }} Err(_) => {
+  {{ indent }}  set_last_error(ALEF_FFI_CONVERSION_ERROR, "FFI field value contains an interior NUL byte");
+  {{ indent }}  std::ptr::null_mut()
+  {{ indent }} },
   {{ indent }}}
 {%- elif type_class == "path" %}
   {{ indent }}match CString::new({{ expr }}.to_string_lossy().to_string()) {
   {{ indent }} Ok(cs) => cs.into_raw(),
-  {{ indent }} Err(_) => std::ptr::null_mut(),
+  {{ indent }} Err(_) => {
+  {{ indent }}  set_last_error(ALEF_FFI_CONVERSION_ERROR, "FFI path value contains an interior NUL byte");
+  {{ indent }}  std::ptr::null_mut()
+  {{ indent }} },
   {{ indent }}}
 {%- elif type_class == "json_or_vec_or_map" %}
   {{ indent }}match serde_json::to_string(&{{ expr }}) {
   {{ indent }} Ok(s) => match CString::new(s) {
   {{ indent }} Ok(cs) => cs.into_raw(),
-  {{ indent }} Err(_) => std::ptr::null_mut(),
+  {{ indent }} Err(_) => {
+  {{ indent }}  set_last_error(ALEF_FFI_CONVERSION_ERROR, "FFI JSON value contains an interior NUL byte");
+  {{ indent }}  std::ptr::null_mut()
   {{ indent }} },
-  {{ indent }} Err(_) => std::ptr::null_mut(),
+  {{ indent }} },
+  {{ indent }} Err(_) => {
+  {{ indent }}  set_last_error(ALEF_FFI_CONVERSION_ERROR, "failed to serialize FFI field value");
+  {{ indent }}  std::ptr::null_mut()
+  {{ indent }} },
   {{ indent }}}
 {%- elif type_class == "named_enum" %}
   {{ indent }}Box::into_raw(Box::new({{ copy_expr }}))

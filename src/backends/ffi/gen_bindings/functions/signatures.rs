@@ -144,7 +144,10 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function_len_companion(
         return out;
     }
 
-    out.push_str("    catch_ffi_panic_preserving_error(0, last_return_len)\n");
+    out.push_str(&crate::backends::ffi::template_env::render(
+        "return_len_companion_body.jinja",
+        context! { return_len_key => format!("{prefix}_{fn_name_snake}") },
+    ));
     out.push_str("\n}");
     out
 }

@@ -46,20 +46,20 @@ pub(in crate::backends::ffi::gen_bindings) fn returns_c_char(ty: &TypeRef) -> bo
 /// Generate a C-string return expression that records the byte length before
 /// transferring ownership to the caller.
 ///
-/// The matching `_len()` companion reads this thread-local length instead of
+/// The matching `_len()` companion reads this function-specific thread-local length instead of
 /// re-executing the wrapped Rust function.
-pub(super) fn gen_owned_c_char_to_c_with_len(expr: &str, ty: &TypeRef, indent: &str) -> String {
+pub(super) fn gen_owned_c_char_to_c_with_len(expr: &str, ty: &TypeRef, indent: &str, return_len_key: &str) -> String {
     match ty {
         TypeRef::String | TypeRef::Char => format!(
             "{indent}{{\n\
              {indent}    let __alef_return = {expr}.to_string();\n\
              {indent}    match CString::new(__alef_return) {{\n\
              {indent}        Ok(cs) => {{\n\
-             {indent}            set_last_return_len(cs.as_bytes().len());\n\
+             {indent}            set_last_return_len(\"{return_len_key}\", cs.as_bytes().len());\n\
              {indent}            cs.into_raw()\n\
              {indent}        }}\n\
              {indent}        Err(_) => {{\n\
-             {indent}            set_last_return_len(0);\n\
+             {indent}            set_last_return_len(\"{return_len_key}\", 0);\n\
              {indent}            std::ptr::null_mut()\n\
              {indent}        }}\n\
              {indent}    }}\n\
@@ -70,11 +70,11 @@ pub(super) fn gen_owned_c_char_to_c_with_len(expr: &str, ty: &TypeRef, indent: &
              {indent}    let __alef_return = {expr}.to_string_lossy().to_string();\n\
              {indent}    match CString::new(__alef_return) {{\n\
              {indent}        Ok(cs) => {{\n\
-             {indent}            set_last_return_len(cs.as_bytes().len());\n\
+             {indent}            set_last_return_len(\"{return_len_key}\", cs.as_bytes().len());\n\
              {indent}            cs.into_raw()\n\
              {indent}        }}\n\
              {indent}        Err(_) => {{\n\
-             {indent}            set_last_return_len(0);\n\
+             {indent}            set_last_return_len(\"{return_len_key}\", 0);\n\
              {indent}            std::ptr::null_mut()\n\
              {indent}        }}\n\
              {indent}    }}\n\
@@ -85,30 +85,31 @@ pub(super) fn gen_owned_c_char_to_c_with_len(expr: &str, ty: &TypeRef, indent: &
              {indent}    match serde_json::to_string(&{expr}) {{\n\
              {indent}        Ok(__alef_return) => match CString::new(__alef_return) {{\n\
              {indent}            Ok(cs) => {{\n\
-             {indent}                set_last_return_len(cs.as_bytes().len());\n\
+             {indent}                set_last_return_len(\"{return_len_key}\", cs.as_bytes().len());\n\
              {indent}                cs.into_raw()\n\
              {indent}            }}\n\
              {indent}            Err(_) => {{\n\
-             {indent}                set_last_return_len(0);\n\
+             {indent}                set_last_return_len(\"{return_len_key}\", 0);\n\
              {indent}                std::ptr::null_mut()\n\
              {indent}            }}\n\
              {indent}        }},\n\
              {indent}        Err(_) => {{\n\
-             {indent}            set_last_return_len(0);\n\
+             {indent}            set_last_return_len(\"{return_len_key}\", 0);\n\
              {indent}            std::ptr::null_mut()\n\
              {indent}        }}\n\
              {indent}    }}\n\
              {indent}}}"
         ),
         TypeRef::Optional(inner) => {
-            let inner_conversion = gen_owned_c_char_to_c_with_len("val", inner, &format!("{indent}        "));
+            let inner_conversion =
+                gen_owned_c_char_to_c_with_len("val", inner, &format!("{indent}        "), return_len_key);
             format!(
                 "{indent}match {expr} {{\n\
                  {indent}    Some(val) => {{\n\
                  {inner_conversion}\n\
                  {indent}    }}\n\
                  {indent}    None => {{\n\
-                 {indent}        set_last_return_len(0);\n\
+                 {indent}        set_last_return_len(\"{return_len_key}\", 0);\n\
                  {indent}        std::ptr::null_mut()\n\
                  {indent}    }}\n\
                  {indent}}}"

@@ -621,6 +621,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
             params => params,
             return_type => return_type,
             source_cfg => func.cfg.as_deref().unwrap_or(""),
+            return_len_key => returns_c_char(&func.return_type).then_some(ffi_name.as_str()),
         },
     );
 
@@ -874,7 +875,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
                         super::super::capsule::capsule_into_raw_expr(val_expr, cfg)
                     )
                 } else if returns_c_char(&func.return_type) {
-                    gen_owned_c_char_to_c_with_len(val_expr, &func.return_type, "            ")
+                    gen_owned_c_char_to_c_with_len(val_expr, &func.return_type, "            ", &ffi_name)
                 } else {
                     gen_owned_value_to_c(val_expr, &func.return_type, "            ", enum_names)
                 };
@@ -897,7 +898,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
             let content = if let Some(cfg) = capsule_cfg {
                 format!("    {}", super::super::capsule::capsule_into_raw_expr(result_expr, cfg))
             } else if returns_c_char(&func.return_type) {
-                gen_owned_c_char_to_c_with_len(result_expr, &func.return_type, "    ")
+                gen_owned_c_char_to_c_with_len(result_expr, &func.return_type, "    ", &ffi_name)
             } else {
                 gen_owned_value_to_c(result_expr, &func.return_type, "    ", enum_names)
             };
