@@ -29,6 +29,12 @@ fn declared_error_value_check(declared: Option<&str>) -> Option<String> {
     ))
 }
 
+fn ensure_assertion_line_ending(assertions: &mut String) {
+    if !assertions.is_empty() && !assertions.ends_with('\n') {
+        assertions.push('\n');
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_test_method(
     out: &mut String,
@@ -364,6 +370,7 @@ pub(super) fn render_test_method(
             &effective_enum_fields,
             &assert_enum_types,
         );
+        ensure_assertion_line_ending(&mut assertions_body);
     }
 
     let throws_clause = " throws Exception";
@@ -490,5 +497,20 @@ mod declared_error_value_check_tests {
             check.contains("bad \\\"field\\\" \\\\ value"),
             "expected escaped literal, got: {check}"
         );
+    }
+}
+
+#[cfg(test)]
+mod assertion_line_ending_tests {
+    use super::ensure_assertion_line_ending;
+
+    #[test]
+    fn separates_consecutive_rendered_assertions() {
+        let mut assertions = "        assertTrue(first);".to_string();
+        ensure_assertion_line_ending(&mut assertions);
+        assertions.push_str("        assertTrue(second);");
+        ensure_assertion_line_ending(&mut assertions);
+
+        assert_eq!(assertions, "        assertTrue(first);\n        assertTrue(second);\n");
     }
 }
