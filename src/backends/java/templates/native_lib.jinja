@@ -4,6 +4,17 @@ final class {{ class_name }} {
     private static final Linker LINKER = Linker.nativeLinker();
     private static SymbolLookup LIB;
     private static final String NATIVES_RESOURCE_ROOT = "/natives";
+    private static final String LIBRARY_PATH_PROPERTY = "{{ lib_name }}.library.path";
+    private static final String LIBRARY_DIRECTORY_PROPERTY = "{{ lib_name }}.library.dir";
+    private static final String SKIP_BUNDLED_PROPERTY = "{{ lib_name }}.skipBundled";
+    private static final String LIBRARY_PATH_ENV = "{{ library_environment_prefix }}_LIB_PATH";
+    private static final String LIBRARY_DIRECTORY_ENV = "{{ library_environment_prefix }}_LIB_DIR";
+    private static final String SKIP_BUNDLED_ENV = "{{ library_environment_prefix }}_SKIP_BUNDLED";
+    private static final String[] REQUIRED_SYMBOLS = {
+{% for symbol in required_symbols %}
+        "{{ symbol }}"{% if not loop.last %},{% endif %}
+{% endfor %}
+    };
     private static final Object NATIVE_EXTRACT_LOCK = new Object();
     private static String cachedExtractKey;
     private static Path cachedExtractDir;
@@ -21,9 +32,9 @@ final class {{ class_name }} {
                     LIB = LINKER.defaultLookup();
                 }
             } else {
-                // Library loaded via System.loadLibrary() without absolute path
                 LIB = LINKER.defaultLookup();
             }
+            validateRequiredSymbols(loadedLibraryPath);
         } catch (RuntimeException | Error e) {
             ExceptionInInitializerError error = new ExceptionInInitializerError(
                 "Failed to initialize library symbols: " + e.getMessage());
@@ -53,10 +64,26 @@ final class {{ class_name }} {
         String nativesRid = resolveNativesRid(osName, osArch);
         String nativesDir = NATIVES_RESOURCE_ROOT + "/" + nativesRid;
 
-        Path extracted = tryExtractAndLoadFromResources(nativesDir, libName, libExt);
-        if (extracted != null) {
-            loadedLibraryPath = extracted;
-            return loadedLibraryPath;
+        String explicitPath = firstNonBlank(System.getProperty(LIBRARY_PATH_PROPERTY), System.getenv(LIBRARY_PATH_ENV));
+        if (explicitPath != null) {
+            return loadAbsolutePath(Paths.get(explicitPath));
+        }
+
+        String explicitDirectory = firstNonBlank(
+                System.getProperty(LIBRARY_DIRECTORY_PROPERTY),
+                System.getenv(LIBRARY_DIRECTORY_ENV));
+        if (explicitDirectory != null) {
+            return loadAbsolutePath(Paths.get(explicitDirectory, libName + libExt));
+        }
+
+        String skipBundledValue = firstNonBlank(
+                System.getProperty(SKIP_BUNDLED_PROPERTY),
+                System.getenv(SKIP_BUNDLED_ENV));
+        if (!Boolean.parseBoolean(skipBundledValue)) {
+            Path extracted = tryExtractAndLoadFromResources(nativesDir, libName, libExt);
+            if (extracted != null) {
+                return extracted;
+            }
         }
 
         try {
@@ -70,12 +97,56 @@ final class {{ class_name }} {
             String msg = "Failed to load {{ lib_name }} native library. Expected resource: " + nativesDir + "/" + libName
                     + libExt + " (RID: " + nativesRid + "). "
                     + "Ensure the library is bundled in the JAR under natives/{os-arch}/, "
-                    + "or place it on the system library path (java.library.path).";
+                    + "place it on java.library.path, set -D" + LIBRARY_PATH_PROPERTY
+                    + "=/absolute/path, or set " + LIBRARY_PATH_ENV + ".";
             UnsatisfiedLinkError out = new UnsatisfiedLinkError(msg + " Original error: " + e.getMessage());
             out.initCause(e);
             throw out;
         }
         return loadedLibraryPath;
+    }
+
+    private static String firstNonBlank(String preferred, String fallback) {
+        if (preferred != null && !preferred.isBlank()) {
+            return preferred;
+        }
+        if (fallback != null && !fallback.isBlank()) {
+            return fallback;
+        }
+        return null;
+    }
+
+    private static Path loadAbsolutePath(Path configuredPath) {
+        Path absolutePath = configuredPath.toAbsolutePath().normalize();
+        if (!Files.isRegularFile(absolutePath)) {
+            throw new UnsatisfiedLinkError("Configured native library does not exist: " + absolutePath);
+        }
+        System.load(absolutePath.toString());
+        return absolutePath;
+    }
+
+    private static void validateRequiredSymbols(Path loadedLibraryPath) {
+        List<String> missing = new ArrayList<>();
+        for (String symbol : REQUIRED_SYMBOLS) {
+            if (LIB.find(symbol).isEmpty() && LIB.find("_" + symbol).isEmpty()) {
+                missing.add(symbol);
+            }
+        }
+        if (missing.isEmpty()) {
+            return;
+        }
+
+        int exportedCount = REQUIRED_SYMBOLS.length - missing.size();
+        String loadedFrom = loadedLibraryPath == null
+                ? "System.loadLibrary({{ lib_name }}) / java.library.path"
+                : loadedLibraryPath.toString();
+        throw new UnsatisfiedLinkError(
+                "The loaded {{ lib_name }} native library is stale relative to this binding: it exports "
+                        + exportedCount + " of " + REQUIRED_SYMBOLS.length + " required symbols. Missing: "
+                        + String.join(", ", missing) + ". Loaded from: " + loadedFrom
+                        + ". Rebuild the native library, point this binding at a current one with -D"
+                        + LIBRARY_PATH_PROPERTY + "=/absolute/path, or bypass bundled resources with -D"
+                        + SKIP_BUNDLED_PROPERTY + "=true.");
     }
 
     private static Path tryExtractAndLoadFromResources(String nativesDir, String libName, String libExt) {

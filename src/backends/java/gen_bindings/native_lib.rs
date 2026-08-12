@@ -36,6 +36,28 @@ fn is_bytes_result_method(method: &MethodDef) -> bool {
         || matches!(&method.return_type, TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Bytes))
 }
 
+fn extract_required_symbols(blocks: impl IntoIterator<Item = impl AsRef<str>>) -> BTreeSet<String> {
+    const FIND_PREFIX: &str = "LIB.find(\"";
+    let mut symbols = BTreeSet::new();
+
+    for block in blocks {
+        let mut remaining = block.as_ref();
+        while let Some(start) = remaining.find(FIND_PREFIX) {
+            remaining = &remaining[start + FIND_PREFIX.len()..];
+            let Some(end) = remaining.find('"') else {
+                break;
+            };
+            let symbol = &remaining[..end];
+            if !symbol.starts_with('_') {
+                symbols.insert(symbol.to_string());
+            }
+            remaining = &remaining[end + 1..];
+        }
+    }
+
+    symbols
+}
+
 pub(crate) fn gen_native_lib(
     api: &ApiSurface,
     config: &ResolvedCrateConfig,
@@ -86,6 +108,7 @@ pub(crate) fn gen_native_lib(
     let enum_names: AHashSet<String> = api.enums.iter().map(|e| e.name.clone()).collect();
 
     let mut function_handles = Vec::new();
+    let mut optional_symbols = BTreeSet::new();
 
     for func in &api.functions {
         let handle_name = format!("{}_{}", prefix.to_uppercase(), func.name.to_uppercase());
@@ -141,6 +164,7 @@ pub(crate) fn gen_native_lib(
         let layout_str = gen_function_descriptor(&return_layout, &param_layouts);
 
         let handle_code = if ffi_excluded.contains(&func.name) {
+            optional_symbols.insert(ffi_name.clone());
             crate::backends::java::template_env::render(
                 "method_handle_nullable.jinja",
                 minijinja::context! {
@@ -713,13 +737,38 @@ pub(crate) fn gen_native_lib(
         String::new()
     };
 
+    let handle_blocks = function_handles
+        .iter()
+        .chain(&accessor_handles)
+        .chain(&builder_handles)
+        .chain(&trait_handles)
+        .map(String::as_str)
+        .chain(std::iter::once(visitor_handles.as_str()));
+    let mut required_symbols = extract_required_symbols(handle_blocks);
+    required_symbols.retain(|symbol| !optional_symbols.contains(symbol));
+    required_symbols.insert(format!("{prefix}_last_error_code"));
+    required_symbols.insert(format!("{prefix}_last_error_context"));
+    let required_symbols: Vec<String> = required_symbols.into_iter().collect();
+    let library_environment_prefix: String = lib_name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+
     let class_body = crate::backends::java::template_env::render(
         "native_lib.jinja",
         minijinja::context! {
             class_name => "NativeLib",
             lib_name => lib_name,
+            library_environment_prefix => library_environment_prefix,
             prefix => prefix,
             prefix_upper => prefix.to_uppercase(),
+            required_symbols => required_symbols,
             function_handles => function_handles,
             accessor_handles => accessor_handles,
             builder_handles => builder_handles,

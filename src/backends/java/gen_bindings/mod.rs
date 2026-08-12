@@ -653,4 +653,38 @@ mod tests {
         assert!(!output.contains("sample_register_markup_visitor"));
         assert!(!output.contains("SAMPLE_REGISTER_MARKUP_VISITOR"));
     }
+
+    #[test]
+    fn native_library_prioritizes_explicit_paths_and_aggregates_symbol_validation() {
+        let api = ApiSurface {
+            functions: vec![FunctionDef {
+                name: "process_document".to_string(),
+                ..FunctionDef::default()
+            }],
+            ..ApiSurface::default()
+        };
+        let output = gen_native_lib(
+            &api,
+            &ResolvedCrateConfig {
+                name: "sample".to_string(),
+                ..ResolvedCrateConfig::default()
+            },
+            "dev.sample",
+            "sample",
+            false,
+        );
+
+        let explicit_path = output.find("String explicitPath").expect("explicit path branch");
+        let resource = output
+            .find("tryExtractAndLoadFromResources")
+            .expect("bundled resource branch");
+        assert!(explicit_path < resource, "explicit path must precede bundled resources");
+        assert!(output.contains("SAMPLE_FFI_LIB_PATH"));
+        assert!(output.contains("sample_ffi.library.path"));
+        assert!(output.contains("sample_process_document"));
+        assert!(output.contains("List<String> missing = new ArrayList<>()"));
+        assert!(output.contains("exports \"\n                        + exportedCount + \" of \""));
+        assert!(output.contains("Loaded from: "));
+        assert!(output.contains("validateRequiredSymbols(loadedLibraryPath)"));
+    }
 }

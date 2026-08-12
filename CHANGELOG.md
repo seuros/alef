@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated Java bindings now honor explicit native-library path overrides before bundled resources and report every
+  missing ABI symbol, the exported count, and the loaded path in one eager startup diagnostic.
+
 - Generated agent skills now include required YAML `name` and `description` frontmatter when templates omit it.
 
 - Alef now warns when the running CLI is newer than `alef.toml`'s pinned version, making compatibility-gated output
