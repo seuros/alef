@@ -12,6 +12,7 @@ import RustBridge
 /// Protocol for outbound `ImageProcessor` implementations.
 /// Conform your Swift class or struct to this protocol to implement
 /// a Rust trait from the host side.
+/// Implementations may be invoked concurrently and must synchronize mutable state.
 public protocol SwiftImageProcessorBridge: SwiftPluginBridge {
     func processImage(imageBytes: Data, config: String) throws -> String
     func supportsLanguage(lang: String) -> Bool

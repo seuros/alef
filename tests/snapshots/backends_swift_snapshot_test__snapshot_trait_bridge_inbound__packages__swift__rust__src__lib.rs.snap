@@ -216,7 +216,9 @@ pub struct SwiftImageProcessorWrapper {
     /// the Swift FFI shim returns an owned `String`. Populated lazily on first access.
     name_cache: ::std::sync::OnceLock<String>,
 }
+// SAFETY: ~keep The Swift API requires conformers to synchronize all shared mutable state.
 unsafe impl Send for SwiftImageProcessorWrapper {}
+// SAFETY: ~keep The same documented synchronization contract permits shared references.
 unsafe impl Sync for SwiftImageProcessorWrapper {}
 
 impl SwiftImageProcessorWrapper {

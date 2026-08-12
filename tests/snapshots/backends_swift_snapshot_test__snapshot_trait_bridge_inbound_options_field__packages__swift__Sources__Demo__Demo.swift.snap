@@ -63,6 +63,7 @@ public func flowDecisionFromJson(_ json: String) throws -> FlowDecision {
 }
 /// Swift protocol that Swift classes implement to provide visitor callbacks.
 /// Conform to this protocol to intercept configured Rust trait bridge events.
+/// Implementations may be invoked concurrently and must synchronize mutable state.
 public protocol MarkupCallbackProtocol: AnyObject {
     func visitNode(_ tag: String) -> FlowDecision
 }

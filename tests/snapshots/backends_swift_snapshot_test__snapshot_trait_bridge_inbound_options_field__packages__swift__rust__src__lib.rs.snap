@@ -205,7 +205,9 @@ where
 pub struct SwiftMarkupCallbackWrapper {
     inner: ffi::SwiftMarkupCallbackBox,
 }
+// SAFETY: ~keep The Swift API requires conformers to synchronize all shared mutable state.
 unsafe impl Send for SwiftMarkupCallbackWrapper {}
+// SAFETY: ~keep The same documented synchronization contract permits shared references.
 unsafe impl Sync for SwiftMarkupCallbackWrapper {}
 
 impl SwiftMarkupCallbackWrapper {
