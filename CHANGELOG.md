@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Alef now warns when the running CLI is newer than `alef.toml`'s pinned version, making compatibility-gated output
+  visible before regeneration.
+
 - Generated Java E2E assertions now retain statement separators when multiple assertions share a test method.
 
 - Generated C# native declarations now treat only emitted concrete Rust types as FFI handles, preventing enum and
