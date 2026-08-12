@@ -287,7 +287,7 @@ default_features = false
     #[test]
     fn streaming_kotlin_declarations_have_matching_jni_exports() {
         use crate::core::config::extras::{AdapterConfig, AdapterParam, AdapterPattern};
-        use crate::core::ir::{MethodDef, ReceiverKind, TypeDef};
+        use crate::core::ir::TypeDef;
 
         let mut config = btree_fixture_config();
         config.adapters.push(AdapterConfig {
@@ -316,12 +316,7 @@ default_features = false
                 name: "Engine".to_string(),
                 rust_path: "demo::Engine".to_string(),
                 is_opaque: true,
-                methods: vec![MethodDef {
-                    name: "status".to_string(),
-                    receiver: Some(ReceiverKind::Ref),
-                    return_type: TypeRef::String,
-                    ..MethodDef::default()
-                }],
+                methods: Vec::new(),
                 ..TypeDef::default()
             }],
             ..crate::core::ir::ApiSurface::default()
@@ -332,7 +327,10 @@ default_features = false
         let expected_methods = ["Start", "Next", "Free"].map(|suffix| format!("nativeEngineStreamItems{suffix}"));
         for method in &expected_methods {
             assert!(kotlin.contains(&format!("external fun {method}(")), "{kotlin}");
-            assert!(rust.contains(&method), "missing JNI export for {method}: {rust}");
+            assert!(
+                rust.contains(method.as_str()),
+                "missing JNI export for {method}: {rust}"
+            );
         }
         for kotlin_method in kotlin
             .lines()

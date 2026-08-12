@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed indexed JSON-scalar metadata matching, simple-result enum containment, falsifiable collection containment,
+  and JNI streaming exports for opaque owner handles without ordinary methods.
+
 - Made Rust and Kotlin containment assertions respect the effective result type, including complex arrays and
   nullable JSON values, without applying whole-record debug matching from unrelated field metadata.
 - Imported streaming request DTOs into generated Kotlin tests and verified Start/Next/Free JNI declarations and

@@ -10,6 +10,8 @@ mod renderers;
 mod resolver;
 mod types;
 
+pub(crate) use parse::normalize_indices_to_wildcards;
+
 pub use types::{DartFirstClassMap, FieldResolver, PhpGetterMap, StringyField, StringyFieldKind, SwiftFirstClassMap};
 
 #[cfg(test)]

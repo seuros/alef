@@ -37,7 +37,7 @@ pub(super) fn strip_numeric_indices(path: &str) -> String {
     result
 }
 
-pub(super) fn normalize_numeric_indices(path: &str) -> String {
+pub(crate) fn normalize_numeric_indices(path: &str) -> String {
     let mut result = String::with_capacity(path.len());
     let mut chars = path.chars().peekable();
     while let Some(c) = chars.next() {
@@ -65,6 +65,31 @@ pub(super) fn normalize_numeric_indices(path: &str) -> String {
         }
     }
     result
+}
+
+pub(crate) fn normalize_indices_to_wildcards(path: &str) -> String {
+    let mut normalized = String::with_capacity(path.len());
+    let mut characters = path.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character != '[' {
+            normalized.push(character);
+            continue;
+        }
+        let mut index = String::new();
+        while let Some(&inner) = characters.peek() {
+            characters.next();
+            if inner == ']' {
+                break;
+            }
+            index.push(inner);
+        }
+        normalized.push('[');
+        if !index.chars().all(|inner| inner.is_ascii_digit()) {
+            normalized.push_str(&index);
+        }
+        normalized.push(']');
+    }
+    normalized
 }
 
 pub(super) fn parse_path(path: &str) -> Vec<PathSegment> {

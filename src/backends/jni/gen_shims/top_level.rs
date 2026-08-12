@@ -114,6 +114,12 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
         );
     }
 
+    let streaming_owner_types: std::collections::HashSet<&str> = config
+        .adapters
+        .iter()
+        .filter(|adapter| matches!(adapter.pattern, AdapterPattern::Streaming))
+        .filter_map(|adapter| adapter.owner_type.as_deref())
+        .collect();
     let client_types: Vec<_> = cfg_filtered_api
         .types
         .iter()
@@ -121,7 +127,8 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
             t.is_opaque
                 && !t.is_trait
                 && !exclude_types.contains(t.name.as_str())
-                && t.methods.iter().any(|m| !m.sanitized && !m.is_static)
+                && (t.methods.iter().any(|m| !m.sanitized && !m.is_static)
+                    || streaming_owner_types.contains(t.name.as_str()))
         })
         .collect();
     let client_type_names: std::collections::HashSet<&str> = client_types.iter().map(|t| t.name.as_str()).collect();

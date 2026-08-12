@@ -183,6 +183,44 @@ fn assertion_json_scalar_optional_field_stringifies_before_or_empty() {
 }
 
 #[test]
+fn assertion_json_scalar_matches_configured_array_wildcard() {
+    let resolver = FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &HashSet::from(["action_results".to_string()]),
+        &HashSet::from(["action_results".to_string()]),
+        &HashSet::new(),
+    );
+    let assertion = Assertion {
+        assertion_type: "contains".to_string(),
+        field: Some("action_results[0].data".to_string()),
+        value: Some(serde_json::json!("JS Test Page")),
+        values: None,
+        method: None,
+        check: None,
+        args: None,
+        return_type: None,
+    };
+    let mut output = String::new();
+    render_assertion(
+        &mut output,
+        &assertion,
+        "result",
+        "",
+        &resolver,
+        false,
+        false,
+        &HashSet::new(),
+        &HashSet::from(["action_results[].data".to_string()]),
+        &HashMap::new(),
+        false,
+        true,
+    );
+    assert!(output.contains("data?.toString().orEmpty().contains"), "got: {output}");
+    assert!(!output.contains("data.orEmpty()"), "got: {output}");
+}
+
+#[test]
 fn assertion_json_scalar_and_nullable_root_are_stringified_for_contains() {
     let resolver = FieldResolver::new(
         &HashMap::new(),

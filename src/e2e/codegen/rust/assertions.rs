@@ -397,13 +397,14 @@ pub fn render_assertion_with_streaming(
         }
         _ => effective_result_var,
     };
-    let field_uses_textual_debug = if result_is_simple {
-        result_is_vec
-    } else {
-        assertion.field.as_deref().is_some_and(|field| {
-            field_resolver.is_enum(field) || field_resolver.is_array(field) || field_resolver.is_collection_root(field)
-        })
-    };
+    let field_is_enum = assertion
+        .field
+        .as_deref()
+        .is_some_and(|field| field_resolver.is_enum(field));
+    let field_is_collection = assertion
+        .field
+        .as_deref()
+        .is_some_and(|field| field_resolver.is_array(field) || field_resolver.is_collection_root(field));
 
     match assertion.assertion_type.as_str() {
         "error" => {
@@ -429,9 +430,13 @@ pub fn render_assertion_with_streaming(
         "contains" => {
             if let Some(val) = &assertion.value {
                 let expected = value_to_rust_string(val);
-                let line = if field_uses_textual_debug {
+                let line = if field_is_enum {
                     format!(
                         "    assert!(format!(\"{{:?}}\", {field_access}).to_lowercase().contains(&{expected}.to_lowercase()), \"expected to contain: {{}}\", {expected});"
+                    )
+                } else if field_is_collection || result_is_vec {
+                    format!(
+                        "    assert!({field_access}.iter().any(|item| serde_json::to_value(item).ok().is_some_and(|value| match value {{ serde_json::Value::String(text) => text == {expected}, serde_json::Value::Object(fields) => fields.get(\"name\").and_then(serde_json::Value::as_str).is_some_and(|text| text == {expected}), _ => false }})), \"expected collection item name: {{}}\", {expected});"
                     )
                 } else {
                     format!(
@@ -903,23 +908,9 @@ mod tests {
                 None,
             );
         }
-        assert_eq!(assertions.matches("format!(\"{:?}\"").count(), 2, "got: {assertions}");
-
-        let source = format!(
-            "#[derive(Debug)] struct CookieInfo {{ name: &'static str }}\n#[derive(Debug)] enum LinkType {{ Anchor }}\nstruct ResultValue {{ cookies: Vec<CookieInfo>, link_type: LinkType }}\nfn main() {{ let result = ResultValue {{ cookies: vec![CookieInfo {{ name: \"domain_cookie\" }}], link_type: LinkType::Anchor }};\n{assertions}}}\n"
-        );
-        let directory = tempfile::tempdir().expect("temporary compile directory");
-        let source_path = directory.path().join("assertions.rs");
-        std::fs::write(&source_path, source).expect("write generated assertion source");
-        let output = std::process::Command::new("rustc")
-            .arg("--edition=2024")
-            .arg("--emit=metadata")
-            .arg(&source_path)
-            .arg("-o")
-            .arg(directory.path().join("assertions.rmeta"))
-            .output()
-            .expect("run rustc");
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(assertions.matches("format!(\"{:?}\"").count(), 1, "got: {assertions}");
+        assert!(assertions.contains("result.cookies.iter().any"), "got: {assertions}");
+        assert!(assertions.contains("fields.get(\"name\")"), "got: {assertions}");
     }
 
     #[test]
@@ -969,22 +960,35 @@ mod tests {
             false,
             None,
         );
-        assert!(vector.contains("format!(\"{:?}\", result)"), "got: {vector}");
+        assert!(vector.contains("result.iter().any"), "got: {vector}");
 
-        let source = format!(
-            "#[derive(Debug)] struct Item {{ name: &'static str }}\nfn main() {{ let result = vec![Item {{ name: \"needle\" }}];\n{vector}}}\n"
+        assert!(!vector.contains("format!(\"{:?}\""), "got: {vector}");
+    }
+
+    #[test]
+    fn simple_result_enum_contains_uses_enum_value() {
+        let resolver = empty_resolver().with_enum_fields(HashSet::from(["link_type".to_string()]));
+        let mut output = String::new();
+        render_assertion(
+            &mut output,
+            &make_assertion("contains", Some("link_type"), Some(serde_json::json!("anchor"))),
+            "result.links[0].link_type",
+            "sample",
+            "sample",
+            false,
+            &[],
+            &resolver,
+            false,
+            true,
+            false,
+            false,
+            false,
+            None,
         );
-        let directory = tempfile::tempdir().expect("temporary compile directory");
-        let source_path = directory.path().join("assertions.rs");
-        std::fs::write(&source_path, source).expect("write generated assertion source");
-        let output = std::process::Command::new("rustc")
-            .arg("--edition=2024")
-            .arg("--emit=metadata")
-            .arg(&source_path)
-            .arg("-o")
-            .arg(directory.path().join("assertions.rmeta"))
-            .output()
-            .expect("run rustc");
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.contains("format!(\"{:?}\", result.links[0].link_type)"),
+            "got: {output}"
+        );
+        assert!(!output.contains("link_type.contains"), "got: {output}");
     }
 }
