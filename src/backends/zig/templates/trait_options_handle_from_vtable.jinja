@@ -1,4 +1,6 @@
-/// Create the native visitor accepted by the generated options-field setter. /// Passing the returned handle to that
-setter transfers ownership. pub fn {{ snake }}_handle_from_callbacks(callbacks: {{ callbacks_type }}) ?*{{
-  native_handle_type
-}} { var _cb = callbacks; return {{ ctor_fn }}(&_cb); }
+/// Create the native visitor accepted by the generated options-field setter.
+/// Passing the returned handle to that setter transfers ownership.
+pub fn {{ snake }}_handle_from_callbacks(callbacks: {{ callbacks_type }}) ?*{{ native_handle_type }} {
+    var _cb = callbacks;
+    return {{ ctor_fn }}(&_cb);
+}

@@ -1,16 +1,20 @@
 {% for variant in variants %}
-  {% if variant.has_payload %}
-    #[napi(namespace = "{{ enum_name }}", js_name = "{{ variant.variant_name }}")] pub fn {{ variant.rust_name }}({{
-      content_field
-    }}: {{ variant.payload_type }}) -> {{ binding_name }} {
+{% if variant.has_payload %}
+#[napi(namespace = "{{ enum_name }}", js_name = "{{ variant.variant_name }}")]
+pub fn {{ variant.rust_name }}({{ content_field }}: {{ variant.payload_type }}) -> {{ binding_name }} {
     {{ binding_name }} {
-    {{ tag_field }}: "{{ variant.wire_value }}".to_string(),
-    {{ content_field }}: Some({{ content_field }}), ..Default::default() } }
-  {% else %}
-    #[napi(namespace = "{{ enum_name }}", getter, js_name = "{{ variant.variant_name }}")] pub fn {{
-      variant.rust_name
-    }}() -> {{ binding_name }} {
+        {{ tag_field }}: "{{ variant.wire_value }}".to_string(),
+        {{ content_field }}: Some({{ content_field }}),
+        ..Default::default()
+    }
+}
+{% else %}
+#[napi(namespace = "{{ enum_name }}", getter, js_name = "{{ variant.variant_name }}")]
+pub fn {{ variant.rust_name }}() -> {{ binding_name }} {
     {{ binding_name }} {
-    {{ tag_field }}: "{{ variant.wire_value }}".to_string(), ..Default::default() } }
-  {% endif %}
+        {{ tag_field }}: "{{ variant.wire_value }}".to_string(),
+        ..Default::default()
+    }
+}
+{% endif %}
 {% endfor %}
