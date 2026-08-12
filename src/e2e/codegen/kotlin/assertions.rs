@@ -323,12 +323,14 @@ pub(super) fn render_assertion(
         } else {
             format!("{field_expr}.text()")
         }
-    } else if field_is_json_scalar && (field_is_optional || bare_result_is_nullable) {
+    } else if field_is_json_scalar {
         // `.orEmpty()` is a `String?`/`CharSequence?` extension and is undefined on
         // `Any?` — stringify through a null-safe call first (`Any?.toString()` is
         // always defined), then coalesce the resulting `String?` the same way.
         format!("{field_expr}?.toString().orEmpty()")
-    } else if field_is_optional || bare_result_is_nullable {
+    } else if bare_result_is_nullable {
+        format!("{field_expr}?.toString().orEmpty()")
+    } else if field_is_optional {
         format!("{field_expr}.orEmpty()")
     } else {
         field_expr.clone()

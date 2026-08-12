@@ -329,10 +329,32 @@ default_features = false
         let kotlin = crate::backends::kotlin::emit_jni_bridge_object(&api, &config).content;
         let rust = emit_lib_rs(&api, &config);
 
-        for suffix in ["Start", "Next", "Free"] {
-            let method = format!("nativeEngineStreamItems{suffix}");
+        let expected_methods = ["Start", "Next", "Free"].map(|suffix| format!("nativeEngineStreamItems{suffix}"));
+        for method in &expected_methods {
             assert!(kotlin.contains(&format!("external fun {method}(")), "{kotlin}");
             assert!(rust.contains(&method), "missing JNI export for {method}: {rust}");
+        }
+        for kotlin_method in kotlin
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("external fun nativeEngineStreamItems"))
+            .filter_map(|tail| {
+                tail.split_once('(')
+                    .map(|(suffix, _)| format!("nativeEngineStreamItems{suffix}"))
+            })
+        {
+            assert!(
+                rust.contains(&kotlin_method),
+                "Kotlin declaration lacks Rust export: {kotlin_method}"
+            );
+        }
+        for rust_method in rust
+            .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+            .filter(|token| token.starts_with("nativeEngineStreamItems"))
+        {
+            assert!(
+                kotlin.contains(&format!("external fun {rust_method}(")),
+                "Rust export lacks Kotlin declaration: {rust_method}"
+            );
         }
     }
 

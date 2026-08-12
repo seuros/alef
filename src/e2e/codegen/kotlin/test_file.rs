@@ -421,6 +421,28 @@ pub(super) fn render_test_file_inner(
             );
             crate::e2e::codegen::streaming_assertions::resolve_is_streaming(f, cc.streaming_enabled())
         });
+    let streaming_request_types: std::collections::BTreeSet<String> = fixtures
+        .iter()
+        .filter_map(|fixture| {
+            let call = e2e_config.resolve_call_for_fixture(
+                fixture.call.as_deref(),
+                &fixture.id,
+                &fixture.resolved_category(),
+                &fixture.tags,
+                &fixture.input,
+            );
+            config
+                .adapters
+                .iter()
+                .find(|adapter| {
+                    adapter.name == call.function
+                        && matches!(adapter.pattern, crate::core::config::extras::AdapterPattern::Streaming)
+                        && adapter.owner_type.is_some()
+                })
+                .and_then(|adapter| adapter.params.first())
+                .map(|param| param.ty.rsplit("::").next().unwrap_or(&param.ty).to_string())
+        })
+        .collect();
 
     let _ = writeln!(out, "import org.junit.jupiter.api.Test");
     let _ = writeln!(out, "import kotlin.test.assertEquals");
@@ -456,6 +478,9 @@ pub(super) fn render_test_file_inner(
         } else if !class_name.is_empty() {
             let _ = writeln!(out, "import {binding_pkg_for_imports}.{class_name}");
         }
+    }
+    for request_type in streaming_request_types {
+        let _ = writeln!(out, "import {binding_pkg_for_imports}.{request_type}");
     }
     let needs_format_metadata_import = fixtures.iter().any(|fixture| {
         fixture.assertions.iter().any(|assertion| {

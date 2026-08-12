@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Made Rust and Kotlin containment assertions respect the effective result type, including complex arrays and
+  nullable JSON values, without applying whole-record debug matching from unrelated field metadata.
+- Imported streaming request DTOs into generated Kotlin tests and verified Start/Next/Free JNI declarations and
+  exports in both directions.
+
 - **snippets**: fail E2E generation when an expected documentation snippet has no compatible built-in or
   extension recipe, including cached coverage manifests, instead of warning and crediting an incomplete corpus.
 - **snippets**: use pyrefly for Python snippet type-checking when available, matching scaffolded project tooling,

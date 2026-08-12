@@ -182,6 +182,68 @@ fn assertion_json_scalar_optional_field_stringifies_before_or_empty() {
     );
 }
 
+#[test]
+fn assertion_json_scalar_and_nullable_root_are_stringified_for_contains() {
+    let resolver = FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+    let assertion = Assertion {
+        assertion_type: "contains".to_string(),
+        field: Some("data".to_string()),
+        value: Some(serde_json::json!("needle")),
+        values: None,
+        method: None,
+        check: None,
+        args: None,
+        return_type: None,
+    };
+    let mut field_output = String::new();
+    render_assertion(
+        &mut field_output,
+        &assertion,
+        "result",
+        "",
+        &resolver,
+        true,
+        false,
+        &HashSet::new(),
+        &HashSet::from(["data".to_string()]),
+        &HashMap::new(),
+        false,
+        true,
+    );
+    assert!(
+        field_output.contains("result?.toString().orEmpty().contains(\"needle\")"),
+        "got: {field_output}"
+    );
+
+    let mut root_output = String::new();
+    let mut root_assertion = assertion;
+    root_assertion.field = None;
+    render_assertion(
+        &mut root_output,
+        &root_assertion,
+        "result",
+        "",
+        &resolver,
+        true,
+        true,
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashMap::new(),
+        false,
+        true,
+    );
+    assert!(
+        root_output.contains("result?.toString().orEmpty().contains(\"needle\")"),
+        "got: {root_output}"
+    );
+}
+
 /// Regression (negative direction): a genuinely `String?` optional field must
 /// keep rendering the plain `.orEmpty()` fallback — `fields_json_scalar` is
 /// opt-in per field, so fields absent from it are unaffected.
@@ -513,6 +575,7 @@ fn auto_detected_enum_fields_from_type_defs_route_through_get_value() {
 #[test]
 fn kotlin_android_streaming_fixture_emits_flow_to_list_import() {
     use crate::core::config::e2e::CallConfig;
+    use crate::core::config::extras::{AdapterConfig, AdapterParam, AdapterPattern};
     use crate::e2e::fixture::MockResponse;
 
     // A fixture with a streaming mock response triggers is_streaming_mock().
@@ -546,11 +609,36 @@ fn kotlin_android_streaming_fixture_emits_flow_to_list_import() {
     };
 
     let e2e_config = E2eConfig {
-        call: CallConfig::default(),
+        call: CallConfig {
+            function: "stream_items".to_string(),
+            ..CallConfig::default()
+        },
         ..E2eConfig::default()
     };
     // kotlin_android_style=true must emit the import.
-    let config = crate::core::config::ResolvedCrateConfig::default();
+    let config = crate::core::config::ResolvedCrateConfig {
+        adapters: vec![AdapterConfig {
+            name: "stream_items".to_string(),
+            pattern: AdapterPattern::Streaming,
+            core_path: "sample::Engine::stream_items".to_string(),
+            params: vec![AdapterParam {
+                name: "request".to_string(),
+                ty: "sample::StreamRequest".to_string(),
+                optional: false,
+            }],
+            returns: None,
+            error_type: None,
+            owner_type: Some("Engine".to_string()),
+            item_type: Some("StreamItem".to_string()),
+            gil_release: false,
+            trait_name: None,
+            trait_method: None,
+            detect_async: false,
+            request_type: None,
+            skip_languages: Vec::new(),
+        }],
+        ..crate::core::config::ResolvedCrateConfig::default()
+    };
     let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
     let out_android = render_test_file_inner(
         "streaming",
@@ -571,6 +659,10 @@ fn kotlin_android_streaming_fixture_emits_flow_to_list_import() {
     assert!(
         out_android.contains("import kotlinx.coroutines.flow.toList"),
         "kotlin_android streaming file must import flow.toList, got:\n{out_android}"
+    );
+    assert!(
+        out_android.contains("import dev.sample_crate.sampleapp.android.StreamRequest"),
+        "streaming request DTO must be imported, got:\n{out_android}"
     );
 
     // kotlin_android_style=false must NOT emit the import.
