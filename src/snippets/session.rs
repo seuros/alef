@@ -123,14 +123,60 @@ fn prepare_session(spec: &SessionSpec, timeout_secs: u64) -> Result<ValidationSe
 
 fn cleanup_legacy_scratch_directories(working_directory: &Path, timeout_secs: u64) -> Result<()> {
     let stale_after = std::time::Duration::from_secs(timeout_secs.saturating_add(60));
-    for entry in std::fs::read_dir(working_directory)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() || !entry.file_name().to_string_lossy().starts_with(".alef-snippet-") {
+    let entries = std::fs::read_dir(working_directory).map_err(|error| {
+        Error::Other(format!(
+            "reading snippet working directory {}: {error}",
+            working_directory.display()
+        ))
+    })?;
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(Error::Other(format!(
+                    "reading an entry in snippet working directory {}: {error}",
+                    working_directory.display()
+                )));
+            }
+        };
+        let entry_type = match entry.file_type() {
+            Ok(entry_type) => entry_type,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(Error::Other(format!(
+                    "reading snippet scratch entry type {}: {error}",
+                    entry.path().display()
+                )));
+            }
+        };
+        if !entry_type.is_dir() || !entry.file_name().to_string_lossy().starts_with(".alef-snippet-") {
             continue;
         }
-        let modified = entry.metadata()?.modified()?;
+        let modified = match entry.metadata() {
+            Ok(metadata) => metadata.modified().map_err(|error| {
+                Error::Other(format!(
+                    "reading snippet scratch modification time {}: {error}",
+                    entry.path().display()
+                ))
+            })?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(Error::Other(format!(
+                    "reading snippet scratch metadata {}: {error}",
+                    entry.path().display()
+                )));
+            }
+        };
         if modified.elapsed().is_ok_and(|age| age >= stale_after) {
-            std::fs::remove_dir_all(entry.path())?;
+            if let Err(error) = std::fs::remove_dir_all(entry.path())
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(Error::Other(format!(
+                    "removing stale snippet scratch directory {}: {error}",
+                    entry.path().display()
+                )));
+            }
         }
     }
     Ok(())
@@ -243,6 +289,18 @@ mod tests {
 
         assert!(marker.exists());
         assert_eq!(sessions.len(), 1);
+    }
+
+    #[test]
+    fn scratch_cleanup_errors_name_the_working_directory() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let missing = directory.path().join("removed");
+
+        let error = cleanup_legacy_scratch_directories(&missing, 5).expect_err("missing root must fail");
+
+        let message = error.to_string();
+        assert!(message.contains("reading snippet working directory"));
+        assert!(message.contains(&missing.display().to_string()));
     }
 
     #[test]
