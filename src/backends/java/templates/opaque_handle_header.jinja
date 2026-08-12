@@ -1,5 +1,14 @@
-@SuppressWarnings("PMD") public class {{ class_name }} implements AutoCloseable { private MemorySegment handle;
+@SuppressWarnings("PMD")
+public class {{ class_name }} implements AutoCloseable {
+    private MemorySegment handle;
 
-{{ class_name }}(MemorySegment handle) { this.handle = handle; } synchronized MemorySegment handle() { if (this.handle
-== null || this.handle.equals(MemorySegment.NULL)) { throw new IllegalStateException("{{ class_name }} is closed"); }
-return this.handle; }
+    {{ class_name }}(MemorySegment handle) {
+        this.handle = handle;
+    }
+
+    synchronized MemorySegment handle() {
+        if (this.handle == null || this.handle.equals(MemorySegment.NULL)) {
+            throw new IllegalStateException("{{ class_name }} is closed");
+        }
+        return this.handle;
+    }

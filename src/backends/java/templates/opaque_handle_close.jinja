@@ -1,4 +1,14 @@
-@Override @SuppressWarnings("PMD.AvoidCatchingGenericException") public synchronized void close() { if (handle == null
-|| handle.equals(MemorySegment.NULL)) { return; } MemorySegment handleToFree = handle; handle = MemorySegment.NULL; try
-{ NativeLib.{{ free_handle }}.invoke(handleToFree); } catch (Throwable e) { throw new RuntimeException("Failed to free
-{{ class_name }}: " + e.getMessage(), e); } }
+    @Override
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    public synchronized void close() {
+        if (handle == null || handle.equals(MemorySegment.NULL)) {
+            return;
+        }
+        MemorySegment handleToFree = handle;
+        handle = MemorySegment.NULL;
+        try {
+            NativeLib.{{ free_handle }}.invoke(handleToFree);
+        } catch (Throwable e) {
+            throw new RuntimeException("Failed to free {{ class_name }}: " + e.getMessage(), e);
+        }
+    }
