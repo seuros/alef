@@ -180,6 +180,24 @@ fn gen_pyo3_data_enum_keeps_bare_string_for_externally_tagged_enum() {
     );
 }
 
+#[test]
+fn pyo3_external_enum_accessors_match_serde_wire_shape() {
+    let mut unit = variant("IdleState", vec![]);
+    unit.serde_rename = Some("idle".to_string());
+    let mut def = enum_def("JobState", vec![unit, variant("HasData", vec![field("value")])]);
+    def.serde_rename_all = Some("snake_case".to_string());
+
+    let generated = gen_pyo3_data_enum(&def, "core");
+
+    assert!(!generated.contains("let tag_field = \"tag\";"), "{generated}");
+    assert!(
+        generated.contains("Value::String(value) if value == \"idle\""),
+        "{generated}"
+    );
+    assert!(generated.contains("values.get(\"has_data\")"), "{generated}");
+    assert!(generated.contains("let json_str = payload.to_string();"), "{generated}");
+}
+
 fn typed_field(name: &str, ty: TypeRef) -> FieldDef {
     FieldDef { ty, ..field(name) }
 }

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated Python data-enum accessors now follow Serde's externally tagged wire shape, including bare-string unit
+  variants and renamed payload keys, instead of assuming every enum contains a `tag` field.
+
 - Generated Java opaque handles now make `close()` idempotent, clear native ownership before freeing, and reject method
   calls after close instead of allowing double-free crashes.
 

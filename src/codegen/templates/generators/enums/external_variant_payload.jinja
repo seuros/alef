@@ -1,0 +1,8 @@
+        let payload = match &json {
+            serde_json::Value::String(value) if value == "{{ wire_variant }}" => serde_json::json!({}),
+            serde_json::Value::Object(values) => match values.get("{{ wire_variant }}") {
+                Some(value) => value.clone(),
+                None => return Ok(None),
+            },
+            _ => return Ok(None),
+        };

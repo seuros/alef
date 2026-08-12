@@ -552,28 +552,36 @@ pub(crate) fn write_pyo3_variant_accessors(out: &mut String, enum_def: &EnumDef,
         ));
         out.push_str("        let json = serde_json::to_value(&self.inner)\n");
         out.push_str("            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;\n");
-        let tag_field = enum_def.serde_tag.as_deref().unwrap_or("tag");
-        out.push_str(&crate::codegen::template_env::render(
-            "generators/enums/tag_field_check.jinja",
-            minijinja::context! {
-                tag_field => tag_field,
-            },
-        ));
-        out.push_str("        let tag_value = json.get(tag_field)\n");
-        out.push_str("            .and_then(|v| v.as_str())\n");
-        out.push_str("            .unwrap_or(\"\");\n");
-        out.push_str(&crate::codegen::template_env::render(
-            "generators/enums/variant_tag_match.jinja",
-            minijinja::context! {
-                variant_name_lower => &variant_name_lower,
-            },
-        ));
-        out.push_str("            return Ok(None);\n");
-        out.push_str("        }\n");
-        out.push_str("        let json_str = json.to_string();\n");
+        let wire_variant = crate::codegen::naming::wire_variant_value(
+            &variant.name,
+            variant.serde_rename.as_deref(),
+            enum_def.serde_rename_all.as_deref(),
+        );
+        if let Some(tag_field) = enum_def.serde_tag.as_deref() {
+            out.push_str(&crate::codegen::template_env::render(
+                "generators/enums/tag_field_check.jinja",
+                minijinja::context! { tag_field => tag_field },
+            ));
+            out.push_str("        let tag_value = json.get(tag_field)\n");
+            out.push_str("            .and_then(|v| v.as_str())\n");
+            out.push_str("            .unwrap_or(\"\");\n");
+            out.push_str(&crate::codegen::template_env::render(
+                "generators/enums/variant_tag_match.jinja",
+                minijinja::context! { variant_name_lower => &wire_variant },
+            ));
+            out.push_str("            return Ok(None);\n");
+            out.push_str("        }\n");
+            out.push_str("        let payload = json;\n");
+        } else {
+            out.push_str(&crate::codegen::template_env::render(
+                "generators/enums/external_variant_payload.jinja",
+                minijinja::context! { wire_variant => &wire_variant },
+            ));
+        }
+        out.push_str("        let json_str = payload.to_string();\n");
         out.push_str("        let json_mod = py.import(\"json\")?;\n");
-        out.push_str("        let py_dict = json_mod.call_method1(\"loads\", (&json_str,))?.cast_into::<pyo3::types::PyDict>()?;\n");
-        out.push_str("        Ok(Some(py_dict.unbind()))\n");
+        out.push_str("        let value = json_mod.call_method1(\"loads\", (&json_str,))?;\n");
+        out.push_str("        Ok(Some(value.unbind()))\n");
         out.push_str("    }\n");
     }
 }
