@@ -72,7 +72,7 @@ pub(super) fn render_engine_factory_test_function(
     if expects_error {
         // Config parsing may legitimately fail for error fixtures (e.g. invalid config
         // rejected by the FFI layer). Return early — that counts as the expected failure.
-        let _ = writeln!(out, "    if (config_handle == NULL) {{ return; }}");
+        let _ = writeln!(out, "    if (config_handle == NULL) {{ ALEF_TEST_PASS(); }}");
     } else {
         let _ = writeln!(out, "    assert(config_handle != NULL && \"failed to parse config\");");
     }
@@ -84,7 +84,7 @@ pub(super) fn render_engine_factory_test_function(
     if expects_error {
         // Engine creation may legitimately fail for error fixtures (e.g. invalid config
         // rejected at engine-creation time). Return early — that counts as the expected failure.
-        let _ = writeln!(out, "    if (engine == NULL) {{ return; }}");
+        let _ = writeln!(out, "    if (engine == NULL) {{ ALEF_TEST_PASS(); }}");
     } else {
         let _ = writeln!(out, "    assert(engine != NULL && \"failed to create engine\");");
     }
@@ -419,7 +419,10 @@ pub(super) fn render_bytes_test_function(
                         // fixtures pass at *any* failure step. The test returns
                         // before attempting to create a client, leaving no
                         // resources to free.
-                        let _ = writeln!(out, "    if ({var_name} == NULL) {{ return; }}");
+                        out.push_str(&crate::e2e::template_env::render(
+                            "c/test_pass_if_null.jinja",
+                            minijinja::context! { variable => var_name },
+                        ));
                     } else {
                         let _ = writeln!(out, "    assert({var_name} != NULL && \"failed to build request\");");
                     }

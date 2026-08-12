@@ -47,8 +47,36 @@ pub(super) fn render_test_runner_header(
     let _ = writeln!(out, "#ifndef TEST_RUNNER_H");
     let _ = writeln!(out, "#define TEST_RUNNER_H");
     let _ = writeln!(out);
+    let _ = writeln!(out, "#include <stdio.h>");
     let _ = writeln!(out, "#include <string.h>");
     let _ = writeln!(out, "#include <stdlib.h>");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "enum alef_test_status {{");
+    let _ = writeln!(out, "    ALEF_TEST_PASSED = 0,");
+    let _ = writeln!(out, "    ALEF_TEST_FAILED = 1,");
+    let _ = writeln!(out, "    ALEF_TEST_SKIPPED = 2");
+    let _ = writeln!(out, "}};");
+    let _ = writeln!(out, "extern enum alef_test_status alef_current_test_status;");
+    let _ = writeln!(out, "#undef assert");
+    let _ = writeln!(out, "#define assert(condition) do {{ \\");
+    let _ = writeln!(out, "    if (!(condition)) {{ \\");
+    let _ = writeln!(
+        out,
+        "        fprintf(stderr, \" assertion failed: %s (%s:%d)\\n\", #condition, __FILE__, __LINE__); \\"
+    );
+    let _ = writeln!(out, "        alef_current_test_status = ALEF_TEST_FAILED; \\");
+    let _ = writeln!(out, "        return; \\");
+    let _ = writeln!(out, "    }} \\");
+    let _ = writeln!(out, "}} while (0)");
+    let _ = writeln!(out, "#define ALEF_TEST_PASS() do {{ \\");
+    let _ = writeln!(out, "    alef_current_test_status = ALEF_TEST_PASSED; \\");
+    let _ = writeln!(out, "    return; \\");
+    let _ = writeln!(out, "}} while (0)");
+    let _ = writeln!(out, "#define ALEF_TEST_SKIP(reason) do {{ \\");
+    let _ = writeln!(out, "    fprintf(stderr, \" skipped: %s\\n\", (reason)); \\");
+    let _ = writeln!(out, "    alef_current_test_status = ALEF_TEST_SKIPPED; \\");
+    let _ = writeln!(out, "    return; \\");
+    let _ = writeln!(out, "}} while (0)");
     let _ = writeln!(out);
     // Trim helper for comparing strings that may have trailing whitespace/newlines.
     let _ = writeln!(out, "/**");
@@ -388,8 +416,15 @@ pub(super) fn render_main_c(
     let _ = writeln!(out, "#include <stdio.h>");
     let _ = writeln!(out, "#include \"test_runner.h\"");
     let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "enum alef_test_status alef_current_test_status = ALEF_TEST_PASSED;"
+    );
+    let _ = writeln!(out);
     let _ = writeln!(out, "int main(void) {{");
     let _ = writeln!(out, "    int passed = 0;");
+    let _ = writeln!(out, "    int failed = 0;");
+    let _ = writeln!(out, "    int skipped = 0;");
     let _ = writeln!(out);
     let env_block = render_env_block(env);
     if !env_block.is_empty() {
@@ -401,9 +436,18 @@ pub(super) fn render_main_c(
         for fixture in fixtures {
             let fn_name = sanitize_ident(&fixture.id);
             let _ = writeln!(out, "    printf(\"  Running test_{fn_name}...\");");
+            let _ = writeln!(out, "    alef_current_test_status = ALEF_TEST_PASSED;");
             let _ = writeln!(out, "    test_{fn_name}();");
-            let _ = writeln!(out, "    printf(\" PASSED\\n\");");
-            let _ = writeln!(out, "    passed++;");
+            let _ = writeln!(out, "    if (alef_current_test_status == ALEF_TEST_FAILED) {{");
+            let _ = writeln!(out, "        printf(\" FAILED\\n\");");
+            let _ = writeln!(out, "        failed++;");
+            let _ = writeln!(out, "    }} else if (alef_current_test_status == ALEF_TEST_SKIPPED) {{");
+            let _ = writeln!(out, "        printf(\" SKIPPED\\n\");");
+            let _ = writeln!(out, "        skipped++;");
+            let _ = writeln!(out, "    }} else {{");
+            let _ = writeln!(out, "        printf(\" PASSED\\n\");");
+            let _ = writeln!(out, "        passed++;");
+            let _ = writeln!(out, "    }}");
         }
         let _ = writeln!(out);
     }
@@ -413,15 +457,27 @@ pub(super) fn render_main_c(
         for fixture in visitor_fixtures {
             let fn_name = sanitize_ident(&fixture.id);
             let _ = writeln!(out, "    printf(\"  Running test_{fn_name}...\");");
+            let _ = writeln!(out, "    alef_current_test_status = ALEF_TEST_PASSED;");
             let _ = writeln!(out, "    test_{fn_name}();");
-            let _ = writeln!(out, "    printf(\" PASSED\\n\");");
-            let _ = writeln!(out, "    passed++;");
+            let _ = writeln!(out, "    if (alef_current_test_status == ALEF_TEST_FAILED) {{");
+            let _ = writeln!(out, "        printf(\" FAILED\\n\");");
+            let _ = writeln!(out, "        failed++;");
+            let _ = writeln!(out, "    }} else if (alef_current_test_status == ALEF_TEST_SKIPPED) {{");
+            let _ = writeln!(out, "        printf(\" SKIPPED\\n\");");
+            let _ = writeln!(out, "        skipped++;");
+            let _ = writeln!(out, "    }} else {{");
+            let _ = writeln!(out, "        printf(\" PASSED\\n\");");
+            let _ = writeln!(out, "        passed++;");
+            let _ = writeln!(out, "    }}");
         }
         let _ = writeln!(out);
     }
 
-    let _ = writeln!(out, "    printf(\"\\nResults: %d passed, 0 failed\\n\", passed);");
-    let _ = writeln!(out, "    return 0;");
+    let _ = writeln!(
+        out,
+        "    printf(\"\\nResults: %d passed, %d failed, %d skipped\\n\", passed, failed, skipped);"
+    );
+    let _ = writeln!(out, "    return failed == 0 ? EXIT_SUCCESS : EXIT_FAILURE;");
     let _ = writeln!(out, "}}");
     out
 }
@@ -466,8 +522,29 @@ mod tests {
         // Env injection happens before any test invocation.
         let main_pos = main_c.find("int main(void)").unwrap();
         let env_pos = main_c.find("setenv(\"E2E_ALLOW_PRIVATE_NETWORK\"").unwrap();
-        let return_pos = main_c.find("return 0;").unwrap();
+        let return_pos = main_c
+            .find("return failed == 0 ? EXIT_SUCCESS : EXIT_FAILURE;")
+            .unwrap();
         assert!(main_pos < env_pos && env_pos < return_pos);
+    }
+
+    #[test]
+    fn render_runner_propagates_assertions_and_reports_failures() {
+        let header = render_test_runner_header(&[], &[]);
+        assert!(header.contains("alef_current_test_status = ALEF_TEST_FAILED"));
+        assert!(header.contains("#define ALEF_TEST_SKIP(reason)"));
+
+        let fixture = Fixture {
+            id: "reports_failure".to_string(),
+            ..Fixture::default()
+        };
+        let main_c = render_main_c(&[], &[&fixture], &HashMap::new());
+        assert!(main_c.contains("int failed = 0;"));
+        assert!(main_c.contains("if (alef_current_test_status == ALEF_TEST_FAILED)"));
+        assert!(main_c.contains("printf(\" FAILED\\n\");"));
+        assert!(main_c.contains("%d passed, %d failed, %d skipped"));
+        assert!(main_c.contains("return failed == 0 ? EXIT_SUCCESS : EXIT_FAILURE;"));
+        assert!(!main_c.contains("0 failed"));
     }
 
     #[test]

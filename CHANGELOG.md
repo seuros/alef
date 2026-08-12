@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated C E2E harnesses now propagate assertion failures into per-test results, return a failing process status,
+  and report credential-gated tests as skipped instead of silently counting every invocation as passed.
+
 - Kotlin JNI bridge declarations now exclude sanitized methods and only expose destructors for opaque handles returned
   by emitted functions, keeping every declared native method paired with a generated JNI export.
 

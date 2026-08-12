@@ -197,7 +197,10 @@ pub(super) fn render_test_function(
             let _ = writeln!(out, "        api_key = \"test-key\";");
             let _ = writeln!(out, "    }}");
         } else {
-            let _ = writeln!(out, "    if (getenv(\"{var}\") == NULL) {{ return; }}");
+            out.push_str(&crate::e2e::template_env::render(
+                "c/test_skip_if_env_missing.jinja",
+                minijinja::context! { env_var => var },
+            ));
         }
     }
 
@@ -345,7 +348,10 @@ pub(super) fn render_test_function(
                         // fixtures pass at *any* failure step. The test returns
                         // before attempting to create a client, leaving no
                         // resources to free.
-                        let _ = writeln!(out, "    if ({var_name} == NULL) {{ return; }}");
+                        out.push_str(&crate::e2e::template_env::render(
+                            "c/test_pass_if_null.jinja",
+                            minijinja::context! { variable => var_name },
+                        ));
                     } else {
                         let _ = writeln!(out, "    assert({var_name} != NULL && \"failed to build request\");");
                     }
