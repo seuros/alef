@@ -134,6 +134,7 @@ mod tests {
 
     #[test]
     fn session_manifest_is_used_as_a_real_classpath() {
+        let _toolchain_guard = crate::snippets::validators::jvm_toolchain_test_lock();
         if which::which("kotlinc").is_err() {
             return;
         }

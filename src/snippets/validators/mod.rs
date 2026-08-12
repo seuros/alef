@@ -26,6 +26,12 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::io::Write;
 
+#[cfg(test)]
+pub(crate) fn jvm_toolchain_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 pub type SnippetValidation = (SnippetStatus, Option<String>);
 pub type BatchValidation = Vec<SnippetValidation>;
 
