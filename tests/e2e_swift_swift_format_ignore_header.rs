@@ -4,7 +4,7 @@
 //! XCTest-first import order, or unwrapped long lines that the e2e generator
 //! produces — without the marker, every `alef e2e generate` run produces files
 //! that the next `swift-format` hook rewrites, defeating
-//! `alef verify --exit-code` and breaking CI.
+//! `alef verify` and breaking CI.
 //!
 //! Mirrors the same pattern in `alef-backend-swift`, where
 //! `DemoMarkup.swift` already carries the directive.

@@ -97,7 +97,7 @@ alef generate --format
 alef scaffold
 alef readme
 alef docs --output docs/reference
-alef verify --exit-code
+alef verify
 ```
 
 For a new project, Alef can create the initial config and first generated files:

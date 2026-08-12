@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated ownership headers now recommend `alef verify` directly instead of the deprecated no-op `--exit-code` flag.
+
 - Zig opaque-handle methods now convert C ABI integer booleans to Zig `bool`, preventing generated methods from
   returning an incompatible `i32` value.
 
