@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated agent skills now include required YAML `name` and `description` frontmatter when templates omit it.
+
 - Alef now warns when the running CLI is newer than `alef.toml`'s pinned version, making compatibility-gated output
   visible before regeneration.
 

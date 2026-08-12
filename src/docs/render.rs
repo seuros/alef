@@ -84,13 +84,14 @@ pub fn render_skills(
             .collect::<anyhow::Result<Vec<_>>>()?
     };
 
-    for (_, template, relative_output) in groups {
+    for (group, template, relative_output) in groups {
         let template_path = if let Some(template_dir) = &cfg.template_dir {
             template_dir.join(&template)
         } else {
             template
         };
         let content = render_template_file(workspace_root, &template_path, context, snippet_dirs)?;
+        let content = ensure_skill_frontmatter(&group, &context.krate.name, content);
         for root in &cfg.outputs {
             let output = root.join(&relative_output);
             ensure_managed_or_adopted(workspace_root, &output, cfg.adopt_existing)?;
@@ -103,6 +104,18 @@ pub fn render_skills(
     }
 
     Ok(rendered)
+}
+
+fn ensure_skill_frontmatter(group: &str, crate_name: &str, content: String) -> String {
+    if yaml_frontmatter_end(content.trim_start()).is_some() {
+        return content;
+    }
+
+    let name = group.replace('"', "\\\"");
+    let crate_name = crate_name.replace('"', "\\\"");
+    format!(
+        "---\nname: \"{name}\"\ndescription: \"Use {crate_name} {name} reference documentation.\"\n---\n\n{content}"
+    )
 }
 
 fn default_skill_groups(
