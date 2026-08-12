@@ -6,6 +6,39 @@ use tempfile::TempDir;
 
 pub struct PythonValidator;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PythonTypeChecker {
+    Pyrefly,
+    Mypy,
+}
+
+impl PythonTypeChecker {
+    fn available() -> Option<Self> {
+        if which::which("pyrefly").is_ok() {
+            Some(Self::Pyrefly)
+        } else if which::which("mypy").is_ok() {
+            Some(Self::Mypy)
+        } else {
+            None
+        }
+    }
+
+    fn command(self, python: &str, path: &str) -> std::process::Command {
+        match self {
+            Self::Pyrefly => {
+                let mut command = std::process::Command::new("pyrefly");
+                command.args(["check", path]);
+                command
+            }
+            Self::Mypy => {
+                let mut command = std::process::Command::new(python);
+                command.args(["-m", "mypy", "--no-error-summary", "--no-color-output", path]);
+                command
+            }
+        }
+    }
+}
+
 impl PythonValidator {
     fn validate_with_context(
         snippet: &Snippet,
@@ -36,10 +69,11 @@ impl PythonValidator {
         let (success, output) = run_command(&mut command, timeout_secs)?;
         if success {
             Ok((SnippetStatus::Pass, None))
-        } else if level == ValidationLevel::TypeCheck
-            && (output.contains("No module named mypy") || output.contains("No module named \"mypy\""))
-        {
-            Ok((SnippetStatus::Unavailable, Some("mypy not installed".to_string())))
+        } else if level == ValidationLevel::TypeCheck && Self::missing_type_checker(&output) {
+            Ok((
+                SnippetStatus::Unavailable,
+                Some("neither pyrefly nor mypy is available for Python type-checking".to_string()),
+            ))
         } else {
             Ok((SnippetStatus::Fail, Some(output)))
         }
@@ -64,11 +98,14 @@ impl PythonValidator {
                 command.args(["-m", "py_compile", path]);
                 command
             }
-            ValidationLevel::TypeCheck => {
-                let mut command = std::process::Command::new(python);
-                command.args(["-m", "mypy", "--no-error-summary", "--no-color-output", path]);
-                command
-            }
+            ValidationLevel::TypeCheck => PythonTypeChecker::available().map_or_else(
+                || {
+                    let mut command = std::process::Command::new(python);
+                    command.args(["-m", "mypy", path]);
+                    command
+                },
+                |checker| checker.command(python, path),
+            ),
             ValidationLevel::Run => {
                 let mut command = std::process::Command::new(python);
                 command.arg(path);
@@ -76,6 +113,10 @@ impl PythonValidator {
             }
         };
         Ok(command)
+    }
+
+    fn missing_type_checker(output: &str) -> bool {
+        output.contains("No module named mypy") || output.contains("No module named \"mypy\"")
     }
 
     fn patch_code(code: &str) -> String {
@@ -222,7 +263,7 @@ impl SnippetValidator for PythonValidator {
         if level != ValidationLevel::TypeCheck {
             return self.is_available();
         }
-        which::which("mypy").is_ok()
+        PythonTypeChecker::available().is_some()
     }
 
     fn validate(
@@ -256,11 +297,28 @@ impl SnippetValidator for PythonValidator {
 
 #[cfg(test)]
 mod tests {
-    use super::PythonValidator;
+    use super::{PythonTypeChecker, PythonValidator};
     use crate::snippets::session::ValidationSession;
     use crate::snippets::types::{Language, Snippet, SnippetMetadata, SnippetStatus, SourceOrigin, ValidationLevel};
     use crate::snippets::validators::SnippetValidator;
     use std::path::PathBuf;
+
+    #[test]
+    fn pyrefly_command_matches_scaffolded_python_tooling() {
+        let command = PythonTypeChecker::Pyrefly.command("python3", "snippet.py");
+        assert_eq!(command.get_program(), "pyrefly");
+        assert_eq!(command.get_args().collect::<Vec<_>>(), ["check", "snippet.py"]);
+    }
+
+    #[test]
+    fn mypy_remains_a_compatible_fallback() {
+        let command = PythonTypeChecker::Mypy.command("python3", "snippet.py");
+        assert_eq!(command.get_program(), "python3");
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            ["-m", "mypy", "--no-error-summary", "--no-color-output", "snippet.py"]
+        );
+    }
 
     #[test]
     fn preserves_multiline_async_signature_lines() {
