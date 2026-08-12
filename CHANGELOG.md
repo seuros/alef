@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated JNI manifests now inherit dependencies declared by the consumer workspace, keeping binding crates aligned
+  with workspace dependency versions while retaining standalone fallbacks.
+
 - Generated Python data-enum accessors now follow Serde's externally tagged wire shape, including bare-string unit
   variants and renamed payload keys, instead of assuming every enum contains a `tag` field.
 

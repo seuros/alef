@@ -355,6 +355,14 @@ fn workspace_dep_specs(config: &ResolvedCrateConfig) -> std::collections::BTreeM
     }
 }
 
+pub(crate) fn render_workspace_dep_or(config: &ResolvedCrateConfig, name: &str, fallback: &str) -> String {
+    if workspace_dep_specs(config).contains_key(name) {
+        format!("{name}.workspace = true")
+    } else {
+        format!("{name} = {fallback}")
+    }
+}
+
 ///
 /// Checks for per-language feature overrides first, then falls back to `[crate] features`.
 /// Returns an empty string if no features are configured, otherwise returns

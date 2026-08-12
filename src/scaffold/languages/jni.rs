@@ -107,13 +107,17 @@ pub(crate) fn scaffold_jni(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
     let rel_path = format!("../{core_crate_dir}");
 
     let mut dep_lines: Vec<String> = vec![
-        "async-trait = \"0.1\"".to_owned(),
-        "base64 = \"0.22\"".to_owned(),
-        "futures-util = \"0.3\"".to_owned(),
-        "jni = \"0.22\"".to_owned(),
-        "serde_json = \"1\"".to_owned(),
-        "tokio = { version = \"1\", features = [\"rt-multi-thread\", \"macros\", \"sync\"] }".to_owned(),
-        format!("tracing = \"{}\"", tv::cargo::TRACING),
+        crate::scaffold::render_workspace_dep_or(config, "async-trait", "\"0.1\""),
+        crate::scaffold::render_workspace_dep_or(config, "base64", "\"0.22\""),
+        crate::scaffold::render_workspace_dep_or(config, "futures-util", "\"0.3\""),
+        crate::scaffold::render_workspace_dep_or(config, "jni", "\"0.22\""),
+        crate::scaffold::render_workspace_dep_or(config, "serde_json", "\"1\""),
+        crate::scaffold::render_workspace_dep_or(
+            config,
+            "tokio",
+            "{ version = \"1\", features = [\"rt-multi-thread\", \"macros\", \"sync\"] }",
+        ),
+        crate::scaffold::render_workspace_dep_or(config, "tracing", &format!("\"{}\"", tv::cargo::TRACING)),
     ];
     if target_overrides.is_empty() {
         dep_lines.push(crate::scaffold::render_core_dep(
@@ -221,6 +225,48 @@ namespace = "dev.sample_crate.demo"
             cargo_toml.contains("\"tracing\""),
             "JNI Cargo.toml must ignore tracing in cargo-machete since it may be unused until trait bridges are configured; got:\n{cargo_toml}"
         );
+    }
+
+    #[test]
+    fn scaffold_jni_inherits_declared_workspace_dependencies() {
+        let workspace = tempfile::tempdir().expect("create workspace");
+        std::fs::write(
+            workspace.path().join("Cargo.toml"),
+            r#"
+[workspace]
+members = []
+
+[workspace.dependencies]
+base64 = "0.22"
+jni = "0.22"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+"#,
+        )
+        .expect("write workspace manifest");
+        let mut config = resolved_one(
+            r#"
+[workspace]
+languages = ["kotlin_android", "jni"]
+
+[[crates]]
+name = "demo-llm"
+sources = ["src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.sample_crate.demo"
+namespace = "dev.sample_crate.demo"
+"#,
+        );
+        config.workspace_root = Some(workspace.path().to_path_buf());
+
+        let files = scaffold_jni(&ApiSurface::default(), &config).expect("scaffold JNI");
+        let cargo_toml = &files[0].content;
+
+        assert!(cargo_toml.contains("base64.workspace = true"));
+        assert!(cargo_toml.contains("jni.workspace = true"));
+        assert!(cargo_toml.contains("tokio.workspace = true"));
+        assert!(cargo_toml.contains("async-trait = \"0.1\""));
+        assert!(!cargo_toml.contains("base64 = \"0.22\""));
     }
 
     /// The scaffolded `[lib] name` must match what the Kotlin Bridge emits in
