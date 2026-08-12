@@ -873,11 +873,11 @@ ffi = "crates/mylib-ffi/src/"
         "_len companion ml_detect_language_len must be emitted"
     );
     assert!(
-        code.contains("static LAST_RETURN_LEN: RefCell<usize>"),
-        "FFI module must record the primary C-string return length"
+        code.contains("static LAST_RETURN_LENGTHS: RefCell<std::collections::BTreeMap<&'static str, usize>>"),
+        "FFI module must isolate C-string return lengths by export"
     );
     assert!(
-        code.contains("set_last_return_len(cs.as_bytes().len());"),
+        code.contains("set_last_return_len(\"ml_detect_language\", cs.as_bytes().len());"),
         "primary C-string return must record its byte length before into_raw"
     );
 
@@ -911,13 +911,13 @@ ffi = "crates/mylib-ffi/src/"
         "_len companion must not clear the primary call's error state"
     );
     assert!(
-        len_fn_snippet.contains("catch_ffi_panic_preserving_error(0, last_return_len)"),
+        len_fn_snippet.contains("catch_ffi_panic_preserving_error(0, || last_return_len(\"ml_detect_language\"))"),
         "_len companion must read the recorded length through the panic boundary"
     );
 }
 
 #[test]
-fn test_error_and_clear_paths_reset_last_return_len() {
+fn test_error_and_clear_paths_preserve_export_specific_return_lengths() {
     let config = resolved_one(
         r#"
 [workspace]
@@ -947,8 +947,8 @@ ffi = "crates/mylib-ffi/src/"
         .and_then(|s| s.split("\n}").next())
         .expect("set_last_error body");
     assert!(
-        set_error.contains("LAST_RETURN_LEN.with_borrow_mut(|c| *c = 0);"),
-        "set_last_error must clear stale C-string success length: {set_error}"
+        !set_error.contains("LAST_RETURN_LENGTHS"),
+        "set_last_error must not erase unrelated export-specific lengths: {set_error}"
     );
 
     let clear_error = code
@@ -957,8 +957,8 @@ ffi = "crates/mylib-ffi/src/"
         .and_then(|s| s.split("\n}").next())
         .expect("clear_last_error body");
     assert!(
-        clear_error.contains("LAST_RETURN_LEN.with_borrow_mut(|c| *c = 0);"),
-        "clear_last_error must clear stale C-string success length: {clear_error}"
+        !clear_error.contains("LAST_RETURN_LENGTHS"),
+        "clear_last_error must not erase unrelated export-specific lengths: {clear_error}"
     );
 }
 
