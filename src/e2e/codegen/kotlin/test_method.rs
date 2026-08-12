@@ -380,12 +380,30 @@ pub(super) fn render_test_method(
     {
         let request_name = request.name.to_lower_camel_case();
         let request_type = request.ty.rsplit("::").next().unwrap_or(&request.ty);
-        let normalized = crate::e2e::codegen::transform_json_keys_for_language(&fixture.input, "snake_case");
+        let mut request_input = fixture.input.clone();
+        if let Some(object) = request_input.as_object_mut() {
+            for handle in args.iter().filter(|arg| arg.arg_type == "handle") {
+                let field = handle.field.strip_prefix("input.").unwrap_or(&handle.field);
+                object.remove(field);
+            }
+        }
+        let normalized = crate::e2e::codegen::transform_json_keys_for_language(&request_input, "snake_case");
         let request_json = serde_json::to_string(&normalized).unwrap_or_default();
-        setup_lines.push(format!(
-            "val {request_name} = MAPPER.readValue(\"{}\", {request_type}::class.java)",
-            crate::e2e::escape::escape_kotlin(&request_json),
-        ));
+        let escaped_json = crate::e2e::escape::escape_kotlin(&request_json);
+        if crate::e2e::codegen::value_contains_mock_url_placeholder(&normalized) {
+            let env_key = crate::e2e::codegen::mock_url_env_key(&fixture.id);
+            setup_lines.push(format!(
+                "val {request_name}Json = \"{escaped_json}\".replace(\"{}\", System.getProperty(\"mockServer.{}\", System.getenv(\"{env_key}\") ?: \"\"))",
+                crate::e2e::escape::escape_kotlin(crate::e2e::codegen::MOCK_URL_PLACEHOLDER), fixture.id,
+            ));
+            setup_lines.push(format!(
+                "val {request_name} = MAPPER.readValue({request_name}Json, {request_type}::class.java)"
+            ));
+        } else {
+            setup_lines.push(format!(
+                "val {request_name} = MAPPER.readValue(\"{escaped_json}\", {request_type}::class.java)"
+            ));
+        }
         args_str = request_name;
     }
 
@@ -701,7 +719,7 @@ mod tests {
         let call = CallConfig {
             function: "stream_items".to_string(),
             result_var: "result".to_string(),
-            args: vec![handle_arg("engine"), string_arg("url")],
+            args: vec![handle_arg("handle"), string_arg("url")],
             ..CallConfig::default()
         };
         let mut adapter = streaming_owner_adapter("stream_items", "Engine");
@@ -713,8 +731,8 @@ mod tests {
         let generated = render(call, vec![adapter]);
         assert!(generated.contains("MAPPER.readValue("), "got:\n{generated}");
         assert!(generated.contains("StreamRequest::class.java"), "got:\n{generated}");
-        assert!(generated.contains("engine.streamItems(request)"), "got:\n{generated}");
-        assert!(!generated.contains("engine.streamItems(\"https://example.com\")"));
+        assert!(generated.contains("handle.streamItems(request)"), "got:\n{generated}");
+        assert!(!generated.contains("handle.streamItems(\"https://example.com\")"));
 
         let statements = generated
             .lines()
@@ -723,7 +741,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n    ");
         let source = format!(
-            "data class StreamRequest(val url: String = \"\")\nclass Engine {{ fun streamItems(request: StreamRequest): List<String> = listOf(request.url) }}\nobject MAPPER {{ fun <T : Any> readValue(value: String, type: Class<T>): T = type.getDeclaredConstructor().newInstance() }}\nfun main() {{\n    val engine = Engine()\n    {statements}\n}}\n"
+            "data class StreamRequest(val url: String = \"\")\nclass Engine {{ fun streamItems(request: StreamRequest): List<String> = listOf(request.url) }}\nobject MAPPER {{ fun <T : Any> readValue(value: String, type: Class<T>): T = type.getDeclaredConstructor().newInstance() }}\nfun main() {{\n    val handle = Engine()\n    {statements}\n}}\n"
         );
         let directory = tempfile::tempdir().expect("temporary Kotlin compile directory");
         let source_path = directory.path().join("Assertions.kt");
@@ -735,5 +753,9 @@ mod tests {
             .output()
             .expect("run kotlinc");
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(
+            !generated.contains("\\\"handle\\\""),
+            "owner handle config leaked into request JSON: {generated}"
+        );
     }
 }
