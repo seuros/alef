@@ -48,6 +48,7 @@ fn assertion_enum_optional_uses_safe_get_value_then_or_empty() {
         false,
         false,
         &enum_fields,
+        &HashSet::new(),
         &HashMap::new(),
         false,
         false,
@@ -121,6 +122,107 @@ fn handle_config_deserialization_uses_resolved_options_type() {
     assert!(!rendered.contains("CrawlConfig"));
 }
 
+/// Resolver for an optional field on a non-array result, e.g. `data` directly
+/// on the result (mirrors `action_results[0].data` after array-index resolution
+/// down to the leaf field on the accessed element).
+fn make_resolver_for_optional_field(field: &str) -> FieldResolver {
+    let mut optional = HashSet::new();
+    optional.insert(field.to_string());
+    FieldResolver::new(
+        &HashMap::new(),
+        &optional,
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+}
+
+/// Regression: an optional field whose Kotlin type is `Any?` (mapped from Rust
+/// `Option<serde_json::Value>`) must not render a bare `.orEmpty()` — that's a
+/// `String?`/`CharSequence?` extension and does not resolve on `Any?`, so the
+/// generated Kotlin fails with "Unresolved reference 'orEmpty'". It must instead
+/// stringify through a null-safe call first.
+#[test]
+fn assertion_json_scalar_optional_field_stringifies_before_or_empty() {
+    let resolver = make_resolver_for_optional_field("data");
+    let mut json_scalar_fields = HashSet::new();
+    json_scalar_fields.insert("data".to_string());
+    let assertion = Assertion {
+        assertion_type: "contains".to_string(),
+        field: Some("data".to_string()),
+        value: Some(serde_json::Value::String("JS Test Page".to_string())),
+        values: None,
+        method: None,
+        check: None,
+        args: None,
+        return_type: None,
+    };
+    let mut out = String::new();
+    render_assertion(
+        &mut out,
+        &assertion,
+        "result",
+        "",
+        &resolver,
+        false,
+        false,
+        &HashSet::new(),
+        &json_scalar_fields,
+        &HashMap::new(),
+        false,
+        true,
+    );
+    assert!(
+        out.contains("result.data?.toString().orEmpty().contains(\"JS Test Page\")"),
+        "expected null-safe stringify before orEmpty() for an Any? field, got: {out}"
+    );
+    assert!(
+        !out.contains("result.data.orEmpty()"),
+        "must not emit a bare .orEmpty() on Any?, got: {out}"
+    );
+}
+
+/// Regression (negative direction): a genuinely `String?` optional field must
+/// keep rendering the plain `.orEmpty()` fallback — `fields_json_scalar` is
+/// opt-in per field, so fields absent from it are unaffected.
+#[test]
+fn assertion_string_optional_field_still_uses_plain_or_empty() {
+    let resolver = make_resolver_for_optional_field("title");
+    let assertion = Assertion {
+        assertion_type: "contains".to_string(),
+        field: Some("title".to_string()),
+        value: Some(serde_json::Value::String("Example".to_string())),
+        values: None,
+        method: None,
+        check: None,
+        args: None,
+        return_type: None,
+    };
+    let mut out = String::new();
+    render_assertion(
+        &mut out,
+        &assertion,
+        "result",
+        "",
+        &resolver,
+        false,
+        false,
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashMap::new(),
+        false,
+        true,
+    );
+    assert!(
+        out.contains("result.title.orEmpty().contains(\"Example\")"),
+        "expected plain .orEmpty() for a String? field, got: {out}"
+    );
+    assert!(
+        !out.contains("?.toString().orEmpty()"),
+        "must not stringify a genuine String? field, got: {out}"
+    );
+}
+
 /// Non-optional enum field should call `.getValue()` directly without
 /// safe-call or fallback (no need to handle null).
 #[test]
@@ -156,6 +258,7 @@ fn assertion_enum_non_optional_uses_plain_get_value() {
         false,
         false,
         &enum_fields,
+        &HashSet::new(),
         &HashMap::new(),
         false,
         false,
@@ -209,6 +312,7 @@ fn per_call_enum_field_override_routes_through_get_value() {
         false,
         false,
         &global_enum_fields,
+        &HashSet::new(),
         &HashMap::new(),
         false,
         false,
@@ -229,6 +333,7 @@ fn per_call_enum_field_override_routes_through_get_value() {
         false,
         false,
         &per_call_enum_fields,
+        &HashSet::new(),
         &HashMap::new(),
         false,
         false,
@@ -391,6 +496,7 @@ fn auto_detected_enum_fields_from_type_defs_route_through_get_value() {
         false,
         false,
         batch_enum_fields,
+        &HashSet::new(),
         &HashMap::new(),
         false,
         false,

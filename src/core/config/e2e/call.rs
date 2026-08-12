@@ -44,6 +44,9 @@ pub struct CallConfig {
     /// Per-call override for `[e2e].fields_c_types`.
     #[serde(default)]
     pub fields_c_types: HashMap<String, String>,
+    /// Per-call override for `[e2e].fields_json_scalar`.
+    #[serde(default)]
+    pub fields_json_scalar: HashSet<String>,
     /// Assertion recipes enabled for all fixtures routed to this call.
     ///
     /// Recipes intentionally gate domain-shaped assertion shortcuts such as

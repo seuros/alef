@@ -50,6 +50,7 @@ pub(super) fn render_test_method(
     .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone());
     let field_resolver = &call_field_resolver;
     let enum_fields = e2e_config.effective_fields_enum(call_config);
+    let json_scalar_fields = e2e_config.effective_fields_json_scalar(call_config);
     let lang = if kotlin_android_style {
         "kotlin_android"
     } else {
@@ -440,6 +441,7 @@ pub(super) fn render_test_method(
                 result_is_simple,
                 result_is_option,
                 enum_fields,
+                json_scalar_fields,
                 e2e_config.effective_fields_c_types(call_config),
                 is_streaming,
                 kotlin_android_style,
@@ -495,6 +497,7 @@ pub(super) fn render_test_method(
             result_is_simple,
             result_is_option,
             enum_fields,
+            json_scalar_fields,
             &e2e_config.fields_c_types,
             is_streaming,
             kotlin_android_style,

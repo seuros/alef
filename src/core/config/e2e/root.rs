@@ -176,6 +176,30 @@ pub struct E2eConfig {
     /// ```
     #[serde(default)]
     pub fields_display_as_text: HashSet<String>,
+    /// Optional fields whose resolved type is an untyped JSON scalar (Rust
+    /// `Option<serde_json::Value>`, Kotlin `Any?`) rather than `Option<String>`.
+    ///
+    /// The Kotlin generator's string-context expression normally appends
+    /// `.orEmpty()` to nullable fields so `contains`/`equals` assertions don't
+    /// need a safe-call chain — but `.orEmpty()` is a `String?`/`CharSequence?`
+    /// extension and does not resolve on `Any?`, producing
+    /// `Unresolved reference 'orEmpty'` at compile time. Fields listed here
+    /// instead render through a null-safe stringify (`?.toString().orEmpty()`),
+    /// which is also correct — but textually different — for genuine `String?`
+    /// fields, so it is opt-in per field rather than applied universally.
+    ///
+    /// No part of the e2e pipeline carries a field's real Kotlin type through
+    /// to assertion rendering (unlike `fields_enum`, nested paths like
+    /// `action_results[].data` are not auto-detected from the IR), so this
+    /// mirrors `fields_enum`'s manual-declaration convention. Both the raw
+    /// fixture field path and the resolved (aliased) path are accepted.
+    ///
+    /// ```toml
+    /// [e2e]
+    /// fields_json_scalar = ["action_results[].data"]
+    /// ```
+    #[serde(default)]
+    pub fields_json_scalar: HashSet<String>,
     /// Environment variables every generated e2e suite's setup must set
     /// before the binding's engine is constructed. Keyed by env-var name;
     /// values are passed through verbatim.
@@ -369,6 +393,15 @@ impl E2eConfig {
         }
     }
 
+    /// Return the effective `fields_json_scalar` for `call`.
+    pub fn effective_fields_json_scalar<'a>(&'a self, call: &'a CallConfig) -> &'a HashSet<String> {
+        if !call.fields_json_scalar.is_empty() {
+            &call.fields_json_scalar
+        } else {
+            &self.fields_json_scalar
+        }
+    }
+
     /// Return the effective `fields_c_types` for `call`.
     pub fn effective_fields_c_types<'a>(&'a self, call: &'a CallConfig) -> &'a HashMap<String, String> {
         if !call.fields_c_types.is_empty() {
@@ -440,6 +473,7 @@ impl Default for E2eConfig {
             fields_c_types: HashMap::new(),
             fields_enum: HashSet::new(),
             fields_display_as_text: HashSet::new(),
+            fields_json_scalar: HashSet::new(),
             env: HashMap::new(),
             harness: HarnessConfig::default(),
             dep_mode: DependencyMode::default(),

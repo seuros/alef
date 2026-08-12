@@ -17,6 +17,7 @@ pub(super) fn render_assertion(
     result_is_simple: bool,
     result_is_option: bool,
     enum_fields: &std::collections::HashSet<String>,
+    json_scalar_fields: &std::collections::HashSet<String>,
     fields_c_types: &std::collections::HashMap<String, String>,
     is_streaming: bool,
     kotlin_android_style: bool,
@@ -224,6 +225,16 @@ pub(super) fn render_assertion(
         .as_deref()
         .is_some_and(|f| enum_fields.contains(f) || enum_fields.contains(field_resolver.resolve(f)));
 
+    // Determine if this field's resolved type is an untyped JSON scalar (Kotlin
+    // `Any?`, from Rust `Option<serde_json::Value>`) rather than `Option<String>`.
+    // `.orEmpty()` does not resolve on `Any?` — see `field_is_json_scalar` usage
+    // below, where the string-context expression falls back to a null-safe
+    // stringify instead.
+    let field_is_json_scalar = assertion
+        .field
+        .as_deref()
+        .is_some_and(|f| json_scalar_fields.contains(f) || json_scalar_fields.contains(field_resolver.resolve(f)));
+
     // Determine if this field is a display_as_text field (e.g., AssistantContent).
     // These fields have a `.text()` accessor that extracts the plain-text representation.
     let field_is_display_as_text = assertion
@@ -298,6 +309,8 @@ pub(super) fn render_assertion(
     // Note: this is only sound when the leaf type is `String?`. For enum-typed
     // optional fields (`T?` where `T` is an enum class), `.orEmpty()` is undefined;
     // the enum branch below handles those by going through `?.getValue()` first.
+    // For fields in `json_scalar_fields` (`Any?`, e.g. `Option<serde_json::Value>`),
+    // `.orEmpty()` is likewise undefined; stringify through `?.toString()` first.
     // For display_as_text fields (e.g., AssistantContent), call `.text()` to extract
     // the textual representation, which returns `String` (non-nullable).
     // Also handle the case where the bare result (no field specified) is nullable
@@ -310,6 +323,11 @@ pub(super) fn render_assertion(
         } else {
             format!("{field_expr}.text()")
         }
+    } else if field_is_json_scalar && (field_is_optional || bare_result_is_nullable) {
+        // `.orEmpty()` is a `String?`/`CharSequence?` extension and is undefined on
+        // `Any?` — stringify through a null-safe call first (`Any?.toString()` is
+        // always defined), then coalesce the resulting `String?` the same way.
+        format!("{field_expr}?.toString().orEmpty()")
     } else if field_is_optional || bare_result_is_nullable {
         format!("{field_expr}.orEmpty()")
     } else {

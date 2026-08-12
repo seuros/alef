@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Kotlin assertions over optional JSON scalar fields now stringify safely instead of invoking string-only extensions
+  on `Any?` values.
+
 - Generated Rust documentation snippets now preserve every line inside multiline raw string literals instead of
   dropping unindented literal contents and emitting malformed source.
 
