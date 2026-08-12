@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Preserve line boundaries in generated JNI crate headers so Rust attributes, imports, and constants remain valid syntax.
+
 - Keep FFI panic-guard and JNI unsafe-lint audits aligned with generated output.
 
 - Emit every `not_contains` value in generated E2E assertions when fixtures use the plural `values` form.
