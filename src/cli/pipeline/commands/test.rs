@@ -37,6 +37,7 @@ pub fn test(config: &ResolvedCrateConfig, languages: &[Language], e2e: bool, cov
             check_precondition(*lang, lang_test.precondition.as_deref())
         })
         .collect();
+    ensure_requested_suites_will_run(languages, &langs_to_test)?;
     for &lang in &langs_to_test {
         let lang_test = config.test_config_for_language(lang);
         if let Err(e) = run_before(lang, lang_test.before.as_ref()) {
@@ -147,6 +148,13 @@ pub fn test(config: &ResolvedCrateConfig, languages: &[Language], e2e: bool, cov
     Ok(())
 }
 
+fn ensure_requested_suites_will_run(requested: &[Language], selected: &[Language]) -> anyhow::Result<()> {
+    if !requested.is_empty() && selected.is_empty() {
+        anyhow::bail!("every requested test suite was skipped by its precondition");
+    }
+    Ok(())
+}
+
 /// Compute the target/release directory path from the workspace root.
 ///
 /// Walks up from the current working directory to find any `target/release/`
@@ -224,7 +232,6 @@ fn get_host_target() -> anyhow::Result<RustTarget> {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
     use super::*;
     #[cfg(unix)]
     use crate::core::config::NewAlefConfig;
@@ -289,5 +296,16 @@ e2e = "{e2e_cmd}"
             vec!["A", "B"],
             "before hook must run before e2e command; got order: {lines:?}"
         );
+    }
+
+    #[test]
+    fn rejects_all_requested_suites_being_skipped() {
+        let error = ensure_requested_suites_will_run(&[Language::Python], &[]).expect_err("zero suites must fail");
+        assert!(error.to_string().contains("every requested test suite was skipped"));
+    }
+
+    #[test]
+    fn permits_an_explicitly_empty_test_selection() {
+        ensure_requested_suites_will_run(&[], &[]).expect("no requested suites is valid");
     }
 }
