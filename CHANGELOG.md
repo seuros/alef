@@ -7,12 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- Emit every `not_contains` value in generated E2E assertions when fixtures use the plural `values` form.
-- Keep FFI panic-guard and JNI unsafe-lint audits aligned with generated output.
-
-## [0.60.1] - 2026-08-11
+## [0.60.1] - 2026-08-12
 
 ### Changed
 
@@ -22,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Development version advanced to 0.60.1 for the strict snippet-validation and migration fixes.
 
 ### Fixed
+
+- Keep FFI panic-guard and JNI unsafe-lint audits aligned with generated output.
+
+- Emit every `not_contains` value in generated E2E assertions when fixtures use the plural `values` form.
 
 - E2E fixtures can opt into preserving declared `mock_url` and `mock_url_list` values verbatim across generated
   language tests, so URL-policy and SSRF regressions exercise the address declared by the fixture rather than a
