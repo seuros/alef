@@ -418,6 +418,15 @@
           "type": "array",
           "uniqueItems": true
         },
+        "fields_json_scalar": {
+          "default": [],
+          "description": "Per-call override for `[e2e].fields_json_scalar`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
         "fields_method_calls": {
           "default": [],
           "description": "Per-call override for `[e2e].fields_method_calls`.",
@@ -2138,6 +2147,15 @@
         "fields_enum": {
           "default": [],
           "description": "Fields whose resolved type is an enum in the generated bindings.\n\nWhen a `contains` / `contains_all` / etc. assertion targets one of these\nfields, language generators that cannot call `.contains()` directly on an\nenum (e.g., Java) will emit a string-conversion call first.  For Java,\nthe generated assertion calls `.getValue()` on the enum — the `@JsonValue`\nmethod that all alef-generated Java enums expose — to obtain the lowercase\nserde string before performing the string comparison.\n\nBoth the raw fixture field path (before alias resolution) and the resolved\npath (after alias resolution via `[e2e.fields]`) are accepted, so you can\nuse either form:\n\n```toml\n# Raw fixture field:\nfields_enum = [\"links[].link_type\", \"assets[].category\"]\n# …or the resolved (aliased) field name:\nfields_enum = [\"links[].link_type\", \"assets[].asset_category\"]\n```",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "fields_json_scalar": {
+          "default": [],
+          "description": "Optional fields whose resolved type is an untyped JSON scalar (Rust\n`Option<serde_json::Value>`, Kotlin `Any?`) rather than `Option<String>`.\n\nThe Kotlin generator's string-context expression normally appends\n`.orEmpty()` to nullable fields so `contains`/`equals` assertions don't\nneed a safe-call chain — but `.orEmpty()` is a `String?`/`CharSequence?`\nextension and does not resolve on `Any?`, producing\n`Unresolved reference 'orEmpty'` at compile time. Fields listed here\ninstead render through a null-safe stringify (`?.toString().orEmpty()`),\nwhich is also correct — but textually different — for genuine `String?`\nfields, so it is opt-in per field rather than applied universally.\n\nNo part of the e2e pipeline carries a field's real Kotlin type through\nto assertion rendering (unlike `fields_enum`, nested paths like\n`action_results[].data` are not auto-detected from the IR), so this\nmirrors `fields_enum`'s manual-declaration convention. Both the raw\nfixture field path and the resolved (aliased) path are accepted.\n\n```toml\n[e2e]\nfields_json_scalar = [\"action_results[].data\"]\n```",
           "items": {
             "type": "string"
           },
@@ -7801,7 +7819,7 @@
       "type": "object"
     }
   },
-  "$id": "https://github.com/xberg-io/alef/releases/download/v0.60.1/alef.schema.json",
+  "$id": "https://github.com/xberg-io/alef/releases/download/v0.60.2/alef.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "JSON Schema for the JSON representation of alef.toml.",
@@ -7921,6 +7939,6 @@
   ],
   "title": "Alef configuration",
   "type": "object",
-  "version": "0.60.1",
-  "x-alef-version": "0.60.1"
+  "version": "0.60.2",
+  "x-alef-version": "0.60.2"
 }

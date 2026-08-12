@@ -7,17 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.60.2] - 2026-08-12
+
 ### Fixed
 
 - Kotlin E2E generation now constructs streaming adapters' declared request DTOs instead of passing primitive fixture
   arguments to typed owner methods, and cross-checks streaming native declarations against generated JNI exports.
 
+- Generic documentation snippet generation now records calls with no effective function identity as missing coverage
+  instead of emitting invalid empty calls and counting those files as generated.
+
 - Generated Rust E2E assertions now use declared collection and enum field metadata for textual containment checks,
   avoiding invalid string arguments to `Vec<Named>::contains` and nonexistent enum `contains` methods.
+
+- Restored structurally corrupted FFI, Go, Swift, Zig, and Node templates while preserving their allocator,
+  ownership-transfer, concurrency, native-symbol, and runtime-export semantics.
+
+- Generated FFI service modules now define their own panic guard, and generated Rust headers are placed before
+  multiline inner attributes instead of being inserted inside their token trees.
+
+- Snippet session cleanup now tolerates scratch directories removed concurrently and reports the exact path and
+  operation for other filesystem failures, preventing opaque intermittent `ENOENT` failures in docs and snippet checks.
 
 - E2E formatting now resolves generated language directories before changing the formatter working directory,
   preventing relative paths from becoming nonexistent doubled paths while rejecting formatter engine failures that
   older Poly versions only reported as warnings.
+
+- Standard-library trait implementations on structs are no longer extracted as public binding methods, preventing
+  methods such as `Debug::fmt` from producing lossy sanitized APIs and blocking generation.
+
+- Generated Elixir test helpers now rely on `System.put_env/2` and no longer call the intentionally omitted
+  `set_env` NIF.
 
 - Generated Ruby bindings now use tuple constructor and match syntax for adjacently tagged positional enum variants.
 
@@ -25,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on `Any?` values.
 
 - Generated Rust documentation snippets now preserve every line inside multiline raw string literals instead of
-  dropping unindented literal contents and emitting malformed source.
+  dropping or reindenting literal contents, and no longer retain the surrounding test module's closing brace.
 
 - Generated Java bindings now honor explicit native-library path overrides before bundled resources and report every
   missing ABI symbol, the exported count, and the loaded path in one eager startup diagnostic.
@@ -37,8 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Generated Java E2E assertions now retain statement separators when multiple assertions share a test method.
 
-- Generated C# native declarations now treat only emitted concrete Rust types as FFI handles, preventing enum and
-  trait parameters from creating calls to nonexistent JSON or destructor exports.
+- Generated C# native declarations now retain data-enum handles while excluding unit enums and traits, preventing
+  both missing live FFI declarations and calls to nonexistent JSON or destructor exports.
 
 - Generated C E2E harnesses now propagate assertion failures into per-test results, return a failing process status,
   and report credential-gated tests as skipped instead of silently counting every invocation as passed.
@@ -68,6 +88,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Generated Zig E2E tests no longer ignore `SIGABRT`, so allocator corruption and native aborts fail the suite instead
   of being silently suppressed.
+
+- C FFI string-length companions now keep function-specific thread-local lengths, preventing intervening calls from
+  turning a valid returned string into an out-of-bounds slice. Feature-gated opaque constructors now match their
+  destructors and header declarations, while field accessors report conversion failures and document pointer ownership.
+
+- JNI shims now contain panics across every Rust-owned JVM entrypoint and reject zero `jlong` handles before
+  constructing Rust references, preventing unwinds and null-reference undefined behavior at the JNI ABI boundary.
+
+- E2E regeneration now refreshes `fixtures/schema.json`, keeping consumer fixture schemas aligned with structured
+  documentation metadata supported by the generator.
+
+- Batched snippet validation now drains compiler output concurrently to prevent large-corpus pipe deadlocks, reports
+  batch start and completion, keeps temporary workspaces under `.alef`, and removes timed-out legacy root-level
+  scratch directories on subsequent validation runs.
+
+- Snippet gap detection now discovers imported snippet content in Astro component files as well as MDX pages.
+
+- `alef test` now fails when preconditions skip every explicitly requested language instead of reporting a vacuous
+  success with zero executed suites.
+
+- Snippet validation limits now cap the effective validation level instead of skipping the snippet when a stronger
+  level is requested; bare fences remain unannotated and validate at the configured level.
 
 ## [0.60.1] - 2026-08-12
 
