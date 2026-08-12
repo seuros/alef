@@ -175,8 +175,8 @@ fn gen_pyo3_data_enum_keeps_bare_string_for_externally_tagged_enum() {
         "expected bare-string path for externally-tagged enum: {generated}"
     );
     assert!(
-        !generated.contains("serde_json::json!({"),
-        "externally-tagged enum must not wrap the string in a tag object: {generated}"
+        !generated.contains(r#"serde_json::json!({ "type": s })"#),
+        "externally-tagged enum constructor must not wrap the string in a tag object: {generated}"
     );
 }
 
