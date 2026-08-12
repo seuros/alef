@@ -29,8 +29,11 @@ pub(super) fn ensure_generated_header(path: &Path, content: &str) -> String {
         _ => return content.to_owned(),
     };
     let header = hash::header(style);
-    if let Some((shebang, body)) = content.split_once('\n').filter(|(line, _)| line.starts_with("#!")) {
+    if let Some((shebang, body)) = content.split_once('\n').filter(|(line, _)| line.starts_with("#!/")) {
         return format!("{shebang}\n{header}\n{body}");
+    }
+    if let Some((opening_tag, body)) = content.split_once('\n').filter(|(line, _)| line.trim() == "<?php") {
+        return format!("{opening_tag}\n{header}\n{body}");
     }
     format!("{header}\n{content}")
 }

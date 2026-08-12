@@ -201,6 +201,10 @@ fn test_entrypoint_function_exists() {
         rs.matches("catch_ffi_panic(").count(),
         "every Rust-owned service export must have a panic guard"
     );
+    assert!(
+        rs.contains("fn catch_ffi_panic<T>(fallback: T, body: impl FnOnce() -> T) -> T"),
+        "service modules must define their panic guard instead of depending on a parent module helper"
+    );
 }
 
 #[test]

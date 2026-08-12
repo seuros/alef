@@ -8,3 +8,10 @@
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::sync::Arc;
 use std::panic;
+
+fn catch_ffi_panic<T>(fallback: T, body: impl FnOnce() -> T) -> T {
+    match panic::catch_unwind(panic::AssertUnwindSafe(body)) {
+        Ok(value) => value,
+        Err(_) => fallback,
+    }
+}
