@@ -105,4 +105,76 @@ mod tests {
         assert!(file.content.contains("if (nativeHandle != 0L)"));
         assert!(file.content.contains("nativeHandle = 0L"));
     }
+
+    #[test]
+    fn jni_bridge_omits_sanitized_instance_method_declarations() {
+        use crate::core::ir::{MethodDef, ReceiverKind, TypeDef, TypeRef};
+
+        let api = ApiSurface {
+            types: vec![TypeDef {
+                name: "SampleClient".to_owned(),
+                rust_path: "sample::SampleClient".to_owned(),
+                is_opaque: true,
+                methods: vec![
+                    MethodDef {
+                        name: "chat".to_owned(),
+                        receiver: Some(ReceiverKind::Ref),
+                        return_type: TypeRef::String,
+                        ..MethodDef::default()
+                    },
+                    MethodDef {
+                        name: "chat_stream".to_owned(),
+                        receiver: Some(ReceiverKind::Ref),
+                        return_type: TypeRef::String,
+                        sanitized: true,
+                        ..MethodDef::default()
+                    },
+                ],
+                ..TypeDef::default()
+            }],
+            ..ApiSurface::default()
+        };
+        let config = ResolvedCrateConfig {
+            name: "sample".to_owned(),
+            kotlin_android: Some(KotlinAndroidConfig::default()),
+            ..ResolvedCrateConfig::default()
+        };
+
+        let content = emit_jni_bridge_object(&api, &config).content;
+
+        assert!(content.contains("external fun nativeSampleClientChat("));
+        assert!(!content.contains("external fun nativeSampleClientChatStream("));
+    }
+
+    #[test]
+    fn jni_bridge_only_declares_destructors_for_returned_opaque_handles() {
+        use crate::core::ir::{FunctionDef, TypeDef, TypeRef};
+
+        let opaque = |name: &str| TypeDef {
+            name: name.to_owned(),
+            rust_path: format!("sample::{name}"),
+            is_opaque: true,
+            ..TypeDef::default()
+        };
+        let api = ApiSurface {
+            types: vec![opaque("ReturnedHandle"), opaque("InternalHandle")],
+            functions: vec![FunctionDef {
+                name: "create_handle".to_owned(),
+                rust_path: "sample::create_handle".to_owned(),
+                return_type: TypeRef::Named("ReturnedHandle".to_owned()),
+                ..FunctionDef::default()
+            }],
+            ..ApiSurface::default()
+        };
+        let config = ResolvedCrateConfig {
+            name: "sample".to_owned(),
+            kotlin_android: Some(KotlinAndroidConfig::default()),
+            ..ResolvedCrateConfig::default()
+        };
+
+        let content = emit_jni_bridge_object(&api, &config).content;
+
+        assert!(content.contains("external fun nativeFreeReturnedHandle(handle: Long)"));
+        assert!(!content.contains("nativeFreeInternalHandle"));
+    }
 }

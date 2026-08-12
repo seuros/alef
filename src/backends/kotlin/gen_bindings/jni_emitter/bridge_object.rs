@@ -29,7 +29,9 @@ pub fn emit_jni_bridge_object(api: &ApiSurface, config: &ResolvedCrateConfig) ->
         .functions
         .iter()
         .filter(|f| {
-            !exclude_functions.contains(f.name.as_str()) && !trait_bridge_manages_jni_function(f.name.as_str(), config)
+            !f.sanitized
+                && !exclude_functions.contains(f.name.as_str())
+                && !trait_bridge_manages_jni_function(f.name.as_str(), config)
         })
         .collect();
 
@@ -97,7 +99,7 @@ pub fn emit_jni_bridge_object(api: &ApiSurface, config: &ResolvedCrateConfig) ->
             .filter(|t| {
                 t.is_opaque
                     && !t.is_trait
-                    && !t.methods.is_empty()
+                    && t.methods.iter().any(|method| !method.sanitized && !method.is_static)
                     && !exclude_functions
                         .iter()
                         .all(|&excluded| t.methods.iter().all(|m| excluded == m.name.as_str()))
@@ -108,7 +110,7 @@ pub fn emit_jni_bridge_object(api: &ApiSurface, config: &ResolvedCrateConfig) ->
             for ty in &opaque_with_methods {
                 let owner_pascal = to_pascal_case(&ty.name);
                 for method in &ty.methods {
-                    if exclude_functions.contains(method.name.as_str()) {
+                    if method.sanitized || method.is_static || exclude_functions.contains(method.name.as_str()) {
                         continue;
                     }
                     let native_name = format!("native{owner_pascal}{}", to_pascal_case(&method.name));
@@ -147,11 +149,18 @@ pub fn emit_jni_bridge_object(api: &ApiSurface, config: &ResolvedCrateConfig) ->
         .map(|t| t.name.as_str())
         .collect();
 
-    let handle_only_opaque_returns: std::collections::BTreeSet<&str> = api
-        .types
+    let handle_only_opaque_returns: std::collections::BTreeSet<&str> = visible_functions
         .iter()
-        .filter(|t| t.is_opaque && !t.is_trait && !client_type_names.contains(t.name.as_str()))
-        .map(|t| t.name.as_str())
+        .filter_map(|function| {
+            let TypeRef::Named(type_name) = &function.return_type else {
+                return None;
+            };
+            if opaque_type_names.contains(type_name.as_str()) && !client_type_names.contains(type_name.as_str()) {
+                Some(type_name.as_str())
+            } else {
+                None
+            }
+        })
         .collect();
 
     if !handle_only_opaque_returns.is_empty() {
