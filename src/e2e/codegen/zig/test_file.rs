@@ -25,28 +25,9 @@ pub(super) fn render_test_file(
     let _ = writeln!(out, "const {module_name} = @import(\"{module_name}\");");
     let _ = writeln!(out);
 
-    // Suppress C++ static destructors that may abort during exit (e.g., leptonica's ObjectCache cleanup).
-    // The Zig test runner's --listen=- IPC protocol expects a clean exit, but C++ cleanup can trigger
-    // SIGABRT. Using SIG_IGN (signal number 1) ignores SIGABRT entirely, allowing normal exit.
-    let _ = writeln!(
-        out,
-        "// Suppress C++ global destructor aborts that break zig's --listen=- IPC"
-    );
-    let _ = writeln!(out, "extern \"c\" fn signal(sig: i32, handler: usize) usize;");
-    let _ = writeln!(out, "var _abort_handler_installed: bool = false;");
-    let _ = writeln!(out, "fn suppress_abort() void {{");
-    let _ = writeln!(out, "    if (!_abort_handler_installed) {{");
-    let _ = writeln!(out, "        // SIGABRT = 6 on POSIX; SIG_IGN = 1");
-    let _ = writeln!(out, "        _ = signal(6, 1);");
-    let _ = writeln!(out, "        _abort_handler_installed = true;");
-    let _ = writeln!(out, "    }}");
-    let _ = writeln!(out, "}}");
-    let _ = writeln!(out);
-
-    // Propagate the configured e2e environment to native code that reads it via getenv
-    // (e.g. SSRF allow-listing for the loopback mock server). Zig has no per-suite setup
-    // hook, so each test body calls allow_private_network() right after suppress_abort().
-    // The managed environment does not reach libc, so push each value through setenv.
+    // Propagate the configured e2e environment to native code that reads it via getenv. Zig has no per-suite setup
+    // hook, so each test body calls allow_private_network(). The managed environment does not reach libc, so push each
+    // value through setenv. ~keep
     if !e2e_config.env.is_empty() {
         let _ = writeln!(
             out,
@@ -295,7 +276,6 @@ fn render_test_fn(
     if wrap_as_test {
         let _ = writeln!(out, "test \"{test_name}\" {{");
         let _ = writeln!(out, "    // {description}");
-        let _ = writeln!(out, "    suppress_abort();");
         if !e2e_config.env.is_empty() {
             let _ = writeln!(out, "    allow_private_network();");
         }
@@ -667,6 +647,32 @@ mod snippet_tests {
         assert!(!rendered.contains("defer "));
         assert!(rendered.contains("pub fn main() !void"));
         assert!(!rendered.contains("testing."));
+    }
+
+    #[test]
+    fn generated_tests_preserve_abort_failures() {
+        let fixture = Fixture {
+            id: "count".into(),
+            description: "Count".into(),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "count".into();
+        let rendered = render_test_file(
+            "smoke",
+            &[&fixture],
+            &e2e,
+            "count",
+            "result",
+            &[],
+            "sample",
+            "sample",
+            &ResolvedCrateConfig::default(),
+            &[],
+        );
+
+        assert!(!rendered.contains("suppress_abort"), "{rendered}");
+        assert!(!rendered.contains("signal(6, 1)"), "{rendered}");
     }
 
     #[test]

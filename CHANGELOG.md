@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Zig opaque-handle methods now convert C ABI integer booleans to Zig `bool`, preventing generated methods from
+  returning an incompatible `i32` value.
+
+- Generated Zig E2E tests no longer ignore `SIGABRT`, so allocator corruption and native aborts fail the suite instead
+  of being silently suppressed.
+
 ## [0.60.1] - 2026-08-12
 
 ### Changed

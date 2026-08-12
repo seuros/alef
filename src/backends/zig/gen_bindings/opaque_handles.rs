@@ -158,4 +158,33 @@ mod tests {
         assert!(output.contains("const handle = self._handle orelse return;"));
         assert!(output.contains("self._handle = null;"));
     }
+
+    #[test]
+    fn opaque_handle_converts_c_integer_booleans() {
+        let ty = TypeDef {
+            name: "NodeHandle".to_owned(),
+            rust_path: "sample::NodeHandle".to_owned(),
+            is_opaque: true,
+            methods: vec![MethodDef {
+                name: "is_named".to_owned(),
+                is_static: false,
+                return_type: TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool),
+                ..MethodDef::default()
+            }],
+            ..TypeDef::default()
+        };
+        let mut output = String::new();
+
+        emit_opaque_handle(
+            &ty,
+            "sample",
+            &[],
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &mut output,
+        );
+
+        assert!(output.contains("return _result != 0;"), "{output}");
+    }
 }

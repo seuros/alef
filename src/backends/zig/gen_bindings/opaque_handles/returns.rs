@@ -1,4 +1,4 @@
-use crate::core::ir::TypeRef;
+use crate::core::ir::{PrimitiveType, TypeRef};
 use heck::AsSnakeCase;
 use std::collections::HashSet;
 
@@ -10,6 +10,7 @@ pub(super) fn method_unwrap_return_expr(
     struct_names: &HashSet<String>,
 ) -> String {
     match ty {
+        TypeRef::Primitive(PrimitiveType::Bool) => format!("{raw} != 0"),
         TypeRef::String | TypeRef::Path | TypeRef::Json | TypeRef::Vec(_) | TypeRef::Map(_, _) => {
             format!(
                 "blk: {{\n            const slice = std.mem.span({raw});\n            const owned = try std.heap.c_allocator.dupe(u8, slice);\n            c.{prefix}_free_string({raw});\n            break :blk owned;\n        }}"
