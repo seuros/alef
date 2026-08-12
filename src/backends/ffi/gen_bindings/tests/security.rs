@@ -55,6 +55,11 @@ fn string_return_lengths_are_isolated_by_export() {
     assert!(lib.contains("set_last_return_len(\"my_lib_long_value\", 0);"));
     assert!(lib.contains("last_return_len(\"my_lib_short_value\")"));
     assert!(lib.contains("last_return_len(\"my_lib_long_value\")"));
+    let short_export = generated_export_block(&lib, "my_lib_short_value");
+    assert!(
+        short_export.find("catch_unwind").unwrap() < short_export.find("set_last_return_len").unwrap(),
+        "return-length storage may allocate and must remain inside the panic boundary"
+    );
 }
 
 #[test]
