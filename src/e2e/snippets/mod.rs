@@ -385,6 +385,16 @@ fn render_snippet_body(
     if let Some(kind) = recipe_policy::extension_owned_recipe_kind(fixture, fixture.resolved_args(call)) {
         bail!("{kind} fixture requires an extension-owned documentation recipe");
     }
+    let effective_function = call
+        .overrides
+        .get(language)
+        .and_then(|override_config| override_config.function.as_deref())
+        .unwrap_or(&call.function);
+    if effective_function.trim().is_empty() {
+        bail!(
+            "built-in `{language}` snippet recipe has no function identity; configure a call function or provide an extension-owned documentation recipe"
+        );
+    }
     let body = generator
         .render_snippet_body_with_functions(
             fixture,
@@ -914,6 +924,80 @@ mod tests {
             report.coverage.missing[0].reason,
             "AsyncAPI fixture requires an extension-owned documentation recipe"
         );
+    }
+
+    #[test]
+    fn empty_call_identity_is_missing_instead_of_generated() {
+        let fixture = documented_fixture();
+        let snippet_config = SnippetConfig {
+            output: "docs/snippets".into(),
+            ..SnippetConfig::default()
+        };
+        let e2e = E2eConfig::default();
+        assert!(e2e.call.function.is_empty());
+        assert!(e2e.call.module.is_empty());
+        let crate_config = ResolvedCrateConfig::default();
+        let context = SnippetRenderContext {
+            e2e: &e2e,
+            crate_config: &crate_config,
+            type_defs: &[],
+            enums: &[],
+            functions: &[],
+        };
+
+        let report = generate_snippet_report_with_extensions(
+            &[fixture],
+            &["go".into(), "java".into()],
+            &snippet_config,
+            &context,
+            &[],
+        )
+        .expect("missing call identities belong in the coverage ledger");
+
+        assert!(report.snippets.is_empty());
+        assert!(report.coverage.generated.is_empty());
+        assert_eq!(report.coverage.expected.len(), 2);
+        assert_eq!(report.coverage.missing.len(), 2);
+        assert!(
+            report
+                .coverage
+                .missing
+                .iter()
+                .all(|missing| missing.reason.contains("has no function identity"))
+        );
+    }
+
+    #[test]
+    fn language_function_override_supplies_missing_default_identity() {
+        let fixture = documented_fixture();
+        let snippet_config = SnippetConfig {
+            output: "docs/snippets".into(),
+            ..SnippetConfig::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.overrides.insert(
+            "go".into(),
+            crate::core::config::e2e::CallOverride {
+                function: Some("process".into()),
+                ..Default::default()
+            },
+        );
+        let crate_config = ResolvedCrateConfig::default();
+        let context = SnippetRenderContext {
+            e2e: &e2e,
+            crate_config: &crate_config,
+            type_defs: &[],
+            enums: &[],
+            functions: &[],
+        };
+
+        let report =
+            generate_snippet_report_with_extensions(&[fixture], &["go".into()], &snippet_config, &context, &[])
+                .expect("language override supplies a valid identity");
+
+        assert_eq!(report.coverage.generated, report.coverage.expected);
+        assert!(report.coverage.missing.is_empty());
+        assert!(!report.snippets[0].file.content.contains("pkg.()"));
     }
 
     #[test]
