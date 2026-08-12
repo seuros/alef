@@ -190,10 +190,7 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
         .filter(|typ| !typ.is_trait && !ffi_exclude_types.contains(typ.name.as_str()))
     {
         if !typ.is_opaque && typ.has_serde {
-            let has_from_json_method = typ.methods.iter().any(|m| m.name == "from_json");
-            if !has_from_json_method {
-                builder.add_item(&gen_type_from_json(typ, prefix, &core_import));
-            }
+            builder.add_item(&gen_type_from_json(typ, prefix, &core_import));
             let has_to_json_method = typ.methods.iter().any(|m| m.name == "to_json");
             if !typ.name.ends_with("Update") && !has_to_json_method {
                 builder.add_item(&gen_type_to_json(typ, prefix, &core_import));

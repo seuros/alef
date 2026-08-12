@@ -21,9 +21,8 @@ fn should_emit_to_json_handle(typ: &TypeDef) -> bool {
 /// This matches the predicate in `src/backends/ffi/gen_bindings/mod.rs`:
 /// - Opaque types do NOT get `_from_json` (they are handles, not serializable values)
 /// - Types without serde derives do NOT get `_from_json`
-/// - Types with an existing `from_json` method do NOT get auto `_from_json` (method collision)
 fn should_emit_from_json_handle(typ: &TypeDef) -> bool {
-    !typ.is_opaque && typ.has_serde && !typ.methods.iter().any(|m| m.name == "from_json")
+    !typ.is_opaque && typ.has_serde
 }
 
 /// Detection mirroring `is_bytes_result` for `MethodDef` — `Result<Vec<u8>>`-returning
@@ -233,6 +232,7 @@ pub(crate) fn gen_native_lib(
 
     let mut emitted_free_handles: AHashSet<String> = AHashSet::new();
     let mut emitted_to_json_handles: AHashSet<String> = AHashSet::new();
+    let mut emitted_from_json_handles: AHashSet<String> = AHashSet::new();
 
     let opaque_type_names: AHashSet<String> = api
         .types
@@ -255,6 +255,35 @@ pub(crate) fn gen_native_lib(
         .collect();
 
     let mut accessor_handles = Vec::new();
+
+    for typ in api.types.iter().filter(|typ| !typ.is_trait) {
+        let type_snake = typ.name.to_snake_case();
+        let type_upper = type_snake.to_uppercase();
+        if should_emit_from_json_handle(typ) {
+            let from_json_handle = format!("{}_{}_FROM_JSON", prefix.to_uppercase(), type_upper);
+            let from_json_ffi = format!("{}_{}_from_json", prefix, type_snake);
+            if emitted_from_json_handles.insert(from_json_handle.clone()) {
+                accessor_handles.push(crate::backends::java::template_env::render(
+                    "method_handle_from_json.jinja",
+                    minijinja::context! {
+                        handle_name => from_json_handle,
+                        ffi_name => from_json_ffi,
+                    },
+                ));
+            }
+        }
+        let free_handle = format!("{}_{}_FREE", prefix.to_uppercase(), type_upper);
+        let free_ffi = format!("{}_{}_free", prefix, type_snake);
+        if emitted_free_handles.insert(free_handle.clone()) {
+            accessor_handles.push(crate::backends::java::template_env::render(
+                "method_handle_free.jinja",
+                minijinja::context! {
+                    handle_name => free_handle,
+                    ffi_name => free_ffi,
+                },
+            ));
+        }
+    }
 
     for func in &api.functions {
         let inner_named = match &func.return_type {
@@ -302,7 +331,6 @@ pub(crate) fn gen_native_lib(
         }
     }
 
-    let mut emitted_from_json_handles: AHashSet<String> = AHashSet::new();
     for func in &api.functions {
         for param in &func.params {
             let inner_name = match &param.ty {

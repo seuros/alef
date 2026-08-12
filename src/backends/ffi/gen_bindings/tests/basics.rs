@@ -5,7 +5,11 @@ use crate::core::ir::*;
 
 #[test]
 fn test_generates_lib_rs() {
-    let api = sample_api();
+    let mut api = sample_api();
+    api.types[0].methods.push(MethodDef {
+        name: "from_json".into(),
+        ..MethodDef::default()
+    });
     let config = sample_config();
     let backend = FfiBackend;
 

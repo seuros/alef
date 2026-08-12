@@ -578,7 +578,7 @@ impl Backend for JavaBackend {
 mod tests {
     use super::*;
     use crate::core::config::TraitBridgeConfig;
-    use crate::core::ir::FunctionDef;
+    use crate::core::ir::{FunctionDef, MethodDef, TypeDef};
 
     #[test]
     fn removes_trait_bridge_managed_functions_from_java_api_functions() {
@@ -632,6 +632,28 @@ mod tests {
 
         assert!(!output.contains("SAMPLE_FREE_BYTES"));
         assert!(!output.contains("sample_free_bytes"));
+    }
+
+    #[test]
+    fn native_library_declares_lifecycle_handles_for_every_serializable_type() {
+        let api = ApiSurface {
+            types: vec![TypeDef {
+                name: "AccessPolicy".into(),
+                has_serde: true,
+                methods: vec![MethodDef {
+                    name: "from_json".into(),
+                    ..MethodDef::default()
+                }],
+                ..TypeDef::default()
+            }],
+            ..ApiSurface::default()
+        };
+        let output = gen_native_lib(&api, &ResolvedCrateConfig::default(), "dev.sample", "sample", false);
+
+        assert!(output.contains("SAMPLE_ACCESS_POLICY_FROM_JSON"));
+        assert!(output.contains("sample_access_policy_from_json"));
+        assert!(output.contains("SAMPLE_ACCESS_POLICY_FREE"));
+        assert!(output.contains("sample_access_policy_free"));
     }
 
     #[test]
