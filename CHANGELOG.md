@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated C# native declarations now treat only emitted concrete Rust types as FFI handles, preventing enum and
+  trait parameters from creating calls to nonexistent JSON or destructor exports.
+
 - Generated C E2E harnesses now propagate assertion failures into per-test results, return a failing process status,
   and report credential-gated tests as skipped instead of silently counting every invocation as passed.
 

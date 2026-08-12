@@ -494,6 +494,7 @@ mod tests {
         assert!(output.contains("EntryPoint = \"sample_visitor_create\""));
         assert!(output.contains("EntryPoint = \"sample_visitor_free\""));
         assert!(!output.contains("htm_"));
+        assert!(!output.contains("register_markup_visitor"));
     }
 
     #[test]

@@ -193,6 +193,10 @@ mod tests {
             !out.contains("SYN_OPTIONS_SET_VISITOR_HANDLE") && !out.contains("syn_options_set_visitor_handle"),
             "options-field mode must not bind the legacy visitor_handle setter"
         );
+        assert!(
+            !out.contains("register_renderer") && !out.contains("register_visitor"),
+            "options-field mode must not bind a legacy registration entry point"
+        );
     }
 
     #[test]

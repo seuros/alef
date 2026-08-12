@@ -8,6 +8,14 @@ use crate::core::ir::{ApiSurface, FunctionDef, MethodDef, PrimitiveType, TypeRef
 use heck::{ToLowerCamelCase, ToSnakeCase};
 use std::collections::{HashMap, HashSet};
 
+fn ffi_handle_type_names(api: &ApiSurface) -> HashSet<&str> {
+    api.types
+        .iter()
+        .filter(|typ| !typ.is_trait)
+        .map(|typ| typ.name.as_str())
+        .collect()
+}
+
 /// Map a Rust FFI type string to the C# P/Invoke parameter declaration.
 ///
 /// String parameters use explicit UTF-8 marshalling to match the C `const char*` ABI.
@@ -123,9 +131,12 @@ pub(super) fn gen_native_methods(
     let true_opaque_types: HashSet<String> = api
         .types
         .iter()
-        .filter(|t| t.is_opaque)
+        .filter(|typ| typ.is_opaque && !typ.is_trait)
         .map(|t| t.name.clone())
         .collect();
+    let ffi_handle_type_names = ffi_handle_type_names(api);
+    opaque_param_types.retain(|name| ffi_handle_type_names.contains(name.as_str()));
+    opaque_return_types.retain(|name| ffi_handle_type_names.contains(name.as_str()));
     opaque_param_types.retain(|name| !bridge_type_aliases.contains(name));
     opaque_return_types.retain(|name| !bridge_type_aliases.contains(name));
 
@@ -650,4 +661,38 @@ pub(super) fn gen_pinvoke_for_method(c_name: &str, cs_name: &str, method: &Metho
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ffi_handle_type_names;
+    use crate::core::ir::{ApiSurface, EnumDef, TypeDef};
+
+    #[test]
+    fn ffi_handle_types_exclude_traits_and_enums() {
+        let api = ApiSurface {
+            types: vec![type_def("RenderOptions", false), type_def("MarkupVisitor", true)],
+            enums: vec![EnumDef {
+                name: "NodeKind".to_string(),
+                ..EnumDef::default()
+            }],
+            ..ApiSurface::default()
+        };
+
+        let names = ffi_handle_type_names(&api);
+
+        assert!(names.contains("RenderOptions"));
+        assert!(!names.contains("MarkupVisitor"));
+        assert!(!names.contains("NodeKind"));
+    }
+
+    fn type_def(name: &str, is_trait: bool) -> TypeDef {
+        TypeDef {
+            name: name.to_string(),
+            rust_path: format!("sample::{name}"),
+            original_rust_path: format!("sample::{name}"),
+            is_trait,
+            ..TypeDef::default()
+        }
+    }
 }
