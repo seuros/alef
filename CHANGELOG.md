@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- E2E formatting now resolves generated language directories before changing the formatter working directory,
+  preventing relative paths from becoming nonexistent doubled paths while retaining strict formatter failures.
+
 - Generated Ruby bindings now use tuple constructor and match syntax for adjacently tagged positional enum variants.
 
 - Kotlin assertions over optional JSON scalar fields now stringify safely instead of invoking string-only extensions

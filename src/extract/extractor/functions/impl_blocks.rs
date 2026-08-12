@@ -305,11 +305,14 @@ fn extract_trait_impl_methods(
             .last()
             .is_some_and(|s| STD_TRAITS.contains(&s.ident.to_string().as_str()))
     });
+    if is_std_trait_impl {
+        return;
+    }
 
     for impl_item in &item.items {
         if let syn::ImplItem::Fn(method) = impl_item {
             if !method.sig.generics.params.is_empty() {
-                if !is_std_trait_impl && extract_binding_exclusion_reason(&method.attrs).is_none() {
+                if extract_binding_exclusion_reason(&method.attrs).is_none() {
                     surface.unsupported_public_items.push(UnsupportedPublicItem {
                         item_kind: "method".to_string(),
                         item_path: format!("{crate_name}::{type_name}.{}", method.sig.ident),

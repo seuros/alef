@@ -29,6 +29,8 @@ use tracing::warn;
 /// generation.
 pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) -> anyhow::Result<()> {
     let output_prefix = Path::new(e2e_config.effective_output());
+    let current_dir =
+        std::env::current_dir().context("failed to resolve formatter working directory")?;
     let languages: HashSet<String> = files
         .iter()
         .filter_map(|f| {
@@ -39,8 +41,9 @@ pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) -> anyhow
         .collect();
 
     for lang in &languages {
-        let dir = format!("{}/{}", e2e_config.effective_output(), lang);
-        let dir_path = PathBuf::from(&dir);
+        let configured_dir = PathBuf::from(format!("{}/{}", e2e_config.effective_output(), lang));
+        let dir_path = resolve_formatter_directory(&configured_dir, &current_dir)?;
+        let dir = dir_path.to_string_lossy();
 
         // User override takes precedence and replaces the poly pass entirely.
         if let Some(custom) = e2e_config.format.get(lang.as_str()) {
@@ -84,6 +87,22 @@ pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) -> anyhow
         }
     }
     Ok(())
+}
+
+fn resolve_formatter_directory(path: &Path, current_dir: &Path) -> anyhow::Result<PathBuf> {
+    let absolute_path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        current_dir.join(path)
+    };
+    absolute_path
+        .canonicalize()
+        .with_context(|| {
+            format!(
+                "generated formatter path does not exist: {}",
+                absolute_path.display()
+            )
+        })
 }
 
 /// Format files restored from the generation-stage cache.
@@ -151,6 +170,28 @@ mod tests {
             output: out.to_string_lossy().into_owned(),
             ..E2eConfig::default()
         }
+    }
+
+    #[test]
+    fn formatter_directory_resolves_relative_targets_against_launch_directory() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let output = directory.path().join("e2e").join("python");
+        std::fs::create_dir_all(&output).expect("create formatter target");
+
+        let resolved = resolve_formatter_directory(Path::new("e2e/python"), directory.path())
+            .expect("resolve path");
+
+        assert!(resolved.is_absolute());
+        assert_eq!(resolved, output.canonicalize().expect("canonical output"));
+    }
+
+    #[test]
+    fn formatter_directory_rejects_real_missing_targets() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let error = resolve_formatter_directory(Path::new("e2e/missing"), directory.path())
+            .expect_err("missing formatter target must fail");
+
+        assert!(error.to_string().contains("generated formatter path does not exist"));
     }
 
     /// A user override in `E2eConfig.format` must replace the poly pass: the
