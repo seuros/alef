@@ -67,7 +67,12 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
     // JNI exposes one native symbol per function, so select the variant compiled by the
     // configured Android feature set before collapsing same-named real/fallback entries. ~keep
     let deduped_functions = crate::codegen::fn_dedup::dedup_same_name_functions(&cfg_filtered_api.functions);
-    let visible_functions: Vec<_> = deduped_functions
+    let candidate_functions: Vec<&crate::core::ir::FunctionDef> = if jni_target_overrides(config).is_empty() {
+        deduped_functions.iter().collect()
+    } else {
+        api.functions.iter().collect()
+    };
+    let visible_functions: Vec<_> = candidate_functions
         .iter()
         .filter(|f| {
             !f.sanitized
@@ -85,6 +90,15 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
         .collect();
 
     for f in &visible_functions {
+        let Some(target_predicate) = jni_target_predicate(f.cfg.as_deref(), config) else {
+            continue;
+        };
+        if let Some(predicate) = target_predicate {
+            out.push_str(&template_env::render(
+                "cfg_attribute.rs.jinja",
+                context! { predicate => predicate },
+            ));
+        }
         let method_name = bridge_method_name("", &f.name);
         let symbol = jni_symbol(&package, &bridge, &method_name);
         emit_function_shim(
@@ -158,4 +172,43 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
     emit_trait_bridge_shims(&mut out, config, &cfg_filtered_api, &package, &bridge);
 
     out
+}
+
+fn jni_target_overrides(config: &ResolvedCrateConfig) -> &[crate::core::config::FfiTargetDepOverride] {
+    config
+        .jni
+        .as_ref()
+        .map(|jni| jni.target_dep_overrides.as_slice())
+        .unwrap_or_default()
+}
+
+fn jni_target_predicate(cfg: Option<&str>, config: &ResolvedCrateConfig) -> Option<Option<String>> {
+    let overrides = jni_target_overrides(config);
+    let default_features: std::collections::HashSet<&str> = config
+        .features_for_language(Language::KotlinAndroid)
+        .iter()
+        .map(String::as_str)
+        .collect();
+    if overrides.is_empty() {
+        return crate::core::ir::cfg_feature_satisfied(cfg, &default_features).then_some(None);
+    }
+
+    let mut enabled_predicates = Vec::new();
+    if crate::core::ir::cfg_feature_satisfied(cfg, &default_features) {
+        let override_predicates = overrides.iter().map(|target| target.cfg.as_str()).collect::<Vec<_>>();
+        enabled_predicates.push(format!("not(any({}))", override_predicates.join(", ")));
+    }
+    for target in overrides {
+        let features = target.features.iter().map(String::as_str).collect();
+        if crate::core::ir::cfg_feature_satisfied(cfg, &features) {
+            enabled_predicates.push(target.cfg.clone());
+        }
+    }
+
+    match enabled_predicates.len() {
+        0 => None,
+        count if count == overrides.len() + 1 => Some(None),
+        1 => Some(enabled_predicates.pop()),
+        _ => Some(Some(format!("any({})", enabled_predicates.join(", ")))),
+    }
 }

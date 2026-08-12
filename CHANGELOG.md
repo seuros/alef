@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Kotlin JNI bridge declarations now exclude sanitized methods and only expose destructors for opaque handles returned
   by emitted functions, keeping every declared native method paired with a generated JNI export.
 
+- Generated JNI shims now gate feature-dependent functions by their target-specific dependency feature sets, keeping
+  disabled APIs out of Android builds while retaining enabled fallback implementations.
+
 - Generated JNI manifests now inherit dependencies declared by the consumer workspace, keeping binding crates aligned
   with workspace dependency versions while retaining standalone fallbacks.
 

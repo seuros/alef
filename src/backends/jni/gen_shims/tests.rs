@@ -219,6 +219,71 @@ namespace = "dev.sample_crate"
         );
     }
 
+    #[test]
+    fn target_feature_overrides_gate_real_and_fallback_functions() {
+        use crate::core::config::NewAlefConfig;
+
+        let raw: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["kotlin_android", "jni"]
+
+[[crates]]
+name = "demo"
+sources = ["src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.sample_crate"
+namespace = "dev.sample_crate"
+features = ["decoder"]
+
+[[crates.jni.target_dep_overrides]]
+cfg = 'target_os = "android"'
+features = ["mobile"]
+default_features = false
+"#,
+        )
+        .expect("fixture config parses");
+        let config = raw.resolve().expect("fixture config resolves").remove(0);
+        let function = |rust_path: &str, cfg: &str| crate::core::ir::FunctionDef {
+            name: "decode_sample".into(),
+            rust_path: rust_path.into(),
+            return_type: TypeRef::String,
+            cfg: Some(cfg.into()),
+            ..Default::default()
+        };
+        let gated_only = crate::core::ir::FunctionDef {
+            name: "decoder_details".into(),
+            rust_path: "demo::decoder::decoder_details".into(),
+            return_type: TypeRef::String,
+            cfg: Some("feature = \"decoder\"".into()),
+            ..Default::default()
+        };
+
+        let content = emit_lib_rs(
+            &api_with_functions(vec![
+                function("demo::decoder::decode_sample", "feature = \"decoder\""),
+                function(
+                    "demo::decode_sample",
+                    "all(feature = \"mobile\", not(feature = \"decoder\"))",
+                ),
+                gated_only,
+            ]),
+            &config,
+        );
+
+        assert!(
+            content.contains("#[cfg(not(any(target_os = \"android\")))]\n#[unsafe(no_mangle)]"),
+            "desktop-only implementations must be target gated: {content}"
+        );
+        assert!(
+            content.contains("#[cfg(target_os = \"android\")]\n#[unsafe(no_mangle)]"),
+            "the enabled Android fallback must be emitted behind its target gate: {content}"
+        );
+        assert!(content.contains("core_crate::decode_sample()"));
+        assert!(content.contains("core_crate::decoder::decoder_details()"));
+    }
+
     /// The generated `throw_jni_error` helper must use `env.throw_new(...).is_err()`
     /// and fall back to `java/lang/RuntimeException` rather than silently discarding
     /// a failed throw (which would leave the Kotlin caller with no exception pending

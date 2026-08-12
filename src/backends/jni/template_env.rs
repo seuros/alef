@@ -3,6 +3,10 @@ use minijinja::Environment;
 static TEMPLATES: &[(&str, &str)] = &[
     ("lib_header.rs.jinja", include_str!("templates/lib_header.rs.jinja")),
     (
+        "cfg_attribute.rs.jinja",
+        include_str!("templates/cfg_attribute.rs.jinja"),
+    ),
+    (
         "runtime_helpers.rs.jinja",
         include_str!("templates/runtime_helpers.rs.jinja"),
     ),
