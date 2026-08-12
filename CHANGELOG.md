@@ -7,11 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- Serialize JVM-backed snippet validator integration tests so concurrent Java and Kotlin compiler startup cannot
-  destabilize the JDK module image during the full test suite.
-
 ## [0.60.1] - 2026-08-12
 
 ### Changed
@@ -22,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Development version advanced to 0.60.1 for the strict snippet-validation and migration fixes.
 
 ### Fixed
+
+- Serialize JVM-backed snippet validator integration tests so concurrent Java and Kotlin compiler startup cannot
+  destabilize the JDK module image during the full test suite.
 
 - Preserve line boundaries in generated JNI crate headers so Rust attributes, imports, and constants remain valid syntax.
 
