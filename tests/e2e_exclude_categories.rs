@@ -59,6 +59,7 @@ fn e2e_config_with_exclusions(excluded: &[&str]) -> E2eConfig {
         fields_c_types: Default::default(),
         fields_enum: HashSet::new(),
         fields_display_as_text: HashSet::new(),
+        fields_json_scalar: HashSet::new(),
         env: Default::default(),
         dep_mode: Default::default(),
         registry: Default::default(),
