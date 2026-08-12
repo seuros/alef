@@ -77,6 +77,7 @@ pub fn generate_e2e(
     let fixtures_dir = Path::new(&e2e_config.fixtures);
     let fixtures = load_fixtures(fixtures_dir)
         .with_context(|| format!("failed to load fixtures from {}", fixtures_dir.display()))?;
+    scaffold::sync_fixture_schema(fixtures_dir)?;
 
     info!("Loaded {} fixture(s) from {}", fixtures.len(), e2e_config.fixtures);
 

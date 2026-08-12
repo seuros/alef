@@ -431,7 +431,7 @@ fn markdown_files(base: &Path) -> Vec<PathBuf> {
         .filter(|path| {
             path.extension()
                 .and_then(|extension| extension.to_str())
-                .map(|extension| matches!(extension.to_lowercase().as_str(), "md" | "markdown" | "mdx"))
+                .map(|extension| matches!(extension.to_lowercase().as_str(), "astro" | "md" | "markdown" | "mdx"))
                 .unwrap_or(false)
         })
         .collect();
@@ -814,6 +814,26 @@ mod tests {
             report.unreferenced_snippets
         );
         assert!(report.unreferenced_snippets[0].ends_with("orphan.md"));
+    }
+
+    #[test]
+    fn walks_astro_files_for_references() {
+        let directory = tempfile::tempdir().expect("temporary docs directory");
+        let docs = directory.path().join("docs");
+        let snippets = directory.path().join("snippets");
+        std::fs::create_dir_all(&docs).expect("create docs directory");
+        std::fs::create_dir_all(&snippets).expect("create snippets directory");
+        std::fs::write(
+            docs.join("example.astro"),
+            "import { Content as Example } from \"../snippets/example.md\";\n",
+        )
+        .expect("write Astro page");
+        std::fs::write(snippets.join("example.md"), "```rust\nlet value = 1;\n```\n").expect("write snippet");
+
+        let references = discover_includes(&[docs], &[]).expect("discover Astro imports");
+
+        assert_eq!(references.len(), 1);
+        assert_eq!(references[0].target, snippets.join("example.md"));
     }
 
     #[test]

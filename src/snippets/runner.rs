@@ -126,6 +126,12 @@ fn validate_batches(
         let validator = registry.get(language).expect("batch group validator");
         let session = key.as_deref().and_then(|value| sessions.get(value));
         let batch_snippets = indices.iter().map(|index| &snippets[*index]).collect::<Vec<_>>();
+        tracing::info!(
+            language = %language,
+            snippet_count = batch_snippets.len(),
+            timeout_secs = config.timeout_secs,
+            "Starting batched snippet validation"
+        );
         let started = Instant::now();
         let validation = || validator.validate_batch_in_session(&batch_snippets, level, config.timeout_secs, session);
         let batch = match key.as_deref().and_then(|value| session_locks.get(value)) {
@@ -148,6 +154,12 @@ fn validate_batches(
             Err(error) => vec![(SnippetStatus::Error, Some(error.to_string())); indices.len()],
         };
         let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        tracing::info!(
+            language = %language,
+            snippet_count = batch_snippets.len(),
+            duration_ms,
+            "Finished batched snippet validation"
+        );
         for ((index, snippet), (status, message)) in indices.into_iter().zip(batch_snippets).zip(values) {
             results[index] = Some(finalize_result(
                 snippet,

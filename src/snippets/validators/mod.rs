@@ -202,32 +202,54 @@ pub fn run_command(command: &mut std::process::Command, timeout_secs: u64) -> Re
         .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|err| crate::snippets::error::Error::Other(format!("spawn failed: {err}")))?;
+    let stdout = child.stdout.take().map(output_reader);
+    let stderr = child.stderr.take().map(output_reader);
 
     let timeout = std::time::Duration::from_secs(timeout_secs);
     match child.wait_timeout(timeout) {
         Ok(Some(status)) => {
-            let mut output = String::new();
-
-            if let Some(mut stdout) = child.stdout.take() {
-                let _ = stdout.read_to_string(&mut output);
-            }
-
-            if let Some(mut stderr) = child.stderr.take() {
-                let _ = stderr.read_to_string(&mut output);
-            }
-
+            let output = collect_output(stdout, stderr)?;
             Ok((status.success(), strip_ansi_codes(&output)))
         }
         Ok(None) => {
             let _ = child.kill();
             let _ = child.wait();
+            let _ = collect_output(stdout, stderr);
             Err(crate::snippets::error::Error::Timeout {
                 command: format!("{command:?}"),
                 timeout_secs,
             })
         }
-        Err(err) => Err(crate::snippets::error::Error::Other(format!("wait failed: {err}"))),
+        Err(err) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = collect_output(stdout, stderr);
+            Err(crate::snippets::error::Error::Other(format!("wait failed: {err}")))
+        }
     }
+}
+
+fn output_reader(mut stream: impl Read + Send + 'static) -> std::thread::JoinHandle<std::io::Result<String>> {
+    std::thread::spawn(move || {
+        let mut output = String::new();
+        stream.read_to_string(&mut output)?;
+        Ok(output)
+    })
+}
+
+fn collect_output(
+    stdout: Option<std::thread::JoinHandle<std::io::Result<String>>>,
+    stderr: Option<std::thread::JoinHandle<std::io::Result<String>>>,
+) -> Result<String> {
+    let read = |handle: std::thread::JoinHandle<std::io::Result<String>>| {
+        handle
+            .join()
+            .map_err(|_| crate::snippets::error::Error::Other("snippet output reader panicked".into()))?
+            .map_err(crate::snippets::error::Error::from)
+    };
+    let mut output = stdout.map(read).transpose()?.unwrap_or_default();
+    output.push_str(&stderr.map(read).transpose()?.unwrap_or_default());
+    Ok(output)
 }
 
 fn sanitize_environment(command: &mut std::process::Command) {
@@ -276,5 +298,19 @@ impl WaitTimeout for std::process::Child {
 
             std::thread::sleep(poll_interval);
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    #[test]
+    fn drains_output_larger_than_an_os_pipe_buffer() {
+        let mut command = std::process::Command::new("sh");
+        command.args(["-c", "dd if=/dev/zero bs=131072 count=1 2>/dev/null"]);
+
+        let (success, output) = super::run_command(&mut command, 5).expect("large-output command");
+
+        assert!(success);
+        assert_eq!(output.len(), 131_072);
     }
 }

@@ -7,6 +7,14 @@ use std::path::Path;
 
 static FIXTURE_SCHEMA: &str = include_str!("schema/fixture.schema.json");
 
+/// ~keep Refresh the checked-in fixture schema consumed by editors and repository tooling.
+pub fn sync_fixture_schema(fixtures_dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(fixtures_dir)
+        .with_context(|| format!("failed to create fixtures dir: {}", fixtures_dir.display()))?;
+    let schema_path = fixtures_dir.join("schema.json");
+    std::fs::write(&schema_path, FIXTURE_SCHEMA).with_context(|| format!("failed to write {}", schema_path.display()))
+}
+
 /// Create the fixtures directory structure and write the schema file.
 /// Called by `alef e2e init`.
 pub fn init_fixtures(e2e_config: &E2eConfig, _config: &ResolvedCrateConfig) -> Result<Vec<String>> {
@@ -22,8 +30,7 @@ pub fn init_fixtures(e2e_config: &E2eConfig, _config: &ResolvedCrateConfig) -> R
 
     // 2. Write schema.json
     let schema_path = fixtures_dir.join("schema.json");
-    std::fs::write(&schema_path, FIXTURE_SCHEMA)
-        .with_context(|| format!("failed to write {}", schema_path.display()))?;
+    sync_fixture_schema(fixtures_dir)?;
     created.push(schema_path.display().to_string());
 
     // 3. Create smoke directory
@@ -146,5 +153,20 @@ fn empty_value_for_type(arg_type: &str) -> &'static str {
         "json_object" => "{}",
         "bytes" => "\"\"",
         _ => "\"\"",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn refreshes_existing_fixture_schema() {
+        let directory = tempfile::tempdir().expect("temporary fixture directory");
+        let schema = directory.path().join("schema.json");
+        std::fs::write(&schema, "{}").expect("write stale schema");
+
+        super::sync_fixture_schema(directory.path()).expect("refresh fixture schema");
+
+        let refreshed = std::fs::read_to_string(schema).expect("read refreshed schema");
+        assert!(refreshed.contains("FixtureDocsPresentation") || refreshed.contains("docs_presentation"));
     }
 }

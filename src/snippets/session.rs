@@ -38,9 +38,11 @@ impl ValidationSession {
     }
 
     pub fn temp_dir(&self) -> Result<tempfile::TempDir> {
+        let scratch_root = self.working_directory.join(".alef/snippets/tmp");
+        std::fs::create_dir_all(&scratch_root)?;
         tempfile::Builder::new()
             .prefix(".alef-snippet-")
-            .tempdir_in(&self.working_directory)
+            .tempdir_in(scratch_root)
             .map_err(Into::into)
     }
 
@@ -86,6 +88,7 @@ pub fn prepare_sessions(
 fn prepare_session(spec: &SessionSpec, timeout_secs: u64) -> Result<ValidationSession> {
     let language = spec.language;
     ensure_directory(&spec.working_directory, language)?;
+    cleanup_legacy_scratch_directories(&spec.working_directory, timeout_secs)?;
     if let Some(manifest) = &spec.manifest
         && !manifest.is_file()
     {
@@ -116,6 +119,21 @@ fn prepare_session(spec: &SessionSpec, timeout_secs: u64) -> Result<ValidationSe
         })?;
     }
     Ok(session)
+}
+
+fn cleanup_legacy_scratch_directories(working_directory: &Path, timeout_secs: u64) -> Result<()> {
+    let stale_after = std::time::Duration::from_secs(timeout_secs.saturating_add(60));
+    for entry in std::fs::read_dir(working_directory)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() || !entry.file_name().to_string_lossy().starts_with(".alef-snippet-") {
+            continue;
+        }
+        let modified = entry.metadata()?.modified()?;
+        if modified.elapsed().is_ok_and(|age| age >= stale_after) {
+            std::fs::remove_dir_all(entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 fn session_fingerprint(spec: &SessionSpec) -> Result<String> {
@@ -337,6 +355,9 @@ mod tests {
             rust_features: Vec::new(),
             rust_dependencies: BTreeMap::new(),
         };
+
+        let scratch = session.temp_dir().expect("isolated scratch directory");
+        assert!(scratch.path().starts_with(directory.path().join(".alef/snippets/tmp")));
         let mut command = std::process::Command::new("true");
         session.apply_environment(&mut command);
         let values = command
