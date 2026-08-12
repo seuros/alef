@@ -70,6 +70,53 @@ fn owned_receiver_is_not_freed_after_ffi_consumes_it() {
 
     assert!(generated.contains("C.sample_example_into_owned(cRecv)"));
     assert!(!generated.contains("defer C.sample_example_free(cRecv)"));
+    assert_go_syntax_is_valid(&generated);
+}
+
+#[test]
+fn borrowed_value_receiver_marshalling_is_valid_go() {
+    let mut typ = opaque_type("Example");
+    typ.is_opaque = false;
+    let method = simple_method("label", TypeRef::String, false);
+
+    let generated = gen_method_wrapper(
+        &typ,
+        &method,
+        "sample",
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+    );
+
+    assert!(generated.contains("defer C.sample_example_free(cRecv)"));
+    assert_go_syntax_is_valid(&generated);
+}
+
+fn assert_go_syntax_is_valid(generated: &str) {
+    use std::io::Write as _;
+
+    let Ok(mut child) = std::process::Command::new("gofmt")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    else {
+        return;
+    };
+    let source = format!("package sample\n\ntype Example struct {{}}\n\n{generated}");
+    child
+        .stdin
+        .take()
+        .expect("gofmt stdin")
+        .write_all(source.as_bytes())
+        .expect("write generated Go source");
+    let output = child.wait_with_output().expect("wait for gofmt");
+    assert!(
+        output.status.success(),
+        "generated Go syntax is invalid: {}\n{generated}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn simple_param(name: &str, ty: TypeRef) -> ParamDef {

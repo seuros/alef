@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Generated ownership headers now recommend `alef verify` directly instead of the deprecated no-op `--exit-code` flag.
 
+- Go methods on value types now emit receiver-marshalling statements on separate lines, restoring valid generated Go
+  syntax while preserving consumed-receiver ownership.
+
 - Zig opaque-handle methods now convert C ABI integer booleans to Zig `bool`, preventing generated methods from
   returning an incompatible `i32` value.
 
