@@ -1,5 +1,21 @@
 use super::super::FfiBackend;
 use super::common::*;
+
+#[test]
+fn emitted_code_blocks_preserve_newline_after_safety_comments() {
+    let first = crate::backends::ffi::template_env::render(
+        "emitted_code_block.jinja",
+        minijinja::context! { content => "// SAFETY: the pointer was validated." },
+    );
+    let second = crate::backends::ffi::template_env::render(
+        "emitted_code_block.jinja",
+        minijinja::context! { content => "unsafe { consume(); }" },
+    );
+    let source = format!("fn boundary() {{\n{first}{second}}}\n");
+
+    assert!(source.contains("validated.\nunsafe"), "{source}");
+    syn::parse_file(&source).expect("a safety comment must not absorb the following unsafe block");
+}
 use crate::backends::ffi::gen_bindings::types::gen_field_accessor;
 use crate::core::backend::Backend;
 use crate::core::ir::*;
