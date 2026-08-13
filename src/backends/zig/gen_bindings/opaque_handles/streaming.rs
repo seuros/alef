@@ -20,7 +20,6 @@ pub(super) fn emit_streaming_struct(
 ) {
     let method_snake = AsSnakeCase(&method.name).to_string();
     let item_snake = AsSnakeCase(item_type).to_string();
-    let upper_prefix = prefix.to_uppercase();
     let struct_name = format!("{}Stream", item_type);
 
     let zig_error_type = method
@@ -34,7 +33,6 @@ pub(super) fn emit_streaming_struct(
         minijinja::context! {
             item_type => item_type,
             struct_name => &struct_name,
-            upper_prefix => &upper_prefix,
             zig_error_type => &zig_error_type,
             prefix => prefix,
             type_snake => type_snake,
@@ -63,8 +61,6 @@ pub(super) fn emit_opaque_streaming_method(
 
     let method_snake = AsSnakeCase(&method.name).to_string();
     let struct_name = format!("{}Stream", item_type);
-    let upper_prefix = prefix.to_uppercase();
-
     let zig_error_type = method
         .error_type
         .as_ref()
@@ -83,10 +79,6 @@ pub(super) fn emit_opaque_streaming_method(
         "chat_completion_request".to_string()
     };
 
-    let c_handle_cast = format!(
-        "@as(*c.{upper_prefix}{type_name}, @ptrCast(handle))",
-        type_name = ty.name
-    );
     out.push_str(&render(
         "opaque_stream_method.jinja",
         minijinja::context! {
@@ -100,7 +92,35 @@ pub(super) fn emit_opaque_streaming_method(
             req_type_snake => &req_type_snake,
             type_snake => type_snake,
             method_snake => &method_snake,
-            c_handle_cast => &c_handle_cast,
+            c_handle => "handle",
         },
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn stream_template_checks_json_and_releases_every_native_value() {
+        let rendered = crate::backends::zig::template_env::render(
+            "opaque_stream_struct.jinja",
+            minijinja::context! {
+                struct_name => "RecordStream",
+                item_type => "Record",
+                zig_error_type => "RequestError",
+                prefix => "sample",
+                type_snake => "client",
+                method_snake => "stream_records",
+                item_snake => "record",
+            },
+        );
+
+        assert!(rendered.contains("if (_json == null) return _error_with_message(RequestError)"));
+        assert!(rendered.contains("defer c.sample_record_free(_chunk)"));
+        assert!(rendered.contains("defer c.sample_free_string(_json)"));
+        assert!(rendered.contains("pub fn deinit"));
+        assert!(rendered.contains("sample_client_stream_records_free"));
+        assert!(rendered.contains("_handle: u64"));
+        assert!(rendered.contains("if (_chunk == 0)"));
+        assert!(rendered.contains("self._handle = 0"));
+    }
 }

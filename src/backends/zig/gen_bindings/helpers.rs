@@ -70,13 +70,10 @@ pub(crate) fn emit_helpers(prefix: &str, declared_errors: &[ErrorDef], taxonomy:
     out.push_str("    return @field(E, fields[0].name);\n");
     out.push_str("}\n\n");
 
-    out.push_str("/// Map the last FFI error to a typed error, logging the error message.\n");
+    out.push_str("/// Map the last FFI error to a typed error.\n");
     out.push_str("/// Dispatches exclusively on the stable numeric FFI taxonomy code.\n");
     out.push_str("inline fn _error_with_message(comptime E: type) E {\n");
-    out.push_str("    const msg_opt = _last_error();\n");
-    out.push_str("    if (msg_opt) |msg| {\n");
-    out.push_str("        std.debug.print(\"FFI error: {s}\\n\", .{msg});\n");
-    out.push_str("    }\n");
+    out.push_str("    _ = _last_error();\n");
     out.push_str(&format!(
         "    const code = @as(i32, @intCast(c.{error_code_symbol}()));\n"
     ));
@@ -141,8 +138,8 @@ mod tests {
             "missing numeric taxonomy dispatch:\n{out}"
         );
         assert!(
-            out.contains("std.debug.print(\"FFI error: {s}\\n\", .{msg});"),
-            "missing FFI error print:\n{out}"
+            !out.contains("std.debug.print"),
+            "FFI helpers must not write to stderr:\n{out}"
         );
         assert!(
             out.contains("return _first_error(E);"),

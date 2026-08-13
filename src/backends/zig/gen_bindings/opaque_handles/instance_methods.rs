@@ -51,7 +51,8 @@ pub(super) fn emit_opaque_method(
             return_ty => &return_ty,
         },
     ));
-    out.push_str("        const handle = self._handle orelse return error.HandleClosed;\n");
+    out.push_str("        const handle = self._handle;\n");
+    out.push_str("        if (handle == 0) return error.HandleClosed;\n");
 
     let json_error_return = zig_error_type
         .as_ref()
@@ -168,7 +169,7 @@ fn method_return_type(
 
 fn method_c_call(
     method: &MethodDef,
-    ty: &TypeDef,
+    _ty: &TypeDef,
     prefix: &str,
     type_snake: &str,
     params: &[ParamDef],
@@ -176,12 +177,7 @@ fn method_c_call(
     enum_names: &HashSet<String>,
 ) -> String {
     let method_snake = AsSnakeCase(&method.name).to_string();
-    let upper_prefix = prefix.to_uppercase();
-    let c_handle = format!(
-        "@as(*c.{upper_prefix}{type_name}, @ptrCast(handle))",
-        type_name = ty.name,
-    );
-    let mut c_args = vec![c_handle];
+    let mut c_args = vec!["handle".to_string()];
     for p in params {
         c_args.extend(method_c_arg_names(p, struct_names, enum_names));
     }
@@ -225,8 +221,8 @@ fn emit_fallible_method_body(
     err_ty: &str,
     out: &mut String,
 ) {
-    let result_is_pointer = !(matches!(method.return_type, TypeRef::Unit) || returns_bytes);
-    if !result_is_pointer {
+    let has_return_value = !(matches!(method.return_type, TypeRef::Unit) || returns_bytes);
+    if !has_return_value {
         out.push_str(&render(
             "opaque_method_call_discard.jinja",
             minijinja::context! {
@@ -242,19 +238,13 @@ fn emit_fallible_method_body(
         ));
     }
 
-    if result_is_pointer {
-        out.push_str("        if (_result == null) {\n");
-        out.push_str(&format!("            return _first_error({err_ty});\n"));
-        out.push_str("        }\n");
-    } else {
-        out.push_str(&render(
-            "opaque_method_error_check.jinja",
-            minijinja::context! {
-                prefix => prefix,
-                error_type => err_ty,
-            },
-        ));
-    }
+    out.push_str(&render(
+        "opaque_method_error_check.jinja",
+        minijinja::context! {
+            prefix => prefix,
+            error_type => err_ty,
+        },
+    ));
 
     for p in params {
         emit_method_param_free(p, struct_names);

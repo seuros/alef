@@ -152,11 +152,12 @@ mod tests {
             &mut output,
         );
 
-        assert!(output.contains("_handle: ?*anyopaque"));
-        assert!(output.contains("const handle = self._handle orelse return error.HandleClosed;"));
+        assert!(output.contains("_handle: u64"));
+        assert!(output.contains("if (handle == 0) return error.HandleClosed;"));
         assert!(output.contains("error{OutOfMemory,HandleClosed}!"));
-        assert!(output.contains("const handle = self._handle orelse return;"));
-        assert!(output.contains("self._handle = null;"));
+        assert!(output.contains("if (handle == 0) return;"));
+        assert!(output.contains("self._handle = 0;"));
+        assert!(!output.contains("@ptrCast(handle)"));
     }
 
     #[test]
@@ -186,5 +187,40 @@ mod tests {
         );
 
         assert!(output.contains("return _result != 0;"), "{output}");
+    }
+
+    #[test]
+    fn fallible_handle_returns_use_error_codes_and_zero_tokens() {
+        let ty = TypeDef {
+            name: "ClientHandle".to_owned(),
+            rust_path: "sample::ClientHandle".to_owned(),
+            is_opaque: true,
+            methods: vec![MethodDef {
+                name: "child".to_owned(),
+                is_static: false,
+                return_type: TypeRef::Named("ChildHandle".to_owned()),
+                error_type: Some("RequestError".to_owned()),
+                ..MethodDef::default()
+            }],
+            ..TypeDef::default()
+        };
+        let mut output = String::new();
+
+        emit_opaque_handle(
+            &ty,
+            "sample",
+            &["RequestError".to_owned()],
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &mut output,
+        );
+
+        assert!(output.contains("sample_last_error_code() != 0"), "{output}");
+        assert!(
+            output.contains("if (_result == 0) return error.OutOfMemory"),
+            "{output}"
+        );
+        assert!(!output.contains("_result == null"), "{output}");
     }
 }

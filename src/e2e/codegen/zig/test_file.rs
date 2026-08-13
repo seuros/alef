@@ -441,8 +441,6 @@ fn render_test_fn(
                 let request_free = format!("{ffi_prefix}_{request_snake}_free");
                 let stream_start = format!("{ffi_prefix}_{owner_snake}_{}_start", streaming_adapter.adapter_name);
                 let stream_free = format!("{ffi_prefix}_{owner_snake}_{}_free", streaming_adapter.adapter_name);
-                let client_c_type = format!("{}{}", ffi_prefix.to_shouty_snake_case(), streaming_adapter.owner_type);
-
                 // Streaming-virtual path: inline FFI collect.
                 // Build a sentinel-terminated request string.
                 let _ = writeln!(
@@ -457,9 +455,9 @@ fn render_test_fn(
                 let _ = writeln!(out, "    defer {module_name}.c.{request_free}(_req_handle);");
                 let _ = writeln!(
                     out,
-                    "    const _stream_handle = {module_name}.c.{stream_start}(@as(*{module_name}.c.{client_c_type}, @ptrCast(_client._handle)), _req_handle);"
+                    "    const _stream_handle = {module_name}.c.{stream_start}(_client._handle, _req_handle);"
                 );
-                let _ = writeln!(out, "    if (_stream_handle == null) return error.StreamStartFailed;");
+                let _ = writeln!(out, "    if (_stream_handle == 0) return error.StreamStartFailed;");
                 let _ = writeln!(out, "    defer {module_name}.c.{stream_free}(_stream_handle);");
                 // Emit the collect snippet (already has 4-space indentation baked in).
                 let snip = StreamingFieldResolver::collect_snippet_zig(
@@ -761,6 +759,68 @@ mod snippet_tests {
 
         assert!(rendered.contains("stream_items"), "{rendered}");
         assert!(rendered.contains("pub fn main() !void"));
+    }
+
+    #[test]
+    fn streaming_e2e_uses_scalar_handle_tokens() {
+        let mut fixture = Fixture {
+            id: "stream_records".into(),
+            description: "Stream records".into(),
+            input: serde_json::json!({}),
+            ..Fixture::default()
+        };
+        fixture.assertions.push(crate::e2e::fixture::Assertion {
+            assertion_type: "not_empty".into(),
+            field: Some("chunks".into()),
+            ..Default::default()
+        });
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "stream_records".into();
+        e2e.call.streaming = Some(crate::core::config::e2e::StreamingConfig::Enabled(true));
+        e2e.call.overrides.insert(
+            "zig".into(),
+            crate::e2e::config::CallOverride {
+                client_factory: Some("create_client".into()),
+                result_is_json_struct: true,
+                ..Default::default()
+            },
+        );
+        let config = ResolvedCrateConfig {
+            adapters: vec![crate::core::config::AdapterConfig {
+                name: "stream_records".into(),
+                pattern: AdapterPattern::Streaming,
+                core_path: "sample::Client::stream_records".into(),
+                params: Vec::new(),
+                returns: None,
+                error_type: None,
+                owner_type: Some("Client".into()),
+                item_type: Some("Record".into()),
+                gil_release: false,
+                trait_name: None,
+                trait_method: None,
+                detect_async: false,
+                request_type: Some("sample::RecordRequest".into()),
+                skip_languages: Vec::new(),
+            }],
+            ..ResolvedCrateConfig::default()
+        };
+
+        let rendered = render_test_file(
+            "streaming",
+            &[&fixture],
+            &e2e,
+            "stream_records",
+            "result",
+            &[],
+            "sample",
+            "sample",
+            &config,
+            &[],
+        );
+
+        assert!(rendered.contains("sample.c.sample_client_stream_records_start(_client._handle, _req_handle)"));
+        assert!(rendered.contains("if (_stream_handle == 0)"));
+        assert!(!rendered.contains("@ptrCast(_client._handle)"));
     }
 }
 

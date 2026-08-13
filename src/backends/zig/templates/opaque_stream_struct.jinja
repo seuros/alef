@@ -1,19 +1,21 @@
 /// Iterator over `{{ item_type }}` items in a streaming response.
 pub const {{ struct_name }} = struct {
-    _handle: ?*c.{{ upper_prefix }}{{ item_type }}Stream,
+    _handle: u64,
 
     /// Fetch the next item from the stream, or null at end-of-stream.
     /// Returns an error on mid-stream failure; null on clean EOS.
     pub fn next(self: *{{ struct_name }}) ({{ zig_error_type }}||error{OutOfMemory,HandleClosed})!?{{ item_type }} {
-        const handle = self._handle orelse return error.HandleClosed;
+        const handle = self._handle;
+        if (handle == 0) return error.HandleClosed;
         const _chunk = c.{{ prefix }}_{{ type_snake }}_{{ method_snake }}_next(handle);
-        if (_chunk == null) {
+        if (_chunk == 0) {
             // Check errno: 0 = clean EOS, != 0 = error
             if (c.{{ prefix }}_last_error_code() != 0) return _first_error({{ zig_error_type }});
             return null;
         }
         defer c.{{ prefix }}_{{ item_snake }}_free(_chunk);
         const _json = c.{{ prefix }}_{{ item_snake }}_to_json(_chunk);
+        if (_json == null) return _error_with_message({{ zig_error_type }});
         defer c.{{ prefix }}_free_string(_json);
         const _json_slice = std.mem.span(_json);
         return try std.json.parseFromSliceLeaky({{ item_type }}, std.heap.c_allocator, _json_slice, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
@@ -21,8 +23,9 @@ pub const {{ struct_name }} = struct {
 
     /// Release the underlying stream handle.
     pub fn deinit(self: *{{ struct_name }}) void {
-        const handle = self._handle orelse return;
-        self._handle = null;
+        const handle = self._handle;
+        if (handle == 0) return;
+        self._handle = 0;
         c.{{ prefix }}_{{ type_snake }}_{{ method_snake }}_free(handle);
     }
 };

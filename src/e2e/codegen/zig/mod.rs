@@ -12,7 +12,7 @@ use crate::e2e::escape::{escape_zig, sanitize_filename};
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::{Assertion, Fixture, FixtureGroup};
 use anyhow::{Result, bail};
-use heck::{ToPascalCase, ToShoutySnakeCase, ToSnakeCase};
+use heck::{ToPascalCase, ToSnakeCase};
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as FmtWrite;
 use std::path::PathBuf;

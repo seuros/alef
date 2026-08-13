@@ -72,13 +72,13 @@ fn needs_from_json_param(
     get_opaque_named(&p.ty, opaque_creator_map).is_some() || is_struct_named(&p.ty, struct_names)
 }
 
-/// Returns true if `ty` can be null. Pointer-like types (String, Path, Json, Bytes,
-/// Vec, Map, Named structs, and Optional<T>) can be null. Primitives cannot be null.
-fn return_type_can_be_null(ty: &TypeRef, struct_names: &std::collections::HashSet<String>) -> bool {
+fn return_type_can_be_null(ty: &TypeRef, _struct_names: &std::collections::HashSet<String>) -> bool {
     match ty {
         TypeRef::String | TypeRef::Path | TypeRef::Json | TypeRef::Bytes | TypeRef::Vec(_) | TypeRef::Map(_, _) => true,
-        TypeRef::Named(name) => struct_names.contains(name),
-        TypeRef::Optional(_) => true,
+        TypeRef::Optional(inner) => matches!(
+            inner.as_ref(),
+            TypeRef::String | TypeRef::Path | TypeRef::Json | TypeRef::Bytes | TypeRef::Vec(_) | TypeRef::Map(_, _)
+        ),
         _ => false,
     }
 }
@@ -765,8 +765,6 @@ fn c_arg_names(
 /// Named struct (has_serde): serialize to JSON via `<prefix>_<snake>_to_json`,
 /// copy the JSON string to an owned Zig slice, then free both the JSON string and
 /// the opaque handle.
-/// Named opaque handle (not in struct_names): wrap the raw C pointer in the Zig
-/// struct wrapper as `TypeName{ ._handle = raw }`.
 /// Everything else: pass through unchanged.
 fn unwrap_return_expr(
     raw: &str,
@@ -799,7 +797,11 @@ fn unwrap_return_expr(
             )
         }
         TypeRef::Named(name) => {
-            format!("{name}{{ ._handle = {raw}.? }}")
+            let fallback = error_type.map_or_else(
+                || "error.OutOfMemory".to_string(),
+                |error| format!("_first_error({error})"),
+            );
+            format!("blk: {{ if ({raw} == 0) return {fallback}; break :blk {name}{{ ._handle = {raw} }}; }}")
         }
         TypeRef::Optional(inner) => match inner.as_ref() {
             TypeRef::String | TypeRef::Path | TypeRef::Json | TypeRef::Vec(_) | TypeRef::Map(_, _) => {
@@ -821,7 +823,7 @@ fn unwrap_return_expr(
                         error_type => error_type,
                     },
                 );
-                format!("if ({raw} == null) null else {inner_block}")
+                format!("if ({raw} == 0) null else {inner_block}")
             }
             _ => raw.to_string(),
         },
