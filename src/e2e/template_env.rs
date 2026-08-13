@@ -2,6 +2,14 @@ use minijinja::Environment;
 
 static TEMPLATES: &[(&str, &str)] = &[
     (
+        "kotlin/not_empty_assertion.kt.jinja",
+        include_str!("templates/kotlin/not_empty_assertion.kt.jinja"),
+    ),
+    (
+        "swift/not_empty_assertion.swift.jinja",
+        include_str!("templates/swift/not_empty_assertion.swift.jinja"),
+    ),
+    (
         "kotlin_android/excluded_fixtures.kt.jinja",
         include_str!("templates/kotlin_android/excluded_fixtures.kt.jinja"),
     ),

@@ -1,7 +1,9 @@
 //! Swift e2e codegen unit tests.
 
 use super::accessors::{swift_build_accessor, swift_stringy_aggregator_contains_assert};
+use super::assertions::render_assertion;
 use crate::e2e::field_access::FieldResolver;
+use crate::e2e::fixture::Assertion;
 use std::collections::{HashMap, HashSet};
 
 fn make_resolver_tool_calls() -> FieldResolver {
@@ -13,6 +15,50 @@ fn make_resolver_tool_calls() -> FieldResolver {
     let mut arrays = HashSet::new();
     arrays.insert("choices".to_string());
     FieldResolver::new(&HashMap::new(), &optional, &HashSet::new(), &arrays, &HashSet::new())
+}
+
+#[test]
+fn not_empty_is_type_aware_for_optional_values() {
+    let cases = [
+        ("quality_score", false, "result.qualityScore() != nil"),
+        ("keywords", true, "result.keywords()?.isEmpty == false"),
+    ];
+
+    for (field, is_collection, expected) in cases {
+        let mut optional = HashSet::new();
+        optional.insert(field.to_string());
+        let mut arrays = HashSet::new();
+        if is_collection {
+            arrays.insert(field.to_string());
+        }
+        let resolver = FieldResolver::new(&HashMap::new(), &optional, &HashSet::new(), &arrays, &HashSet::new());
+        let assertion = Assertion {
+            assertion_type: "not_empty".to_string(),
+            field: Some(field.to_string()),
+            value: None,
+            values: None,
+            method: None,
+            check: None,
+            args: None,
+            return_type: None,
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            &HashMap::new(),
+            &HashSet::new(),
+            false,
+        );
+        assert!(out.contains(expected), "field {field}: {out}");
+        assert!(!out.contains("toString"), "field {field}: {out}");
+    }
 }
 
 /// Regression: after the optional `[0]` subscript, the codegen must NOT

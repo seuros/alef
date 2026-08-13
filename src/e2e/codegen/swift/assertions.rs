@@ -617,16 +617,21 @@ pub(super) fn render_assertion(
                         out,
                         "        XCTAssertFalse({string_expr}.isEmpty, \"expected non-empty value\")"
                     );
+                } else if field_is_array && field_is_optional {
+                    out.push_str(&crate::e2e::template_env::render(
+                        "swift/not_empty_assertion.swift.jinja",
+                        minijinja::context! { predicate => format!("{field_expr}?.isEmpty == false") },
+                    ));
                 } else if field_is_optional {
-                    let _ = writeln!(
-                        out,
-                        "        XCTAssertFalse({string_expr}.isEmpty, \"expected non-empty value\")"
-                    );
+                    out.push_str(&crate::e2e::template_env::render(
+                        "swift/not_empty_assertion.swift.jinja",
+                        minijinja::context! { predicate => format!("{field_expr} != nil") },
+                    ));
                 } else if field_is_array {
-                    let _ = writeln!(
-                        out,
-                        "        XCTAssertFalse({field_expr}.isEmpty, \"expected non-empty value\")"
-                    );
+                    out.push_str(&crate::e2e::template_env::render(
+                        "swift/not_empty_assertion.swift.jinja",
+                        minijinja::context! { predicate => format!("!{field_expr}.isEmpty") },
+                    ));
                 } else if result_is_simple {
                     // result_is_simple: result is a primitive (Data, String, etc.) — use .isEmpty directly.
                     let _ = writeln!(

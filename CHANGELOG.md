@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **e2e/python**: emit unbound calls when a fixture only verifies that the call does not raise, avoiding unused-result
   Ruff failures during generation.
 - **snippets/c**: derive list and map return ownership from the Rust IR and use the generated JSON-string ABI.
+- **e2e/kotlin/swift**: make `not_empty` assertions distinguish nullable scalars from nullable containers.
 - **generate/snippets**: propagate mandatory post-build failures from `alef generate`, terminate descendant validator
   processes at the configured timeout, and report stable generated-file totals across content-identical passes.
 - **snippets**: use built-in language recipes for declarative trait-bridge fixtures and resolve C registry operations

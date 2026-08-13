@@ -494,15 +494,20 @@ pub(super) fn render_assertion(
             let bare_result_is_option =
                 result_is_option && assertion.field.as_deref().filter(|f| !f.is_empty()).is_none();
             if bare_result_is_option && !kotlin_android_style {
-                let _ = writeln!(
-                    out,
-                    "        assertTrue({field_expr}.filter {{ it.toString().isNotEmpty() }}.isPresent, \"expected non-empty value\")"
-                );
+                out.push_str(&crate::e2e::template_env::render(
+                    "kotlin/not_empty_assertion.kt.jinja",
+                    minijinja::context! { predicate => format!("{field_expr}.isPresent") },
+                ));
+            } else if field_is_collection && (bare_result_is_option || field_is_optional) {
+                out.push_str(&crate::e2e::template_env::render(
+                    "kotlin/not_empty_assertion.kt.jinja",
+                    minijinja::context! { predicate => format!("{field_expr}?.isNotEmpty() == true") },
+                ));
             } else if bare_result_is_option || field_is_optional {
-                let _ = writeln!(
-                    out,
-                    "        assertTrue({field_expr}?.toString()?.isNotEmpty() == true, \"expected non-empty value\")"
-                );
+                out.push_str(&crate::e2e::template_env::render(
+                    "kotlin/not_empty_assertion.kt.jinja",
+                    minijinja::context! { predicate => format!("{field_expr} != null") },
+                ));
             } else {
                 let _ = writeln!(
                     out,

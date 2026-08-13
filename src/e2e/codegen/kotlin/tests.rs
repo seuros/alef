@@ -137,6 +137,51 @@ fn make_resolver_for_optional_field(field: &str) -> FieldResolver {
     )
 }
 
+#[test]
+fn not_empty_is_type_aware_for_nullable_values() {
+    let cases = [
+        ("quality_score", false, "result.qualityScore() != null"),
+        ("keywords", true, "result.keywords()?.isNotEmpty() == true"),
+    ];
+
+    for (field, is_collection, expected) in cases {
+        let mut optional = HashSet::new();
+        optional.insert(field.to_string());
+        let mut arrays = HashSet::new();
+        if is_collection {
+            arrays.insert(field.to_string());
+        }
+        let resolver = FieldResolver::new(&HashMap::new(), &optional, &HashSet::new(), &arrays, &HashSet::new());
+        let assertion = Assertion {
+            assertion_type: "not_empty".to_string(),
+            field: Some(field.to_string()),
+            value: None,
+            values: None,
+            method: None,
+            check: None,
+            args: None,
+            return_type: None,
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            "",
+            &resolver,
+            false,
+            false,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            false,
+        );
+        assert!(out.contains(expected), "field {field}: {out}");
+        assert!(!out.contains("toString"), "field {field}: {out}");
+    }
+}
+
 /// Regression: an optional field whose Kotlin type is `Any?` (mapped from Rust
 /// `Option<serde_json::Value>`) must not render a bare `.orEmpty()` — that's a
 /// `String?`/`CharSequence?` extension and does not resolve on `Any?`, so the
