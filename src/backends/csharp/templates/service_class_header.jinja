@@ -11,9 +11,22 @@ using System.Runtime.InteropServices;
 /// <summary>
 /// Service wrapper for {{ service_name }}.
 /// </summary>
-public class {{ class_name }} {
+internal sealed class {{ class_name }}SafeHandle : SafeHandle {
+    internal {{ class_name }}SafeHandle(IntPtr handle) : base(IntPtr.Zero, true) {
+        SetHandle(handle);
+    }
 
-    private IntPtr _handle;
+    public override bool IsInvalid => handle == IntPtr.Zero;
+
+    protected override bool ReleaseHandle() {
+        NativeMethods.{{ native_free }}(handle);
+        return true;
+    }
+}
+
+public class {{ class_name }} : IDisposable {
+
+    private readonly {{ class_name }}SafeHandle _safeHandle;
     private static readonly Dictionary<IntPtr, GCHandle> _registeredCallbacks = new();
     // A single static delegate instance bridges the native callback. Held in a static field so the
     // marshalled function pointer outlives every registration (a transient delegate would be collected).

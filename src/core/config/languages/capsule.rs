@@ -95,6 +95,24 @@ impl HostCapsuleTypeConfig {
     }
 }
 
+pub fn require_shared_native_runtime(
+    capsule_types: &std::collections::HashMap<String, HostCapsuleTypeConfig>,
+    shares_native_runtime: bool,
+    backend: &str,
+) -> Result<(), anyhow::Error> {
+    if shares_native_runtime || capsule_types.is_empty() {
+        return Ok(());
+    }
+    let mut type_names: Vec<_> = capsule_types.keys().map(String::as_str).collect();
+    type_names.sort_unstable();
+    anyhow::bail!(
+        "capsule type(s) `{}` in backend `{backend}` cannot safely wrap native pointers: \
+         `[crates.{backend}].shares_native_runtime = true` is required and affirms every configured host wrapper \
+         uses the exact same native runtime and ownership contract",
+        type_names.join("`, `")
+    )
+}
+
 /// Extract the Zig import name from a capsule `host_type` expression.
 ///
 /// For a `host_type` like `"?*const tree_sitter.Language"` the import name is
@@ -173,6 +191,19 @@ mod tests {
         assert!(msg.contains("host_type"), "error must mention the field: {msg}");
         assert!(msg.contains("Language"), "error must name the type: {msg}");
         assert!(msg.contains("swift"), "error must name the backend: {msg}");
+    }
+
+    #[test]
+    fn shared_runtime_contract_is_explicit_and_contextual() {
+        let capsule_types =
+            std::collections::HashMap::from([("Language".to_string(), make_cfg("Language", "new Language({ptr})"))]);
+        let error = require_shared_native_runtime(&capsule_types, false, "java").unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("[crates.java].shares_native_runtime = true"));
+        assert!(message.contains("Language"));
+        assert!(message.contains("exact same native runtime and ownership contract"));
+
+        require_shared_native_runtime(&capsule_types, true, "java").unwrap();
     }
 
     #[test]

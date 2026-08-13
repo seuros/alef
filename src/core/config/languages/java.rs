@@ -12,6 +12,10 @@ pub struct JavaConfig {
     /// `MemorySegment`) instead of an opaque handle. See [`crate::core::config::HostCapsuleTypeConfig`].
     #[serde(default)]
     pub capsule_types: HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
+    /// Affirms every configured capsule wrapper uses the exact native runtime instance ~keep
+    /// and ownership contract that produced its pointer. ~keep
+    #[serde(default)]
+    pub shares_native_runtime: bool,
     pub package: Option<String>,
     /// Override the Maven `<groupId>` emitted by alef-scaffold and alef-e2e. When unset,
     /// `java_group_id()` falls back to the Java `package` value. Set this when the

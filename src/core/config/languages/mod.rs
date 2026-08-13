@@ -20,6 +20,7 @@ mod swift;
 mod wasm;
 mod zig;
 
+pub(crate) use capsule::require_shared_native_runtime;
 pub use capsule::{HostCapsuleTypeConfig, zig_capsule_import_name, zig_capsule_import_names};
 pub use common::StubsConfig;
 pub use csharp::CSharpConfig;

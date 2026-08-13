@@ -1,22 +1,11 @@
-    /// <summary>
-    /// {{ doc }}
-    /// </summary>
-    public int {{ method_name }}({% if signature_params %}{{ signature_params }}, {% endif %}Delegate handler) {
-        var handle = GCHandle.Alloc(handler, GCHandleType.Normal);
-        IntPtr ctx = GCHandle.ToIntPtr(handle);
-
-        int result = NativeMethods.{{ native_method }}(
-            _handle,
-            _handlerCallback,
-            ctx{{ arg_lines }}
-        );
-
-        if (result == 0) {
-            lock (_registeredCallbacks) {
-                _registeredCallbacks[ctx] = handle;
-            }
-        } else {
-            handle.Free();
-        }
-        return result;
-    }
+/// <summary>
+  /// {{ doc }}
+  ///
+</summary>
+public int {{ method_name }}({% if signature_params %}{{ signature_params }},
+{% endif %}Delegate handler) { ArgumentNullException.ThrowIfNull(handler); var handle = GCHandle.Alloc(handler,
+GCHandleType.Normal); IntPtr ctx = GCHandle.ToIntPtr(handle); bool handleAdded = false; int result; try {
+_safeHandle.DangerousAddRef(ref handleAdded); result = NativeMethods.{{ native_method }}(
+_safeHandle.DangerousGetHandle(), _handlerCallback, ctx{{ arg_lines }}
+); } catch { handle.Free(); throw; } finally { if (handleAdded) _safeHandle.DangerousRelease(); } if (result == 0) {
+lock (_registeredCallbacks) { _registeredCallbacks[ctx] = handle; } } else { handle.Free(); } return result; }

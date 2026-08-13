@@ -1,6 +1,7 @@
-    /// <summary>
-    /// Create a new {{ service_name }}.
-    /// </summary>
-    public {{ class_name }}({{ params_decl }}) {
-        _handle = NativeMethods.{{ native_new }}();
-    }
+/// <summary>
+  /// Create a new {{ service_name }}. ///
+</summary>
+public {{ class_name }}({{ params_decl }}) { var handle = NativeMethods.{{ native_new }}(); if (handle == IntPtr.Zero) {
+throw new InvalidOperationException("Native service constructor returned a null handle"); } _safeHandle = new {{
+  class_name
+}}SafeHandle(handle); }

@@ -151,12 +151,15 @@ fn gen_service_cs(api: &ApiSurface, service: &ServiceDef, namespace: &str, prefi
     let mut out = String::new();
 
     let class_name = to_csharp_name(&service.name);
+    let service_snake = service.name.to_snake_case();
+    let native_free = format!("{}_{}_free", prefix.to_lowercase(), service_snake);
     out.push_str(&render(
         "service_class_header.jinja",
         minijinja::context! {
             namespace,
             service_name => &service.name,
             class_name,
+            native_free,
         },
     ));
 
@@ -190,7 +193,6 @@ fn gen_service_cs(api: &ApiSurface, service: &ServiceDef, namespace: &str, prefi
 
     for reg in &service.registrations {
         let reg_method = &reg.method;
-        let service_snake = service.name.to_snake_case();
         let metadata_params = metadata_param_decl_list(&reg.metadata_params, api);
         let native_method = format!(
             "{}_{}_register_{}",
@@ -234,8 +236,6 @@ fn gen_service_cs(api: &ApiSurface, service: &ServiceDef, namespace: &str, prefi
 
     for ep in &service.entrypoints {
         let ep_method = &ep.method;
-        let service_snake = service.name.to_snake_case();
-
         if !entrypoint_return_representable(ep, api) {
             continue;
         }
@@ -263,12 +263,7 @@ fn gen_service_cs(api: &ApiSurface, service: &ServiceDef, namespace: &str, prefi
         ));
     }
 
-    let service_snake = service.name.to_snake_case();
-    let native_free = format!("{}_{}_free", prefix.to_lowercase(), service_snake);
-    out.push_str(&render(
-        "service_dispose_method.jinja",
-        minijinja::context! { native_free },
-    ));
+    out.push_str(&render("service_dispose_method.jinja", minijinja::context! {}));
     out.push_str(&render("service_handler_trampoline.jinja", minijinja::context! {}));
 
     out.push_str("}\n\n");
@@ -561,7 +556,9 @@ mod tests {
         let cs = gen_service_cs(&api, service, "MyNamespace", "test");
 
         assert!(cs.contains("public class TestService"));
-        assert!(cs.contains("private IntPtr _handle"));
+        assert!(cs.contains("internal sealed class TestServiceSafeHandle : SafeHandle"));
+        assert!(cs.contains("private readonly TestServiceSafeHandle _safeHandle"));
+        assert!(cs.contains("NativeMethods.test_test_service_free(handle)"));
         assert!(cs.contains("public TestService()"));
     }
 
@@ -573,6 +570,11 @@ mod tests {
 
         assert!(cs.contains("public int add_handler("));
         assert!(cs.contains("GCHandle.Alloc(handler, GCHandleType.Normal)"));
+        assert!(cs.contains("ArgumentNullException.ThrowIfNull(handler)"));
+        assert!(cs.contains("_safeHandle.DangerousGetHandle()"));
+        assert!(cs.contains("_safeHandle.DangerousAddRef(ref handleAdded)"));
+        assert!(cs.contains("if (handleAdded) _safeHandle.DangerousRelease()"));
+        assert!(cs.contains("catch {\n            handle.Free();"));
         assert!(cs.contains("_handlerCallback"));
         assert!(cs.contains("_registeredCallbacks[ctx] = handle"));
     }
@@ -585,6 +587,8 @@ mod tests {
 
         assert!(cs.contains("public int run("));
         assert!(cs.contains("NativeMethods.test_test_service_ep_run"));
+        assert!(cs.contains("_safeHandle.DangerousAddRef(ref handleAdded)"));
+        assert!(cs.contains("if (handleAdded) _safeHandle.DangerousRelease()"));
     }
 
     #[test]

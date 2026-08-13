@@ -1,8 +1,5 @@
     public void Dispose() {
-        if (_handle != IntPtr.Zero) {
-            NativeMethods.{{ native_free }}(_handle);
-            _handle = IntPtr.Zero;
-        }
+        _safeHandle.Dispose();
         // Clean up all registered callbacks for this instance
         lock (_registeredCallbacks) {
             var keys = _registeredCallbacks.Keys.ToList();

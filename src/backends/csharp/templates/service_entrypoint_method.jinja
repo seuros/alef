@@ -1,8 +1,7 @@
-    /// <summary>
-    /// {{ method_name }}.
-    /// </summary>
-    public {{ return_type }} {{ method_name }}({{ params_decl }}) {
-        return NativeMethods.{{ native_method }}(
-            _handle{{ arg_lines }}
-        );
-    }
+/// <summary>
+  /// {{ method_name }}. ///
+</summary>
+public {{ return_type }} {{ method_name }}({{ params_decl }}) { bool handleAdded = false; try {
+_safeHandle.DangerousAddRef(ref handleAdded); return NativeMethods.{{ native_method }}(
+_safeHandle.DangerousGetHandle(){{ arg_lines }}
+); } finally { if (handleAdded) _safeHandle.DangerousRelease(); } }

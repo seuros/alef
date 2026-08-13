@@ -190,6 +190,11 @@ impl Backend for JavaBackend {
             .as_ref()
             .map(|c| c.capsule_types.clone())
             .unwrap_or_default();
+        crate::core::config::languages::require_shared_native_runtime(
+            &java_capsule_types,
+            config.java.as_ref().is_some_and(|java| java.shares_native_runtime),
+            "java",
+        )?;
 
         let bridge_param_names: HashSet<String> = config
             .trait_bridges

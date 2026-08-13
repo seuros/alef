@@ -19,6 +19,9 @@ fn generated_schema_contains_versioned_release_metadata() {
         schema.get("$schema").and_then(serde_json::Value::as_str),
         Some("https://json-schema.org/draft/2020-12/schema")
     );
+    let rendered = serde_json::to_string(&schema).expect("schema serializes");
+    assert!(rendered.contains("shares_native_runtime"));
+    assert!(rendered.contains("exact native runtime instance"));
 }
 
 #[test]

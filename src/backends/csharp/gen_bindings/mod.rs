@@ -276,6 +276,14 @@ impl Backend for CsharpBackend {
             .as_ref()
             .map(|c| c.capsule_types.clone())
             .unwrap_or_default();
+        crate::core::config::languages::require_shared_native_runtime(
+            &capsule_types,
+            config
+                .csharp
+                .as_ref()
+                .is_some_and(|csharp| csharp.shares_native_runtime),
+            "csharp",
+        )?;
         files.push(GeneratedFile {
             path: base_path.join(format!("{}.cs", wrapper_class_name)),
             content: strip_trailing_whitespace(&methods::gen_wrapper_class(
