@@ -9,6 +9,8 @@ enum HandleError {
     StaleGeneration,
     WrongType,
     RegistryPoisoned,
+    HandleBusy,
+    AliasedHandle,
 }
 
 impl std::fmt::Display for HandleError {
@@ -19,6 +21,8 @@ impl std::fmt::Display for HandleError {
             Self::StaleGeneration => "handle generation is stale",
             Self::WrongType => "handle has the wrong type",
             Self::RegistryPoisoned => "handle registry lock is poisoned",
+            Self::HandleBusy => "handle is currently in use",
+            Self::AliasedHandle => "the same handle was passed more than once",
         };
         formatter.write_str(message)
     }
@@ -60,6 +64,11 @@ impl HandleRegistry {
     }
 
     fn remove<T: std::any::Any + Send>(&mut self, handle: AlefHandle) -> Result<(), HandleError> {
+        drop(self.take::<T>(handle)?);
+        Ok(())
+    }
+
+    fn take<T: std::any::Any + Send>(&mut self, handle: AlefHandle) -> Result<T, HandleError> {
         let (index, generation) = decode_handle(handle)?;
         let slot = self.slots.get_mut(index).ok_or(HandleError::UnknownSlot)?;
         if slot.generation != generation {
@@ -72,9 +81,13 @@ impl HandleRegistry {
         }
         drop(guard);
         let value = slot.value.take().ok_or(HandleError::StaleGeneration)?;
+        let mutex = std::sync::Arc::try_unwrap(value).map_err(|value| {
+            slot.value = Some(value);
+            HandleError::HandleBusy
+        })?;
         slot.generation = next_generation(slot.generation);
-        drop(value);
-        Ok(())
+        let boxed = mutex.into_inner().map_err(|_| HandleError::RegistryPoisoned)?;
+        boxed.downcast::<T>().map(|value| *value).map_err(|_| HandleError::WrongType)
     }
 }
 
@@ -102,6 +115,39 @@ fn with_handle<T: std::any::Any + Send, R>(
     Ok(operation(typed))
 }
 
+struct HandleRequest {
+    handle: AlefHandle,
+    expected_type: std::any::TypeId,
+}
+
+fn acquire_handles(requests: &[HandleRequest]) -> Result<Vec<(AlefHandle, ErasedHandleValue)>, HandleError> {
+    let mut ordered = requests.iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|request| request.handle);
+    if ordered.windows(2).any(|pair| pair[0].handle == pair[1].handle) {
+        return Err(HandleError::AliasedHandle);
+    }
+    let registry = handle_registry().lock().map_err(|_| HandleError::RegistryPoisoned)?;
+    let mut values = Vec::with_capacity(ordered.len());
+    for request in ordered {
+        let value = registry.get(request.handle)?;
+        let guard = value.lock().map_err(|_| HandleError::RegistryPoisoned)?;
+        if guard.as_ref().type_id() != request.expected_type {
+            return Err(HandleError::WrongType);
+        }
+        drop(guard);
+        values.push((request.handle, value));
+    }
+    Ok(values)
+}
+
+fn locked_handle_ptr<T: std::any::Any + Send>(
+    guards: &mut [(AlefHandle, std::sync::MutexGuard<'_, Box<dyn std::any::Any + Send>>)],
+    handle: AlefHandle,
+) -> Result<*mut T, HandleError> {
+    let (_, guard) = guards.iter_mut().find(|(candidate, _)| *candidate == handle).ok_or(HandleError::UnknownSlot)?;
+    guard.downcast_mut::<T>().map(|value| value as *mut T).ok_or(HandleError::WrongType)
+}
+
 fn with_handle_mut<T: std::any::Any + Send, R>(
     handle: AlefHandle,
     operation: impl FnOnce(&mut T) -> R,
@@ -118,6 +164,11 @@ fn with_handle_mut<T: std::any::Any + Send, R>(
 fn remove_handle<T: std::any::Any + Send>(handle: AlefHandle) -> Result<(), HandleError> {
     let mut registry = handle_registry().lock().map_err(|_| HandleError::RegistryPoisoned)?;
     registry.remove::<T>(handle)
+}
+
+fn take_handle<T: std::any::Any + Send>(handle: AlefHandle) -> Result<T, HandleError> {
+    let mut registry = handle_registry().lock().map_err(|_| HandleError::RegistryPoisoned)?;
+    registry.take::<T>(handle)
 }
 
 fn encode_handle(index: usize, generation: u32) -> AlefHandle {

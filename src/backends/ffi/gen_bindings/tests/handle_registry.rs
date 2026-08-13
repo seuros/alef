@@ -1,4 +1,5 @@
 use crate::backends::ffi::template_env;
+use crate::core::backend::Backend;
 
 #[test]
 fn generated_registry_uses_typed_generational_tokens() {
@@ -43,7 +44,31 @@ fn main() {
     assert!(matches!(with_handle::<String, _>(0, |_| ()), Err(HandleError::InvalidZero)));
     let second = insert_handle(String::from("next")).expect("reuse");
     assert_ne!(first, second);
+    let third = insert_handle(7_u64).expect("second type");
+    let aliased = [
+        HandleRequest { handle: second, expected_type: std::any::TypeId::of::<String>() },
+        HandleRequest { handle: second, expected_type: std::any::TypeId::of::<String>() },
+    ];
+    assert!(matches!(acquire_handles(&aliased), Err(HandleError::AliasedHandle)));
+    let partial = [
+        HandleRequest { handle: second, expected_type: std::any::TypeId::of::<String>() },
+        HandleRequest { handle: u64::MAX, expected_type: std::any::TypeId::of::<u64>() },
+    ];
+    assert!(acquire_handles(&partial).is_err());
+    assert_eq!(with_handle::<String, _>(second, Clone::clone).expect("not consumed"), "next");
+    let forward = [
+        HandleRequest { handle: second, expected_type: std::any::TypeId::of::<String>() },
+        HandleRequest { handle: third, expected_type: std::any::TypeId::of::<u64>() },
+    ];
+    let reverse = [
+        HandleRequest { handle: third, expected_type: std::any::TypeId::of::<u64>() },
+        HandleRequest { handle: second, expected_type: std::any::TypeId::of::<String>() },
+    ];
+    let forward_values = acquire_handles(&forward).expect("forward acquisition");
+    let reverse_values = acquire_handles(&reverse).expect("reverse acquisition");
+    assert_eq!(forward_values.iter().map(|(handle, _)| *handle).collect::<Vec<_>>(), reverse_values.iter().map(|(handle, _)| *handle).collect::<Vec<_>>());
 }
+
 "#,
     );
     let directory = tempfile::tempdir().expect("temporary directory");
@@ -61,4 +86,149 @@ fn main() {
         .output()
         .expect("run registry harness");
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+}
+
+#[test]
+fn acquisition_rejects_aliases_before_locking_entries() {
+    let source = template_env::render("handle_registry.rs.jinja", minijinja::context! {});
+
+    let acquire = source.split("fn acquire_handles").nth(1).expect("acquisition helper");
+    let duplicate_check = acquire.find("ordered.windows(2)").expect("duplicate-token check");
+    let entry_lock = acquire.find("let guard = value.lock()").expect("entry lock");
+    assert!(
+        duplicate_check < entry_lock,
+        "aliases must fail before entry locks are acquired"
+    );
+    assert!(source.contains("ordered.sort_by_key(|request| request.handle)"));
+    assert!(source.contains("HandleError::AliasedHandle"));
+}
+
+#[test]
+fn opaque_type_exports_use_scalar_handles_and_parse() {
+    let mut resource = crate::core::ir::TypeDef {
+        name: "Resource".into(),
+        is_opaque: true,
+        ..Default::default()
+    };
+    resource.methods.push(crate::core::ir::MethodDef {
+        name: "label".into(),
+        receiver: Some(crate::core::ir::ReceiverKind::Ref),
+        return_type: crate::core::ir::TypeRef::String,
+        ..Default::default()
+    });
+    let api = crate::core::ir::ApiSurface {
+        crate_name: "sample".into(),
+        types: vec![resource],
+        ..Default::default()
+    };
+    let config = super::common::sample_config();
+    let files = super::super::FfiBackend
+        .generate_bindings(&api, &config)
+        .expect("FFI generation");
+    let lib = files
+        .iter()
+        .find(|file| file.path.ends_with("lib.rs"))
+        .expect("generated Rust library");
+    let cbindgen = files
+        .iter()
+        .find(|file| file.path.ends_with("cbindgen.toml"))
+        .expect("cbindgen config");
+
+    syn::parse_file(&lib.content).expect("ordinary opaque handle exports must parse");
+    assert!(lib.content.contains("this: AlefHandle"), "{}", lib.content);
+    assert!(
+        lib.content.contains("locked_handle_ptr::<my_lib::Resource"),
+        "{}",
+        lib.content
+    );
+    assert!(
+        cbindgen.content.contains("typedef uint64_t MY_LIBResource;"),
+        "{}",
+        cbindgen.content
+    );
+    assert!(!lib.content.contains("Box::from_raw(this)"), "{}", lib.content);
+}
+
+#[test]
+fn generated_calls_acquire_all_handles_before_use_or_owned_take() {
+    use crate::core::ir::{FunctionDef, MethodDef, ParamDef, ReceiverKind, TypeDef, TypeRef};
+
+    let mut resource = TypeDef {
+        name: "Resource".into(),
+        is_opaque: true,
+        ..Default::default()
+    };
+    resource.methods.push(MethodDef {
+        name: "merge".into(),
+        receiver: Some(ReceiverKind::Owned),
+        params: vec![ParamDef {
+            name: "other".into(),
+            ty: TypeRef::Named("Resource".into()),
+            is_ref: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let context = TypeDef {
+        name: "Context".into(),
+        is_opaque: true,
+        ..Default::default()
+    };
+    let function = FunctionDef {
+        name: "compare".into(),
+        rust_path: "my_lib::compare".into(),
+        params: vec![
+            ParamDef {
+                name: "left".into(),
+                ty: TypeRef::Named("Resource".into()),
+                is_ref: true,
+                ..Default::default()
+            },
+            ParamDef {
+                name: "context".into(),
+                ty: TypeRef::Optional(Box::new(TypeRef::Named("Context".into()))),
+                optional: true,
+                is_ref: true,
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let api = crate::core::ir::ApiSurface {
+        crate_name: "sample".into(),
+        types: vec![resource, context],
+        functions: vec![function],
+        ..Default::default()
+    };
+    let files = super::super::FfiBackend
+        .generate_bindings(&api, &super::common::sample_config())
+        .expect("FFI generation");
+    let source = &files
+        .iter()
+        .find(|file| file.path.ends_with("lib.rs"))
+        .expect("generated Rust library")
+        .content;
+
+    syn::parse_file(source).unwrap_or_else(|error| panic!("multi-handle wrappers must parse: {error}\n{source}"));
+    let free_function = source.split("fn my_lib_compare").nth(1).expect("free function wrapper");
+    assert!(free_function.contains("left: AlefHandle"), "{free_function}");
+    assert!(free_function.contains("context: AlefHandle"), "{free_function}");
+    let acquisition = free_function
+        .find("acquire_handles")
+        .expect("free-function acquisition");
+    let conversion = free_function
+        .find("locked_handle_ptr::<my_lib::Resource>")
+        .expect("free-function conversion");
+    assert!(acquisition < conversion, "{free_function}");
+
+    let owned_method = source
+        .split("fn my_lib_resource_merge")
+        .nth(1)
+        .expect("owned method wrapper");
+    assert!(owned_method.contains("this: AlefHandle"), "{owned_method}");
+    let alias_check = owned_method.find("request.handle == this").expect("owned alias check");
+    let owned_take = owned_method
+        .find("take_handle::<my_lib::Resource>")
+        .expect("owned take");
+    assert!(alias_check < owned_take, "{owned_method}");
 }

@@ -725,14 +725,20 @@ pub(super) fn gen_opaque_static_constructor(
 
     if method.error_type.is_some() {
         out.push_str("    match result {\n");
-        out.push_str("        Ok(value) => Box::into_raw(Box::new(value)),\n");
+        out.push_str("        Ok(value) => match insert_handle(value) {\n");
+        out.push_str("            Ok(handle) => handle,\n");
+        out.push_str("            Err(error) => { set_handle_error(&error); 0 },\n");
+        out.push_str("        },\n");
         out.push_str("        Err(e) => {\n");
         out.push_str("            set_last_error(1, &e.to_string());\n");
-        out.push_str("            std::ptr::null_mut()\n");
+        out.push_str("            0\n");
         out.push_str("        }\n");
         out.push_str("    }\n");
     } else {
-        out.push_str("    Box::into_raw(Box::new(result))\n");
+        out.push_str("    match insert_handle(result) {\n");
+        out.push_str("        Ok(handle) => handle,\n");
+        out.push_str("        Err(error) => { set_handle_error(&error); 0 },\n");
+        out.push_str("    }\n");
     }
     out.push_str("    })\n}\n");
 

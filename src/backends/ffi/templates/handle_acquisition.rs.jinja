@@ -1,0 +1,25 @@
+    let mut __alef_requests = Vec::new();
+{{ requests }}
+{% if owned_handle %}
+    if __alef_requests.iter().any(|request| request.handle == {{ owned_handle }}) {
+        set_handle_error(&HandleError::AliasedHandle);
+        {{ fail_ret }}
+    }
+{% endif %}
+    let __alef_values = match acquire_handles(&__alef_requests) {
+        Ok(values) => values,
+        Err(error) => {
+            set_handle_error(&error);
+            {{ fail_ret }}
+        }
+    };
+    let mut __alef_guards = Vec::with_capacity(__alef_values.len());
+    for (handle, value) in &__alef_values {
+        match value.lock() {
+            Ok(guard) => __alef_guards.push((*handle, guard)),
+            Err(_) => {
+                set_handle_error(&HandleError::RegistryPoisoned);
+                {{ fail_ret }}
+            }
+        }
+    }

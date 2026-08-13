@@ -391,12 +391,12 @@ pub(super) fn gen_cbindgen_toml(
             _ => None,
         })
         .collect();
-    let mut entries: Vec<(String, String)> = api
+    let mut entries: Vec<(String, String, bool)> = api
         .types
         .iter()
         .filter(|t| !exclude_types.contains(&t.name))
         .filter(|t| !capsule_types.contains_key(t.name.as_str()) || capsule_used_as_opaque.contains(t.name.as_str()))
-        .map(|t| (format!("{prefix_upper}{}", t.name), t.doc.clone()))
+        .map(|t| (format!("{prefix_upper}{}", t.name), t.doc.clone(), t.is_opaque))
         .collect();
 
     {
@@ -404,32 +404,32 @@ pub(super) fn gen_cbindgen_toml(
         c_names.sort_unstable();
         c_names.dedup();
         for c_name in c_names {
-            if !entries.iter().any(|(n, _)| n == c_name) {
-                entries.push((c_name.to_string(), String::new()));
+            if !entries.iter().any(|(name, _, _)| name == c_name) {
+                entries.push((c_name.to_string(), String::new(), false));
             }
         }
     }
 
     for e in api.enums.iter().filter(|e| !exclude_types.contains(&e.name)) {
         let c_name = format!("{prefix_upper}{}", e.name);
-        if !entries.iter().any(|(n, _)| n == &c_name) {
-            entries.push((c_name, e.doc.clone()));
+        if !entries.iter().any(|(name, _, _)| name == &c_name) {
+            entries.push((c_name, e.doc.clone(), false));
         }
     }
 
     for err in api.errors.iter().filter(|err| !exclude_types.contains(&err.name)) {
         if !err.methods.is_empty() {
             let c_name = format!("{prefix_upper}{}", err.name);
-            if !entries.iter().any(|(n, _)| n == &c_name) {
-                entries.push((c_name, err.doc.clone()));
+            if !entries.iter().any(|(name, _, _)| name == &c_name) {
+                entries.push((c_name, err.doc.clone(), false));
             }
         }
     }
 
     for svc in api.services.iter() {
         let c_name = format!("{prefix_upper}{}", svc.name);
-        if !entries.iter().any(|(n, _)| n == &c_name) {
-            entries.push((c_name, svc.doc.clone()));
+        if !entries.iter().any(|(name, _, _)| name == &c_name) {
+            entries.push((c_name, svc.doc.clone(), false));
         }
     }
 
@@ -437,9 +437,11 @@ pub(super) fn gen_cbindgen_toml(
 
     let forward_decls: String = entries
         .iter()
-        .map(|(name, doc)| {
+        .map(|(name, doc, is_handle)| {
             let doc_block = render_doxygen_typedef_block(doc);
-            if doc_block.is_empty() {
+            if *is_handle {
+                format!("{doc_block}typedef uint64_t {name};")
+            } else if doc_block.is_empty() {
                 format!("typedef struct {name} {name};")
             } else {
                 format!("{doc_block}typedef struct {name} {name};")

@@ -173,8 +173,8 @@ fn test_opaque_typedef_carries_doxygen_block_in_cbindgen_toml() {
         cbindgen.content
     );
     assert!(
-        cbindgen.content.contains("typedef struct MY_LIBHandle MY_LIBHandle;"),
-        "expected prefixed typedef, got:\n{}",
+        cbindgen.content.contains("typedef uint64_t MY_LIBHandle;"),
+        "expected scalar generational handle typedef, got:\n{}",
         cbindgen.content
     );
 }

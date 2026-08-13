@@ -12,6 +12,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/handle_registry.rs.jinja"),
     ),
     (
+        "handle_acquisition.rs.jinja",
+        include_str!("templates/handle_acquisition.rs.jinja"),
+    ),
+    (
         "ffi_tokio_runtime.jinja",
         include_str!("templates/ffi_tokio_runtime.jinja"),
     ),

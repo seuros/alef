@@ -1,6 +1,10 @@
-let {{ rs_name }} = if {{ name }}.is_null() {
+let {{ rs_name }} = if {{ name }} == 0 {
         None
     } else {
-        // SAFETY: null check above guarantees {{ name }} is a valid pointer.
-        Some({% if is_ref %}unsafe { &*{{ name }} }{% else %}unsafe { &*{{ name }} }.clone(){% endif %})
+        let value = match locked_handle_ptr::<{{ qualified }}>(&mut __alef_guards, {{ name }}) {
+            Ok(value) => value,
+            Err(error) => { set_handle_error(&error); {{ fail_ret }} }
+        };
+        // SAFETY: the registry entry guard remains held for the duration of this call.
+        Some({% if is_ref %}unsafe { &*value }{% else %}unsafe { &*value }.clone(){% endif %})
     };

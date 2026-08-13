@@ -12,6 +12,17 @@ use super::return_handling::{gen_owned_c_char_to_c_with_len, return_type_needs_n
 use super::signatures::{c_symbol_component, internal_class_component};
 use super::support::{ffi_doxygen_block, method_sanitized_recoverable, sanitized_recoverable};
 
+fn named_handle_type(ty: &TypeRef) -> Option<&str> {
+    match ty {
+        TypeRef::Named(name) => Some(name),
+        TypeRef::Optional(inner) => match inner.as_ref() {
+            TypeRef::Named(name) => Some(name),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 pub(in crate::backends::ffi::gen_bindings) fn gen_streaming_method_wrapper(
     typ: &TypeDef,
     method: &MethodDef,
@@ -107,8 +118,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
     let mut params = Vec::new();
     if !method.is_static {
         let receiver_ty = match method.receiver.as_ref().unwrap_or(&ReceiverKind::Ref) {
-            ReceiverKind::Ref => format!("*const {qualified}"),
-            ReceiverKind::RefMut | ReceiverKind::Owned => format!("*mut {qualified}"),
+            ReceiverKind::Ref | ReceiverKind::RefMut | ReceiverKind::Owned => "AlefHandle".to_string(),
         };
         let param_name = if will_be_unimplemented { "_this" } else { "this" };
         params.push(format!("    {param_name}: {receiver_ty}"));
@@ -191,27 +201,62 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
         ));
     }
 
-    if !method.is_static {
-        let fail_ret = if is_bytes_result || (has_error && is_void_return(&method.return_type)) {
-            "return -1;".to_string()
-        } else if is_void_return(&method.return_type) {
-            "return;".to_string()
-        } else {
-            format!("return {};", null_return_value(&method.return_type))
-        };
+    let fail_ret = if is_bytes_result || (has_error && is_void_return(&method.return_type)) {
+        "return -1;".to_string()
+    } else if is_void_return(&method.return_type) {
+        "return;".to_string()
+    } else {
+        format!("return {};", null_return_value(&method.return_type))
+    };
 
+    let mut handle_requests = Vec::new();
+    let is_owned_receiver = method.receiver.as_ref() == Some(&ReceiverKind::Owned);
+    if !method.is_static && !is_owned_receiver {
+        handle_requests.push(format!(
+            "    __alef_requests.push(HandleRequest {{ handle: this, expected_type: std::any::TypeId::of::<{qualified}>() }});"
+        ));
+    }
+    for parameter in &method.params {
+        let Some(type_name) = named_handle_type(&parameter.ty) else {
+            continue;
+        };
+        if enum_names.contains(type_name) {
+            continue;
+        }
+        let request = format!(
+            "__alef_requests.push(HandleRequest {{ handle: {}, expected_type: std::any::TypeId::of::<{core_import}::{type_name}>() }});",
+            parameter.name
+        );
+        if parameter.optional {
+            handle_requests.push(format!("    if {} != 0 {{ {request} }}", parameter.name));
+        } else {
+            handle_requests.push(format!("    {request}"));
+        }
+    }
+    if !handle_requests.is_empty() || method.receiver.as_ref() == Some(&ReceiverKind::Owned) {
+        out.push_str(&crate::backends::ffi::template_env::render(
+            "handle_acquisition.rs.jinja",
+            context! {
+                requests => handle_requests.join("\n"),
+                fail_ret => fail_ret.clone(),
+                owned_handle => is_owned_receiver.then_some("this"),
+            },
+        ));
+    }
+
+    if !method.is_static {
         let null_check = match method.receiver.as_ref().unwrap_or(&ReceiverKind::Ref) {
             ReceiverKind::Ref => crate::backends::ffi::template_env::render(
                 "null_check_self_ref.jinja",
-                context! { fail_ret => fail_ret },
+                context! { fail_ret => fail_ret, qualified => qualified.clone() },
             ),
             ReceiverKind::RefMut => crate::backends::ffi::template_env::render(
                 "null_check_self_mut.jinja",
-                context! { fail_ret => fail_ret },
+                context! { fail_ret => fail_ret, qualified => qualified.clone() },
             ),
             ReceiverKind::Owned => crate::backends::ffi::template_env::render(
                 "null_check_self_owned.jinja",
-                context! { fail_ret => fail_ret },
+                context! { fail_ret => fail_ret, qualified => qualified.clone() },
             ),
         };
         out.push_str(&crate::backends::ffi::template_env::render(
@@ -251,7 +296,6 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
         }
     }
 
-    let is_owned_receiver = method.receiver.as_ref() == Some(&ReceiverKind::Owned);
     let arg_names: Vec<String> = method
         .params
         .iter()
@@ -649,6 +693,42 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
         out.push_str(&crate::backends::ffi::template_env::render(
             "bytes_result_null_check.jinja",
             context! {},
+        ));
+    }
+
+    let fail_ret = if is_bytes_result || (has_error && is_void_return(&func.return_type)) {
+        "return -1;".to_string()
+    } else if is_void_return(&func.return_type) {
+        "return;".to_string()
+    } else {
+        format!("return {};", null_return_value(&func.return_type))
+    };
+    let mut handle_requests = Vec::new();
+    for parameter in &func.params {
+        let Some(type_name) = named_handle_type(&parameter.ty) else {
+            continue;
+        };
+        if enum_names.contains(type_name) {
+            continue;
+        }
+        let request = format!(
+            "__alef_requests.push(HandleRequest {{ handle: {}, expected_type: std::any::TypeId::of::<{core_import}::{type_name}>() }});",
+            parameter.name
+        );
+        if parameter.optional {
+            handle_requests.push(format!("    if {} != 0 {{ {request} }}", parameter.name));
+        } else {
+            handle_requests.push(format!("    {request}"));
+        }
+    }
+    if !handle_requests.is_empty() {
+        out.push_str(&crate::backends::ffi::template_env::render(
+            "handle_acquisition.rs.jinja",
+            context! {
+                requests => handle_requests.join("\n"),
+                fail_ret => fail_ret,
+                owned_handle => Option::<&str>::None,
+            },
         ));
     }
 

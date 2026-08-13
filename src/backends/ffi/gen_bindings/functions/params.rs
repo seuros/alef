@@ -115,13 +115,30 @@ pub(super) fn gen_param_conversion_with_enums(
                     },
                 ));
             }
-            TypeRef::Named(_type_name) => {
+            TypeRef::Named(type_name) => {
                 out.push_str(&crate::backends::ffi::template_env::render(
                     "param_optional_named_conversion.jinja",
                     context! {
                         rs_name => rs_name.clone(),
                         name => name.clone(),
                         is_ref => param.is_ref,
+                        qualified => format!("{core_import}::{type_name}"),
+                        fail_ret => fail_ret.to_string(),
+                    },
+                ));
+            }
+            TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Named(_)) => {
+                let TypeRef::Named(type_name) = inner.as_ref() else {
+                    unreachable!("guarded by match condition")
+                };
+                out.push_str(&crate::backends::ffi::template_env::render(
+                    "param_optional_named_conversion.jinja",
+                    context! {
+                        rs_name => rs_name.clone(),
+                        name => name.clone(),
+                        is_ref => param.is_ref,
+                        qualified => format!("{core_import}::{type_name}"),
+                        fail_ret => fail_ret.to_string(),
                     },
                 ));
             }
@@ -284,7 +301,7 @@ pub(super) fn gen_param_conversion_with_enums(
                     },
                 ));
             }
-            TypeRef::Named(_type_name) => {
+            TypeRef::Named(type_name) => {
                 out.push_str(&crate::backends::ffi::template_env::render(
                     "param_non_optional_named_conversion.jinja",
                     context! {
@@ -293,6 +310,7 @@ pub(super) fn gen_param_conversion_with_enums(
                         fail_ret => fail_ret.to_string(),
                         is_ref => param.is_ref,
                         is_mut => param.is_mut,
+                        qualified => format!("{core_import}::{type_name}"),
                     },
                 ));
             }

@@ -1,6 +1,12 @@
-if this.is_null() {
-        set_last_error(1, "Null pointer passed for self");
+if this == 0 {
+        set_last_error(ALEF_INVALID_HANDLE_ERROR, "zero is not a valid handle");
         {{ fail_ret }}
     }
-    // SAFETY: null check above guarantees this is a valid pointer originally from Box::into_raw.
-    let obj = unsafe { *Box::from_raw(this) };
+    if __alef_values.iter().any(|(handle, _)| *handle == this) {
+        set_handle_error(&HandleError::AliasedHandle);
+        {{ fail_ret }}
+    }
+    let obj = match take_handle::<{{ qualified }}>(this) {
+        Ok(value) => value,
+        Err(error) => { set_handle_error(&error); {{ fail_ret }} }
+    };

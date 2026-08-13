@@ -33,13 +33,22 @@
   {{ indent }} },
   {{ indent }}}
 {%- elif type_class == "named_enum" %}
-  {{ indent }}Box::into_raw(Box::new({{ copy_expr }}))
+  {{ indent }}match insert_handle({{ copy_expr }}) {
+  {{ indent }} Ok(handle) => handle,
+  {{ indent }} Err(error) => { set_handle_error(&error); 0 },
+  {{ indent }}}
 {%- elif type_class == "named_clone" %}
-  {{ indent }}Box::into_raw(Box::new({{ expr }}.clone()))
+  {{ indent }}match insert_handle({{ expr }}.clone()) {
+  {{ indent }} Ok(handle) => handle,
+  {{ indent }} Err(error) => { set_handle_error(&error); 0 },
+  {{ indent }}}
 {%- elif type_class == "named_owned" %}
-  {{ indent }}Box::into_raw(Box::new({{ expr }}))
+  {{ indent }}match insert_handle({{ expr }}) {
+  {{ indent }} Ok(handle) => handle,
+  {{ indent }} Err(error) => { set_handle_error(&error); 0 },
+  {{ indent }}}
 {%- elif type_class == "named_non_clone" %}
-  {{ indent }}std::ptr::null_mut()
+  {{ indent }}0
 {%- elif type_class == "bytes" %}
   {{ indent }}{{ expr }}.as_ptr() as *mut u8
 {%- elif type_class == "duration" %}

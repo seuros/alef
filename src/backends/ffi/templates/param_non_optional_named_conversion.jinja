@@ -1,6 +1,10 @@
- if {{ name }}.is_null() {
-        set_last_error(1, "Null pointer passed for parameter '{{ name }}'");
+ if {{ name }} == 0 {
+        set_last_error(ALEF_INVALID_HANDLE_ERROR, "zero is not a valid handle for parameter '{{ name }}'");
         {{ fail_ret }}
     }
-    // SAFETY: null check above guarantees {{ name }} is a valid non-null pointer.
-    let {{ rs_name }} = {% if is_mut %}unsafe { &mut *{{ name }} }{% elif is_ref %}unsafe { &*{{ name }} }{% else %}unsafe { &*{{ name }} }.clone(){% endif %};
+    let {{ rs_name }}_ptr = match locked_handle_ptr::<{{ qualified }}>(&mut __alef_guards, {{ name }}) {
+        Ok(value) => value,
+        Err(error) => { set_handle_error(&error); {{ fail_ret }} }
+    };
+    // SAFETY: the registry entry guard remains held for the duration of this call.
+    let {{ rs_name }} = {% if is_mut %}unsafe { &mut *{{ rs_name }}_ptr }{% elif is_ref %}unsafe { &*{{ rs_name }}_ptr }{% else %}unsafe { &*{{ rs_name }}_ptr }.clone(){% endif %};

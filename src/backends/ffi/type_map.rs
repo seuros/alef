@@ -45,8 +45,8 @@ impl TypeMapper for FfiParamMapper<'_> {
         Cow::Borrowed("u64")
     }
 
-    fn named<'a>(&self, name: &'a str) -> Cow<'a, str> {
-        Cow::Owned(format!("*const {}::{name}", self.core_import))
+    fn named<'a>(&self, _name: &'a str) -> Cow<'a, str> {
+        Cow::Borrowed("AlefHandle")
     }
 
     fn vec(&self, _inner: &str) -> String {
@@ -119,8 +119,8 @@ impl TypeMapper for FfiReturnMapper<'_> {
         Cow::Borrowed("u64")
     }
 
-    fn named<'a>(&self, name: &'a str) -> Cow<'a, str> {
-        Cow::Owned(format!("*mut {}::{name}", self.core_import))
+    fn named<'a>(&self, _name: &'a str) -> Cow<'a, str> {
+        Cow::Borrowed("AlefHandle")
     }
 
     fn vec(&self, _inner: &str) -> String {
@@ -197,7 +197,7 @@ fn c_param_optional(inner: &TypeRef, core_import: &str) -> String {
             _ => "*const std::ffi::c_char".to_string(),
         },
         TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json => "*const std::ffi::c_char".to_string(),
-        TypeRef::Named(_) => format!("*const {}", c_param_type(inner, core_import)),
+        TypeRef::Named(_) => "AlefHandle".to_string(),
         TypeRef::Vec(_) | TypeRef::Map(_, _) | TypeRef::Bytes | TypeRef::Unit | TypeRef::Duration => {
             "*const std::ffi::c_char".to_string()
         }
@@ -215,7 +215,7 @@ fn c_return_optional(inner: &TypeRef, core_import: &str) -> String {
             _ => "*mut std::ffi::c_char".to_string(),
         },
         TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json => "*mut std::ffi::c_char".to_string(),
-        TypeRef::Named(name) => format!("*mut {core_import}::{name}"),
+        TypeRef::Named(_) => "AlefHandle".to_string(),
         TypeRef::Duration => "u64".to_string(),
         TypeRef::Bytes => "*mut u8".to_string(),
         TypeRef::Vec(_) | TypeRef::Map(_, _) | TypeRef::Unit => "*mut std::ffi::c_char".to_string(),
@@ -239,28 +239,19 @@ pub fn is_passthrough_return(ty: &TypeRef) -> bool {
 
 /// Maps a TypeRef to the C FFI parameter type, using full rust_path from path_map for Named
 /// types and emitting `i32` for enum types.
-///
-/// When `is_mut` is true and the type is a non-enum Named type, the pointer is `*mut` instead
-/// of `*const` — required when the core function takes `&mut T` rather than `&T` or `T`.
-/// Optional Named types are always `*const` (null = None), regardless of `is_mut`.
 pub fn c_param_type_with_paths_and_enums(
     ty: &TypeRef,
     core_import: &str,
-    path_map: &AHashMap<String, String>,
+    _path_map: &AHashMap<String, String>,
     enum_names: &AHashSet<String>,
-    is_mut: bool,
+    _is_mut: bool,
 ) -> Cow<'static, str> {
     match ty {
         TypeRef::Named(name) => {
             if enum_names.contains(name.as_str()) {
                 Cow::Borrowed("i32")
             } else {
-                let full_path = path_map
-                    .get(name.as_str())
-                    .cloned()
-                    .unwrap_or_else(|| format!("{core_import}::{name}"));
-                let ptr_kind = if is_mut { "*mut" } else { "*const" };
-                Cow::Owned(format!("{ptr_kind} {full_path}"))
+                Cow::Borrowed("AlefHandle")
             }
         }
         TypeRef::Optional(inner) => {
@@ -268,11 +259,7 @@ pub fn c_param_type_with_paths_and_enums(
                 if enum_names.contains(name.as_str()) {
                     Cow::Borrowed("i32")
                 } else {
-                    let inner_type = path_map
-                        .get(name.as_str())
-                        .cloned()
-                        .unwrap_or_else(|| format!("{core_import}::{name}"));
-                    Cow::Owned(format!("*const {inner_type}"))
+                    Cow::Borrowed("AlefHandle")
                 }
             } else {
                 c_param_type(ty, core_import)
