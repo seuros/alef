@@ -401,3 +401,71 @@ fn dart_error_assertion_escapes_declared_value_for_dart_string_literal() {
         "expected escaped literal snippet `{expected_snippet}` in:\n{output}"
     );
 }
+
+#[test]
+fn dart_test_file_emits_wrapper_for_call_config_trait_argument() {
+    let fixture = make_fixture("register_backend");
+    let mut e2e_config = crate::e2e::config::E2eConfig::default();
+    e2e_config.call.function = "registerBackend".into();
+    e2e_config.call.args.push(crate::e2e::config::ArgMapping {
+        name: "backend".into(),
+        field: "input.backend".into(),
+        arg_type: "test_backend".into(),
+        optional: false,
+        owned: false,
+        element_type: None,
+        go_type: None,
+        vec_inner_is_ref: false,
+        trait_name: Some("TestTrait".into()),
+    });
+    let mut config = crate::core::config::ResolvedCrateConfig::default();
+    config.trait_bridges.push(make_trait_bridge("TestTrait"));
+    let type_defs = [crate::core::ir::TypeDef {
+        name: "TestTrait".into(),
+        methods: vec![make_method("doWork", true)],
+        ..Default::default()
+    }];
+    let output = super::test_file::render_test_file(
+        "plugins",
+        &[&fixture],
+        &e2e_config,
+        "dart",
+        "samplecli",
+        "RustLib",
+        "RustLibBridge",
+        &crate::e2e::field_access::DartFirstClassMap::default(),
+        &[],
+        &config,
+        &type_defs,
+        &[],
+    );
+    assert!(output.contains("Future<TestTraitDartImpl> _createTestStubRegisterBackendWrapper()"));
+    assert!(output.contains("await _createTestStubRegisterBackendWrapper()"));
+}
+
+#[test]
+fn dart_trait_stub_wrapper_compiles() {
+    if std::process::Command::new("dart").arg("--version").output().is_err() {
+        return;
+    }
+    let method = make_method("doWork", true);
+    let emission = emit_test_backend(
+        &make_trait_bridge("TestTrait"),
+        &[&method],
+        &make_fixture("register_backend"),
+        &[],
+    );
+    let source = format!(
+        "abstract class TestTrait {{ Future<bool> doWork(); }}\nclass TestTraitDartImpl {{}}\nFuture<TestTraitDartImpl> createTestTraitDartImpl({{required String pluginName, required String pluginVersion, required Future<bool> Function() doWork}}) async => TestTraitDartImpl();\n{}\nFuture<void> main() async {{ await _createTestStubRegisterBackendWrapper(); }}\n",
+        emission.setup_block
+    );
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let source_path = directory.path().join("stub.dart");
+    std::fs::write(&source_path, source).expect("write Dart source");
+    let output = std::process::Command::new("dart")
+        .args(["analyze", "--fatal-infos"])
+        .arg(&source_path)
+        .output()
+        .expect("run Dart analyzer");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stdout));
+}

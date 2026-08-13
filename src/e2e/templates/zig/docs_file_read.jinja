@@ -1,2 +1,5 @@
-const {{ variable }}_file_{{ index }} = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "{{ path }}", allocator, .unlimited);
+var {{ variable }}_file_{{ index }}_threaded = std.Io.Threaded.init(allocator, .{});
+defer {{ variable }}_file_{{ index }}_threaded.deinit();
+const {{ variable }}_file_{{ index }}_io = {{ variable }}_file_{{ index }}_threaded.io();
+const {{ variable }}_file_{{ index }} = try std.Io.Dir.cwd().readFileAlloc({{ variable }}_file_{{ index }}_io, "{{ path }}", allocator, .unlimited);
 defer allocator.free({{ variable }}_file_{{ index }});

@@ -171,15 +171,18 @@ pub(super) fn build_args_and_setup(
                         parts.push(format!("\"{}\"", escape_zig(&json_str)));
                     }
                 } else if arg.arg_type == "bytes" {
-                    // `bytes` args are file paths in fixtures — read the file into a
-                    // local buffer. The cwd is set to test_documents/ at runtime.
-                    // Zig 0.16 uses std.Io.Dir.cwd() (not std.fs.cwd()) and requires
-                    // an `io` instance from std.testing.io in test context.
                     if let serde_json::Value::String(path) = v {
                         let var_name = format!("{}_bytes", arg.name);
+                        let io_name = format!("{var_name}_io");
+                        let threaded_name = format!("{var_name}_threaded");
                         let epath = escape_zig(path);
                         setup_lines.push(format!(
-                            "const {var_name} = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, \"{epath}\", std.heap.c_allocator, .unlimited);"
+                            "var {threaded_name} = std.Io.Threaded.init(std.heap.c_allocator, .{{}});"
+                        ));
+                        setup_lines.push(format!("defer {threaded_name}.deinit();"));
+                        setup_lines.push(format!("const {io_name} = {threaded_name}.io();"));
+                        setup_lines.push(format!(
+                            "const {var_name} = try std.Io.Dir.cwd().readFileAlloc({io_name}, \"{epath}\", std.heap.c_allocator, .unlimited);"
                         ));
                         setup_lines.push(format!("defer std.heap.c_allocator.free({var_name});"));
                         parts.push(var_name);
@@ -275,5 +278,33 @@ mod docs_file_tests {
         );
         assert!(lines.iter().any(|line| line.contains("emit_strings_as_arrays")));
         assert_eq!(expression, "request_json_0");
+    }
+
+    #[test]
+    fn runtime_file_io_compiles_as_a_zig_binary() {
+        let zig = std::process::Command::new("zig").arg("version").output();
+        if zig.is_err() {
+            return;
+        }
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source_path = directory.path().join("main.zig");
+        let source = r#"const std = @import("std");
+pub fn main(init: std.process.Init) !void {
+    var content_bytes_threaded = std.Io.Threaded.init(std.heap.c_allocator, .{});
+    defer content_bytes_threaded.deinit();
+    const content_bytes_io = content_bytes_threaded.io();
+    const content_bytes = try std.Io.Dir.cwd().readFileAlloc(content_bytes_io, "Cargo.toml", std.heap.c_allocator, .unlimited);
+    defer std.heap.c_allocator.free(content_bytes);
+    _ = init;
+}
+"#;
+        std::fs::write(&source_path, source).expect("write Zig source");
+        let output = std::process::Command::new("zig")
+            .args(["build-exe", "-fno-emit-bin"])
+            .arg(&source_path)
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .expect("run Zig compiler");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     }
 }

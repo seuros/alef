@@ -735,7 +735,7 @@ fn render_dart_sut_spawn(out: &mut String) {
 fn collect_dart_test_stub_classes(
     out: &mut String,
     fixture: &Fixture,
-    _e2e_config: &E2eConfig,
+    e2e_config: &E2eConfig,
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
@@ -745,9 +745,14 @@ fn collect_dart_test_stub_classes(
         return;
     }
 
-    // Check fixture.args directly (not call_config.args, which is empty for trait-bridge calls).
-    // The fixture JSON defines the actual arguments including test_backend definitions.
-    for arg_def in &fixture.args {
+    let call_config = e2e_config.resolve_call_for_fixture(
+        fixture.call.as_deref(),
+        &fixture.id,
+        &fixture.resolved_category(),
+        &fixture.tags,
+        &fixture.input,
+    );
+    for arg_def in fixture.resolved_args(call_config) {
         if arg_def.arg_type != "test_backend" {
             continue;
         }

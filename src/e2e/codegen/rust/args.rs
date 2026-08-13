@@ -308,12 +308,14 @@ fn render_json_object_arg(
             "let {name}_json_text = {json_literal}.replace(\"{}\", &{name}_mock_base_url);",
             super::super::MOCK_URL_PLACEHOLDER
         ));
+        let mutability = if docs_files.is_empty() { "" } else { "mut " };
         lines.push(format!(
-            "let {name}_json: serde_json::Value = serde_json::from_str(&{name}_json_text).unwrap();"
+            "let {mutability}{name}_json: serde_json::Value = serde_json::from_str(&{name}_json_text).unwrap();"
         ));
     } else {
+        let mutability = if docs_files.is_empty() { "" } else { "mut " };
         lines.push(format!(
-            "let {name}_json: serde_json::Value = serde_json::from_str({json_literal}).unwrap();"
+            "let {mutability}{name}_json: serde_json::Value = serde_json::from_str({json_literal}).unwrap();"
         ));
     }
     for (index, file) in docs_files.iter().enumerate() {
@@ -768,9 +770,54 @@ mod tests {
             rendered.contains(r##"input_json.pointer_mut(r#"/bytes"#)"##),
             "{rendered}"
         );
+        assert!(rendered.contains("let mut input_json:"), "{rendered}");
         assert!(
             rendered.contains("serde_json::from_value::<DocumentInput>"),
             "{rendered}"
         );
+    }
+
+    #[test]
+    fn docs_nested_bytes_generated_rust_compiles() {
+        let (lines, expression) = render_rust_arg(
+            "input",
+            &serde_json::json!({"bytes": "document.pdf"}),
+            "json_object",
+            false,
+            "sample",
+            "fixture",
+            None,
+            true,
+            Some("DocumentInput"),
+            "test_documents",
+            false,
+            None,
+            &[FixtureDocsFileInput {
+                field: "/bytes".into(),
+                path: "document.pdf".into(),
+            }],
+            false,
+            false,
+        );
+        let directory = tempfile::tempdir().expect("temporary directory");
+        std::fs::create_dir(directory.path().join("src")).expect("create source directory");
+        std::fs::write(
+            directory.path().join("Cargo.toml"),
+            "[package]\nname = \"generated-check\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\nserde_json = \"1\"\n",
+        )
+        .expect("write manifest");
+        let body = lines.join("\n    ");
+        let source = format!(
+            "#[derive(serde::Deserialize)]\nstruct DocumentInput {{ bytes: Vec<u8> }}\nfn main() {{\n    {body}\n    let _input: DocumentInput = {expression};\n}}\n"
+        );
+        std::fs::write(directory.path().join("src/main.rs"), source).expect("write Rust source");
+        std::fs::write(directory.path().join("document.pdf"), b"document").expect("write fixture file");
+        let output = std::process::Command::new("cargo")
+            .args(["check", "--offline", "--quiet"])
+            .env("CARGO_TARGET_DIR", directory.path().join("target"))
+            .current_dir(directory.path())
+            .output()
+            .expect("run Rust compiler");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     }
 }

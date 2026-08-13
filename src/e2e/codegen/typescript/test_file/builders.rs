@@ -270,9 +270,17 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
     };
 
     let mut stmts: Vec<String> = vec![init_stmt];
+    let ir_owner_name = type_name.strip_prefix(wasm_type_prefix).unwrap_or(type_name);
+    let owner_type = type_defs.iter().find(|definition| definition.name == ir_owner_name);
     for (key, val) in obj {
         let camel_key = snake_to_camel(key);
         let field_pointer = json_pointer_child(pointer, key);
+        let field_type = owner_type
+            .and_then(|definition| definition.fields.iter().find(|field| field.name == *key))
+            .map(|field| match &field.ty {
+                crate::core::ir::TypeRef::Optional(inner) => inner.as_ref(),
+                other => other,
+            });
         if let Some(file) = docs_files.iter().find(|file| file.field == field_pointer) {
             stmts.push(
                 crate::e2e::template_env::render(
@@ -311,7 +319,9 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
             // (registered in `effective_nested_types`), wrap each object element
             // via the same builder-expression emitter; primitive elements pass
             // through as JS literals.
-            if let Some(elem_type) = effective_nested_types.get(key.as_str()) {
+            if matches!(field_type, Some(crate::core::ir::TypeRef::Bytes)) {
+                stmts.push(format!("{var}.{camel_key} = Uint8Array.from({});", json_to_js(val)));
+            } else if let Some(elem_type) = effective_nested_types.get(key.as_str()) {
                 let element_exprs: Vec<String> = items
                     .iter()
                     .enumerate()
@@ -340,6 +350,15 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
             } else {
                 stmts.push(format!("{var}.{camel_key} = {};", json_to_js(val)));
             }
+        } else if let Some(crate::core::ir::TypeRef::Named(enum_type)) = field_type
+            && enums.iter().any(|definition| definition.name == *enum_type)
+            && let serde_json::Value::String(variant) = val
+        {
+            let enum_type = wasm_prefixed_wrapped_type(lang, enum_type, type_defs, enums, wasm_type_prefix);
+            stmts.push(format!(
+                "{var}.{camel_key} = {enum_type}.{};",
+                variant.to_upper_camel_case()
+            ));
         } else if let Some(enum_type) = enum_fields
             .get(key.as_str())
             .or_else(|| enum_fields.get(camel_key.as_str()))
@@ -576,6 +595,56 @@ mod tests {
         let accessor = resolver.accessor("content", "node", "result");
         let source = format!(
             "enum InputKind {{ Bytes }}\ninterface DocumentInput {{ bytes: Uint8Array; kind: InputKind }}\ninterface Output {{ results?: Array<{{ content: string }}> }}\nconst input: DocumentInput = {expression};\ndeclare const result: Output;\nconst content: string | undefined = {accessor};\nvoid input; void content;\n"
+        );
+        assert_strict_typescript_compiles(&source);
+    }
+
+    #[test]
+    fn wasm_typed_objects_lower_bytes_and_enums_from_ir() {
+        let type_defs = [TypeDef {
+            name: "ExtractInput".into(),
+            fields: vec![
+                crate::core::ir::FieldDef {
+                    name: "bytes".into(),
+                    ty: crate::core::ir::TypeRef::Bytes,
+                    ..Default::default()
+                },
+                crate::core::ir::FieldDef {
+                    name: "kind".into(),
+                    ty: crate::core::ir::TypeRef::Named("ExtractInputKind".into()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }];
+        let enums = [EnumDef {
+            name: "ExtractInputKind".into(),
+            ..Default::default()
+        }];
+        let expression = ts_builder_expression(
+            serde_json::json!({"bytes": [72, 105], "kind": "bytes"})
+                .as_object()
+                .expect("object"),
+            "WasmExtractInput",
+            &Default::default(),
+            "wasm",
+            &Default::default(),
+            &Default::default(),
+            &type_defs,
+            &enums,
+            "Wasm",
+            &[],
+        );
+        assert!(
+            expression.contains("_u0.bytes = Uint8Array.from([72, 105])"),
+            "{expression}"
+        );
+        assert!(
+            expression.contains("_u0.kind = WasmExtractInputKind.Bytes"),
+            "{expression}"
+        );
+        let source = format!(
+            "enum WasmExtractInputKind {{ Bytes }}\nclass WasmExtractInput {{ static default(): WasmExtractInput {{ return new WasmExtractInput(); }} bytes!: Uint8Array; kind!: WasmExtractInputKind; }}\nconst input: WasmExtractInput = {expression};\nvoid input;\n"
         );
         assert_strict_typescript_compiles(&source);
     }

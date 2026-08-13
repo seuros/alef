@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Ruff failures during generation.
 - **snippets/c**: derive list and map return ownership from the Rust IR and use the generated JSON-string ABI.
 - **e2e/kotlin/swift**: make `not_empty` assertions distinguish nullable scalars from nullable containers.
+- **e2e/rust/zig**: generate mutable JSON patch values and use a runtime Zig I/O provider for file inputs.
+- **e2e/dart**: emit trait-stub wrapper factories when test backends come from call-level argument mappings.
+- **e2e/typescript**: lower IR byte arrays and enum wire strings to their typed WASM values.
 - **generate/snippets**: propagate mandatory post-build failures from `alef generate`, terminate descendant validator
   processes at the configured timeout, and report stable generated-file totals across content-identical passes.
 - **snippets**: use built-in language recipes for declarative trait-bridge fixtures and resolve C registry operations
