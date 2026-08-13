@@ -375,6 +375,14 @@ fn render_snippet_body(
         &fixture.tags,
         &fixture.input,
     );
+    if matches!(language, "c" | "c_ffi" | "ffi")
+        && fixture
+            .resolved_args(call)
+            .iter()
+            .any(|argument| argument.arg_type == "test_backend")
+    {
+        bail!("built-in C trait-bridge snippet recipe requires a concrete vtable implementation");
+    }
     if let Some(kind) = recipe_policy::extension_owned_recipe_kind(fixture, fixture.resolved_args(call)) {
         bail!("{kind} fixture requires an extension-owned documentation recipe");
     }
@@ -382,7 +390,14 @@ fn render_snippet_body(
         .overrides
         .get(language)
         .and_then(|override_config| override_config.function.as_deref())
-        .unwrap_or(&call.function);
+        .filter(|function| !function.trim().is_empty())
+        .or_else(|| (!call.function.trim().is_empty()).then_some(call.function.as_str()))
+        .or_else(|| {
+            matches!(language, "c" | "c_ffi" | "ffi")
+                .then(|| crate::e2e::codegen::recipe::trait_bridge_function_identity(context.crate_config, fixture))
+                .flatten()
+        })
+        .unwrap_or_default();
     if effective_function.trim().is_empty() {
         bail!(
             "built-in `{language}` snippet recipe has no function identity; configure a call function or provide an extension-owned documentation recipe"
@@ -883,6 +898,72 @@ mod tests {
         assert_eq!(report.coverage.generated, report.coverage.expected);
         assert!(report.coverage.missing.is_empty());
         assert!(report.snippets[0].file.content.contains("extension_call()"));
+    }
+
+    #[test]
+    fn c_trait_bridge_without_vtable_recipe_remains_missing() {
+        let mut fixture = documented_fixture();
+        fixture.call = Some("register_sample_backend".into());
+        fixture.args = vec![crate::core::config::e2e::ArgMapping {
+            name: "backend".into(),
+            field: "backend".into(),
+            arg_type: "test_backend".into(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: Some("SampleBackend".into()),
+        }];
+        let mut e2e = E2eConfig::default();
+        let mut call = crate::core::config::e2e::CallConfig::default();
+        call.overrides.insert(
+            "python".into(),
+            crate::core::config::e2e::CallOverride {
+                function: Some("register_sample_backend".into()),
+                ..Default::default()
+            },
+        );
+        e2e.calls.insert("register_sample_backend".into(), call);
+        let snippet_config = SnippetConfig {
+            output: "docs/snippets".into(),
+            ..SnippetConfig::default()
+        };
+        let crate_config = ResolvedCrateConfig {
+            trait_bridges: vec![crate::core::config::TraitBridgeConfig {
+                trait_name: "SampleBackend".into(),
+                register_fn: Some("register_sample_backend".into()),
+                ..Default::default()
+            }],
+            ..ResolvedCrateConfig::default()
+        };
+        let context = SnippetRenderContext {
+            e2e: &e2e,
+            crate_config: &crate_config,
+            type_defs: &[],
+            enums: &[],
+            functions: &[],
+        };
+
+        let report = generate_snippet_report_with_extensions(
+            &[fixture],
+            &["c".into(), "python".into()],
+            &snippet_config,
+            &context,
+            &[],
+        )
+        .expect("unsupported C recipe belongs in the coverage ledger");
+
+        assert_eq!(report.coverage.expected.len(), 2);
+        assert_eq!(report.coverage.generated.len(), 1);
+        assert_eq!(report.coverage.generated[0].language, "python");
+        assert_eq!(report.coverage.missing.len(), 1);
+        assert_eq!(report.coverage.missing[0].key.language, "c");
+        assert!(
+            report.coverage.missing[0]
+                .reason
+                .contains("concrete vtable implementation")
+        );
     }
 
     #[test]

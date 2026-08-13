@@ -359,7 +359,7 @@ fn render_c_snippet(
     type_defs: &[crate::core::ir::TypeDef],
     functions: &[crate::core::ir::FunctionDef],
 ) -> Result<String> {
-    let mut info = resolve_fixture_call_info(fixture, e2e_config, "c", functions);
+    let mut info = resolve_fixture_call_info(fixture, e2e_config, config, "c", functions);
     let call = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
         &fixture.id,
@@ -374,7 +374,7 @@ fn render_c_snippet(
         .or_else(|| config.ffi.as_ref().and_then(|value| value.prefix.clone()))
         .unwrap_or_else(|| config.ffi_prefix());
     if !prefix.is_empty() && !info.function_name.starts_with(&format!("{prefix}_")) {
-        info.function_name = format!("{prefix}_{}", info.function_name);
+        info.function_name = crate::codegen::naming::abi_symbol(&prefix, &info.function_name);
     }
     let header = call
         .overrides
@@ -520,6 +520,7 @@ fn resolve_ir_result_type(call: &CallConfig, functions: &[crate::core::ir::Funct
 fn resolve_fixture_call_info(
     fixture: &Fixture,
     e2e_config: &E2eConfig,
+    config: &ResolvedCrateConfig,
     lang: &str,
     functions: &[crate::core::ir::FunctionDef],
 ) -> ResolvedCallInfo {
@@ -531,6 +532,12 @@ fn resolve_fixture_call_info(
         &fixture.input,
     );
     let mut info = resolve_call_info(call, lang, functions);
+
+    if info.function_name.is_empty()
+        && let Some(identity) = crate::e2e::codegen::recipe::trait_bridge_function_identity(config, fixture)
+    {
+        info.function_name = identity.to_string();
+    }
 
     let default_overrides = e2e_config.call.overrides.get(lang);
 
@@ -627,7 +634,7 @@ fn render_test_file(
             );
         }
 
-        let call_info = resolve_fixture_call_info(fixture, e2e_config, lang, &[]);
+        let call_info = resolve_fixture_call_info(fixture, e2e_config, config, lang, &[]);
 
         // Effective enum fields for this fixture: merge global e2e_config.fields_enum
         // (HashSet) with the per-call C override's enum_fields (HashMap keys). This
@@ -744,6 +751,39 @@ mod snippet_tests {
         assert!(!rendered.contains("void test_"));
         assert!(!rendered.contains("assert("));
         assert!(rendered.contains("_free(result)"), "{rendered}");
+    }
+
+    #[test]
+    fn trait_bridge_operation_uses_declared_abi_identity() {
+        let fixture = Fixture {
+            id: "clear_sample_backends".into(),
+            description: "Clear registered sample backends".into(),
+            call: Some("clear_sample_backends".into()),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.calls.insert(
+            "clear_sample_backends".into(),
+            CallConfig {
+                returns_result: false,
+                returns_void: true,
+                ..CallConfig::default()
+            },
+        );
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            trait_bridges: vec![crate::core::config::TraitBridgeConfig {
+                trait_name: "SampleBackend".into(),
+                clear_fn: Some("clear_sample_backends".into()),
+                ..Default::default()
+            }],
+            ..ResolvedCrateConfig::default()
+        };
+
+        let rendered = render_c_snippet(&fixture, &e2e, &config, &[], &[]).expect("C snippet renders");
+
+        assert!(rendered.contains("sample_clear_sample_backends()"), "{rendered}");
+        assert!(!rendered.contains("has no function identity"), "{rendered}");
     }
 
     #[test]

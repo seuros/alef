@@ -2,7 +2,7 @@ use crate::e2e::fixture::Fixture;
 
 pub(super) fn extension_owned_recipe_kind(
     fixture: &Fixture,
-    resolved_args: &[crate::core::config::e2e::ArgMapping],
+    _resolved_args: &[crate::core::config::e2e::ArgMapping],
 ) -> Option<&'static str> {
     if fixture.http.is_some() {
         return Some("HTTP");
@@ -13,10 +13,7 @@ pub(super) fn extension_owned_recipe_kind(
     if fixture.websocket.is_some() {
         return Some("WebSocket");
     }
-    resolved_args
-        .iter()
-        .any(|argument| argument.arg_type == "test_backend")
-        .then_some("test-backend")
+    None
 }
 
 #[cfg(test)]
@@ -25,7 +22,7 @@ mod tests {
     use crate::core::config::e2e::ArgMapping;
 
     #[test]
-    fn test_backend_fixture_requires_public_extension_recipe() {
+    fn test_backend_fixture_uses_builtin_declarative_recipe() {
         let fixture = Fixture {
             id: "register_processor".into(),
             description: "Register a processor".into(),
@@ -43,10 +40,7 @@ mod tests {
             ..Fixture::default()
         };
 
-        assert_eq!(
-            extension_owned_recipe_kind(&fixture, &fixture.args),
-            Some("test-backend")
-        );
+        assert_eq!(extension_owned_recipe_kind(&fixture, &fixture.args), None);
     }
 
     #[test]
@@ -61,7 +55,7 @@ mod tests {
     }
 
     #[test]
-    fn call_level_test_backend_requires_public_extension_recipe() {
+    fn call_level_test_backend_uses_builtin_declarative_recipe() {
         let fixture = Fixture {
             id: "register_processor".into(),
             description: "Register a processor".into(),
@@ -79,6 +73,6 @@ mod tests {
             trait_name: Some("Processor".into()),
         }];
 
-        assert_eq!(extension_owned_recipe_kind(&fixture, &call_args), Some("test-backend"));
+        assert_eq!(extension_owned_recipe_kind(&fixture, &call_args), None);
     }
 }

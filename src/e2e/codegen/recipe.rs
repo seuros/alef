@@ -198,6 +198,24 @@ pub(crate) fn trait_bridge_options_type(config: &ResolvedCrateConfig) -> Option<
         .find_map(|bridge| bridge.options_type.as_deref())
 }
 
+/// ~keep Match only declared bridge operations; fixture ids must never become ABI symbols implicitly.
+pub(crate) fn trait_bridge_function_identity<'a>(
+    config: &'a ResolvedCrateConfig,
+    fixture: &Fixture,
+) -> Option<&'a str> {
+    let identity = fixture.call.as_deref()?;
+    config.trait_bridges.iter().find_map(|bridge| {
+        [
+            bridge.register_fn.as_deref(),
+            bridge.unregister_fn.as_deref(),
+            bridge.clear_fn.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|candidate| *candidate == identity)
+    })
+}
+
 /// Resolve the concrete stream item type for an e2e call.
 ///
 /// Explicit call recipe metadata wins. Otherwise infer from matching streaming
@@ -590,5 +608,47 @@ mod tests {
         assert!(excluded.contains("HiddenRecord"));
         assert!(excluded.contains("SecondaryTrait"));
         assert!(!excluded.contains("PublicOptions"));
+    }
+
+    #[test]
+    fn trait_bridge_function_identity_uses_declared_registry_operations() {
+        let config = ResolvedCrateConfig {
+            trait_bridges: vec![TraitBridgeConfig {
+                trait_name: "SampleBackend".to_string(),
+                register_fn: Some("register_sample_backend".to_string()),
+                unregister_fn: Some("unregister_sample_backend".to_string()),
+                clear_fn: Some("clear_sample_backends".to_string()),
+                ..TraitBridgeConfig::default()
+            }],
+            ..ResolvedCrateConfig::default()
+        };
+        let fixture = Fixture {
+            call: Some("clear_sample_backends".to_string()),
+            ..Fixture::default()
+        };
+
+        assert_eq!(
+            trait_bridge_function_identity(&config, &fixture),
+            Some("clear_sample_backends")
+        );
+    }
+
+    #[test]
+    fn trait_bridge_function_identity_does_not_infer_from_fixture_names() {
+        let config = ResolvedCrateConfig {
+            trait_bridges: vec![TraitBridgeConfig {
+                trait_name: "SampleBackend".to_string(),
+                clear_fn: Some("clear_sample_backends".to_string()),
+                ..TraitBridgeConfig::default()
+            }],
+            ..ResolvedCrateConfig::default()
+        };
+        let fixture = Fixture {
+            id: "clear_sample_backends".to_string(),
+            call: Some("different_operation".to_string()),
+            ..Fixture::default()
+        };
+
+        assert_eq!(trait_bridge_function_identity(&config, &fixture), None);
     }
 }
