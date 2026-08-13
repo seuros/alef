@@ -35,8 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **snippets**: fail E2E generation when an expected documentation snippet has no compatible built-in or
   extension recipe, including cached coverage manifests, instead of warning and crediting an incomplete corpus.
-- **snippets**: use pyrefly for Python snippet type-checking when available, matching scaffolded project tooling,
-  while retaining mypy as a compatible fallback with an explicit unavailable diagnostic.
+- **snippets**: use pyrefly as the sole built-in Python snippet type-checker, matching scaffolded project tooling and
+  reporting it explicitly when unavailable.
 
 ## [0.60.2] - 2026-08-12
 
