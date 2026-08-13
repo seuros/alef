@@ -273,23 +273,13 @@ pub fn c_param_type_with_paths_and_enums(
 pub fn c_return_type_with_paths(
     ty: &TypeRef,
     core_import: &str,
-    path_map: &AHashMap<String, String>,
+    _path_map: &AHashMap<String, String>,
 ) -> Cow<'static, str> {
     match ty {
-        TypeRef::Named(name) => {
-            let full_path = path_map
-                .get(name.as_str())
-                .map(|s| s.as_str())
-                .unwrap_or_else(|| name.as_str());
-            Cow::Owned(format!("*mut {full_path}"))
-        }
+        TypeRef::Named(_) => Cow::Borrowed("AlefHandle"),
         TypeRef::Optional(inner) => {
-            if let TypeRef::Named(name) = inner.as_ref() {
-                let inner_type = path_map
-                    .get(name.as_str())
-                    .map(|s| s.as_str())
-                    .unwrap_or_else(|| name.as_str());
-                Cow::Owned(format!("*mut {inner_type}"))
+            if matches!(inner.as_ref(), TypeRef::Named(_)) {
+                Cow::Borrowed("AlefHandle")
             } else {
                 c_return_type(ty, core_import)
             }
@@ -351,10 +341,7 @@ mod tests {
 
     #[test]
     fn test_param_named() {
-        assert_eq!(
-            c_param_type(&TypeRef::Named("MyType".to_string()), CORE),
-            "*const my_crate::MyType"
-        );
+        assert_eq!(c_param_type(&TypeRef::Named("MyType".to_string()), CORE), "AlefHandle");
     }
 
     #[test]
@@ -411,10 +398,7 @@ mod tests {
 
     #[test]
     fn test_return_named() {
-        assert_eq!(
-            c_return_type(&TypeRef::Named("MyType".to_string()), CORE),
-            "*mut my_crate::MyType"
-        );
+        assert_eq!(c_return_type(&TypeRef::Named("MyType".to_string()), CORE), "AlefHandle");
     }
 
     #[test]
@@ -440,7 +424,24 @@ mod tests {
     fn test_return_optional_named() {
         assert_eq!(
             c_return_type(&TypeRef::Optional(Box::new(TypeRef::Named("Foo".to_string()))), CORE),
-            "*mut my_crate::Foo"
+            "AlefHandle"
+        );
+    }
+
+    #[test]
+    fn test_return_named_with_paths_is_a_generational_handle() {
+        let path_map = ahash::AHashMap::from_iter([("Request".to_string(), "my_crate::nested::Request".to_string())]);
+        assert_eq!(
+            c_return_type_with_paths(&TypeRef::Named("Request".to_string()), CORE, &path_map),
+            "AlefHandle"
+        );
+        assert_eq!(
+            c_return_type_with_paths(
+                &TypeRef::Optional(Box::new(TypeRef::Named("Request".to_string()))),
+                CORE,
+                &path_map,
+            ),
+            "AlefHandle"
         );
     }
 
@@ -490,7 +491,7 @@ mod tests {
                 &enum_names,
                 false
             ),
-            "*const my_crate::RouteBuilder"
+            "AlefHandle"
         );
     }
 
@@ -506,7 +507,7 @@ mod tests {
                 &enum_names,
                 true
             ),
-            "*mut my_crate::ExtractionResult"
+            "AlefHandle"
         );
     }
 
@@ -522,7 +523,7 @@ mod tests {
                 &enum_names,
                 true
             ),
-            "*const my_crate::OperationOutput"
+            "AlefHandle"
         );
     }
 }

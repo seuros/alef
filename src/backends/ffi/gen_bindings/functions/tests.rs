@@ -1,5 +1,5 @@
 use crate::core::ir::{ParamDef, TypeRef};
-use ahash::AHashSet;
+use ahash::{AHashMap, AHashSet};
 
 use super::orchestration::gen_function_wrapper_footer;
 use super::params::gen_param_conversion_with_enums;
@@ -98,7 +98,16 @@ fn enum_param_local_name_uses_param_name_not_type_name() {
         core_wrapper: crate::core::ir::CoreWrapper::None,
     };
 
-    let output = gen_param_conversion_with_enums(&p, false, false, &TypeRef::Unit, None, "sample_crate", &enum_names);
+    let output = gen_param_conversion_with_enums(
+        &p,
+        false,
+        false,
+        &TypeRef::Unit,
+        None,
+        "sample_crate",
+        &AHashMap::new(),
+        &enum_names,
+    );
 
     assert!(
         output.contains("let strategy_rs ="),

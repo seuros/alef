@@ -671,8 +671,8 @@ type = "*const std::ffi::c_char"
         "should include typed param in signature"
     );
     assert!(
-        lib.content.contains("-> *mut my_lib::DefaultClient"),
-        "should return *mut TypeName"
+        lib.content.contains("-> AlefHandle"),
+        "should return a generational handle"
     );
     assert!(
         lib.content.contains("clear_last_error"),
@@ -683,8 +683,8 @@ type = "*const std::ffi::c_char"
         "should call set_last_error on Err path"
     );
     assert!(
-        lib.content.contains("Box::into_raw(Box::new(val))"),
-        "should box the value on Ok path"
+        lib.content.contains("insert_handle(val)"),
+        "should register the value on the Ok path"
     );
 }
 

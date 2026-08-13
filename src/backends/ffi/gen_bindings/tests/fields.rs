@@ -189,13 +189,14 @@ fn test_named_field_non_clone_does_not_return_borrow_as_owned() {
     let files = backend.generate_bindings(&api, &config).unwrap();
     let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
 
+    let accessor = lib.content.split("fn my_lib_holder_inner").nth(1).expect("field accessor");
     assert!(
-        !lib.content.contains(".clone()"),
+        !accessor.contains(".clone()"),
         "non-Clone opaque Named field must not emit .clone() in accessor:\n{}",
         lib.content
     );
-    assert!(lib.content.contains("std::ptr::null_mut()"));
-    assert!(!lib.content.contains("as *const _ as *mut _"));
+    assert!(accessor.contains("return 0;"));
+    assert!(!accessor.contains("as *const _ as *mut _"));
 }
 
 /// Clone-capable Named-type fields must still emit `.clone()` in the accessor.

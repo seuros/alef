@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **ffi**: return named values as generational handle tokens and resolve nested Rust type paths without duplicating
+  the core module.
 - **clean**: use the generated Kotlin Android Gradle wrapper and avoid invalid generic Dart and C# clean commands.
 - **e2e**: keep ordinary generation from writing a fixture schema before validation succeeds.
 - **snippets/docs**: emit reader-facing, fail-closed examples, recognize Astro content-collection references, and

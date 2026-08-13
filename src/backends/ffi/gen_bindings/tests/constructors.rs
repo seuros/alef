@@ -226,7 +226,7 @@ fn test_opaque_constructor_marshals_enum_from_i32() {
 }
 
 #[test]
-fn test_opaque_constructor_returns_mut_opaque_pointer() {
+fn test_opaque_constructor_returns_generational_handle() {
     let api = opaque_with_constructor_api();
     let config = sample_config();
     let backend = FfiBackend;
@@ -234,13 +234,10 @@ fn test_opaque_constructor_returns_mut_opaque_pointer() {
     let files = backend.generate_bindings(&api, &config).unwrap();
     let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
 
-    let has_mut_return = lib
-        .content
-        .lines()
-        .any(|line| line.contains("-> *mut") && line.contains("RouteBuilder") && !line.contains("RouteBuilderOpaque"));
+    let has_handle_return = lib.content.lines().any(|line| line.contains(") -> AlefHandle"));
     assert!(
-        has_mut_return,
-        "constructor should return *mut <core>::RouteBuilder (not a wrapper); got:\n{}",
+        has_handle_return,
+        "constructor should return a generational handle; got:\n{}",
         lib.content
     );
 }
@@ -376,7 +373,7 @@ fn test_named_static_constructor_does_not_emit_new_symbol() {
 
 /// A fallible named constructor (`error_type` set) must clear the thread-local
 /// error state at entry (`clear_last_error`) and propagate errors by calling
-/// `set_last_error` + returning null rather than panicking.
+/// `set_last_error` + returning a zero handle rather than panicking.
 #[test]
 fn test_named_static_constructor_is_fallible() {
     let api = opaque_with_named_constructor_api();
@@ -397,8 +394,8 @@ fn test_named_static_constructor_is_fallible() {
         lib.content
     );
     assert!(
-        lib.content.contains("std::ptr::null_mut()"),
-        "fallible constructor must return null_mut() on error; got:\n{}",
+        lib.content.contains("Err(e) =>") && lib.content.contains("set_last_error(1, &e.to_string());\n            0"),
+        "fallible constructor must return a zero handle on error; got:\n{}",
         lib.content
     );
 }

@@ -1,6 +1,6 @@
 use crate::backends::ffi::type_map::is_void_return;
 use crate::core::ir::{ParamDef, TypeRef};
-use ahash::AHashSet;
+use ahash::{AHashMap, AHashSet};
 use minijinja::context;
 
 use super::super::helpers::ffi_null_return_value;
@@ -47,6 +47,7 @@ pub(super) fn gen_param_conversion_with_enums(
     return_type: &TypeRef,
     ffi_return_type: Option<&str>,
     core_import: &str,
+    path_map: &AHashMap<String, String>,
     enum_names: &AHashSet<String>,
 ) -> String {
     let name = &param.name;
@@ -122,7 +123,7 @@ pub(super) fn gen_param_conversion_with_enums(
                         rs_name => rs_name.clone(),
                         name => name.clone(),
                         is_ref => param.is_ref,
-                        qualified => format!("{core_import}::{type_name}"),
+                        qualified => path_map.get(type_name).filter(|path| !path.is_empty()).cloned().unwrap_or_else(|| format!("{core_import}::{type_name}")),
                         fail_ret => fail_ret.to_string(),
                     },
                 ));
@@ -137,7 +138,7 @@ pub(super) fn gen_param_conversion_with_enums(
                         rs_name => rs_name.clone(),
                         name => name.clone(),
                         is_ref => param.is_ref,
-                        qualified => format!("{core_import}::{type_name}"),
+                        qualified => path_map.get(type_name).filter(|path| !path.is_empty()).cloned().unwrap_or_else(|| format!("{core_import}::{type_name}")),
                         fail_ret => fail_ret.to_string(),
                     },
                 ));
@@ -310,7 +311,7 @@ pub(super) fn gen_param_conversion_with_enums(
                         fail_ret => fail_ret.to_string(),
                         is_ref => param.is_ref,
                         is_mut => param.is_mut,
-                        qualified => format!("{core_import}::{type_name}"),
+                        qualified => path_map.get(type_name).filter(|path| !path.is_empty()).cloned().unwrap_or_else(|| format!("{core_import}::{type_name}")),
                     },
                 ));
             }

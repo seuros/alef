@@ -23,6 +23,14 @@ fn named_handle_type(ty: &TypeRef) -> Option<&str> {
     }
 }
 
+fn named_type_path(type_name: &str, core_import: &str, path_map: &AHashMap<String, String>) -> String {
+    path_map
+        .get(type_name)
+        .filter(|path| !path.is_empty())
+        .cloned()
+        .unwrap_or_else(|| format!("{core_import}::{type_name}"))
+}
+
 pub(in crate::backends::ffi::gen_bindings) fn gen_streaming_method_wrapper(
     typ: &TypeDef,
     method: &MethodDef,
@@ -224,8 +232,9 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
             continue;
         }
         let request = format!(
-            "__alef_requests.push(HandleRequest {{ handle: {}, expected_type: std::any::TypeId::of::<{core_import}::{type_name}>() }});",
-            parameter.name
+            "__alef_requests.push(HandleRequest {{ handle: {}, expected_type: std::any::TypeId::of::<{}>() }});",
+            parameter.name,
+            named_type_path(type_name, core_import, path_map)
         );
         if parameter.optional {
             handle_requests.push(format!("    if {} != 0 {{ {request} }}", parameter.name));
@@ -276,6 +285,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
                     &method.return_type,
                     return_type.as_deref(),
                     core_import,
+                    path_map,
                     enum_names,
                 ),
             },
@@ -712,8 +722,9 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
             continue;
         }
         let request = format!(
-            "__alef_requests.push(HandleRequest {{ handle: {}, expected_type: std::any::TypeId::of::<{core_import}::{type_name}>() }});",
-            parameter.name
+            "__alef_requests.push(HandleRequest {{ handle: {}, expected_type: std::any::TypeId::of::<{}>() }});",
+            parameter.name,
+            named_type_path(type_name, core_import, path_map)
         );
         if parameter.optional {
             handle_requests.push(format!("    if {} != 0 {{ {request} }}", parameter.name));
@@ -743,6 +754,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
                     &func.return_type,
                     return_type.as_deref(),
                     core_import,
+                    path_map,
                     enum_names,
                 ),
             },
