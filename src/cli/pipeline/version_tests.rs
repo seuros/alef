@@ -17,6 +17,8 @@ mod basic;
 mod e2e_manifests;
 #[path = "version_tests/manifests.rs"]
 mod manifests;
+#[path = "version_tests/readme_regen.rs"]
+mod readme_regen;
 #[path = "version_tests/swift_checksum.rs"]
 mod swift_checksum;
 #[path = "version_tests/swift_placeholder.rs"]

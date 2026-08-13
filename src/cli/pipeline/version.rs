@@ -747,17 +747,19 @@ pub fn sync_versions(
         }
     }
 
-    info!("Regenerating READMEs with updated version");
-    match regenerate_readmes(config, config_path) {
-        Ok(count) => {
-            if count > 0 {
-                info!("  Regenerated {count} README(s)");
-            } else {
-                debug!("  No READMEs updated");
+    if !no_regen {
+        info!("Regenerating READMEs with updated version");
+        match regenerate_readmes(config, config_path) {
+            Ok(count) => {
+                if count > 0 {
+                    info!("  Regenerated {count} README(s)");
+                } else {
+                    debug!("  No READMEs updated");
+                }
             }
-        }
-        Err(e) => {
-            warn!("Could not regenerate READMEs: {e}");
+            Err(e) => {
+                warn!("Could not regenerate READMEs: {e}");
+            }
         }
     }
 
