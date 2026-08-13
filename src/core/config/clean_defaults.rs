@@ -56,9 +56,9 @@ pub(crate) fn default_clean_config(lang: Language, output_dir: &str, _ctx: &Lang
             ))),
         },
         Language::Csharp => CleanConfig {
-            precondition: Some(require_tool("dotnet")),
+            precondition: None,
             before: None,
-            clean: Some(StringOrVec::Single(format!("dotnet clean {output_dir}"))),
+            clean: None,
         },
         Language::Elixir => CleanConfig {
             precondition: Some(require_tool("mix")),
@@ -79,10 +79,15 @@ pub(crate) fn default_clean_config(lang: Language, output_dir: &str, _ctx: &Lang
             before: None,
             clean: None,
         },
-        Language::Kotlin | Language::KotlinAndroid => CleanConfig {
+        Language::Kotlin => CleanConfig {
             precondition: Some(require_tool("gradle")),
             before: None,
-            clean: Some(StringOrVec::Single("gradle clean".to_string())),
+            clean: Some(StringOrVec::Single(format!("cd {output_dir} && gradle clean"))),
+        },
+        Language::KotlinAndroid => CleanConfig {
+            precondition: Some(format!("test -x {output_dir}/gradlew")),
+            before: None,
+            clean: Some(StringOrVec::Single(format!("cd {output_dir} && ./gradlew clean"))),
         },
         Language::Swift => CleanConfig {
             precondition: Some(require_tool("swift")),
@@ -90,9 +95,9 @@ pub(crate) fn default_clean_config(lang: Language, output_dir: &str, _ctx: &Lang
             clean: Some(StringOrVec::Single("swift package clean".to_string())),
         },
         Language::Dart => CleanConfig {
-            precondition: Some(require_tool("dart")),
+            precondition: None,
             before: None,
-            clean: Some(StringOrVec::Single("dart clean".to_string())),
+            clean: None,
         },
         Language::Zig => CleanConfig {
             precondition: None,
@@ -157,9 +162,9 @@ mod tests {
     }
 
     #[test]
-    fn non_ffi_languages_have_clean_command() {
+    fn languages_with_project_agnostic_cleaning_have_defaults() {
         for lang in all_languages() {
-            if matches!(lang, Language::Ffi) {
+            if matches!(lang, Language::Ffi | Language::Csharp | Language::Dart) {
                 continue;
             }
             let c = cfg(lang, "packages/test");
@@ -173,7 +178,6 @@ mod tests {
             Language::Rust,
             Language::Go,
             Language::Java,
-            Language::Csharp,
             Language::Elixir,
         ] {
             let c = cfg(lang, "packages/test");
@@ -252,10 +256,28 @@ mod tests {
     }
 
     #[test]
-    fn csharp_uses_dotnet_clean() {
+    fn csharp_requires_an_explicit_project_aware_clean_command() {
         let c = cfg(Language::Csharp, "packages/csharp");
-        let clean = c.clean.unwrap().commands().join(" ");
-        assert!(clean.contains("dotnet clean"));
+        assert!(c.clean.is_none());
+    }
+
+    #[test]
+    fn kotlin_android_uses_its_generated_gradle_wrapper() {
+        let c = cfg(Language::KotlinAndroid, "packages/kotlin-android");
+        assert_eq!(
+            c.precondition.as_deref(),
+            Some("test -x packages/kotlin-android/gradlew")
+        );
+        assert_eq!(
+            c.clean.unwrap().commands(),
+            vec!["cd packages/kotlin-android && ./gradlew clean"]
+        );
+    }
+
+    #[test]
+    fn dart_requires_an_explicit_project_aware_clean_command() {
+        let c = cfg(Language::Dart, "packages/dart/lib/src");
+        assert!(c.clean.is_none());
     }
 
     #[test]

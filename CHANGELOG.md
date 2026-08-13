@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **clean**: use the generated Kotlin Android Gradle wrapper and avoid invalid generic Dart and C# clean commands.
 - **snippets/docs**: emit reader-facing, fail-closed examples, recognize Astro content-collection references, and
   allow per-language README snippet roots.
 - **sync-versions**: preserve README content unless regeneration is explicitly requested with `--regen`.
