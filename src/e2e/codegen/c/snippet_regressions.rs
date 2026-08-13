@@ -15,7 +15,7 @@ fn json_arg(name: &str, field: &str, element_type: &str) -> crate::e2e::config::
     }
 }
 
-fn compile_snippet(rendered: &str, header: &str) {
+pub(super) fn compile_snippet(rendered: &str, header: &str) {
     let Some(compiler) = ["cc", "clang", "gcc"]
         .into_iter()
         .find(|candidate| which::which(candidate).is_ok())

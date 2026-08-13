@@ -1,0 +1,62 @@
+#include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "{{ header }}"
+
+typedef struct SampleContext {
+    int released;
+} SampleContext;
+
+static char *sample_copy_string(const char *value) {
+    size_t length = strlen(value) + 1;
+    char *copy = malloc(length);
+    if (copy != NULL) {
+        memcpy(copy, value, length);
+    }
+    return copy;
+}
+
+static void sample_release_callback_string(char *value) {
+    free(value);
+}
+
+static void sample_free_context(void *user_data) {
+    SampleContext *context = user_data;
+    if (context != NULL) {
+        context->released = 1;
+        free(context);
+    }
+}
+
+{% for callback in callbacks %}
+static {{ callback.return_type }} {{ callback.name }}({{ callback.params }}) {
+{% for initializer in callback.initializers %}    {{ initializer }}
+{% endfor %}    {{ callback.return_value | replace("\n", "\n    ") }}
+}
+
+{% endfor %}
+int main(void) {
+    SampleContext *context = calloc(1, sizeof(*context));
+    if (context == NULL) {
+        return EXIT_FAILURE;
+    }
+    {{ vtable_type }} vtable = {
+{% for callback in callbacks %}        .{{ callback.field }} = {{ callback.name }},
+{% endfor %}        .free_string = sample_release_callback_string,
+        .free_user_data = sample_free_context,
+    };
+    char *error = NULL;
+    int32_t status = {{ register_symbol }}("test-backend", &vtable, context, &error);
+    if (status != 0) {
+        {{ free_string_symbol }}(error);
+        return EXIT_FAILURE;
+    }
+{% if unregister_symbol %}    status = {{ unregister_symbol }}("test-backend", &error);
+    if (status != 0) {
+        {{ free_string_symbol }}(error);
+        return EXIT_FAILURE;
+    }
+{% endif %}    return EXIT_SUCCESS;
+}

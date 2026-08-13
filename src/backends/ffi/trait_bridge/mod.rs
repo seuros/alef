@@ -74,7 +74,7 @@ impl FfiBridgeGenerator {
     /// String params become `*const std::ffi::c_char`.
     /// Named/complex params become JSON-encoded `*const std::ffi::c_char`.
     /// Primitives map directly.
-    pub(super) fn c_param_type(ty: &TypeRef) -> String {
+    pub(crate) fn c_param_type(ty: &TypeRef) -> String {
         match ty {
             TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json => "*const std::ffi::c_char".to_string(),
             TypeRef::Bytes => "*const u8".to_string(),
@@ -94,7 +94,7 @@ impl FfiBridgeGenerator {
     /// Returns:
     /// - A list of additional out-parameters to append to the function signature.
     /// - The C return type (`i32` for fallible, or the direct primitive for infallible simple types).
-    pub(super) fn c_return_convention(ty: &TypeRef, has_error: bool) -> (Vec<String>, String) {
+    pub(crate) fn c_return_convention(ty: &TypeRef, has_error: bool) -> (Vec<String>, String) {
         let needs_out_error = matches!(
             ty,
             TypeRef::Named(_) | TypeRef::Vec(_) | TypeRef::Map(_, _) | TypeRef::String | TypeRef::Json

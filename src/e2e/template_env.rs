@@ -51,6 +51,10 @@ static TEMPLATES: &[(&str, &str)] = &[
     ),
     ("c/snippet_body.jinja", include_str!("templates/c/snippet_body.jinja")),
     (
+        "c/trait_bridge_snippet.jinja",
+        include_str!("templates/c/trait_bridge_snippet.jinja"),
+    ),
+    (
         "c/test_skip_if_env_missing.jinja",
         include_str!("templates/c/test_skip_if_env_missing.jinja"),
     ),

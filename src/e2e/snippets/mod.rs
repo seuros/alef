@@ -375,14 +375,6 @@ fn render_snippet_body(
         &fixture.tags,
         &fixture.input,
     );
-    if matches!(language, "c" | "c_ffi" | "ffi")
-        && fixture
-            .resolved_args(call)
-            .iter()
-            .any(|argument| argument.arg_type == "test_backend")
-    {
-        bail!("built-in C trait-bridge snippet recipe requires a concrete vtable implementation");
-    }
     if let Some(kind) = recipe_policy::extension_owned_recipe_kind(fixture, fixture.resolved_args(call)) {
         bail!("{kind} fixture requires an extension-owned documentation recipe");
     }
@@ -901,7 +893,7 @@ mod tests {
     }
 
     #[test]
-    fn c_trait_bridge_without_vtable_recipe_remains_missing() {
+    fn c_trait_bridge_vtable_recipe_counts_as_generated() {
         let mut fixture = documented_fixture();
         fixture.call = Some("register_sample_backend".into());
         fixture.args = vec![crate::core::config::e2e::ArgMapping {
@@ -937,10 +929,15 @@ mod tests {
             }],
             ..ResolvedCrateConfig::default()
         };
+        let type_defs = [TypeDef {
+            name: "SampleBackend".into(),
+            is_trait: true,
+            ..TypeDef::default()
+        }];
         let context = SnippetRenderContext {
             e2e: &e2e,
             crate_config: &crate_config,
-            type_defs: &[],
+            type_defs: &type_defs,
             enums: &[],
             functions: &[],
         };
@@ -955,15 +952,15 @@ mod tests {
         .expect("unsupported C recipe belongs in the coverage ledger");
 
         assert_eq!(report.coverage.expected.len(), 2);
-        assert_eq!(report.coverage.generated.len(), 1);
-        assert_eq!(report.coverage.generated[0].language, "python");
-        assert_eq!(report.coverage.missing.len(), 1);
-        assert_eq!(report.coverage.missing[0].key.language, "c");
-        assert!(
-            report.coverage.missing[0]
-                .reason
-                .contains("concrete vtable implementation")
-        );
+        assert_eq!(report.coverage.generated.len(), 2);
+        assert!(report.coverage.missing.is_empty());
+        let c = report
+            .snippets
+            .iter()
+            .find(|snippet| snippet.language == "c")
+            .expect("C trait bridge snippet");
+        assert!(c.file.content.contains("register_sample_backend"));
+        assert!(c.file.content.contains(".free_user_data = sample_free_context"));
     }
 
     #[test]

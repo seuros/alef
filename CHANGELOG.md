@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **snippets**: use built-in language recipes for declarative trait-bridge fixtures and resolve C registry operations
   from configured bridge identities through canonical ABI naming.
+- **snippets/c**: generate compilable trait-bridge examples with IR-derived callbacks, initialized vtables, canonical
+  registration calls, and owned userdata cleanup.
 - **e2e/rust**: emit Clippy-clean mock-server route loading.
 - **ffi**: return named values as generational handle tokens and resolve nested Rust type paths without duplicating
   the core module.

@@ -49,6 +49,13 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
     if fixture.visitor.is_some() {
         return super::visitor::render_visitor_snippet(fixture, header, prefix, e2e_config, config);
     }
+    if fixture
+        .resolved_args(call)
+        .iter()
+        .any(|argument| argument.arg_type == "test_backend")
+    {
+        return super::trait_bridge_snippet::render(fixture, header, prefix, config, type_defs);
+    }
     if info.returns_void {
         let args = if info.args.is_empty() {
             String::new()

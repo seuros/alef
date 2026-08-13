@@ -586,6 +586,7 @@ mod runner;
 mod snippet_regressions;
 mod streaming;
 mod test_function;
+mod trait_bridge_snippet;
 mod visitor;
 
 use assertions::{build_args_string_c, emit_nested_accessor, render_assertion};
@@ -717,11 +718,11 @@ fn json_to_c(value: &serde_json::Value) -> String {
 
 /// Emit a test backend stub.
 pub fn emit_test_backend(
-    _trait_bridge: &crate::core::config::TraitBridgeConfig,
-    _methods: &[&crate::core::ir::MethodDef],
-    _fixture: &crate::e2e::fixture::Fixture,
+    trait_bridge: &crate::core::config::TraitBridgeConfig,
+    methods: &[&crate::core::ir::MethodDef],
+    fixture: &crate::e2e::fixture::Fixture,
 ) -> super::TestBackendEmission {
-    super::TestBackendEmission::unimplemented("c")
+    trait_bridge_snippet::emit_test_backend(trait_bridge, methods, fixture)
 }
 
 #[cfg(test)]
