@@ -4,7 +4,7 @@ use super::{
 };
 use crate::core::backend::Backend;
 use crate::core::config::{BridgeBinding, NewAlefConfig, ResolvedCrateConfig, TraitBridgeConfig};
-use crate::core::ir::{ApiSurface, FieldDef, MethodDef, PrimitiveType, ReceiverKind, TypeDef, TypeRef};
+use crate::core::ir::{ApiSurface, FieldDef, MethodDef, ParamDef, PrimitiveType, ReceiverKind, TypeDef, TypeRef};
 
 fn empty_api() -> ApiSurface {
     ApiSurface {
@@ -599,6 +599,47 @@ fn generated_lib_rs_has_reverse_impl_for_return_only_delegating_type() {
         lib_rs.contains("test_lib::PageRange::from(self.clone()).page_count()"),
         "expected the self-delegation call the reverse impl above exists to support:\n{lib_rs}"
     );
+}
+
+#[test]
+fn instance_method_with_borrowed_named_input_delegates_to_core() {
+    let method = MethodDef {
+        name: "evaluate".to_string(),
+        params: vec![ParamDef {
+            name: "options".to_string(),
+            ty: TypeRef::Named("Options".to_string()),
+            is_ref: true,
+            ..Default::default()
+        }],
+        return_type: TypeRef::Primitive(PrimitiveType::Bool),
+        error_type: Some("EvaluationError".to_string()),
+        receiver: Some(ReceiverKind::Ref),
+        ..Default::default()
+    };
+    let typ = TypeDef {
+        name: "Evaluator".to_string(),
+        methods: vec![method.clone()],
+        ..Default::default()
+    };
+    let mapper = crate::backends::wasm::type_map::WasmMapper::new(Default::default(), "Wasm".to_string());
+    let output = super::methods::gen_method(
+        &method,
+        &mapper,
+        "Evaluator",
+        "sample_core",
+        &Default::default(),
+        "Wasm",
+        &typ,
+        &Default::default(),
+        &Default::default(),
+    );
+
+    assert!(output.contains("let options_core: sample_core::Options"), "{output}");
+    assert!(
+        output.contains("sample_core::Evaluator::from(self.clone()).evaluate(&options_core)"),
+        "{output}"
+    );
+    assert!(!output.contains("Not implemented"), "{output}");
 }
 
 /// Regression test for a wasm-only E0282: a field whose Rust type is a payload-carrying enum

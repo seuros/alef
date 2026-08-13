@@ -66,6 +66,7 @@ fn gen_env_shims_emits_expected_signatures_for_all_supported_names() {
 
     let out = gen_env_shims(&names);
 
+    assert!(out.contains("#[cfg(target_arch = \"wasm32\")]"), "{out}");
     assert_eq!(out.matches("#[unsafe(no_mangle)]").count(), names.len(), "{out}");
 
     for name in ["iswspace", "iswalnum", "iswalpha", "iswlower", "iswupper", "iswxdigit"] {

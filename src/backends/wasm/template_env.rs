@@ -45,6 +45,7 @@ static TEMPLATES: &[(&str, &str)] = &[
     ("gen_static_method", include_str!("templates/gen_static_method.jinja")),
     ("gen_result_body", include_str!("templates/gen_result_body.jinja")),
     ("gen_direct_body", include_str!("templates/gen_direct_body.jinja")),
+    ("env_shims", include_str!("templates/env_shims.jinja")),
     (
         "gen_unit_result_body",
         include_str!("templates/gen_unit_result_body.jinja"),

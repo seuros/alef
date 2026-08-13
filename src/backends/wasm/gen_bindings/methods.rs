@@ -29,7 +29,7 @@ pub(super) fn gen_method(
 
     let is_ref_mut_receiver = matches!(method.receiver.as_ref(), Some(crate::core::ir::ReceiverKind::RefMut));
 
-    let can_delegate_base = shared::can_auto_delegate(method, opaque_types);
+    let can_delegate_base = shared::can_auto_delegate_with_named_let_bindings(method, opaque_types);
     let can_delegate = if is_ref_mut_receiver && has_mut_methods {
         !method.sanitized
             && method
