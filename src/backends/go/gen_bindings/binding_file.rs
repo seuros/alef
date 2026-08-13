@@ -207,7 +207,7 @@ pub(super) fn gen_go_file(
 
     let mut body = String::with_capacity(8192);
 
-    body.push_str(&gen_last_error_helper(ffi_prefix));
+    body.push_str(&gen_last_error_helper(api, ffi_prefix));
     body.push_str("\n\n");
 
     body.push_str(&gen_unmarshal_bytes_helper());

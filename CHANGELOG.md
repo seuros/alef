@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **go/zig**: map native failures to typed binding errors by stable numeric FFI taxonomy codes instead of parsing
+  human-readable error messages.
 - **ffi**: report stable, collision-checked per-variant error taxonomy codes while preserving reserved conversion and
   panic codes.
 - **JNI/Kotlin Android**: transfer configured capsule values as their raw host pointers instead of boxed Rust

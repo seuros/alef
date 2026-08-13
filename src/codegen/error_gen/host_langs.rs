@@ -55,6 +55,20 @@ pub fn gen_go_sentinel_errors(errors: &[ErrorDef]) -> String {
     )
 }
 
+pub fn go_error_sentinel_name(errors: &[ErrorDef], error_name: &str, variant_name: &str) -> String {
+    let collides = errors
+        .iter()
+        .flat_map(|error| &error.variants)
+        .filter(|variant| variant.name == variant_name)
+        .count()
+        > 1;
+    if collides {
+        format!("Err{}{}", error_base_prefix(error_name), variant_name)
+    } else {
+        format!("Err{variant_name}")
+    }
+}
+
 /// Generate the structured error type (struct + Error() method) for a single
 /// error definition. Sentinel errors are emitted separately by
 /// [`gen_go_sentinel_errors`].

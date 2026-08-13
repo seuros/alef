@@ -6,6 +6,7 @@ mod shared;
 
 pub use host_langs::{
     gen_csharp_error_types, gen_go_error_struct, gen_go_error_types, gen_go_sentinel_errors, gen_java_error_types,
+    go_error_sentinel_name,
 };
 pub use napi_wasm::{
     gen_napi_error_class, gen_napi_error_converter, gen_napi_error_types, gen_wasm_error_converter,

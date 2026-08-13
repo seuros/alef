@@ -84,8 +84,6 @@ pub(crate) fn emit_error_set(error: &ErrorDef, out: &mut String) {
         ));
     }
     out.push_str("};\n");
-
-    emit_from_ffi_msg_fn(error, out);
 }
 
 /// Emit `_from_ffi_msg_<ErrorName>(msg: ?[]const u8) <ErrorName>` — a helper

@@ -151,8 +151,7 @@ impl Backend for ZigBackend {
         ));
         content.push('\n');
 
-        let declared_error_names: Vec<String> = api.errors.iter().map(|e| e.name.clone()).collect();
-        emit_helpers(&prefix, &declared_error_names, &mut content);
+        emit_helpers(&prefix, &api.errors, &api.error_taxonomy(), &mut content);
         content.push('\n');
 
         for bridge in &config.trait_bridges {

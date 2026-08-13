@@ -61,13 +61,68 @@ pub(in crate::backends::go::gen_bindings) fn gen_ptr_helper() -> String {
 }
 
 /// Generate the lastError() helper function.
-pub(in crate::backends::go::gen_bindings) fn gen_last_error_helper(ffi_prefix: &str) -> String {
+pub(in crate::backends::go::gen_bindings) fn gen_last_error_helper(
+    api: &crate::core::ir::ApiSurface,
+    ffi_prefix: &str,
+) -> String {
+    let taxonomy = api.error_taxonomy();
+    let error_codes: Vec<_> = taxonomy
+        .iter()
+        .map(|entry| {
+            let error = api
+                .errors
+                .iter()
+                .find(|error| error.rust_path == entry.error_type)
+                .unwrap();
+            (
+                entry.code,
+                crate::codegen::error_gen::go_error_sentinel_name(&api.errors, &error.name, &entry.variant),
+            )
+        })
+        .collect();
     crate::backends::go::template_env::render(
         "last_error_helper.jinja",
         context! {
             ffi_prefix => ffi_prefix,
+            error_codes => error_codes,
         },
     )
+}
+
+#[cfg(test)]
+mod last_error_tests {
+    use super::*;
+    use crate::core::ir::{ErrorDef, ErrorVariant};
+
+    #[test]
+    fn typed_errors_dispatch_by_numeric_taxonomy_code() {
+        let error = ErrorDef {
+            name: "RequestError".to_string(),
+            rust_path: "sample::RequestError".to_string(),
+            variants: vec![ErrorVariant {
+                name: "InvalidInput".to_string(),
+                is_unit: true,
+                ..Default::default()
+            }],
+            original_rust_path: String::new(),
+            doc: String::new(),
+            methods: Vec::new(),
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        };
+        let api = crate::core::ir::ApiSurface {
+            errors: vec![error],
+            ..Default::default()
+        };
+        let code = api.error_taxonomy()[0].code;
+
+        let helper = gen_last_error_helper(&api, "sample");
+
+        assert!(helper.contains(&format!("case {code}:")));
+        assert!(helper.contains("return ErrInvalidInput"));
+        assert!(helper.contains("fmt.Errorf(\"[%d] %s\", code, message)"));
+    }
 }
 
 /// Emit Go-convention doc comment lines for an exported symbol into `out`.

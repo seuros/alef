@@ -4,6 +4,14 @@ func lastError() error {
 	if code == 0 {
 		return nil
 	}
+{% if error_codes %}
+	switch code {
+{% for error_code in error_codes %}
+	case {{ error_code.0 }}:
+		return {{ error_code.1 }}
+{% endfor %}
+	}
+{% endif %}
 	ctx := C.{{ ffi_prefix }}_last_error_context()
 	if ctx == nil {
 		return fmt.Errorf("[%d] native error", code)
