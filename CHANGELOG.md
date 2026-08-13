@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **csharp**: emit formatter-stable imports, native calls, and sealed-union converters that pass `dotnet format`.
+- **zig**: keep generated bindings silent, validate nullable native returns before dereference, and release owned native
+  buffers even when Zig allocation fails.
 - **node/python**: attach stable numeric taxonomy codes to generated native error conversions while preserving typed
   Python exception classes and generic fallbacks.
 - **java**: emit native-library required symbols one per line so generated bindings satisfy Checkstyle line limits.
@@ -3277,5 +3279,3 @@ could actually install.
 Early development history (592 releases through 0.28.1) has been trimmed to keep
 this file small. The full per-version changelog is preserved in the git tags and
 GitHub releases: <https://github.com/xberg-io/alef/releases>
-- **zig**: keep generated bindings silent, validate nullable native returns before dereference, and release owned native
-  buffers even when Zig allocation fails.
