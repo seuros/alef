@@ -382,6 +382,25 @@ fn test_extract_skip_attribute_on_bare_alef_impl_block_drops_all_methods() {
 }
 
 #[test]
+fn test_type_level_skip_drops_inherent_impl_methods() {
+    let source = r#"
+        #[alef(skip)]
+        pub struct InternalLayer<T> {
+            pub value: T,
+        }
+
+        impl<T> InternalLayer<T> {
+            pub fn into_value(self) -> T { self.value }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+
+    assert!(surface.types.iter().all(|typ| typ.name != "InternalLayer"));
+    assert!(surface.unsupported_public_items.is_empty());
+}
+
+#[test]
 fn test_disambiguation_pass_runs_on_full_extract() {
     let dir = tempfile::tempdir().expect("tempdir");
     let lib_rs = dir.path().join("lib.rs");

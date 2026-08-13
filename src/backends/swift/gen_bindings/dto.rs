@@ -408,7 +408,7 @@ pub(super) fn swift_typed_default_literal(dv: &DefaultValue) -> Option<String> {
             Some(escaped)
         }
         DefaultValue::EnumVariant(_) => None,
-        DefaultValue::Empty | DefaultValue::None => None,
+        DefaultValue::Empty | DefaultValue::None | DefaultValue::FunctionCall(_) => None,
     }
 }
 

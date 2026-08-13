@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 
 use super::items::{EnumDef, ErrorDef, FunctionDef, TypeDef};
+use super::metadata::ErrorTaxonomy;
 use super::service::{HandlerContractDef, ServiceDef};
 
 /// Returns `true` when the `#[cfg(...)]` condition string is satisfied by the
@@ -152,6 +153,17 @@ pub struct ApiSurface {
 }
 
 impl ApiSurface {
+    /// Returns deterministic, collision-free taxonomy metadata for every error variant. ~keep
+    pub fn error_taxonomy(&self) -> Vec<ErrorTaxonomy> {
+        let mut taxonomy: Vec<_> = self
+            .errors
+            .iter()
+            .flat_map(|error| error.variants.iter().map(|variant| variant.taxonomy(&error.rust_path)))
+            .collect();
+        ErrorTaxonomy::ensure_unique_codes(&mut taxonomy);
+        taxonomy
+    }
+
     /// Returns a clone of this surface with same-named cfg-variant functions collapsed to one.
     ///
     /// Single-surface backends (Java, C#, Go, Kotlin, Swift, Dart, PHP, Ruby, Elixir, R/extendr)

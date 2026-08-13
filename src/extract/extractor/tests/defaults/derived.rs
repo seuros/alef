@@ -45,6 +45,26 @@ fn test_struct_without_default() {
 }
 
 #[test]
+fn test_serde_function_default_preserves_runtime_provider() {
+    let source = r#"
+        pub struct RetryPolicy {
+            #[serde(default = "defaults::retry_limit")]
+            pub limit: u32,
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let limit = &surface.types[0].fields[0];
+
+    assert_eq!(
+        limit.typed_default,
+        Some(crate::core::ir::DefaultValue::FunctionCall(
+            "defaults::retry_limit".to_string()
+        ))
+    );
+}
+
+#[test]
 fn test_impl_default_without_fn_default() {
     let source = r#"
         pub struct Incomplete {

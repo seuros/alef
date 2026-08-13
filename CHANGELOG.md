@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   manifest-owned orphans, and keep handwritten scaffold files outside formatting, hashing, and deletion.
 - **verify**: evaluate fixture-snippet coverage from current fixtures and renderers, reject stale or malformed coverage
   ledgers and missing tracked snippets, and preflight `alef all` before generated-file writes.
+- **IR**: attach serialization-compatible, deterministic error type, variant, and numeric code taxonomy metadata to
+  every extracted error variant.
+- **extract**: preserve serde function defaults and supported zero-argument default calls as explicit runtime
+  providers instead of collapsing them to empty language defaults.
+- **extract**: suppress inherent impl methods and generic-method diagnostics when their declaring type is excluded.
+
 - Fixed indexed JSON-scalar metadata matching, simple-result enum containment, falsifiable collection containment,
   and JNI streaming exports for opaque owner handles without ordinary methods.
 

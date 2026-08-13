@@ -256,6 +256,7 @@ pub(in crate::backends::rustler::gen_bindings) fn elixir_field_default(
             DefaultValue::EnumVariant(v) => format!(":{}", v.to_snake_case()),
             DefaultValue::Empty => elixir_zero_value(ty, enum_defaults),
             DefaultValue::None => "nil".to_string(),
+            DefaultValue::FunctionCall(_) => "nil".to_string(),
         };
     }
 

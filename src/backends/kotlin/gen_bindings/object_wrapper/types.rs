@@ -198,6 +198,7 @@ fn render_kotlin_default(
             _ => None,
         },
         DefaultValue::None => Some("null".to_string()),
+        DefaultValue::FunctionCall(_) => None,
     }
 }
 

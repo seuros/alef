@@ -1,4 +1,4 @@
-use crate::core::ir::FieldDef;
+use crate::core::ir::{DefaultValue, FieldDef};
 
 use crate::extract::type_resolver;
 
@@ -38,7 +38,8 @@ pub(crate) fn extract_field(field: &syn::Field, crate_name: Option<&str>) -> Fie
 
     // If the field has #[serde(default)], mark it as having a default value.
     // (`#[serde(default = "path")]`), preserve it verbatim so bindings can emit an
-    let default = match extract_serde_default_path(&field.attrs) {
+    let serde_default_path = extract_serde_default_path(&field.attrs);
+    let default = match serde_default_path.as_deref() {
         Some(path) => Some(format!("serde(default = \"{path}\")")),
         None if has_serde_default_attr => Some("/* serde(default) */".to_string()),
         None => None,
@@ -54,7 +55,7 @@ pub(crate) fn extract_field(field: &syn::Field, crate_name: Option<&str>) -> Fie
         is_boxed,
         type_rust_path,
         cfg,
-        typed_default: None,
+        typed_default: serde_default_path.map(DefaultValue::FunctionCall),
         core_wrapper,
         vec_inner_core_wrapper,
         newtype_wrapper: None,

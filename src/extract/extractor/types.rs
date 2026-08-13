@@ -215,6 +215,7 @@ pub(crate) fn extract_error_enum(item: &syn::ItemEnum, crate_name: &str, module_
     let binding_excluded = binding_exclusion_reason.is_some();
     let name = item.ident.to_string();
     let doc = extract_doc_comments(&item.attrs);
+    let rust_path = build_rust_path(crate_name, module_path, &name);
 
     let variants = item
         .variants
@@ -303,8 +304,6 @@ pub(crate) fn extract_error_enum(item: &syn::ItemEnum, crate_name: &str, module_
             }
         })
         .collect();
-
-    let rust_path = build_rust_path(crate_name, module_path, &name);
 
     Some(ErrorDef {
         name,

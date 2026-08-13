@@ -260,6 +260,10 @@ fn expr_to_default_value(expr: &syn::Expr) -> DefaultValue {
                 if segments.last().is_some_and(|s| s == "default") {
                     return DefaultValue::Empty;
                 }
+
+                if call.args.is_empty() {
+                    return DefaultValue::FunctionCall(segments.join("::"));
+                }
             }
             DefaultValue::Empty
         }
@@ -326,5 +330,13 @@ mod tests {
     #[test]
     fn bare_none_stays_none() {
         assert_eq!(default_value_of("None"), DefaultValue::None);
+    }
+
+    #[test]
+    fn zero_argument_function_call_preserves_its_path() {
+        assert_eq!(
+            default_value_of("defaults::retry_limit()"),
+            DefaultValue::FunctionCall("defaults::retry_limit".to_string())
+        );
     }
 }

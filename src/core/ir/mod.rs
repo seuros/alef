@@ -7,7 +7,7 @@ mod type_ref;
 pub use items::{
     EnumDef, EnumVariant, ErrorDef, ErrorVariant, FieldDef, FunctionDef, MethodDef, ParamDef, ReceiverKind, TypeDef,
 };
-pub use metadata::{CoreWrapper, DefaultValue, DeprecationInfo, VersionAnnotation};
+pub use metadata::{CoreWrapper, DefaultValue, DeprecationInfo, ErrorTaxonomy, VersionAnnotation};
 pub use service::{
     EntrypointDef, EntrypointKind, HandlerContractDef, HandlerShape, ParameterConstraint, RegistrationDef,
     RegistrationVariant, RegistrationVariantLanguageOverride, RegistrationVariantOverride, RegistrationVariantStyle,

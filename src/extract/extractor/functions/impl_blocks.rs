@@ -51,6 +51,7 @@ pub(crate) fn extract_impl_block(
     module_path: &str,
     surface: &mut ApiSurface,
     type_index: &AHashMap<String, usize>,
+    binding_excluded_type_names: &ahash::AHashSet<String>,
     result_wrapping_aliases: &ahash::AHashSet<String>,
 ) {
     // Honor `#[cfg_attr(alef, alef(skip))]` (or bare `#[alef(skip)]`) on the impl block
@@ -67,6 +68,14 @@ pub(crate) fn extract_impl_block(
         syn::Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()).unwrap_or_default(),
         _ => return,
     };
+
+    if binding_excluded_type_names.contains(&type_name)
+        || type_index
+            .get(&type_name)
+            .is_some_and(|&idx| surface.types[idx].binding_excluded)
+    {
+        return;
+    }
 
     if has_non_lifetime_generics(&item.generics) {
         record_unsupported_generic_impl_methods(

@@ -284,6 +284,7 @@ pub(crate) fn format_typed_default(
                 | Language::Zig => "`null`".to_string(),
             }
         }
+        DefaultValue::FunctionCall(path) => format!("`{path}()`"),
     }
 }
 

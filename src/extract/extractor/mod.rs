@@ -478,6 +478,18 @@ fn extract_items(
         .enumerate()
         .map(|(idx, typ)| (typ.name.clone(), idx))
         .collect();
+    let binding_excluded_type_names: ahash::AHashSet<String> = items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Struct(item) if extract_binding_exclusion_reason(&item.attrs).is_some() => {
+                Some(item.ident.to_string())
+            }
+            syn::Item::Enum(item) if extract_binding_exclusion_reason(&item.attrs).is_some() => {
+                Some(item.ident.to_string())
+            }
+            _ => None,
+        })
+        .collect();
 
     for item in items {
         if let syn::Item::Impl(item_impl) = item {
@@ -491,6 +503,7 @@ fn extract_items(
                 module_path,
                 surface,
                 &type_index,
+                &binding_excluded_type_names,
                 result_wrapping_aliases,
             );
         }

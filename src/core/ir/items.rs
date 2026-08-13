@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::metadata::{CoreWrapper, DefaultValue, VersionAnnotation};
+use super::metadata::{CoreWrapper, DefaultValue, ErrorTaxonomy, VersionAnnotation};
 use super::type_ref::TypeRef;
 
 /// A public struct exposed to bindings.
@@ -522,6 +522,12 @@ pub struct ErrorVariant {
     #[serde(default)]
     pub is_tuple: bool,
     pub doc: String,
+}
+
+impl ErrorVariant {
+    pub fn taxonomy(&self, error_type: &str) -> ErrorTaxonomy {
+        ErrorTaxonomy::for_variant(error_type, &self.name)
+    }
 }
 
 // Compile-time witnesses guarding against a field being added to a core IR struct and
