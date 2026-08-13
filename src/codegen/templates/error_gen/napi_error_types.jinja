@@ -1,4 +1,5 @@
 // Error variant name constants
-{% for variant_const, variant_name in variants %}
+{% for variant_const, variant_name, variant_code in variants %}
 pub const {{ variant_const }}: &str = "{{ variant_name }}";
+pub const {{ variant_const }}_CODE: u32 = {{ variant_code }};
 {% endfor %}

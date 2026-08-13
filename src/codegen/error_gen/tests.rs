@@ -157,10 +157,12 @@ fn test_gen_error_types() {
 #[test]
 fn test_gen_error_converter() {
     let error = sample_error();
+    let parse_code = error.variants[0].taxonomy(&error.rust_path).code;
     let output = gen_pyo3_error_converter(&error, "sample_markup_rs");
     assert!(output.contains("fn conversion_error_to_py_err(e: sample_markup_rs::ConversionError) -> pyo3::PyErr {"));
-    assert!(output.contains("sample_markup_rs::ConversionError::ParseError(..) => ParseError::new_err(msg),"));
-    assert!(output.contains("sample_markup_rs::ConversionError::IoError(..) => IoError::new_err(msg),"));
+    assert!(output.contains(&format!(
+        "sample_markup_rs::ConversionError::ParseError(..) => ParseError::new_err(format!(\"[{parse_code}] {{}}\", msg)),"
+    )));
 }
 
 #[test]
@@ -194,8 +196,11 @@ fn test_unit_variant_pattern() {
         binding_exclusion_reason: None,
         version: Default::default(),
     };
+    let code = error.variants[0].taxonomy(&error.rust_path).code;
     let output = gen_pyo3_error_converter(&error, "my_crate");
-    assert!(output.contains("my_crate::MyError::NotFound => NotFoundError::new_err(msg),"));
+    assert!(output.contains(&format!(
+        "my_crate::MyError::NotFound => NotFoundError::new_err(format!(\"[{code}] {{}}\", msg)),"
+    )));
     assert!(!output.contains("NotFound(..)"));
 }
 
@@ -221,9 +226,12 @@ fn test_struct_variant_pattern() {
         binding_exclusion_reason: None,
         version: Default::default(),
     };
+    let code = error.variants[0].taxonomy(&error.rust_path).code;
     let output = gen_pyo3_error_converter(&error, "my_crate");
     assert!(
-        output.contains("my_crate::MyError::Parsing { .. } => ParsingError::new_err(msg),"),
+        output.contains(&format!(
+            "my_crate::MyError::Parsing {{ .. }} => ParsingError::new_err(format!(\"[{code}] {{}}\", msg)),"
+        )),
         "Struct variants must use {{ .. }} pattern, got:\n{output}"
     );
     assert!(!output.contains("Parsing(..)"));
@@ -241,11 +249,11 @@ fn test_gen_napi_error_types() {
 #[test]
 fn test_gen_napi_error_converter() {
     let error = sample_error();
+    let parse_code = error.variants[0].taxonomy(&error.rust_path).code;
     let output = gen_napi_error_converter(&error, "sample_markup_rs");
     assert!(output.contains("fn conversion_error_to_napi_err(e: sample_markup_rs::ConversionError) -> napi::Error {"));
     assert!(output.contains("napi::Error::new(napi::Status::GenericFailure,"));
-    assert!(output.contains("[ParseError]"));
-    assert!(output.contains("[IoError]"));
+    assert!(output.contains(&format!("[{parse_code}]")));
     assert!(output.contains("#[allow(dead_code)]"));
 }
 

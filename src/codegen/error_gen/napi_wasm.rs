@@ -3,7 +3,11 @@ pub fn gen_napi_error_types(error: &ErrorDef) -> String {
     let error_screaming = to_screaming_snake(&error.name);
     for variant in &error.variants {
         let variant_const = format!("{}_ERROR_{}", error_screaming, to_screaming_snake(&variant.name));
-        variants.push((variant_const, variant.name.clone()));
+        variants.push((
+            variant_const,
+            variant.name.clone(),
+            variant.taxonomy(&error.rust_path).code,
+        ));
     }
 
     crate::codegen::template_env::render(
@@ -27,7 +31,7 @@ pub fn gen_napi_error_converter(error: &ErrorDef, core_import: &str) -> String {
     let mut variants = Vec::new();
     for variant in &error.variants {
         let pattern = error_variant_wildcard_pattern(&rust_path, variant);
-        variants.push((pattern, variant.name.clone()));
+        variants.push((pattern, variant.taxonomy(&error.rust_path).code));
     }
 
     crate::codegen::template_env::render(

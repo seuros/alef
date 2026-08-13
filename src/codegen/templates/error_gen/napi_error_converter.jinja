@@ -4,8 +4,8 @@ fn {{ fn_name }}(e: {{ rust_path }}) -> napi::Error {
     let msg = e.to_string();
     #[allow(unreachable_patterns)]
     match &e {
-{%- for pattern, variant_name in variants %}
-        {{ pattern }} => napi::Error::new(napi::Status::GenericFailure, format!("[{{ variant_name }}] {}", msg)),
+{%- for pattern, variant_code in variants %}
+        {{ pattern }} => napi::Error::new(napi::Status::GenericFailure, format!("[{{ variant_code }}] {}", msg)),
 {%- endfor %}
         _ => napi::Error::new(napi::Status::GenericFailure, msg),
     }

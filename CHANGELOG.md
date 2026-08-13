@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **node/python**: attach stable numeric taxonomy codes to generated native error conversions while preserving typed
+  Python exception classes and generic fallbacks.
 - **java**: emit native-library required symbols one per line so generated bindings satisfy Checkstyle line limits.
 - **java/kotlin**: map stable native taxonomy codes to generated typed exceptions while retaining generic FFI error
   fallbacks.
