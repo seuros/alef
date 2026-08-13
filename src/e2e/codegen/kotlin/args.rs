@@ -342,7 +342,9 @@ pub(super) fn build_args_and_setup(
                 }
                 // For json_object args, deserialize via Jackson or use pre-deserialized variable.
                 if arg.arg_type == "json_object" {
-                    if let Some(opts_type) = options_type {
+                    if let Some(opts_type) =
+                        crate::e2e::codegen::recipe::json_object_constructor_type(arg, options_type, v)
+                    {
                         let files = fixture.docs_files_for_arg(&arg.field);
                         let mut json_value = v.clone();
                         let file_reads = prepare_docs_file_reads(&mut json_value, &files);

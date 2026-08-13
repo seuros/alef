@@ -188,6 +188,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
         };
 
         let mut fields = Vec::new();
+        let owner_type = type_defs.iter().find(|definition| definition.name == type_name);
         for (key, val) in obj {
             let field_pointer = json_pointer_child(pointer, key);
             // Rename serde_tag key → "kind" for node-bound tagged-data enum objects.
@@ -218,7 +219,19 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
                         json_to_js(&preprocessed)
                     }
                 } else {
-                    node_value_expression(&preprocessed, key, enum_fields, docs_files, &field_pointer)
+                    let field_type = owner_type
+                        .and_then(|definition| definition.fields.iter().find(|field| field.name == *key))
+                        .map(|field| &field.ty);
+                    node_value_expression(
+                        &preprocessed,
+                        key,
+                        enum_fields,
+                        docs_files,
+                        &field_pointer,
+                        field_type,
+                        type_defs,
+                        enums,
+                    )
                 }
             } else {
                 match val {
@@ -367,6 +380,9 @@ fn node_value_expression(
     enum_fields: &std::collections::HashMap<String, String>,
     docs_files: &[crate::e2e::fixture::FixtureDocsFileInput],
     pointer: &str,
+    field_type: Option<&crate::core::ir::TypeRef>,
+    type_defs: &[TypeDef],
+    enums: &[EnumDef],
 ) -> String {
     if let Some(file) = docs_files.iter().find(|file| file.field == pointer) {
         return crate::e2e::template_env::render(
@@ -376,6 +392,19 @@ fn node_value_expression(
         .trim_end()
         .to_string();
     }
+    let field_type = field_type.map(|field_type| match field_type {
+        crate::core::ir::TypeRef::Optional(inner) => inner.as_ref(),
+        other => other,
+    });
+    if matches!(field_type, Some(crate::core::ir::TypeRef::Bytes)) {
+        return format!("Uint8Array.from({})", json_to_js(value));
+    }
+    if let Some(crate::core::ir::TypeRef::Named(type_name)) = field_type
+        && enums.iter().any(|definition| definition.name == *type_name)
+        && let Some(variant) = value.as_str()
+    {
+        return format!("{type_name}.{}", variant.to_upper_camel_case());
+    }
     let camel_field = snake_to_camel(field);
     if let Some(enum_type) = enum_fields.get(field).or_else(|| enum_fields.get(camel_field.as_str()))
         && let Some(variant) = value.as_str()
@@ -384,19 +413,41 @@ fn node_value_expression(
     }
     match value {
         serde_json::Value::Object(object) => {
+            let nested_type = field_type
+                .and_then(|field_type| match field_type {
+                    crate::core::ir::TypeRef::Named(type_name) => Some(type_name.as_str()),
+                    _ => None,
+                })
+                .and_then(|type_name| type_defs.iter().find(|definition| definition.name == type_name));
             let fields = object
                 .iter()
                 .map(|(name, value)| {
+                    let nested_field_type = nested_type
+                        .and_then(|definition| definition.fields.iter().find(|field| field.name == *name))
+                        .map(|field| &field.ty);
                     format!(
                         "{}: {}",
                         snake_to_camel(name),
-                        node_value_expression(value, name, enum_fields, docs_files, &json_pointer_child(pointer, name),)
+                        node_value_expression(
+                            value,
+                            name,
+                            enum_fields,
+                            docs_files,
+                            &json_pointer_child(pointer, name),
+                            nested_field_type,
+                            type_defs,
+                            enums,
+                        )
                     )
                 })
                 .collect::<Vec<_>>();
             format!("{{ {} }}", fields.join(", "))
         }
         serde_json::Value::Array(values) => {
+            let element_type = field_type.and_then(|field_type| match field_type {
+                crate::core::ir::TypeRef::Vec(inner) => Some(inner.as_ref()),
+                _ => None,
+            });
             let values = values
                 .iter()
                 .enumerate()
@@ -407,6 +458,9 @@ fn node_value_expression(
                         enum_fields,
                         docs_files,
                         &json_pointer_child(pointer, &index.to_string()),
+                        element_type,
+                        type_defs,
+                        enums,
                     )
                 })
                 .collect::<Vec<_>>();
@@ -425,6 +479,30 @@ fn json_pointer_child(pointer: &str, field: &str) -> String {
 mod tests {
     use super::*;
 
+    fn assert_strict_typescript_compiles(source: &str) {
+        let directory = tempfile::tempdir().expect("temporary TypeScript project");
+        let source_path = directory.path().join("snippet.ts");
+        std::fs::write(&source_path, source).expect("write TypeScript regression source");
+        let Ok(output) = std::process::Command::new("tsc")
+            .args([
+                "--strict",
+                "--noUncheckedIndexedAccess",
+                "--noEmit",
+                "--target",
+                "ES2022",
+            ])
+            .arg(&source_path)
+            .output()
+        else {
+            return;
+        };
+        assert!(
+            output.status.success(),
+            "strict TypeScript rejected generated snippet:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     #[test]
     fn node_typed_objects_use_importable_enum_members() {
         let expression = ts_builder_expression(
@@ -441,6 +519,65 @@ mod tests {
         );
 
         assert_eq!(expression, "{ kind: InputKind.Uri } as DocumentInput");
+    }
+
+    #[test]
+    fn node_typed_objects_lower_bytes_and_enums_from_ir() {
+        let type_defs = [TypeDef {
+            name: "DocumentInput".into(),
+            fields: vec![
+                crate::core::ir::FieldDef {
+                    name: "bytes".into(),
+                    ty: crate::core::ir::TypeRef::Bytes,
+                    ..Default::default()
+                },
+                crate::core::ir::FieldDef {
+                    name: "kind".into(),
+                    ty: crate::core::ir::TypeRef::Named("InputKind".into()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }];
+        let enums = [EnumDef {
+            name: "InputKind".into(),
+            ..Default::default()
+        }];
+        let expression = ts_builder_expression(
+            serde_json::json!({"bytes": [72, 105], "kind": "bytes"})
+                .as_object()
+                .expect("object"),
+            "DocumentInput",
+            &Default::default(),
+            "node",
+            &Default::default(),
+            &Default::default(),
+            &type_defs,
+            &enums,
+            "",
+            &[],
+        );
+
+        assert_eq!(
+            expression,
+            "{ bytes: Uint8Array.from([72, 105]), kind: InputKind.Bytes } as DocumentInput"
+        );
+
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("content".to_string(), "results[0].content".to_string());
+        let optional = ["results".to_string()].into_iter().collect();
+        let resolver = crate::e2e::field_access::FieldResolver::new(
+            &fields,
+            &optional,
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+        );
+        let accessor = resolver.accessor("content", "node", "result");
+        let source = format!(
+            "enum InputKind {{ Bytes }}\ninterface DocumentInput {{ bytes: Uint8Array; kind: InputKind }}\ninterface Output {{ results?: Array<{{ content: string }}> }}\nconst input: DocumentInput = {expression};\ndeclare const result: Output;\nconst content: string | undefined = {accessor};\nvoid input; void content;\n"
+        );
+        assert_strict_typescript_compiles(&source);
     }
 
     #[test]

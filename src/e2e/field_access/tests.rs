@@ -171,6 +171,16 @@ fn test_accessor_node_alias() {
 }
 
 #[test]
+fn test_accessor_typescript_guards_optional_array_and_index() {
+    let mut fields = HashMap::new();
+    fields.insert("content".to_string(), "results[0].content".to_string());
+    let optional = ["results".to_string()].into_iter().collect();
+    let r = FieldResolver::new(&fields, &optional, &HashSet::new(), &HashSet::new(), &HashSet::new());
+
+    assert_eq!(r.accessor("content", "node", "result"), "result.results?.[0]?.content");
+}
+
+#[test]
 fn test_accessor_wasm_camel_case() {
     let r = make_resolver();
     assert_eq!(r.accessor("og", "wasm", "result"), "result.metadata.document.openGraph");

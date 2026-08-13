@@ -390,7 +390,7 @@ mod tests {
                 arg_type: "json_object".into(),
                 optional: false,
                 owned: false,
-                element_type: None,
+                element_type: Some("DocumentInput".into()),
                 go_type: None,
                 vec_inner_is_ref: false,
                 trait_name: None,
@@ -400,7 +400,7 @@ mod tests {
         call.overrides.insert(
             "kotlin_android".into(),
             CallOverride {
-                options_type: Some("DocumentInput".into()),
+                options_type: Some("ExtractionConfig".into()),
                 ..CallOverride::default()
             },
         );
@@ -418,6 +418,7 @@ mod tests {
 
         assert!(body.contains("val input = mapper.readValue("), "{body}");
         assert!(body.contains("DocumentInput::class.java"), "{body}");
+        assert!(!body.contains("ExtractionConfig::class.java"), "{body}");
         assert!(body.contains(".process(input)"), "{body}");
         assert!(body.contains("jacksonObjectMapper"), "{body}");
     }

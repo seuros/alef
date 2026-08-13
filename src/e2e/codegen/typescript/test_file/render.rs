@@ -359,8 +359,9 @@ pub fn render_test_file(
                 let mut enum_field_values: Vec<&String> = all_enum_fields.values().collect();
                 enum_field_values.sort();
                 for enum_type in enum_field_values {
-                    if !imports.contains(enum_type) {
-                        imports.push(enum_type.clone());
+                    let enum_type = wasm_prefixed_wrapped_type(lang, enum_type, type_defs, enums, wasm_type_prefix);
+                    if !imports.contains(&enum_type) {
+                        imports.push(enum_type);
                     }
                 }
             }

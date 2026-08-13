@@ -1,7 +1,7 @@
 use super::optional_renderers::{
     render_csharp_with_optionals, render_dart_with_optionals, render_java_with_optionals,
     render_kotlin_android_with_optionals, render_kotlin_with_optionals, render_php_with_getters,
-    render_rust_with_optionals, render_zig_with_optionals,
+    render_rust_with_optionals, render_typescript_with_optionals, render_zig_with_optionals,
 };
 use super::parse::{normalize_numeric_indices, parse_path, strip_numeric_indices};
 use super::renderers::{render_accessor, render_swift_with_first_class_map};
@@ -505,6 +505,7 @@ impl FieldResolver {
         let segments = parse_path(effective);
         let segments = self.inject_array_indexing(segments);
         match language {
+            "typescript" | "node" => render_typescript_with_optionals(&segments, result_var, &self.optional_fields),
             "java" => render_java_with_optionals(&segments, result_var, &self.optional_fields),
             "kotlin" => render_kotlin_with_optionals(&segments, result_var, &self.optional_fields),
             // kotlin_android data classes expose fields as Kotlin properties (no parens),

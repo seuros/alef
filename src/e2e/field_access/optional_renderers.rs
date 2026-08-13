@@ -3,6 +3,66 @@ use super::types::{PathSegment, PhpGetterMap};
 use heck::{ToLowerCamelCase, ToPascalCase, ToSnakeCase};
 use std::collections::HashSet;
 
+pub(super) fn render_typescript_with_optionals(
+    segments: &[PathSegment],
+    result_var: &str,
+    optional_fields: &HashSet<String>,
+) -> String {
+    let mut out = result_var.to_string();
+    let mut path = String::new();
+    let mut previous_optional = false;
+    for segment in segments {
+        match segment {
+            PathSegment::Field(field) => {
+                if !path.is_empty() {
+                    path.push('.');
+                }
+                path.push_str(field);
+                out.push_str(if previous_optional { "?." } else { "." });
+                out.push_str(&field.to_lower_camel_case());
+                previous_optional = optional_fields.contains(&path);
+            }
+            PathSegment::ArrayField { name, index } => {
+                if !path.is_empty() {
+                    path.push('.');
+                }
+                path.push_str(name);
+                out.push_str(if previous_optional { "?." } else { "." });
+                out.push_str(&name.to_lower_camel_case());
+                let optional = optional_fields.contains(&path);
+                if optional {
+                    out.push_str("?.");
+                }
+                out.push_str(&format!("[{index}]"));
+                previous_optional = optional;
+            }
+            PathSegment::MapAccess { field, key } => {
+                if !path.is_empty() {
+                    path.push('.');
+                }
+                path.push_str(field);
+                out.push_str(if previous_optional { "?." } else { "." });
+                out.push_str(&field.to_lower_camel_case());
+                let optional = optional_fields.contains(&path);
+                if optional {
+                    out.push_str("?.");
+                }
+                if !key.is_empty() && key.chars().all(|character| character.is_ascii_digit()) {
+                    out.push_str(&format!("[{key}]"));
+                } else {
+                    out.push_str(&format!("[{key:?}]"));
+                }
+                previous_optional = optional;
+            }
+            PathSegment::Length => {
+                out.push_str(if previous_optional { "?.length" } else { ".length" });
+                previous_optional = false;
+            }
+        }
+    }
+    out
+}
+
 pub(super) fn render_java_with_optionals(
     segments: &[PathSegment],
     result_var: &str,

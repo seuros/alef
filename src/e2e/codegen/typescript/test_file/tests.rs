@@ -336,6 +336,13 @@ fn wasm_imports_nested_types_from_json_object_element_types() {
         vec_inner_is_ref: false,
         trait_name: None,
     }];
+    e2e_config.call.overrides.insert(
+        "wasm".into(),
+        crate::e2e::config::CallOverride {
+            enum_fields: [("kind".into(), "ExtractInputKind".into())].into_iter().collect(),
+            ..Default::default()
+        },
+    );
 
     let fixture = Fixture {
         docs: None,
@@ -369,6 +376,10 @@ fn wasm_imports_nested_types_from_json_object_element_types() {
         )],
     );
     let file_config = make_type("FileExtractionConfig", vec![]);
+    let enums = [EnumDef {
+        name: "ExtractInputKind".into(),
+        ..Default::default()
+    }];
     let config = crate::core::config::ResolvedCrateConfig::default();
 
     let output = render_test_file(
@@ -383,7 +394,7 @@ fn wasm_imports_nested_types_from_json_object_element_types() {
         None,
         &e2e_config,
         &[extract_input, file_config],
-        &[],
+        &enums,
         "Wasm",
         &config,
     );
@@ -404,6 +415,10 @@ fn wasm_imports_nested_types_from_json_object_element_types() {
     assert!(
         import_line.contains("WasmExtractInput"),
         "import line must reference the prefixed input class;\n{import_line}"
+    );
+    assert!(
+        import_line.contains("WasmExtractInputKind"),
+        "import line must prefix enum classes referenced by the input;\n{import_line}"
     );
     assert!(
         !import_line.split([',', '{', '}', ' ']).any(|tok| tok == "ExtractInput"),

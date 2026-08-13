@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **snippets**: emit strict TypeScript DTO literals and optional accessors, prefix WASM imports, and deserialize
+  Kotlin Android inputs using each argument's declared DTO type.
 - **node**: export zero-argument adjacent-enum namespace constructors as callable functions instead of getters.
 - **csharp**: emit formatter-stable imports, native calls, and sealed-union converters that pass `dotnet format`.
 - **zig**: keep generated bindings silent, validate nullable native returns before dereference, and release owned native
