@@ -9,7 +9,7 @@ pub fn {{ variant.rust_name }}({{ content_field }}: {{ variant.payload_type }}) 
     }
 }
 {% else %}
-#[napi(namespace = "{{ enum_name }}", getter, js_name = "{{ variant.variant_name }}")]
+#[napi(namespace = "{{ enum_name }}", js_name = "{{ variant.variant_name }}")]
 pub fn {{ variant.rust_name }}() -> {{ binding_name }} {
     {{ binding_name }} {
         {{ tag_field }}: "{{ variant.wire_value }}".to_string(),

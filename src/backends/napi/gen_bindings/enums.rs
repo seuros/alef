@@ -837,7 +837,8 @@ mod tests {
         assert!(output.contains("pub type_tag: String"));
         assert!(output.contains("pub output: Option<String>"));
         assert!(!output.contains("pub custom: Option<String>"));
-        assert!(output.contains("#[napi(namespace = \"Action\", getter, js_name = \"Continue\")]"));
+        assert!(output.contains("#[napi(namespace = \"Action\", js_name = \"Continue\")]"));
+        assert!(!output.contains("getter"));
         assert!(output.contains("#[napi(namespace = \"Action\", js_name = \"Custom\")]"));
         assert!(output.contains("pub fn action_custom(output: String) -> JsAction"));
         assert!(output.contains("output: Some(output)"));

@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **node**: export zero-argument adjacent-enum namespace constructors as callable functions instead of getters.
 - **csharp**: emit formatter-stable imports, native calls, and sealed-union converters that pass `dotnet format`.
 - **zig**: keep generated bindings silent, validate nullable native returns before dereference, and release owned native
   buffers even when Zig allocation fails.
