@@ -54,6 +54,7 @@ static TEMPLATES: &[(&str, &str)] = &[
         "indented_arg_sync.jinja",
         include_str!("templates/indented_arg_sync.jinja"),
     ),
+    ("indented_arg.jinja", include_str!("templates/indented_arg.jinja")),
     ("namespace_decl.jinja", include_str!("templates/namespace_decl.jinja")),
     (
         "native_call_start.jinja",

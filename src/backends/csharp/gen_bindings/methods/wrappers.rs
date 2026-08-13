@@ -272,16 +272,30 @@ pub(super) fn gen_wrapper_function(
             out.push_str("        try\n        {\n");
         }
 
-        if func.return_type == TypeRef::Unit {
-            out.push_str("            await Task.Run(() =>\n            {\n");
+        let lambda_indent = if needs_outer_try { "            " } else { "        " };
+        let body_indent = if needs_outer_try {
+            "                "
         } else {
-            out.push_str("            return await Task.Run(() =>\n            {\n");
-        }
+            "            "
+        };
+        let argument_indent = if needs_outer_try {
+            "                    "
+        } else {
+            "                "
+        };
 
-        if func.return_type != TypeRef::Unit {
-            out.push_str("                var nativeResult = ");
+        out.push_str(lambda_indent);
+        if func.return_type == TypeRef::Unit {
+            out.push_str("await Task.Run(() =>\n");
         } else {
-            out.push_str("                ");
+            out.push_str("return await Task.Run(() =>\n");
+        }
+        out.push_str(lambda_indent);
+        out.push_str("{\n");
+
+        out.push_str(body_indent);
+        if func.return_type != TypeRef::Unit {
+            out.push_str("var nativeResult = ");
         }
 
         out.push_str(
@@ -306,41 +320,52 @@ pub(super) fn gen_wrapper_function(
                 }
             }
             for (i, arg) in arg_parts.iter().enumerate() {
-                out.push_str(render("indented_arg_async.jinja", minijinja::context! { arg }).trim_end_matches('\n'));
+                out.push_str(
+                    render(
+                        "indented_arg.jinja",
+                        minijinja::context! { arg, indent => argument_indent },
+                    )
+                    .trim_end_matches('\n'),
+                );
                 if i < arg_parts.len() - 1 {
                     out.push(',');
                 }
                 out.push('\n');
             }
-            out.push_str("                );\n");
+            out.push_str(body_indent);
+            out.push_str(");\n");
         }
 
         if func.return_type != TypeRef::Unit && returns_ptr(&func.return_type) {
             if matches!(func.return_type, TypeRef::Optional(_)) {
-                out.push_str(
-                    "                if (nativeResult == IntPtr.Zero)\n                {\n                    return null;\n                }\n",
-                );
+                out.push_str(&render(
+                    "null_result_return.jinja",
+                    minijinja::context! { indent => body_indent },
+                ));
             } else {
-                out.push_str(
-                    "                if (nativeResult == IntPtr.Zero)\n                {\n                    throw GetLastError();\n                }\n",
-                );
+                out.push_str(&render(
+                    "last_error_throw.jinja",
+                    minijinja::context! { indent => body_indent },
+                ));
             }
         } else if func.error_type.is_some() {
-            out.push_str(
-                "                if (NativeMethods.LastErrorCode() != 0)\n                {\n                    throw GetLastError();\n                }\n",
-            );
+            out.push_str(&render(
+                "last_error_throw.jinja",
+                minijinja::context! { indent => body_indent },
+            ));
         }
 
         emit_return_marshalling_indented(
             &mut out,
             &func.return_type,
-            "                ",
+            body_indent,
             enum_names,
             true_opaque_types,
             handle_returned_types,
         );
-        emit_return_statement_indented(&mut out, &func.return_type, "                ");
-        out.push_str("            });\n");
+        emit_return_statement_indented(&mut out, &func.return_type, body_indent);
+        out.push_str(lambda_indent);
+        out.push_str("});\n");
 
         if needs_outer_try {
             out.push_str("        }\n        finally\n        {\n");
@@ -358,10 +383,18 @@ pub(super) fn gen_wrapper_function(
             out.push_str("        try\n        {\n");
         }
 
-        if func.return_type != TypeRef::Unit {
-            out.push_str("            var nativeResult = ");
+        let call_indent = if needs_outer_try { "            " } else { "        " };
+        let argument_indent = if needs_outer_try {
+            "                "
         } else {
-            out.push_str("            ");
+            "            "
+        };
+
+        if func.return_type != TypeRef::Unit {
+            out.push_str(call_indent);
+            out.push_str("var nativeResult = ");
+        } else {
+            out.push_str(call_indent);
         }
 
         out.push_str(
@@ -386,13 +419,20 @@ pub(super) fn gen_wrapper_function(
                 }
             }
             for (i, arg) in arg_parts.iter().enumerate() {
-                out.push_str(render("indented_arg_sync.jinja", minijinja::context! { arg }).trim_end_matches('\n'));
+                out.push_str(
+                    render(
+                        "indented_arg.jinja",
+                        minijinja::context! { arg, indent => argument_indent },
+                    )
+                    .trim_end_matches('\n'),
+                );
                 if i < arg_parts.len() - 1 {
                     out.push(',');
                 }
                 out.push('\n');
             }
-            out.push_str("            );\n");
+            out.push_str(call_indent);
+            out.push_str(");\n");
         }
 
         let body_indent = if needs_outer_try { "            " } else { "        " };

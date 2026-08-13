@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **csharp**: emit formatter-stable imports, native calls, and sealed-union converters that pass `dotnet format`.
 - **node/python**: attach stable numeric taxonomy codes to generated native error conversions while preserving typed
   Python exception classes and generic fallbacks.
 - **java**: emit native-library required symbols one per line so generated bindings satisfy Checkstyle line limits.

@@ -6,9 +6,9 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-{%- if has_async %}
+{% if has_async %}
 using System.Threading.Tasks;
-{%- endif %}
+{% endif %}
 
 namespace {{ namespace }};
 
