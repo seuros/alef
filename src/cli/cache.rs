@@ -226,6 +226,18 @@ pub fn write_lang_manifest(crate_name: &str, lang: &str, output_paths: &[PathBuf
     write_manifest(&dir.join(format!("{lang}.manifest")), output_paths)
 }
 
+pub fn read_lang_manifest(crate_name: &str, lang: &str) -> Vec<PathBuf> {
+    let manifest_path = hashes_dir(crate_name).join(format!("{lang}.manifest"));
+    match fs::read_to_string(manifest_path) {
+        Ok(content) => content
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(PathBuf::from)
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
 /// Compute hash for a generation stage (stubs, docs, readme, scaffold, e2e).
 /// `extra` allows including additional content (e.g., fixture files for e2e).
 /// The alef binary's identity is included so that locally rebuilt binaries

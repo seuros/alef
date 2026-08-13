@@ -11,10 +11,14 @@ mod write;
 pub use diff::diff_files;
 pub use generation::{generate, generate_public_api, generate_service_api, generate_stubs};
 pub use normalization::normalize_content;
-pub use orphans::{collect_alef_headered_paths, generate_sweep_roots, sweep_orphans, targeted_e2e_sweep_roots};
-pub use scaffold::{readme, scaffold, write_scaffold_files, write_scaffold_files_with_overwrite};
+pub use orphans::{
+    collect_alef_headered_paths, generate_sweep_roots, sweep_manifest_orphans, sweep_orphans, targeted_e2e_sweep_roots,
+};
+pub use scaffold::{
+    readme, scaffold, write_scaffold_files, write_scaffold_files_report, write_scaffold_files_with_overwrite,
+};
 pub(crate) use write::apply_shebang_chmod;
-pub use write::{finalize_hashes, write_files};
+pub use write::{finalize_hashes, managed_output_paths, write_files, write_files_report};
 
 #[cfg(test)]
 use normalization::{detect_crate_edition, parse_package_edition};

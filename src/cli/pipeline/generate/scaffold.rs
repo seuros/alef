@@ -85,9 +85,28 @@ pub fn write_scaffold_files_with_overwrite(
     base_dir: &Path,
     overwrite: bool,
 ) -> anyhow::Result<usize> {
-    let mut count = 0;
+    Ok(write_scaffold_files_report(files, base_dir, overwrite)?.changed_count())
+}
+
+pub fn write_scaffold_files_report(
+    files: &[GeneratedFile],
+    base_dir: &Path,
+    overwrite: bool,
+) -> anyhow::Result<super::write::WriteReport> {
+    let mut report = super::write::WriteReport::default();
+    let mut prepared = std::collections::BTreeMap::new();
     for file in files {
+        if let Some(existing) = prepared.insert(file.path.clone(), file) {
+            anyhow::ensure!(
+                existing.content == file.content && existing.generated_header == file.generated_header,
+                "multiple generators emitted different content for {}",
+                file.path.display()
+            );
+        }
+    }
+    for file in prepared.into_values() {
         let full_path = base_dir.join(&file.path);
+        report.expected_paths.insert(full_path.clone());
         let can_skip = !overwrite && !file.generated_header && full_path.exists();
         if can_skip {
             debug!("  skipped (already exists): {}", full_path.display());
@@ -108,9 +127,8 @@ pub fn write_scaffold_files_with_overwrite(
                 debug!("  unchanged: {}", full_path.display());
                 continue;
             }
-            std::fs::write(&full_path, &binary_content)
-                .with_context(|| format!("failed to write binary file {}", full_path.display()))?;
-            count += 1;
+            super::write::atomic_write(&full_path, &binary_content)?;
+            report.changed_paths.insert(full_path.clone());
             debug!("  wrote (binary): {}", full_path.display());
             continue;
         }
@@ -140,16 +158,15 @@ pub fn write_scaffold_files_with_overwrite(
                 continue;
             }
         }
-        std::fs::write(&full_path, &normalized)
-            .with_context(|| format!("failed to write generated file {}", full_path.display()))?;
+        super::write::atomic_write(&full_path, normalized.as_bytes())?;
         apply_shebang_chmod(&full_path, &normalized)?;
-        count += 1;
+        report.changed_paths.insert(full_path.clone());
         debug!("  wrote: {}", full_path.display());
         if file.path == Path::new(POLY_CONFIG) {
             normalize_poly_config(&full_path, base_dir);
         }
     }
-    Ok(count)
+    Ok(report)
 }
 
 /// Repo-root poly config, emitted by the scaffold pass.

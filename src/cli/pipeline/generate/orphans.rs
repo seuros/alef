@@ -1,4 +1,5 @@
 use crate::core::config::{Language, ResolvedCrateConfig};
+use anyhow::Context as _;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
@@ -175,6 +176,28 @@ pub fn sweep_orphans(
     Ok(removed)
 }
 
+pub fn sweep_manifest_orphans(
+    previous_paths: &[PathBuf],
+    keep: &std::collections::HashSet<PathBuf>,
+    allowed_roots: &[PathBuf],
+) -> anyhow::Result<usize> {
+    let mut removed = 0;
+    for path in previous_paths {
+        if keep.contains(path) || !allowed_roots.iter().any(|root| path.starts_with(root)) || !path.is_file() {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        if crate::core::hash::extract_hash(&content).is_none() {
+            continue;
+        }
+        std::fs::remove_file(path).with_context(|| format!("failed to remove orphan {}", path.display()))?;
+        removed += 1;
+    }
+    Ok(removed)
+}
+
 /// Collect every alef-headered file under `root` (recursively), skipping
 /// dependency / build directories.
 ///
@@ -282,5 +305,31 @@ mod sweep_roots_tests {
             roots.contains(&base.join("packages/typescript")),
             "unfiltered run keeps the typescript fallback root"
         );
+    }
+
+    #[test]
+    fn manifest_sweep_removes_only_prior_managed_orphans_in_selected_root() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let selected = dir.path().join("python");
+        let other = dir.path().join("ruby");
+        std::fs::create_dir_all(&selected).expect("selected root");
+        std::fs::create_dir_all(&other).expect("other root");
+        let managed = selected.join("orphan.py");
+        let handwritten = selected.join("notes.py");
+        let unselected = other.join("orphan.rb");
+        let header = crate::core::hash::header(crate::core::hash::CommentStyle::Hash);
+        let hashed = crate::core::hash::inject_hash_line(&header, &"0".repeat(64));
+        std::fs::write(&managed, &hashed).expect("managed");
+        std::fs::write(&handwritten, "handwritten\n").expect("handwritten");
+        std::fs::write(&unselected, &hashed).expect("unselected");
+
+        let previous = vec![managed.clone(), handwritten.clone(), unselected.clone()];
+        let removed =
+            sweep_manifest_orphans(&previous, &std::collections::HashSet::new(), &[selected]).expect("manifest sweep");
+
+        assert_eq!(removed, 1);
+        assert!(!managed.exists());
+        assert!(handwritten.exists());
+        assert!(unselected.exists());
     }
 }

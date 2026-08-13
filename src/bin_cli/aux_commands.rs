@@ -313,68 +313,19 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let e2e_ref = &registry_config;
                         let output_root = base_dir.join(e2e_ref.effective_output());
 
-                        if clean {
-                            let langs_to_clean: Vec<String> = lang
-                                .as_deref()
-                                .map(|ls| ls.iter().map(|s| s.to_string()).collect())
-                                .unwrap_or_else(|| e2e_ref.languages.clone());
-                            let lock_files = [
-                                "go.sum",
-                                "go.mod",
-                                "Gemfile.lock",
-                                "composer.lock",
-                                "uv.lock",
-                                "pubspec.lock",
-                            ];
-                            // JS lockfiles are deliberately NOT preserved across --clean for the ~keep
-                            // node/wasm test apps. A committed lockfile that pins an older version ~keep
-                            // than package.json wants (e.g. `pnpm-lock.yaml` stuck at rc.25 while ~keep
-                            // package.json wants ^rc.26) makes pnpm's `minimumReleaseAge` ~keep
-                            // supply-chain gate reject the install ~keep
-                            // (ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION). Dropping the stale lock lets ~keep
-                            // the post-generate `pnpm install --lockfile-only` regenerate it fresh ~keep
-                            // against the current package.json — and if that step is unavailable, no ~keep
-                            // stale lock ships and smoke-time `pnpm install` resolves cleanly. ~keep
-                            let js_lock_files = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock"];
-                            for lang_name in &langs_to_clean {
-                                let preserve_js_locks = lang_name != "node" && lang_name != "wasm";
-                                let lang_dir = output_root.join(lang_name);
-                                if lang_dir.exists() {
-                                    let mut saved_locks = std::collections::HashMap::new();
-                                    let lock_files_iter = lock_files
-                                        .iter()
-                                        .chain(js_lock_files.iter().filter(|_| preserve_js_locks));
-                                    for lock_file in lock_files_iter {
-                                        let lock_path = lang_dir.join(lock_file);
-                                        if lock_path.exists()
-                                            && let Ok(content) = std::fs::read(&lock_path)
-                                        {
-                                            saved_locks.insert(lock_path.clone(), content);
-                                        }
-                                    }
-
-                                    std::fs::remove_dir_all(&lang_dir)
-                                        .with_context(|| format!("failed to remove {}", lang_dir.display()))?;
-
-                                    std::fs::create_dir_all(&lang_dir)
-                                        .with_context(|| format!("failed to recreate {}", lang_dir.display()))?;
-                                    for (lock_path, content) in saved_locks {
-                                        std::fs::write(&lock_path, content).with_context(|| {
-                                            format!("failed to restore lock file {}", lock_path.display())
-                                        })?;
-                                    }
-                                }
-                            }
-                        }
-
                         let fixtures_dir = std::path::Path::new(&this_e2e_config.fixtures);
                         let fixture_hash = cache::hash_directory(fixtures_dir).unwrap_or_default();
                         let api = pipeline::extract(e2e_crate, config_path, false)?;
                         let ir_json = serde_json::to_string(&api)?;
-                        let cache_key = "test-apps";
-                        let stage_hash = cache::compute_stage_hash(&ir_json, cache_key, &config_toml, &fixture_hash);
-                        if !clean && cache::is_stage_cached(&e2e_crate.name, cache_key, &stage_hash) {
-                            let cached_paths = cache::read_stage_paths(&e2e_crate.name, cache_key);
+                        let selector = lang
+                            .as_deref()
+                            .map(|languages| languages.join("-"))
+                            .unwrap_or_else(|| "all".to_string());
+                        let cache_key = format!("test-apps-{selector}");
+                        let previous_paths = cache::read_stage_paths(&e2e_crate.name, &cache_key);
+                        let stage_hash = cache::compute_stage_hash(&ir_json, &cache_key, &config_toml, &fixture_hash);
+                        if !clean && cache::is_stage_cached(&e2e_crate.name, &cache_key, &stage_hash) {
+                            let cached_paths = cache::read_stage_paths(&e2e_crate.name, &cache_key);
                             crate::e2e::format::run_formatters_for_cached_paths(&cached_paths, &base_dir, e2e_ref)?;
                             tracing::info!("Test apps up to date (cached)");
                             continue;
@@ -392,12 +343,25 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         )?;
                         let sources_hash = cache::sources_hash(&e2e_crate.sources)?;
                         let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
-                        let count = pipeline::write_scaffold_files_with_overwrite(&files, &base_dir, true)?;
+                        let report = pipeline::write_scaffold_files_report(&files, &base_dir, true)?;
+                        let count = report.changed_count();
+                        let managed_files: Vec<_> =
+                            files.iter().filter(|file| file.generated_header).cloned().collect();
 
                         let generated_langs: Vec<String> = languages
                             .map(|ls| ls.iter().map(|s| s.to_string()).collect())
                             .unwrap_or_else(|| e2e_ref.languages.clone());
                         for lang_name in &generated_langs {
+                            let lock_missing = matches!(lang_name.as_str(), "node" | "wasm")
+                                && !output_root.join(lang_name).join("pnpm-lock.yaml").exists();
+                            if !lock_missing
+                                && !report
+                                    .changed_paths
+                                    .iter()
+                                    .any(|path| path.starts_with(output_root.join(lang_name)))
+                            {
+                                continue;
+                            }
                             if lang_name == "node" || lang_name == "wasm" {
                                 let test_app_dir = output_root.join(lang_name);
                                 let package_json = test_app_dir.join("package.json");
@@ -432,9 +396,14 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             }
                         }
 
-                        crate::e2e::format::run_formatters(&files, e2e_ref)?;
+                        if managed_files
+                            .iter()
+                            .any(|file| report.changed_paths.contains(&base_dir.join(&file.path)))
+                        {
+                            crate::e2e::format::run_formatters(&managed_files, e2e_ref)?;
+                        }
 
-                        let output_paths: Vec<PathBuf> = files.iter().map(|f| base_dir.join(&f.path)).collect();
+                        let output_paths: Vec<PathBuf> = managed_files.iter().map(|f| base_dir.join(&f.path)).collect();
                         let path_set: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
                         pipeline::finalize_hashes(&path_set, &sources_hash, &alef_toml_bytes)?;
 
@@ -451,9 +420,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         } else {
                             vec![output_root]
                         };
-                        pipeline::sweep_orphans(&sweep_roots, &path_set)?;
+                        pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &sweep_roots)?;
 
-                        cache::write_stage_hash(&e2e_crate.name, cache_key, &stage_hash, &output_paths)?;
+                        cache::write_stage_hash(&e2e_crate.name, &cache_key, &stage_hash, &output_paths)?;
                         grand_count += count;
                     }
                     tracing::info!("Generated {grand_count} test-app files");

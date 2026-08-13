@@ -10,6 +10,45 @@ use tracing::debug;
 
 const HASH_HEADER_SCAN_LINES: usize = 10;
 
+#[derive(Debug, Default)]
+pub struct WriteReport {
+    pub expected_paths: std::collections::HashSet<std::path::PathBuf>,
+    pub changed_paths: std::collections::HashSet<std::path::PathBuf>,
+}
+
+impl WriteReport {
+    pub fn changed_count(&self) -> usize {
+        self.changed_paths.len()
+    }
+}
+
+pub fn managed_output_paths(files: &[GeneratedFile], base_dir: &Path) -> std::collections::HashSet<std::path::PathBuf> {
+    files
+        .iter()
+        .filter(|file| file.generated_header)
+        .map(|file| base_dir.join(&file.path))
+        .collect()
+}
+
+pub(crate) fn atomic_write(path: &Path, content: &[u8]) -> anyhow::Result<()> {
+    let parent = path.parent().context("generated output path has no parent")?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("failed to create temporary file in {}", parent.display()))?;
+    if let Ok(metadata) = std::fs::metadata(path) {
+        temporary
+            .as_file()
+            .set_permissions(metadata.permissions())
+            .with_context(|| format!("failed to preserve permissions for {}", path.display()))?;
+    }
+    std::io::Write::write_all(&mut temporary, content)
+        .with_context(|| format!("failed to write temporary file for {}", path.display()))?;
+    temporary
+        .persist(path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("failed to replace {}", path.display()))?;
+    Ok(())
+}
+
 pub(super) fn ensure_generated_header(path: &Path, content: &str) -> String {
     let has_marker = content
         .lines()
@@ -76,37 +115,20 @@ pub(crate) fn apply_shebang_chmod(_path: &std::path::Path, _content: &str) -> an
 ///    reflects the actual on-disk byte content and `alef verify` is a
 ///    pure read+strip+rehash+compare with no regeneration.
 pub fn write_files(files: &[(Language, Vec<GeneratedFile>)], base_dir: &Path) -> anyhow::Result<usize> {
-    let dirs: std::collections::BTreeSet<_> = files
-        .iter()
-        .flat_map(|(_, lang_files)| lang_files.iter())
-        .filter_map(|f| base_dir.join(&f.path).parent().map(|p| p.to_path_buf()))
-        .collect();
-    for dir in &dirs {
-        std::fs::create_dir_all(dir).with_context(|| format!("failed to create directory {}", dir.display()))?;
-    }
+    Ok(write_files_report(files, base_dir)?.changed_count())
+}
 
-    let all_files: Vec<_> = files.iter().flat_map(|(_, lang_files)| lang_files.iter()).collect();
-
-    all_files.par_iter().try_for_each(|file| -> anyhow::Result<()> {
+pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &Path) -> anyhow::Result<WriteReport> {
+    let mut prepared = std::collections::BTreeMap::<std::path::PathBuf, (Vec<u8>, bool)>::new();
+    for file in files.iter().flat_map(|(_, lang_files)| lang_files.iter()) {
         let full_path = base_dir.join(&file.path);
-
-        let is_jar_file = full_path.extension().is_some_and(|ext| ext == "jar");
-
-        if is_jar_file {
-            let binary_content = base64::engine::general_purpose::STANDARD
-                .decode(&file.content)
-                .with_context(|| format!("failed to decode base64 for {}", full_path.display()))?;
-
-            if let Ok(existing) = std::fs::read(&full_path)
-                && existing == binary_content
-            {
-                debug!("  unchanged: {}", full_path.display());
-                return Ok(());
-            }
-
-            std::fs::write(&full_path, &binary_content)
-                .with_context(|| format!("failed to write binary file {}", full_path.display()))?;
-            debug!("  wrote: {}", full_path.display());
+        let (content, is_text) = if full_path.extension().is_some_and(|extension| extension == "jar") {
+            (
+                base64::engine::general_purpose::STANDARD
+                    .decode(&file.content)
+                    .with_context(|| format!("failed to decode base64 for {}", full_path.display()))?,
+                false,
+            )
         } else {
             let normalized = normalize_content(&full_path, &file.content);
             let normalized = if file.generated_header {
@@ -114,24 +136,61 @@ pub fn write_files(files: &[(Language, Vec<GeneratedFile>)], base_dir: &Path) ->
             } else {
                 normalized
             };
-            if let Ok(existing) = std::fs::read_to_string(&full_path) {
-                let existing_body = crate::core::hash::strip_hash_line(&existing);
-                let normalized_body = crate::core::hash::strip_hash_line(&normalized);
-                if existing_body == normalized_body {
-                    apply_shebang_chmod(&full_path, &normalized)?;
-                    debug!("  unchanged: {}", full_path.display());
-                    return Ok(());
-                }
-            }
-            std::fs::write(&full_path, &normalized)
-                .with_context(|| format!("failed to write generated file {}", full_path.display()))?;
-            apply_shebang_chmod(&full_path, &normalized)?;
-            debug!("  wrote: {}", full_path.display());
+            (normalized.into_bytes(), true)
+        };
+        if let Some((existing, _)) = prepared.get(&full_path) {
+            anyhow::ensure!(
+                existing == &content,
+                "multiple generators emitted different content for {}",
+                full_path.display()
+            );
+            continue;
         }
-        Ok(())
-    })?;
+        prepared.insert(full_path, (content, is_text));
+    }
+    let dirs: std::collections::BTreeSet<_> = prepared
+        .keys()
+        .filter_map(|path| path.parent().map(Path::to_path_buf))
+        .collect();
+    for dir in &dirs {
+        std::fs::create_dir_all(dir).with_context(|| format!("failed to create directory {}", dir.display()))?;
+    }
 
-    Ok(all_files.len())
+    let changed_paths = std::sync::Mutex::new(std::collections::HashSet::new());
+    prepared
+        .par_iter()
+        .try_for_each(|(full_path, (content, is_text))| -> anyhow::Result<()> {
+            if *is_text {
+                let normalized = std::str::from_utf8(content).context("prepared generated text was not UTF-8")?;
+                if let Ok(existing) = std::fs::read_to_string(full_path) {
+                    let existing_body = crate::core::hash::strip_hash_line(&existing);
+                    let normalized_body = crate::core::hash::strip_hash_line(&normalized);
+                    if existing_body == normalized_body {
+                        apply_shebang_chmod(full_path, normalized)?;
+                        debug!("  unchanged: {}", full_path.display());
+                        return Ok(());
+                    }
+                }
+                atomic_write(full_path, content)?;
+                apply_shebang_chmod(full_path, normalized)?;
+            } else if std::fs::read(full_path).is_ok_and(|existing| existing == *content) {
+                debug!("  unchanged: {}", full_path.display());
+                return Ok(());
+            } else {
+                atomic_write(full_path, content)?;
+            }
+            changed_paths
+                .lock()
+                .expect("changed-path mutex poisoned")
+                .insert(full_path.clone());
+            debug!("  wrote: {}", full_path.display());
+            Ok(())
+        })?;
+
+    Ok(WriteReport {
+        expected_paths: prepared.into_keys().collect(),
+        changed_paths: changed_paths.into_inner().expect("changed-path mutex poisoned"),
+    })
 }
 
 /// Inject the per-file `alef:hash:` line into every alef-headered file in
@@ -173,8 +232,8 @@ pub fn finalize_hashes(
             return Ok(());
         }
 
-        std::fs::write(path, &final_content)
-            .with_context(|| format!("failed to finalize hash for {}", path.display()))?;
+        atomic_write(path, final_content.as_bytes())?;
+        apply_shebang_chmod(path, &final_content)?;
         updated.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     })?;

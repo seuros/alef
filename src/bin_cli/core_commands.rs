@@ -82,7 +82,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     .map(|(language, generated)| {
                         (
                             *language,
-                            generated.iter().map(|file| base_dir.join(&file.path)).collect(),
+                            generated
+                                .iter()
+                                .filter(|file| file.generated_header)
+                                .map(|file| base_dir.join(&file.path))
+                                .collect(),
                         )
                     })
                     .collect();
@@ -93,7 +97,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let mut any_written = false;
                 for (lang, lang_files) in &files {
                     let lang_str = lang.to_string();
-                    for file in lang_files {
+                    for file in lang_files.iter().filter(|file| file.generated_header) {
                         current_gen_paths.insert(base_dir.join(&file.path));
                     }
 
@@ -118,10 +122,12 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     }
 
                     let single = vec![(*lang, lang_files.clone())];
-                    let written = pipeline::write_files(&single, &base_dir)?;
-                    total_written += written;
-                    any_written = true;
-                    changed_languages.insert(*lang);
+                    let report = pipeline::write_files_report(&single, &base_dir)?;
+                    total_written += report.changed_count();
+                    if report.changed_count() > 0 {
+                        any_written = true;
+                        changed_languages.insert(*lang);
+                    }
                     let _ = cache::write_generation_hashes(&cache_key, &hashes);
                 }
 
@@ -129,21 +135,31 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     let svc_files = pipeline::generate_service_api(&api, resolved_cfg, &languages)?;
                     if !svc_files.is_empty() {
                         for (_, files) in &svc_files {
-                            for file in files {
+                            for file in files.iter().filter(|file| file.generated_header) {
                                 current_gen_paths.insert(base_dir.join(&file.path));
                             }
                         }
                         for (language, generated) in &svc_files {
-                            language_output_paths
-                                .entry(*language)
-                                .or_default()
-                                .extend(generated.iter().map(|file| base_dir.join(&file.path)));
+                            language_output_paths.entry(*language).or_default().extend(
+                                generated
+                                    .iter()
+                                    .filter(|file| file.generated_header)
+                                    .map(|file| base_dir.join(&file.path)),
+                            );
                         }
-                        let svc_count = pipeline::write_files(&svc_files, &base_dir)?;
+                        let report = pipeline::write_files_report(&svc_files, &base_dir)?;
+                        let svc_count = report.changed_count();
                         tracing::info!("Generated {svc_count} service API files");
-                        any_written = true;
-                        for (lang, _) in &svc_files {
-                            changed_languages.insert(*lang);
+                        if svc_count > 0 {
+                            any_written = true;
+                            for (lang, generated) in &svc_files {
+                                if generated
+                                    .iter()
+                                    .any(|file| report.changed_paths.contains(&base_dir.join(&file.path)))
+                                {
+                                    changed_languages.insert(*lang);
+                                }
+                            }
                         }
                     }
                 }
@@ -169,24 +185,32 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             !api_hashes.is_empty() && api_hashes.iter().all(|(p, h)| stored_api.get(p) == Some(h));
 
                         for (_, files) in &public_api_files {
-                            for file in files {
+                            for file in files.iter().filter(|file| file.generated_header) {
                                 current_gen_paths.insert(base_dir.join(&file.path));
                             }
                         }
                         for (language, generated) in &public_api_files {
-                            language_output_paths
-                                .entry(*language)
-                                .or_default()
-                                .extend(generated.iter().map(|file| base_dir.join(&file.path)));
+                            language_output_paths.entry(*language).or_default().extend(
+                                generated
+                                    .iter()
+                                    .filter(|file| file.generated_header)
+                                    .map(|file| base_dir.join(&file.path)),
+                            );
                         }
 
                         if !api_match || clean {
-                            let api_count = pipeline::write_files(&public_api_files, &base_dir)?;
+                            let report = pipeline::write_files_report(&public_api_files, &base_dir)?;
+                            let api_count = report.changed_count();
                             tracing::info!("Generated {api_count} public API files");
-                            any_written = true;
+                            any_written |= api_count > 0;
                             let _ = cache::write_generation_hashes(&api_cache_key, &api_hashes);
-                            for (lang, _) in &public_api_files {
-                                changed_languages.insert(*lang);
+                            for (lang, generated) in &public_api_files {
+                                if generated
+                                    .iter()
+                                    .any(|file| report.changed_paths.contains(&base_dir.join(&file.path)))
+                                {
+                                    changed_languages.insert(*lang);
+                                }
                             }
                         } else {
                             tracing::info!("  [public_api] up to date (skipping)");
@@ -214,25 +238,33 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         !stub_hashes.is_empty() && stub_hashes.iter().all(|(p, h)| stored_stubs.get(p) == Some(h));
 
                     for (_, files) in &stub_files {
-                        for file in files {
+                        for file in files.iter().filter(|file| file.generated_header) {
                             current_gen_paths.insert(base_dir.join(&file.path));
                         }
                     }
                     for (language, generated) in &stub_files {
-                        language_output_paths
-                            .entry(*language)
-                            .or_default()
-                            .extend(generated.iter().map(|file| base_dir.join(&file.path)));
+                        language_output_paths.entry(*language).or_default().extend(
+                            generated
+                                .iter()
+                                .filter(|file| file.generated_header)
+                                .map(|file| base_dir.join(&file.path)),
+                        );
                     }
 
                     if !stubs_match || clean {
-                        let stub_count = pipeline::write_files(&stub_files, &base_dir)?;
+                        let report = pipeline::write_files_report(&stub_files, &base_dir)?;
+                        let stub_count = report.changed_count();
                         tracing::info!("Generated {stub_count} type stub files");
-                        any_written = true;
+                        any_written |= stub_count > 0;
                         let _ = cache::write_generation_hashes(&stubs_cache_key, &stub_hashes);
 
-                        for (lang, _) in &stub_files {
-                            changed_languages.insert(*lang);
+                        for (lang, generated) in &stub_files {
+                            if generated
+                                .iter()
+                                .any(|file| report.changed_paths.contains(&base_dir.join(&file.path)))
+                            {
+                                changed_languages.insert(*lang);
+                            }
                         }
                     } else {
                         tracing::info!("  [stubs] up to date (skipping)");
@@ -241,7 +273,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                 match pipeline::scaffold(&api, resolved_cfg, &languages, config_path) {
                     Ok(scaffold_files) => {
-                        for file in &scaffold_files {
+                        for file in scaffold_files.iter().filter(|file| file.generated_header) {
                             current_gen_paths.insert(base_dir.join(&file.path));
                         }
                     }
@@ -251,20 +283,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 }
 
                 let cleanup_roots = pipeline::generate_sweep_roots(&languages, lang.is_some(), resolved_cfg, &base_dir);
-                if let Ok(removed) = pipeline::cleanup_orphaned_files(&current_gen_paths, &cleanup_roots)
-                    && removed > 0
-                {
-                    tracing::info!("Removed {removed} stale alef-generated file(s)");
-                }
-
-                {
-                    let roots: Vec<std::path::PathBuf> = cleanup_roots.into_iter().filter(|d| d.exists()).collect();
-                    if let Ok(removed) = pipeline::sweep_orphans(&roots, &current_gen_paths)
-                        && removed > 0
-                    {
-                        tracing::info!("Removed {removed} stale alef-generated file(s)");
-                    }
-                }
+                let previous_paths: Vec<_> = languages
+                    .iter()
+                    .flat_map(|language| cache::read_lang_manifest(&resolved_cfg.name, &language.to_string()))
+                    .collect();
+                pipeline::sweep_manifest_orphans(&previous_paths, &current_gen_paths, &cleanup_roots)?;
 
                 if any_written && !changed_languages.is_empty() {
                     tracing::info!("Formatting generated files...");
@@ -346,7 +369,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                 let stub_paths: std::collections::HashSet<PathBuf> = files
                     .iter()
-                    .flat_map(|(_, fs)| fs.iter().map(|f| base_dir.join(&f.path)))
+                    .flat_map(|(_, fs)| {
+                        fs.iter()
+                            .filter(|file| file.generated_header)
+                            .map(|file| base_dir.join(&file.path))
+                    })
                     .collect();
                 let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
                 pipeline::finalize_hashes(&stub_paths, &sources_hash, &alef_toml_bytes)?;
@@ -394,7 +421,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let sources_hash = cache::sources_hash(&resolved_cfg.sources)?;
                 let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
                 let count = pipeline::write_scaffold_files(&files, &base_dir)?;
-                let output_paths: Vec<PathBuf> = files.iter().map(|f| base_dir.join(&f.path)).collect();
+                let output_paths: Vec<PathBuf> = files
+                    .iter()
+                    .filter(|file| file.generated_header)
+                    .map(|file| base_dir.join(&file.path))
+                    .collect();
                 let scaffold_paths: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
                 pipeline::finalize_hashes(&scaffold_paths, &sources_hash, &alef_toml_bytes)?;
                 cache::write_stage_hash(&resolved_cfg.name, "scaffold", &stage_hash, &output_paths)?;
@@ -451,7 +482,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let sources_hash = cache::sources_hash(&resolved_cfg.sources)?;
                 let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
                 let count = pipeline::write_scaffold_files_with_overwrite(&files, &base_dir, true)?;
-                let output_paths: Vec<PathBuf> = files.iter().map(|f| base_dir.join(&f.path)).collect();
+                let output_paths: Vec<PathBuf> = files
+                    .iter()
+                    .filter(|file| file.generated_header)
+                    .map(|file| base_dir.join(&file.path))
+                    .collect();
                 let readme_paths: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
                 pipeline::finalize_hashes(&readme_paths, &sources_hash, &alef_toml_bytes)?;
                 cache::write_stage_hash(&resolved_cfg.name, "readme", &stage_hash, &output_paths)?;
@@ -469,11 +504,14 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             let mut grand_total: usize = 0;
             for resolved_cfg in &crates_to_process {
                 let languages = resolve_doc_languages(resolved_cfg, lang.as_deref())?;
+                let selector = languages.iter().map(ToString::to_string).collect::<Vec<_>>().join("-");
+                let output_key = output.as_deref().unwrap_or("default");
+                let docs_stage_key = format!("docs-{}", cache::hash_content(&format!("{selector}:{output_key}")));
                 let api = pipeline::extract(resolved_cfg, config_path, false)?;
                 let ir_json = serde_json::to_string(&api)?;
-                let stage_hash = cache::compute_stage_hash(&ir_json, "docs", &config_toml, &[]);
+                let stage_hash = cache::compute_stage_hash(&ir_json, &docs_stage_key, &config_toml, &[]);
                 let use_stage_cache = resolved_cfg.docs.is_none();
-                if use_stage_cache && cache::is_stage_cached(&resolved_cfg.name, "docs", &stage_hash) {
+                if use_stage_cache && cache::is_stage_cached(&resolved_cfg.name, &docs_stage_key, &stage_hash) {
                     if multi {
                         tracing::info!("[{}] Docs up to date (cached)", resolved_cfg.name);
                     } else {
@@ -494,12 +532,13 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     crate::docs::generate_docs_stage(&api, resolved_cfg, &languages, output.as_deref(), &base_dir)?;
                 let sources_hash = cache::sources_hash(&resolved_cfg.sources)?;
                 let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
-                let count = pipeline::write_scaffold_files_with_overwrite(&files, &base_dir, true)?;
+                let report = pipeline::write_scaffold_files_report(&files, &base_dir, true)?;
+                let count = report.changed_count();
                 let output_paths: Vec<PathBuf> = files.iter().map(|f| base_dir.join(&f.path)).collect();
                 let doc_paths: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
                 pipeline::finalize_hashes(&doc_paths, &sources_hash, &alef_toml_bytes)?;
                 if use_stage_cache {
-                    cache::write_stage_hash(&resolved_cfg.name, "docs", &stage_hash, &output_paths)?;
+                    cache::write_stage_hash(&resolved_cfg.name, &docs_stage_key, &stage_hash, &output_paths)?;
                 }
                 grand_total += count;
             }
