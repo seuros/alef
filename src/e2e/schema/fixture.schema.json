@@ -31,6 +31,12 @@
             },
             "title": { "type": "string" },
             "description": { "type": "string" },
+            "input": {},
+            "shows": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "error": { "type": "boolean", "default": false },
             "presentation": { "$ref": "#/$defs/docs_presentation" },
             "coverage_exceptions": {
               "type": "object",

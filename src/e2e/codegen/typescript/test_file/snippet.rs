@@ -285,6 +285,9 @@ mod tests {
             paths: Default::default(),
             title: None,
             description: None,
+            input: None,
+            shows: Vec::new(),
+            error: None,
             presentation: Some(crate::e2e::fixture::FixtureDocsPresentation {
                 call: None,
                 input: Some(serde_json::json!({"source": {"kind": "uri", "uri": "guide.txt"}})),

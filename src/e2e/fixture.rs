@@ -422,6 +422,9 @@ impl Default for Fixture {
 impl Fixture {
     pub fn docs_call_fixture(&self) -> Self {
         let mut fixture = self.clone();
+        if let Some(input) = self.docs.as_ref().and_then(|docs| docs.input.as_ref()) {
+            fixture.input = input.clone();
+        }
         if let Some(presentation) = self.docs.as_ref().and_then(|docs| docs.presentation.as_ref()) {
             if let Some(call) = &presentation.call {
                 fixture.call = Some(call.clone());
@@ -484,10 +487,13 @@ impl Fixture {
     }
 
     pub fn has_docs_presentation(&self) -> bool {
-        self.docs
-            .as_ref()
-            .and_then(|docs| docs.presentation.as_ref())
-            .is_some_and(|presentation| !presentation.operations.is_empty())
+        self.docs.as_ref().is_some_and(|docs| {
+            !docs.shows.is_empty()
+                || docs
+                    .presentation
+                    .as_ref()
+                    .is_some_and(|presentation| !presentation.operations.is_empty())
+        })
     }
 
     /// Resolve the effective args for this fixture, preferring fixture-level args when present.
@@ -808,6 +814,8 @@ fn load_fixtures_recursive(base: &Path, dir: &Path, fixtures: &mut Vec<Fixture>)
                 fixture.source = relative.clone();
                 validate_docs_file_inputs(&fixture)
                     .with_context(|| format!("invalid docs file input in fixture: {}", path.display()))?;
+                validate_docs_metadata(&fixture)
+                    .with_context(|| format!("invalid docs metadata in fixture: {}", path.display()))?;
                 // Expand template expressions (e.g. `{{ repeat 'x' 10000 times }}`)
                 // in all JSON string values so generators emit the expanded values.
                 expand_json_templates(&mut fixture.input);
@@ -822,6 +830,26 @@ fn load_fixtures_recursive(base: &Path, dir: &Path, fixtures: &mut Vec<Fixture>)
                 fixtures.push(fixture);
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_docs_metadata(fixture: &Fixture) -> Result<()> {
+    let Some(docs) = &fixture.docs else {
+        return Ok(());
+    };
+    let fixture_expects_error = fixture
+        .assertions
+        .iter()
+        .any(|assertion| assertion.assertion_type == "error");
+    if docs.error == Some(true) && !fixture_expects_error {
+        bail!("docs.error requires an error assertion");
+    }
+    if docs.error == Some(false) && fixture_expects_error {
+        bail!("docs.error cannot be false when the fixture expects an error");
+    }
+    if docs.shows.iter().any(|path| path.trim().is_empty()) {
+        bail!("docs.shows entries must be non-empty result paths");
     }
     Ok(())
 }

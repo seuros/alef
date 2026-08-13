@@ -36,6 +36,12 @@ pub struct FixtureDocs {
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
+    pub input: Option<serde_json::Value>,
+    #[serde(default)]
+    pub shows: Vec<String>,
+    #[serde(default)]
+    pub error: Option<bool>,
+    #[serde(default)]
     pub presentation: Option<FixtureDocsPresentation>,
     #[serde(default)]
     pub side_effects: SideEffectClass,
@@ -171,5 +177,24 @@ mod tests {
             presentation.operations[1],
             FixtureDocsOperation::Iterate { optional: true, .. }
         ));
+    }
+
+    #[test]
+    fn concise_docs_contract_deserializes_structured_input_and_result_intent() {
+        let docs: FixtureDocs = serde_json::from_value(serde_json::json!({
+            "topic": "configuration",
+            "description": "Process a structured source.",
+            "input": {"source": {"kind": "text", "value": "Hello"}},
+            "shows": ["summary", "items[0].label"],
+            "error": false
+        }))
+        .expect("fixture docs deserialize");
+
+        assert_eq!(
+            docs.input,
+            Some(serde_json::json!({"source": {"kind": "text", "value": "Hello"}}))
+        );
+        assert_eq!(docs.shows, vec!["summary", "items[0].label"]);
+        assert_eq!(docs.error, Some(false));
     }
 }

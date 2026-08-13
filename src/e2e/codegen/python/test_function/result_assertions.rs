@@ -128,12 +128,11 @@ pub(super) fn emit_result_and_assertions(
             !trimmed.starts_with('#') && trimmed.contains(result_var)
         });
 
-        let py_result_var = if result_var_used || fixture.has_docs_presentation() {
-            result_var.to_string()
-        } else {
-            "_".to_string()
-        };
-        let _ = writeln!(out, "    {py_result_var} = {call_expr}");
+        let result_binding = (result_var_used || fixture.has_docs_presentation()).then_some(result_var);
+        out.push_str(&crate::e2e::template_env::render(
+            "python/call_statement.py.jinja",
+            minijinja::context! { result_binding => result_binding, call_expr => call_expr },
+        ));
         out.push_str(&temp_assertions);
     }
 }
@@ -254,5 +253,17 @@ mod tests {
         emit_streaming_virtual_assertion(&mut out, &assertion, "chunks", "chunks");
 
         assert!(out.contains("assert len(chunks) >= 1"), "got: {out}");
+    }
+
+    #[test]
+    fn call_statement_omits_binding_when_the_result_is_unused() {
+        let rendered = crate::e2e::template_env::render(
+            "python/call_statement.py.jinja",
+            minijinja::context! { result_binding => Option::<&str>::None, call_expr => "await process(value)" },
+        );
+
+        assert_eq!(rendered, "    await process(value)\n");
+        assert!(!rendered.contains("result ="));
+        assert!(!rendered.contains("_ ="));
     }
 }

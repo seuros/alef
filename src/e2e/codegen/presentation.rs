@@ -15,7 +15,7 @@ pub(crate) struct PresentationOperation {
 }
 
 pub(crate) fn resolve(fixture: &Fixture, e2e_config: &E2eConfig, language: &str) -> Vec<PresentationOperation> {
-    let Some(presentation) = fixture.docs.as_ref().and_then(|docs| docs.presentation.as_ref()) else {
+    let Some(docs) = fixture.docs.as_ref() else {
         return Vec::new();
     };
     let call = e2e_config.resolve_call_for_fixture(
@@ -32,8 +32,18 @@ pub(crate) fn resolve(fixture: &Fixture, e2e_config: &E2eConfig, language: &str)
         e2e_config.effective_fields_array(call),
         e2e_config.effective_fields_method_calls(call),
     );
-    presentation
-        .operations
+    let operations = docs
+        .shows
+        .iter()
+        .cloned()
+        .map(|path| FixtureDocsOperation::Show { path })
+        .chain(
+            docs.presentation
+                .iter()
+                .flat_map(|presentation| presentation.operations.iter().cloned()),
+        )
+        .collect::<Vec<_>>();
+    operations
         .iter()
         .map(|operation| match operation {
             FixtureDocsOperation::Show { path } => PresentationOperation {
@@ -110,6 +120,9 @@ mod tests {
                 paths: BTreeMap::new(),
                 title: None,
                 description: None,
+                input: None,
+                shows: Vec::new(),
+                error: None,
                 presentation: Some(FixtureDocsPresentation {
                     call: None,
                     input: Some(serde_json::json!({"source": "guide.txt"})),

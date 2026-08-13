@@ -14,6 +14,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/python/docs_file_expression.py.jinja"),
     ),
     (
+        "python/call_statement.py.jinja",
+        include_str!("templates/python/call_statement.py.jinja"),
+    ),
+    (
         "rust/snippet_body.rs.jinja",
         include_str!("templates/rust/snippet_body.rs.jinja"),
     ),

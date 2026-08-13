@@ -39,3 +39,89 @@ fn readme_language_mapping_can_override_the_shared_snippet_root() {
 
     assert!(files[0].content.contains("print('generated')"));
 }
+
+#[test]
+fn readme_snippet_mapping_can_override_the_root_during_migration() {
+    let temporary = tempfile::tempdir().expect("temporary README workspace");
+    fs::create_dir_all(temporary.path().join("manual/python")).expect("manual snippet root");
+    fs::create_dir_all(temporary.path().join("generated/python")).expect("generated snippet root");
+    fs::write(
+        temporary.path().join("manual/python/legacy.md"),
+        "```python\nprint('legacy')\n```\n",
+    )
+    .expect("legacy snippet");
+    fs::write(
+        temporary.path().join("generated/python/current.md"),
+        "```python\nprint('current')\n```\n",
+    )
+    .expect("generated snippet");
+    fs::write(
+        temporary.path().join("template.md"),
+        r#"{{ snippets.legacy | include_snippet("python") }}
+{{ snippets.current | include_snippet("python") }}"#,
+    )
+    .expect("README template");
+
+    let mut config = test_config();
+    config.readme = Some(ReadmeConfig {
+        template_dir: Some(temporary.path().to_path_buf()),
+        snippets_dir: Some(PathBuf::from("manual")),
+        config: None,
+        output_pattern: None,
+        discord_url: None,
+        banner_url: None,
+        languages: std::collections::HashMap::from([(
+            "python".to_string(),
+            serde_json::json!({
+                "template": "template.md",
+                "output_path": "packages/python/README.md",
+                "snippets": {
+                    "legacy": "legacy.md",
+                    "current": {"path": "current.md", "root": "generated"}
+                }
+            }),
+        )]),
+        targets: std::collections::HashMap::new(),
+    });
+    config.workspace_root = Some(temporary.path().to_path_buf());
+
+    let files = generate_readmes(&test_api(), &config, &[Language::Python]).expect("generated README");
+
+    assert!(files[0].content.contains("print('legacy')"));
+    assert!(files[0].content.contains("print('current')"));
+}
+
+#[test]
+fn missing_mapping_root_reports_the_mapping_path_and_resolved_root() {
+    let temporary = tempfile::tempdir().expect("temporary README workspace");
+    fs::create_dir_all(temporary.path().join("manual")).expect("manual snippet root");
+    fs::write(
+        temporary.path().join("template.md"),
+        r#"{{ snippets.current | include_snippet("python") }}"#,
+    )
+    .expect("README template");
+    let mut config = test_config();
+    config.readme = Some(ReadmeConfig {
+        template_dir: Some(temporary.path().to_path_buf()),
+        snippets_dir: Some(PathBuf::from("manual")),
+        config: None,
+        output_pattern: None,
+        discord_url: None,
+        banner_url: None,
+        languages: std::collections::HashMap::from([(
+            "python".to_string(),
+            serde_json::json!({
+                "template": "template.md",
+                "output_path": "packages/python/README.md",
+                "snippets": {"current": {"path": "current.md", "root": "missing"}}
+            }),
+        )]),
+        targets: std::collections::HashMap::new(),
+    });
+    config.workspace_root = Some(temporary.path().to_path_buf());
+
+    let error = generate_readmes(&test_api(), &config, &[Language::Python]).expect_err("missing mapping root");
+    let message = format!("{error:#}");
+    assert!(message.contains("current.md"), "{message}");
+    assert!(message.contains("missing/python/current.md"), "{message}");
+}

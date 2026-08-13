@@ -3,10 +3,28 @@ use super::template_env;
 use crate::core::backend::GeneratedFile;
 use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
+use minijinja::value::ViaDeserialize;
 use minijinja::{Environment, Value};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum SnippetMapping {
+    Path(String),
+    Detailed { path: String, root: PathBuf },
+}
+
+impl SnippetMapping {
+    fn into_parts(self) -> (String, Option<PathBuf>) {
+        match self {
+            Self::Path(path) => (path, None),
+            Self::Detailed { path, root } => (path, Some(root)),
+        }
+    }
+}
 
 /// Attempt to render a README using a minijinja template. Returns `None` when no
 /// language-specific template entry is found in the config (signals caller to fall back).
@@ -138,6 +156,7 @@ fn render_template_readme(
         .map(|path| workspace_root.join(path))
         .or_else(|| readme_cfg.snippets_dir.as_ref().map(|path| workspace_root.join(path)));
     let snippets_dir_clone = snippets_dir.clone();
+    let workspace_root_for_snippets = workspace_root.to_path_buf();
 
     // A README language may borrow its code snippets from a differently-named
     // snippet directory (e.g. an `ffi` README pulling examples from a `c/`
@@ -157,12 +176,15 @@ fn render_template_readme(
 
     env.add_filter(
         "include_snippet",
-        move |path: String, language: String| -> Result<String, minijinja::Error> {
-            let Some(dir) = &snippets_dir_clone else {
+        move |ViaDeserialize(mapping): ViaDeserialize<SnippetMapping>, language: String| -> Result<String, minijinja::Error> {
+            let (path, mapping_root) = mapping.into_parts();
+            let resolved_root = mapping_root.map(|root| workspace_root_for_snippets.join(root));
+            let dir = resolved_root.as_ref().or(snippets_dir_clone.as_ref());
+            let Some(dir) = dir else {
                 return Err(minijinja::Error::new(
                     minijinja::ErrorKind::InvalidOperation,
                     format!(
-                        "cannot include snippet `{language}/{path}`: neither the README mapping nor `crates.readme.snippets_dir` configures a snippet root"
+                        "cannot include snippet `{language}/{path}`: neither this snippet mapping nor the README language nor `crates.readme.snippets_dir` configures a snippet root"
                     ),
                 ));
             };

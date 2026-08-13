@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fixtures/readme**: separate reader-facing fixture inputs, result presentation, and error intent from test data,
+  and allow individual README snippet mappings to migrate between roots without breaking sibling mappings.
+- **e2e/python**: emit unbound calls when a fixture only verifies that the call does not raise, avoiding unused-result
+  Ruff failures during generation.
 - **generate/snippets**: propagate mandatory post-build failures from `alef generate`, terminate descendant validator
   processes at the configured timeout, and report stable generated-file totals across content-identical passes.
 - **snippets**: use built-in language recipes for declarative trait-bridge fixtures and resolve C registry operations

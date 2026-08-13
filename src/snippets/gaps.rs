@@ -118,17 +118,16 @@ pub fn readme_snippet_references(
             .and_then(serde_json::Value::as_str)
             .map(PathBuf::from)
             .or_else(|| readme.snippets_dir.clone());
-        let Some(snippets_dir) = snippets_dir else {
-            continue;
-        };
         let source_language = entry
             .get("snippet_language")
             .and_then(serde_json::Value::as_str)
             .unwrap_or(language);
         if let Some(snippets) = entry.get("snippets") {
-            collect_readme_snippet_paths(snippets, &mut |path| {
+            collect_readme_snippet_mappings(snippets, &mut |path, mapping_root| {
                 let path = normalize_readme_snippet_path(path, language, source_language);
-                references.push(normalize_path(&workspace_root.join(&snippets_dir).join(path)));
+                if let Some(root) = mapping_root.map(PathBuf::from).or_else(|| snippets_dir.clone()) {
+                    references.push(normalize_path(&workspace_root.join(root).join(path)));
+                }
             });
         }
     }
@@ -264,17 +263,21 @@ fn read_coverage_ledger_references(output_root: &Path, manifest: &Path) -> Resul
         .collect()
 }
 
-fn collect_readme_snippet_paths(value: &serde_json::Value, collect: &mut impl FnMut(&str)) {
+fn collect_readme_snippet_mappings(value: &serde_json::Value, collect: &mut impl FnMut(&str, Option<&str>)) {
     match value {
-        serde_json::Value::String(path) => collect(path),
+        serde_json::Value::String(path) => collect(path, None),
         serde_json::Value::Array(values) => {
             for value in values {
-                collect_readme_snippet_paths(value, collect);
+                collect_readme_snippet_mappings(value, collect);
             }
         }
         serde_json::Value::Object(values) => {
-            for value in values.values() {
-                collect_readme_snippet_paths(value, collect);
+            if let Some(path) = values.get("path").and_then(serde_json::Value::as_str) {
+                collect(path, values.get("root").and_then(serde_json::Value::as_str));
+            } else {
+                for value in values.values() {
+                    collect_readme_snippet_mappings(value, collect);
+                }
             }
         }
         _ => {}
@@ -954,5 +957,32 @@ mod tests {
         let references = readme_snippet_references(directory.path(), Some(&readme));
 
         assert_eq!(references, vec![generated_snippet]);
+    }
+
+    #[test]
+    fn readme_references_honor_per_mapping_roots() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let readme: crate::core::config::ReadmeConfig = serde_json::from_value(serde_json::json!({
+            "snippets_dir": "manual",
+            "languages": {
+                "python": {
+                    "snippets": {
+                        "legacy": "legacy.md",
+                        "current": {"path": "current.md", "root": "generated"}
+                    }
+                }
+            }
+        }))
+        .expect("README config");
+
+        let references = readme_snippet_references(directory.path(), Some(&readme));
+
+        assert_eq!(
+            references,
+            vec![
+                directory.path().join("generated/python/current.md"),
+                directory.path().join("manual/python/legacy.md"),
+            ]
+        );
     }
 }
