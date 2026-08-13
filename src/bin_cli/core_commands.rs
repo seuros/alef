@@ -704,6 +704,24 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
             let stale = verify_walk_multi(&base_dir, &all_inputs_hashes)?;
 
+            let mut snippet_coverage_issues = Vec::new();
+            for resolved_cfg in &crates_to_process {
+                let Some(e2e_config) = &resolved_cfg.e2e else {
+                    continue;
+                };
+                let api = pipeline::extract(resolved_cfg, config_path, false)?;
+                if let Err(error) = crate::e2e::verify_fresh_snippet_coverage(
+                    &base_dir,
+                    resolved_cfg,
+                    e2e_config,
+                    &api.types,
+                    &api.enums,
+                    &api.functions,
+                ) {
+                    snippet_coverage_issues.push(format!("[{}] {error:#}", resolved_cfg.name));
+                }
+            }
+
             let mut all_version_mismatches: Vec<String> = Vec::new();
             for resolved_cfg in &crates_to_process {
                 let mismatches = pipeline::verify_versions(resolved_cfg)?;
@@ -716,8 +734,14 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     crate::bin_cli::output::line(format_args!("  {mismatch}"));
                 }
             }
+            if !snippet_coverage_issues.is_empty() {
+                crate::bin_cli::output::line("Snippet coverage issues detected:");
+                for issue in &snippet_coverage_issues {
+                    crate::bin_cli::output::line(format_args!("  {issue}"));
+                }
+            }
 
-            if stale.is_empty() && !has_version_issues {
+            if stale.is_empty() && !has_version_issues && snippet_coverage_issues.is_empty() {
                 crate::bin_cli::output::line("All bindings and versions are up to date.");
             } else {
                 if !stale.is_empty() {
@@ -731,10 +755,13 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         }
                     }
                 }
-                if !report_only {
-                    anyhow::bail!("generated bindings or versions are out of date");
-                }
             }
+            super::verify_outcome::ensure_success(
+                !stale.is_empty(),
+                has_version_issues,
+                snippet_coverage_issues.len(),
+                report_only,
+            )?;
             Ok(None)
         }
         Commands::Diff { exit_code } => {

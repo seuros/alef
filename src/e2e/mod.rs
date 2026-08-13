@@ -221,8 +221,68 @@ pub fn generate_e2e(
 
 pub fn report_cached_snippet_coverage(path: &Path) -> Result<()> {
     let coverage = coverage_cache::read_coverage_manifest(path)?;
+    snippets::coverage::validate(&coverage)?;
     report_snippet_coverage(&coverage);
     ensure_snippet_coverage_complete(&coverage)
+}
+
+pub fn evaluate_snippet_coverage(
+    config: &ResolvedCrateConfig,
+    e2e_config: &E2eConfig,
+    type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
+) -> Result<Option<snippets::SnippetCoverageLedger>> {
+    let Some(snippet_config) = &e2e_config.snippets else {
+        return Ok(None);
+    };
+    let fixtures_dir = Path::new(&e2e_config.fixtures);
+    let fixtures = load_fixtures(fixtures_dir)
+        .with_context(|| format!("failed to load fixtures from {}", fixtures_dir.display()))?;
+    let configured_languages = if e2e_config.languages.is_empty() {
+        default_e2e_languages(&config.languages)
+    } else {
+        e2e_config.languages.clone()
+    };
+    let report = snippets::generate_snippet_report(
+        &fixtures,
+        snippet_config.languages_or(&configured_languages),
+        e2e_config,
+        snippet_config,
+        config,
+        type_defs,
+        enums,
+        functions,
+    )?;
+    Ok(Some(report.coverage))
+}
+
+pub fn ensure_fresh_snippet_coverage_complete(coverage: &snippets::SnippetCoverageLedger) -> Result<()> {
+    snippets::coverage::validate(coverage)?;
+    report_snippet_coverage(coverage);
+    ensure_snippet_coverage_complete(coverage)
+}
+
+pub fn verify_fresh_snippet_coverage(
+    base_dir: &Path,
+    config: &ResolvedCrateConfig,
+    e2e_config: &E2eConfig,
+    type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
+) -> Result<()> {
+    let Some(snippet_config) = &e2e_config.snippets else {
+        return Ok(());
+    };
+    let computed = evaluate_snippet_coverage(config, e2e_config, type_defs, enums, functions)?
+        .expect("snippet configuration produces a coverage ledger");
+    ensure_fresh_snippet_coverage_complete(&computed)?;
+    let manifest = base_dir.join(&snippet_config.output).join(snippets::COVERAGE_MANIFEST);
+    let disk = coverage_cache::read_coverage_manifest(&manifest)?;
+    snippets::coverage::validate_tracked_files(&disk, &base_dir.join(&snippet_config.output))?;
+    snippets::coverage::validate_current(disk, computed)
+        .with_context(|| format!("snippet coverage manifest is stale: {}", manifest.display()))?;
+    Ok(())
 }
 
 fn report_snippet_coverage(coverage: &snippets::SnippetCoverageLedger) {

@@ -184,43 +184,11 @@ pub fn coverage_ledger_references(snippet_dirs: &[PathBuf]) -> Result<Vec<PathBu
 fn read_coverage_ledger_references(output_root: &Path, manifest: &Path) -> Result<Vec<PathBuf>> {
     let content = std::fs::read_to_string(manifest)?;
     let ledger: crate::e2e::snippets::SnippetCoverageLedger = serde_json::from_str(&content)?;
-    if ledger.format_version != crate::e2e::snippets::COVERAGE_MANIFEST_VERSION {
-        return Err(crate::snippets::error::Error::Other(format!(
-            "stale fixture-snippet coverage manifest version {} at {}; expected {}",
-            ledger.format_version,
-            manifest.display(),
-            crate::e2e::snippets::COVERAGE_MANIFEST_VERSION
-        )));
-    }
-    if !ledger.missing.is_empty()
-        || ledger.expected.len() != ledger.generated.len() + ledger.documented_exceptions.len()
-    {
+    crate::e2e::snippets::coverage::validate(&ledger)
+        .map_err(|error| crate::snippets::error::Error::Other(format!("invalid coverage ledger: {error:#}")))?;
+    if !ledger.missing.is_empty() {
         return Err(crate::snippets::error::Error::Other(format!(
             "incomplete fixture-snippet coverage manifest at {}",
-            manifest.display()
-        )));
-    }
-    if ledger.generated_paths.len() != ledger.generated.len()
-        || ledger.generated_metadata.len() != ledger.generated_paths.len()
-    {
-        return Err(crate::snippets::error::Error::Other(format!(
-            "stale fixture-snippet path ledger at {}",
-            manifest.display()
-        )));
-    }
-    let metadata_paths = ledger
-        .generated_metadata
-        .iter()
-        .map(|metadata| metadata.path.as_path())
-        .collect::<BTreeSet<_>>();
-    let generated_paths = ledger
-        .generated_paths
-        .iter()
-        .map(PathBuf::as_path)
-        .collect::<BTreeSet<_>>();
-    if metadata_paths != generated_paths {
-        return Err(crate::snippets::error::Error::Other(format!(
-            "stale fixture-snippet metadata ledger at {}",
             manifest.display()
         )));
     }
@@ -660,11 +628,7 @@ mod tests {
 
         let error = coverage_ledger_references(&[directory.path().to_path_buf()]).expect_err("stale ledger must fail");
 
-        assert!(
-            error
-                .to_string()
-                .contains("stale fixture-snippet coverage manifest version")
-        );
+        assert!(error.to_string().contains("coverage manifest version 0 is unsupported"));
     }
 
     fn coverage_ledger(format_version: u32) -> SnippetCoverageLedger {

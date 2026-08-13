@@ -28,6 +28,22 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             let multi = dispatch::is_multi_crate(&crates_to_process);
             let base_dir = std::env::current_dir()?;
 
+            for resolved_cfg in &crates_to_process {
+                let Some(e2e_config) = &resolved_cfg.e2e else {
+                    continue;
+                };
+                let api = pipeline::extract(resolved_cfg, config_path, false)?;
+                if let Some(coverage) = crate::e2e::evaluate_snippet_coverage(
+                    resolved_cfg,
+                    e2e_config,
+                    &api.types,
+                    &api.enums,
+                    &api.functions,
+                )? {
+                    crate::e2e::ensure_fresh_snippet_coverage_complete(&coverage)?;
+                }
+            }
+
             if let Err(e) = version_pin::write_alef_toml_version(config_path) {
                 tracing::warn!("could not update alef.toml version pin: {e}");
             }

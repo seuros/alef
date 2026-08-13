@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
+pub mod coverage;
 pub(crate) mod ledger_paths;
 pub mod migration;
 mod recipe_policy;
@@ -298,16 +299,8 @@ fn generate_snippet_report_with_extensions(
             coverage.generated.push(key);
         }
     }
-    coverage.expected.sort();
-    coverage.generated.sort();
-    coverage.generated_paths.sort();
-    coverage
-        .generated_metadata
-        .sort_by(|left, right| left.path.cmp(&right.path));
-    coverage.missing.sort_by(|left, right| left.key.cmp(&right.key));
-    coverage
-        .documented_exceptions
-        .sort_by(|left, right| left.key.cmp(&right.key));
+    coverage = coverage::normalize(coverage);
+    coverage::validate(&coverage)?;
     Ok(SnippetGenerationReport {
         snippets: generated.into_values().collect(),
         coverage,

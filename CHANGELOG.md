@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **verify**: evaluate fixture-snippet coverage from current fixtures and renderers, reject stale or malformed coverage
+  ledgers and missing tracked snippets, and preflight `alef all` before generated-file writes.
 - Fixed indexed JSON-scalar metadata matching, simple-result enum containment, falsifiable collection containment,
   and JNI streaming exports for opaque owner handles without ordinary methods.
 
