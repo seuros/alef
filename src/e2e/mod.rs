@@ -77,7 +77,6 @@ pub fn generate_e2e(
     let fixtures_dir = Path::new(&e2e_config.fixtures);
     let fixtures = load_fixtures(fixtures_dir)
         .with_context(|| format!("failed to load fixtures from {}", fixtures_dir.display()))?;
-    scaffold::sync_fixture_schema(fixtures_dir)?;
 
     info!("Loaded {} fixture(s) from {}", fixtures.len(), e2e_config.fixtures);
 
@@ -344,5 +343,24 @@ mod tests {
         };
 
         ensure_snippet_coverage_complete(&coverage).expect("documented exception is intentional");
+    }
+
+    #[test]
+    fn generation_does_not_write_fixture_schema() {
+        let directory = tempfile::tempdir().expect("temporary fixture directory");
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.fixtures = directory.path().display().to_string();
+
+        generate_e2e(
+            &ResolvedCrateConfig::default(),
+            &e2e_config,
+            Some(&[]),
+            &[],
+            &[],
+            &[],
+        )
+        .expect("generate empty E2E suite");
+
+        assert!(!directory.path().join("schema.json").exists());
     }
 }
