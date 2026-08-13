@@ -143,8 +143,9 @@ impl Fixture {
             });
         }
 
-        if let Some(input) = &self.input {
-            if let Some(arr) = input.get("mock_responses").and_then(|v| v.as_array()) {
+        if let Some(input) = &self.input
+            && let Some(arr) = input.get("mock_responses").and_then(|v| v.as_array())
+        {
                 for entry in arr {
                     let original_path = entry
                         .get("path")
@@ -218,7 +219,6 @@ impl Fixture {
                         body_bytes,
                     });
                 }
-            }
         }
 
         routes

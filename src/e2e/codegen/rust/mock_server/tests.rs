@@ -18,6 +18,10 @@ fn render_mock_server_binary_contains_main() {
 fn render_mock_server_binary_is_valid_rust() {
     let out = render_mock_server_binary();
     syn::parse_file(&out).expect("generated mock server must parse as Rust");
+    assert!(
+        out.contains("if let Some(input) = &self.input\n            && let Some(arr)"),
+        "mock route loading must use a let-chain accepted by clippy"
+    );
 }
 
 #[test]

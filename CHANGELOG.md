@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **e2e/rust**: emit Clippy-clean mock-server route loading.
 - **ffi**: return named values as generational handle tokens and resolve nested Rust type paths without duplicating
   the core module.
 - **clean**: use the generated Kotlin Android Gradle wrapper and avoid invalid generic Dart and C# clean commands.
