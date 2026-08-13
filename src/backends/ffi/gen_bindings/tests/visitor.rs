@@ -170,6 +170,41 @@ fn test_visitor_callbacks_ffi_functions() {
 }
 
 #[test]
+fn test_visitor_callbacks_preserve_configured_registration_export() {
+    let api = visitor_api();
+    let config = resolved_one(
+        r#"
+[workspace]
+languages = ["ffi"]
+
+[[crates]]
+name = "my-lib"
+sources = ["src/lib.rs"]
+
+[crates.ffi]
+prefix = "sample"
+visitor_callbacks = true
+
+[[crates.trait_bridges]]
+trait_name = "HtmlVisitor"
+type_alias = "VisitorHandle"
+param_name = "visitor"
+bind_via = "options_field"
+options_type = "Options"
+options_field = "visitor"
+register_fn = "register_html_visitor"
+registry_getter = "html_visitor_registry"
+context_type = "NodeContext"
+result_type = "VisitResult"
+"#,
+    );
+    let files = FfiBackend.generate_bindings(&api, &config).unwrap();
+    let lib = files.iter().find(|file| file.path.ends_with("lib.rs")).unwrap();
+
+    assert!(lib.content.contains("fn sample_register_html_visitor("));
+}
+
+#[test]
 fn test_visitor_callbacks_callback_signatures() {
     let api = visitor_api();
     let config = visitor_config_htm();

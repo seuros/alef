@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ffi**: keep named field accessors on scalar handle tokens, fail closed for lifetime-borrowed types that cannot
   enter the process-global registry, preserve forward-compatible error taxonomy matching, and type empty handle
   acquisition lists explicitly.
+- **ffi/csharp**: retain configured trait registration exports and matching P/Invoke declarations when visitor
+  callbacks also bind the trait through an options field.
+- **ruby**: exclude compiled native libraries, object archives, logs, and debug-symbol bundles from scaffolded source
+  gems.
+- **zig**: derive the scaffolded local FFI header include directory from the configured FFI output path.
 - **snippets**: emit strict TypeScript DTO literals and optional accessors, prefix WASM imports, and deserialize
   Kotlin Android inputs using each argument's declared DTO type.
 - **node**: export zero-argument adjacent-enum namespace constructors as callable functions instead of getters.

@@ -543,6 +543,17 @@ fn test_scaffold_ruby_gemspec_includes_sorbet_runtime_dependency() {
 }
 
 #[test]
+fn test_scaffold_ruby_gemspec_excludes_native_build_artifacts() {
+    let all_files = scaffold(&test_api(), &test_config(), &[Language::Ruby]).unwrap();
+    let files = language_files(&all_files);
+    let gemspec = &files[0].content;
+
+    assert!(gemspec.contains("/(?:target|tmp)/"));
+    assert!(gemspec.contains("\\.(?:bundle|so|dylib|dll|o|a|log)\\z"));
+    assert!(gemspec.contains("\\.dSYM/"));
+}
+
+#[test]
 fn test_java_checkstyle_no_cosmetic_checks() {
     let mut config = test_config();
     config.languages = vec![Language::Java];

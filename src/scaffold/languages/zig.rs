@@ -10,7 +10,7 @@ pub(crate) fn scaffold_zig(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
     let version = &api.version;
     let ffi_lib_name = config.ffi_lib_name();
     let module_name = config.zig_module_name();
-    let ffi_crate_dir = format!("{}-ffi", config.name);
+    let ffi_crate_path = config.ffi_crate_path();
 
     let capsule_imports_block: String = config
         .zig
@@ -54,7 +54,7 @@ pub fn build(b: *std.Build) void {{
         []const u8,
         "ffi_include_path",
         "Path to directory containing the FFI C header"
-    ) orelse "../../crates/{ffi_crate_dir}/include";
+    ) orelse "{ffi_crate_path}/include";
 
     const module = b.addModule("{module_name}", .{{
         .root_source_file = b.path("src/{module_name}.zig"),
@@ -87,7 +87,7 @@ pub fn build(b: *std.Build) void {{
 "#,
         module_name = module_name,
         ffi_lib = ffi_lib_name,
-        ffi_crate_dir = ffi_crate_dir,
+        ffi_crate_path = ffi_crate_path,
         capsule_imports_block = capsule_imports_block,
     );
 

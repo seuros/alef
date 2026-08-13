@@ -508,3 +508,15 @@ fn test_scaffold_zig() {
         "Zig scaffold must not emit GitHub workflows"
     );
 }
+
+#[test]
+fn test_scaffold_zig_uses_configured_ffi_output_path() {
+    let mut config = test_config();
+    config.explicit_output.ffi = Some("crates/sample-native-ffi/src".into());
+    let all_files = scaffold(&test_api(), &config, &[Language::Zig]).unwrap();
+    let files = language_files(&all_files);
+    let build_zig = &files[0].content;
+
+    assert!(build_zig.contains("../../crates/sample-native-ffi/include"));
+    assert!(!build_zig.contains("my-lib-ffi/include"));
+}

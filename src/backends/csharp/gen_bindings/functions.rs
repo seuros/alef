@@ -8,6 +8,12 @@ use crate::core::ir::{ApiSurface, FunctionDef, MethodDef, PrimitiveType, TypeRef
 use heck::{ToLowerCamelCase, ToSnakeCase};
 use std::collections::{HashMap, HashSet};
 
+fn emits_registered_trait_bridge(has_visitor_callbacks: bool, config: &TraitBridgeConfig) -> bool {
+    !has_visitor_callbacks
+        || config.bind_via != crate::core::config::BridgeBinding::OptionsField
+        || config.register_fn.is_some()
+}
+
 fn ffi_handle_type_names(api: &ApiSurface) -> HashSet<&str> {
     let mut names: HashSet<&str> = api
         .types
@@ -482,9 +488,7 @@ pub(super) fn gen_native_methods(
 
         let bridges: Vec<_> = trait_bridges
             .iter()
-            .filter(|config| {
-                !(has_visitor_callbacks && config.bind_via == crate::core::config::BridgeBinding::OptionsField)
-            })
+            .filter(|config| emits_registered_trait_bridge(has_visitor_callbacks, config))
             .filter_map(|config| {
                 let trait_name = config.trait_name.clone();
                 trait_defs
@@ -673,7 +677,8 @@ pub(super) fn gen_pinvoke_for_method(c_name: &str, cs_name: &str, method: &Metho
 
 #[cfg(test)]
 mod tests {
-    use super::ffi_handle_type_names;
+    use super::{emits_registered_trait_bridge, ffi_handle_type_names};
+    use crate::core::config::NewAlefConfig;
     use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, FieldDef, TypeDef};
 
     #[test]
@@ -704,6 +709,33 @@ mod tests {
         assert!(!names.contains("MarkupVisitor"));
         assert!(!names.contains("NodeKind"));
         assert!(names.contains("CrawlEvent"));
+    }
+
+    #[test]
+    fn visitor_callbacks_preserve_registered_options_field_pinvoke() {
+        let config: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["csharp"]
+
+[[crates]]
+name = "sample"
+sources = ["src/lib.rs"]
+
+[[crates.trait_bridges]]
+trait_name = "MarkupVisitor"
+bind_via = "options_field"
+options_type = "RenderOptions"
+options_field = "visitor"
+register_fn = "register_markup_visitor"
+registry_getter = "markup_visitor_registry"
+"#,
+        )
+        .unwrap();
+        let resolved = config.resolve().unwrap();
+        let bridge = &resolved[0].trait_bridges[0];
+
+        assert!(emits_registered_trait_bridge(true, bridge));
     }
 
     fn type_def(name: &str, is_trait: bool) -> TypeDef {
