@@ -5,6 +5,71 @@ use crate::core::backend::Backend;
 use crate::core::ir::*;
 
 #[test]
+fn ffi_result_errors_use_stable_variant_taxonomy_codes() {
+    let config = resolved_one(
+        r#"
+[workspace]
+languages = ["ffi"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+
+[crates.ffi]
+prefix = "sample"
+"#,
+    );
+    let error = ErrorDef {
+        name: "RequestError".to_string(),
+        rust_path: "sample_lib::RequestError".to_string(),
+        variants: vec![
+            ErrorVariant {
+                name: "InvalidInput".to_string(),
+                is_unit: true,
+                ..ErrorVariant::default()
+            },
+            ErrorVariant {
+                name: "Unavailable".to_string(),
+                is_tuple: true,
+                ..ErrorVariant::default()
+            },
+        ],
+        original_rust_path: String::new(),
+        doc: String::new(),
+        methods: Vec::new(),
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        version: VersionAnnotation::default(),
+    };
+    let api = ApiSurface {
+        crate_name: "sample-lib".to_string(),
+        version: "1.0.0".to_string(),
+        errors: vec![error],
+        functions: vec![FunctionDef {
+            name: "execute".to_string(),
+            rust_path: "sample_lib::execute".to_string(),
+            return_type: TypeRef::Unit,
+            error_type: Some("RequestError".to_string()),
+            ..FunctionDef::default()
+        }],
+        ..ApiSurface::default()
+    };
+    let codes = api.error_taxonomy();
+
+    let files = FfiBackend.generate_bindings(&api, &config).unwrap();
+    let lib = files.iter().find(|file| file.path.ends_with("lib.rs")).unwrap();
+
+    assert!(lib.content.contains("const ALEF_FFI_CONVERSION_ERROR: i32 = 1;"));
+    assert!(lib.content.contains("const ALEF_FFI_PANIC_ERROR: i32 = 3;"));
+    assert!(lib.content.contains("sample_lib::RequestError::InvalidInput =>"));
+    assert!(lib.content.contains("sample_lib::RequestError::Unavailable(..) =>"));
+    assert!(lib.content.contains("set_last_error(alef_ffi_error_code(&e)"));
+    for taxonomy in codes {
+        assert!(lib.content.contains(&format!("=> {}", taxonomy.code)));
+    }
+}
+
+#[test]
 fn cbindgen_maps_feature_gates_to_header_macros() {
     let config = resolved_one(
         r#"

@@ -1,6 +1,6 @@
 use crate::backends::ffi::type_map::is_void_return;
 use crate::codegen::doc_emission::emit_c_doxygen;
-use crate::core::ir::TypeRef;
+use crate::core::ir::{ApiSurface, TypeRef};
 use ahash::AHashSet;
 
 /// Render a `/** ... */` Doxygen block above a `typedef` line. `doc` is the
@@ -604,11 +604,58 @@ pub(super) fn gen_build_rs(
     )
 }
 
-pub(super) fn gen_last_error(prefix: &str) -> String {
+#[derive(serde::Serialize)]
+struct FfiErrorVariantCode {
+    pattern: String,
+    code: i32,
+}
+
+#[derive(serde::Serialize)]
+struct FfiErrorCodeImpl {
+    error_path: String,
+    variants: Vec<FfiErrorVariantCode>,
+}
+
+pub(super) fn gen_last_error(api: &ApiSurface, prefix: &str, core_import: &str) -> String {
+    let taxonomy = api.error_taxonomy();
+    let error_code_impls: Vec<_> = api
+        .errors
+        .iter()
+        .map(|error| {
+            let error_path = if error.rust_path.contains("::") {
+                error.rust_path.replace('-', "_")
+            } else {
+                format!("{core_import}::{}", error.name)
+            };
+            let variants = error
+                .variants
+                .iter()
+                .map(|variant| {
+                    let metadata = taxonomy
+                        .iter()
+                        .find(|entry| entry.error_type == error.rust_path && entry.variant == variant.name)
+                        .expect("taxonomy covers every extracted error variant");
+                    let suffix = if variant.is_unit {
+                        String::new()
+                    } else if variant.is_tuple {
+                        "(..)".to_string()
+                    } else {
+                        " { .. }".to_string()
+                    };
+                    FfiErrorVariantCode {
+                        pattern: format!("{error_path}::{}{suffix}", variant.name),
+                        code: metadata.code as i32,
+                    }
+                })
+                .collect();
+            FfiErrorCodeImpl { error_path, variants }
+        })
+        .collect();
     crate::backends::ffi::template_env::render(
         "last_error.jinja",
         minijinja::context! {
             prefix => prefix,
+            error_code_impls => error_code_impls,
         },
     )
 }

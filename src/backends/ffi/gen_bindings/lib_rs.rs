@@ -85,7 +85,7 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
         builder.add_item("pub mod service;");
     }
 
-    builder.add_item(&gen_last_error(prefix));
+    builder.add_item(&gen_last_error(api, prefix, &core_import));
 
     builder.add_item(&gen_free_string(prefix));
 

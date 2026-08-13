@@ -47,12 +47,16 @@ pub struct ErrorTaxonomy {
 }
 
 impl ErrorTaxonomy {
+    const FIRST_VARIANT_CODE: u32 = 100;
+    const LAST_VARIANT_CODE: u32 = i32::MAX as u32;
+
     pub fn for_variant(error_type: &str, variant: &str) -> Self {
         let identity = format!("{error_type}::{variant}");
         let digest = blake3::hash(identity.as_bytes());
         let mut code_bytes = [0_u8; size_of::<u32>()];
         code_bytes.copy_from_slice(&digest.as_bytes()[..size_of::<u32>()]);
-        let code = u32::from_le_bytes(code_bytes).max(1);
+        let code_space = Self::LAST_VARIANT_CODE - Self::FIRST_VARIANT_CODE + 1;
+        let code = Self::FIRST_VARIANT_CODE + u32::from_le_bytes(code_bytes) % code_space;
 
         Self {
             code,
@@ -70,8 +74,12 @@ impl ErrorTaxonomy {
 
         let mut used = std::collections::HashSet::new();
         for index in order {
-            while taxonomies[index].code == 0 || !used.insert(taxonomies[index].code) {
-                taxonomies[index].code = taxonomies[index].code.wrapping_add(1);
+            while !used.insert(taxonomies[index].code) {
+                taxonomies[index].code = if taxonomies[index].code == Self::LAST_VARIANT_CODE {
+                    Self::FIRST_VARIANT_CODE
+                } else {
+                    taxonomies[index].code + 1
+                };
             }
         }
     }
@@ -116,7 +124,7 @@ mod error_taxonomy_tests {
         let mut taxonomies: Vec<_> = cases
             .iter()
             .map(|(error_type, variant)| ErrorTaxonomy {
-                code: 7,
+                code: ErrorTaxonomy::FIRST_VARIANT_CODE,
                 error_type: error_type.to_string(),
                 variant: variant.to_string(),
             })
@@ -124,8 +132,8 @@ mod error_taxonomy_tests {
 
         ErrorTaxonomy::ensure_unique_codes(&mut taxonomies);
 
-        assert_eq!(taxonomies[0].code, 8);
-        assert_eq!(taxonomies[1].code, 7);
+        assert_eq!(taxonomies[0].code, ErrorTaxonomy::FIRST_VARIANT_CODE + 1);
+        assert_eq!(taxonomies[1].code, ErrorTaxonomy::FIRST_VARIANT_CODE);
     }
 }
 
