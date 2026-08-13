@@ -1,12 +1,3 @@
-# Default owner — everything
-* @Goldziher
-
-# Zensical config and documentation
-/zensical.toml @Goldziher @v-tan
-/docs/ @Goldziher @v-tan
-*.md @Goldziher @v-tan
-
-# Rust source
-/src/ @Goldziher @kh3rld
-/tests/ @Goldziher @kh3rld
-/benches/ @Goldziher @kh3rld
+# Default owner — everything.
+# Both maintainers are requested for review on every pull request.
+* @Goldziher @tobocop2
