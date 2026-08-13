@@ -33,7 +33,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             let mut binding_count: usize = 0;
             let mut all_paths = std::collections::HashSet::new();
             for (lang_key, lang_files) in &bindings {
-                for file in lang_files {
+                for file in lang_files.iter().filter(|file| file.generated_header) {
                     all_paths.insert(base_dir.join(&file.path));
                 }
                 let single = vec![(*lang_key, lang_files.clone())];
@@ -43,12 +43,16 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             tracing::info!("  Generating scaffolding...");
             let scaffold_files = pipeline::scaffold(&api, resolved_cfg, &languages, config_path)?;
             let scaffold_count = pipeline::write_scaffold_files(&scaffold_files, &base_dir)?;
-            for file in &scaffold_files {
+            for file in scaffold_files.iter().filter(|file| file.generated_header) {
                 all_paths.insert(base_dir.join(&file.path));
             }
 
             tracing::info!("  Formatting...");
-            pipeline::format_generated(&bindings, resolved_cfg, &base_dir, None);
+            let managed_bindings: Vec<_> = bindings
+                .iter()
+                .map(|(language, files)| (*language, pipeline::managed_generated_files(files)))
+                .collect();
+            pipeline::format_generated(&managed_bindings, resolved_cfg, &base_dir, None);
 
             let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
             pipeline::finalize_hashes(&all_paths, &sources_hash, &alef_toml_bytes)?;
@@ -150,11 +154,18 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         )?;
                         let sources_hash = cache::sources_hash(&e2e_crate.sources)?;
                         let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
-                        let count = pipeline::write_scaffold_files_with_overwrite(&files, &base_dir, true)?;
+                        let report = pipeline::write_scaffold_files_report(&files, &base_dir, true)?;
+                        let count = report.changed_count();
+                        let managed_files = pipeline::managed_generated_files(&files);
 
-                        crate::e2e::format::run_formatters(&files, e2e_ref)?;
+                        if managed_files
+                            .iter()
+                            .any(|file| report.changed_paths.contains(&base_dir.join(&file.path)))
+                        {
+                            crate::e2e::format::run_formatters(&managed_files, e2e_ref)?;
+                        }
 
-                        let output_paths: Vec<PathBuf> = files.iter().map(|f| base_dir.join(&f.path)).collect();
+                        let output_paths: Vec<PathBuf> = managed_files.iter().map(|f| base_dir.join(&f.path)).collect();
                         let path_set: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
                         pipeline::finalize_hashes(&path_set, &sources_hash, &alef_toml_bytes)?;
 
@@ -172,7 +183,8 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         } else {
                             vec![e2e_output_root]
                         };
-                        pipeline::sweep_orphans(&sweep_roots, &path_set)?;
+                        let previous_paths = cache::read_stage_paths(&e2e_crate.name, cache_key);
+                        pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &sweep_roots)?;
 
                         cache::write_stage_hash(&e2e_crate.name, cache_key, &stage_hash, &output_paths)?;
                         grand_count += count;

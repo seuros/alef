@@ -18,7 +18,7 @@ pub use scaffold::{
     readme, scaffold, write_scaffold_files, write_scaffold_files_report, write_scaffold_files_with_overwrite,
 };
 pub(crate) use write::apply_shebang_chmod;
-pub use write::{finalize_hashes, managed_output_paths, write_files, write_files_report};
+pub use write::{finalize_hashes, managed_generated_files, managed_output_paths, write_files, write_files_report};
 
 #[cfg(test)]
 use normalization::{detect_crate_edition, parse_package_edition};

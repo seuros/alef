@@ -534,7 +534,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
                 let report = pipeline::write_scaffold_files_report(&files, &base_dir, true)?;
                 let count = report.changed_count();
-                let output_paths: Vec<PathBuf> = files.iter().map(|f| base_dir.join(&f.path)).collect();
+                let output_paths: Vec<PathBuf> = files
+                    .iter()
+                    .filter(|file| file.generated_header)
+                    .map(|file| base_dir.join(&file.path))
+                    .collect();
                 let doc_paths: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
                 pipeline::finalize_hashes(&doc_paths, &sources_hash, &alef_toml_bytes)?;
                 if use_stage_cache {

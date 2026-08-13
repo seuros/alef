@@ -95,12 +95,13 @@ pub(super) fn regenerate_test_apps_after_sync(
     }
     let count = super::generate::write_scaffold_files_with_overwrite(&files, &base_dir, true)?;
 
-    format_regenerated_files(&fresh_config, &files, &base_dir);
+    let managed_files = super::managed_generated_files(&files);
+    format_regenerated_files(&fresh_config, &managed_files, &base_dir);
 
     let sources_hash = super::super::cache::sources_hash(&fresh_config.source_hash_paths())?;
     let alef_toml_bytes = super::super::cache::read_alef_toml_bytes(config_path);
     let path_set: std::collections::HashSet<std::path::PathBuf> =
-        files.iter().map(|f| base_dir.join(&f.path)).collect();
+        managed_files.iter().map(|f| base_dir.join(&f.path)).collect();
     super::generate::finalize_hashes(&path_set, &sources_hash, &alef_toml_bytes)?;
 
     Ok(count)
@@ -164,12 +165,13 @@ pub(super) fn regenerate_scaffold_after_sync(
     }
     let count = super::generate::write_scaffold_files_with_overwrite(&scaffold_files, &base_dir, true)?;
 
-    format_regenerated_files(&fresh_config, &scaffold_files, &base_dir);
+    let managed_files = super::managed_generated_files(&scaffold_files);
+    format_regenerated_files(&fresh_config, &managed_files, &base_dir);
 
     let sources_hash = super::super::cache::sources_hash(&fresh_config.source_hash_paths())?;
     let alef_toml_bytes = super::super::cache::read_alef_toml_bytes(config_path);
     let path_set: std::collections::HashSet<std::path::PathBuf> =
-        scaffold_files.iter().map(|f| base_dir.join(&f.path)).collect();
+        managed_files.iter().map(|f| base_dir.join(&f.path)).collect();
     super::generate::finalize_hashes(&path_set, &sources_hash, &alef_toml_bytes)?;
 
     Ok(count)
@@ -185,8 +187,11 @@ pub(super) fn regenerate_readmes(config: &ResolvedCrateConfig, config_path: &std
     let sources_hash = super::super::cache::sources_hash(&config.source_hash_paths())?;
     let alef_toml_bytes = super::super::cache::read_alef_toml_bytes(config_path);
     let count = super::generate::write_scaffold_files_with_overwrite(&readme_files, &base_dir, true)?;
-    let paths: std::collections::HashSet<std::path::PathBuf> =
-        readme_files.iter().map(|f| base_dir.join(&f.path)).collect();
+    let paths: std::collections::HashSet<std::path::PathBuf> = readme_files
+        .iter()
+        .filter(|file| file.generated_header)
+        .map(|file| base_dir.join(&file.path))
+        .collect();
     super::generate::finalize_hashes(&paths, &sources_hash, &alef_toml_bytes)?;
     Ok(count)
 }

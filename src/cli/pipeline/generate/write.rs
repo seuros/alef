@@ -30,6 +30,10 @@ pub fn managed_output_paths(files: &[GeneratedFile], base_dir: &Path) -> std::co
         .collect()
 }
 
+pub fn managed_generated_files(files: &[GeneratedFile]) -> Vec<GeneratedFile> {
+    files.iter().filter(|file| file.generated_header).cloned().collect()
+}
+
 pub(crate) fn atomic_write(path: &Path, content: &[u8]) -> anyhow::Result<()> {
     let parent = path.parent().context("generated output path has no parent")?;
     let mut temporary = tempfile::NamedTempFile::new_in(parent)

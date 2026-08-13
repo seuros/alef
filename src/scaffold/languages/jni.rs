@@ -174,7 +174,7 @@ crate-type = ["cdylib"]
     Ok(vec![GeneratedFile {
         path: PathBuf::from(format!("crates/{jni_crate_name}/Cargo.toml")),
         content,
-        generated_header: false,
+        generated_header: true,
     }])
 }
 
@@ -336,6 +336,7 @@ namespace = "dev.sample_crate.sample_language_pack.android"
         let path = files[0].path.to_string_lossy();
         let cargo_toml = &files[0].content;
 
+        assert!(files[0].generated_header, "generated JNI manifest must be Alef-owned");
         assert_eq!(
             path, "crates/sample-language-pack-jni/Cargo.toml",
             "JNI scaffold path must follow config.name, not core_crate_dir; got: {path}"
