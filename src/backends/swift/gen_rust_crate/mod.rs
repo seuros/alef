@@ -466,11 +466,11 @@ fn emit_lib_rs(
     let service_api_callback_funcs: Vec<String> =
         super::gen_bindings::service_api::generate_rust_callback_c_functions(api).unwrap_or_default();
 
-    let extra_serde_param_types: Vec<&TypeDef> =
-        json_bridge::collect_serde_param_types(api, &visible_types, &visible_functions, &[]);
+    let signature_serde_types: Vec<&TypeDef> =
+        json_bridge::collect_signature_serde_types(&visible_types, &visible_functions, &[]);
 
-    let extra_serde_param_names: std::collections::HashSet<&str> =
-        extra_serde_param_types.iter().map(|t| t.name.as_str()).collect();
+    let signature_serde_names: std::collections::HashSet<&str> =
+        signature_serde_types.iter().map(|t| t.name.as_str()).collect();
     let streaming_item_types: Vec<&TypeDef> = {
         let streaming_item_names: std::collections::HashSet<&str> = config
             .adapters
@@ -483,7 +483,7 @@ fn emit_lib_rs(
             .copied()
             .filter(|ty| streaming_item_names.contains(ty.name.as_str()))
             .filter(|ty| ty.has_serde && !ty.is_opaque && !ty.is_trait)
-            .filter(|ty| !extra_serde_param_names.contains(ty.name.as_str()))
+            .filter(|ty| !signature_serde_names.contains(ty.name.as_str()))
             .collect()
     };
 
@@ -493,7 +493,7 @@ fn emit_lib_rs(
         .iter()
         .copied()
         .filter(|ty| ty.has_serde && !ty.is_opaque && !ty.is_trait)
-        .filter(|ty| !extra_serde_param_names.contains(ty.name.as_str()))
+        .filter(|ty| !signature_serde_names.contains(ty.name.as_str()))
         .filter(|ty| !streaming_item_names.contains(ty.name.as_str()))
         .collect();
 
@@ -503,7 +503,7 @@ fn emit_lib_rs(
     for block in &extern_blocks {
         out.push_str(block);
     }
-    json_bridge::emit_type_from_json_extern_block(&mut out, &extra_serde_param_types);
+    json_bridge::emit_type_from_json_extern_block(&mut out, &signature_serde_types);
     json_bridge::emit_type_from_json_extern_block(&mut out, &streaming_item_types);
     json_bridge::emit_type_from_json_extern_block(&mut out, &json_fallback_types);
     let json_fallback_enums_filtered: Vec<&EnumDef> = json_fallback_enums
@@ -709,7 +709,7 @@ fn emit_lib_rs(
         out.push_str(&streaming_shims);
     }
 
-    for ty in &extra_serde_param_types {
+    for ty in &signature_serde_types {
         let type_snake = AsSnakeCase(ty.name.as_str()).to_string();
         let type_name = &ty.name;
         let source_path_base =

@@ -214,11 +214,20 @@ pub(super) fn emit_from_json_forwarders(
 ) {
     use heck::AsSnakeCase;
 
-    let struct_candidates: Vec<&str> = api
-        .types
+    let visible_types: Vec<_> = api.types.iter().filter(|t| !exclude_types.contains(&t.name)).collect();
+    let visible_functions: Vec<_> = api.functions.iter().collect();
+    let struct_candidates: Vec<&str> = visible_types
         .iter()
-        .filter(|t| !t.is_trait && !t.is_opaque && t.has_serde)
-        .filter(|t| !exclude_types.contains(&t.name))
+        .copied()
+        .filter(|t| !t.is_trait && t.has_serde)
+        .filter(|t| {
+            !t.is_opaque
+                || crate::backends::swift::signatures_reference_named(
+                    visible_types.iter().copied(),
+                    visible_functions.iter().copied(),
+                    &t.name,
+                )
+        })
         .map(|t| t.name.as_str())
         .collect();
 
@@ -561,5 +570,47 @@ mod tests {
             !out.contains("presetFromJson") && !out.contains("RustBridge.Preset"),
             "cfg-filtered type must not emit a dangling RustBridge reference. Got:\n{out}"
         );
+    }
+
+    #[test]
+    fn from_json_forwarders_cover_referenced_opaque_serde_types() {
+        use crate::core::ir::FieldDef;
+
+        let mut api = ApiSurface::default();
+        api.types.push(TypeDef {
+            name: "CredentialConfig".to_owned(),
+            is_opaque: true,
+            has_serde: true,
+            ..TypeDef::default()
+        });
+        api.types.push(TypeDef {
+            name: "UnusedConfig".to_owned(),
+            is_opaque: true,
+            has_serde: true,
+            ..TypeDef::default()
+        });
+        api.types.push(TypeDef {
+            name: "RequestOptions".to_owned(),
+            fields: vec![FieldDef {
+                name: "credential".to_owned(),
+                ty: TypeRef::Named("CredentialConfig".to_owned()),
+                ..FieldDef::default()
+            }],
+            ..TypeDef::default()
+        });
+        let mut out = String::new();
+
+        emit_from_json_forwarders(
+            &api,
+            &std::collections::HashSet::new(),
+            &SwiftMapper,
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &mut out,
+        );
+
+        assert!(out.contains("credentialConfigFromJson"), "{out}");
+        assert!(out.contains("RustBridge.credentialConfigFromJson"), "{out}");
+        assert!(!out.contains("unusedConfigFromJson"), "{out}");
     }
 }

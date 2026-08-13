@@ -12,3 +12,22 @@ mod template_env;
 pub(crate) mod type_map;
 
 pub use gen_bindings::SwiftBackend;
+
+pub(crate) fn signatures_reference_named<'a>(
+    types: impl IntoIterator<Item = &'a crate::core::ir::TypeDef>,
+    functions: impl IntoIterator<Item = &'a crate::core::ir::FunctionDef>,
+    name: &str,
+) -> bool {
+    let function_references = functions.into_iter().any(|function| {
+        function.return_type.references_named(name)
+            || function.params.iter().any(|param| param.ty.references_named(name))
+    });
+    function_references
+        || types.into_iter().any(|ty| {
+            ty.fields.iter().any(|field| field.ty.references_named(name))
+                || ty.methods.iter().any(|method| {
+                    method.return_type.references_named(name)
+                        || method.params.iter().any(|param| param.ty.references_named(name))
+                })
+        })
+}

@@ -1,6 +1,6 @@
 //! Rust-side JSON bridge shims for generated swift-bridge crates.
 
-use crate::core::ir::{ApiSurface, EnumDef, FunctionDef, TypeDef};
+use crate::core::ir::{EnumDef, FunctionDef, TypeDef};
 use heck::AsSnakeCase;
 
 pub(super) fn emit_from_json_extern_decl(out: &mut String, snake_name: &str, wrapper_name: &str) {
@@ -60,39 +60,65 @@ pub(super) fn emit_from_json_shim(
     ));
 }
 
-/// Collect serde-enabled, non-opaque types from `visible_types` that appear as
-/// parameters in either free functions or type methods, excluding those already
-/// covered by static e2e shims (`already_covered`).
-///
-/// These types need `{type_snake}_from_json` shims so Swift e2e tests can
-/// deserialise fixture JSON into the strongly-typed request objects required by
-/// swift-bridge wrappers.
-pub(super) fn collect_serde_param_types<'a>(
-    api: &'a ApiSurface,
+pub(super) fn collect_signature_serde_types<'a>(
     visible_types: &[&'a TypeDef],
     visible_functions: &[&FunctionDef],
     already_covered: &[&str],
 ) -> Vec<&'a TypeDef> {
     let covered: std::collections::HashSet<&str> = already_covered.iter().copied().collect();
 
-    /// Return true if any param in `params` references the type named `name`.
-    fn param_uses_type(params: &[crate::core::ir::ParamDef], name: &str) -> bool {
-        params.iter().any(|p| p.ty.references_named(name))
-    }
-
     visible_types
         .iter()
         .copied()
-        .filter(|ty| ty.has_serde && !ty.is_opaque && !ty.is_trait)
+        .filter(|ty| ty.has_serde && !ty.is_trait)
         .filter(|ty| !covered.contains(ty.name.as_str()))
         .filter(|ty| {
-            let name = ty.name.as_str();
-            let in_free_fn = visible_functions.iter().any(|f| param_uses_type(&f.params, name));
-            let in_method = api
-                .types
-                .iter()
-                .any(|t| t.methods.iter().any(|m| param_uses_type(&m.params, name)));
-            in_free_fn || in_method
+            crate::backends::swift::signatures_reference_named(
+                visible_types.iter().copied(),
+                visible_functions.iter().copied(),
+                &ty.name,
+            )
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::ir::{ApiSurface, FieldDef, TypeRef};
+
+    #[test]
+    fn collects_opaque_serde_types_referenced_by_fields() {
+        let credential = TypeDef {
+            name: "CredentialConfig".to_owned(),
+            is_opaque: true,
+            has_serde: true,
+            ..TypeDef::default()
+        };
+        let unused = TypeDef {
+            name: "UnusedConfig".to_owned(),
+            is_opaque: true,
+            has_serde: true,
+            ..TypeDef::default()
+        };
+        let options = TypeDef {
+            name: "RequestOptions".to_owned(),
+            fields: vec![FieldDef {
+                name: "credential".to_owned(),
+                ty: TypeRef::Named("CredentialConfig".to_owned()),
+                ..FieldDef::default()
+            }],
+            ..TypeDef::default()
+        };
+        let api = ApiSurface {
+            types: vec![credential, unused, options],
+            ..ApiSurface::default()
+        };
+        let visible_types: Vec<_> = api.types.iter().collect();
+
+        let collected = collect_signature_serde_types(&visible_types, &[], &[]);
+        let names: Vec<_> = collected.iter().map(|ty| ty.name.as_str()).collect();
+
+        assert_eq!(names, vec!["CredentialConfig"]);
+    }
 }
