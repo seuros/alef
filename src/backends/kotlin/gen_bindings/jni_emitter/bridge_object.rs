@@ -155,7 +155,10 @@ pub fn emit_jni_bridge_object(api: &ApiSurface, config: &ResolvedCrateConfig) ->
             let TypeRef::Named(type_name) = &function.return_type else {
                 return None;
             };
-            if opaque_type_names.contains(type_name.as_str()) && !client_type_names.contains(type_name.as_str()) {
+            if opaque_type_names.contains(type_name.as_str())
+                && !client_type_names.contains(type_name.as_str())
+                && !kotlin_android_capsule_types.contains_key(type_name)
+            {
                 Some(type_name.as_str())
             } else {
                 None

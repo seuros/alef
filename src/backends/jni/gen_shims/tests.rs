@@ -630,6 +630,51 @@ exclude_types = ["Loader"]
     }
 
     #[test]
+    fn capsule_language_returns_raw_grammar_pointer_without_box_destructor() {
+        let raw: crate::core::config::NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["kotlin_android", "jni", "ffi"]
+[[crates]]
+name = "sample"
+sources = ["src/lib.rs"]
+[crates.kotlin_android]
+package = "dev.sample"
+[crates.kotlin_android.capsule_types.Language]
+host_type = "dev.runtime.Language"
+construct_expr = "dev.runtime.Language({ptr})"
+[crates.ffi.capsule_types.Language]
+into_raw_type = "tree_sitter::ffi::TSLanguage"
+c_return_type = "TSLanguage"
+"#,
+        )
+        .expect("valid config");
+        let config = raw.resolve().expect("resolved config").remove(0);
+        let function = crate::core::ir::FunctionDef {
+            name: "language_sample".into(),
+            rust_path: "sample::language_sample".into(),
+            return_type: TypeRef::Named("Language".into()),
+            ..Default::default()
+        };
+        let mut api = api_with_functions(vec![function]);
+        api.types.push(crate::core::ir::TypeDef {
+            name: "Language".into(),
+            is_opaque: true,
+            ..Default::default()
+        });
+
+        let content = emit_lib_rs(&api, &config);
+
+        assert!(
+            content.contains("v.into_raw() as *const tree_sitter::ffi::TSLanguage as jlong"),
+            "capsule return must mirror the C FFI raw-pointer transfer: {content}"
+        );
+        assert!(!content.contains("Box::into_raw(Box::new(v))"), "capsule must not box Language: {content}");
+        assert!(!content.contains("nativeFreeLanguage"), "host runtime owns the raw language pointer: {content}");
+        syn::parse_file(&content).expect("generated JNI crate parses");
+    }
+
+    #[test]
     fn opaque_receiver_is_rejected_before_reference_construction() {
         let method = crate::core::ir::MethodDef {
             name: "status".into(),

@@ -1,2 +1,15 @@
-class {{ class_name }} internal constructor(internal val handle: Long) : AutoCloseable {
-    override fun close() { {{ bridge_name }}.{{ free_name }}(handle) }
+class {{ class_name }} internal constructor(handle: Long) : AutoCloseable {
+    private var nativeHandle: Long = handle
+    internal val handle: Long
+        @Synchronized get() {
+            check(nativeHandle != 0L) { "{{ class_name }} is closed" }
+            return nativeHandle
+        }
+
+    @Synchronized
+    override fun close() {
+        val ownedHandle = nativeHandle
+        if (ownedHandle == 0L) return
+        nativeHandle = 0L
+        {{ bridge_name }}.{{ free_name }}(ownedHandle)
+    }

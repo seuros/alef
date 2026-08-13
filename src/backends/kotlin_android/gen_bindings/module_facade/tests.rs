@@ -82,6 +82,49 @@ fn capsule_wrapper_errors_when_host_type_empty() {
 }
 
 #[test]
+fn capsule_wrapper_constructs_host_language_without_alef_close_path() {
+    let func = make_get_language_fn();
+    let cfg = HostCapsuleTypeConfig {
+        host_type: "dev.runtime.Language".into(),
+        package: String::new(),
+        package_version: String::new(),
+        construct_expr: "dev.runtime.Language({ptr})".into(),
+    };
+    let mut body = String::new();
+    emit_capsule_function_wrapper(&mut body, &func, "SampleBridge", &cfg);
+
+    assert!(body.contains("return dev.runtime.Language(cLangPtr)"), "{body}");
+    assert!(
+        !body.contains("nativeFreeLanguage"),
+        "capsule ownership belongs to the host runtime: {body}"
+    );
+}
+
+#[test]
+fn opaque_handle_header_clears_ownership_before_idempotent_free() {
+    let rendered = crate::backends::kotlin_android::template_env::render(
+        "handle_wrapper_header.jinja",
+        minijinja::context! {
+            class_name => "ResourceHandle",
+            bridge_name => "SampleBridge",
+            free_name => "nativeFreeResourceHandle",
+        },
+    );
+
+    assert!(rendered.contains("@Synchronized get()"), "{rendered}");
+    assert!(
+        rendered.contains("check(nativeHandle != 0L) { \"ResourceHandle is closed\" }"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("if (ownedHandle == 0L) return"), "{rendered}");
+    let clear = rendered.find("nativeHandle = 0L").expect("ownership clear");
+    let free = rendered
+        .find("nativeFreeResourceHandle(ownedHandle)")
+        .expect("native free");
+    assert!(clear < free, "ownership must clear before native free: {rendered}");
+}
+
+#[test]
 fn android_trait_bridge_lifecycle_functions_are_managed_by_bridge_object() {
     let config = crate::core::config::ResolvedCrateConfig {
         trait_bridges: vec![crate::core::config::TraitBridgeConfig {

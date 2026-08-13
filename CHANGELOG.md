@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **JNI/Kotlin Android**: transfer configured capsule values as their raw host pointers instead of boxed Rust
+  wrappers, omit incompatible Alef destructors, and make generated opaque-handle closure synchronized and idempotent.
 - **generate**: preserve unchanged generated files and modification times across clean regeneration, reconcile only
   manifest-owned orphans, and keep handwritten scaffold files outside formatting, hashing, and deletion.
 - **verify**: evaluate fixture-snippet coverage from current fixtures and renderers, reject stale or malformed coverage

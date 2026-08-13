@@ -574,11 +574,12 @@ pub(super) fn gen_build_rs(
             let to_root = "../".repeat(depth);
             let dest_dir = format!("{to_root}{go_dir}/include");
             format!(
-                "\n    // Go is the ONLY binding that compiles against the C header: `binding.go`\n    \
-                 // carries `#include \"{header_name}\"` under cgo, so the header has to be\n    \
+                "\n    // Go, Zig, and generated C consumers compile against the C header. Go's\n    \
+                 // `binding.go` carries `#include \"{header_name}\"` under cgo, so the header has to be\n    \
                  // vendored next to the Go sources to build at all. Every other binding\n    \
                  // (Panama/JNI, P/Invoke, PyO3, NAPI, Magnus, ...) resolves the cdylib's\n    \
-                 // symbols at run time and never sees a header.\n    \
+                 // symbols at run time and never sees a header. Zig and C consume the canonical\n    \
+                 // staged header directly rather than this Go-specific vendored copy.\n    \
                  //\n    \
                  // So this is deliberately a single destination, NOT an incomplete fan-out\n    \
                  // list. Do not add package directories here just because they ship the\n    \

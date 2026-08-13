@@ -88,6 +88,12 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
         .filter(|t| t.is_opaque && !t.is_trait)
         .map(|t| t.name.as_str())
         .collect();
+    let ffi_capsule_types = config
+        .ffi
+        .as_ref()
+        .map(|ffi| &ffi.capsule_types)
+        .cloned()
+        .unwrap_or_default();
 
     for f in &visible_functions {
         let Some(target_predicate) = jni_target_predicate(f.cfg.as_deref(), config) else {
@@ -110,6 +116,7 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
             f.is_async,
             f.error_type.is_some(),
             &opaque_type_names,
+            &ffi_capsule_types,
             &config.name,
         );
     }
@@ -162,6 +169,7 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
         .filter_map(|f| {
             if let TypeRef::Named(n) = &f.return_type
                 && opaque_type_names.contains(n.as_str())
+                && !ffi_capsule_types.contains_key(n)
                 && !client_type_names.contains(n.as_str())
             {
                 return Some(n.as_str());

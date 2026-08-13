@@ -15,6 +15,7 @@ fn emit_function_shim(
     is_async: bool,
     has_error: bool,
     opaque_type_names: &std::collections::HashSet<&str>,
+    capsule_types: &std::collections::HashMap<String, crate::core::config::FfiCapsuleTypeConfig>,
     core_crate_prefix: &str,
 ) {
     let path = rust_path.replace('-', "_");
@@ -34,6 +35,10 @@ fn emit_function_shim(
     };
 
     let is_opaque_return = matches!(return_type, TypeRef::Named(n) if opaque_type_names.contains(n.as_str()));
+    let capsule_return = match return_type {
+        TypeRef::Named(name) => capsule_types.get(name),
+        _ => None,
+    };
     let ret_decl = if is_opaque_return {
         " -> jlong".to_string()
     } else {
@@ -201,7 +206,14 @@ fn emit_function_shim(
     if has_error {
         let mut ok_body = String::new();
         if is_opaque_return {
-            ok_body.push_str("            Box::into_raw(Box::new(v)) as jlong\n");
+            if let Some(capsule) = capsule_return {
+                ok_body.push_str(&format!(
+                    "            v.into_raw() as *const {} as jlong\n",
+                    capsule.into_raw_type
+                ));
+            } else {
+                ok_body.push_str("            Box::into_raw(Box::new(v)) as jlong\n");
+            }
         } else {
             emit_return_marshal_with_indent(&mut ok_body, return_type, "            ", err_null);
         }
@@ -209,7 +221,14 @@ fn emit_function_shim(
     } else {
         let mut value_body = String::new();
         if is_opaque_return {
-            value_body.push_str("    Box::into_raw(Box::new(v)) as jlong\n");
+            if let Some(capsule) = capsule_return {
+                value_body.push_str(&format!(
+                    "    v.into_raw() as *const {} as jlong\n",
+                    capsule.into_raw_type
+                ));
+            } else {
+                value_body.push_str("    Box::into_raw(Box::new(v)) as jlong\n");
+            }
         } else {
             emit_return_marshal_with_indent(&mut value_body, return_type, "    ", err_null);
         }
