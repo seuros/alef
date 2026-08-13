@@ -9,12 +9,12 @@
 /// Returns 0 on success, non-zero error code on failure.
 #[unsafe(no_mangle)]
 pub extern "C" fn {{ fn_name }}(
-    owner: *mut {{ opaque_name }},
+    owner: AlefHandle,
     callback: extern "C" fn(*mut c_void, *const c_char) -> *mut c_char,
     context: *mut c_void{{ param_decls }}
 ) -> i32 {
     catch_ffi_panic(1, || {
-    if owner.is_null() {
+    if owner == 0 {
         return 1; // Error: null pointer
     }
 {{ pre_bridge_body }}    let bridge = {{ bridge_name }} {

@@ -1,4 +1,9 @@
     fn {{ method_name }}({{ all_params }}) -> {{ ret }} {
-        // SAFETY: self.0 is a valid pointer for the duration of the conversion call.
-        unsafe { (*self.0).{{ method_name }}({{ arg_list }}) }
+        match with_handle::<{{ pascal_prefix }}Visitor, _>(self.0, |visitor| visitor.{{ method_name }}({{ arg_list }})) {
+            Ok(result) => result,
+            Err(error) => {
+                set_handle_error(&error);
+                {{ default_result }}
+            }
+        }
     }

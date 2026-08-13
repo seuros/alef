@@ -217,9 +217,7 @@ fn test_service_header_declares_metadata_and_entrypoint_params() {
         "registration metadata param missing from service header:\n{header}"
     );
     assert!(
-        header.contains(
-            "test_crate_test_service_ep_run(\n    test_crateTestServiceOpaque* owner,\n    const char* addr\n);"
-        ),
+        header.contains("test_crate_test_service_ep_run(\n    uint64_t owner,\n    const char* addr\n);"),
         "entrypoint param missing from service header:\n{header}"
     );
 }
@@ -443,7 +441,7 @@ fn test_variant_fn_has_null_check_for_owner() {
     let start = rs.find("fn my_crate_app_get(").expect("variant fn not found");
     let body = &rs[start..];
     assert!(
-        body.contains("if owner.is_null()"),
+        body.contains("if owner == 0"),
         "owner null check missing from variant fn"
     );
 }
@@ -645,11 +643,11 @@ fn configurator_function_unboxes_and_reboxes_inner() {
         "configurator fn must be emitted; got:\n{rs}"
     );
     assert!(
-        rs.contains("let inner = match (*owner).inner.take()"),
+        rs.contains("let inner = match service.inner.take()"),
         "configurator must `take()` owner.inner before calling the consuming method; got:\n{rs}"
     );
     assert!(
-        rs.contains("(*owner).inner = Some(Box::new(inner.setup("),
+        rs.contains("service.inner = Some(Box::new(inner.setup("),
         "configurator must re-box the result and assign to owner.inner; got:\n{rs}"
     );
 }
@@ -725,11 +723,11 @@ fn registration_named_opaque_param_clones_borrowed_pointer_at_call_site() {
     let rs = gen_service_rs(&api, &config);
 
     assert!(
-        rs.contains("let builder = unsafe { &*builder };"),
+        rs.contains("with_handle::<my_crate::RouteBuilder, _>(builder, Clone::clone)"),
         "opaque-pointer metadata param `builder` must be borrowed via &*ptr; got:\n{rs}"
     );
     assert!(
-        rs.contains(".add_route(builder.clone(), handler)"),
+        rs.contains(".add_route(builder, handler)"),
         "opaque-pointer metadata param `builder` must be `.clone()`d at the \
          registration dispatch call site so the consuming Rust API receives \
          `T`, not `&T`; got:\n{rs}"

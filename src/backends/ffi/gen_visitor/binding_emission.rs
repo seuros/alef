@@ -110,7 +110,7 @@ pub fn gen_visitor_bindings_with_api(
     let context_inits = gen_context_inits(&context_fields);
     let struct_fields = gen_struct_fields(&specs, &pascal_prefix);
     let impl_methods = gen_impl_methods(&specs, &pascal_prefix, core_import, &protocol, &default_result);
-    let visitor_ref_methods = gen_visitor_ref_methods(&specs, core_import, &protocol);
+    let visitor_ref_methods = gen_visitor_ref_methods(&specs, &pascal_prefix, &protocol, &default_result);
     let legacy_options_setter = if emit_legacy_options_setter {
         gen_legacy_options_setter(
             prefix,
@@ -310,10 +310,10 @@ impl {trait_path} for {pascal_prefix}Visitor {{
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn {prefix}_visitor_create(
     callbacks: *const {pascal_prefix}VisitorCallbacks,
-) -> *mut {pascal_prefix}Visitor {{
-    catch_ffi_panic(std::ptr::null_mut(), || {{
+) -> AlefHandle {{
+    catch_ffi_panic(0, || {{
     if callbacks.is_null() {{
-        return std::ptr::null_mut();
+        return 0;
     }}
     // SAFETY: caller guarantees the pointer is valid.
     let cbs = unsafe {{ callbacks.read() }};
@@ -321,7 +321,10 @@ pub unsafe extern "C" fn {prefix}_visitor_create(
         callbacks: cbs,
         _tag_scratch: std::cell::RefCell::new(Vec::new()),
     }};
-    Box::into_raw(Box::new(visitor))
+    match insert_handle(visitor) {{
+        Ok(handle) => handle,
+        Err(error) => {{ set_handle_error(&error); 0 }}
+    }}
     }})
 }}
 
@@ -334,11 +337,12 @@ pub unsafe extern "C" fn {prefix}_visitor_create(
 /// `visitor` must have been returned by `{prefix}_visitor_create`, or be null.
 /// Passing a null pointer is safe and has no effect.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn {prefix}_visitor_free(visitor: *mut {pascal_prefix}Visitor) {{
+pub unsafe extern "C" fn {prefix}_visitor_free(visitor: AlefHandle) {{
     catch_ffi_panic((), || {{
-    if !visitor.is_null() {{
-        // SAFETY: visitor was created with Box::into_raw.
-        unsafe {{ drop(Box::from_raw(visitor)); }}
+    if visitor != 0 {{
+        if let Err(error) = remove_handle::<{pascal_prefix}Visitor>(visitor) {{
+            set_handle_error(&error);
+        }}
     }}
     }})
 }}
@@ -406,18 +410,27 @@ fn gen_legacy_options_setter(
 /// `{prefix}_visitor_create`, or null. Ownership transfers to `options` on success.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn {prefix}_options_set_visitor_handle(
-    options: *mut {options_path},
-    visitor: *mut {pascal_prefix}Visitor,
+    options: AlefHandle,
+    visitor: AlefHandle,
 ) {{
     catch_ffi_panic((), || {{
-    if options.is_null() || visitor.is_null() {{
+    if options == 0 || visitor == 0 || options == visitor {{
+        if options == visitor && options != 0 {{ set_handle_error(&HandleError::AliasedHandle); }}
         return;
     }}
-    // SAFETY: options is non-null (checked above); caller guarantees it is valid for write.
-    let options_ref = unsafe {{ &mut *options }};
-    // SAFETY: ownership of the unique visitor handle transfers to this options value.
-    let visitor = unsafe {{ *Box::from_raw(visitor) }};
-    options_ref.{options_field} = Some(std::sync::Arc::new(std::sync::Mutex::new(visitor)));
+    if let Err(error) = with_handle::<{options_path}, _>(options, |_| ()) {{
+        set_handle_error(&error);
+        return;
+    }}
+    let visitor = match take_handle::<{pascal_prefix}Visitor>(visitor) {{
+        Ok(value) => value,
+        Err(error) => {{ set_handle_error(&error); return; }}
+    }};
+    if let Err(error) = with_handle_mut::<{options_path}, _>(options, |options_ref| {{
+        options_ref.{options_field} = Some(std::sync::Arc::new(std::sync::Mutex::new(visitor)));
+    }}) {{
+        set_handle_error(&error);
+    }}
     }})
 }}"#,
     )

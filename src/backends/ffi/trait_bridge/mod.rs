@@ -300,14 +300,17 @@ pub fn gen_bridge_new_free(prefix: &str, pascal_prefix: &str, trait_name: &str) 
 pub unsafe extern "C" fn {fn_new}(
     vtable: *const {vtable_name},
     user_data: *const std::ffi::c_void,
-) -> *mut {bridge_name} {{
-    catch_ffi_panic(std::ptr::null_mut(), || {{
+) -> AlefHandle {{
+    catch_ffi_panic(0, || {{
     if vtable.is_null() {{
-        return std::ptr::null_mut();
+        return 0;
     }}
     // SAFETY: vtable is non-null (checked above); caller guarantees it is valid for this call.
     let bridge = unsafe {{ {bridge_name}::new(String::new(), *vtable, user_data) }};
-    Box::into_raw(Box::new(bridge))
+    match insert_handle(bridge) {{
+        Ok(handle) => handle,
+        Err(error) => {{ set_handle_error(&error); 0 }}
+    }}
     }})
 }}
 
@@ -320,11 +323,12 @@ pub unsafe extern "C" fn {fn_new}(
 /// `ptr` must be either null or a non-null pointer returned by `{fn_new}` that has
 /// not yet been freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn {fn_free}(ptr: *mut {bridge_name}) {{
+pub unsafe extern "C" fn {fn_free}(handle: AlefHandle) {{
     catch_ffi_panic((), || {{
-    if !ptr.is_null() {{
-        // SAFETY: ptr is non-null and was created via Box::into_raw in {fn_new}.
-        drop(unsafe {{ Box::from_raw(ptr) }});
+    if handle != 0 {{
+        if let Err(error) = remove_handle::<{bridge_name}>(handle) {{
+            set_handle_error(&error);
+        }}
     }}
     }})
 }}"#,

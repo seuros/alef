@@ -750,35 +750,45 @@ pub struct {handle_name} {{
 /// Both pointers must remain valid until this function returns.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn {fn_start}(
-    client: *const {owner_ty},
-    req: *const {request_type},
-) -> *mut {handle_name} {{
-    catch_ffi_panic(std::ptr::null_mut(), || {{
+    client: AlefHandle,
+    req: AlefHandle,
+) -> AlefHandle {{
+    catch_ffi_panic(0, || {{
     clear_last_error();
 
-    if client.is_null() {{
-        set_last_error(99, "{fn_start}: client must not be NULL");
-        return std::ptr::null_mut();
+    let requests = [
+        HandleRequest {{ handle: client, expected_type: std::any::TypeId::of::<{owner_ty}>() }},
+        HandleRequest {{ handle: req, expected_type: std::any::TypeId::of::<{core_import}::{request_type}>() }},
+    ];
+    let values = match acquire_handles(&requests) {{
+        Ok(values) => values,
+        Err(error) => {{ set_handle_error(&error); return 0; }}
+    }};
+    let mut guards = Vec::with_capacity(values.len());
+    for (token, value) in &values {{
+        match value.lock() {{
+            Ok(guard) => guards.push((*token, guard)),
+            Err(_) => {{ set_handle_error(&HandleError::RegistryPoisoned); return 0; }}
+        }}
     }}
-    if req.is_null() {{
-        set_last_error(99, "{fn_start}: req must not be NULL");
-        return std::ptr::null_mut();
-    }}
-
-    // SAFETY: caller guarantees `client` is a non-null, valid, aligned pointer to a live
-    // `{owner_ty}` value. The reference does not outlive this function.
-    let client_ref = unsafe {{ &*client }};
-
-    // SAFETY: caller guarantees `req` is a non-null, valid, aligned pointer to a live
-    // `{request_type}` value. We clone it to obtain an owned request independent of the
-    // caller's lifetime.
-    let req_owned = unsafe {{ (*req).clone() }};
+    let client_ptr = match locked_handle_ptr::<{owner_ty}>(&mut guards, client) {{
+        Ok(value) => value,
+        Err(error) => {{ set_handle_error(&error); return 0; }}
+    }};
+    let request_ptr = match locked_handle_ptr::<{core_import}::{request_type}>(&mut guards, req) {{
+        Ok(value) => value,
+        Err(error) => {{ set_handle_error(&error); return 0; }}
+    }};
+    // SAFETY: both registry entry guards remain held for the duration of this call.
+    let client_ref = unsafe {{ &*client_ptr }};
+    // SAFETY: both registry entry guards remain held for the duration of this call.
+    let req_owned = unsafe {{ &*request_ptr }}.clone();
 
     let rt = match tokio::runtime::Runtime::new() {{
         Ok(r) => r,
         Err(e) => {{
             set_last_error(99, &format!("{fn_start}: failed to create tokio runtime: {{e}}"));
-            return std::ptr::null_mut();
+            return 0;
         }}
     }};
 
@@ -788,7 +798,7 @@ pub unsafe extern "C" fn {fn_start}(
         Ok(s) => s,
         Err(e) => {{
             set_last_error(99, &format!("{fn_start}: failed to open stream: {{e}}"));
-            return std::ptr::null_mut();
+            return 0;
         }}
     }};
 
@@ -798,12 +808,14 @@ pub unsafe extern "C" fn {fn_start}(
         Box::pin(raw_stream.map(|r| r.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync + 'static>)))
     }};
 
-    let handle = Box::new({handle_name} {{
+    let handle = {handle_name} {{
         rt,
         stream: std::sync::Mutex::new(Some(mapped)),
-    }});
-
-    Box::into_raw(handle)
+    }};
+    match insert_handle(handle) {{
+        Ok(handle) => handle,
+        Err(error) => {{ set_handle_error(&error); 0 }}
+    }}
     }})
 }}
 
@@ -822,25 +834,35 @@ pub unsafe extern "C" fn {fn_start}(
 /// across threads without external synchronisation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn {fn_next}(
-    handle: *mut {handle_name},
-) -> *mut {core_item} {{
-    catch_ffi_panic(std::ptr::null_mut(), || {{
+    handle: AlefHandle,
+) -> AlefHandle {{
+    catch_ffi_panic(0, || {{
     clear_last_error();
 
-    if handle.is_null() {{
-        set_last_error(99, "{fn_next}: handle must not be NULL");
-        return std::ptr::null_mut();
-    }}
-
-    // SAFETY: caller guarantees `handle` is a non-null valid pointer produced by `{fn_start}`
-    // and not yet freed. We take a shared reference for the duration of this call.
-    let h = unsafe {{ &*handle }};
+    let value = match acquire_handles(&[HandleRequest {{
+        handle,
+        expected_type: std::any::TypeId::of::<{handle_name}>(),
+    }}]) {{
+        Ok(mut values) => match values.pop() {{
+            Some(value) => value,
+            None => {{ set_handle_error(&HandleError::UnknownSlot); return 0; }}
+        }},
+        Err(error) => {{ set_handle_error(&error); return 0; }}
+    }};
+    let h_guard = match value.1.lock() {{
+        Ok(guard) => guard,
+        Err(_) => {{ set_handle_error(&HandleError::RegistryPoisoned); return 0; }}
+    }};
+    let h = match h_guard.downcast_ref::<{handle_name}>() {{
+        Some(value) => value,
+        None => {{ set_handle_error(&HandleError::WrongType); return 0; }}
+    }};
 
     let mut guard = match h.stream.lock() {{
         Ok(g) => g,
         Err(_) => {{
             set_last_error(99, "{fn_next}: stream mutex is poisoned");
-            return std::ptr::null_mut();
+            return 0;
         }}
     }};
 
@@ -848,7 +870,7 @@ pub unsafe extern "C" fn {fn_next}(
         Some(s) => s,
         None => {{
             // Stream already exhausted or taken.
-            return std::ptr::null_mut();
+            return 0;
         }}
     }};
 
@@ -857,16 +879,19 @@ pub unsafe extern "C" fn {fn_next}(
         Some(Ok(chunk)) => {{
             // SAFETY: We box the chunk and transfer ownership to the caller via raw pointer.
             // The caller must free it via the appropriate type-free function.
-            Box::into_raw(Box::new(chunk))
+            match insert_handle(chunk) {{
+                Ok(handle) => handle,
+                Err(error) => {{ set_handle_error(&error); 0 }}
+            }}
         }}
         Some(Err(e)) => {{
             set_last_error(99, &format!("{fn_next}: stream error: {{e}}"));
-            std::ptr::null_mut()
+            0
         }}
         None => {{
             // Clean end-of-stream — error code remains 0 (cleared at top of function).
             *guard = None;
-            std::ptr::null_mut()
+            0
         }}
     }}
     }})
@@ -880,12 +905,12 @@ pub unsafe extern "C" fn {fn_next}(
 /// `handle` must either be null or a valid pointer previously returned by `{fn_start}` and
 /// not yet freed. Double-free is undefined behaviour.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn {fn_free}(handle: *mut {handle_name}) {{
+pub unsafe extern "C" fn {fn_free}(handle: AlefHandle) {{
     catch_ffi_panic((), || {{
-    if !handle.is_null() {{
-        // SAFETY: `handle` was produced by Box::into_raw in `{fn_start}` and has not been freed.
-        // Reconstructing the Box transfers ownership back to Rust, which drops it at end of scope.
-        unsafe {{ drop(Box::from_raw(handle)); }}
+    if handle != 0 {{
+        if let Err(error) = remove_handle::<{handle_name}>(handle) {{
+            set_handle_error(&error);
+        }}
     }}
     }})
 }}"#,
@@ -898,7 +923,6 @@ pub unsafe extern "C" fn {fn_free}(handle: *mut {handle_name}) {{
         request_type = request_type,
         core_path = core_path,
         stream_ty = stream_ty,
-        core_item = core_item,
         owner_snake = owner_snake,
         item_type = item_type,
     )

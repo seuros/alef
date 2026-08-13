@@ -16,12 +16,15 @@ pub struct {{ opaque_name }} {
 /// The returned pointer must be freed via {{ free_fn_name }}().
 /// Never access the pointer after freeing it.
 #[unsafe(no_mangle)]
-pub extern "C" fn {{ new_fn_name }}() -> *mut {{ opaque_name }} {
-    catch_ffi_panic(std::ptr::null_mut(), || {
+pub extern "C" fn {{ new_fn_name }}() -> AlefHandle {
+    catch_ffi_panic(0, || {
         let owner = {{ owner_path }}::{{ constructor_name }}();
-        Box::into_raw(Box::new({{ opaque_name }} {
+        match insert_handle({{ opaque_name }} {
             inner: Some(Box::new(owner)),
-        }))
+        }) {
+            Ok(handle) => handle,
+            Err(error) => { set_handle_error(&error); 0 }
+        }
     })
 }
 
@@ -33,13 +36,11 @@ pub extern "C" fn {{ new_fn_name }}() -> *mut {{ opaque_name }} {
 /// - Calling this twice on the same pointer causes undefined behavior.
 /// - Safe to call even after a `Finalize` entrypoint has emptied `inner`.
 #[unsafe(no_mangle)]
-pub extern "C" fn {{ free_fn_name }}(ptr: *mut {{ opaque_name }}) {
+pub extern "C" fn {{ free_fn_name }}(handle: AlefHandle) {
     catch_ffi_panic((), || {
-    if !ptr.is_null() {
-        // SAFETY: ptr was allocated by into_raw above;
-        // we are the sole owner and this is the final drop.
-        unsafe {
-            drop(Box::from_raw(ptr));
+    if handle != 0 {
+        if let Err(error) = remove_handle::<{{ opaque_name }}>(handle) {
+            set_handle_error(&error);
         }
     }
     })

@@ -142,12 +142,13 @@ fn visitor_bindings_use_trait_name_and_callback_count_from_ir() {
 
     assert!(code.contains("// Visitor / callback FFI — 1 MarkdownVisitor methods"));
     assert!(code.contains("dyn MarkdownVisitor + Send"));
-    assert!(code.contains("options: *mut my_lib::RenderOptions"));
+    assert!(code.contains("options: AlefHandle"));
     assert!(code.contains("MD_VISIT_CUSTOM"));
     assert!(code.contains("pub free_string: Option<unsafe extern \"C\" fn(*mut std::ffi::c_char)>"));
     assert!(code.contains("from_raw_parts(custom_ptr.cast::<u8>(), custom_len)"));
     assert!(code.contains("free(custom_ptr)"));
-    assert!(code.contains("*Box::from_raw(visitor)"));
+    assert!(code.contains("take_handle::<MdVisitor>(visitor)"));
+    assert!(code.contains("with_handle_mut::<my_lib::RenderOptions"));
     assert!(!code.contains("VisitorRef(*mut"));
     assert!(!code.contains("fn md_convert_with_visitor"));
     assert!(!code.contains("all 42 HtmlVisitor methods"));

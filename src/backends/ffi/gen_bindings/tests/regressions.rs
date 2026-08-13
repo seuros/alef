@@ -549,13 +549,23 @@ type = "ChatRequest"
     );
 
     assert!(
-        lib.content.contains("-> *mut my_lib::ChatChunk"),
-        "_next must return *mut my_lib::ChatChunk"
+        lib.content.contains("-> AlefHandle"),
+        "stream functions must return generational handles"
     );
 
     assert!(
-        lib.content.contains("if !handle.is_null()"),
-        "_free must check for null before dropping"
+        lib.content
+            .contains("remove_handle::<MlDefaultClientChatStreamStreamHandle>(handle)"),
+        "_free must invalidate the stream token through the registry"
+    );
+
+    assert!(
+        lib.content.contains("insert_handle(chunk)"),
+        "chunks must use registry tokens"
+    );
+    assert!(
+        lib.content.contains("acquire_handles(&requests)"),
+        "inputs must be validated together"
     );
 
     // SAFETY comments must be present

@@ -1,1 +1,4 @@
-    Box::into_raw(Box::new({{ call }}))
+    match insert_handle({{ call }}) {
+        Ok(handle) => handle,
+        Err(error) => { set_handle_error(&error); 0 }
+    }

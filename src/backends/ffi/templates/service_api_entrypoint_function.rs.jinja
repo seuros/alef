@@ -8,16 +8,20 @@
 ///   on the same pointer will fail with the null-return error code.
 #[unsafe(no_mangle)]
 pub extern "C" fn {{ fn_name }}(
-    owner: *mut {{ opaque_name }}{{ param_decls }}
+    owner: AlefHandle{{ param_decls }}
 ) -> {{ return_type }} {
     catch_ffi_panic({{ null_return }}, || {
-    if owner.is_null() {
+    if owner == 0 {
         return {{ null_return }};
     }
 {{ pre_call_body }}    // SAFETY: owner was allocated by _new() and is valid until freed.
     // Move the inner owner out; leave `None` behind so the consumer's deferred
     // `_free` call drops the empty shell instead of touching a moved-from box.
-    let inner = match unsafe { (*owner).inner.take() } {
+    let service = match take_handle::<{{ opaque_name }}>(owner) {
+        Ok(value) => value,
+        Err(error) => { set_handle_error(&error); return {{ null_return }}; }
+    };
+    let inner = match service.inner {
         Some(boxed) => *boxed,
         None => return {{ null_return }},
     };

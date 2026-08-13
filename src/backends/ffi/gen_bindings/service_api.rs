@@ -103,7 +103,7 @@ fn gen_service_h(api: &ApiSurface, crate_name: &str) -> String {
 }
 
 #[allow(dead_code)]
-fn gen_service_h_decls(out: &mut String, service: &ServiceDef, _api: &ApiSurface, prefix: &str) {
+fn gen_service_h_decls(out: &mut String, service: &ServiceDef, api: &ApiSurface, prefix: &str) {
     let service_snake = service.name.to_snake_case();
     let opaque_name = format!("{}Opaque", service.name);
     let prefix_lower = prefix.to_lowercase();
@@ -153,7 +153,10 @@ fn gen_service_h_decls(out: &mut String, service: &ServiceDef, _api: &ApiSurface
 
     for ep in &service.entrypoints {
         let ep_name_snake = ep.method.to_snake_case();
-        let return_type = typeref_to_c_type(&ep.return_type);
+        let return_type = match &ep.return_type {
+            TypeRef::Named(name) if api.types.iter().any(|typ| typ.name == *name) => "uint64_t".to_owned(),
+            _ => typeref_to_c_type(&ep.return_type),
+        };
 
         let kind = if ep.kind == EntrypointKind::Run {
             "Run"
@@ -305,7 +308,12 @@ fn conversion_body(bindings: &[FfiParamBinding], add_trailing_blank: bool) -> St
 /// - A `Named` type this surface wraps crosses as a `*mut {core}::{name}` opaque pointer and is
 ///   reconstructed (consumed) via `Box::from_raw`.
 /// - Everything else crosses by value via [`typeref_to_rust_ffi_type`].
-fn ffi_param_binding(p: &crate::core::ir::ParamDef, core_import: &str, api: &ApiSurface) -> FfiParamBinding {
+fn ffi_param_binding(
+    p: &crate::core::ir::ParamDef,
+    core_import: &str,
+    api: &ApiSurface,
+    failure_return: &str,
+) -> FfiParamBinding {
     match &p.ty {
         TypeRef::String => FfiParamBinding {
             decl: format!("{}: *const c_char", p.name),
@@ -335,15 +343,16 @@ fn ffi_param_binding(p: &crate::core::ir::ParamDef, core_import: &str, api: &Api
             }
         }
         TypeRef::Named(n) if api.types.iter().any(|t| t.name == *n) => FfiParamBinding {
-            decl: format!("{}: *mut {core_import}::{n}", p.name),
+            decl: format!("{}: AlefHandle", p.name),
             conversion: format!(
-                "    // SAFETY: pointer was produced by the matching opaque `_new`/builder export.\n    \
-                 // Borrow it as a reference; caller retains ownership and is responsible for freeing.\n    \
-                 let {0} = unsafe {{ &*{0} }};\n",
-                p.name
+                "    let {0} = match with_handle::<{1}::{2}, _>({0}, Clone::clone) {{\n        \
+                 Ok(value) => value,\n        \
+                 Err(error) => {{ set_handle_error(&error); return {3}; }}\n    \
+                 }};\n",
+                p.name, core_import, n, failure_return
             ),
-            arg: format!("{}.clone()", p.name),
-            pointer: true,
+            arg: p.name.clone(),
+            pointer: false,
         },
         _ => FfiParamBinding {
             decl: format!("{}: {}", p.name, typeref_to_rust_ffi_type(&p.ty, core_import)),
@@ -546,7 +555,7 @@ fn gen_registration_function(
     let meta_bindings: Vec<FfiParamBinding> = reg
         .metadata_params
         .iter()
-        .map(|p| ffi_param_binding(p, core_import, api))
+        .map(|p| ffi_param_binding(p, core_import, api, "1"))
         .collect();
 
     let meta_args: String = meta_bindings.iter().map(|b| format!("{}, ", b.arg)).collect();
@@ -556,6 +565,7 @@ fn gen_registration_function(
             minijinja::context! {
                 method_name => reg.method.clone(),
                 meta_args => meta_args.clone(),
+                opaque_name,
             },
         )
     } else {
@@ -564,6 +574,7 @@ fn gen_registration_function(
             minijinja::context! {
                 method_name => reg.method.clone(),
                 meta_args => meta_args.clone(),
+                opaque_name,
             },
         )
     };
@@ -677,7 +688,7 @@ fn gen_registration_variant(
     let sig_bindings: Vec<FfiParamBinding> = variant
         .signature_params
         .iter()
-        .map(|p| ffi_param_binding(p, core_import, api))
+        .map(|p| ffi_param_binding(p, core_import, api, "1"))
         .collect();
 
     let default_doc = format!("Variant shortcut `{}` over `{}`.", variant.name, base_fn_name);
@@ -739,6 +750,7 @@ fn gen_registration_variant(
             minijinja::context! {
                 method_name => reg.method.clone(),
                 meta_args => meta_args.clone(),
+                opaque_name,
             },
         )
     } else {
@@ -747,6 +759,7 @@ fn gen_registration_variant(
             minijinja::context! {
                 method_name => reg.method.clone(),
                 meta_args => meta_args.clone(),
+                opaque_name,
             },
         )
     };
@@ -792,7 +805,7 @@ fn gen_configurator_function(
     let param_bindings: Vec<FfiParamBinding> = cfg
         .params
         .iter()
-        .map(|p| ffi_param_binding(p, core_import, api))
+        .map(|p| ffi_param_binding(p, core_import, api, "0"))
         .collect();
 
     let call_args: String = param_bindings
@@ -839,15 +852,15 @@ fn gen_entrypoint_function(
 
     let returns_opaque = matches!(&ep.return_type, TypeRef::Named(n) if api.types.iter().any(|t| t.name == *n));
     let return_type = match &ep.return_type {
-        TypeRef::Named(n) if returns_opaque => format!("*mut {core_import}::{n}"),
+        TypeRef::Named(_) if returns_opaque => "AlefHandle".to_owned(),
         _ => "i32".to_owned(),
     };
-    let null_return = if returns_opaque { "std::ptr::null_mut()" } else { "1" };
+    let null_return = if returns_opaque { "0" } else { "1" };
 
     let param_bindings: Vec<FfiParamBinding> = ep
         .params
         .iter()
-        .map(|p| ffi_param_binding(p, core_import, api))
+        .map(|p| ffi_param_binding(p, core_import, api, null_return))
         .collect();
 
     let call_args: String = param_bindings

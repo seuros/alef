@@ -127,8 +127,9 @@ fn visitor_ref_args(spec: &CallbackSpec) -> String {
 /// Generate all `VisitorRef` forwarding methods.
 pub(super) fn gen_visitor_ref_methods(
     specs: &[CallbackSpec],
-    _core_import: &str,
+    pascal_prefix: &str,
     protocol: &VisitorProtocol,
+    default_result: &str,
 ) -> String {
     let mut out = String::new();
     let result_path = protocol.result_path.clone();
@@ -142,6 +143,8 @@ pub(super) fn gen_visitor_ref_methods(
                 all_params => params,
                 ret => result_path.as_str(),
                 arg_list => args,
+                pascal_prefix,
+                default_result,
             },
         ));
     }

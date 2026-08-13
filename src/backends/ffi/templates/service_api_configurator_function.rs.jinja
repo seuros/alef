@@ -7,22 +7,26 @@
 ///   handle is still valid in that case but should be inspected for usability).
 #[unsafe(no_mangle)]
 pub extern "C" fn {{ fn_name }}(
-    owner: *mut {{ opaque_name }}{{ param_decls }}
-) -> *mut {{ opaque_name }} {
-    catch_ffi_panic(std::ptr::null_mut(), || {
-    if owner.is_null() {
-        return std::ptr::null_mut();
+    owner: AlefHandle{{ param_decls }}
+) -> AlefHandle {
+    catch_ffi_panic(0, || {
+    if owner == 0 {
+        return 0;
     }
 {{ pre_call_body }}    // SAFETY: owner was allocated by _new() and is valid until freed.
     // Take the inner box out, transform it, and put the result back. The opaque
     // shell stays at the same address so the caller's handle remains valid.
-    unsafe {
-        let inner = match (*owner).inner.take() {
+    match with_handle_mut::<{{ opaque_name }}, _>(owner, |service| {
+        let inner = match service.inner.take() {
             Some(boxed) => *boxed,
-            None => return std::ptr::null_mut(),
+            None => return false,
         };
-        (*owner).inner = Some(Box::new(inner.{{ method_name }}({{ call_args }})));
+        service.inner = Some(Box::new(inner.{{ method_name }}({{ call_args }})));
+        true
+    }) {
+        Ok(true) => owner,
+        Ok(false) => 0,
+        Err(error) => { set_handle_error(&error); 0 }
     }
-    owner
     })
 }

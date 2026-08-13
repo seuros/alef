@@ -1,4 +1,7 @@
     match {{ call }} {
-        Ok(value) => Box::into_raw(Box::new(value)),
-        Err(_) => std::ptr::null_mut(),
+        Ok(value) => match insert_handle(value) {
+            Ok(handle) => handle,
+            Err(error) => { set_handle_error(&error); 0 }
+        },
+        Err(_) => 0,
     }
