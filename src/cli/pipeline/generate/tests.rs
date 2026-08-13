@@ -832,6 +832,8 @@ mod generated_header_tests {
 
         assert_eq!(first.changed_count(), 1);
         assert_eq!(second.changed_count(), 0);
+        assert_eq!(first.expected_count(), 1);
+        assert_eq!(second.expected_count(), 1);
         assert_eq!(initial_mtime, repeated_mtime);
     }
 

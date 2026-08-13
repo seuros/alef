@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::path::PathBuf;
 
-use crate::cli::{cache, dispatch, pipeline, registry, version_pin};
+use crate::cli::{cache, dispatch, pipeline, version_pin};
 
 use super::args::*;
 use super::dispatch::DispatchContext;
@@ -147,27 +147,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 }
 
                 tracing::info!("Running post-build processing...");
-                for &lang in &languages {
-                    let Some(backend) = registry::try_get_backend(lang) else {
-                        continue;
-                    };
-                    let Some(bc) = backend.build_config_with_config(resolved_cfg) else {
-                        continue;
-                    };
-                    if bc.post_build.is_empty() {
-                        continue;
-                    }
-                    tracing::info!("  [{lang}] running post-build...");
-                    match pipeline::run_post_build(lang, &bc, resolved_cfg, &base_dir) {
-                        Ok(()) => {
-                            tracing::info!("  [{lang}] post-build processing complete");
-                        }
-                        Err(e) => {
-                            tracing::error!("  [{lang}] post-build processing failed: {e}");
-                            return Err(e);
-                        }
-                    }
-                }
+                run_required_post_builds(&languages, resolved_cfg, &base_dir)?;
 
                 tracing::info!("Generating type stubs...");
                 let stubs = pipeline::generate_stubs(&api, resolved_cfg, &languages)?;

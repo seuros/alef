@@ -59,7 +59,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 tracing::warn!("could not update alef.toml version pin: {e}");
             }
 
-            let mut grand_total_written: usize = 0;
+            let mut grand_total_generated: usize = 0;
             for resolved_cfg in &crates_to_process {
                 let languages = resolve_languages(resolved_cfg, lang.as_deref())?;
                 pipeline::warn_missing_formatters(&languages);
@@ -93,9 +93,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let mut changed_languages: std::collections::HashSet<crate::core::config::Language> =
                     std::collections::HashSet::new();
 
-                let mut total_written: usize = 0;
+                let mut generated_paths = std::collections::HashSet::new();
                 let mut any_written = false;
                 for (lang, lang_files) in &files {
+                    generated_paths.extend(lang_files.iter().map(|file| base_dir.join(&file.path)));
                     let lang_str = lang.to_string();
                     for file in lang_files.iter().filter(|file| file.generated_header) {
                         current_gen_paths.insert(base_dir.join(&file.path));
@@ -123,7 +124,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                     let single = vec![(*lang, lang_files.clone())];
                     let report = pipeline::write_files_report(&single, &base_dir)?;
-                    total_written += report.changed_count();
                     if report.changed_count() > 0 {
                         any_written = true;
                         changed_languages.insert(*lang);
@@ -134,6 +134,12 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 if !api.services.is_empty() {
                     let svc_files = pipeline::generate_service_api(&api, resolved_cfg, &languages)?;
                     if !svc_files.is_empty() {
+                        generated_paths.extend(
+                            svc_files
+                                .iter()
+                                .flat_map(|(_, generated)| generated.iter())
+                                .map(|file| base_dir.join(&file.path)),
+                        );
                         for (_, files) in &svc_files {
                             for file in files.iter().filter(|file| file.generated_header) {
                                 current_gen_paths.insert(base_dir.join(&file.path));
@@ -167,6 +173,12 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 if resolved_cfg.generate.public_api {
                     let public_api_files = pipeline::generate_public_api(&api, resolved_cfg, &languages, config_path)?;
                     if !public_api_files.is_empty() {
+                        generated_paths.extend(
+                            public_api_files
+                                .iter()
+                                .flat_map(|(_, generated)| generated.iter())
+                                .map(|file| base_dir.join(&file.path)),
+                        );
                         let api_hashes: Vec<(String, String)> = public_api_files
                             .iter()
                             .flat_map(|(_, fs)| {
@@ -220,6 +232,12 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                 let stub_files = pipeline::generate_stubs(&api, resolved_cfg, &languages)?;
                 if !stub_files.is_empty() {
+                    generated_paths.extend(
+                        stub_files
+                            .iter()
+                            .flat_map(|(_, generated)| generated.iter())
+                            .map(|file| base_dir.join(&file.path)),
+                    );
                     let stub_hashes: Vec<(String, String)> = stub_files
                         .iter()
                         .flat_map(|(_, fs)| {
@@ -296,6 +314,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     pipeline::format_generated(&files_to_format, resolved_cfg, &base_dir, Some(&changed_languages));
                 }
 
+                tracing::info!("Running post-build processing...");
+                run_required_post_builds(&languages, resolved_cfg, &base_dir)?;
+
                 let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
                 for (language, paths) in language_output_paths {
@@ -311,9 +332,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     tracing::warn!("[e2e] block detected — run 'alef e2e generate' to regenerate e2e test suites");
                 }
 
-                grand_total_written += total_written;
+                grand_total_generated += generated_paths.len();
             }
-            tracing::info!("Generated {grand_total_written} files");
+            tracing::info!("Generated {grand_total_generated} files");
             Ok(None)
         }
         Commands::Stubs { lang } => {

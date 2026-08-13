@@ -20,6 +20,10 @@ impl WriteReport {
     pub fn changed_count(&self) -> usize {
         self.changed_paths.len()
     }
+
+    pub fn expected_count(&self) -> usize {
+        self.expected_paths.len()
+    }
 }
 
 pub fn managed_output_paths(files: &[GeneratedFile], base_dir: &Path) -> std::collections::HashSet<std::path::PathBuf> {

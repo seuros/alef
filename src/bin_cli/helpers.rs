@@ -1,5 +1,28 @@
 use anyhow::{Context, Result};
 
+pub(crate) fn run_required_post_builds(
+    languages: &[crate::core::config::Language],
+    config: &crate::core::config::ResolvedCrateConfig,
+    base_dir: &std::path::Path,
+) -> Result<()> {
+    for &language in languages {
+        let Some(backend) = crate::cli::registry::try_get_backend(language) else {
+            continue;
+        };
+        let Some(build_config) = backend.build_config_with_config(config) else {
+            continue;
+        };
+        if build_config.post_build.is_empty() {
+            continue;
+        }
+        tracing::info!("  [{language}] running post-build...");
+        crate::cli::pipeline::run_post_build(language, &build_config, config, base_dir)
+            .with_context(|| format!("failed to run required post-build steps for {language}"))?;
+        tracing::info!("  [{language}] post-build processing complete");
+    }
+    Ok(())
+}
+
 /// Returns true when every freshly generated file already matches the file on disk,
 /// using the same hash-line-insensitive body comparison as [`crate::cli::pipeline::write_files`].
 ///
@@ -401,6 +424,23 @@ e2e = "cargo test"
         // --quiet wins over any -v count.
         assert_eq!(default_log_level(0, true), "error");
         assert_eq!(default_log_level(3, true), "error");
+    }
+
+    #[test]
+    fn required_post_build_failure_is_propagated_with_language_context() {
+        let directory = tempfile::tempdir().expect("temporary project");
+        let error = run_required_post_builds(
+            &[Language::Swift],
+            &crate::core::config::ResolvedCrateConfig::default(),
+            directory.path(),
+        )
+        .expect_err("missing Swift build project must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to run required post-build steps for swift")
+        );
     }
 
     #[test]

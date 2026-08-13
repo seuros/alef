@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **generate/snippets**: propagate mandatory post-build failures from `alef generate`, terminate descendant validator
+  processes at the configured timeout, and report stable generated-file totals across content-identical passes.
 - **snippets**: use built-in language recipes for declarative trait-bridge fixtures and resolve C registry operations
   from configured bridge identities through canonical ABI naming.
 - **snippets/c**: generate compilable trait-bridge examples with IR-derived callbacks, initialized vtables, canonical

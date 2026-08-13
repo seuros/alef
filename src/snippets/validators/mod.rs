@@ -197,6 +197,7 @@ fn strip_ansi_codes(input: &str) -> String {
 /// Returns an error when the child process cannot be spawned, waited on, or times out.
 pub fn run_command(command: &mut std::process::Command, timeout_secs: u64) -> Result<(bool, String)> {
     sanitize_environment(command);
+    configure_process_group(command);
     let mut child = command
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -212,7 +213,7 @@ pub fn run_command(command: &mut std::process::Command, timeout_secs: u64) -> Re
             Ok((status.success(), strip_ansi_codes(&output)))
         }
         Ok(None) => {
-            let _ = child.kill();
+            kill_process_tree(&mut child);
             let _ = child.wait();
             let _ = collect_output(stdout, stderr);
             Err(crate::snippets::error::Error::Timeout {
@@ -221,12 +222,38 @@ pub fn run_command(command: &mut std::process::Command, timeout_secs: u64) -> Re
             })
         }
         Err(err) => {
-            let _ = child.kill();
+            kill_process_tree(&mut child);
             let _ = child.wait();
             let _ = collect_output(stdout, stderr);
             Err(crate::snippets::error::Error::Other(format!("wait failed: {err}")))
         }
     }
+}
+
+#[cfg(unix)]
+fn configure_process_group(command: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+    command.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn configure_process_group(_command: &mut std::process::Command) {}
+
+#[cfg(unix)]
+fn kill_process_tree(child: &mut std::process::Child) {
+    let process_group = format!("-{}", child.id());
+    let killed_group = std::process::Command::new("kill")
+        .args(["-KILL", "--", &process_group])
+        .status()
+        .is_ok_and(|status| status.success());
+    if !killed_group {
+        let _ = child.kill();
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_process_tree(child: &mut std::process::Child) {
+    let _ = child.kill();
 }
 
 fn output_reader(mut stream: impl Read + Send + 'static) -> std::thread::JoinHandle<std::io::Result<String>> {
@@ -303,6 +330,8 @@ impl WaitTimeout for std::process::Child {
 
 #[cfg(all(test, unix))]
 mod tests {
+    use std::time::{Duration, Instant};
+
     #[test]
     fn drains_output_larger_than_an_os_pipe_buffer() {
         let mut command = std::process::Command::new("sh");
@@ -312,5 +341,17 @@ mod tests {
 
         assert!(success);
         assert_eq!(output.len(), 131_072);
+    }
+
+    #[test]
+    fn timeout_kills_descendants_holding_output_pipes() {
+        let mut command = std::process::Command::new("sh");
+        command.args(["-c", "sleep 30 & wait"]);
+        let started = Instant::now();
+
+        let error = super::run_command(&mut command, 1).expect_err("command must time out");
+
+        assert!(matches!(error, crate::snippets::error::Error::Timeout { .. }));
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 }
