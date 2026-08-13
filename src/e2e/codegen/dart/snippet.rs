@@ -46,10 +46,18 @@ pub(super) fn render_snippet_body(
         .unwrap_or_else(|| config.dart_pubspec_name());
     let module = config.name.replace('-', "_");
     let bridge_module = format!("{module}_bridge_generated");
+    let call = e2e_config.resolve_call_for_fixture(
+        fixture.call.as_deref(),
+        &fixture.id,
+        &fixture.resolved_category(),
+        &fixture.tags,
+        &fixture.input,
+    );
     let needs_json = statements
         .iter()
         .any(|statement| statement.contains("jsonDecode(") || statement.contains("jsonEncode("));
-    let needs_io = expects_error || statements.iter().any(|statement| statement.contains("File("));
+    let needs_io =
+        expects_error || !call.returns_void || statements.iter().any(|statement| statement.contains("File("));
     Ok(crate::e2e::template_env::render(
         "dart/snippet_body.jinja",
         minijinja::context! {
@@ -57,6 +65,9 @@ pub(super) fn render_snippet_body(
             statements => statements, needs_json => needs_json,
             needs_io => needs_io,
             expects_error => expects_error,
+            error_type => config.error_type_name(),
+            result_var => call.result_var,
+            returns_void => call.returns_void,
         },
     ))
 }
@@ -162,8 +173,8 @@ mod tests {
         )
         .expect("snippet");
 
-        assert!(body.contains("catch (error)"), "{body}");
-        assert!(body.contains("throw StateError('expected call to fail')"), "{body}");
+        assert!(body.contains("on Error catch (error)"), "{body}");
+        assert!(!body.contains("expected call to fail"), "{body}");
     }
 
     #[test]

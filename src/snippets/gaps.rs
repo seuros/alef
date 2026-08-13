@@ -111,11 +111,16 @@ pub fn readme_snippet_references(
     let Some(readme) = readme else {
         return Vec::new();
     };
-    let Some(snippets_dir) = &readme.snippets_dir else {
-        return Vec::new();
-    };
     let mut references = Vec::new();
     for (language, entry) in &readme.languages {
+        let snippets_dir = entry
+            .get("snippets_dir")
+            .and_then(serde_json::Value::as_str)
+            .map(PathBuf::from)
+            .or_else(|| readme.snippets_dir.clone());
+        let Some(snippets_dir) = snippets_dir else {
+            continue;
+        };
         let source_language = entry
             .get("snippet_language")
             .and_then(serde_json::Value::as_str)
@@ -123,7 +128,7 @@ pub fn readme_snippet_references(
         if let Some(snippets) = entry.get("snippets") {
             collect_readme_snippet_paths(snippets, &mut |path| {
                 let path = normalize_readme_snippet_path(path, language, source_language);
-                references.push(normalize_path(&workspace_root.join(snippets_dir).join(path)));
+                references.push(normalize_path(&workspace_root.join(&snippets_dir).join(path)));
             });
         }
     }
@@ -179,6 +184,57 @@ pub fn coverage_ledger_references(snippet_dirs: &[PathBuf]) -> Result<Vec<PathBu
     references.sort();
     references.dedup();
     Ok(references)
+}
+
+/// Resolve every snippet beneath an Astro content collection root when that
+/// collection is queried from the configured documentation tree. ~keep
+pub fn astro_collection_references(
+    docs_dirs: &[PathBuf],
+    collections: &BTreeMap<String, PathBuf>,
+) -> Result<Vec<PathBuf>> {
+    let mut referenced_collections = BTreeSet::new();
+    for docs_dir in docs_dirs {
+        for path in markdown_files(docs_dir) {
+            let content = std::fs::read_to_string(&path)?;
+            referenced_collections.extend(parse_astro_collection_queries(&content));
+        }
+    }
+
+    let mut references = Vec::new();
+    for collection in referenced_collections {
+        let Some(root) = collections.get(&collection) else {
+            continue;
+        };
+        references.extend(
+            WalkDir::new(root)
+                .follow_links(false)
+                .into_iter()
+                .filter_map(std::result::Result::ok)
+                .filter(|entry| entry.file_type().is_file())
+                .map(walkdir::DirEntry::into_path),
+        );
+    }
+    references.sort();
+    references.dedup();
+    Ok(references)
+}
+
+#[must_use]
+pub fn parse_astro_collection_queries(content: &str) -> BTreeSet<String> {
+    let mut collections = BTreeSet::new();
+    for quote in ['"', '\''] {
+        let marker = format!("getCollection({quote}");
+        let mut remainder = content;
+        while let Some((_, after_marker)) = remainder.split_once(&marker) {
+            if let Some((name, after_name)) = after_marker.split_once(quote) {
+                collections.insert(name.to_string());
+                remainder = after_name;
+            } else {
+                break;
+            }
+        }
+    }
+    collections
 }
 
 fn read_coverage_ledger_references(output_root: &Path, manifest: &Path) -> Result<Vec<PathBuf>> {
@@ -801,6 +857,45 @@ mod tests {
     }
 
     #[test]
+    fn astro_collection_query_references_every_file_in_its_mapped_root() {
+        let directory = tempfile::tempdir().expect("temporary docs directory");
+        let docs = directory.path().join("docs");
+        let snippets = directory.path().join("snippets-generated");
+        std::fs::create_dir_all(&docs).expect("create docs directory");
+        std::fs::create_dir_all(snippets.join("python")).expect("create snippets directory");
+        std::fs::write(
+            docs.join("Example.astro"),
+            r#"const examples = await getCollection("apiExamples");"#,
+        )
+        .expect("write Astro component");
+        let first = snippets.join("python/first.md");
+        let second = snippets.join("python/second.md");
+        std::fs::write(&first, "```python\nprint('first')\n```\n").expect("write first snippet");
+        std::fs::write(&second, "```python\nprint('second')\n```\n").expect("write second snippet");
+        let collections = BTreeMap::from([("apiExamples".to_string(), snippets)]);
+
+        let references = astro_collection_references(&[docs], &collections).expect("discover collection references");
+
+        assert_eq!(references, vec![first, second]);
+    }
+
+    #[test]
+    fn ignores_configured_astro_collection_until_docs_query_it() {
+        let directory = tempfile::tempdir().expect("temporary docs directory");
+        let docs = directory.path().join("docs");
+        let snippets = directory.path().join("snippets-generated");
+        std::fs::create_dir_all(&docs).expect("create docs directory");
+        std::fs::create_dir_all(&snippets).expect("create snippets directory");
+        std::fs::write(docs.join("Example.astro"), "const examples = [];\n").expect("write Astro component");
+        std::fs::write(snippets.join("unused.md"), "```rust\nlet value = 1;\n```\n").expect("write snippet");
+        let collections = BTreeMap::from([("apiExamples".to_string(), snippets)]);
+
+        let references = astro_collection_references(&[docs], &collections).expect("scan docs");
+
+        assert!(references.is_empty());
+    }
+
+    #[test]
     fn readme_only_references_honor_language_redirects_and_prefixes() {
         let dir = tempfile::tempdir().unwrap();
         let snippets = dir.path().join("docs-site/src/snippets");
@@ -834,5 +929,30 @@ mod tests {
         .unwrap();
         assert!(report.unreferenced_snippets.is_empty());
         assert!(report.missing_references.is_empty());
+    }
+
+    #[test]
+    fn readme_references_honor_per_language_snippet_roots() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let manual = directory.path().join("manual");
+        let generated = directory.path().join("generated");
+        std::fs::create_dir_all(manual.join("python")).expect("manual root");
+        std::fs::create_dir_all(generated.join("python")).expect("generated root");
+        let generated_snippet = generated.join("python/quick_start.md");
+        std::fs::write(&generated_snippet, "```python\nprint('ready')\n```\n").expect("generated snippet");
+        let readme: crate::core::config::ReadmeConfig = serde_json::from_value(serde_json::json!({
+            "snippets_dir": "manual",
+            "languages": {
+                "python": {
+                    "snippets_dir": "generated",
+                    "snippets": { "quick_start": "quick_start.md" }
+                }
+            }
+        }))
+        .expect("README config");
+
+        let references = readme_snippet_references(directory.path(), Some(&readme));
+
+        assert_eq!(references, vec![generated_snippet]);
     }
 }

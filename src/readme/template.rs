@@ -132,7 +132,11 @@ fn render_template_readme(
         }
     });
 
-    let snippets_dir = readme_cfg.snippets_dir.as_ref().map(|s| workspace_root.join(s));
+    let snippets_dir = entry_json
+        .get("snippets_dir")
+        .and_then(|value| value.as_str())
+        .map(|path| workspace_root.join(path))
+        .or_else(|| readme_cfg.snippets_dir.as_ref().map(|path| workspace_root.join(path)));
     let snippets_dir_clone = snippets_dir.clone();
 
     // A README language may borrow its code snippets from a differently-named
@@ -158,7 +162,7 @@ fn render_template_readme(
                 return Err(minijinja::Error::new(
                     minijinja::ErrorKind::InvalidOperation,
                     format!(
-                        "cannot include snippet `{language}/{path}`: `crates.readme.snippets_dir` is not configured"
+                        "cannot include snippet `{language}/{path}`: neither the README mapping nor `crates.readme.snippets_dir` configures a snippet root"
                     ),
                 ));
             };

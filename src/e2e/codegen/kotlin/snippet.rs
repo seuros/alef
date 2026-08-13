@@ -313,10 +313,8 @@ mod tests {
         let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], false);
 
         assert!(body.contains("catch (error: Exception)"), "{body}");
-        assert!(
-            body.contains("throw AssertionError(\"expected call to fail\")"),
-            "{body}"
-        );
+        assert!(body.contains("error::class.simpleName"), "{body}");
+        assert!(!body.contains("AssertionError"), "{body}");
     }
 
     #[test]

@@ -22,13 +22,13 @@ using {{ namespace }};
 {% elif returns_void %}{% if is_async %}await {% endif %}{{ class_name }}.{{ function_name }}({{ args }});
 {% else %}var {{ result_var }} = {% if is_async %}await {% endif %}{{ class_name }}.{{ function_name }}({{ args }});
 {% endif %}
+{% if not expects_error and not returns_void %}Console.WriteLine({{ result_var }});
+{% endif %}
 {% if expects_error %}}
 catch (Exception error)
 {
-    Console.Error.WriteLine($"Call failed as expected: {error.Message}");
-    return;
+    Console.Error.WriteLine($"{error.GetType().Name}: {error.Message}");
 }
-throw new InvalidOperationException("expected call to fail");
 {% endif %}
 {% for declaration in visitor_declarations %}
 {{ declaration }}

@@ -157,12 +157,30 @@ impl super::E2eCodegen for PythonE2eCodegen {
             enums,
         );
         let (imports, body, is_async) = extract_python_snippet(&test_file)?;
+        let error_type = config.error_type_name();
+        let mut imports = imports.into_iter().map(str::to_string).collect::<Vec<_>>();
+        if expects_error {
+            imports.push(format!(
+                "from {} import {error_type}",
+                helpers::resolve_module(e2e_config)
+            ));
+        }
         let presentation = super::presentation::resolve(&call_fixture, e2e_config, "python");
+        let call = e2e_config.resolve_call_for_fixture(
+            call_fixture.call.as_deref(),
+            &call_fixture.id,
+            &call_fixture.resolved_category(),
+            &call_fixture.tags,
+            &call_fixture.input,
+        );
         Ok(crate::e2e::template_env::render(
             "python/snippet_body.py.jinja",
             minijinja::context! {
                 imports => imports, body => body, is_async => is_async, presentation => presentation,
                 expects_error => expects_error,
+                error_type => error_type,
+                result_var => call.result_var,
+                returns_void => call.returns_void,
             },
         ))
     }
@@ -525,11 +543,8 @@ headingStyle = "HeadingStyle"
             )
             .expect("snippet");
 
-        assert!(rendered.contains("except Exception as error:"), "{rendered}");
-        assert!(
-            rendered.contains("raise AssertionError(\"expected call to fail\")"),
-            "{rendered}"
-        );
+        assert!(rendered.contains("except Error as error:"), "{rendered}");
+        assert!(!rendered.contains("AssertionError"), "{rendered}");
     }
 
     #[test]

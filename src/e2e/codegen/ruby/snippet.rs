@@ -193,7 +193,7 @@ mod tests {
         .expect("snippet");
 
         assert!(body.contains("rescue StandardError => error"), "{body}");
-        assert!(body.contains("raise \"expected call to fail\""), "{body}");
+        assert!(!body.contains("expected call to fail"), "{body}");
     }
 
     #[test]

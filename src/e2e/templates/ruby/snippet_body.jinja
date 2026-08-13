@@ -14,9 +14,9 @@ require "{{ require_path }}"
 {% else %}
 {% if expects_error %}  {% endif %}{{ result_var }} = {{ call_receiver }}.{{ function }}({{ args }})
 {% endif %}
+{% if not expects_error and not returns_void %}puts {{ result_var }}.inspect
+{% endif %}
 {% if expects_error %}rescue StandardError => error
-  warn "Call failed as expected: #{error.message}"
-else
-  raise "expected call to fail"
+  warn "#{error.class}: #{error.message}"
 end
 {% endif %}

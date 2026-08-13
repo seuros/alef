@@ -346,6 +346,15 @@ fn validate_snippets(
     configured_references.extend(crate::snippets::gaps::coverage_ledger_references(
         absolute_snippet_dirs,
     )?);
+    let content_collections = snippet_cfg
+        .content_collections
+        .iter()
+        .map(|(name, root)| (name.clone(), workspace_root.join(root)))
+        .collect();
+    configured_references.extend(crate::snippets::gaps::astro_collection_references(
+        &docs_dirs,
+        &content_collections,
+    )?);
 
     if !docs_dirs.is_empty() {
         let audit_report = crate::snippets::audit::audit(&crate::snippets::audit::AuditConfig {

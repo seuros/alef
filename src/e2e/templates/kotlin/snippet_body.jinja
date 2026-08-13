@@ -18,9 +18,7 @@ fun main() {% if is_async %}= kotlinx.coroutines.runBlocking {% endif %}{
 {% else %}    val {{ result_var }} = {{ class_name }}.{{ function_name }}({{ args }})
 {% endif %}
 {% if expects_error %}    } catch (error: Exception) {
-        System.err.println("Call failed as expected: ${error.message}")
-        return{% if is_async %}@runBlocking{% endif %}
+        System.err.println("${error::class.simpleName}: ${error.message}")
     }
-    throw AssertionError("expected call to fail")
 {% endif %}
 }

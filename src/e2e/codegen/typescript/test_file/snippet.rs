@@ -122,6 +122,9 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
         .any(|assertion| assertion.assertion_type == "error");
     let mut imports = std::collections::BTreeSet::new();
     imports.insert(effective_factory.unwrap_or(&function_name).to_string());
+    if expects_error {
+        imports.insert(config.error_type_name());
+    }
     imports.extend(visitor_imports);
     let referenced_code = format!("{}\n{args}\n{client_setup}", setup_lines.join("\n"));
     if let Some(name) = options_type
@@ -161,6 +164,8 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
             setup_lines => setup_lines, client_setup => client_setup, call_expr => call_expr,
             result_var => call.result_var, is_async => override_config.and_then(|value| value.r#async).unwrap_or(call.r#async),
             expects_error => expects_error,
+            error_type => config.error_type_name(),
+            returns_void => call.returns_void,
             presentation => crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang),
         },
     )
@@ -395,7 +400,8 @@ mod tests {
             config: &config,
         });
         assert!(body.contains("try {"));
-        assert!(body.contains("Call failed as expected"));
+        assert!(body.contains("error instanceof Error"));
+        assert!(!body.contains("expected call to fail"));
         assert!(!body.contains("const result = await"));
     }
 

@@ -410,6 +410,9 @@ pub struct DocsSnippetsConfig {
     /// Documentation/template roots to scan for MkDocs snippet includes.
     #[serde(default)]
     pub docs_dirs: Vec<PathBuf>,
+    /// Astro content collection names mapped to the snippet root they load. ~keep
+    #[serde(default)]
+    pub content_collections: BTreeMap<String, PathBuf>,
     /// Documentation roots whose fenced code blocks are validated as snippets.
     #[serde(default)]
     pub inline_dirs: Vec<PathBuf>,
@@ -499,6 +502,10 @@ impl DocsSnippetsConfig {
         Some(Self {
             dirs: merge_vec(workspace.map(|cfg| &cfg.dirs), krate.map(|cfg| &cfg.dirs)),
             docs_dirs: merge_vec(workspace.map(|cfg| &cfg.docs_dirs), krate.map(|cfg| &cfg.docs_dirs)),
+            content_collections: merge_btree_map(
+                workspace.map(|cfg| &cfg.content_collections),
+                krate.map(|cfg| &cfg.content_collections),
+            ),
             inline_dirs: merge_vec(workspace.map(|cfg| &cfg.inline_dirs), krate.map(|cfg| &cfg.inline_dirs)),
             exclude: merge_vec(workspace.map(|cfg| &cfg.exclude), krate.map(|cfg| &cfg.exclude)),
             required_languages: merge_vec(

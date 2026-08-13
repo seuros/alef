@@ -8,10 +8,8 @@
 {% endif %}
 {% if expects_error %}    try:
 {% for line in body %}        {{ line }}
-{% endfor %}    except Exception as error:
-        print(f"Call failed as expected: {error}")
-    else:
-        raise AssertionError("expected call to fail")
+{% endfor %}    except {{ error_type }} as error:
+        print(f"{type(error).__name__}: {error}")
 {% else %}{% for line in body %}    {{ line }}
 {% endfor %}
 {% for operation in presentation %}
@@ -20,6 +18,8 @@
 {% for field in operation.fields %}        print({{ field }})
 {% endfor %}{% endif %}
 {% endfor %}
+{% if not presentation and not returns_void %}    print({{ result_var }})
+{% endif %}
 {% endif %}
 
 {% if is_async %}asyncio.run(main())

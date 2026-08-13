@@ -81,6 +81,7 @@ pub(super) fn render_snippet_body(
         .assertions
         .iter()
         .any(|assertion| assertion.assertion_type == "error");
+    let exception_class = format!("{class_name}Exception");
 
     crate::e2e::template_env::render(
         "java/snippet_body.jinja",
@@ -97,6 +98,7 @@ pub(super) fn render_snippet_body(
             fixture_id => fixture.id,
             presentation => presentation,
             expects_error => expects_error,
+            exception_class => exception_class,
         },
     )
 }
@@ -199,13 +201,14 @@ mod tests {
             "assertions": [{"type": "error"}]
         }))
         .expect("fixture");
-        let body = render_snippet_body(&fixture, &E2eConfig::default(), &ResolvedCrateConfig::default(), &[]);
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+        let body = render_snippet_body(&fixture, &E2eConfig::default(), &config, &[]);
 
-        assert!(body.contains("catch (Exception error)"), "{body}");
-        assert!(
-            body.contains("throw new AssertionError(\"expected call to fail\")"),
-            "{body}"
-        );
+        assert!(body.contains("catch (SampleException error)"), "{body}");
+        assert!(!body.contains("AssertionError"), "{body}");
     }
 
     #[test]

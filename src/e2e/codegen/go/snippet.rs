@@ -171,6 +171,7 @@ pub(super) fn render_snippet_body(
         standard_imports.insert("fmt");
     }
     if expects_error {
+        standard_imports.insert("errors");
         standard_imports.insert("os");
     }
     let mut imports = standard_imports
@@ -192,6 +193,8 @@ pub(super) fn render_snippet_body(
             call_expr => call_expr, result_var => call.result_var, returns_error => returns_error,
             returns_void => call.returns_void,
             expects_error => expects_error,
+            error_type => config.error_type_name(),
+            import_alias => import_alias,
         },
     )
     .trim_end()
@@ -291,8 +294,9 @@ mod tests {
         let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[]);
 
         assert!(body.contains("_, err := pkg."), "{body}");
-        assert!(body.contains("if err == nil"), "{body}");
-        assert!(body.contains("expected call to fail"), "{body}");
+        assert!(body.contains("var typedError *pkg.Error"), "{body}");
+        assert!(body.contains("errors.As(err, &typedError)"), "{body}");
+        assert!(!body.contains("expected call to fail"), "{body}");
     }
 
     #[test]

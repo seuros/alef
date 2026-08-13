@@ -143,17 +143,32 @@ fn validate_readme_snippets_dir(config: &ResolvedCrateConfig) -> anyhow::Result<
     let Some(readme_cfg) = &config.readme else {
         return Ok(());
     };
-    let Some(snippets_dir) = &readme_cfg.snippets_dir else {
-        return Ok(());
-    };
     let workspace_root = config.workspace_root.clone().unwrap_or_else(|| PathBuf::from("."));
-    let abs_snippets_dir = workspace_root.join(snippets_dir);
-    if !abs_snippets_dir.exists() {
-        anyhow::bail!(
-            "config key `crates.readme.snippets_dir` is set to '{}' (resolved to '{}'), which does not exist",
-            snippets_dir.display(),
-            abs_snippets_dir.display()
-        );
+    let mut roots = readme_cfg
+        .snippets_dir
+        .iter()
+        .map(|root| ("crates.readme.snippets_dir".to_string(), root.clone()))
+        .collect::<Vec<_>>();
+    roots.extend(readme_cfg.languages.iter().filter_map(|(language, entry)| {
+        entry
+            .get("snippets_dir")
+            .and_then(serde_json::Value::as_str)
+            .map(|root| {
+                (
+                    format!("crates.readme.languages.{language}.snippets_dir"),
+                    PathBuf::from(root),
+                )
+            })
+    }));
+    for (key, snippets_dir) in roots {
+        let abs_snippets_dir = workspace_root.join(&snippets_dir);
+        if !abs_snippets_dir.exists() {
+            anyhow::bail!(
+                "config key `{key}` is set to '{}' (resolved to '{}'), which does not exist",
+                snippets_dir.display(),
+                abs_snippets_dir.display()
+            );
+        }
     }
     Ok(())
 }

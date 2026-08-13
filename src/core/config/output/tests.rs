@@ -5,6 +5,7 @@ fn docs_snippets_merge_covers_validation_policy_and_paths() {
     let workspace: DocsSnippetsConfig = toml::from_str(
         r#"
 dirs = ["docs/snippets"]
+content_collections = { apiExamples = "docs/snippets/generated" }
 inline_dirs = ["docs/guides"]
 exclude = ["docs/reference"]
 strict = true
@@ -27,6 +28,10 @@ deny_unclassified = true
 
     let merged = DocsSnippetsConfig::merge(Some(&workspace), Some(&krate)).unwrap();
     assert_eq!(merged.dirs, vec![PathBuf::from("docs/snippets")]);
+    assert_eq!(
+        merged.content_collections,
+        BTreeMap::from([("apiExamples".to_string(), PathBuf::from("docs/snippets/generated"))])
+    );
     assert_eq!(merged.inline_dirs, vec![PathBuf::from("book")]);
     assert_eq!(merged.exclude, vec![PathBuf::from("docs/reference")]);
     assert!(merged.strict);

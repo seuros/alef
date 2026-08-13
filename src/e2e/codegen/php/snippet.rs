@@ -252,7 +252,7 @@ mod tests {
         };
         let body = render_snippet_body(&fixture, &e2e, &config, &[], &[]).expect("snippet renders");
         assert!(body.contains("catch (Throwable $error)"));
-        assert!(body.contains("Call failed as expected"));
+        assert!(!body.contains("expected call to fail"));
     }
 
     #[test]

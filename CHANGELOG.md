@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **snippets/docs**: emit reader-facing, fail-closed examples, recognize Astro content-collection references, and
+  allow per-language README snippet roots.
 - **sync-versions**: preserve README content unless regeneration is explicitly requested with `--regen`.
 - **wasm**: delegate instance methods with borrowed named inputs to the Rust core and compile C environment shims
   only for `wasm32` targets.

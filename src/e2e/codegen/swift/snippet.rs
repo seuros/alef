@@ -64,13 +64,8 @@ pub(super) fn render(
         .take(body_line_count)
         .map(|line| line.strip_prefix("        ").unwrap_or(line))
         .map(|line| line.replacen("let  =", "_ =", 1))
-        .map(|line| {
-            line.replace(
-                "XCTFail(\"expected to throw\")",
-                "fatalError(\"expected call to fail\")",
-            )
-        })
-        .map(|line| line.replace("// success", "print(\"Call failed as expected: \\(error)\")"))
+        .filter(|line| !line.contains("XCTFail(\"expected to throw\")"))
+        .map(|line| line.replace("// success", "print(\"\\(type(of: error)): \\(error)\")"))
         .collect::<Vec<_>>()
         .join("\n");
     let needs_foundation = ["Data(", "URL(", "JSONDecoder", "JSONEncoder"]
@@ -123,7 +118,8 @@ mod tests {
         let rendered = render(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[]).expect("snippet renders");
         assert!(rendered.contains("do {"));
         assert!(rendered.contains("catch {"));
-        assert!(rendered.contains("Call failed as expected"));
+        assert!(rendered.contains("type(of: error)"));
+        assert!(!rendered.contains("fatalError"));
         assert!(!rendered.contains("XCTFail"));
     }
 

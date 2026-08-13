@@ -197,7 +197,7 @@ mod tests {
         .expect("snippet");
 
         assert!(body.contains("rescue\n  error ->"), "{body}");
-        assert!(body.contains("else\n  _ -> raise \"expected call to fail\""), "{body}");
+        assert!(!body.contains("expected call to fail"), "{body}");
     }
 
     #[test]
