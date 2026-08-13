@@ -4,6 +4,7 @@ mod common;
 mod constructors;
 mod doxygen;
 mod fields;
+mod handle_registry;
 mod methods;
 mod regressions;
 mod security;

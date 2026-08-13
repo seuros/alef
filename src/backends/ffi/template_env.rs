@@ -8,6 +8,10 @@ static TEMPLATES: &[(&str, &str)] = &[
     ("free_bytes.jinja", include_str!("templates/free_bytes.jinja")),
     ("version_fn.jinja", include_str!("templates/version_fn.jinja")),
     (
+        "handle_registry.rs.jinja",
+        include_str!("templates/handle_registry.rs.jinja"),
+    ),
+    (
         "ffi_tokio_runtime.jinja",
         include_str!("templates/ffi_tokio_runtime.jinja"),
     ),

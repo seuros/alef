@@ -87,6 +87,11 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
 
     builder.add_item(&gen_last_error(api, prefix, &core_import));
 
+    builder.add_item(&crate::backends::ffi::template_env::render(
+        "handle_registry.rs.jinja",
+        minijinja::context! {},
+    ));
+
     builder.add_item(&gen_free_string(prefix));
 
     let has_bytes_results = api.functions.iter().any(|function| {
