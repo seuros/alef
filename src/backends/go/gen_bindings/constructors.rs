@@ -107,8 +107,6 @@ pub(super) fn gen_go_opaque_constructor(typ: &TypeDef, ffi_prefix: &str, ctor: &
 
     let go_name = go_type_name(&typ.name);
     let type_snake = typ.name.to_snake_case();
-    let upper_prefix = ffi_prefix.to_uppercase();
-    let c_type = format!("{upper_prefix}{}", typ.name);
 
     let go_params: String = ctor
         .params
@@ -135,10 +133,10 @@ pub(super) fn gen_go_opaque_constructor(typ: &TypeDef, ffi_prefix: &str, ctor: &
          func New{go_name}({go_params}) (*{go_name}, error) {{\n\
          {setup}\
          \tptr := C.{ffi_prefix}_{type_snake}_new({c_call_args})\n\
-         \tif ptr == nil {{\n\
+         \tif ptr == 0 {{\n\
          \t\treturn nil, fmt.Errorf(\"new{go_name}: %s\", C.GoString(C.{ffi_prefix}_last_error_context()))\n\
          \t}}\n\
-         \treturn &{go_name}{{ptr: unsafe.Pointer((*C.{c_type})(ptr))}}, nil\n\
+         \treturn &{go_name}{{ptr: ptr}}, nil\n\
          }}"
     )
 }

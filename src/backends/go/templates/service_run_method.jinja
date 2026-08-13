@@ -1,7 +1,7 @@
 // Run starts the HTTP server with the given configuration.
 // This method blocks until the server exits or an error occurs.
 func (s *{{ service_name }}) Run(config Config) error {
-	if s.owner == nil {
+	if s.owner == 0 {
 		return errors.New("service is closed")
 	}
 

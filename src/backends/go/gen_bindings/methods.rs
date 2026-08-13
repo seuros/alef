@@ -92,12 +92,8 @@ pub(super) fn gen_streaming_method_wrapper(
     let type_snake = typ.name.to_snake_case();
     let method_snake = method.name.to_snake_case();
     let item_snake = item_type.to_snake_case();
-    let upper_prefix = ffi_prefix.to_uppercase();
 
-    let c_receiver = format!(
-        "(*C.{}{})(unsafe.Pointer({}.ptr))",
-        upper_prefix, typ.name, receiver_name
-    );
+    let c_receiver = format!("{}.ptr", receiver_name);
     let start_call = if c_params.is_empty() {
         format!("C.{}_{}_{}_start({})", ffi_prefix, type_snake, method_snake, c_receiver)
     } else {
@@ -275,12 +271,7 @@ pub(super) fn gen_method_wrapper(
                 )
             }
         } else if typ.is_opaque {
-            let c_receiver = format!(
-                "(*C.{}{})(unsafe.Pointer({}.ptr))",
-                ffi_prefix.to_uppercase(),
-                typ.name,
-                receiver_name
-            );
+            let c_receiver = format!("{}.ptr", receiver_name);
             if c_params.is_empty() {
                 format!("C.{}_{}_{}({})", ffi_prefix, type_snake, method_snake, c_receiver)
             } else {

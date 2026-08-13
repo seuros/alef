@@ -1,5 +1,5 @@
 func (s *{{ service_name }}) {{ method_name }}({{ params }}){{ return_sig }} {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.owner == nil {
+	if s.owner == 0 {
 {{ closed_return }}	}

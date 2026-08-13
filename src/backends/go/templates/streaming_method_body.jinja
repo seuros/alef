@@ -1,5 +1,5 @@
 	handle := {{ start_call }}
-	if handle == nil {
+	if handle == 0 {
 		if err := lastError(); err != nil {
 			return nil, err
 		}
@@ -11,7 +11,7 @@
 		defer C.{{ ffi_prefix }}_{{ type_snake }}_{{ method_snake }}_free(handle)
 		for {
 			chunkPtr := C.{{ ffi_prefix }}_{{ type_snake }}_{{ method_snake }}_next(handle)
-			if chunkPtr == nil {
+			if chunkPtr == 0 {
 				// Null = clean end-of-stream (errno 0) or stream error (errno != 0).
 				// In either case there are no more chunks; close the channel.
 				return

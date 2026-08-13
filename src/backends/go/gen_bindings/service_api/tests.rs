@@ -165,7 +165,7 @@ fn test_gen_service_go_produces_valid_go() {
     assert!(go.contains("#include \"test_crate.h\""));
     assert!(go.contains("//export service_handler_callback"));
     assert!(go.contains("import \"C\""));
-    assert!(go.contains("*TEST_CRATETestServiceOpaque"));
+    assert!(go.contains("owner C.uint64_t"));
 }
 
 #[test]
@@ -179,8 +179,8 @@ fn test_service_struct_is_generated() {
     let go = gen_service_go(&api, &config, "binding", "TEST_CRATE");
 
     assert!(go.contains("type TestService struct"));
-    assert!(go.contains("owner unsafe.Pointer"));
-    assert!(go.contains("*TEST_CRATETestServiceOpaque"));
+    assert!(go.contains("owner C.uint64_t"));
+    assert!(go.contains("test_crate_test_service_free(s.owner)"));
     assert!(go.contains("mu    sync.Mutex"));
 }
 

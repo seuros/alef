@@ -1,4 +1,4 @@
-	if ret == nil {
+	if ret == 0 {
 		return nil, errors.New("{{ ep_method }} failed")
 	}
-	return &{{ return_type }}{ptr: unsafe.Pointer(ret)}, nil
+	return &{{ return_type }}{ptr: ret}, nil

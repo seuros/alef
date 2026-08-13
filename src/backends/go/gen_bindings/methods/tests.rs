@@ -184,7 +184,7 @@ fn test_gen_method_wrapper_opaque_free_method_emits_ptr_cast() {
         out.contains("func (h *Client) Close("),
         "expected receiver+method in: {out}"
     );
-    assert!(out.contains("unsafe.Pointer(h.ptr)"));
+    assert!(out.contains("C.krz_client_close(h.ptr)"));
 }
 
 #[test]

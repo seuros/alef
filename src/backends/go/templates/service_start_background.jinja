@@ -26,7 +26,7 @@ func (s *{{ service_name }}) StartBackground(host string, port uint16) (*ServerH
 
 	// Lock to check ownership and then spawn Run in a goroutine.
 	s.mu.Lock()
-	if s.owner == nil {
+	if s.owner == 0 {
 		s.mu.Unlock()
 		return nil, errors.New("service is closed")
 	}

@@ -204,11 +204,11 @@ fn typeref_to_c_type(ty: &TypeRef) -> String {
 /// Generate a C argument expression for a parameter.
 /// For opaque types and primitives, returns just the expression.
 /// For DTOs in configurators, use service_c_arg_expr_with_marshal instead.
-fn service_c_arg_expr(param_name: &str, ty: &TypeRef, api: &ApiSurface, upper_prefix: &str) -> String {
+fn service_c_arg_expr(param_name: &str, ty: &TypeRef, api: &ApiSurface, _upper_prefix: &str) -> String {
     match ty {
         TypeRef::String => format!("C.CString({param_name})"),
         TypeRef::Named(type_name) if api.types.iter().any(|t| t.name == *type_name) => {
-            format!("(*C.{upper_prefix}{type_name})(unsafe.Pointer({param_name}.ptr))")
+            format!("{param_name}.ptr")
         }
         _ => {
             let c_type = typeref_to_c_type(ty);
@@ -226,7 +226,7 @@ fn service_c_arg_expr_with_marshal(
     param_name: &str,
     ty: &TypeRef,
     api: &ApiSurface,
-    upper_prefix: &str,
+    _upper_prefix: &str,
     ffi_prefix: &str,
 ) -> (String, String) {
     match ty {
@@ -234,10 +234,7 @@ fn service_c_arg_expr_with_marshal(
         TypeRef::Named(type_name) => {
             if let Some(typedef) = api.types.iter().find(|t| t.name == *type_name) {
                 if typedef.is_opaque {
-                    (
-                        String::new(),
-                        format!("(*C.{upper_prefix}{type_name})(unsafe.Pointer({param_name}.ptr))"),
-                    )
+                    (String::new(), format!("{param_name}.ptr"))
                 } else {
                     let var_name = format!("c_{param_name}");
                     let type_name_snake = type_name.to_snake_case();
@@ -262,10 +259,7 @@ fn service_c_arg_expr_with_marshal(
                     (preprocessing, arg_expr)
                 }
             } else {
-                (
-                    String::new(),
-                    format!("(*C.{upper_prefix}{type_name})(unsafe.Pointer({param_name}.ptr))"),
-                )
+                (String::new(), format!("{param_name}.ptr"))
             }
         }
         _ => {

@@ -112,11 +112,7 @@ fn go_return_expr_inner(
         },
         TypeRef::Named(name) => {
             if opaque_names.contains(name.as_str()) {
-                format!(
-                    "&{go_type}{{ptr: unsafe.Pointer({var_name})}}",
-                    go_type = name,
-                    var_name = var_name,
-                )
+                format!("&{go_type}{{ptr: {var_name}}}", go_type = name, var_name = var_name,)
             } else {
                 let type_snake = name.to_snake_case();
                 let go_type = go_type_name(name);
