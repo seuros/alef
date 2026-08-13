@@ -8,8 +8,8 @@ use crate::backends::ffi::gen_bindings::helpers::{
     gen_ffi_tokio_runtime, gen_free_bytes, gen_free_string, gen_last_error, gen_version,
 };
 use crate::backends::ffi::gen_bindings::lib_setup::{
-    build_lib_setup_context, function_param_bridge_for_visitor_callbacks, has_trait_bridge_param,
-    options_field_bridge_for_function,
+    build_lib_setup_context, crosses_borrowed_handle_boundary, function_param_bridge_for_visitor_callbacks,
+    has_trait_bridge_param, options_field_bridge_for_function,
 };
 use crate::backends::ffi::gen_bindings::types::{
     gen_enum_free, gen_enum_from_i32, gen_enum_from_i32_rs_helper, gen_enum_from_json, gen_enum_to_i32,
@@ -188,11 +188,17 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
         .map(|(name, _)| name.as_str())
         .collect();
     ffi_exclude_types.extend(exclude_generic_opaques);
+    let borrowed_handle_types: ahash::AHashSet<String> = api
+        .types
+        .iter()
+        .filter(|typ| typ.has_lifetime_params)
+        .map(|typ| typ.name.clone())
+        .collect();
 
     for typ in api
         .types
         .iter()
-        .filter(|typ| !typ.is_trait && !ffi_exclude_types.contains(typ.name.as_str()))
+        .filter(|typ| !typ.is_trait && !typ.has_lifetime_params && !ffi_exclude_types.contains(typ.name.as_str()))
     {
         if !typ.is_opaque && typ.has_serde {
             builder.add_item(&gen_type_from_json(typ, prefix, &core_import));
@@ -226,7 +232,10 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
 
         let mut emitted_field_names: ahash::AHashSet<&str> = ahash::AHashSet::default();
         for field in &typ.fields {
-            if !field.sanitized && !field.binding_excluded {
+            if !field.sanitized
+                && !field.binding_excluded
+                && !crosses_borrowed_handle_boundary(&field.ty, &borrowed_handle_types)
+            {
                 emitted_field_names.insert(field.name.as_str());
                 builder.add_item(&gen_field_accessor(
                     typ,
@@ -261,6 +270,14 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
         for method in &typ.methods {
             let method_key = format!("{}.{}", typ.name, method.name);
             if ffi_exclude_methods.contains(&method_key) {
+                continue;
+            }
+            if crosses_borrowed_handle_boundary(&method.return_type, &borrowed_handle_types)
+                || method
+                    .params
+                    .iter()
+                    .any(|parameter| crosses_borrowed_handle_boundary(&parameter.ty, &borrowed_handle_types))
+            {
                 continue;
             }
 
@@ -458,6 +475,14 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
     let ffi_functions = crate::backends::ffi::gen_bindings::functions::dedup_same_name_functions(&api.functions);
     for func in &ffi_functions {
         if ffi_exclude_functions.contains(&func.name) {
+            continue;
+        }
+        if crosses_borrowed_handle_boundary(&func.return_type, &borrowed_handle_types)
+            || func
+                .params
+                .iter()
+                .any(|parameter| crosses_borrowed_handle_boundary(&parameter.ty, &borrowed_handle_types))
+        {
             continue;
         }
         if crate::codegen::generators::trait_bridge::is_trait_bridge_managed_fn(&func.name, &config.trait_bridges) {

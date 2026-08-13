@@ -1,4 +1,4 @@
-    let mut __alef_requests = Vec::new();
+    let mut __alef_requests: Vec<HandleRequest> = Vec::new();
 {{ requests }}
 {% if owned_handle %}
     if __alef_requests.iter().any(|request| request.handle == {{ owned_handle }}) {

@@ -232,3 +232,74 @@ fn generated_calls_acquire_all_handles_before_use_or_owned_take() {
         .expect("owned take");
     assert!(alias_check < owned_take, "{owned_method}");
 }
+
+#[test]
+fn borrowed_types_do_not_enter_process_global_handle_registry() {
+    use crate::core::ir::{FieldDef, FunctionDef, ParamDef, TypeDef, TypeRef};
+
+    let borrowed = TypeDef {
+        name: "BorrowedNode".into(),
+        rust_path: "sample_lib::BorrowedNode".into(),
+        has_lifetime_params: true,
+        has_serde: true,
+        ..TypeDef::default()
+    };
+    let owner = TypeDef {
+        name: "Document".into(),
+        rust_path: "sample_lib::Document".into(),
+        fields: vec![FieldDef {
+            name: "node".into(),
+            ty: TypeRef::Named("BorrowedNode".into()),
+            ..FieldDef::default()
+        }],
+        ..TypeDef::default()
+    };
+    let inspect = FunctionDef {
+        name: "inspect".into(),
+        rust_path: "sample_lib::inspect".into(),
+        params: vec![ParamDef {
+            name: "node".into(),
+            ty: TypeRef::Named("BorrowedNode".into()),
+            is_ref: true,
+            ..ParamDef::default()
+        }],
+        ..FunctionDef::default()
+    };
+    let api = crate::core::ir::ApiSurface {
+        crate_name: "sample".into(),
+        types: vec![borrowed, owner],
+        functions: vec![inspect],
+        ..Default::default()
+    };
+    let files = super::super::FfiBackend
+        .generate_bindings(&api, &super::common::sample_config())
+        .expect("FFI generation");
+    let source = &files
+        .iter()
+        .find(|file| file.path.ends_with("lib.rs"))
+        .expect("generated Rust library")
+        .content;
+
+    syn::parse_file(source).expect("fail-closed borrowed-type output must parse");
+    assert!(!source.contains("sample_borrowed_node_from_json"), "{source}");
+    assert!(!source.contains("sample_document_node"), "{source}");
+    assert!(!source.contains("sample_inspect"), "{source}");
+    assert!(!source.contains("insert_handle(val)"), "{source}");
+}
+
+#[test]
+fn owned_receiver_alias_check_has_concrete_request_type() {
+    let source = crate::backends::ffi::template_env::render(
+        "handle_acquisition.rs.jinja",
+        minijinja::context! {
+            requests => "",
+            fail_ret => "return 0;",
+            owned_handle => "this",
+        },
+    );
+
+    assert!(
+        source.contains("let mut __alef_requests: Vec<HandleRequest>"),
+        "{source}"
+    );
+}

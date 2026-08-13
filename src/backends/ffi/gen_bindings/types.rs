@@ -163,11 +163,7 @@ pub(super) fn gen_field_accessor(
     let c_type_override = fields_c_types.get(&lookup_key).filter(|t| t.as_str() != "skip");
     let (mut ret_type, override_is_opaque_handle, override_type_name) = if let Some(override_type) = c_type_override {
         if !is_primitive_c_type_override(override_type) && override_type != "char*" {
-            (
-                format!("*mut {core_import}::{override_type}"),
-                true,
-                Some(override_type.clone()),
-            )
+            ("AlefHandle".to_string(), true, Some(override_type.clone()))
         } else {
             (
                 c_return_type_with_paths(&effective_ty, &field_core_import, path_map).into_owned(),
@@ -187,7 +183,7 @@ pub(super) fn gen_field_accessor(
     }
 
     let null_ret = if override_is_opaque_handle {
-        "std::ptr::null_mut()".to_string()
+        "0".to_string()
     } else {
         null_return_value(&effective_ty).to_string()
     };
@@ -255,7 +251,7 @@ fn gen_field_access_body(
             .zip(override_type_name)
             .is_some_and(|(field_named, ovr)| field_named == ovr);
         if !field_is_override_type {
-            out.push_str("    std::ptr::null_mut()");
+            out.push_str("    0");
             return out;
         }
     }

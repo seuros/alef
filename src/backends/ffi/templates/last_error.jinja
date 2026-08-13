@@ -12,10 +12,12 @@ const ALEF_FFI_PANIC_ERROR: i32 = 3;
 fn alef_ffi_error_code(error: &dyn std::any::Any) -> i32 {
 {% for error_code_impl in error_code_impls %}
     if let Some(error) = error.downcast_ref::<{{ error_code_impl.error_path }}>() {
+        #[allow(unreachable_patterns)]
         return match error {
 {% for variant in error_code_impl.variants %}
             {{ variant.pattern }} => {{ variant.code }},
 {% endfor %}
+            _ => ALEF_FFI_CORE_ERROR,
         };
     }
 {% endfor %}

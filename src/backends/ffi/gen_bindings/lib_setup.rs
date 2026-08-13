@@ -77,6 +77,18 @@ pub(super) fn named_type_ref(ty: &TypeRef) -> Option<&str> {
     }
 }
 
+pub(super) fn crosses_borrowed_handle_boundary(ty: &TypeRef, borrowed_types: &AHashSet<String>) -> bool {
+    match ty {
+        TypeRef::Named(name) => borrowed_types.contains(name),
+        TypeRef::Optional(inner) | TypeRef::Vec(inner) => crosses_borrowed_handle_boundary(inner, borrowed_types),
+        TypeRef::Map(key, value) => {
+            crosses_borrowed_handle_boundary(key, borrowed_types)
+                || crosses_borrowed_handle_boundary(value, borrowed_types)
+        }
+        _ => false,
+    }
+}
+
 pub(super) fn has_trait_bridge_param(func: &FunctionDef, trait_bridges: &[TraitBridgeConfig]) -> bool {
     func.params.iter().any(|param| {
         let param_type = named_type_ref(&param.ty);

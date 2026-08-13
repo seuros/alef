@@ -79,6 +79,7 @@ prefix = "sample"
     assert!(lib.content.contains("const ALEF_FFI_PANIC_ERROR: i32 = 3;"));
     assert!(lib.content.contains("sample_lib::RequestError::InvalidInput =>"));
     assert!(lib.content.contains("sample_lib::RequestError::Unavailable(..) =>"));
+    assert!(lib.content.contains("_ => ALEF_FFI_CORE_ERROR"));
     assert!(lib.content.contains("set_last_error(alef_ffi_error_code(&e)"));
     for taxonomy in codes {
         assert!(lib.content.contains(&format!("=> {}", taxonomy.code)));
@@ -944,4 +945,38 @@ fn test_optional_bytes_field_accessor_emits_out_len_and_length_writes() {
         code.contains("!out_len.is_null()"),
         "optional Bytes field must null-check out_len before writing, got:\n{code}"
     );
+}
+
+#[test]
+fn overridden_named_field_accessor_returns_handle_token() {
+    let field = FieldDef {
+        name: "child".to_string(),
+        ty: TypeRef::Named("Child".to_string()),
+        ..FieldDef::default()
+    };
+    let typ = TypeDef {
+        name: "Container".to_string(),
+        rust_path: "sample_lib::Container".to_string(),
+        fields: vec![field.clone()],
+        ..TypeDef::default()
+    };
+    let fields_c_types = std::collections::HashMap::from([("container.child".to_string(), "Child".to_string())]);
+    let clone_names = ahash::AHashSet::from_iter(["Child".to_string()]);
+
+    let code = gen_field_accessor(
+        &typ,
+        &field,
+        "sample",
+        "sample_lib",
+        &ahash::AHashMap::new(),
+        &ahash::AHashSet::new(),
+        &clone_names,
+        &fields_c_types,
+    );
+
+    assert!(code.contains(") -> AlefHandle"), "{code}");
+    assert!(code.contains("catch_ffi_panic(0, ||"), "{code}");
+    assert!(!code.contains("std::ptr::null_mut()"), "{code}");
+    assert!(code.contains("insert_handle"), "{code}");
+    syn::parse_file(&code).expect("handle-token accessor must parse");
 }

@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **ffi**: keep named field accessors on scalar handle tokens, fail closed for lifetime-borrowed types that cannot
+  enter the process-global registry, preserve forward-compatible error taxonomy matching, and type empty handle
+  acquisition lists explicitly.
 - **snippets**: emit strict TypeScript DTO literals and optional accessors, prefix WASM imports, and deserialize
   Kotlin Android inputs using each argument's declared DTO type.
 - **node**: export zero-argument adjacent-enum namespace constructors as callable functions instead of getters.
