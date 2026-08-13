@@ -12,7 +12,7 @@ final class {{ class_name }} {
     private static final String SKIP_BUNDLED_ENV = "{{ library_environment_prefix }}_SKIP_BUNDLED";
     private static final String[] REQUIRED_SYMBOLS = {
 {% for symbol in required_symbols %}
-        "{{ symbol }}"{% if not loop.last %},{% endif %}
+        "{{ symbol }}"{% if not loop.last %},{% endif +%}
 {% endfor %}
     };
     private static final Object NATIVE_EXTRACT_LOCK = new Object();

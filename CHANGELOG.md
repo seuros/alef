@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **java**: emit native-library required symbols one per line so generated bindings satisfy Checkstyle line limits.
 - **java/kotlin**: map stable native taxonomy codes to generated typed exceptions while retaining generic FFI error
   fallbacks.
 - **go/zig**: map native failures to typed binding errors by stable numeric FFI taxonomy codes instead of parsing
