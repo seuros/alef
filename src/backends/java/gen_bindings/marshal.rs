@@ -380,7 +380,7 @@ pub(crate) fn gen_function_descriptor(return_layout: &str, param_layouts: &[Stri
     }
 }
 
-pub(crate) fn gen_helper_methods(out: &mut String, prefix: &str, class_name: &str) {
+pub(crate) fn gen_helper_methods(out: &mut String, prefix: &str, class_name: &str, api: &crate::core::ir::ApiSurface) {
     let needs_check_last_error = out.contains("checkLastError()");
     let needs_read_cstring = out.contains("readCString(");
     let needs_read_bytes = out.contains("readBytes(");
@@ -403,11 +403,24 @@ pub(crate) fn gen_helper_methods(out: &mut String, prefix: &str, class_name: &st
     out.push('\n');
 
     if needs_check_last_error {
+        let taxonomy = api.error_taxonomy();
+        let error_codes: Vec<_> = taxonomy
+            .iter()
+            .map(|entry| {
+                let error = api
+                    .errors
+                    .iter()
+                    .find(|error| error.rust_path == entry.error_type)
+                    .unwrap();
+                (entry.code, format!("{}Exception", entry.variant), error.name.clone())
+            })
+            .collect();
         out.push_str(&crate::backends::java::template_env::render(
             "helper_check_last_error.jinja",
             minijinja::context! {
                 prefix_upper => prefix.to_uppercase(),
                 class_name => class_name,
+                error_codes => error_codes,
             },
         ));
     }
@@ -442,5 +455,41 @@ pub(crate) fn gen_helper_methods(out: &mut String, prefix: &str, class_name: &st
                 free_handle => free_handle,
             },
         ));
+    }
+}
+
+#[cfg(test)]
+mod typed_error_tests {
+    use super::*;
+
+    #[test]
+    fn helper_maps_taxonomy_code_to_variant_exception() {
+        let error = crate::core::ir::ErrorDef {
+            name: "RequestError".to_string(),
+            rust_path: "sample::RequestError".to_string(),
+            variants: vec![crate::core::ir::ErrorVariant {
+                name: "InvalidInput".to_string(),
+                is_unit: true,
+                ..Default::default()
+            }],
+            original_rust_path: String::new(),
+            doc: String::new(),
+            methods: Vec::new(),
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        };
+        let api = crate::core::ir::ApiSurface {
+            errors: vec![error],
+            ..Default::default()
+        };
+        let code = api.error_taxonomy()[0].code;
+        let mut output = "checkLastError()".to_string();
+
+        gen_helper_methods(&mut output, "sample", "Sample", &api);
+
+        assert!(output.contains(&format!("case {code} -> throw new InvalidInputException(msg);")));
+        assert!(output.contains("case 1 -> throw new InvalidInputException(msg);"));
+        assert!(output.contains("case 2 -> throw new ConversionErrorException(msg);"));
     }
 }

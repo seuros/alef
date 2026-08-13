@@ -246,7 +246,7 @@ fn emit_native_actual(api: &ApiSurface, config: &ResolvedCrateConfig) -> String 
             },
         ));
         for f in &visible_functions {
-            emit_native_function_pub(f, &prefix, &mut body);
+            emit_native_function_pub(f, &prefix, &api.errors, &api.error_taxonomy(), &mut body);
             body.push('\n');
         }
         body.push_str("}\n");

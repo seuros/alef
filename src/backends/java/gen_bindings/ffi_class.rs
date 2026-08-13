@@ -136,7 +136,7 @@ pub(crate) fn gen_main_class(
         }
     }
 
-    gen_helper_methods(&mut body, prefix, class_name);
+    gen_helper_methods(&mut body, prefix, class_name, api);
 
     let footer_out = crate::backends::java::template_env::render("ffi_main_class_footer.jinja", minijinja::context! {});
     body.push_str(&footer_out);

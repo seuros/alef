@@ -6,6 +6,9 @@
             switch (errCode) {
                 case 1 -> throw new InvalidInputException(msg);
                 case 2 -> throw new ConversionErrorException(msg);
+{% for error_code in error_codes %}
+                case {{ error_code.0 }} -> throw new {{ error_code.1 }}(msg);
+{% endfor %}
                 default -> throw new {{ class_name }}Exception(errCode, msg);
             }
         }

@@ -115,7 +115,7 @@ fn emit_kotlin_source(api: &ApiSurface, config: &ResolvedCrateConfig) -> String 
             },
         ));
         for f in &visible_functions {
-            emit_native_function(f, &prefix, &mut body);
+            emit_native_function(f, &prefix, &api.errors, &api.error_taxonomy(), &mut body);
             body.push('\n');
         }
         body.push_str("}\n");
@@ -140,11 +140,23 @@ fn emit_kotlin_source(api: &ApiSurface, config: &ResolvedCrateConfig) -> String 
 }
 
 /// Emit a Kotlin/Native function body — exposed for `gen_mpp` to reuse.
-pub(crate) fn emit_native_function_pub(f: &FunctionDef, prefix: &str, out: &mut String) {
-    emit_native_function(f, prefix, out)
+pub(crate) fn emit_native_function_pub(
+    f: &FunctionDef,
+    prefix: &str,
+    errors: &[crate::core::ir::ErrorDef],
+    taxonomy: &[crate::core::ir::ErrorTaxonomy],
+    out: &mut String,
+) {
+    emit_native_function(f, prefix, errors, taxonomy, out)
 }
 
-fn emit_native_function(f: &FunctionDef, prefix: &str, out: &mut String) {
+fn emit_native_function(
+    f: &FunctionDef,
+    prefix: &str,
+    errors: &[crate::core::ir::ErrorDef],
+    taxonomy: &[crate::core::ir::ErrorTaxonomy],
+    out: &mut String,
+) {
     if !f.doc.is_empty() {
         let doc_lines: Vec<String> = f.doc.lines().map(ToString::to_string).collect();
         out.push_str(&crate::backends::kotlin::template_env::render(
@@ -202,7 +214,23 @@ fn emit_native_function(f: &FunctionDef, prefix: &str, out: &mut String) {
                 error_context_sym => error_context_sym,
             },
         ));
-        out.push_str("                throw RuntimeException(_msg)\n");
+        if let Some(error_type) = f.error_type.as_deref()
+            && let Some(error) = errors
+                .iter()
+                .find(|error| error.name == error_type.rsplit("::").next().unwrap_or(error_type))
+        {
+            for variant in error.variants.iter().filter(|variant| variant.is_unit) {
+                let metadata = taxonomy
+                    .iter()
+                    .find(|entry| entry.error_type == error.rust_path && entry.variant == variant.name)
+                    .unwrap();
+                out.push_str(&format!(
+                    "                if (_code == {}) throw {}.{}\n",
+                    metadata.code, error.name, variant.name
+                ));
+            }
+        }
+        out.push_str("                throw RuntimeException(\"[${_code}] ${_msg}\")\n");
         out.push_str("            }\n");
         if matches!(f.return_type, TypeRef::Unit) {
             out.push_str("            Unit\n");
@@ -241,6 +269,53 @@ fn emit_native_function(f: &FunctionDef, prefix: &str, out: &mut String) {
 
     out.push_str("        }\n");
     out.push_str("    }\n");
+}
+
+#[cfg(test)]
+mod typed_error_tests {
+    use super::*;
+
+    #[test]
+    fn native_function_maps_taxonomy_code_to_unit_variant() {
+        let error = crate::core::ir::ErrorDef {
+            name: "RequestError".to_string(),
+            rust_path: "sample::RequestError".to_string(),
+            variants: vec![crate::core::ir::ErrorVariant {
+                name: "InvalidInput".to_string(),
+                is_unit: true,
+                ..Default::default()
+            }],
+            original_rust_path: String::new(),
+            doc: String::new(),
+            methods: Vec::new(),
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        };
+        let function = FunctionDef {
+            name: "execute".to_string(),
+            rust_path: "sample::execute".to_string(),
+            return_type: TypeRef::Unit,
+            error_type: Some("RequestError".to_string()),
+            ..Default::default()
+        };
+        let taxonomy = error.variants[0].taxonomy(&error.rust_path);
+        let mut output = String::new();
+
+        emit_native_function(
+            &function,
+            "sample",
+            std::slice::from_ref(&error),
+            std::slice::from_ref(&taxonomy),
+            &mut output,
+        );
+
+        assert!(output.contains(&format!(
+            "if (_code == {}) throw RequestError.InvalidInput",
+            taxonomy.code
+        )));
+        assert!(output.contains("throw RuntimeException(\"[${_code}] ${_msg}\")"));
+    }
 }
 
 fn format_native_param(p: &ParamDef) -> String {
