@@ -446,7 +446,9 @@ fn resolve_call_info(call: &CallConfig, lang: &str, functions: &[crate::core::ir
         .unwrap_or_default()
         .to_string();
     let client_factory = overrides.and_then(|o| o.client_factory.as_ref()).cloned();
-    let raw_c_result_type = overrides.and_then(|o| o.raw_c_result_type.clone());
+    let raw_c_result_type = overrides
+        .and_then(|o| o.raw_c_result_type.clone())
+        .or_else(|| return_shape::resolve_raw_c_result_type(call, functions));
     let c_free_fn = overrides.and_then(|o| o.c_free_fn.clone());
     let c_engine_factory = overrides.and_then(|o| o.c_engine_factory.clone());
     let result_is_option = overrides
@@ -581,6 +583,7 @@ mod assertions;
 mod call_patterns;
 mod docs_input;
 mod project;
+mod return_shape;
 mod runner;
 #[cfg(test)]
 mod snippet_regressions;

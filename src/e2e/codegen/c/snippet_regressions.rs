@@ -160,3 +160,39 @@ fn multiple_typed_args_and_ir_return_shape_match_the_public_abi() {
         ),
     );
 }
+
+#[test]
+fn list_return_uses_owned_json_string_abi() {
+    let fixture = Fixture {
+        id: "list_items".into(),
+        description: "List items".into(),
+        ..Fixture::default()
+    };
+    let mut e2e = E2eConfig::default();
+    e2e.call.function = "sample_list_items".into();
+    e2e.call.overrides.insert(
+        "c".into(),
+        crate::core::config::e2e::CallOverride {
+            header: Some("sample_ffi.h".into()),
+            ..Default::default()
+        },
+    );
+    let functions = [FunctionDef {
+        name: "sample_list_items".into(),
+        return_type: TypeRef::Vec(Box::new(TypeRef::Named("Item".into()))),
+        ..FunctionDef::default()
+    }];
+    let config = ResolvedCrateConfig {
+        name: "sample".into(),
+        ..ResolvedCrateConfig::default()
+    };
+    let rendered = render_c_snippet(&fixture, &e2e, &config, &[], &functions).expect("list snippet renders");
+
+    assert!(rendered.contains("char* result = sample_list_items();"), "{rendered}");
+    assert!(rendered.contains("sample_free_string(result);"), "{rendered}");
+    assert!(!rendered.contains("SAMPLEList"), "{rendered}");
+    compile_snippet(
+        &rendered,
+        concat!("char *sample_list_items(void);\n", "void sample_free_string(char *value);\n"),
+    );
+}
