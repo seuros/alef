@@ -37,6 +37,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **snippets**: enforce one timeout budget across every snippet in a validation batch and terminate timed-out
   toolchain process groups so descendant processes cannot keep docs generation alive.
 - **cache**: serialize IR maps and sets in canonical order so unchanged inputs retain stable IR and backend cache hashes.
+- **codegen/defaults**: stop emitting `#[serde(default = "path")]` functions as callable initializers in generated
+  Rust (Magnus, PHP, NAPI, Rustler) — the named function belongs to the source crate, is not `pub`, and is frequently
+  `#[cfg(feature = "serde")]`-gated, so the binding failed to compile with `E0425: cannot find function`. Generated
+  Rust now recovers the field's real value by deserializing a minimal JSON stub through the source type's own
+  `Deserialize` impl, the same mechanism `#[serde(default = "path")]` itself relies on. Where the owning type is not
+  known, generation fails with the crate, type, field, and uncallable function named, rather than substituting the
+  field type's zero value — which compiles and looks right while disagreeing with the source crate (html-to-markdown's
+  `default_span()` is `1`; `u32::default()` is `0`).
 - **validate versions**: discover nested C#, Dart, Zig, and Cargo lock manifests, validate all C# assembly version
   fields and every local lock package against its manifest, and normalize doubled path separators in diagnostics.
 - **ffi**: preserve fully qualified streaming request types when emitting handle validation and lookup code.
