@@ -519,8 +519,10 @@ mod tests {
     #[test]
     fn generation_does_not_write_fixture_schema() {
         let directory = tempfile::tempdir().expect("temporary fixture directory");
-        let mut e2e_config = E2eConfig::default();
-        e2e_config.fixtures = directory.path().display().to_string();
+        let e2e_config = E2eConfig {
+            fixtures: directory.path().display().to_string(),
+            ..E2eConfig::default()
+        };
 
         generate_e2e(
             &ResolvedCrateConfig::default(),

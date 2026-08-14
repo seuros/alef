@@ -1165,7 +1165,7 @@ mod tests {
         struct SampleItem {
             name: String,
         }
-        let items = vec![SampleItem {
+        let items = [SampleItem {
             name: "needle".to_string(),
         }];
 

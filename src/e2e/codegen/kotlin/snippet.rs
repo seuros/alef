@@ -393,8 +393,10 @@ mod tests {
             },
         );
 
-        let mut config = ResolvedCrateConfig::default();
-        config.name = "sample_api".into();
+        let config = ResolvedCrateConfig {
+            name: "sample_api".into(),
+            ..ResolvedCrateConfig::default()
+        };
         let body = render_snippet_body(
             &fixture,
             &E2eConfig {
