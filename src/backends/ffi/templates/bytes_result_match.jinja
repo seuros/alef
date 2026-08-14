@@ -1,3 +1,4 @@
+{% if has_error %}
     match result {
         Ok(val) => {
             // Convert via Vec<u8> so the path works for both Vec<u8> and bytes::Bytes
@@ -16,3 +17,11 @@
             -1
         }
     }
+{% else %}
+    let buffer = Vec::<u8>::from(result).into_boxed_slice();
+    let len = buffer.len();
+    let ptr = Box::into_raw(buffer).cast::<u8>();
+    // SAFETY: out_ptr/out_len/out_cap were null-checked above.
+    unsafe { *out_ptr = ptr; *out_len = len; *out_cap = len; }
+    0
+{% endif %}

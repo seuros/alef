@@ -78,7 +78,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
 
     let has_error = method.error_type.is_some();
 
-    let is_bytes_result = has_error && matches!(method.return_type, TypeRef::Bytes);
+    let is_bytes_result = matches!(method.return_type, TypeRef::Bytes);
 
     let ffi_param_count = (if method.is_static { 0 } else { 1 })
         + method.params.len()
@@ -428,6 +428,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
     let call_args = arg_names.join(", ");
 
     let can_inline = is_passthrough_return(&method.return_type)
+        && !is_bytes_result
         && !has_error
         && !method.returns_ref
         && !method.returns_cow
@@ -473,7 +474,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
     if is_bytes_result {
         out.push_str(&crate::backends::ffi::template_env::render(
             "bytes_result_match.jinja",
-            context! {},
+            context! { has_error },
         ));
     } else {
         let result_expr =
@@ -602,7 +603,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
 
     let has_error = func.error_type.is_some();
 
-    let is_bytes_result = has_error && matches!(func.return_type, TypeRef::Bytes);
+    let is_bytes_result = matches!(func.return_type, TypeRef::Bytes);
 
     let ffi_param_count = func.params.len()
         + func.params.iter().filter(|p| matches!(p.ty, TypeRef::Bytes)).count()
@@ -897,6 +898,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
     let call_args = arg_names.join(", ");
 
     let can_inline_fn = is_passthrough_return(&func.return_type)
+        && !is_bytes_result
         && !has_error
         && !func.returns_ref
         && !func.returns_cow
@@ -930,7 +932,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
     if is_bytes_result {
         out.push_str(&crate::backends::ffi::template_env::render(
             "bytes_result_match.jinja",
-            context! {},
+            context! { has_error },
         ));
     } else {
         let result_expr = if func.return_newtype_wrapper.is_some() && matches!(func.return_type, TypeRef::Primitive(_))

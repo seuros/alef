@@ -94,13 +94,15 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
 
     builder.add_item(&gen_free_string(prefix));
 
-    let has_bytes_results = api.functions.iter().any(|function| {
-        function.error_type.is_some() && matches!(function.return_type, crate::core::ir::TypeRef::Bytes)
-    }) || api.types.iter().any(|typ| {
-        typ.methods
-            .iter()
-            .any(|method| method.error_type.is_some() && matches!(method.return_type, crate::core::ir::TypeRef::Bytes))
-    });
+    let has_bytes_results = api
+        .functions
+        .iter()
+        .any(|function| matches!(function.return_type, crate::core::ir::TypeRef::Bytes))
+        || api.types.iter().any(|typ| {
+            typ.methods
+                .iter()
+                .any(|method| matches!(method.return_type, crate::core::ir::TypeRef::Bytes))
+        });
     if has_bytes_results {
         builder.add_item(&gen_free_bytes(prefix));
     }

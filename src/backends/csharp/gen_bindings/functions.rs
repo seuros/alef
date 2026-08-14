@@ -522,15 +522,15 @@ pub(super) fn gen_native_methods(
     out
 }
 
-/// Returns true when a function returns `Result<Vec<u8>>` — uses the out-param
-/// convention: `(args..., out IntPtr, out UIntPtr, out UIntPtr) -> int`.
+/// Returns true when a function returns bytes — uses the owned out-param convention:
+/// `(args..., out IntPtr, out UIntPtr, out UIntPtr) -> int`.
 pub(super) fn is_bytes_result_func(func: &FunctionDef) -> bool {
-    func.error_type.is_some() && matches!(func.return_type, TypeRef::Bytes)
+    matches!(func.return_type, TypeRef::Bytes)
 }
 
 /// Same check for MethodDef.
 pub(super) fn is_bytes_result_method(method: &MethodDef) -> bool {
-    method.error_type.is_some() && matches!(method.return_type, TypeRef::Bytes)
+    matches!(method.return_type, TypeRef::Bytes)
 }
 
 pub(super) fn gen_pinvoke_for_func(
