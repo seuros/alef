@@ -111,7 +111,7 @@ fn string_callback(field: &str, name: &str, value: &str) -> Callback {
     Callback {
         field: field.into(),
         name: format!("sample_{name}"),
-        params: format!("const void *user_data, char **out_result, char **out_error"),
+        params: "const void *user_data, char **out_result, char **out_error".to_string(),
         return_type: "int32_t".into(),
         initializers: vec!["(void)user_data;".into(), "*out_error = NULL;".into()],
         return_value: format!(

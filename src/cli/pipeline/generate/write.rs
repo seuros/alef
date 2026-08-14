@@ -197,7 +197,7 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
                 let normalized = std::str::from_utf8(content).context("prepared generated text was not UTF-8")?;
                 if let Ok(existing) = std::fs::read_to_string(full_path) {
                     let existing_body = crate::core::hash::strip_hash_line(&existing);
-                    let normalized_body = crate::core::hash::strip_hash_line(&normalized);
+                    let normalized_body = crate::core::hash::strip_hash_line(normalized);
                     if existing_body == normalized_body {
                         apply_shebang_chmod(full_path, normalized)?;
                         debug!("  unchanged: {}", full_path.display());

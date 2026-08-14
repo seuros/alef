@@ -123,6 +123,7 @@ impl DocumentationLanguage {
     }
 }
 
+#[expect(clippy::too_many_arguments, reason = "preserves the public snippet generation API")]
 pub fn generate_snippets(
     fixtures: &[Fixture],
     languages: &[String],
@@ -149,6 +150,7 @@ pub fn generate_snippets(
     .collect())
 }
 
+#[expect(clippy::too_many_arguments, reason = "preserves the public snippet generation API")]
 pub fn generate_snippet_artifacts(
     fixtures: &[Fixture],
     languages: &[String],
@@ -172,6 +174,7 @@ pub fn generate_snippet_artifacts(
     .snippets)
 }
 
+#[expect(clippy::too_many_arguments, reason = "preserves the public snippet generation API")]
 pub fn generate_snippet_report(
     fixtures: &[Fixture],
     languages: &[String],

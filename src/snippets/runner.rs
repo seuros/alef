@@ -351,20 +351,17 @@ fn validate_one(
         );
     }
 
-    if let Some(annotation) = &snippet.annotation {
-        match annotation.kind {
-            SnippetAnnotationKind::Skip => {
-                return result(
-                    snippet,
-                    SnippetStatus::Skip,
-                    config.level,
-                    config.level,
-                    Some(skip_message("skipped via annotation", annotation.reason.as_deref())),
-                    0,
-                );
-            }
-            _ => {}
-        }
+    if let Some(annotation) = &snippet.annotation
+        && annotation.kind == SnippetAnnotationKind::Skip
+    {
+        return result(
+            snippet,
+            SnippetStatus::Skip,
+            config.level,
+            config.level,
+            Some(skip_message("skipped via annotation", annotation.reason.as_deref())),
+            0,
+        );
     }
 
     let Some(validator) = registry.get(snippet.language) else {

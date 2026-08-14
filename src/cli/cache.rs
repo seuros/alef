@@ -484,8 +484,10 @@ mod tests {
     use super::*;
 
     fn api_with_ordered_entries(entries: &[(&str, &str)]) -> crate::core::ir::ApiSurface {
-        let mut api = crate::core::ir::ApiSurface::default();
-        api.crate_name = "sample_crate".to_string();
+        let mut api = crate::core::ir::ApiSurface {
+            crate_name: "sample_crate".to_string(),
+            ..Default::default()
+        };
         for (name, path) in entries {
             api.excluded_type_paths.insert((*name).to_string(), (*path).to_string());
             api.excluded_trait_names.insert((*name).to_string());
@@ -652,7 +654,8 @@ mod tests {
         let composer_json = package_dir.join("composer.json");
         std::fs::write(&composer_json, "{\n  \"name\": \"acme/demo\"\n}\n").expect("write composer.json");
 
-        write_scaffold_manifest("crawlberg-php", &[composer_json.clone()]).expect("write manifest for run 1");
+        write_scaffold_manifest("crawlberg-php", std::slice::from_ref(&composer_json))
+            .expect("write manifest for run 1");
 
         let previous_scaffold = read_scaffold_manifest("crawlberg-php");
         let keep = std::collections::HashSet::new();
@@ -660,7 +663,10 @@ mod tests {
             crate::cli::pipeline::sweep_manifest_orphans(&previous_scaffold, &keep, &[package_dir]).expect("sweep");
 
         let _ = std::env::set_current_dir(&original_cwd);
-        assert_eq!(removed, 1, "composer.json recorded by run 1's manifest must be reclaimed in run 2");
+        assert_eq!(
+            removed, 1,
+            "composer.json recorded by run 1's manifest must be reclaimed in run 2"
+        );
         assert!(!composer_json.exists(), "orphaned composer.json must be deleted");
     }
 }

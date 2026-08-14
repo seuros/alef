@@ -192,11 +192,11 @@ pub fn sync_versions(
         .flatten()
         .flatten()
     {
-        if let Ok(content) = std::fs::read_to_string(&entry) {
-            if let Some(rewritten) = sync_csharp_project_versions(&content, &version) {
-                std::fs::write(&entry, &rewritten)?;
-                updated.push(entry.to_string_lossy().to_string());
-            }
+        if let Ok(content) = std::fs::read_to_string(&entry)
+            && let Some(rewritten) = sync_csharp_project_versions(&content, &version)
+        {
+            std::fs::write(&entry, &rewritten)?;
+            updated.push(entry.to_string_lossy().to_string());
         }
     }
 

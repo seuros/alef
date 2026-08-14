@@ -192,15 +192,14 @@ fn cleanup_legacy_scratch_directories(working_directory: &Path, timeout_secs: u6
                 )));
             }
         };
-        if modified.elapsed().is_ok_and(|age| age >= stale_after) {
-            if let Err(error) = std::fs::remove_dir_all(entry.path())
-                && error.kind() != std::io::ErrorKind::NotFound
-            {
-                return Err(Error::Other(format!(
-                    "removing stale snippet scratch directory {}: {error}",
-                    entry.path().display()
-                )));
-            }
+        if modified.elapsed().is_ok_and(|age| age >= stale_after)
+            && let Err(error) = std::fs::remove_dir_all(entry.path())
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(Error::Other(format!(
+                "removing stale snippet scratch directory {}: {error}",
+                entry.path().display()
+            )));
         }
     }
     Ok(())
