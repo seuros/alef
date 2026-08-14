@@ -49,6 +49,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             }
 
             let config_toml = std::fs::read_to_string(config_path)?;
+            let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
 
             let mut grand_binding_count: usize = 0;
             let mut grand_stub_count: usize = 0;
@@ -116,6 +117,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     }
                     let _ = cache::write_generation_hashes(&cache_key, &hashes);
                 }
+                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 if !api.services.is_empty() {
                     let svc_files = pipeline::generate_service_api(&api, resolved_cfg, &languages)?;
@@ -138,6 +140,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         }
                     }
                 }
+                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 tracing::info!("Generating scaffolding...");
                 let scaffold_files = pipeline::scaffold(&api, resolved_cfg, &languages, config_path)?;
@@ -145,9 +148,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 for file in scaffold_files.iter().filter(|file| file.generated_header) {
                     current_gen_paths.insert(base_dir.join(&file.path));
                 }
+                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 tracing::info!("Running post-build processing...");
                 run_required_post_builds(&languages, resolved_cfg, &base_dir)?;
+                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 tracing::info!("Generating type stubs...");
                 let stubs = pipeline::generate_stubs(&api, resolved_cfg, &languages)?;
@@ -191,6 +196,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         current_gen_paths.insert(base_dir.join(&file.path));
                     }
                 }
+                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 let mut api_count = 0;
                 if resolved_cfg.generate.public_api {
@@ -229,6 +235,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         }
                     }
                 }
+                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 if !api.version.is_empty() {
                     let pkg = base_dir.join("Package.swift");
@@ -247,6 +254,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 for file in readme_files.iter().filter(|file| file.generated_header) {
                     current_gen_paths.insert(base_dir.join(&file.path));
                 }
+                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 let mut e2e_count = 0;
                 if let Some(e2e_config) = &resolved_cfg.e2e {
@@ -314,6 +322,8 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let output_paths: Vec<PathBuf> = managed_files.iter().map(|f| base_dir.join(&f.path)).collect();
                         let path_set: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
 
+                        pipeline::finalize_hashes(&path_set, &sources_hash, &alef_toml_bytes)?;
+
                         let e2e_output_root = base_dir.join(&e2e_config.output);
                         pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &[e2e_output_root])?;
 
@@ -323,6 +333,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             current_gen_paths.insert(path);
                         }
                     }
+                    pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                     let test_apps_stage_hash =
                         cache::compute_stage_hash(&ir_json, "test-apps", &config_toml, &fixture_hash);
@@ -363,6 +374,8 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let output_paths: Vec<PathBuf> = managed_files.iter().map(|f| base_dir.join(&f.path)).collect();
                         let path_set: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
 
+                        pipeline::finalize_hashes(&path_set, &sources_hash, &alef_toml_bytes)?;
+
                         let test_apps_root = base_dir.join(registry_e2e_ref.effective_output());
                         pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &[test_apps_root])?;
 
@@ -372,6 +385,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             current_gen_paths.insert(path);
                         }
                     }
+                    pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
                 }
 
                 tracing::info!("Generating docs...");
@@ -383,6 +397,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 for file in doc_files.iter().filter(|file| file.generated_header) {
                     current_gen_paths.insert(base_dir.join(&file.path));
                 }
+                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 let cleanup_roots = pipeline::generate_sweep_roots(&languages, false, resolved_cfg, &base_dir);
                 let previous_paths: Vec<_> = languages
@@ -399,7 +414,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 }
 
                 tracing::info!("Finalising hashes...");
-                let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 grand_binding_count += binding_count;

@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **generate/all**: stamp each successful generation stage before later work can fail, and defer standalone orphan
+  cleanup until post-build succeeds while preserving non-header generator and scaffold outputs.
 - **snippets**: isolate per-target validation-session preparation failures so healthy language sessions still run
   while strict validation reports the affected target as an error.
 

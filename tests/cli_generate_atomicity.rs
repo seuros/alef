@@ -1,0 +1,226 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
+const HASH_MARKER: &str = concat!("alef:", "hash:");
+const PROTECTED_PATHS: &[&str] = &[
+    "packages/swift/Sources/RustBridgeC/RustBridgeC.c",
+    "packages/swift/Sources/RustBridge/RustBridge.swift",
+    "packages/swift/rust/Cargo.toml",
+    "packages/swift/rust/build.rs",
+];
+
+fn alef_binary() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_alef"))
+}
+
+fn write_fixture(root: &Path) {
+    fs::create_dir_all(root.join("src")).expect("create fixture source directory");
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"atomicity-fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("write fixture Cargo.toml");
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub struct Record { pub value: String }\n\npub fn record_value(record: Record) -> String { record.value }\n",
+    )
+    .expect("write fixture source");
+    fs::write(
+        root.join("alef.toml"),
+        format!(
+            "[workspace]\nalef_version = \"{}\"\nlanguages = [\"swift\", \"go\", \"zig\"]\n\n\
+             [[crates]]\nname = \"atomicity-fixture\"\nsources = [\"src/lib.rs\"]\n\
+             version_from = \"Cargo.toml\"\n\n[crates.generate]\npublic_api = false\n",
+            env!("CARGO_PKG_VERSION")
+        ),
+    )
+    .expect("write alef config");
+}
+
+fn seed_owned_files(root: &Path) {
+    for relative in PROTECTED_PATHS {
+        let path = root.join(relative);
+        fs::create_dir_all(path.parent().expect("protected file parent")).expect("create protected parent");
+        let content = fs::read_to_string(&path).unwrap_or_else(|_| format!("protected {relative}\n"));
+        fs::write(path, format!("// {HASH_MARKER}deadbeef\n{content}")).expect("mark protected file as prior-owned");
+    }
+
+    let swift_orphan = root.join("packages/swift/rust/src/obsolete.rs");
+    let go_orphan = root.join("packages/go/obsolete.go");
+    let unselected_orphan = root.join("packages/python/obsolete.py");
+    for orphan in [&swift_orphan, &go_orphan, &unselected_orphan] {
+        fs::create_dir_all(orphan.parent().expect("orphan parent")).expect("create orphan parent");
+        fs::write(orphan, format!("// {HASH_MARKER}deadbeef\n")).expect("seed orphan");
+    }
+
+    let crate_cache = fs::read_dir(root.join(".alef"))
+        .expect("read Alef cache")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| path.is_dir() && path.join("ir.json").is_file())
+        .expect("find crate-scoped Alef cache");
+    let hashes = crate_cache.join("hashes");
+    fs::create_dir_all(&hashes).expect("create manifest directory");
+    let mut swift_manifest = PROTECTED_PATHS
+        .iter()
+        .map(|path| root.join(path).display().to_string())
+        .collect::<Vec<_>>();
+    swift_manifest.push(swift_orphan.display().to_string());
+    fs::write(
+        hashes.join("swift.manifest"),
+        format!("{}\n", swift_manifest.join("\n")),
+    )
+    .expect("write Swift manifest");
+    fs::write(hashes.join("go.manifest"), format!("{}\n", go_orphan.display())).expect("write Go manifest");
+    fs::write(
+        hashes.join("python.manifest"),
+        format!("{}\n", unselected_orphan.display()),
+    )
+    .expect("write unselected manifest");
+}
+
+fn run_generate(root: &Path, fail_swift_post_build: bool) -> Output {
+    let mut command = Command::new(alef_binary());
+    command.current_dir(root).args(["generate", "--lang", "swift,go,zig"]);
+    let cargo_lookup = Command::new("which").arg("cargo").output().expect("locate cargo");
+    assert!(cargo_lookup.status.success(), "cargo must be available for the fixture");
+    let real_cargo = String::from_utf8(cargo_lookup.stdout).expect("cargo path is UTF-8");
+    let fake_bin = root.join("fake-bin");
+    fs::create_dir_all(&fake_bin).expect("create fake binary directory");
+    let fake_cargo = fake_bin.join("cargo");
+    fs::write(
+        &fake_cargo,
+        concat!(
+            "#!/bin/sh\n",
+            "case \"$*\" in\n",
+            "  *packages/swift/rust/Cargo.toml*)\n",
+            "    [ \"$FAIL_SWIFT_POST_BUILD\" = 1 ] && exit 17 || exit 0\n",
+            "    ;;\n",
+            "esac\n",
+            "exec \"$REAL_CARGO\" \"$@\"\n",
+        ),
+    )
+    .expect("write fake cargo");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&fake_cargo, fs::Permissions::from_mode(0o755)).expect("make fake cargo executable");
+    }
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    command.env(
+        "PATH",
+        std::env::join_paths(std::iter::once(fake_bin).chain(std::env::split_paths(&path))).unwrap(),
+    );
+    command.env("REAL_CARGO", real_cargo.trim());
+    command.env("FAIL_SWIFT_POST_BUILD", if fail_swift_post_build { "1" } else { "0" });
+    command.output().expect("run alef generate")
+}
+
+fn generated_hashed_files(root: &Path) -> Vec<PathBuf> {
+    walkdir::WalkDir::new(root.join("packages"))
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .map(walkdir::DirEntry::into_path)
+        .filter(|path| fs::read_to_string(path).is_ok_and(|content| content.contains(HASH_MARKER)))
+        .collect()
+}
+
+fn generated_ownership_paths(root: &Path) -> Vec<PathBuf> {
+    walkdir::WalkDir::new(root.join(".alef"))
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry.file_type().is_file()
+                && entry.file_name().to_string_lossy().starts_with("generate-")
+                && entry.file_name().to_string_lossy().ends_with("-ownership.manifest")
+        })
+        .flat_map(|entry| {
+            fs::read_to_string(entry.path())
+                .expect("read generation ownership manifest")
+                .lines()
+                .filter(|line| !line.is_empty())
+                .map(PathBuf::from)
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+#[test]
+fn failed_swift_post_build_preserves_owned_files_and_finalizes_written_outputs() {
+    let fixture = tempfile::tempdir().expect("create fixture directory");
+    let root = fixture.path();
+    write_fixture(root);
+
+    let first_failure = run_generate(root, true);
+    assert!(
+        !first_failure.status.success(),
+        "required Swift post-build unexpectedly succeeded"
+    );
+    let first_stderr = String::from_utf8_lossy(&first_failure.stderr);
+    assert!(
+        first_stderr.contains("post-build") || first_stderr.contains("status 17"),
+        "unexpected first failure:\n{first_stderr}"
+    );
+    let generated_hashes = generated_hashed_files(root);
+    assert!(
+        !generated_hashes.is_empty(),
+        "outputs written before the first required post-build failure must retain their hash markers; stderr:\n{first_stderr}"
+    );
+    assert!(
+        generated_hashes
+            .iter()
+            .any(|path| path.starts_with(root.join("packages/go"))),
+        "Go output written before the later Swift post-build failure must retain a hash marker"
+    );
+    seed_owned_files(root);
+
+    let failed = run_generate(root, true);
+    assert!(
+        !failed.status.success(),
+        "required Swift cargo post-build unexpectedly succeeded"
+    );
+    let stderr = String::from_utf8_lossy(&failed.stderr);
+    assert!(
+        stderr.contains("post-build") || stderr.contains("status 17"),
+        "unexpected failure:\n{stderr}"
+    );
+
+    for relative in PROTECTED_PATHS {
+        assert!(
+            root.join(relative).is_file(),
+            "failed generation removed protected {relative}"
+        );
+    }
+    assert!(root.join("packages/swift/rust/src/obsolete.rs").is_file());
+    assert!(root.join("packages/go/obsolete.go").is_file());
+    assert!(root.join("packages/python/obsolete.py").is_file());
+
+    let first_success = run_generate(root, false);
+    assert!(
+        first_success.status.success(),
+        "generation after the post-build failure must recover: {}",
+        String::from_utf8_lossy(&first_success.stderr)
+    );
+    let owned_paths = generated_ownership_paths(root);
+    assert!(
+        !owned_paths.is_empty(),
+        "successful generation must record owned outputs"
+    );
+    assert!(
+        owned_paths.iter().all(|path| path.is_file()),
+        "the first successful generation must leave every owned output on disk"
+    );
+
+    let cached_success = run_generate(root, false);
+    assert!(
+        cached_success.status.success(),
+        "content-identical generation must succeed: {}",
+        String::from_utf8_lossy(&cached_success.stderr)
+    );
+    assert!(
+        owned_paths.iter().all(|path| path.is_file()),
+        "a cache-hit generation must not sweep valid outputs from its ownership manifest"
+    );
+}

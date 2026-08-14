@@ -332,4 +332,22 @@ mod sweep_roots_tests {
         assert!(handwritten.exists());
         assert!(unselected.exists());
     }
+
+    #[test]
+    fn manifest_sweep_preserves_non_header_generator_manifests() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let selected = dir.path().join("swift");
+        let manifest = selected.join("rust/Cargo.toml");
+        std::fs::create_dir_all(manifest.parent().expect("manifest parent")).expect("selected root");
+        let header = crate::core::hash::header(crate::core::hash::CommentStyle::Hash);
+        let hashed = crate::core::hash::inject_hash_line(&header, &"0".repeat(64));
+        std::fs::write(&manifest, hashed).expect("manifest");
+
+        let previous = vec![manifest.clone()];
+        let keep = std::collections::HashSet::from([manifest.clone()]);
+        let removed = sweep_manifest_orphans(&previous, &keep, &[selected]).expect("manifest sweep");
+
+        assert_eq!(removed, 0);
+        assert!(manifest.exists());
+    }
 }

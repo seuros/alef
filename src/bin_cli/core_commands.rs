@@ -58,6 +58,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             if let Err(e) = version_pin::write_alef_toml_version(config_path) {
                 tracing::warn!("could not update alef.toml version pin: {e}");
             }
+            let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
 
             let mut grand_total_generated: usize = 0;
             for resolved_cfg in &crates_to_process {
@@ -74,6 +75,8 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 }
                 let api = pipeline::extract(resolved_cfg, config_path, clean)?;
                 let files = pipeline::generate(&api, resolved_cfg, &languages, clean, config_path)?;
+                let regenerated_languages: std::collections::HashSet<_> =
+                    files.iter().map(|(language, _)| *language).collect();
                 let sources_hash = cache::sources_hash(&resolved_cfg.sources)?;
 
                 let mut current_gen_paths = std::collections::HashSet::new();
@@ -90,6 +93,30 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         )
                     })
                     .collect();
+                let mut generation_owned_paths: std::collections::HashMap<_, std::collections::HashSet<_>> = files
+                    .iter()
+                    .map(|(language, generated)| {
+                        (
+                            *language,
+                            generated.iter().map(|file| base_dir.join(&file.path)).collect(),
+                        )
+                    })
+                    .collect();
+                for language in languages
+                    .iter()
+                    .filter(|language| !regenerated_languages.contains(language))
+                {
+                    let cached_paths = cache::read_lang_manifest(&resolved_cfg.name, &language.to_string());
+                    current_gen_paths.extend(cached_paths.iter().cloned());
+                    language_output_paths
+                        .entry(*language)
+                        .or_default()
+                        .extend(cached_paths.iter().cloned());
+                    generation_owned_paths
+                        .entry(*language)
+                        .or_default()
+                        .extend(cached_paths);
+                }
                 let mut changed_languages: std::collections::HashSet<crate::core::config::Language> =
                     std::collections::HashSet::new();
 
@@ -130,6 +157,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     }
                     let _ = cache::write_generation_hashes(&cache_key, &hashes);
                 }
+                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 if !api.services.is_empty() {
                     let svc_files = pipeline::generate_service_api(&api, resolved_cfg, &languages)?;
@@ -146,6 +174,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             }
                         }
                         for (language, generated) in &svc_files {
+                            generation_owned_paths
+                                .entry(*language)
+                                .or_default()
+                                .extend(generated.iter().map(|file| base_dir.join(&file.path)));
                             language_output_paths.entry(*language).or_default().extend(
                                 generated
                                     .iter()
@@ -169,6 +201,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         }
                     }
                 }
+                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 if resolved_cfg.generate.public_api {
                     let public_api_files = pipeline::generate_public_api(&api, resolved_cfg, &languages, config_path)?;
@@ -202,6 +235,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             }
                         }
                         for (language, generated) in &public_api_files {
+                            generation_owned_paths
+                                .entry(*language)
+                                .or_default()
+                                .extend(generated.iter().map(|file| base_dir.join(&file.path)));
                             language_output_paths.entry(*language).or_default().extend(
                                 generated
                                     .iter()
@@ -229,6 +266,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         }
                     }
                 }
+                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 let stub_files = pipeline::generate_stubs(&api, resolved_cfg, &languages)?;
                 if !stub_files.is_empty() {
@@ -261,6 +299,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         }
                     }
                     for (language, generated) in &stub_files {
+                        generation_owned_paths
+                            .entry(*language)
+                            .or_default()
+                            .extend(generated.iter().map(|file| base_dir.join(&file.path)));
                         language_output_paths.entry(*language).or_default().extend(
                             generated
                                 .iter()
@@ -288,24 +330,22 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         tracing::info!("  [stubs] up to date (skipping)");
                     }
                 }
+                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 match pipeline::scaffold(&api, resolved_cfg, &languages, config_path) {
                     Ok(scaffold_files) => {
-                        for file in scaffold_files.iter().filter(|file| file.generated_header) {
-                            current_gen_paths.insert(base_dir.join(&file.path));
+                        for file in &scaffold_files {
+                            let path = base_dir.join(&file.path);
+                            if file.generated_header {
+                                current_gen_paths.insert(path);
+                            }
                         }
                     }
                     Err(err) => {
                         tracing::warn!("failed to enumerate scaffold paths for cleanup safety: {err}");
                     }
                 }
-
-                let cleanup_roots = pipeline::generate_sweep_roots(&languages, lang.is_some(), resolved_cfg, &base_dir);
-                let previous_paths: Vec<_> = languages
-                    .iter()
-                    .flat_map(|language| cache::read_lang_manifest(&resolved_cfg.name, &language.to_string()))
-                    .collect();
-                pipeline::sweep_manifest_orphans(&previous_paths, &current_gen_paths, &cleanup_roots)?;
+                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 if any_written && !changed_languages.is_empty() {
                     tracing::info!("Formatting generated files...");
@@ -313,12 +353,46 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     files_to_format.extend(stub_files.clone());
                     pipeline::format_generated(&files_to_format, resolved_cfg, &base_dir, Some(&changed_languages));
                 }
+                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 tracing::info!("Running post-build processing...");
                 run_required_post_builds(&languages, resolved_cfg, &base_dir)?;
 
-                let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
+
+                let previous_generation_owned: std::collections::HashMap<_, _> = languages
+                    .iter()
+                    .map(|language| {
+                        (
+                            *language,
+                            cache::read_stage_paths(&resolved_cfg.name, &format!("generate-{language}-ownership")),
+                        )
+                    })
+                    .collect();
+                for (language, previous_paths) in &previous_generation_owned {
+                    if !regenerated_languages.contains(language) {
+                        generation_owned_paths
+                            .entry(*language)
+                            .or_default()
+                            .extend(previous_paths.iter().cloned());
+                    }
+                }
+                let cleanup_keep_paths: std::collections::HashSet<_> = generation_owned_paths
+                    .values()
+                    .flat_map(|paths| paths.iter().cloned())
+                    .collect();
+                let cleanup_roots = pipeline::generate_sweep_roots(&languages, lang.is_some(), resolved_cfg, &base_dir);
+                let previous_paths: Vec<_> = previous_generation_owned.into_values().flatten().collect();
+                pipeline::sweep_manifest_orphans(&previous_paths, &cleanup_keep_paths, &cleanup_roots)?;
+                for (language, paths) in &generation_owned_paths {
+                    let paths: Vec<_> = paths.iter().cloned().collect();
+                    cache::write_stage_hash(
+                        &resolved_cfg.name,
+                        &format!("generate-{language}-ownership"),
+                        &sources_hash,
+                        &paths,
+                    )?;
+                }
                 for (language, paths) in language_output_paths {
                     let paths: Vec<_> = paths.into_iter().collect();
                     cache::write_lang_manifest(&resolved_cfg.name, &language.to_string(), &paths)?;
