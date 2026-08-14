@@ -6,3 +6,4 @@ pub mod migrate;
 pub mod release_metadata;
 pub mod snippets;
 pub mod validate_versions;
+mod version_manifests;

@@ -189,16 +189,6 @@ fn collect_checks(config: &ResolvedCrateConfig, workspace_root: &Path, canonical
         read_pom_xml_version,
     );
 
-    let csharp_dir = config.package_dir(crate::core::config::extras::Language::Csharp);
-    let csharp_ns = config.csharp_namespace();
-    push_check_if_exists(
-        &mut checks,
-        canonical,
-        &format!("{csharp_dir}/{csharp_ns}/{csharp_ns}.csproj"),
-        workspace_root,
-        read_csproj_version,
-    );
-
     let r_dir = config.package_dir(crate::core::config::extras::Language::R);
     push_check_with_transform(
         &mut checks,
@@ -231,6 +221,8 @@ fn collect_checks(config: &ResolvedCrateConfig, workspace_root: &Path, canonical
         let path = format!("crates/{crate_name}-{sub}/package.json");
         push_check_if_exists(&mut checks, canonical, &path, workspace_root, read_package_json_version);
     }
+
+    checks.extend(super::version_manifests::collect(config, workspace_root, canonical));
 
     checks
 }
@@ -431,15 +423,6 @@ fn read_pom_xml_version(path: &Path) -> Option<String> {
     Some(text[inner_start..inner_start + end].to_string())
 }
 
-fn read_csproj_version(path: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(path).ok()?;
-    let text = content.as_str();
-    let start = text.find("<Version>")?;
-    let inner_start = start + "<Version>".len();
-    let end = text[inner_start..].find("</Version>")?;
-    Some(text[inner_start..inner_start + end].to_string())
-}
-
 fn read_description_version(path: &Path) -> Option<String> {
     let content = std::fs::read_to_string(path).ok()?;
     for line in content.lines() {
@@ -552,18 +535,6 @@ version_from = "{root_str}/Cargo.toml"
         let path = tmp.path().join("pom.xml");
         fs::write(&path, "<project><version>1.5.0</version></project>").unwrap();
         assert_eq!(read_pom_xml_version(&path), Some("1.5.0".to_string()));
-    }
-
-    #[test]
-    fn read_csproj_version_ok() {
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("MyLib.csproj");
-        fs::write(
-            &path,
-            "<Project><PropertyGroup><Version>1.2.0</Version></PropertyGroup></Project>",
-        )
-        .unwrap();
-        assert_eq!(read_csproj_version(&path), Some("1.2.0".to_string()));
     }
 
     #[test]
