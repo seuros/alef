@@ -284,6 +284,69 @@ default_features = false
         assert!(content.contains("core_crate::decoder::decoder_details()"));
     }
 
+    /// Mirrors a real crate shape: a function defined inside a `pub mod` and ALSO re-exported
+    /// by name at the crate root (`pub use the_module::{max_sim_score, ...}`), e.g. xberg's
+    /// `late_interaction` module. The extractor preserves both `FunctionDef` entries — one with
+    /// a module-nested `rust_path`, one with a crate-root `rust_path` — and since their raw
+    /// `cfg` is identical (unconditional here), `dedup_same_name_functions`'s cfg-must-differ
+    /// merge guard leaves both alone. With `[[crates.jni.target_dep_overrides]]` configured
+    /// (as xberg-jni's real alef.toml is), `emit_lib_rs` used to source `visible_functions`
+    /// straight from the raw, un-deduped surface, so both entries resolved to the identical
+    /// `#[cfg(not(any(target_os = "android")))]` gate and were emitted as two
+    /// `#[unsafe(no_mangle)]` definitions of the same native symbol — E0428.
+    #[test]
+    fn duplicate_ir_entries_with_matching_target_predicate_emit_one_native_symbol() {
+        use crate::core::config::NewAlefConfig;
+
+        let raw: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["kotlin_android", "jni"]
+
+[[crates]]
+name = "demo"
+sources = ["src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.sample_crate"
+namespace = "dev.sample_crate"
+
+[[crates.jni.target_dep_overrides]]
+cfg = 'target_os = "android"'
+features = ["mobile"]
+default_features = false
+"#,
+        )
+        .expect("fixture config parses");
+        let config = raw.resolve().expect("fixture config resolves").remove(0);
+
+        let module_definition_entry = crate::core::ir::FunctionDef {
+            name: "max_sim_score".into(),
+            rust_path: "demo::late_interaction::max_sim_score".into(),
+            return_type: TypeRef::String,
+            cfg: None,
+            ..Default::default()
+        };
+        let crate_root_reexport_entry = crate::core::ir::FunctionDef {
+            name: "max_sim_score".into(),
+            rust_path: "demo::max_sim_score".into(),
+            return_type: TypeRef::String,
+            cfg: None,
+            ..Default::default()
+        };
+
+        let content = emit_lib_rs(
+            &api_with_functions(vec![module_definition_entry, crate_root_reexport_entry]),
+            &config,
+        );
+
+        let native_fn_count = content.matches("nativeMaxSimScore").count();
+        assert_eq!(
+            native_fn_count, 1,
+            "the module-definition and crate-root-reexport entries must collapse to one native symbol: {content}"
+        );
+    }
+
     #[test]
     fn streaming_kotlin_declarations_have_matching_jni_exports() {
         use crate::core::config::extras::{AdapterConfig, AdapterParam, AdapterPattern};

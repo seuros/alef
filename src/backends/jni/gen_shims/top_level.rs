@@ -189,17 +189,24 @@ fn emit_top_level_function_shims(
     opaque_types: &std::collections::HashSet<&str>,
     capsule_types: &std::collections::HashMap<String, crate::core::config::FfiCapsuleTypeConfig>,
 ) {
+    // The symbol is keyed by its resolved predicate because duplicate IR entries can represent the same re-export. ~keep
+    let mut emitted_native_symbols: std::collections::HashSet<(String, Option<String>)> =
+        std::collections::HashSet::new();
     for function in functions {
         let Some(target_predicate) = jni_target_predicate(function.cfg.as_deref(), config) else {
             continue;
         };
+        let method_name = bridge_method_name("", &function.name);
+        if !emitted_native_symbols.insert((method_name.clone(), target_predicate.clone())) {
+            continue;
+        }
         if let Some(predicate) = target_predicate {
             out.push_str(&template_env::render(
                 "cfg_attribute.rs.jinja",
                 context! { predicate => predicate },
             ));
         }
-        let symbol = jni_symbol(package, bridge, &bridge_method_name("", &function.name));
+        let symbol = jni_symbol(package, bridge, &method_name);
         emit_function_shim(out, &symbol, function, opaque_types, capsule_types, &config.name);
     }
 }
