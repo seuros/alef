@@ -940,15 +940,35 @@ pub(super) fn render_assertion(
         }
     }
 
-    if let Some(ref arr) = array_guard {
-        if !assertion_buf.is_empty() {
-            let _ = writeln!(out, "\tif len({arr}) > 0 {{");
-            for line in assertion_buf.lines() {
-                let _ = writeln!(out, "\t{line}");
-            }
-            let _ = writeln!(out, "\t}}");
+    match &array_guard {
+        Some(arr) if !assertion_buf.is_empty() => {
+            emit_non_empty_precondition(out, arr);
+            out.push_str(&assertion_buf);
         }
-    } else {
-        out.push_str(&assertion_buf);
+        _ => out.push_str(&assertion_buf),
     }
+}
+
+/// Emit the `len(arr) == 0` precondition that must precede an `arr[0]` assertion.
+///
+/// A fixture that asserts on element `0` is stating that the collection has an element;
+/// wrapping the assertion in `if len(arr) > 0` instead let an empty result satisfy the
+/// whole check, so the test could not fail. `t.Fatalf` stops the test function before the
+/// index panics, matching how the generator reports every other unmet precondition.
+///
+/// The precondition is emitted once per collection per function body: `t.Fatalf` aborts,
+/// so repeating it ahead of every indexed assertion would add nothing. The de-duplication
+/// compares whole lines, so an identical check emitted at a deeper indentation (inside a
+/// nil guard, where it may not run) does not suppress the function-level one.
+fn emit_non_empty_precondition(out: &mut String, array_expr: &str) {
+    let fatal_line = format!(
+        "\t\tt.Fatalf(\"expected non-empty %s\", {})",
+        go_string_literal(array_expr)
+    );
+    if out.lines().any(|line| line == fatal_line) {
+        return;
+    }
+    let _ = writeln!(out, "\tif len({array_expr}) == 0 {{");
+    let _ = writeln!(out, "{fatal_line}");
+    let _ = writeln!(out, "\t}}");
 }

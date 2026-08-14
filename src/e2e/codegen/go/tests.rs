@@ -375,12 +375,11 @@ fn test_indexed_element_prefix_guard_uses_array_not_element() {
 
     eprintln!("generated:\n{out}");
 
-    // Must guard on the slice itself — not on the element.
-    // Accepts either `Segments != nil` or `len(Segments) > 0`; both are
-    // valid Go guards for the slice and avoid the invalid element nil
-    // check.
+    // Must guard on the slice itself — not on the element. Either the nil check on the
+    // optional slice or the non-empty precondition is valid Go here; `len(...) > 0` is
+    // not, because it would swallow the assertion instead of failing the test.
     assert!(
-        out.contains("result.Segments != nil") || out.contains("len(result.Segments) > 0"),
+        out.contains("result.Segments != nil") || out.contains("len(result.Segments) == 0"),
         "guard must be on Segments (the slice), not an element; got:\n{out}"
     );
     // Must NOT emit the invalid element nil check.
@@ -1020,5 +1019,126 @@ fn render_harness_uses_escaped_alias_for_reserved_keyword_module_segment() {
     assert!(
         out.contains("go_.NewApp()"),
         "escaped alias `go_` should be used as the package qualifier, got:\n{out}"
+    );
+}
+
+/// Render a single test function over `assertions` against a result whose only array
+/// field is `results`, so the indexed-assertion emitter is exercised in isolation.
+fn render_indexed_assertion_function(assertions: Vec<Assertion>) -> String {
+    let mut array_fields = std::collections::HashSet::new();
+    array_fields.insert("results".to_string());
+
+    let e2e_config = E2eConfig {
+        call: CallConfig {
+            function: "extract".to_string(),
+            module: "github.com/example/mylib".to_string(),
+            result_var: "result".to_string(),
+            returns_result: true,
+            ..CallConfig::default()
+        },
+        fields_array: array_fields,
+        ..E2eConfig::default()
+    };
+
+    let mut fixture = make_fixture("batch_results");
+    fixture.assertions = assertions;
+
+    let mut out = String::new();
+    let config = crate::core::config::ResolvedCrateConfig::default();
+    let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
+    let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
+    render_test_function(
+        &mut out,
+        &fixture,
+        GoTestFunctionContext {
+            import_alias: "pkg",
+            e2e_config: &e2e_config,
+            adapters: &[],
+            data_enum_names: &std::collections::HashSet::new(),
+            config: &config,
+            type_defs: &type_defs,
+            enums: &enums,
+        },
+    );
+    out
+}
+
+/// A fixture asserting on `results[0]` states that `results` has an element, so the
+/// emitted Go must abort on an empty slice and then index unconditionally. Wrapping the
+/// assertion in `if len(result.Results) > 0` made the whole check vanish for an empty
+/// result, which is how 30 generated Go tests passed without ever asserting anything.
+#[test]
+fn indexed_assertion_fails_the_test_when_the_collection_is_empty() {
+    let out = render_indexed_assertion_function(vec![Assertion {
+        assertion_type: "equals".to_string(),
+        field: Some("results[0].mime_type".to_string()),
+        value: Some(serde_json::Value::String("image/png".to_string())),
+        ..Default::default()
+    }]);
+
+    let expected = "\tif len(result.Results) == 0 {\n\
+         \t\tt.Fatalf(\"expected non-empty %s\", `result.Results`)\n\
+         \t}\n\
+         \tif string(result.Results[0].MimeType) != `image/png` {\n\
+         \t\tt.Errorf(\"equals mismatch: got %v\", result.Results[0].MimeType)\n\
+         \t}\n";
+    assert!(
+        out.contains(expected),
+        "expected fatal precondition followed by an unguarded assertion:\n{expected}\ngot:\n{out}"
+    );
+    assert!(
+        !out.contains("if len(result.Results) > 0 {"),
+        "the emptiness guard that swallows the assertion must be gone; got:\n{out}"
+    );
+}
+
+/// `t.Fatalf` aborts the function, so one precondition protects every later index into
+/// the same collection. Emitting it per assertion would triple the noise for a fixture
+/// that checks three fields of `results[0]`.
+#[test]
+fn repeated_indexed_assertions_share_one_non_empty_precondition() {
+    let out = render_indexed_assertion_function(vec![
+        Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("results[0].mime_type".to_string()),
+            value: Some(serde_json::Value::String("image/png".to_string())),
+            ..Default::default()
+        },
+        Assertion {
+            assertion_type: "not_empty".to_string(),
+            field: Some("results[0].content".to_string()),
+            ..Default::default()
+        },
+    ]);
+
+    assert_eq!(
+        out.matches("t.Fatalf(\"expected non-empty %s\", `result.Results`)").count(),
+        1,
+        "the precondition should be emitted once per collection; got:\n{out}"
+    );
+    assert!(
+        out.contains("\tif len(result.Results[0].Content) == 0 {\n\t\tt.Errorf(\"expected non-empty value\")\n\t}\n"),
+        "the second assertion must still be emitted unguarded; got:\n{out}"
+    );
+}
+
+/// A fixture that never indexes a collection makes no claim about its length, so no
+/// precondition may be invented for it — `not_empty` on the slice itself is the fixture's
+/// own way of demanding a non-empty result and must stay a plain, non-fatal check.
+#[test]
+fn assertion_without_an_index_gets_no_non_empty_precondition() {
+    let out = render_indexed_assertion_function(vec![Assertion {
+        assertion_type: "not_empty".to_string(),
+        field: Some("results".to_string()),
+        ..Default::default()
+    }]);
+
+    assert!(
+        !out.contains("t.Fatalf(\"expected non-empty %s\""),
+        "a non-indexed assertion must not gain a fatal precondition; got:\n{out}"
+    );
+    assert!(
+        out.contains("\tif len(result.Results) == 0 {\n\t\tt.Errorf(\"expected non-empty value\")\n\t}\n"),
+        "the fixture's own not_empty check must be emitted verbatim; got:\n{out}"
     );
 }
