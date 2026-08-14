@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicit manifest override, and copy host libraries from the Cargo workspace target directory.
 
 ### Fixed
+- **e2e/elixir**: stop normalizing the actual value in generated `equals` and `is_empty` assertions. `is_empty`
+  emitted `String.trim(actual) == ""`, which passes for a whitespace-only value that Python's falsy check and
+  TypeScript's length check both reject — so one fixture assertion disagreed across languages.
 - **e2e**: compare `equals` assertions exactly in generated Python, PHP, Rust, TypeScript and WASM tests. The actual
   value was normalized with `.trim()`/`.strip()` while the fixture `expected` literal was emitted verbatim, so a
   fixture whose expectation legitimately ends in a newline could never be satisfied, and a genuine trailing-whitespace
