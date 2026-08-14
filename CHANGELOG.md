@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cannot use ... as *_Ctype_struct_... value`) for any enum with data-carrying variants.
 - **codegen/conversions**: use one tuple-variant predicate for enum definitions and `From` conversions so
   adjacently tagged tuple variants and untagged struct variants emit matching Rust syntax (#232).
+- **ffi/service**: free the C-allocated response pointer before deserializing it in the generated service handler
+  bridge, so a malformed response no longer leaks the buffer when parsing fails.
 - **snippets**: enforce one timeout budget across every snippet in a validation batch and terminate timed-out
   toolchain process groups so descendant processes cannot keep docs generation alive.
 - **cache**: serialize IR maps and sets in canonical order so unchanged inputs retain stable IR and backend cache hashes.

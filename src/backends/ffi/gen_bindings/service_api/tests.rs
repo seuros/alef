@@ -157,6 +157,35 @@ fn test_handler_bridge_struct_is_generated() {
 }
 
 #[test]
+fn test_handler_bridge_frees_response_before_deserializing() {
+    // Regression: the response pointer from the C callback used to leak on a deserialization
+    // failure. `serde_json::from_str(...)?` ran before free(resp_ptr), so a malformed response
+    // returned early via `?` and the host-allocated buffer was never released. free() must run
+    // unconditionally, ahead of the fallible parse, so every path (success or failure) releases
+    // ownership of the pointer. ~keep
+    let api = make_fixture_surface();
+    let config = ResolvedCrateConfig {
+        name: "test_crate".to_owned(),
+        ..ResolvedCrateConfig::default()
+    };
+
+    let rs = gen_service_rs(&api, &config);
+
+    let free_pos = rs
+        .find("free(resp_ptr as *mut c_void);")
+        .expect("handler bridge must free the response pointer");
+    let parse_pos = rs
+        .find("serde_json::from_str(&resp_json)")
+        .expect("handler bridge must deserialize the response");
+
+    assert!(
+        free_pos < parse_pos,
+        "resp_ptr must be freed before the fallible deserialize, otherwise a malformed \
+         response leaks the C-allocated buffer:\n{rs}"
+    );
+}
+
+#[test]
 fn test_opaque_has_constructor_and_destructor() {
     let api = make_fixture_surface();
     let config = ResolvedCrateConfig {

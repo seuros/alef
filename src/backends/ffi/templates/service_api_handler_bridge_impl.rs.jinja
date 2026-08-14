@@ -28,15 +28,12 @@ impl {{ core_import }}::{{ trait_name }} for {{ bridge_name }} {
                 }
 
                 // SAFETY: resp_ptr was returned by the C callback and must be a null-terminated string.
-                let resp_c_str = unsafe { CStr::from_ptr(resp_ptr) };
-                let resp_json = resp_c_str.to_string_lossy();
+                let resp_json = unsafe { CStr::from_ptr(resp_ptr) }.to_string_lossy().into_owned();
 
-                // Deserialize response from JSON
-                let response: {{ resp_path }} = serde_json::from_str(&resp_json)
-                    .map_err(|e| Box::new(e) as {{ box_err }})?;
-
-                // Free the C-allocated response string. The host allocates it via malloc/strdup
-                // and hands ownership to us; we release it with the C runtime's free.
+                // Free the C-allocated response string now that its contents are copied into an
+                // owned `String`. The host allocates it via malloc/strdup and hands ownership to
+                // us; we release it with the C runtime's free before the fallible deserialize
+                // below so a malformed response cannot leak the buffer. ~keep
                 // SAFETY: resp_ptr is null-checked above and was produced by the host callback.
                 unsafe {
                     unsafe extern "C" {
@@ -44,6 +41,10 @@ impl {{ core_import }}::{{ trait_name }} for {{ bridge_name }} {
                     }
                     free(resp_ptr as *mut c_void);
                 }
+
+                // Deserialize response from JSON
+                let response: {{ resp_path }} = serde_json::from_str(&resp_json)
+                    .map_err(|e| Box::new(e) as {{ box_err }})?;
 
                 Ok(response)
             }
