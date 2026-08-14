@@ -1,5 +1,6 @@
 mod diff;
 mod generation;
+mod header_freshness;
 mod normalization;
 mod orphans;
 mod scaffold;
