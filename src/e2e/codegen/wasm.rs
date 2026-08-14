@@ -343,13 +343,14 @@ impl E2eCodegen for WasmCodegen {
         let wasm_type_prefix = config.wasm_type_prefix();
         for (group, active) in groups.iter().zip(active_per_group.iter()) {
             if active.is_empty() {
-                // Every fixture in this category was excluded for wasm (fixture-level
-                // `skip.languages: ["wasm"]`, per-call `skip_languages`, or a static
-                // `[crates.wasm].languages` gap). Previously this silently dropped the
-                // whole category with no generated output and no signal — 54 `visitor`
-                // fixtures vanished with no warning or CI failure. Emit a visible
-                // placeholder suite (mirroring kotlin_android's `ExcludedBindingsTest.kt`)
-                // and log a warning so the omission shows up in generation output.
+                // ~keep: every fixture in this category was excluded for wasm
+                // (fixture-level `skip.languages: ["wasm"]`, per-call `skip_languages`,
+                // or a static `[crates.wasm].languages` gap). Previously this silently
+                // dropped the whole category with no generated output and no signal —
+                // all 49 `visitor` fixtures vanished with no warning or CI failure.
+                // Emit a visible placeholder suite (mirroring kotlin_android's
+                // `ExcludedBindingsTest.kt`) and log a warning so the omission shows up
+                // in generation output.
                 if !group.fixtures.is_empty() {
                     let reasons: Vec<(String, String)> = group
                         .fixtures
