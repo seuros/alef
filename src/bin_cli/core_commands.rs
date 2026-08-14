@@ -336,7 +336,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     Ok(scaffold_files) => {
                         for file in &scaffold_files {
                             let path = base_dir.join(&file.path);
-                            if file.generated_header {
+                            if file.carries_alef_marker() {
                                 current_gen_paths.insert(path);
                             }
                         }
