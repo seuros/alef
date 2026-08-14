@@ -150,6 +150,18 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
             .map(|name| import_name(&name))
             .filter(|name| referenced_code.contains(name)),
     );
+    // A trait-bridge stub method returning a named enum annotates its signature with that
+    // enum and casts through it (`(): ProcessingStage { return "\"Early\"" as unknown as
+    // ProcessingStage; }` — see `emit_test_backend`'s `type_imports`). The enum is a
+    // top-level type, so it is reached by neither `nested_types` nor `enum_fields`, and
+    // without an import the emitted snippet does not type-check. Both uses are type
+    // positions, but the module is imported as values here, which covers them.
+    imports.extend(
+        enums
+            .iter()
+            .map(|enum_def| import_name(&enum_def.name))
+            .filter(|name| referenced_code.contains(name)),
+    );
     for arg in recipe.args {
         if arg.arg_type == "json_object"
             && let Some(type_name) = &arg.element_type

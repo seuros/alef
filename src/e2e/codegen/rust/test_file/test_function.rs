@@ -166,7 +166,7 @@ pub fn render_test_function(
                     .map(|t| t.methods.iter().collect())
                     .unwrap_or_default();
                 // Emit the test backend stub.
-                let emission = crate::e2e::codegen::emit_test_backend("rust", trait_bridge, &methods, fixture);
+                let emission = crate::e2e::codegen::emit_test_backend("rust", trait_bridge, &methods, fixture, &[]);
                 let expr = emission.arg_expr;
                 // Emit `use module::Symbol;` imports inside the function body so that
                 // the trait name and any named return/param types are in scope for the

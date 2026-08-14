@@ -574,12 +574,13 @@ pub fn emit_test_backend(
     trait_bridge: &crate::core::config::TraitBridgeConfig,
     methods: &[&MethodDef],
     fixture: &Fixture,
+    enums: &[crate::core::ir::EnumDef],
 ) -> TestBackendEmission {
     match language {
         "rust" => rust::emit_test_backend(trait_bridge, methods, fixture),
         "python" => python::emit_test_backend(trait_bridge, methods, fixture),
-        "typescript" | "wasm" => typescript::emit_test_backend(trait_bridge, methods, fixture),
-        "node" => typescript::emit_test_backend(trait_bridge, methods, fixture), // node uses typescript codegen
+        "typescript" | "wasm" => typescript::emit_test_backend(trait_bridge, methods, fixture, enums),
+        "node" => typescript::emit_test_backend(trait_bridge, methods, fixture, enums), // node uses typescript codegen
         "go" => go::emit_test_backend(trait_bridge, methods, fixture),
         "java" => java::emit_test_backend(trait_bridge, methods, fixture, ""),
         "kotlin" => kotlin::emit_test_backend(trait_bridge, methods, fixture),

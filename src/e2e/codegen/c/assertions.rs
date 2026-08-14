@@ -339,7 +339,7 @@ pub(super) fn build_args_string_c(
                         }
                     }
                 }
-                let emission = crate::e2e::codegen::emit_test_backend("c", trait_bridge, &methods, fixture);
+                let emission = crate::e2e::codegen::emit_test_backend("c", trait_bridge, &methods, fixture, &[]);
                 parts.push(emission.arg_expr);
                 continue;
             }

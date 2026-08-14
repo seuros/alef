@@ -180,7 +180,7 @@ pub(super) fn build_args_and_setup(
                 } else {
                     "kotlin"
                 };
-                let emission = crate::e2e::codegen::emit_test_backend(lang, trait_bridge, &methods, fixture);
+                let emission = crate::e2e::codegen::emit_test_backend(lang, trait_bridge, &methods, fixture, &[]);
                 setup_lines.push(emission.setup_block);
                 parts.push(emission.arg_expr);
                 continue;

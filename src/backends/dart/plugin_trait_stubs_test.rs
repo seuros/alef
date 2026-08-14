@@ -22,7 +22,7 @@ mod plugin_trait_stub_generation {
         methods: &[&MethodDef],
         fixture: &Fixture,
     ) -> crate::e2e::codegen::TestBackendEmission {
-        crate::e2e::codegen::emit_test_backend("dart", bridge, methods, fixture)
+        crate::e2e::codegen::emit_test_backend("dart", bridge, methods, fixture, &[])
     }
 
     /// Helper to create a test trait bridge.

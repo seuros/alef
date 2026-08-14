@@ -125,7 +125,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
                     .find(|t| t.name == *trait_name)
                     .map(|t| t.methods.iter().collect())
                     .unwrap_or_default();
-                let emission = crate::e2e::codegen::emit_test_backend(lang, trait_bridge, &methods, fixture);
+                let emission = crate::e2e::codegen::emit_test_backend(lang, trait_bridge, &methods, fixture, enums);
                 setup_lines.push(emission.setup_block);
                 // Assign the bridge to a variable for NAPI cleanup
                 if lang == "node" {
