@@ -19,13 +19,13 @@
                 .or(() -> LOOKUP.find("_{{ ffi_prefix }}_server_config_from_json"))
                 .orElseThrow();
             FunctionDescriptor createDesc = FunctionDescriptor.of(
-                ValueLayout.ADDRESS   // return: ServerConfig*
+                ValueLayout.JAVA_LONG  // return: ServerConfig AlefHandle
                 , ValueLayout.ADDRESS  // param: config JSON string
             );
             MethodHandle createHandle = LINKER.downcallHandle(createAddr, createDesc);
-            MemorySegment configHandle = (MemorySegment) createHandle.invoke(configSegment);
+            long configHandle = (long) createHandle.invokeExact(configSegment);
 
-            if (configHandle == null || configHandle.address() == 0) {
+            if (configHandle == 0) {
                 throw new RuntimeException("Failed to create ServerConfig from JSON");
             }
 
@@ -34,20 +34,20 @@
                 .or(() -> LOOKUP.find("_{{ ffi_prefix }}_{{ service_snake }}_config"))
                 .orElseThrow();
             FunctionDescriptor applyDesc = FunctionDescriptor.of(
-                ValueLayout.ADDRESS,   // return: *mut opaque (updated owner)
-                ValueLayout.ADDRESS,   // owner: *mut opaque
-                ValueLayout.ADDRESS    // config: ServerConfig*
+                ValueLayout.JAVA_LONG, // return: AlefHandle
+                ValueLayout.JAVA_LONG, // owner: AlefHandle
+                ValueLayout.JAVA_LONG  // config: AlefHandle
             );
             MethodHandle applyHandle = LINKER.downcallHandle(applyAddr, applyDesc);
-            ownerHandle = (MemorySegment) applyHandle.invoke(ownerHandle, configHandle);
+            ownerHandle = (long) applyHandle.invokeExact(ownerHandle, configHandle);
 
             // Free the ServerConfig handle
             MemorySegment freeAddr = LOOKUP.find("{{ ffi_prefix }}_server_config_free")
                 .or(() -> LOOKUP.find("_{{ ffi_prefix }}_server_config_free"))
                 .orElseThrow();
-            FunctionDescriptor freeDesc = FunctionDescriptor.ofVoid(ValueLayout.ADDRESS);
+            FunctionDescriptor freeDesc = FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG);
             MethodHandle freeHandle = LINKER.downcallHandle(freeAddr, freeDesc);
-            freeHandle.invoke(configHandle);
+            freeHandle.invokeExact(configHandle);
 
         } catch (Throwable e) {
             throw new RuntimeException("Failed to configure host and port", e);

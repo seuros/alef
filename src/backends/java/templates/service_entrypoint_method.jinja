@@ -8,16 +8,20 @@
                 .or(() -> LOOKUP.find("_{{ ffi_prefix }}_{{ service_snake }}_ep_{{ ep_method_snake }}"))
                 .orElseThrow();
             FunctionDescriptor epDesc = FunctionDescriptor.of(
-{{ return_layout }}                ValueLayout.ADDRESS       // owner: *mut opaque
+{{ return_layout }}                ValueLayout.JAVA_LONG      // owner: AlefHandle
 {% for layout in descriptor_layouts %}
                 , {{ layout.0 }}    // {{ layout.1 }} param
 {% endfor %}            );
             MethodHandle epHandle = LINKER.downcallHandle(epAddr, epDesc);
-            {% if return_type == "void" %}epHandle.invoke(ownerHandle{% else %}return (long) epHandle.invoke(ownerHandle{% endif %}
+{{ metadata_setup }}
+            {% if returns_opaque %}return (long) epHandle.invokeExact(ownerHandle{% else %}int status = (int) epHandle.invokeExact(ownerHandle{% endif %}
 {% for arg in invoke_args %}
                 , {{ arg }}
 {% endfor %}            );
-
+{% if not returns_opaque %}            if (status != 0) {
+                throw new RuntimeException("Native entrypoint failed with status " + status);
+            }
+{% endif %}
         } catch (Throwable e) {
             throw new RuntimeException("Failed to invoke entrypoint", e);
         }

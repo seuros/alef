@@ -16,14 +16,14 @@
 use crate::backends::java::template_env;
 use crate::core::backend::GeneratedFile;
 use crate::core::config::ResolvedCrateConfig;
-use crate::core::ir::{ApiSurface, EntrypointKind, ParamDef, ServiceDef, TypeRef};
+use crate::core::ir::{ApiSurface, ParamDef, ServiceDef, TypeRef};
 use heck::{ToLowerCamelCase, ToSnakeCase, ToUpperCamelCase};
 use minijinja::context;
 use std::path::PathBuf;
 
 /// Check if a TypeRef is an opaque (surface-wrapped Named type).
 fn is_opaque_metadata(ty: &TypeRef, api: &ApiSurface) -> bool {
-    matches!(ty, TypeRef::Named(n) if api.types.iter().any(|t| t.name == *n))
+    matches!(ty, TypeRef::Named(n) if api.types.iter().any(|t| t.name == *n && t.is_opaque))
 }
 
 /// Map TypeRef to Java parameter type.
@@ -32,6 +32,7 @@ fn is_opaque_metadata(ty: &TypeRef, api: &ApiSurface) -> bool {
 fn java_type_for_metadata(ty: &TypeRef, api: &ApiSurface) -> String {
     match ty {
         TypeRef::String | TypeRef::Char => "String".to_owned(),
+        TypeRef::Path => "java.nio.file.Path".to_owned(),
         TypeRef::Primitive(p) => {
             use crate::core::ir::PrimitiveType;
             match p {
@@ -54,20 +55,21 @@ fn java_type_for_metadata(ty: &TypeRef, api: &ApiSurface) -> String {
 
 fn java_layout_for_metadata(ty: &TypeRef) -> &'static str {
     match ty {
-        TypeRef::String => "ValueLayout.ADDRESS",
+        TypeRef::String | TypeRef::Char | TypeRef::Path => "ValueLayout.ADDRESS",
         TypeRef::Primitive(p) => {
             use crate::core::ir::PrimitiveType;
             match p {
-                PrimitiveType::Bool => "ValueLayout.JAVA_LONG",
-                PrimitiveType::U8 | PrimitiveType::I8 => "ValueLayout.JAVA_LONG",
-                PrimitiveType::U16 | PrimitiveType::I16 => "ValueLayout.JAVA_LONG",
-                PrimitiveType::U32 | PrimitiveType::I32 => "ValueLayout.JAVA_LONG",
+                PrimitiveType::Bool => "ValueLayout.JAVA_BOOLEAN",
+                PrimitiveType::U8 | PrimitiveType::I8 => "ValueLayout.JAVA_BYTE",
+                PrimitiveType::U16 | PrimitiveType::I16 => "ValueLayout.JAVA_SHORT",
+                PrimitiveType::U32 | PrimitiveType::I32 => "ValueLayout.JAVA_INT",
                 PrimitiveType::U64 | PrimitiveType::I64 => "ValueLayout.JAVA_LONG",
                 PrimitiveType::F32 => "ValueLayout.JAVA_FLOAT",
                 PrimitiveType::F64 => "ValueLayout.JAVA_DOUBLE",
-                PrimitiveType::Usize | PrimitiveType::Isize => "ValueLayout.ADDRESS",
+                PrimitiveType::Usize | PrimitiveType::Isize => "ValueLayout.JAVA_LONG",
             }
         }
+        TypeRef::Named(_) => "ValueLayout.JAVA_LONG",
         _ => "ValueLayout.ADDRESS",
     }
 }
@@ -86,25 +88,40 @@ fn descriptor_layouts_vec(params: &[ParamDef]) -> Vec<(String, String)> {
         .collect()
 }
 
-fn bool_arg_expr(param_name: &str) -> String {
-    template_env::render(
-        "service_bool_arg_expr.jinja",
-        context! {
-            param_name => param_name,
-        },
-    )
-    .trim_end()
-    .to_owned()
+fn metadata_setup(param: &ParamDef) -> String {
+    let param_name = param.name.to_lower_camel_case();
+    let template = match param.ty {
+        TypeRef::String | TypeRef::Char => Some("marshal_string.jinja"),
+        TypeRef::Path => Some("marshal_path.jinja"),
+        _ => None,
+    };
+    template.map_or_else(String::new, |name| {
+        template_env::render(
+            name,
+            context! {
+                cname => format!("c{param_name}"),
+                name => param_name,
+            },
+        )
+    })
 }
 
 fn metadata_arg_expr(param: &ParamDef, api: &ApiSurface) -> String {
     let param_name = param.name.to_lower_camel_case();
     if is_opaque_metadata(&param.ty, api) {
-        format!("{param_name}.handle()")
-    } else if matches!(param.ty, TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool)) {
-        bool_arg_expr(&param_name)
+        format!("{param_name}.handle().address()")
+    } else if matches!(param.ty, TypeRef::String | TypeRef::Char | TypeRef::Path) {
+        format!("c{param_name}")
     } else {
         param_name
+    }
+}
+
+fn entrypoint_return_representable(return_type: &TypeRef, api: &ApiSurface) -> bool {
+    match return_type {
+        TypeRef::Unit | TypeRef::Primitive(_) => true,
+        TypeRef::Named(name) => api.types.iter().any(|typ| typ.name == *name),
+        _ => false,
     }
 }
 
@@ -203,6 +220,7 @@ fn gen_service_class(api: &ApiSurface, service: &ServiceDef, package: &str, conf
         }
 
         let descriptor_layouts_vec = descriptor_layouts_vec(&reg.metadata_params);
+        let metadata_setup: String = reg.metadata_params.iter().map(metadata_setup).collect();
         let invoke_args_vec: Vec<_> = reg
             .metadata_params
             .iter()
@@ -226,29 +244,47 @@ fn gen_service_class(api: &ApiSurface, service: &ServiceDef, package: &str, conf
                 metadata_signature => metadata_signature,
                 class_name => class_name,
                 descriptor_layouts => descriptor_layouts_vec,
+                metadata_setup => metadata_setup,
                 invoke_args => invoke_args_vec,
             },
         ));
     }
 
     for reg in &service.registrations {
-        let reg_method_snake = reg.method.to_snake_case();
-        for variant in &reg.variants {
+        for variant in reg.variants.iter().filter(|variant| variant.wrapper_call.is_some()) {
             let variant_method_name = variant.name.to_lower_camel_case();
-            let ffi_symbol = format!(
-                "{}_{}_register_{}_{}",
-                ffi_prefix,
-                service_snake,
-                reg_method_snake,
-                variant.name.to_snake_case()
-            );
+            let ffi_symbol = format!("{}_{}_{}", ffi_prefix, service_snake, variant.name.to_snake_case());
             let doc = variant.doc.clone();
+            let signature_params = variant
+                .signature_params
+                .iter()
+                .map(|param| {
+                    format!(
+                        "{} {}",
+                        java_type_for_metadata(&param.ty, api),
+                        param.name.to_lower_camel_case()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let descriptor_layouts = descriptor_layouts_vec(&variant.signature_params);
+            let metadata_setup: String = variant.signature_params.iter().map(metadata_setup).collect();
+            let invoke_args: Vec<String> = variant
+                .signature_params
+                .iter()
+                .map(|param| metadata_arg_expr(param, api))
+                .collect();
 
             let ctx = context! {
                 method_name => variant_method_name.clone(),
                 variant_name_display => variant.name.to_lower_camel_case(),
                 ffi_symbol => ffi_symbol.clone(),
                 doc => doc,
+                class_name => class_name,
+                signature_params => signature_params,
+                descriptor_layouts => descriptor_layouts,
+                metadata_setup => metadata_setup,
+                invoke_args => invoke_args,
             };
 
             let rendered = template_env::render("registration_variant.java.jinja", ctx);
@@ -258,13 +294,15 @@ fn gen_service_class(api: &ApiSurface, service: &ServiceDef, package: &str, conf
     }
 
     for ep in &service.entrypoints {
+        if !entrypoint_return_representable(&ep.return_type, api) {
+            continue;
+        }
         let ep_method = &ep.method;
         let ep_method_snake = ep_method.to_snake_case();
 
-        let return_type = match ep.kind {
-            EntrypointKind::Run => "void",
-            EntrypointKind::Finalize => "long",
-        };
+        let returns_opaque =
+            matches!(&ep.return_type, TypeRef::Named(name) if api.types.iter().any(|typ| typ.name == *name));
+        let return_type = if returns_opaque { "long" } else { "void" };
 
         let params_signature = ep
             .params
@@ -276,21 +314,21 @@ fn gen_service_class(api: &ApiSurface, service: &ServiceDef, package: &str, conf
             })
             .collect::<Vec<_>>()
             .join(", ");
-        let return_layout = match ep.kind {
-            EntrypointKind::Run => "                ValueLayout.JAVA_INT,    // return int (status)\n",
-            EntrypointKind::Finalize => {
-                "                ValueLayout.ADDRESS,     // return *mut opaque or int status\n"
-            }
+        let return_layout = if returns_opaque {
+            "                ValueLayout.JAVA_LONG,   // return AlefHandle\n"
+        } else {
+            "                ValueLayout.JAVA_INT,    // return int status\n"
         };
         let descriptor_layouts_vec = descriptor_layouts_vec(&ep.params);
+        let metadata_setup: String = ep.params.iter().map(metadata_setup).collect();
         let invoke_args_vec: Vec<String> = ep
             .params
             .iter()
             .map(|param| {
                 if is_opaque_metadata(&param.ty, api) {
-                    format!("{}.handle()", param.name.to_lower_camel_case())
-                } else if matches!(param.ty, TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool)) {
-                    bool_arg_expr(&param.name.to_lower_camel_case())
+                    format!("{}.handle().address()", param.name.to_lower_camel_case())
+                } else if matches!(param.ty, TypeRef::String | TypeRef::Char | TypeRef::Path) {
+                    format!("c{}", param.name.to_lower_camel_case())
                 } else {
                     param.name.to_lower_camel_case()
                 }
@@ -307,7 +345,9 @@ fn gen_service_class(api: &ApiSurface, service: &ServiceDef, package: &str, conf
                 return_type => return_type,
                 params_signature => params_signature,
                 return_layout => return_layout,
+                returns_opaque => returns_opaque,
                 descriptor_layouts => descriptor_layouts_vec,
+                metadata_setup => metadata_setup,
                 invoke_args => invoke_args_vec,
             },
         ));
@@ -414,17 +454,18 @@ mod tests {
             version: Default::default(),
         };
 
+        let path_param = ParamDef {
+            name: "path".to_owned(),
+            ty: TypeRef::String,
+            optional: false,
+            default: None,
+            ..ParamDef::default()
+        };
         let registration = RegistrationDef {
             method: "add_handler".to_owned(),
             callback_param: "handler".to_owned(),
             callback_contract: "RequestHandler".to_owned(),
-            metadata_params: vec![ParamDef {
-                name: "path".to_owned(),
-                ty: TypeRef::String,
-                optional: false,
-                default: None,
-                ..ParamDef::default()
-            }],
+            metadata_params: vec![path_param.clone()],
             receiver: Some(crate::core::ir::ReceiverKind::RefMut),
             return_type: TypeRef::Unit,
             error_type: None,
@@ -433,8 +474,16 @@ mod tests {
                 crate::core::ir::RegistrationVariant {
                     name: "get".to_owned(),
                     overrides: vec![],
-                    wrapper_call: None,
-                    signature_params: vec![],
+                    wrapper_call: Some(crate::core::ir::WrapperConstructorCall {
+                        metadata_param: "path".to_owned(),
+                        wrapper_type_path: "my_crate::Route".to_owned(),
+                        wrapper_type_name: "Route".to_owned(),
+                        constructor_method: "get".to_owned(),
+                        args: vec![crate::core::ir::WrapperConstructorArg::Free {
+                            param: path_param.clone(),
+                        }],
+                    }),
+                    signature_params: vec![path_param.clone()],
                     doc: Some("Register a GET handler.".to_owned()),
                     style: Default::default(),
                     ..Default::default()
@@ -442,8 +491,16 @@ mod tests {
                 crate::core::ir::RegistrationVariant {
                     name: "post".to_owned(),
                     overrides: vec![],
-                    wrapper_call: None,
-                    signature_params: vec![],
+                    wrapper_call: Some(crate::core::ir::WrapperConstructorCall {
+                        metadata_param: "path".to_owned(),
+                        wrapper_type_path: "my_crate::Route".to_owned(),
+                        wrapper_type_name: "Route".to_owned(),
+                        constructor_method: "post".to_owned(),
+                        args: vec![crate::core::ir::WrapperConstructorArg::Free {
+                            param: path_param.clone(),
+                        }],
+                    }),
+                    signature_params: vec![path_param],
                     doc: Some("Register a POST handler.".to_owned()),
                     style: Default::default(),
                     ..Default::default()
@@ -558,7 +615,7 @@ mod tests {
 
         assert!(java.contains("public class TestService"));
         assert!(java.contains("implements AutoCloseable"));
-        assert!(java.contains("private MemorySegment ownerHandle"));
+        assert!(java.contains("private long ownerHandle"));
     }
 
     #[test]
@@ -738,11 +795,11 @@ mod tests {
         );
 
         assert!(
-            java.contains("test_crate_test_service_register_add_handler_get"),
+            java.contains("test_crate_test_service_get"),
             "should bind get variant to correct C symbol"
         );
         assert!(
-            java.contains("test_crate_test_service_register_add_handler_post"),
+            java.contains("test_crate_test_service_post"),
             "should bind post variant to correct C symbol"
         );
 

@@ -7,10 +7,10 @@
             MemorySegment addr = LOOKUP.find("{{ ffi_prefix }}_{{ service_snake }}_new")
                 .or(() -> LOOKUP.find("_{{ ffi_prefix }}_{{ service_snake }}_new"))
                 .orElseThrow();
-            FunctionDescriptor desc = FunctionDescriptor.of(ValueLayout.ADDRESS);
+            FunctionDescriptor desc = FunctionDescriptor.of(ValueLayout.JAVA_LONG);
             MethodHandle handle = LINKER.downcallHandle(addr, desc);
-            this.ownerHandle = (MemorySegment) handle.invoke();
-            if (this.ownerHandle == null) {
+            this.ownerHandle = (long) handle.invokeExact();
+            if (this.ownerHandle == 0) {
                 throw new RuntimeException("Failed to allocate service instance");
             }
         } catch (Throwable e) {

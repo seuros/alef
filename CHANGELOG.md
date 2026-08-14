@@ -95,6 +95,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returns, so fluent builders cannot retain a stale owner while wrapping the replacement handle.
 - **ffi/csharp/zig**: return every byte buffer through the owned pointer/length/capacity ABI, including infallible
   borrowed slices, so hosts copy exact binary data and free only the allocation transferred by the FFI layer.
+- **java/service**: bind service constructors, owners, metadata, registration variants, and entrypoints with the
+  scalar `AlefHandle` carriers and canonical C export names emitted by the FFI backend; marshal text metadata to
+  native segments, invoke Panama handles with typed arguments, and validate the service symbols at load time.
 - **config**: reject unknown keys in closed Alef configuration sections instead of silently discarding misspelled or
   misplaced settings; extension maps remain open where arbitrary names are part of the schema.
 - **ffi/java**: always emit JSON constructors for serializable FFI types and declare matching Java lifecycle handles,

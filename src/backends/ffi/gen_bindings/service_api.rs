@@ -152,6 +152,9 @@ fn gen_service_h_decls(out: &mut String, service: &ServiceDef, api: &ApiSurface,
     }
 
     for ep in &service.entrypoints {
+        if matches!(ep.kind, EntrypointKind::Finalize) && !entrypoint_return_representable(ep, api) {
+            continue;
+        }
         let ep_name_snake = ep.method.to_snake_case();
         let return_type = match &ep.return_type {
             TypeRef::Named(name) if api.types.iter().any(|typ| typ.name == *name) => "uint64_t".to_owned(),

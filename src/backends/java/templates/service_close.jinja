@@ -4,11 +4,11 @@
             MemorySegment freeAddr = LOOKUP.find("{{ ffi_prefix }}_{{ service_snake }}_free")
                 .or(() -> LOOKUP.find("_{{ ffi_prefix }}_{{ service_snake }}_free"))
                 .orElseThrow();
-            FunctionDescriptor freeDesc = FunctionDescriptor.ofVoid(ValueLayout.ADDRESS);
+            FunctionDescriptor freeDesc = FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG);
             MethodHandle freeHandle = LINKER.downcallHandle(freeAddr, freeDesc);
-            if (ownerHandle != null) {
-                freeHandle.invoke(ownerHandle);
-                ownerHandle = null;
+            if (ownerHandle != 0) {
+                freeHandle.invokeExact(ownerHandle);
+                ownerHandle = 0;
             }
             arena.close();
         } catch (Throwable e) {

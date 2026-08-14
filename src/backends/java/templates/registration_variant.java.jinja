@@ -4,18 +4,15 @@
      *
      * Invokes C FFI: {{ ffi_symbol }}
      *
-     * @param path route path
+{% for layout in descriptor_layouts %}     * @param {{ layout.1 }} registration metadata
+{% endfor %}
      * @param handler functional interface receiving JSON request, returning JSON response
      * @return 0 on success, non-zero error code on failure
      */
-    public int {{ method_name }}(String path, Callable handler) {
+    public int {{ method_name }}({{ signature_params }}{% if signature_params %}, {% endif %}Callable handler) {
         try {
             // Build upcall stub from handler
             MethodHandles.Lookup lookup = MethodHandles.lookup();
-            MethodHandle mh = lookup.findVirtual(Callable.class, "handle",
-                MethodType.methodType(String.class, String.class));
-            MethodHandle boundMh = mh.bindTo(handler);
-
             // Build C FFI signature: (context: ADDRESS, request: ADDRESS) -> ADDRESS
             FunctionDescriptor upcallDesc = FunctionDescriptor.of(
                 ValueLayout.ADDRESS,  // return: *mut c_char
@@ -25,7 +22,7 @@
 
             // Create adapter: (context_ptr: ADDRESS, request_ptr: ADDRESS) -> response_ptr: ADDRESS
             // Marshals C pointers <-> Java strings via Arena
-            MethodHandle baseMh = lookup.findStatic(this.getClass(), "invokeHandlerWithMarshal",
+            MethodHandle baseMh = lookup.findStatic({{ class_name }}.class, "invokeHandlerWithMarshal",
                 MethodType.methodType(MemorySegment.class, MemorySegment.class, MemorySegment.class, Callable.class, Arena.class)
             );
             MethodHandle adapter = MethodHandles.insertArguments(baseMh, 2, handler, arena);
@@ -39,19 +36,24 @@
 
             FunctionDescriptor varDesc = FunctionDescriptor.of(
                 ValueLayout.JAVA_INT,  // return: int
-                ValueLayout.ADDRESS,   // owner: *mut opaque
+                ValueLayout.JAVA_LONG, // owner: AlefHandle
                 ValueLayout.ADDRESS,   // callback: upcall stub
-                ValueLayout.ADDRESS    // path: *const c_char
+                ValueLayout.ADDRESS    // context: *mut c_void
+{% for layout in descriptor_layouts %}
+                , {{ layout.0 }}    // {{ layout.1 }} param
+{% endfor %}
             );
 
             MethodHandle varHandle = LINKER.downcallHandle(varAddr, varDesc);
-
-            Object[] args = new Object[] {
-                ownerHandle,     // owner
-                upcallStub,      // callback
-                path             // path
-            };
-            return (int) varHandle.invokeExact(args);
+{{ metadata_setup }}
+            return (int) varHandle.invokeExact(
+                ownerHandle,
+                upcallStub,
+                MemorySegment.NULL
+{% for arg in invoke_args %}
+                , {{ arg }}
+{% endfor %}
+            );
         } catch (Throwable e) {
             throw new RuntimeException("Failed to register {{ variant_name_display }} handler", e);
         }

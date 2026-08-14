@@ -35,14 +35,14 @@
                 .orElseThrow();
             FunctionDescriptor regDesc = FunctionDescriptor.of(
                 ValueLayout.JAVA_INT,  // return: int
-                ValueLayout.ADDRESS,   // owner: *mut opaque
+                ValueLayout.JAVA_LONG, // owner: AlefHandle
                 ValueLayout.ADDRESS,   // callback: upcall stub
                 ValueLayout.ADDRESS    // context: *mut c_void (null for now)
 {% for layout in descriptor_layouts %}
                 , {{ layout.0 }}    // {{ layout.1 }} param
 {% endfor %}            );
             MethodHandle regHandle = LINKER.downcallHandle(regAddr, regDesc);
-
+{{ metadata_setup }}
             return (int) regHandle.invokeExact(
                 ownerHandle,     // owner
                 upcallStub,      // callback

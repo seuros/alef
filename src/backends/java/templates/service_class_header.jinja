@@ -17,7 +17,7 @@ import java.lang.invoke.MethodType;
 @SuppressWarnings("PMD")
 public class {{ class_name }} implements AutoCloseable {
 
-    private MemorySegment ownerHandle;
+    private long ownerHandle;
     private final Arena arena = Arena.ofShared();
 
     private static final Linker LINKER = Linker.nativeLinker();

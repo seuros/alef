@@ -1,6 +1,6 @@
 use crate::core::config::{AdapterPattern, BridgeBinding, ResolvedCrateConfig};
 use crate::core::hash::{self, CommentStyle};
-use crate::core::ir::{ApiSurface, MethodDef, TypeDef, TypeRef};
+use crate::core::ir::{ApiSurface, EntrypointKind, MethodDef, TypeDef, TypeRef};
 use ahash::AHashSet;
 use heck::ToSnakeCase;
 use std::collections::BTreeSet;
@@ -54,6 +54,51 @@ fn extract_required_symbols(blocks: impl IntoIterator<Item = impl AsRef<str>>) -
         }
     }
 
+    symbols
+}
+
+fn service_entrypoint_is_exported(entrypoint: &crate::core::ir::EntrypointDef, api: &ApiSurface) -> bool {
+    if !matches!(entrypoint.kind, EntrypointKind::Finalize) {
+        return true;
+    }
+    match &entrypoint.return_type {
+        TypeRef::Unit | TypeRef::String | TypeRef::Char | TypeRef::Primitive(_) | TypeRef::Bytes => true,
+        TypeRef::Named(name) => api.types.iter().any(|typ| typ.name == *name),
+        _ => false,
+    }
+}
+
+fn service_required_symbols(api: &ApiSurface, prefix: &str) -> BTreeSet<String> {
+    let mut symbols = BTreeSet::new();
+    for service in &api.services {
+        let service_name = service.name.to_snake_case();
+        symbols.insert(format!("{prefix}_{service_name}_new"));
+        symbols.insert(format!("{prefix}_{service_name}_free"));
+        for registration in &service.registrations {
+            symbols.insert(format!(
+                "{prefix}_{service_name}_register_{}",
+                registration.method.to_snake_case()
+            ));
+            for variant in registration
+                .variants
+                .iter()
+                .filter(|variant| variant.wrapper_call.is_some())
+            {
+                symbols.insert(format!("{prefix}_{service_name}_{}", variant.name.to_snake_case()));
+            }
+        }
+        for configurator in &service.configurators {
+            symbols.insert(format!("{prefix}_{service_name}_{}", configurator.name.to_snake_case()));
+        }
+        for entrypoint in &service.entrypoints {
+            if service_entrypoint_is_exported(entrypoint, api) {
+                symbols.insert(format!(
+                    "{prefix}_{service_name}_ep_{}",
+                    entrypoint.method.to_snake_case()
+                ));
+            }
+        }
+    }
     symbols
 }
 
@@ -773,6 +818,7 @@ pub(crate) fn gen_native_lib(
         .map(String::as_str)
         .chain(std::iter::once(visitor_handles.as_str()));
     let mut required_symbols = extract_required_symbols(handle_blocks);
+    required_symbols.extend(service_required_symbols(api, prefix));
     required_symbols.retain(|symbol| !optional_symbols.contains(symbol));
     required_symbols.insert(format!("{prefix}_last_error_code"));
     required_symbols.insert(format!("{prefix}_last_error_context"));
