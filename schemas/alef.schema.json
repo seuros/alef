@@ -1,6 +1,7 @@
 {
   "$defs": {
     "AdapterConfig": {
+      "additionalProperties": false,
       "description": "Configuration for a single adapter.",
       "properties": {
         "core_path": {
@@ -100,6 +101,7 @@
       "type": "object"
     },
     "AdapterParam": {
+      "additionalProperties": false,
       "description": "A parameter in an adapter function.",
       "properties": {
         "name": {
@@ -130,6 +132,7 @@
       "type": "string"
     },
     "ArgMapping": {
+      "additionalProperties": false,
       "description": "Maps a fixture input field to a function argument.",
       "properties": {
         "element_type": {
@@ -207,6 +210,7 @@
       ]
     },
     "BuildCommandConfig": {
+      "additionalProperties": false,
       "properties": {
         "before": {
           "anyOf": [
@@ -252,6 +256,7 @@
       "type": "object"
     },
     "CSharpConfig": {
+      "additionalProperties": false,
       "properties": {
         "capsule_types": {
           "additionalProperties": {
@@ -356,6 +361,7 @@
       "type": "object"
     },
     "CallConfig": {
+      "additionalProperties": false,
       "description": "Configuration for the function call in each test.",
       "properties": {
         "args": {
@@ -590,6 +596,7 @@
       "type": "object"
     },
     "CallOverride": {
+      "additionalProperties": false,
       "description": "Per-language override for function call configuration.",
       "properties": {
         "alias": {
@@ -1145,6 +1152,7 @@
       "type": "object"
     },
     "CleanConfig": {
+      "additionalProperties": false,
       "properties": {
         "before": {
           "anyOf": [
@@ -1179,6 +1187,7 @@
       "type": "object"
     },
     "ClientConstructorConfig": {
+      "additionalProperties": false,
       "description": "Custom constructor configuration for an opaque handle type.\n\nWhen present under `[workspace.client_constructors.<TypeName>]`, every\nbackend that wraps the type in an opaque handle emits a constructor whose\nbody is the `body` template string with `{type_name}` and `{source_path}`\nsubstituted.",
       "properties": {
         "body": {
@@ -1208,6 +1217,7 @@
       "type": "object"
     },
     "ConstructorParam": {
+      "additionalProperties": false,
       "description": "One parameter in a [`ClientConstructorConfig`].",
       "properties": {
         "name": {
@@ -1232,6 +1242,7 @@
       "type": "string"
     },
     "CustomModulesConfig": {
+      "additionalProperties": false,
       "description": "Custom modules that alef should declare (mod X;) but not generate.\nThese are hand-written modules imported by the generated lib.rs.",
       "properties": {
         "csharp": {
@@ -1315,6 +1326,7 @@
       "type": "object"
     },
     "CustomRegistration": {
+      "additionalProperties": false,
       "description": "Custom classes/functions from hand-written modules to register in module init.",
       "properties": {
         "classes": {
@@ -1342,6 +1354,7 @@
       "type": "object"
     },
     "CustomRegistrationsConfig": {
+      "additionalProperties": false,
       "description": "Per-language custom registrations.",
       "properties": {
         "elixir": {
@@ -1414,6 +1427,7 @@
       "type": "object"
     },
     "DartConfig": {
+      "additionalProperties": false,
       "properties": {
         "capsule_types": {
           "additionalProperties": {
@@ -1589,6 +1603,7 @@
       ]
     },
     "DartTargetDepOverride": {
+      "additionalProperties": false,
       "properties": {
         "cfg": {
           "description": "Cargo `cfg(...)` predicate (without the `cfg(...)` wrapper). Example:\n`all(target_os = \"android\", target_arch = \"x86_64\")`.",
@@ -1614,6 +1629,7 @@
       "type": "object"
     },
     "DocsConfig": {
+      "additionalProperties": false,
       "properties": {
         "cli": {
           "anyOf": [
@@ -1687,6 +1703,7 @@
       "type": "object"
     },
     "DocsLlmsConfig": {
+      "additionalProperties": false,
       "properties": {
         "adopt_existing": {
           "default": false,
@@ -1713,6 +1730,7 @@
       "type": "object"
     },
     "DocsSkillTemplateConfig": {
+      "additionalProperties": false,
       "properties": {
         "output": {
           "default": null,
@@ -1734,6 +1752,7 @@
       "type": "object"
     },
     "DocsSkillsConfig": {
+      "additionalProperties": false,
       "properties": {
         "adopt_existing": {
           "default": false,
@@ -1768,6 +1787,7 @@
       "type": "object"
     },
     "DocsSnippetRustDependencyConfig": {
+      "additionalProperties": false,
       "properties": {
         "default_features": {
           "default": true,
@@ -1793,6 +1813,7 @@
       "type": "object"
     },
     "DocsSnippetSessionConfig": {
+      "additionalProperties": false,
       "properties": {
         "before": {
           "default": [],
@@ -1853,6 +1874,7 @@
       "type": "object"
     },
     "DocsSnippetsConfig": {
+      "additionalProperties": false,
       "properties": {
         "allowed_side_effects": {
           "default": [],
@@ -1984,6 +2006,7 @@
       "type": "object"
     },
     "DocsSourceConfig": {
+      "additionalProperties": false,
       "properties": {
         "adopt_existing": {
           "default": false,
@@ -2018,6 +2041,7 @@
       "type": "object"
     },
     "DtoConfig": {
+      "additionalProperties": false,
       "description": "Per-language DTO/type generation style configuration.\n\nControls what type system is used for generated public API types in each language\n(e.g., Python `@dataclass` vs `TypedDict` vs `pydantic.BaseModel`).",
       "properties": {
         "csharp": {
@@ -2081,6 +2105,7 @@
       "type": "object"
     },
     "E2eConfig": {
+      "additionalProperties": false,
       "description": "Root e2e configuration from `[e2e]` section of alef.toml.",
       "properties": {
         "call": {
@@ -2101,6 +2126,14 @@
           },
           "default": {},
           "description": "Environment variables every generated e2e suite's setup must set\nbefore the binding's engine is constructed. Keyed by env-var name;\nvalues are passed through verbatim.\n\nEach per-language test-harness emitter consumes this map at\nsuite-setup time (conftest.py for Python, spec_helper.rb for Ruby,\nTestMain for Go, bootstrap.php for PHP, test_helper.exs for Elixir,\nglobalSetup.ts for WASM, assembly fixture for C#, XCTestCase\nclassSetUp for Swift, etc.). The injection point sits next to where\n`MOCK_SERVER_URL` is exported so the binding's first call already\nsees the configured environment.\n\nMotivating use case: a binding may require an environment flag to\nallow loopback mock-server calls in e2e tests while keeping production\nURL validation strict by default. The map is intentionally generic so\nconsumers can pass any binding-side env-var (feature flags,\nobservability toggles, etc.) the same way.\n\nExample:\n```toml\n[crates.e2e.env]\nALLOW_PRIVATE_NETWORK = \"true\"\n```",
+          "type": "object"
+        },
+        "error_field_aliases": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Error field aliases: maps fixture paths after `error.` to fields on the Rust error type.",
           "type": "object"
         },
         "exclude_categories": {
@@ -2296,6 +2329,7 @@
       "type": "object"
     },
     "ElixirConfig": {
+      "additionalProperties": false,
       "properties": {
         "app_name": {
           "type": [
@@ -2421,6 +2455,7 @@
       "type": "string"
     },
     "EntrypointSpec": {
+      "additionalProperties": false,
       "description": "Per-entrypoint configuration inside a `[[crates.services]]` table.\n\n```toml\n[[crates.services.entrypoints]]\nmethod = \"run\"\nkind = \"run\"\n\n[[crates.services.entrypoints]]\nmethod = \"into_router\"\nkind = \"finalize\"\n```",
       "properties": {
         "kind": {
@@ -2439,6 +2474,7 @@
       "type": "object"
     },
     "ExcludeConfig": {
+      "additionalProperties": false,
       "properties": {
         "fields": {
           "default": [],
@@ -2488,6 +2524,7 @@
       "description": "A single extra-dependency declaration. Accepts either a bare version string\n(`\"tree-sitter\" = \"^0.25.0\"`) or a free-form TOML table for source/feature\nmetadata (`\"foo\" = { version = \"1\", git = \"https://…\" }`).\n\nPer-language emitters decide which table keys they understand. Unknown keys\nare surfaced as warnings but never block emission — the goal is forward\ncompatibility as the alef.toml surface grows."
     },
     "FfiCapsuleTypeConfig": {
+      "additionalProperties": false,
       "description": "Configuration for a single capsule (Language-passthrough) type at the C-ABI layer.\n\nWhen a Rust type is listed in [`FfiConfig::capsule_types`], the C FFI backend\ndoes NOT box it into an opaque `*mut {Type}` handle. Instead, the generated C\nfunction returns the host ecosystem's native grammar pointer directly by calling\n`value.into_raw()` and casting the result to `*const {c_return_type}`. The\nmatching opaque `_new`/`_free`/`_to_json` symbols are suppressed for that type.\n\nThis is the load-bearing layer consumed by every C-ABI binding (Go, Java, C#,\nSwift, Dart, Zig, Kotlin Android): each of those constructs its own host-native\n`Language` wrapper from this raw pointer.\n\nBoth `into_raw_type` and `c_return_type` are **required** — there are no\ndefaults. A missing or empty value is a deserialization error (for required\nfields) or an emission-time error (for fields validated later).\n\nTOML form:\n```toml\n[crates.ffi.capsule_types.Language]\ninto_raw_type = \"my_crate::ffi::MyRawType\"\nc_return_type = \"MyRawType\"\npackage = \"my-crate\"\npackage_version = \"1.0\"\n```",
       "properties": {
         "c_return_type": {
@@ -2522,6 +2559,7 @@
       "type": "object"
     },
     "FfiConfig": {
+      "additionalProperties": false,
       "properties": {
         "capsule_types": {
           "additionalProperties": {
@@ -2630,6 +2668,7 @@
       "type": "object"
     },
     "FfiTargetDepOverride": {
+      "additionalProperties": false,
       "description": "A per-target replacement for the core-crate feature set emitted into the\ngenerated FFI Cargo.toml. See [`FfiConfig::target_dep_overrides`].",
       "properties": {
         "cfg": {
@@ -2656,6 +2695,7 @@
       "type": "object"
     },
     "GenerateConfig": {
+      "additionalProperties": false,
       "description": "Controls which generation passes alef runs.\nAll flags default to `true`; set to `false` to skip a pass.\nCan be overridden per-language via `[generate_overrides.<lang>]`.",
       "properties": {
         "async_wrappers": {
@@ -2702,6 +2742,7 @@
       "type": "object"
     },
     "GeneratedHeaderConfig": {
+      "additionalProperties": false,
       "properties": {
         "issues_url": {
           "default": null,
@@ -2731,6 +2772,7 @@
       "type": "object"
     },
     "GleamConfig": {
+      "additionalProperties": false,
       "properties": {
         "app_name": {
           "type": [
@@ -2824,6 +2866,7 @@
       "type": "object"
     },
     "GleamElementConstructor": {
+      "additionalProperties": false,
       "description": "One per-`element_type` Gleam record-constructor recipe. Keyed by the\nfixture-side `element_type` string and consumed by the e2e Gleam codegen\nwhen building `json_object` arg literals.",
       "properties": {
         "constructor": {
@@ -2850,6 +2893,7 @@
       "type": "object"
     },
     "GleamElementField": {
+      "additionalProperties": false,
       "description": "One field inside a [`GleamElementConstructor`]'s argument list.\n\n`kind` selects the source/encoding strategy:\n* `\"file_path\"` — read `json_field` from the JSON object as a string,\n  prefix with the configured `test_documents_dir` when the value does not\n  start with `/`, and emit as a Gleam string literal.\n* `\"byte_array\"` — read `json_field` from the JSON object as a JSON\n  `Array(Number)` and emit as a Gleam BitArray literal `<<n1, n2, …>>`.\n* `\"string\"` — read `json_field` as a string, emit as a Gleam string\n  literal; falls back to `default` (or empty) if missing.\n* `\"literal\"` — emit `value` verbatim (no JSON lookup). Use for\n  constant fields like `config: option.None`.",
       "properties": {
         "default": {
@@ -2892,6 +2936,7 @@
       "type": "object"
     },
     "GoConfig": {
+      "additionalProperties": false,
       "properties": {
         "capsule_types": {
           "additionalProperties": {
@@ -3000,6 +3045,7 @@
       "type": "string"
     },
     "HandlerContractConfig": {
+      "additionalProperties": false,
       "description": "Configuration for one handler-contract entry in `[[crates.handler_contracts]]`.\n\nThis augments a trait already present in the extracted surface with\nservice-specific metadata: the dispatch method that backends must bridge,\nwhether that method is async, and the names of the wire request/response DTOs.\n\n```toml\n[[crates.handler_contracts]]\ntrait_name = \"Handler\"\ndispatch_method = \"call\"\nis_async = true\nwire_request_type = \"RequestData\"\nwire_response_type = \"ResponseData\"\n```",
       "properties": {
         "dispatch_extra_params": {
@@ -3079,6 +3125,7 @@
       "type": "object"
     },
     "HarnessConfig": {
+      "additionalProperties": false,
       "description": "Server-shaped e2e harness configuration for HTTP fixtures.\n\nWhen HTTP fixtures are present (server-pattern testing), alef generates\na harness script that starts the SUT app, registers handlers per fixture,\nand serves requests. This config provides the language-agnostic knobs that\ncontrol harness code generation.",
       "properties": {
         "app_class": {
@@ -3167,6 +3214,7 @@
       "type": "object"
     },
     "HarnessOverride": {
+      "additionalProperties": false,
       "description": "Per-language harness config overrides.",
       "properties": {
         "app_class": {
@@ -3232,6 +3280,7 @@
       "type": "object"
     },
     "HomebrewCliTest": {
+      "additionalProperties": false,
       "description": "A single CLI test entry for the Homebrew test_app generator.\n\nEach entry describes one test step in `run_tests.sh`.  The `command`\nfield is a verbatim shell fragment; the following variables are already\nexported by `run_tests.sh` when the fragment is evaluated:\n\n- `$CLI_FORMULA` — the CLI binary name (from `cli_formula`)\n- `$VERSION` — the package version\n- `$TAP` — the Homebrew tap (e.g. `\"myorg/tap\"`)\n- `$SCRIPT_DIR` — absolute directory of `run_tests.sh`\n\nIf `expect_contains` is set the test passes only when the command's\ncombined stdout+stderr contains the given substring; otherwise a zero\nexit code is sufficient.\n\nExample `alef.toml`:\n\n```toml\n[[crates.e2e.registry.packages.homebrew.cli_tests]]\nname = \"version\"\ncommand = \"$CLI_FORMULA --version\"\nexpect_contains = \"$VERSION\"\n\n[[crates.e2e.registry.packages.homebrew.cli_tests]]\nname = \"convert-h1\"\ncommand = \"echo '<h1>Hi</h1>' | $CLI_FORMULA\"\nexpect_contains = \"# Hi\"\n```",
       "properties": {
         "command": {
@@ -3290,6 +3339,7 @@
       "type": "object"
     },
     "HostCapsuleTypeConfig": {
+      "additionalProperties": false,
       "description": "Host-native capsule config for a single type in one C-ABI family backend.\n\nTOML form (Go example):\n```toml\n[crates.go.capsule_types.Language]\nhost_type = \"*my_pkg.Language\"\npackage = \"github.com/example/go-my-lib\"\npackage_version = \"v1.0.0\"\nconstruct_expr = \"my_pkg.NewLanguage(unsafe.Pointer({ptr}))\"\npointer_ownership = \"borrowed_static\"\nhost_destructor = \"none\"\nabi_compatible = true\n```",
       "properties": {
         "abi_compatible": {
@@ -3353,6 +3403,7 @@
       ]
     },
     "IncludeConfig": {
+      "additionalProperties": false,
       "properties": {
         "functions": {
           "default": [],
@@ -3391,6 +3442,7 @@
       ]
     },
     "JavaConfig": {
+      "additionalProperties": false,
       "properties": {
         "artifact_id": {
           "default": null,
@@ -3500,6 +3552,7 @@
       "type": "object"
     },
     "JavaDtoConfig": {
+      "additionalProperties": false,
       "description": "Java-specific DTO configuration.",
       "properties": {
         "builder": {
@@ -3517,6 +3570,7 @@
       "type": "string"
     },
     "JniConfig": {
+      "additionalProperties": false,
       "description": "Configuration for the JNI Rust shim crate emitter (`alef-backend-jni`).\n\nMost identifiers are derived from the paired `[crates.kotlin_android]`\nsection (package, features, etc.).  Set `crate_dir` when the JNI crate\ndirectory should differ from the default `<config.name>-jni/` — for\nexample when `config.name` carries a language-specific suffix (e.g.\n`\"sample-markdown-rs\"`) but you want the JNI crate to live at\n`crates/sample-markdown-jni/` to match every other binding crate.",
       "properties": {
         "crate_dir": {
@@ -3526,6 +3580,14 @@
             "string",
             "null"
           ]
+        },
+        "exclude_functions": {
+          "default": [],
+          "description": "Functions and instance methods to exclude from JNI shim generation.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "target_dep_overrides": {
           "default": [],
@@ -3539,6 +3601,7 @@
       "type": "object"
     },
     "KotlinAndroidConfig": {
+      "additionalProperties": false,
       "description": "Configuration for the dedicated Kotlin/Android backend (`alef-backend-kotlin-android`).\n\nDistinct from [`crate::core::config::languages::KotlinConfig`] (Kotlin/JVM). When a crate targets the\n`kotlin_android` language slug, this struct controls the emitted\n`build.gradle.kts`, `AndroidManifest.xml`, namespace, Maven publish\ncoordinates, ABI list, and the bundled Java facade emitted into\n`src/main/java/` so the AAR is self-contained.",
       "properties": {
         "abis": {
@@ -3683,6 +3746,7 @@
       "type": "object"
     },
     "KotlinConfig": {
+      "additionalProperties": false,
       "properties": {
         "exclude_functions": {
           "default": [],
@@ -3824,6 +3888,7 @@
       ]
     },
     "LintConfig": {
+      "additionalProperties": false,
       "properties": {
         "before": {
           "anyOf": [
@@ -3877,6 +3942,7 @@
       "type": "object"
     },
     "ManifestExtras": {
+      "additionalProperties": false,
       "description": "Extra dependencies declared for a language-native manifest. `dependencies` and\n`dev_dependencies` mirror the runtime / dev-test distinction present in\nnpm, Composer, Bundler, pubspec, Mix, etc. Languages without that distinction\n(Go, Zig, Kotlin `testImplementation`) collapse both buckets into one at the\nemitter level.",
       "properties": {
         "dependencies": {
@@ -3899,6 +3965,7 @@
       "type": "object"
     },
     "NapiTypeTagConfig": {
+      "additionalProperties": false,
       "description": "An N-API `napi_type_tag` value, expressed as two 64-bit hex strings.",
       "properties": {
         "lower": {
@@ -3917,6 +3984,7 @@
       "type": "object"
     },
     "NodeCapsuleTypeConfig": {
+      "additionalProperties": false,
       "description": "Configuration for a single capsule type entry in `NodeConfig::capsule_types`.\n\nWhen set, the named Rust type is NOT emitted as a `#[napi]` opaque wrapper.\nInstead, functions returning this type produce a `JsObject` carrying the raw\npointer in a configurable `Napi::External<T>` property — the layout consumed\nby the `sample_language` npm package's `Parser.setLanguage()`.\n\nTOML form:\n```toml\n[crates.node.capsule_types.Language]\ntype = \"Language\"\nfrom_module = \"sample_language\"\nproperty_name = \"language\"\ntype_tag = { lower = \"0x8AF2E5212AD58ABF\", upper = \"0xD5006CAD83ABBA16\" }\n```",
       "properties": {
         "construct": {
@@ -3957,6 +4025,7 @@
       "type": "object"
     },
     "NodeConfig": {
+      "additionalProperties": false,
       "properties": {
         "capsule_types": {
           "additionalProperties": {
@@ -4099,6 +4168,7 @@
       "type": "string"
     },
     "OutputConfig": {
+      "additionalProperties": false,
       "properties": {
         "csharp": {
           "type": [
@@ -4206,6 +4276,7 @@
       "type": "object"
     },
     "OutputTemplate": {
+      "additionalProperties": false,
       "description": "Per-language output path templates for multi-crate workspaces.\n\nEach entry is a path string that may contain `{crate}` and `{lang}` placeholders.\nResolved by [`OutputTemplate::resolve`] to produce a concrete path for one\n`(crate, language)` pair.\n\nDefaults (when a language entry is absent and no per-crate explicit override is set):\n- Single-crate workspaces resolve to `packages/{lang}/`.\n- Multi-crate workspaces resolve to `packages/{lang}/{crate}/`.\n\nPer-crate explicit paths in [`OutputConfig`] always win over a workspace template.",
       "properties": {
         "csharp": {
@@ -4396,6 +4467,7 @@
       "type": "object"
     },
     "PackageRef": {
+      "additionalProperties": false,
       "description": "Per-language package reference configuration.",
       "properties": {
         "cli_formula": {
@@ -4482,6 +4554,7 @@
       "type": "object"
     },
     "PhpConfig": {
+      "additionalProperties": false,
       "properties": {
         "cargo_crate_name": {
           "default": null,
@@ -4730,6 +4803,7 @@
       "type": "object"
     },
     "PublishConfig": {
+      "additionalProperties": false,
       "description": "Configuration for the `alef publish` command group.",
       "properties": {
         "core_crate": {
@@ -4751,6 +4825,7 @@
       "type": "object"
     },
     "PublishLanguageConfig": {
+      "additionalProperties": false,
       "description": "Per-language publish configuration.",
       "properties": {
         "after": {
@@ -4898,6 +4973,7 @@
       "type": "object"
     },
     "PythonConfig": {
+      "additionalProperties": false,
       "properties": {
         "async_runtime": {
           "type": [
@@ -5070,6 +5146,7 @@
       "type": "string"
     },
     "RConfig": {
+      "additionalProperties": false,
       "properties": {
         "default_features": {
           "default": null,
@@ -5760,6 +5837,7 @@
       "type": "object"
     },
     "ReadmeConfig": {
+      "additionalProperties": false,
       "properties": {
         "banner_url": {
           "description": "Banner image URL used in README templates.",
@@ -5816,6 +5894,7 @@
       "type": "object"
     },
     "RegistrationSpec": {
+      "additionalProperties": false,
       "description": "Per-registration configuration entry inside a `[[crates.services]]` table.\n\nExample in `alef.toml`:\n\n```toml\n[[crates.services.registrations]]\nmethod = \"add_route\"\ncallback_param = \"handler\"\ncallback_bound = \"IntoHandler\"\ncallback_contract = \"Handler\"\n\n[[crates.services.registrations.variants]]\nname = \"get\"\nfixed = { method = \"GET\" }\n```",
       "properties": {
         "callback_bound": {
@@ -5891,6 +5970,7 @@
       "type": "object"
     },
     "RegistrationVariantSpec": {
+      "additionalProperties": false,
       "description": "A named shortcut over a base [`RegistrationSpec`] with one or more pinned\nparameter values.\n\nThe variant's emitted method takes the **non-pinned** subset of the base's\nmetadata params and forwards them, along with the handler, to the base\nregistration with the pinned values substituted in. For library-supplied\nenum overrides, the pinned value is the variant *name* (e.g. `\"GET\"`); the\nextractor resolves it against the param type's [`crate::core::ir::EnumDef`] variants. For\nnon-enum types, the pinned value is a verbatim expression in the host\nlanguage's Rust bridge.\n\n```toml\n[[crates.services.registrations.variants]]\nname = \"get\"\nfixed = { method = \"GET\" }\nstyle = \"verb_decorator\"\n```",
       "properties": {
         "doc": {
@@ -5936,6 +6016,7 @@
       "type": "object"
     },
     "RegistryConfig": {
+      "additionalProperties": false,
       "description": "Configuration for registry-mode e2e generation (`alef e2e generate --registry`).",
       "properties": {
         "categories": {
@@ -5979,6 +6060,7 @@
       "type": "object"
     },
     "RubyConfig": {
+      "additionalProperties": false,
       "properties": {
         "exclude_functions": {
           "default": [],
@@ -6097,6 +6179,7 @@
       "type": "string"
     },
     "ScaffoldCargo": {
+      "additionalProperties": false,
       "description": "Opt-in management of workspace-level `.cargo/config.toml`.\n\nAll fields default to canonical values that produce the same `.cargo/config.toml`\nacross polyglot repos. Override individual targets via `targets`, or inject\nrepo-specific `[env]` entries via `env`.",
       "properties": {
         "build_jobs": {
@@ -6161,6 +6244,7 @@
       "description": "Value for a `[scaffold.cargo.env]` entry. Either a bare string (renders as\n`KEY = \"value\"`) or a structured form with `value` + optional `relative`."
     },
     "ScaffoldCargoTargets": {
+      "additionalProperties": false,
       "description": "Per-target opt-out flags. All default to `true`.",
       "properties": {
         "aarch64_unknown_linux_gnu": {
@@ -6191,6 +6275,7 @@
       "type": "object"
     },
     "ScaffoldConfig": {
+      "additionalProperties": false,
       "properties": {
         "authors": {
           "default": [],
@@ -6257,6 +6342,7 @@
       "type": "object"
     },
     "SelectWhen": {
+      "additionalProperties": false,
       "description": "Condition for auto-selecting a named call config when the fixture matches.\n\nWhen a fixture does not specify `\"call\"`, the codegen normally uses the default\n`[e2e.call]`.  A `SelectWhen` condition on a named call allows automatic routing\nbased on the fixture's id, category, tags, or input shape.  All set fields must\nmatch (logical AND); a condition with no fields set never matches.\n\n```toml\n[e2e.calls.batch_scrape]\nselect_when = { input_has = \"batch_urls\" }\n\n[e2e.calls.crawl]\nselect_when = { category = \"crawl\" }\n\n[e2e.calls.batch_crawl_stream]\nselect_when = { category = \"stream\", id_prefix = \"batch_crawl_stream\" }\n```",
       "properties": {
         "category": {
@@ -6303,6 +6389,7 @@
       "type": "object"
     },
     "ServiceConfig": {
+      "additionalProperties": false,
       "description": "Full configuration for one service definition in `[[crates.services]]`.\n\n```toml\n[[crates.services]]\nowner_type = \"App\"\nconstructor = \"new\"\nconfigurators = [\"set_address\", \"set_tls\"]\nskip_languages = [\"wasm\"]\n\n[[crates.services.registrations]]\nmethod = \"add_route\"\ncallback_param = \"handler\"\ncallback_bound = \"IntoHandler\"\ncallback_contract = \"Handler\"\n\n[[crates.services.entrypoints]]\nmethod = \"run\"\nkind = \"run\"\n```",
       "properties": {
         "configurators": {
@@ -6364,6 +6451,7 @@
       "type": "object"
     },
     "SetupConfig": {
+      "additionalProperties": false,
       "properties": {
         "before": {
           "anyOf": [
@@ -6433,6 +6521,7 @@
       "type": "object"
     },
     "SnippetConfig": {
+      "additionalProperties": false,
       "properties": {
         "capabilities": {
           "$ref": "#/$defs/SnippetCapabilities",
@@ -6457,6 +6546,7 @@
       "type": "object"
     },
     "SourceCrate": {
+      "additionalProperties": false,
       "description": "A source crate group for multi-crate extraction.",
       "properties": {
         "from_registry": {
@@ -6504,6 +6594,7 @@
       "description": "E2E streaming call recipe."
     },
     "StreamingRecipe": {
+      "additionalProperties": false,
       "description": "Structured streaming recipe options.",
       "properties": {
         "enabled": {
@@ -6540,6 +6631,7 @@
       "description": "A value that can be either a single string or a list of strings.\n\nDeserializes from both `\"cmd\"` and `[\"cmd1\", \"cmd2\"]` in TOML/JSON."
     },
     "StubsConfig": {
+      "additionalProperties": false,
       "properties": {
         "emit_docstrings": {
           "default": false,
@@ -6556,6 +6648,7 @@
       "type": "object"
     },
     "SwiftConfig": {
+      "additionalProperties": false,
       "properties": {
         "capsule_types": {
           "additionalProperties": {
@@ -6738,6 +6831,7 @@
       "type": "object"
     },
     "SwiftTargetDepOverride": {
+      "additionalProperties": false,
       "properties": {
         "cfg": {
           "description": "Cargo `cfg(...)` predicate (without the `cfg(...)` wrapper). Example:\n`target_os = \"ios\"`.",
@@ -6763,6 +6857,7 @@
       "type": "object"
     },
     "SyncConfig": {
+      "additionalProperties": false,
       "description": "Configuration for the `sync-versions` command. ~keep",
       "properties": {
         "extra_paths": {
@@ -6785,6 +6880,7 @@
       "type": "object"
     },
     "TestAppRunConfig": {
+      "additionalProperties": false,
       "properties": {
         "before": {
           "anyOf": [
@@ -6819,6 +6915,7 @@
       "type": "object"
     },
     "TestConfig": {
+      "additionalProperties": false,
       "properties": {
         "before": {
           "anyOf": [
@@ -6875,6 +6972,7 @@
       "type": "object"
     },
     "TextReplacement": {
+      "additionalProperties": false,
       "description": "A single text replacement rule for version sync. ~keep",
       "properties": {
         "path": {
@@ -6898,6 +6996,7 @@
       "type": "object"
     },
     "ToolsConfig": {
+      "additionalProperties": false,
       "description": "Top-level `[tools]` config. Selects which package manager / tool variants\nthe default per-language pipeline commands target.\n\nAll fields are optional; getters return the documented default when unset.",
       "properties": {
         "node_package_manager": {
@@ -6931,6 +7030,7 @@
       "type": "object"
     },
     "TraitBridgeConfig": {
+      "additionalProperties": false,
       "description": "Configuration for generating trait bridge code that allows foreign language\nobjects to implement Rust traits via FFI.",
       "properties": {
         "bind_via": {
@@ -7124,6 +7224,7 @@
       "type": "object"
     },
     "UpdateConfig": {
+      "additionalProperties": false,
       "properties": {
         "before": {
           "anyOf": [
@@ -7194,6 +7295,7 @@
       ]
     },
     "WasmConfig": {
+      "additionalProperties": false,
       "properties": {
         "core_crate_override": {
           "default": null,
@@ -7864,6 +7966,7 @@
       "type": "object"
     },
     "ZigConfig": {
+      "additionalProperties": false,
       "properties": {
         "capsule_types": {
           "additionalProperties": {
