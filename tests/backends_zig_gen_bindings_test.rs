@@ -1954,7 +1954,8 @@ type = "BatchCrawlStreamRequest"
         "crawl_stream() must construct a CrawlStream, not a BatchCrawlStream: {content}"
     );
     assert!(
-        content.contains("pub fn batch_crawl_stream(self: *CrawlEngineHandle") && content.contains("!BatchCrawlStream {"),
+        content.contains("pub fn batch_crawl_stream(self: *CrawlEngineHandle")
+            && content.contains("!BatchCrawlStream {"),
         "batch_crawl_stream() must return !BatchCrawlStream: {content}"
     );
     assert!(

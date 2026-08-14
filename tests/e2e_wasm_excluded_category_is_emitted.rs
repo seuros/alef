@@ -106,11 +106,7 @@ fn wasm_generate_emits_placeholder_for_a_fully_excluded_category() {
         .generate(&groups, &e2e, &resolved, &[], &[])
         .expect("wasm generation succeeds");
 
-    let combined = files
-        .iter()
-        .map(|f| f.content.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
+    let combined = files.iter().map(|f| f.content.as_str()).collect::<Vec<_>>().join("\n");
 
     // The category must not vanish. This is the assertion the direct-renderer unit test
     // cannot make, because it never exercises `generate`.

@@ -145,11 +145,7 @@ pub(crate) fn scaffold_ffi(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
     // never true, which silently drops the export from the cdylib while cbindgen still declares
     // it in the header -- a link failure for every C-ABI consumer. Declare every feature the
     // emitted surface actually gates on. ~keep
-    let extra_declared: &[String] = config
-        .ffi
-        .as_ref()
-        .map(|c| c.extra_features.as_slice())
-        .unwrap_or(&[]);
+    let extra_declared: &[String] = config.ffi.as_ref().map(|c| c.extra_features.as_slice()).unwrap_or(&[]);
     let emitted_cfg_features: Vec<String> = crate::codegen::cfg::collect_cfg_features(api)
         .into_iter()
         .filter(|name| {

@@ -524,15 +524,8 @@ mod tests {
             ..E2eConfig::default()
         };
 
-        generate_e2e(
-            &ResolvedCrateConfig::default(),
-            &e2e_config,
-            Some(&[]),
-            &[],
-            &[],
-            &[],
-        )
-        .expect("generate empty E2E suite");
+        generate_e2e(&ResolvedCrateConfig::default(), &e2e_config, Some(&[]), &[], &[], &[])
+            .expect("generate empty E2E suite");
 
         assert!(!directory.path().join("schema.json").exists());
     }

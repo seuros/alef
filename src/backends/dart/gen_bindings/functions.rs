@@ -44,8 +44,7 @@ fn is_optional_config_param(p: &crate::core::ir::ParamDef, type_defs: &[TypeDef]
 ///
 /// Every wrapper is `async`, so `await` is legal in the emitted default expression.
 fn config_default_expression(name: &str, type_defs: &[TypeDef], enums: &[EnumDef]) -> Option<String> {
-    default_expression_for_named_type(name, type_defs, enums)
-        .or_else(|| from_json_default_expression(name, type_defs))
+    default_expression_for_named_type(name, type_defs, enums).or_else(|| from_json_default_expression(name, type_defs))
 }
 
 /// `await create<Type>FromJson(json: '{}')`, or `None` when no such helper is generated.

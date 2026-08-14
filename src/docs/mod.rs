@@ -528,7 +528,10 @@ fn validate_snippets(
 /// level is not recorded in the emitted snippet frontmatter, so there is no other way to learn
 /// which snippets regressed or from what level. Groups by language and bounds the per-language
 /// sample, so a large run stays readable while still naming concrete ids to start from. ~keep
-fn attribute_results(summary: &crate::snippets::types::RunSummary, status: crate::snippets::types::SnippetStatus) -> String {
+fn attribute_results(
+    summary: &crate::snippets::types::RunSummary,
+    status: crate::snippets::types::SnippetStatus,
+) -> String {
     const SAMPLE_PER_LANGUAGE: usize = 3;
 
     let mut by_language: std::collections::BTreeMap<String, (usize, Vec<String>)> = std::collections::BTreeMap::new();

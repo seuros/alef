@@ -62,7 +62,11 @@ fn explicit_default_impl_preserves_serde_default_fn_instead_of_type_zero_value()
     // `GridCell.default().row_span == 0` while `default_span()` returns 1, and the kwargs
     // constructor in the same generated file returned the correct 1: two different defaults for
     // one field. ~keep
-    let mut span = make_field("row_span", TypeRef::Primitive(crate::core::ir::PrimitiveType::U32), false);
+    let mut span = make_field(
+        "row_span",
+        TypeRef::Primitive(crate::core::ir::PrimitiveType::U32),
+        false,
+    );
     span.typed_default = Some(crate::core::ir::DefaultValue::FunctionCall("default_span".to_string()));
 
     let mut typ = make_typedef(

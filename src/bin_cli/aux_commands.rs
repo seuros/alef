@@ -170,7 +170,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             .iter()
                             .any(|file| report.changed_paths.contains(&base_dir.join(&file.path)))
                         {
-                            crate::e2e::format::warn_deferred(&crate::e2e::format::run_formatters(&managed_files, e2e_ref)?);
+                            crate::e2e::format::warn_deferred(&crate::e2e::format::run_formatters(
+                                &managed_files,
+                                e2e_ref,
+                            )?);
                         }
 
                         let output_paths: Vec<PathBuf> = managed_files.iter().map(|f| base_dir.join(&f.path)).collect();
@@ -427,7 +430,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             .iter()
                             .any(|file| report.changed_paths.contains(&base_dir.join(&file.path)))
                         {
-                            crate::e2e::format::warn_deferred(&crate::e2e::format::run_formatters(&managed_files, e2e_ref)?);
+                            crate::e2e::format::warn_deferred(&crate::e2e::format::run_formatters(
+                                &managed_files,
+                                e2e_ref,
+                            )?);
                         }
 
                         let output_paths: Vec<PathBuf> = managed_files.iter().map(|f| base_dir.join(&f.path)).collect();

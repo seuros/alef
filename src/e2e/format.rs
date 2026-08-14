@@ -420,7 +420,10 @@ mod tests {
             run_formatters(&one_file_in(&out, "python", "main.py"), &config).expect("successful override must be Ok");
 
         assert!(sentinel.exists(), "registry mode must still run the formatter");
-        assert!(deferred.is_empty(), "a successful step must not be deferred: {deferred:?}");
+        assert!(
+            deferred.is_empty(),
+            "a successful step must not be deferred: {deferred:?}"
+        );
     }
 
     /// `go mod tidy` is dependency resolution, not formatting, and in registry mode
@@ -673,7 +676,10 @@ mod tests {
             .join("");
 
         assert_eq!(first, expected, "languages must be formatted in sorted order");
-        assert_eq!(second, first, "two runs over an unchanged tree must format in the same order");
+        assert_eq!(
+            second, first,
+            "two runs over an unchanged tree must format in the same order"
+        );
     }
 
     /// One language's formatter failing must not decide whether the rest run. Aborting on the

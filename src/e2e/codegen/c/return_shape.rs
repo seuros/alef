@@ -8,12 +8,7 @@ pub(super) fn resolve_raw_c_result_type(call: &CallConfig, functions: &[Function
 
 fn c_string_return(return_type: &TypeRef) -> bool {
     match return_type {
-        TypeRef::String
-        | TypeRef::Char
-        | TypeRef::Path
-        | TypeRef::Json
-        | TypeRef::Vec(_)
-        | TypeRef::Map(_, _) => true,
+        TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json | TypeRef::Vec(_) | TypeRef::Map(_, _) => true,
         TypeRef::Optional(inner) => c_string_return(inner),
         _ => false,
     }

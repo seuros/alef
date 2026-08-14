@@ -174,12 +174,7 @@ mod tests {
 
     #[test]
     fn toolchain_clean_has_precondition() {
-        for lang in [
-            Language::Rust,
-            Language::Go,
-            Language::Java,
-            Language::Elixir,
-        ] {
+        for lang in [Language::Rust, Language::Go, Language::Java, Language::Elixir] {
             let c = cfg(lang, "packages/test");
             let pre = c
                 .precondition

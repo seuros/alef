@@ -759,15 +759,16 @@ fn default_constructible_excludes_types_with_a_bare_constructor_parameter() {
     let counters = crate::core::ir::TypeDef {
         name: "Counters".to_string(),
         rust_path: "crate::Counters".to_string(),
-        fields: vec![make_field("count", TypeRef::Primitive(crate::core::ir::PrimitiveType::I32))],
+        fields: vec![make_field(
+            "count",
+            TypeRef::Primitive(crate::core::ir::PrimitiveType::I32),
+        )],
         has_default: true,
         ..Default::default()
     };
 
-    let constructible = default_constructible_type_names(
-        std::slice::from_ref(&counters),
-        &std::collections::HashMap::new(),
-    );
+    let constructible =
+        default_constructible_type_names(std::slice::from_ref(&counters), &std::collections::HashMap::new());
 
     assert!(
         !constructible.contains("Counters"),
@@ -806,7 +807,10 @@ fn default_constructible_propagates_removal_to_dependent_types() {
     let inner = crate::core::ir::TypeDef {
         name: "Inner".to_string(),
         rust_path: "crate::Inner".to_string(),
-        fields: vec![make_field("count", TypeRef::Primitive(crate::core::ir::PrimitiveType::I32))],
+        fields: vec![make_field(
+            "count",
+            TypeRef::Primitive(crate::core::ir::PrimitiveType::I32),
+        )],
         has_default: true,
         ..Default::default()
     };

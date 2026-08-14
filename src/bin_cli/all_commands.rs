@@ -420,7 +420,8 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             .filter(|file| file.carries_alef_marker())
                             .cloned()
                             .collect();
-                        deferred_formatting.extend(crate::e2e::format::run_formatters(&managed_files, registry_e2e_ref)?);
+                        deferred_formatting
+                            .extend(crate::e2e::format::run_formatters(&managed_files, registry_e2e_ref)?);
 
                         let output_paths: Vec<PathBuf> = managed_files.iter().map(|f| base_dir.join(&f.path)).collect();
                         let path_set: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();

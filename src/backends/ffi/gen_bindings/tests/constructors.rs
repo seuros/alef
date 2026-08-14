@@ -441,7 +441,10 @@ fn test_named_static_constructor_is_fallible() {
         lib.content
     );
     assert!(
-        lib.content.contains("Err(e) =>") && lib.content.contains("set_last_error(1, &e.to_string());\n            0"),
+        lib.content.contains("Err(e) =>")
+            && lib
+                .content
+                .contains("set_last_error(1, &e.to_string());\n            0"),
         "fallible constructor must return a zero handle on error; got:\n{}",
         lib.content
     );

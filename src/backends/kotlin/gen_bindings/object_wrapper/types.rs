@@ -163,20 +163,17 @@ fn every_field_has_a_kotlin_default(
     enum_defaults: &std::collections::HashMap<String, String>,
     default_constructible_types: &std::collections::HashSet<String>,
 ) -> bool {
-    ty.fields
-        .iter()
-        .filter(|field| !field.binding_excluded)
-        .all(|field| {
-            field.serde_flatten
-                || !kotlin_field_default(
-                    &field.ty,
-                    field.optional,
-                    field.typed_default.as_ref(),
-                    enum_defaults,
-                    default_constructible_types,
-                )
-                .is_empty()
-        })
+    ty.fields.iter().filter(|field| !field.binding_excluded).all(|field| {
+        field.serde_flatten
+            || !kotlin_field_default(
+                &field.ty,
+                field.optional,
+                field.typed_default.as_ref(),
+                enum_defaults,
+                default_constructible_types,
+            )
+            .is_empty()
+    })
 }
 
 /// Render a `DefaultValue` as a Kotlin expression. Returns `None` when no

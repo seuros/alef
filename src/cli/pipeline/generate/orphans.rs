@@ -519,9 +519,15 @@ mod sweep_roots_tests {
         let removed = sweep_manifest_orphans(&previous, &std::collections::HashSet::new(), &[package_dir])
             .expect("manifest sweep");
 
-        assert_eq!(removed, 2, "both the manifest and its lockfile sibling must be reclaimed");
+        assert_eq!(
+            removed, 2,
+            "both the manifest and its lockfile sibling must be reclaimed"
+        );
         assert!(!composer_json.exists());
-        assert!(!composer_lock.exists(), "orphaned lockfile must be reclaimed alongside its manifest");
+        assert!(
+            !composer_lock.exists(),
+            "orphaned lockfile must be reclaimed alongside its manifest"
+        );
     }
 
     /// THE risk-bounding test: a hand-authored `composer.lock` at a path alef
@@ -545,8 +551,14 @@ mod sweep_roots_tests {
         let removed = sweep_manifest_orphans(&previous, &std::collections::HashSet::new(), &[package_dir])
             .expect("manifest sweep");
 
-        assert_eq!(removed, 0, "a lockfile with no reclaimed manifest sibling must never be touched");
-        assert!(hand_authored_lock.exists(), "hand-authored lockfile alef never emitted must survive");
+        assert_eq!(
+            removed, 0,
+            "a lockfile with no reclaimed manifest sibling must never be touched"
+        );
+        assert!(
+            hand_authored_lock.exists(),
+            "hand-authored lockfile alef never emitted must survive"
+        );
     }
 
     /// Second half of the risk-bounding guarantee: even when a real
@@ -570,7 +582,10 @@ mod sweep_roots_tests {
 
         assert_eq!(removed, 0);
         assert!(composer_json.exists());
-        assert!(composer_lock.exists(), "lockfile must survive when its manifest is still written this run");
+        assert!(
+            composer_lock.exists(),
+            "lockfile must survive when its manifest is still written this run"
+        );
     }
 
     /// Documents the chosen behavior for the genuinely contentious case: a user
@@ -597,7 +612,10 @@ mod sweep_roots_tests {
         let removed = sweep_manifest_orphans(&previous, &std::collections::HashSet::new(), &[package_dir])
             .expect("manifest sweep");
 
-        assert_eq!(removed, 1, "hand-edited content at a disowned path is reclaimed, not preserved");
+        assert_eq!(
+            removed, 1,
+            "hand-edited content at a disowned path is reclaimed, not preserved"
+        );
         assert!(!composer_json.exists());
     }
 
@@ -618,7 +636,10 @@ mod sweep_roots_tests {
         let removed = sweep_manifest_orphans(&previous, &std::collections::HashSet::new(), &[package_dir])
             .expect("manifest sweep");
 
-        assert_eq!(removed, 0, "a filename outside the allowlist must still require the marker check");
+        assert_eq!(
+            removed, 0,
+            "a filename outside the allowlist must still require the marker check"
+        );
         assert!(pubspec.exists());
     }
 

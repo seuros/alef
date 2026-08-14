@@ -456,8 +456,7 @@ file_safety = { exclude = ["target/**"] }
             std::iter::once(file_path.clone()).collect();
         let roots = vec![dir.path().to_path_buf()];
 
-        let updated =
-            finalize_hashes_sweeping(&explicit_paths, &roots, "sources", b"[workspace]\n").expect("sweep ok");
+        let updated = finalize_hashes_sweeping(&explicit_paths, &roots, "sources", b"[workspace]\n").expect("sweep ok");
         assert_eq!(updated, 1, "one physical file must produce exactly one update");
     }
 
@@ -930,7 +929,10 @@ mod scaffold_ownership_guard_tests {
 
         let prior_run_content = marked_content("package e2e_test\n\nfunc TestMain(m *testing.M) { m.Run() }\n");
         std::fs::write(&target, &prior_run_content).expect("seed prior alef output");
-        assert!(content_has_alef_marker(&prior_run_content), "sanity: seed must carry the marker");
+        assert!(
+            content_has_alef_marker(&prior_run_content),
+            "sanity: seed must carry the marker"
+        );
 
         let generated = GeneratedFile {
             path: target_relative,

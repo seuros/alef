@@ -804,10 +804,8 @@ fn serde_default_function_is_never_emitted_as_a_callable_in_generated_rust() {
     // emit anything: `default_span()` does not compile from a generated crate, and substituting
     // `Default::default()` compiles while silently shipping `0` where the source crate says `1`.
     // A wrong-but-compiling default is far harder to find than a generation error. ~keep
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        default_value_for_field(&field, "rust")
-    }))
-    .expect_err("generated Rust must not silently substitute a value for an unresolvable serde default fn");
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| default_value_for_field(&field, "rust")))
+        .expect_err("generated Rust must not silently substitute a value for an unresolvable serde default fn");
 
     let message = failure
         .downcast_ref::<String>()

@@ -1112,7 +1112,8 @@ fn repeated_indexed_assertions_share_one_non_empty_precondition() {
     ]);
 
     assert_eq!(
-        out.matches("t.Fatalf(\"expected non-empty %s\", `result.Results`)").count(),
+        out.matches("t.Fatalf(\"expected non-empty %s\", `result.Results`)")
+            .count(),
         1,
         "the precondition should be emitted once per collection; got:\n{out}"
     );

@@ -135,7 +135,11 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
         };
 
         // Per-field `#[serde(rename = "...")]` wins over `rename_all`.
-        let json_name = wire_field_name(&field.name, field.serde_rename.as_deref(), typ.serde_rename_all.as_deref());
+        let json_name = wire_field_name(
+            &field.name,
+            field.serde_rename.as_deref(),
+            typ.serde_rename_all.as_deref(),
+        );
         let is_collection = matches!(&field.ty, TypeRef::Vec(_) | TypeRef::Map(_, _));
         let json_tag = if field.optional || is_collection || use_default_pointer || is_named_enum || is_unresolved_named
         {
@@ -189,8 +193,11 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
             }
             let go_field = to_go_name(&field.name);
             // Per-field `#[serde(rename = "...")]` wins over `rename_all`.
-            let json_name =
-                wire_field_name(&field.name, field.serde_rename.as_deref(), typ.serde_rename_all.as_deref());
+            let json_name = wire_field_name(
+                &field.name,
+                field.serde_rename.as_deref(),
+                typ.serde_rename_all.as_deref(),
+            );
             let use_default_pointer = !field.optional && typ.has_default && needs_omitempty_pointer(field);
             let is_named_enum = !field.optional
                 && !use_default_pointer
@@ -315,8 +322,11 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
                 continue;
             }
             let go_field_name = to_go_name(&field.name);
-            let json_name =
-                wire_field_name(&field.name, field.serde_rename.as_deref(), typ.serde_rename_all.as_deref());
+            let json_name = wire_field_name(
+                &field.name,
+                field.serde_rename.as_deref(),
+                typ.serde_rename_all.as_deref(),
+            );
             let data_enum_def = data_enum_fields.iter().find(|def| def.go_name == go_field_name);
             if let Some(def) = data_enum_def {
                 let raw_type = if def.is_slice {

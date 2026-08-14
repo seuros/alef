@@ -177,13 +177,8 @@ fn module_cfg_applies_when_the_gated_module_is_not_the_first_source() {
     .expect("write lib.rs");
 
     // `lib.rs` deliberately second: this is the ordering that regressed.
-    let surface = super::extract(
-        &[other_rs.as_path(), lib_rs.as_path()],
-        "my_crate",
-        "0.0.0",
-        None,
-    )
-    .expect("extract failed");
+    let surface =
+        super::extract(&[other_rs.as_path(), lib_rs.as_path()], "my_crate", "0.0.0", None).expect("extract failed");
 
     let record_cost = surface
         .functions

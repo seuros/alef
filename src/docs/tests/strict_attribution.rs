@@ -46,10 +46,19 @@ fn attribution_names_language_count_and_level_transition() {
 
     let detail = attribute_results(&summary, SnippetStatus::Downgraded);
 
-    assert!(detail.contains("fixture_c_smoke (typecheck -> syntax)"), "got: {detail}");
-    assert!(detail.contains("fixture_py_smoke (typecheck -> syntax)"), "got: {detail}");
+    assert!(
+        detail.contains("fixture_c_smoke (typecheck -> syntax)"),
+        "got: {detail}"
+    );
+    assert!(
+        detail.contains("fixture_py_smoke (typecheck -> syntax)"),
+        "got: {detail}"
+    );
     assert!(detail.contains("c: 1"), "per-language count missing, got: {detail}");
-    assert!(detail.contains("python: 1"), "per-language count missing, got: {detail}");
+    assert!(
+        detail.contains("python: 1"),
+        "per-language count missing, got: {detail}"
+    );
 }
 
 /// A run with hundreds of downgrades must stay readable: sample a few ids per language and say
@@ -64,7 +73,10 @@ fn attribution_bounds_the_sample_and_reports_the_remainder() {
     let detail = attribute_results(&summary, SnippetStatus::Downgraded);
 
     assert!(detail.contains("c: 10"), "total must be the real count, got: {detail}");
-    assert!(detail.contains("+7 more"), "elided remainder must be reported, got: {detail}");
+    assert!(
+        detail.contains("+7 more"),
+        "elided remainder must be reported, got: {detail}"
+    );
     assert_eq!(
         detail.matches("fixture_c_").count(),
         3,

@@ -474,14 +474,7 @@ pub(super) fn render_test_file(
     // at the module level before void main().
     let mut test_stub_classes = String::new();
     for fixture in fixtures {
-        super::stubs::collect_test_stub_classes(
-            &mut test_stub_classes,
-            fixture,
-            e2e_config,
-            config,
-            type_defs,
-            enums,
-        );
+        super::stubs::collect_test_stub_classes(&mut test_stub_classes, fixture, e2e_config, config, type_defs, enums);
     }
     if !test_stub_classes.is_empty() {
         out.push_str(&test_stub_classes);

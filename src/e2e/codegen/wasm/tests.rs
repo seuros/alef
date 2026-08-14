@@ -180,11 +180,17 @@ fn render_wasm_excluded_category_emits_named_skip_cases_with_reasons() {
             "visitor_skip_heading".to_string(),
             "WASM visitor bridge not yet exposed via @xberg-io/html-to-markdown-wasm public API".to_string(),
         ),
-        ("visitor_custom_output".to_string(), "excluded for wasm e2e generation".to_string()),
+        (
+            "visitor_custom_output".to_string(),
+            "excluded for wasm e2e generation".to_string(),
+        ),
     ];
     let content = render_wasm_excluded_category("visitor", &reasons);
 
-    assert!(content.contains("describe(\"visitor\""), "must name the category:\n{content}");
+    assert!(
+        content.contains("describe(\"visitor\""),
+        "must name the category:\n{content}"
+    );
     assert!(
         content.contains("it.skip(\"visitor_skip_heading\""),
         "must name each excluded fixture as a skipped case:\n{content}"
