@@ -120,10 +120,15 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
         .assertions
         .iter()
         .any(|assertion| assertion.assertion_type == "error");
+    let error_type_name = if lang == "node" {
+        "Error".to_string()
+    } else {
+        crate::e2e::codegen::snippet_error_type_name(config)
+    };
     let mut imports = std::collections::BTreeSet::new();
     imports.insert(effective_factory.unwrap_or(&function_name).to_string());
-    if expects_error {
-        imports.insert(crate::e2e::codegen::snippet_error_type_name(config));
+    if expects_error && lang != "node" {
+        imports.insert(error_type_name.clone());
     }
     imports.extend(visitor_imports);
     let referenced_code = format!("{}\n{args}\n{client_setup}", setup_lines.join("\n"));
@@ -171,7 +176,7 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
             setup_lines => setup_lines, client_setup => client_setup, call_expr => call_expr,
             result_var => call.result_var, is_async => override_config.and_then(|value| value.r#async).unwrap_or(call.r#async),
             expects_error => expects_error,
-            error_type => crate::e2e::codegen::snippet_error_type_name(config),
+            error_type => error_type_name,
             returns_void => call.returns_void,
             presentation => crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang),
         },
@@ -413,6 +418,76 @@ mod tests {
         assert!(body.contains("error instanceof Error"));
         assert!(!body.contains("expected call to fail"));
         assert!(!body.contains("const result = await"));
+    }
+
+    /// napi-rs (the node target's FFI boundary) converts every Rust error into a
+    /// plain JS `Error` -- it never generates a named error class. A crate's
+    /// `error_type` config (e.g. `error_type = "XbergError"` in alef.toml, used
+    /// by every other language's docs snippets to build an idiomatic
+    /// `import`/`instanceof` pair) does not apply to node: importing and
+    /// `instanceof`-checking a class that the node package never exports fails
+    /// with `TS2305: Module has no exported member 'XbergError'`.
+    ///
+    /// Before this fix, node snippets used `config.error_type_name()`
+    /// unconditionally, so any crate with a custom `error_type` broke every
+    /// generated node docs snippet that expects an error (see
+    /// error_empty_mime.md, error_unsupported_mime.md, and others).
+    #[test]
+    fn node_error_snippet_uses_builtin_error_not_the_crate_error_type() {
+        let mut fixture = fixture();
+        fixture.assertions.push(crate::e2e::fixture::Assertion {
+            assertion_type: "error".into(),
+            ..Default::default()
+        });
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "parse".into();
+        e2e.call.r#async = true;
+        let config = crate::core::config::ResolvedCrateConfig {
+            error_type: Some("XbergError".into()),
+            ..Default::default()
+        };
+
+        let node_body = render_snippet_body(SnippetContext {
+            lang: "node",
+            fixture: &fixture,
+            module: "@example/library",
+            client_factory: None,
+            e2e_config: &e2e,
+            type_defs: &[],
+            enums: &[],
+            wasm_type_prefix: "",
+            config: &config,
+        });
+        assert!(
+            node_body.contains("error instanceof Error"),
+            "node must fall back to the built-in Error, got: {node_body}"
+        );
+        assert!(
+            !node_body.contains("XbergError"),
+            "node must never reference the crate error type, got: {node_body}"
+        );
+        assert!(
+            !node_body.contains("import { Error"),
+            "Error is a global -- it must not be imported, got: {node_body}"
+        );
+
+        // wasm is unaffected: wasm-bindgen DOES generate a named error export,
+        // so it must keep using the crate's configured error type name.
+        let wasm_body = render_snippet_body(SnippetContext {
+            lang: "wasm",
+            fixture: &fixture,
+            module: "@example/library",
+            client_factory: None,
+            e2e_config: &e2e,
+            type_defs: &[],
+            enums: &[],
+            wasm_type_prefix: "",
+            config: &config,
+        });
+        assert!(
+            wasm_body.contains("error instanceof XbergError"),
+            "wasm must keep using the crate's configured error type, got: {wasm_body}"
+        );
     }
 
     #[test]
