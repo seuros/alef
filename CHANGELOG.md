@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **napi**: allow string-enum field literals alongside the nominal TypeScript enum using values derived from the
+  canonical enum emitter.
 - **kotlin-android**: treat a DTO as default-constructible only when every emitted constructor parameter has a
   Kotlin default, including transitive nested DTO defaults.
 - **dart**: keep config parameters optional for serde function defaults by delegating to generated JSON

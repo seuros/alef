@@ -338,6 +338,7 @@ impl Backend for NapiBackend {
                     has_serde,
                     &opaque_types,
                     &never_skip_cfg_field_names,
+                    &api.enums,
                 ));
                 // Emit impl methods as standalone #[napi] free functions.
                 // #[napi(object)] structs cannot have impl blocks, so each method becomes a

@@ -6,10 +6,11 @@ use crate::codegen::generators::{self, RustBindingConfig};
 use crate::codegen::naming::to_node_name;
 use crate::codegen::shared::{binding_fields, can_auto_delegate, function_params, partition_methods};
 use crate::codegen::type_mapper::TypeMapper;
-use crate::core::ir::{MethodDef, TypeDef, TypeRef};
+use crate::core::ir::{EnumDef, MethodDef, TypeDef, TypeRef};
 use ahash::AHashSet;
 use heck::{ToPascalCase, ToSnakeCase};
 
+use super::enums::string_enum_js_values;
 use super::functions::{napi_apply_primitive_casts_to_call_args, napi_gen_call_args, napi_wrap_return};
 
 /// Map a struct-field `TypeRef` containing `TypeRef::Bytes` (Rust `Vec<u8>`) to the TS
@@ -27,6 +28,42 @@ fn ts_type_for_bytes_field(ty: &TypeRef) -> Option<String> {
     inner(ty)
 }
 
+/// Map a struct-field `TypeRef` naming a `#[napi(string_enum)]` to a TS string-literal union.
+///
+/// napi-rs emits a string enum as a nominal TS `enum`, so a caller writing the plain literal the
+/// enum accepts at runtime — `{ kind: "uri" }` — is rejected with *"Type '\"uri\"' is not
+/// assignable to type 'ExtractInputKind'"*, even though the value is exactly what the binding
+/// expects. Declaring the field as the union of the enum's own runtime values keeps the nominal
+/// type usable while also accepting the literals, which is how the enum is documented and how
+/// every JS caller naturally writes it.
+///
+/// The union comes from [`string_enum_js_values`], which mirrors the enum emitter, so the two
+/// cannot drift. Enums that are not emitted as string enums yield `None` and keep the nominal type.
+fn ts_type_for_string_enum_field(ty: &TypeRef, enums: &[EnumDef]) -> Option<String> {
+    fn inner(ty: &TypeRef, enums: &[EnumDef]) -> Option<String> {
+        match ty {
+            TypeRef::Named(name) => {
+                let enum_def = enums.iter().find(|e| e.name == *name)?;
+                let values = string_enum_js_values(enum_def)?;
+                Some(format!(
+                    "{} | {}",
+                    name,
+                    values
+                        .iter()
+                        .map(|value| format!("'{value}'"))
+                        .collect::<Vec<_>>()
+                        .join(" | ")
+                ))
+            }
+            TypeRef::Optional(i) => inner(i, enums).map(|s| format!("{s} | null | undefined")),
+            TypeRef::Vec(i) => inner(i, enums).map(|s| format!("Array<{s}>")),
+            TypeRef::Map(_k, v) => inner(v, enums).map(|s| format!("Record<string, {s}>")),
+            _ => None,
+        }
+    }
+    inner(ty, enums)
+}
+
 pub(super) fn gen_struct(
     typ: &TypeDef,
     mapper: &NapiMapper,
@@ -34,6 +71,7 @@ pub(super) fn gen_struct(
     has_serde: bool,
     opaque_types: &ahash::AHashSet<String>,
     never_skip_cfg_field_names: &[String],
+    enums: &[EnumDef],
 ) -> String {
     let has_serde_with_field = has_serde
         && binding_fields(&typ.fields).any(|f| match &f.ty {
@@ -100,7 +138,8 @@ pub(super) fn gen_struct(
         };
         // Honor `#[serde(rename = "...")]` on the core field so JS callers see the wire
         let js_name = field.serde_rename.clone().unwrap_or_else(|| to_node_name(&field.name));
-        let ts_type_override = ts_type_for_bytes_field(&field.ty);
+        let ts_type_override =
+            ts_type_for_bytes_field(&field.ty).or_else(|| ts_type_for_string_enum_field(&field.ty, enums));
         let napi_attr_inner: Vec<String> = {
             let mut v = vec![];
             if js_name != field.name {
