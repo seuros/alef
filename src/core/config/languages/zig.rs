@@ -11,6 +11,10 @@ pub struct ZigConfig {
     /// instead of an opaque handle. See [`crate::core::config::HostCapsuleTypeConfig`].
     #[serde(default)]
     pub capsule_types: HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
+    /// Affirms every configured capsule wrapper uses the exact native runtime instance ~keep
+    /// and ownership contract that produced its pointer. ~keep
+    #[serde(default)]
+    pub shares_native_runtime: bool,
     pub module_name: Option<String>,
     #[serde(default)]
     pub features: Option<Vec<String>>,

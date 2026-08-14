@@ -211,6 +211,94 @@ pub fn zig_capsule_import_names(
 }
 
 #[cfg(test)]
+mod capsule_backend_coverage_tests {
+    use crate::core::backend::Backend;
+    use crate::core::config::ResolvedCrateConfig;
+    use crate::core::ir::ApiSurface;
+
+    const UNDECLARED_CAPSULE: &str = "[capsule_types.Language]\nhost_type = \"Placeholder\"\n";
+
+    const GATE_ERROR: &str = "cannot safely wrap native pointers";
+
+    fn go_config(shares_native_runtime: bool) -> ResolvedCrateConfig {
+        ResolvedCrateConfig {
+            go: Some(parse_language_config(UNDECLARED_CAPSULE, shares_native_runtime)),
+            ..Default::default()
+        }
+    }
+
+    fn swift_config(shares_native_runtime: bool) -> ResolvedCrateConfig {
+        ResolvedCrateConfig {
+            swift: Some(parse_language_config(UNDECLARED_CAPSULE, shares_native_runtime)),
+            ..Default::default()
+        }
+    }
+
+    fn zig_config(shares_native_runtime: bool) -> ResolvedCrateConfig {
+        ResolvedCrateConfig {
+            zig: Some(parse_language_config(UNDECLARED_CAPSULE, shares_native_runtime)),
+            ..Default::default()
+        }
+    }
+
+    fn parse_language_config<T: serde::de::DeserializeOwned>(capsule: &str, shares_native_runtime: bool) -> T {
+        let toml = format!("shares_native_runtime = {shares_native_runtime}\n{capsule}");
+        toml::from_str(&toml).expect("language config fixture parses")
+    }
+
+    fn gate_error_of(result: anyhow::Result<Vec<crate::core::backend::GeneratedFile>>) -> Option<String> {
+        result
+            .err()
+            .map(|error| error.to_string())
+            .filter(|m| m.contains(GATE_ERROR))
+    }
+
+    #[test]
+    fn go_rejects_an_undeclared_capsule_contract() {
+        let backend = crate::backends::go::GoBackend;
+        let result = backend.generate_bindings(&ApiSurface::default(), &go_config(false));
+        assert!(
+            gate_error_of(result).is_some(),
+            "the go backend must enforce the capsule gate"
+        );
+    }
+
+    #[test]
+    fn swift_rejects_an_undeclared_capsule_contract() {
+        let backend = crate::backends::swift::SwiftBackend;
+        let result = backend.generate_bindings(&ApiSurface::default(), &swift_config(false));
+        assert!(
+            gate_error_of(result).is_some(),
+            "the swift backend must enforce the capsule gate"
+        );
+    }
+
+    #[test]
+    fn zig_rejects_an_undeclared_capsule_contract() {
+        let backend = crate::backends::zig::ZigBackend;
+        let result = backend.generate_bindings(&ApiSurface::default(), &zig_config(false));
+        assert!(
+            gate_error_of(result).is_some(),
+            "the zig backend must enforce the capsule gate"
+        );
+    }
+
+    #[test]
+    fn shares_native_runtime_clears_the_gate_for_every_newly_gated_backend() {
+        let go = crate::backends::go::GoBackend.generate_bindings(&ApiSurface::default(), &go_config(true));
+        let swift = crate::backends::swift::SwiftBackend.generate_bindings(&ApiSurface::default(), &swift_config(true));
+        let zig = crate::backends::zig::ZigBackend.generate_bindings(&ApiSurface::default(), &zig_config(true));
+        assert_eq!(gate_error_of(go), None, "go ignored `shares_native_runtime = true`");
+        assert_eq!(
+            gate_error_of(swift),
+            None,
+            "swift ignored `shares_native_runtime = true`"
+        );
+        assert_eq!(gate_error_of(zig), None, "zig ignored `shares_native_runtime = true`");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

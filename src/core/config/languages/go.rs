@@ -14,6 +14,10 @@ pub struct GoConfig {
     /// of an opaque handle. See [`crate::core::config::HostCapsuleTypeConfig`].
     #[serde(default)]
     pub capsule_types: std::collections::HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
+    /// Affirms every configured capsule wrapper uses the exact native runtime instance ~keep
+    /// and ownership contract that produced its pointer. ~keep
+    #[serde(default)]
+    pub shares_native_runtime: bool,
     /// Go module major version segment (`/vN`). Required for any v2+ Go module.
     /// Defaults to no segment when `None` and the Go module path has no version suffix;
     /// when set, emits `packages/go/v<N>/`.

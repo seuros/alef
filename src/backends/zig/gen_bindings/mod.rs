@@ -63,6 +63,13 @@ impl Backend for ZigBackend {
     }
 
     fn generate_bindings(&self, api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+        if let Some(zig) = config.zig.as_ref() {
+            crate::core::config::languages::require_shared_native_runtime(
+                &zig.capsule_types,
+                zig.shares_native_runtime,
+                "zig",
+            )?;
+        }
         let api = api.with_deduped_functions();
         let module_name = zig_module_name(&config.name);
         let header = config.ffi_header_name();

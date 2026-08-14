@@ -74,6 +74,13 @@ impl Backend for SwiftBackend {
     }
 
     fn generate_bindings(&self, api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+        if let Some(swift) = config.swift.as_ref() {
+            crate::core::config::languages::require_shared_native_runtime(
+                &swift.capsule_types,
+                swift.shares_native_runtime,
+                "swift",
+            )?;
+        }
         let module_name = config.swift_module();
         let mapper = SwiftMapper;
 

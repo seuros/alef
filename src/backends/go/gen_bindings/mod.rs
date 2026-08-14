@@ -66,6 +66,13 @@ impl Backend for GoBackend {
     }
 
     fn generate_bindings(&self, api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+        if let Some(go) = config.go.as_ref() {
+            crate::core::config::languages::require_shared_native_runtime(
+                &go.capsule_types,
+                go.shares_native_runtime,
+                "go",
+            )?;
+        }
         let deduped_api = api.with_deduped_functions();
         let api = &deduped_api;
         let module_path = config.go_module();
