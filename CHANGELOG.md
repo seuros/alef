@@ -7,13 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.61.0] - 2026-08-14
+
+### Changed (BREAKING)
+
+- **FFI handles**: ordinary opaque values now cross the C ABI as scalar, generational `AlefHandle` tokens with zero as
+  the invalid sentinel. Regenerate every host binding and C consumer; pointer-shaped calls to constructors,
+  accessors, serializers, streaming methods, and destructors are no longer compatible.
+- **capsules**: Java, C#, JNI, and Kotlin Android capsule mappings must explicitly describe either shared-runtime
+  ownership or borrowed-static ABI compatibility. Owned, refcounted, and WebAssembly-backed pointers remain
+  fail-closed unless the configured host contract can preserve their lifecycle.
+
+### Fixed
+
+- **config**: reject unknown keys in closed Alef configuration sections instead of silently discarding misspelled or
+  misplaced settings; extension maps remain open where arbitrary names are part of the schema.
 - **ffi/java**: always emit JSON constructors for serializable FFI types and declare matching Java lifecycle handles,
   including types reached through generated facade fields rather than direct function parameters.
 
 - **kotlin-android**: locate the configured JNI crate by walking from the generated Gradle project, accept an
   explicit manifest override, and copy host libraries from the Cargo workspace target directory.
-
-### Fixed
 
 - **swift**: emit reachable opaque-handle type aliases even when no capsule mapping is configured, while avoiding
   duplicate declarations for client and capsule types.
