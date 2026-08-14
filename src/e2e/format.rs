@@ -5,7 +5,10 @@
 //! For each language directory that had files generated, `run_formatters` runs a
 //! single `poly fmt --fix` pass, which formats every language poly supports
 //! (Python via ruff, JS/TS/JSON via oxc, Rust via rustfmt, Go via gofmt, …).
-//! Missing or failing formatters abort generation.
+//! Languages are formatted in sorted order, and every language is attempted
+//! before failures are reported, so which languages get formatted never depends
+//! on iteration order or on whether an earlier one failed. Missing or failing
+//! formatters still fail generation, naming every language that failed.
 //!
 //! Two escape hatches remain:
 //! * a per-language `E2eConfig.format` override (`sh -c`, with `{dir}` expanded)
@@ -61,8 +64,9 @@ const UNPUBLISHED_VERSION_REASON: &str = "registry-mode manifests pin the versio
 /// E2e files are written to `{output}/{lang}/...`, so the language is the first
 /// path component after the output prefix. For each language directory: a user
 /// `E2eConfig.format[lang]` override runs as a shell command (`{dir}` expanded);
-/// otherwise poly formats the directory in-process. Formatter failures abort
-/// generation.
+/// otherwise poly formats the directory in-process. Languages run in sorted
+/// order and each is attempted regardless of earlier failures; the run then
+/// fails with every failing language named.
 ///
 /// Actual formatting (poly, `mix format`) aborts generation in every mode — it
 /// needs no registry and so has no pre-release excuse. Only *dependency
@@ -76,71 +80,29 @@ pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) -> anyhow
     let mut deferred = Vec::new();
     let output_prefix = Path::new(e2e_config.effective_output());
     let current_dir = std::env::current_dir().context("failed to resolve formatter working directory")?;
-    let languages: HashSet<String> = files
+    // Sorted, not `HashSet` iteration order. `HashSet` is randomly seeded per process, so the
+    // order languages were formatted in varied run to run; combined with the abort-on-first-
+    // failure below, a single failing language left a *different* arbitrary subset of the others
+    // unformatted each time, and regenerating an unchanged tree produced different bytes. ~keep
+    let mut languages: Vec<String> = files
         .iter()
         .filter_map(|f| {
             let remainder = f.path.strip_prefix(output_prefix).ok()?;
             let first = remainder.components().next()?;
             Some(first.as_os_str().to_string_lossy().into_owned())
         })
+        .collect::<HashSet<String>>()
+        .into_iter()
         .collect();
+    languages.sort();
 
+    // Format every language before reporting rather than aborting on the first failure. Whether
+    // one language's formatter fails must not decide whether the others run at all -- that made
+    // the emitted tree depend on ordering. The run still fails, naming every failure. ~keep
+    let mut failures: Vec<String> = Vec::new();
     for lang in &languages {
-        let configured_dir = PathBuf::from(format!("{}/{}", e2e_config.effective_output(), lang));
-        let dir_path = resolve_formatter_directory(&configured_dir, &current_dir)?;
-        let dir = dir_path.to_string_lossy();
-
-        // User override takes precedence and replaces the poly pass entirely. Its
-        // contents are opaque to us, so it may or may not resolve dependencies
-        // (`bundle exec`, `npx`, …). In registry mode we cannot tell the two apart,
-        // so a failure is recorded rather than fatal; in local mode it still aborts.
-        if let Some(custom) = e2e_config.format.get(lang.as_str()) {
-            let cmd = custom.replace("{dir}", &dir);
-            tracing::debug!("Formatting {lang}: {cmd}");
-            match run_shell(&cmd, lang) {
-                Ok(()) => {}
-                Err(error) if defer_resolution => {
-                    warn!("deferring {lang} format override until after publish: {error}");
-                    deferred.push(DeferredFormatting {
-                        language: lang.clone(),
-                        step: cmd,
-                        reason: format!("{UNPUBLISHED_VERSION_REASON} (failed with: {error})"),
-                    });
-                }
-                Err(error) => return Err(error),
-            }
-            continue;
-        }
-
-        // Default: shell out to `poly fmt --fix` over the directory. poly walks up
-        // from `dir_path` for a `poly.toml` (falling back to poly's zero-config
-        // defaults when none is found).
-        tracing::debug!("Formatting {lang} with poly: {dir}");
-        crate::cli::pipeline::poly_format_strict(std::slice::from_ref(&dir_path), &dir_path)?;
-
-        // Residual: `go mod tidy` populates `go.sum` from `go.mod` (poly cannot —
-        // it is dependency resolution, not formatting) so the Go suite builds.
-        // In registry mode `go.mod` pins the unpublished version this run emits, so
-        // tidy cannot resolve it; skip rather than fail, and record the debt.
-        if lang == "go" {
-            if defer_resolution {
-                warn!("skipping `go mod tidy` for {lang}: {UNPUBLISHED_VERSION_REASON}");
-                deferred.push(DeferredFormatting {
-                    language: lang.clone(),
-                    step: GO_MOD_TIDY_STEP.to_owned(),
-                    reason: UNPUBLISHED_VERSION_REASON.to_owned(),
-                });
-            } else {
-                run_go_mod_tidy(&dir)?;
-            }
-        }
-
-        // Residual: `mix format` is the SOLE formatter for `.ex`/`.exs` — the poly
-        // pass above excludes them (see `POLY_ELIXIR_EXCLUDE_GLOBS`), so without
-        // this the generated Elixir suite is never formatted at all and ships with
-        // the emitter's unwrapped long lines.
-        if lang == "elixir" {
-            run_mix_format(&dir)?;
+        if let Err(error) = format_language(lang, e2e_config, &current_dir, defer_resolution, &mut deferred) {
+            failures.push(format!("{lang}: {error:#}"));
         }
     }
 
@@ -156,7 +118,81 @@ pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) -> anyhow
             warn!("failed to restore exec bit on {}: {e}", file.path.display());
         }
     }
+    if !failures.is_empty() {
+        anyhow::bail!(
+            "formatting failed for {} of {} language(s): {}",
+            failures.len(),
+            languages.len(),
+            failures.join("; ")
+        );
+    }
     Ok(deferred)
+}
+
+/// Run the configured formatter for one generated language directory.
+///
+/// Split out of [`run_formatters`] so a failure can be collected per language instead of
+/// aborting the whole pass -- see the ordering note there. ~keep
+fn format_language(
+    lang: &str,
+    e2e_config: &E2eConfig,
+    current_dir: &Path,
+    defer_resolution: bool,
+    deferred: &mut Vec<DeferredFormatting>,
+) -> anyhow::Result<()> {
+    let configured_dir = PathBuf::from(format!("{}/{}", e2e_config.effective_output(), lang));
+    let dir_path = resolve_formatter_directory(&configured_dir, current_dir)?;
+    let dir = dir_path.to_string_lossy();
+
+    // User override takes precedence and replaces the poly pass entirely. Its
+    // contents are opaque to us, so registry-mode failures are deferred.
+    if let Some(custom) = e2e_config.format.get(lang) {
+        let cmd = custom.replace("{dir}", &dir);
+        tracing::debug!("Formatting {lang}: {cmd}");
+        return match run_shell(&cmd, lang) {
+            Ok(()) => Ok(()),
+            Err(error) if defer_resolution => {
+                warn!("deferring {lang} format override until after publish: {error}");
+                deferred.push(DeferredFormatting {
+                    language: lang.to_owned(),
+                    step: cmd,
+                    reason: format!("{UNPUBLISHED_VERSION_REASON} (failed with: {error})"),
+                });
+                Ok(())
+            }
+            Err(error) => Err(error),
+        };
+    }
+
+    // Default: shell out to `poly fmt --fix` over the directory. poly walks up
+    // from `dir_path` for a `poly.toml` (falling back to poly's zero-config
+    // defaults when none is found).
+    tracing::debug!("Formatting {lang} with poly: {dir}");
+    crate::cli::pipeline::poly_format_strict(std::slice::from_ref(&dir_path), &dir_path)?;
+
+    // Residual: `go mod tidy` populates `go.sum` from `go.mod` (poly cannot —
+    // it is dependency resolution, not formatting) so the Go suite builds.
+    if lang == "go" {
+        if defer_resolution {
+            warn!("skipping `go mod tidy` for {lang}: {UNPUBLISHED_VERSION_REASON}");
+            deferred.push(DeferredFormatting {
+                language: lang.to_owned(),
+                step: GO_MOD_TIDY_STEP.to_owned(),
+                reason: UNPUBLISHED_VERSION_REASON.to_owned(),
+            });
+        } else {
+            run_go_mod_tidy(&dir)?;
+        }
+    }
+
+    // Residual: `mix format` is the SOLE formatter for `.ex`/`.exs` — the poly
+    // pass above excludes them (see `POLY_ELIXIR_EXCLUDE_GLOBS`), so without
+    // this the generated Elixir suite is never formatted at all and ships with
+    // the emitter's unwrapped long lines.
+    if lang == "elixir" {
+        run_mix_format(&dir)?;
+    }
+    Ok(())
 }
 
 fn resolve_formatter_directory(path: &Path, current_dir: &Path) -> anyhow::Result<PathBuf> {
@@ -581,5 +617,116 @@ mod tests {
         } else {
             assert!(result.is_err());
         }
+    }
+
+    /// Build an output tree with one directory per language, each with a format override that
+    /// appends its own name to `log`, so a completed run records the order languages ran in.
+    fn config_recording_order(out: &Path, log: &Path, languages: &[&str]) -> E2eConfig {
+        let mut e2e_config = e2e_config_for(out);
+        let log_str = log.to_string_lossy().replace('\\', "/");
+        for lang in languages {
+            std::fs::create_dir_all(out.join(lang)).expect("create language dir");
+            e2e_config
+                .format
+                .insert((*lang).to_owned(), format!("echo {lang} >> {log_str}"));
+        }
+        e2e_config
+    }
+
+    fn files_for(out: &Path, languages: &[&str]) -> Vec<GeneratedFile> {
+        languages
+            .iter()
+            .map(|lang| GeneratedFile {
+                path: out.join(lang).join("main.txt"),
+                content: String::new(),
+                generated_header: false,
+            })
+            .collect()
+    }
+
+    /// Languages were collected into a `HashSet`, whose iteration order is randomly seeded per
+    /// instance, so two runs over an unchanged tree formatted in different orders. That is
+    /// invisible on its own, but combined with abort-on-first-failure it made the emitted bytes
+    /// depend on chance. Order must be stable across runs.
+    #[test]
+    fn languages_are_formatted_in_a_deterministic_order() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = dir.path().join("e2e-out");
+        let log = dir.path().join("order.log");
+        let languages = ["python", "csharp", "go", "ruby", "elixir", "dart"];
+
+        let e2e_config = config_recording_order(&out, &log, &languages);
+        let files = files_for(&out, &languages);
+
+        run_formatters(&files, &e2e_config).expect("first pass");
+        let first = std::fs::read_to_string(&log).expect("order log");
+        std::fs::remove_file(&log).expect("reset log");
+        run_formatters(&files, &e2e_config).expect("second pass");
+        let second = std::fs::read_to_string(&log).expect("order log");
+
+        let mut expected = languages.to_vec();
+        expected.sort_unstable();
+        let expected = expected
+            .iter()
+            .map(|lang| format!("{lang}\n"))
+            .collect::<Vec<_>>()
+            .join("");
+
+        assert_eq!(first, expected, "languages must be formatted in sorted order");
+        assert_eq!(second, first, "two runs over an unchanged tree must format in the same order");
+    }
+
+    /// One language's formatter failing must not decide whether the rest run. Aborting on the
+    /// first failure left every later language unformatted, and since the order was random, a
+    /// different arbitrary subset was skipped each run.
+    #[test]
+    fn a_failing_language_does_not_skip_the_others() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = dir.path().join("e2e-out");
+        let log = dir.path().join("order.log");
+        let languages = ["python", "csharp", "go"];
+
+        let mut e2e_config = config_recording_order(&out, &log, &languages);
+        // `csharp` sorts first, so under abort-on-first-failure nothing else would run.
+        e2e_config.format.insert("csharp".to_owned(), "exit 1".to_owned());
+        let files = files_for(&out, &languages);
+
+        let error = run_formatters(&files, &e2e_config).expect_err("a failing formatter must fail the run");
+
+        let recorded = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(
+            recorded.contains("go") && recorded.contains("python"),
+            "languages after the failing one must still be formatted, recorded: {recorded:?}"
+        );
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("csharp"),
+            "the failing language must be named, got: {message}"
+        );
+        assert!(
+            message.contains("1 of 3"),
+            "the report must say how many of how many failed, got: {message}"
+        );
+    }
+
+    /// Every failure is reported, not just the first, so one run surfaces the whole picture.
+    #[test]
+    fn every_failing_language_is_named() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = dir.path().join("e2e-out");
+        let log = dir.path().join("order.log");
+        let languages = ["python", "csharp", "go"];
+
+        let mut e2e_config = config_recording_order(&out, &log, &languages);
+        e2e_config.format.insert("csharp".to_owned(), "exit 1".to_owned());
+        e2e_config.format.insert("go".to_owned(), "exit 1".to_owned());
+        let files = files_for(&out, &languages);
+
+        let error = run_formatters(&files, &e2e_config).expect_err("failing formatters must fail the run");
+
+        let message = format!("{error:#}");
+        assert!(message.contains("csharp"), "got: {message}");
+        assert!(message.contains("go"), "got: {message}");
+        assert!(message.contains("2 of 3"), "got: {message}");
     }
 }

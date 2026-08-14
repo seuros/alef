@@ -48,6 +48,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configured by `report_output` is also written *before* the strict bails rather than after: a run that fails
   strict mode is precisely the run whose report is needed, and emitting it afterwards meant the artifact was never
   produced in that case.
+- **e2e/format**: make generated output reproducible when a formatter fails. Languages were collected into a
+  `HashSet` and formatted in its iteration order, which is randomly seeded per instance, and the loop aborted on
+  the first failure with `?`. Together those meant one failing language left a *different, arbitrary* subset of
+  the remaining languages unformatted on every run: regenerating an unchanged tree produced different bytes.
+  Observed on a consumer whose registry-mode Go test app cannot pass `go mod tidy` before its version is
+  published — two consecutive `alef all --clean` runs differed in 143 files, the next pair in 47, all under
+  `test_apps/`, with clang-format applied to a varying subset. Languages are now formatted in sorted order and
+  every language is attempted before failures are reported, so the emitted tree no longer depends on ordering or
+  on whether an earlier language failed. The run still fails, and now names every language that failed rather
+  than only the first.
 - **tests**: refresh Kotlin Android, Swift, and Zig snapshots so the checked-in expectations cover the integrated
   JNI path discovery, serde bridge grouping, numeric error dispatch, and fallible string ownership behavior.
 - **ffi/scaffold**: declare every feature named by a `#[cfg(feature = "X")]` gate the codegen emits into the
