@@ -226,6 +226,53 @@ fn test_opaque_constructor_marshals_enum_from_i32() {
 }
 
 #[test]
+fn opaque_constructor_enum_failure_uses_scalar_handle_sentinel_and_compiles() {
+    let api = opaque_with_constructor_api();
+    let files = FfiBackend.generate_bindings(&api, &sample_config()).unwrap();
+    let lib = files.iter().find(|file| file.path.ends_with("lib.rs")).unwrap();
+    let function = lib
+        .content
+        .split("pub unsafe extern \"C\" fn my_lib_route_builder_new")
+        .nth(1)
+        .expect("opaque constructor")
+        .split("let path_rs")
+        .next()
+        .expect("enum conversion prefix");
+
+    assert!(function.contains("return 0;"), "{function}");
+    assert!(!function.contains("std::ptr::null_mut()"), "{function}");
+
+    let source = format!(
+        r#"
+type AlefHandle = u64;
+fn method_from_i32_rs(value: i32) -> Option<i32> {{ (value == 0).then_some(value) }}
+fn set_last_error(_: i32, _: &str) {{}}
+fn convert(method: i32) -> AlefHandle {{
+{}
+    method_rs as AlefHandle
+}}
+fn main() {{ assert_eq!(convert(1), 0); }}
+"#,
+        function
+            .split("let method_rs")
+            .nth(1)
+            .map(|body| format!("    let method_rs{body}"))
+            .expect("enum conversion body")
+    );
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let source_path = directory.path().join("scalar_handle_constructor.rs");
+    let binary_path = directory.path().join("scalar-handle-constructor-test");
+    std::fs::write(&source_path, source).expect("write compile harness");
+    let compile = std::process::Command::new("rustc")
+        .args(["--edition=2024", "-o"])
+        .arg(&binary_path)
+        .arg(&source_path)
+        .output()
+        .expect("run rustc");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+}
+
+#[test]
 fn test_opaque_constructor_returns_generational_handle() {
     let api = opaque_with_constructor_api();
     let config = sample_config();

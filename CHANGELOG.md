@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicit manifest override, and copy host libraries from the Cargo workspace target directory.
 
 ### Fixed
+- **ffi**: preserve registration methods' domain error types when a service owner is absent, and return the scalar
+  zero sentinel when an opaque constructor rejects an enum discriminant.
 - **e2e/snippets**: assert the whole rendered snippet document in the canonical-language test instead of a set of
   substring probes, so `level`, `requires` and `side_effect` are pinned again; a renderer emitting a bogus value for
   any of them previously satisfied the probes.

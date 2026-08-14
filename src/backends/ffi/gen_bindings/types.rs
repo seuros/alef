@@ -666,7 +666,7 @@ pub(super) fn gen_opaque_static_constructor(
                         enum_snake => enum_snake,
                         name => param_name,
                         error_message => format!("invalid discriminant for {n}"),
-                        fail_ret => "return std::ptr::null_mut();",
+                        fail_ret => "return 0;",
                     },
                 ));
             }

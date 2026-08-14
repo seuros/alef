@@ -228,6 +228,57 @@ fn test_registration_function_exists() {
 }
 
 #[test]
+fn registration_dispatch_preserves_domain_error_type_and_compiles() {
+    let dispatch = render(
+        "service_api_registration_dispatch_result.rs.jinja",
+        minijinja::context! {
+            method_name => "route",
+            meta_args => "",
+            opaque_name => "ServiceOpaque",
+        },
+    );
+    let source = format!(
+        r#"
+#[derive(Debug)]
+struct DomainError;
+#[derive(Debug)]
+struct HandleError;
+struct Application;
+struct Owner;
+impl Owner {{
+    fn route(&mut self, _: Handler) -> Result<&mut Application, DomainError> {{
+        Err(DomainError)
+    }}
+}}
+struct ServiceOpaque {{ inner: Option<Owner> }}
+struct Handler;
+fn set_handle_error(_: &HandleError) {{}}
+fn with_handle_mut<T, R>(_: u64, body: impl FnOnce(&mut T) -> R) -> Result<R, HandleError> {{
+    let mut value = ServiceOpaque {{ inner: Some(Owner) }};
+    let erased = (&mut value as *mut ServiceOpaque).cast::<T>();
+    // SAFETY: this compile-only harness instantiates T as ServiceOpaque. ~keep
+    Ok(body(unsafe {{ &mut *erased }}))
+}}
+fn register(owner: u64, handler: Handler) -> i32 {{
+{dispatch}
+}}
+fn main() {{ assert_eq!(register(1, Handler), 1); }}
+"#
+    );
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let source_path = directory.path().join("service_registration.rs");
+    let binary_path = directory.path().join("service-registration-test");
+    std::fs::write(&source_path, source).expect("write compile harness");
+    let compile = std::process::Command::new("rustc")
+        .args(["--edition=2024", "-o"])
+        .arg(&binary_path)
+        .arg(&source_path)
+        .output()
+        .expect("run rustc");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+}
+
+#[test]
 fn test_entrypoint_function_exists() {
     let api = make_fixture_surface();
     let config = ResolvedCrateConfig {
