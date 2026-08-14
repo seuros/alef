@@ -133,6 +133,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Java/C#**: require either a shared-native-runtime contract or an explicit borrowed-static, ABI-compatible,
   no-destructor capsule contract before wrapping native pointers, and protect C# service calls and callback
   registrations with SafeHandle lifetime guards.
+- **C#**: restore readable formatting and a valid `/// <summary>` doc comment block in the service templates whose
+  SafeHandle lifetime guards were reflowed onto run-together lines, including a bare `</summary>` that made the
+  generated source uncompilable.
 - **ffi**: report stable, collision-checked per-variant error taxonomy codes while preserving reserved conversion and
   panic codes.
 - **JNI/Kotlin Android**: transfer configured capsule values as their raw host pointers instead of boxed Rust

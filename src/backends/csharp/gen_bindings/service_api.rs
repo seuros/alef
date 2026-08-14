@@ -200,7 +200,7 @@ fn gen_service_cs(api: &ApiSurface, service: &ServiceDef, namespace: &str, prefi
             service_snake,
             reg_method.to_snake_case()
         );
-        let arg_lines = handle_aware_arg_lines(&reg.metadata_params, api, "            ");
+        let arg_lines = handle_aware_arg_lines(&reg.metadata_params, api, "                ");
         out.push_str(&render(
             "service_registration_method.jinja",
             minijinja::context! {
@@ -220,7 +220,7 @@ fn gen_service_cs(api: &ApiSurface, service: &ServiceDef, namespace: &str, prefi
                 .unwrap_or_else(|| format!("Register a handler via the {} variant.", variant.name));
             let signature_params = metadata_param_decl_list(&variant.signature_params, api);
             let native_method = format!("{}_{}_{}", prefix.to_lowercase(), service_snake, variant_fn_name);
-            let arg_lines = handle_aware_arg_lines(&variant.signature_params, api, "            ");
+            let arg_lines = handle_aware_arg_lines(&variant.signature_params, api, "                ");
             out.push_str(&render(
                 "service_variant_registration_method.jinja",
                 minijinja::context! {
@@ -250,7 +250,7 @@ fn gen_service_cs(api: &ApiSurface, service: &ServiceDef, namespace: &str, prefi
             service_snake,
             ep_method.to_snake_case()
         );
-        let arg_lines = handle_aware_arg_lines(&ep.params, api, "            ");
+        let arg_lines = handle_aware_arg_lines(&ep.params, api, "                ");
         out.push_str(&render(
             "service_entrypoint_method.jinja",
             minijinja::context! {
