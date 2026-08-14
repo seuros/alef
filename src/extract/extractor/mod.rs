@@ -97,11 +97,17 @@ pub fn extract(
     }
 
     // For intra-crate re-exports like `#[cfg(feature = "api")] pub use core::ServerConfig`,
-    if let Some(first_source) = sources.first()
-        && let Ok(content) = std::fs::read_to_string(first_source)
-        && let Ok(file) = syn::parse_file(&content)
-    {
-        apply_reexport_cfg_attributes(&mut surface, &file.items);
+    // Every source is scanned, not just the first: a crate's `#[cfg(feature = "x")] pub mod x;`
+    // declarations live in whichever file owns them, and `sources` is an author-ordered list
+    // with no guarantee that lib.rs comes first. Scanning only `sources.first()` silently left
+    // every item under a gated module ungated, so backends that exclude on `cfg` emitted calls
+    // into modules absent from their feature set. ~keep
+    for source in sources {
+        if let Ok(content) = std::fs::read_to_string(source)
+            && let Ok(file) = syn::parse_file(&content)
+        {
+            apply_reexport_cfg_attributes(&mut surface, &file.items);
+        }
     }
 
     // NOTE: Same-named function entries with disjoint cfg gates (e.g. a `pub use real::fn` under

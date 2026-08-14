@@ -151,3 +151,59 @@ fn test_cfg_test_top_level_items_excluded() {
         "#[cfg(all(test, ...))] fn must be excluded, got {fn_names:?}"
     );
 }
+
+/// A `#[cfg(feature = "…")] pub mod` gate must reach the items inside it no matter which
+/// source file declares the module. `sources` is an author-ordered list, so the file holding
+/// the gated `pub mod` is frequently not the first entry; when only the first source was
+/// scanned, every item under the gate was recorded with `cfg: None` and backends that skip
+/// items on `cfg` emitted calls into modules their feature set does not compile.
+#[test]
+fn module_cfg_applies_when_the_gated_module_is_not_the_first_source() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let other_rs = dir.path().join("other.rs");
+    std::fs::write(&other_rs, "pub fn unrelated() -> u32 { 0 }\n").expect("write other.rs");
+
+    let lib_rs = dir.path().join("lib.rs");
+    std::fs::write(
+        &lib_rs,
+        r#"
+        #[cfg(feature = "metrics")]
+        pub mod metrics {
+            pub fn record_cost(system: &str) -> u32 { system.len() as u32 }
+        }
+        "#,
+    )
+    .expect("write lib.rs");
+
+    // `lib.rs` deliberately second: this is the ordering that regressed.
+    let surface = super::extract(
+        &[other_rs.as_path(), lib_rs.as_path()],
+        "my_crate",
+        "0.0.0",
+        None,
+    )
+    .expect("extract failed");
+
+    let record_cost = surface
+        .functions
+        .iter()
+        .find(|f| f.name == "record_cost")
+        .expect("record_cost should be extracted");
+
+    assert_eq!(
+        record_cost.cfg.as_deref(),
+        Some("feature = \"metrics\""),
+        "item under a gated module must carry the module's cfg regardless of source order"
+    );
+
+    let unrelated = surface
+        .functions
+        .iter()
+        .find(|f| f.name == "unrelated")
+        .expect("unrelated should be extracted");
+    assert_eq!(
+        unrelated.cfg, None,
+        "an ungated item must not inherit an unrelated module's cfg"
+    );
+}

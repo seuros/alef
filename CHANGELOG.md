@@ -63,6 +63,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of silently disappearing from generated Go literals.
 - **e2e/typescript**: qualify inferred enum-field metadata by its owning type so an enum field cannot poison a
   same-named scalar field on another generated DTO.
+- **jni**: request the core crate's configured feature set in the generated JNI `Cargo.toml`. Features were read only
+  from `[crates.kotlin_android] features`, so a consumer that omits that key got a dependency on the core crate's
+  default features while the generated shim still called into feature-gated modules — the crate then failed to compile
+  with `E0433`. The lookup now falls back to the top-level `features`, matching every other binding scaffolder, and an
+  explicit `[crates.kotlin_android] features` still wins.
+- **extract**: apply a `#[cfg(feature = "…")] pub mod` gate to the items inside it regardless of which source file
+  declares the module. Only `sources[0]` was scanned for module-level cfg attributes, but `sources` is an
+  author-ordered list and the file holding the gated module is frequently not first. Every item under such a gate was
+  recorded with no cfg, so backends that exclude items by cfg — notably wasm, whose target cannot compile
+  non-wasm-safe modules — emitted calls into modules absent from their feature set.
 - **ffi/all**: rebuild a missing or stale cbindgen header after all FFI source-writing stages and validate the refreshed
   declarations in the same `alef all --clean` run, instead of failing once and requiring a manual Cargo build before
   an identical second generation could succeed.
