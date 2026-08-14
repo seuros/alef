@@ -15,21 +15,58 @@ use std::path::{Path, PathBuf};
 /// leave the new Rust source on disk so the requested Cargo build can refresh the
 /// header rather than rebuilding the old source forever. ~keep
 pub(crate) fn check_ffi_header_freshness(config: &ResolvedCrateConfig, base_dir: &Path) -> anyhow::Result<()> {
+    match ffi_header_freshness(config, base_dir)? {
+        HeaderFreshness::Fresh => Ok(()),
+        HeaderFreshness::Missing(header_path) => {
+            tracing::warn!(
+                "FFI header {} not found — skipping freshness check. Run a build so cbindgen emits it.",
+                header_path.display()
+            );
+            Ok(())
+        }
+        HeaderFreshness::Stale(message) => Err(anyhow::anyhow!(message)),
+    }
+}
+
+/// Refresh a missing or stale header before enforcing the freshness gate.
+///
+/// Full generation workflows use this after every FFI source-writing stage has
+/// completed. The callback keeps command orchestration outside this module and
+/// makes the refresh-before-validation ordering directly testable. ~keep
+pub(crate) fn ensure_ffi_header_freshness(
+    config: &ResolvedCrateConfig,
+    base_dir: &Path,
+    refresh: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    match ffi_header_freshness(config, base_dir)? {
+        HeaderFreshness::Fresh => return Ok(()),
+        HeaderFreshness::Missing(header_path) => {
+            tracing::info!("Building FFI crate to create header {}", header_path.display());
+        }
+        HeaderFreshness::Stale(_) => {
+            tracing::info!("Building FFI crate to refresh its cbindgen header");
+        }
+    }
+
+    refresh().context("failed to refresh the generated FFI header")?;
+    check_ffi_header_freshness(config, base_dir)
+}
+
+enum HeaderFreshness {
+    Fresh,
+    Missing(PathBuf),
+    Stale(String),
+}
+
+fn ffi_header_freshness(config: &ResolvedCrateConfig, base_dir: &Path) -> anyhow::Result<HeaderFreshness> {
     let exported = exported_symbols_in_dir(&ffi_source_root(config, base_dir))?;
     if exported.is_empty() {
-        return Ok(());
+        return Ok(HeaderFreshness::Fresh);
     }
 
     let header_path = ffi_header_path(config, base_dir);
     let Ok(header) = std::fs::read_to_string(&header_path) else {
-        // A project generating for the first time has no header yet. Failing
-        // closed here would break bootstrapping to fix a staleness bug, so an
-        // absent header is reported and generation continues. ~keep
-        tracing::warn!(
-            "FFI header {} not found — skipping freshness check. Run a build so cbindgen emits it.",
-            header_path.display()
-        );
-        return Ok(());
+        return Ok(HeaderFreshness::Missing(header_path));
     };
 
     let prefix = config.ffi_prefix();
@@ -39,10 +76,10 @@ pub(crate) fn check_ffi_header_freshness(config: &ResolvedCrateConfig, base_dir:
     let removed: Vec<&String> = declared.iter().filter(|name| !exported.contains(*name)).collect();
 
     if missing.is_empty() && removed.is_empty() {
-        return Ok(());
+        return Ok(HeaderFreshness::Fresh);
     }
 
-    Err(anyhow::anyhow!("{}", drift_message(&header_path, &missing, &removed)))
+    Ok(HeaderFreshness::Stale(drift_message(&header_path, &missing, &removed)))
 }
 
 fn drift_message(header_path: &Path, missing: &[&String], removed: &[&String]) -> String {
@@ -382,5 +419,34 @@ void sample_options_default_suffix(void);
 
         assert!(exported.iter().all(|name| declared.contains(name)));
         assert!(declared.iter().all(|name| exported.contains(name)));
+    }
+
+    #[test]
+    fn should_refresh_stale_header_before_validating_full_generation() {
+        let directory = tempfile::tempdir().expect("temporary project");
+        let config = ResolvedCrateConfig {
+            name: "sample".to_owned(),
+            ..ResolvedCrateConfig::default()
+        };
+        let crate_root = directory.path().join("crates/sample-ffi");
+        std::fs::create_dir_all(crate_root.join("src")).expect("create FFI source directory");
+        std::fs::create_dir_all(crate_root.join("include")).expect("create FFI include directory");
+        std::fs::write(
+            crate_root.join("src/lib.rs"),
+            "#[unsafe(no_mangle)]\npub unsafe extern \"C\" fn sample_current() {}\n",
+        )
+        .expect("write generated FFI source");
+        std::fs::write(crate_root.join("include/sample.h"), "void sample_previous(void);\n")
+            .expect("write stale FFI header");
+
+        let mut refreshed = false;
+        ensure_ffi_header_freshness(&config, directory.path(), || {
+            refreshed = true;
+            std::fs::write(crate_root.join("include/sample.h"), "void sample_current(void);\n")?;
+            Ok(())
+        })
+        .expect("full generation should refresh before validating");
+
+        assert!(refreshed, "a stale header must trigger the build callback");
     }
 }

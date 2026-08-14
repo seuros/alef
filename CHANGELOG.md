@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicit manifest override, and copy host libraries from the Cargo workspace target directory.
 
 ### Fixed
+
+- **ffi/all**: rebuild a missing or stale cbindgen header after all FFI source-writing stages and validate the refreshed
+  declarations in the same `alef all --clean` run, instead of failing once and requiring a manual Cargo build before
+  an identical second generation could succeed.
 - **scaffold/php**: emit exactly one composer.json per layout. The co-located layout now emits only the
   repository-root manifest; the package-directory copy is kept for the split layout, where it is the
   installable package. Both rendered the same composer `name`, so every co-located consumer carried a

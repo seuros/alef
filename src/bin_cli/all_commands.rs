@@ -117,9 +117,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     }
                     let _ = cache::write_generation_hashes(&cache_key, &hashes);
                 }
-                if languages.contains(&crate::core::config::Language::Ffi) {
-                    pipeline::check_ffi_header_freshness(resolved_cfg, &base_dir)?;
-                }
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 if !api.services.is_empty() {
@@ -155,6 +152,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                 tracing::info!("Running post-build processing...");
                 run_required_post_builds(&languages, resolved_cfg, &base_dir)?;
+                if languages.contains(&crate::core::config::Language::Ffi) {
+                    pipeline::ensure_ffi_header_freshness(resolved_cfg, &base_dir, || {
+                        pipeline::build(resolved_cfg, &[crate::core::config::Language::Ffi], false)
+                    })?;
+                }
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 tracing::info!("Generating type stubs...");
