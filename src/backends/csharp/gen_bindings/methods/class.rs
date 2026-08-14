@@ -182,16 +182,25 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_wrapper_class(
         let trait_pascal = csharp_type_name(&bridge_cfg.trait_name);
         let has_super = bridge_cfg.super_trait.is_some();
 
-        let register_method_name = format!("Register{trait_pascal}");
-        out.push_str(&render(
-            "trait_register_facade.jinja",
-            minijinja::context! {
-                trait_name => trait_pascal,
-                method_name => register_method_name,
-                has_super,
-                exception_name,
-            },
-        ));
+        // ~keep Gate on `register_fn` exactly as the unregister facade below does. The facade
+        // calls `NativeMethods.Register<Trait>`, which is only declared when the bridge has a
+        // native register function; emitting it unconditionally produced CS0117 against a
+        // NativeMethods class with no such member. Declaring the extern instead would be worse
+        // -- no register-shaped symbol exists in the exports, header or dylib, so it would turn
+        // a build error into a runtime EntryPointNotFoundException. Java (facade.rs) and Go
+        // (gen_bindings/mod.rs) already gate on this field; C# was the outlier.
+        if bridge_cfg.register_fn.is_some() {
+            let register_method_name = format!("Register{trait_pascal}");
+            out.push_str(&render(
+                "trait_register_facade.jinja",
+                minijinja::context! {
+                    trait_name => trait_pascal,
+                    method_name => register_method_name,
+                    has_super,
+                    exception_name,
+                },
+            ));
+        }
 
         if bridge_cfg.unregister_fn.is_some() {
             let unregister_method_name = format!("Unregister{trait_pascal}");

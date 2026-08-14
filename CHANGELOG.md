@@ -23,6 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **csharp**: only emit the `Register<Trait>` facade when the trait bridge declares a `register_fn`. The facade calls
+  `NativeMethods.Register<Trait>`, which is generated solely for bridges that have a native register function, so a
+  bridge configured without one produced a call to an undeclared member — `CS0117`, failing the whole package build.
+  The unregister facade two lines below was already gated on `unregister_fn`, and Java (`gen_bindings/facade.rs`) and
+  Go (`gen_bindings/mod.rs`) already gate on `register_fn`; C# was the sole outlier. Emission is narrowed rather than
+  a declaration invented: no register-shaped symbol exists in the Rust exports, the cbindgen header or the built
+  dylib, so declaring the extern would convert a build error into a runtime `EntryPointNotFoundException`.
+  **Consumer-visible:** bridges without a `register_fn` no longer expose a `Register<Trait>` method that could never
+  have worked; bridges with one are unaffected.
 - **e2e/fixture**: accept a `skip.languages` id naming a known e2e target that isn't configured in this run, so a
   consumer holding a backend out of `[languages]` keeps its skip entries valid. Typo'd ids still fail, and `"ffi"`
   stays rejected because `Language::Ffi` maps to the `"c"` generator.
