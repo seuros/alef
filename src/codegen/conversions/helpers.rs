@@ -11,6 +11,7 @@ pub(crate) use eligibility::is_tuple_type_name;
 pub use eligibility::{
     can_generate_conversion, can_generate_enum_conversion, can_generate_enum_conversion_from_core, convertible_types,
     core_to_binding_convertible_types, has_sanitized_fields, is_newtype, is_tuple_variant,
+    variant_emits_tuple_form,
 };
 #[allow(unused_imports)]
 pub use enum_arms::{

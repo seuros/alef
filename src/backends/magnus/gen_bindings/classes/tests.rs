@@ -389,3 +389,42 @@ fn variant_constructors_empty_for_unit_only_enum() {
     let code = gen_data_enum_variant_constructors(&def);
     assert!(code.is_empty(), "expected no output for unit-only enum: {code}");
 }
+
+/// Issue #232: an adjacently-tagged enum (`tag` + `content`) emits tuple-form variants
+/// exactly like an untagged one, but the conversion match arms keyed only on
+/// `serde_untagged` and so destructured struct-form. Definition and `From` impls
+/// disagreed in shape and rustc rejected them (E0559 / E0769). Both sides must now
+/// consult the same predicate.
+#[test]
+fn adjacently_tagged_tuple_variant_uses_tuple_form_in_both_definition_and_conversions() {
+    use crate::codegen::conversions::helpers::variant_emits_tuple_form;
+
+    let mut adjacent = make_data_enum("OperationResult", Some("type"));
+    adjacent.serde_content = Some("output".to_string());
+    adjacent.variants[1].is_tuple = true;
+    adjacent.variants[1].fields[0].name = "_0".to_string();
+
+    // The definition emits tuple form ...
+    let code = gen_enum(&adjacent);
+    assert!(code.contains("Jpeg(String)"), "{code}");
+    assert!(!code.contains("Self::Jpeg { _0 }"), "{code}");
+
+    // ... and the shared predicate agrees, so conversions destructure the same way.
+    assert!(
+        variant_emits_tuple_form(&adjacent, &adjacent.variants[1]),
+        "adjacently-tagged tuple variant must report tuple form to the conversion layer"
+    );
+
+    // Untagged keeps working.
+    let mut untagged = make_data_enum("OperationResult", None);
+    untagged.serde_untagged = true;
+    untagged.variants[1].is_tuple = true;
+    untagged.variants[1].fields[0].name = "_0".to_string();
+    assert!(variant_emits_tuple_form(&untagged, &untagged.variants[1]));
+
+    // A non-tuple variant of an adjacently-tagged enum keeps struct form.
+    assert!(
+        !variant_emits_tuple_form(&adjacent, &adjacent.variants[0]),
+        "struct-form variants must not be reported as tuple form"
+    );
+}

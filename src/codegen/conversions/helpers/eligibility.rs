@@ -1,6 +1,6 @@
 use crate::codegen::conversions::helpers::type_discovery::field_references_excluded_type;
 use crate::codegen::shared::binding_fields;
-use crate::core::ir::{ApiSurface, EnumDef, FieldDef, TypeDef, TypeRef};
+use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, FieldDef, TypeDef, TypeRef};
 use ahash::{AHashMap, AHashSet};
 
 /// Build the set of types that can have core→binding From safely generated.
@@ -305,6 +305,20 @@ pub fn is_tuple_variant(fields: &[FieldDef]) -> bool {
             .name
             .strip_prefix('_')
             .is_some_and(|rest: &str| rest.chars().all(|c: char| c.is_ascii_digit()))
+}
+
+/// Returns true if serde represents `variant` in tuple form `Variant(T)` rather than
+/// struct form `Variant { _0: T }`.
+///
+/// Serde uses tuple form for BOTH untagged enums and adjacently-tagged ones (`tag` +
+/// `content`). A backend whose enum body emitter follows serde here must use this same
+/// predicate for its conversion match arms, or the definition and the `From` impls
+/// disagree in shape and rustc rejects them with E0559 / E0769.
+///
+/// Project-agnostic on purpose: the emitter and the conversion layer must not each
+/// carry their own copy of this rule. ~keep
+pub fn variant_emits_tuple_form(enum_def: &EnumDef, variant: &EnumVariant) -> bool {
+    variant.is_tuple && (enum_def.serde_untagged || enum_def.serde_content.is_some())
 }
 
 /// Returns true if a TypeDef represents a newtype struct (single unnamed field `_0`).

@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **codegen/conversions**: use one tuple-variant predicate for enum definitions and `From` conversions so
+  adjacently tagged tuple variants and untagged struct variants emit matching Rust syntax (#232).
 - **snippets**: enforce one timeout budget across every snippet in a validation batch and terminate timed-out
   toolchain process groups so descendant processes cannot keep docs generation alive.
 - **validate versions**: discover nested C#, Dart, Zig, and Cargo lock manifests, validate all C# assembly version
