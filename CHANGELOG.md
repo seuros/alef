@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **zig**: give each streaming adapter its own iterator struct type instead of naming it after the item type alone.
+  Two streaming methods on the same opaque handle that yield the same item type (e.g. `crawl_stream` and
+  `batch_crawl_stream`, both yielding `CrawlEvent`) collapsed into one shared `{ItemType}Stream` struct — whichever
+  adapter emitted its struct first "won" the name, and the other adapter's wrapper method returned that same struct,
+  whose `next()`/`deinit()` hardcode only the first adapter's `_next`/`_free` FFI symbols. That compiled and linked
+  (both symbol sets exist in the C header) but handed the second adapter's stream handle to the first adapter's
+  native functions — a runtime handle type-confusion bug, not a missing feature. Colliding adapters now each get a
+  uniquely named struct derived from the adapter's own name. **Consumer-visible:** where a collision exists the
+  shared `{ItemType}Stream` type is renamed — crawlberg's `CrawlEventStream` becomes `CrawlStream` and
+  `BatchCrawlStream`. Zig code naming the old type explicitly must be updated. Types with a single streaming adapter
+  keep their existing name.
+
 ### Fixed
 
 - **e2e/wasm (tests)**: cover the fully-excluded-category path through `WasmCodegen::generate`, not only through the

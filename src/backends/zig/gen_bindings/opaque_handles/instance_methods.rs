@@ -27,7 +27,16 @@ pub(super) fn emit_opaque_method(
     out: &mut String,
 ) {
     if let Some(item_type) = streaming_item_types.get(&method.name) {
-        emit_opaque_streaming_method(method, ty, prefix, type_snake, item_type, declared_errors, out);
+        emit_opaque_streaming_method(
+            method,
+            ty,
+            prefix,
+            type_snake,
+            item_type,
+            declared_errors,
+            streaming_item_types,
+            out,
+        );
         return;
     }
 

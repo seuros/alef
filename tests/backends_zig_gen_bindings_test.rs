@@ -1753,6 +1753,216 @@ type = "CrawlStreamRequest"
     );
 }
 
+/// Regression coverage for a handle type-confusion bug: two streaming adapters on the
+/// same opaque handle (`crawl_stream` and `batch_crawl_stream`) that both yield the
+/// same item type (`CrawlEvent`) must NOT be collapsed into one shared `CrawlEventStream`
+/// struct. Naming the emitted struct after the item type alone means whichever adapter's
+/// struct is emitted first "wins" the name — and both wrapper methods then return that
+/// same struct type, whose `next()`/`deinit()` bodies hardcode only ONE family's FFI
+/// symbols. A caller of the other adapter would silently hand its own stream handle to
+/// the wrong family's `_next`/`_free` symbols: it compiles and links (both symbols exist
+/// in the C header) but is a runtime handle type-confusion bug on the Rust side.
+///
+/// Each colliding adapter must get its own, uniquely named struct type whose `next()`
+/// and `deinit()` reference only that adapter's own `_start`/`_next`/`_free` symbols.
+#[test]
+fn colliding_stream_item_types_get_distinct_struct_types() {
+    let toml = r#"
+[workspace]
+languages = ["zig", "ffi"]
+
+[[crates]]
+name = "demo"
+sources = ["src/lib.rs"]
+
+[crates.ffi]
+prefix = "demo"
+
+[[crates.adapters]]
+name = "crawl_stream"
+pattern = "streaming"
+core_path = "demo::crawl_stream"
+owner_type = "CrawlEngineHandle"
+item_type = "CrawlEvent"
+error_type = "DemoError"
+request_type = "demo::CrawlStreamRequest"
+
+[[crates.adapters.params]]
+name = "req"
+type = "CrawlStreamRequest"
+
+[[crates.adapters]]
+name = "batch_crawl_stream"
+pattern = "streaming"
+core_path = "demo::batch_crawl_stream"
+owner_type = "CrawlEngineHandle"
+item_type = "CrawlEvent"
+error_type = "DemoError"
+request_type = "demo::BatchCrawlStreamRequest"
+
+[[crates.adapters.params]]
+name = "req"
+type = "BatchCrawlStreamRequest"
+"#;
+    let cfg: NewAlefConfig = toml::from_str(toml).expect("test config must parse");
+    let config = cfg.resolve().expect("test config must resolve").remove(0);
+
+    let crawl_stream_method = MethodDef {
+        name: "crawl_stream".into(),
+        params: vec![make_param("req", TypeRef::Named("CrawlStreamRequest".into()))],
+        return_type: TypeRef::String,
+        is_async: true,
+        is_static: false,
+        error_type: Some("DemoError".into()),
+        doc: "Stream crawl events for a single URL.".into(),
+        receiver: None,
+        sanitized: false,
+        trait_source: None,
+        returns_ref: false,
+        returns_cow: false,
+        return_newtype_wrapper: None,
+        has_default_impl: false,
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        version: Default::default(),
+    };
+
+    let batch_crawl_stream_method = MethodDef {
+        name: "batch_crawl_stream".into(),
+        params: vec![make_param("req", TypeRef::Named("BatchCrawlStreamRequest".into()))],
+        return_type: TypeRef::String,
+        is_async: true,
+        is_static: false,
+        error_type: Some("DemoError".into()),
+        doc: "Stream crawl events for multiple seed URLs.".into(),
+        receiver: None,
+        sanitized: false,
+        trait_source: None,
+        returns_ref: false,
+        returns_cow: false,
+        return_newtype_wrapper: None,
+        has_default_impl: false,
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        version: Default::default(),
+    };
+
+    let engine_type = TypeDef {
+        name: "CrawlEngineHandle".into(),
+        rust_path: "demo::CrawlEngineHandle".into(),
+        original_rust_path: String::new(),
+        fields: vec![],
+        methods: vec![crawl_stream_method, batch_crawl_stream_method],
+        is_opaque: true,
+        is_clone: false,
+        is_copy: false,
+        doc: String::new(),
+        cfg: None,
+        is_trait: false,
+        has_default: false,
+        has_stripped_cfg_fields: false,
+        is_return_type: false,
+        serde_rename_all: None,
+        has_serde: false,
+        super_traits: vec![],
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        is_variant_wrapper: false,
+        has_lifetime_params: false,
+        has_private_fields: false,
+        version: Default::default(),
+    };
+
+    let api = ApiSurface {
+        crate_name: "demo".into(),
+        version: "0.1.0".into(),
+        types: vec![engine_type],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![ErrorDef {
+            name: "DemoError".into(),
+            rust_path: "demo::DemoError".into(),
+            original_rust_path: String::new(),
+            variants: vec![ErrorVariant {
+                name: "Network".into(),
+                message_template: None,
+                fields: vec![],
+                has_source: false,
+                has_from: false,
+                is_unit: true,
+                is_tuple: false,
+                doc: String::new(),
+            }],
+            doc: String::new(),
+            methods: vec![],
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+
+    let files = ZigBackend.generate_bindings(&api, &config).unwrap();
+    let content = &files[0].content;
+
+    // The ambiguous, item-type-only name must never appear: both families collide on
+    // `CrawlEvent`, so neither may claim the generic `CrawlEventStream` name.
+    assert!(
+        !content.contains("CrawlEventStream"),
+        "colliding stream families must not share the item-type-only struct name: {content}"
+    );
+
+    assert!(
+        content.contains("pub const CrawlStream = struct {"),
+        "crawl_stream must get its own struct type: {content}"
+    );
+    assert!(
+        content.contains("pub const BatchCrawlStream = struct {"),
+        "batch_crawl_stream must get its own, distinctly named struct type: {content}"
+    );
+
+    // Each struct's next()/deinit() must dispatch to its OWN family's FFI symbols only.
+    assert!(
+        content.contains("c.demo_crawl_engine_handle_crawl_stream_next(handle)"),
+        "CrawlStream.next() must call the single-crawl _next symbol: {content}"
+    );
+    assert!(
+        content.contains("c.demo_crawl_engine_handle_crawl_stream_free(handle)"),
+        "CrawlStream.deinit() must call the single-crawl _free symbol: {content}"
+    );
+    assert!(
+        content.contains("c.demo_crawl_engine_handle_batch_crawl_stream_next(handle)"),
+        "BatchCrawlStream.next() must call the batch _next symbol: {content}"
+    );
+    assert!(
+        content.contains("c.demo_crawl_engine_handle_batch_crawl_stream_free(handle)"),
+        "BatchCrawlStream.deinit() must call the batch _free symbol: {content}"
+    );
+
+    // Each wrapper method must return (and construct) its own family's struct type,
+    // not the other family's.
+    assert!(
+        content.contains("pub fn crawl_stream(self: *CrawlEngineHandle") && content.contains("!CrawlStream {"),
+        "crawl_stream() must return !CrawlStream: {content}"
+    );
+    assert!(
+        content.contains("return CrawlStream{ ._handle = _stream_handle };"),
+        "crawl_stream() must construct a CrawlStream, not a BatchCrawlStream: {content}"
+    );
+    assert!(
+        content.contains("pub fn batch_crawl_stream(self: *CrawlEngineHandle") && content.contains("!BatchCrawlStream {"),
+        "batch_crawl_stream() must return !BatchCrawlStream: {content}"
+    );
+    assert!(
+        content.contains("return BatchCrawlStream{ ._handle = _stream_handle };"),
+        "batch_crawl_stream() must construct a BatchCrawlStream, not a CrawlStream: {content}"
+    );
+}
+
 #[test]
 fn named_json_return_guards_against_null_to_json_pointer() {
     let result_type = TypeDef {

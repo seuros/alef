@@ -1,9 +1,46 @@
 use crate::backends::zig::gen_bindings::errors::resolve_zig_error_type;
 use crate::backends::zig::gen_bindings::helpers::emit_cleaned_zig_doc;
 use crate::core::ir::{MethodDef, TypeDef, TypeRef};
-use heck::AsSnakeCase;
+use heck::{AsSnakeCase, AsUpperCamelCase};
+use std::collections::HashMap;
 
 use super::render;
+
+/// Compute the Zig struct name for a streaming method's iterator type.
+///
+/// Defaults to `{item_type}Stream`. That name is only safe when a single streaming
+/// method on `ty` yields `item_type`: the emitted struct's `next()`/`deinit()` bodies
+/// hardcode the FFI symbols for one specific method (`{prefix}_{type_snake}_{method_snake}_next`,
+/// `..._free`), not the item type. If a second streaming method on the same `ty` yields
+/// the same `item_type` (e.g. `crawl_stream` and `batch_crawl_stream` both yielding
+/// `CrawlEvent`), a bare `{item_type}Stream` name would be shared by both families —
+/// whichever struct gets emitted first silently "wins" the name, and callers of the
+/// *other* method would receive its own handle wrapped in a type whose `next`/`deinit`
+/// dispatch to the *other* family's C symbols. That is a handle type-confusion bug, not
+/// a naming cosmetic — every colliding method must get its own type so the mismatch is
+/// unrepresentable rather than merely avoided by emission order.
+///
+/// Method names are unique within `ty`, so disambiguating by method name (with a
+/// redundant trailing `_stream` stripped for readability) is always collision-free.
+pub(super) fn stream_struct_name(
+    ty: &TypeDef,
+    method_snake: &str,
+    item_type: &str,
+    streaming_item_types: &HashMap<String, String>,
+) -> String {
+    let sibling_count = ty
+        .methods
+        .iter()
+        .filter(|m| streaming_item_types.get(&m.name).map(String::as_str) == Some(item_type))
+        .count();
+
+    if sibling_count <= 1 {
+        return format!("{item_type}Stream");
+    }
+
+    let trimmed = method_snake.strip_suffix("_stream").unwrap_or(method_snake);
+    format!("{}Stream", AsUpperCamelCase(trimmed))
+}
 
 /// Emit a Zig struct type for a streaming iterator.
 ///
@@ -11,16 +48,17 @@ use super::render;
 /// to incrementally consume chunks without eagerly collecting them all into memory.
 pub(super) fn emit_streaming_struct(
     method: &MethodDef,
-    _ty: &TypeDef,
+    ty: &TypeDef,
     prefix: &str,
     type_snake: &str,
     item_type: &str,
     declared_errors: &[String],
+    streaming_item_types: &HashMap<String, String>,
     out: &mut String,
 ) {
     let method_snake = AsSnakeCase(&method.name).to_string();
     let item_snake = AsSnakeCase(item_type).to_string();
-    let struct_name = format!("{}Stream", item_type);
+    let struct_name = stream_struct_name(ty, &method_snake, item_type, streaming_item_types);
 
     let zig_error_type = method
         .error_type
@@ -55,12 +93,13 @@ pub(super) fn emit_opaque_streaming_method(
     type_snake: &str,
     item_type: &str,
     declared_errors: &[String],
+    streaming_item_types: &HashMap<String, String>,
     out: &mut String,
 ) {
     emit_cleaned_zig_doc(out, &method.doc, "    ");
 
     let method_snake = AsSnakeCase(&method.name).to_string();
-    let struct_name = format!("{}Stream", item_type);
+    let struct_name = stream_struct_name(ty, &method_snake, item_type, streaming_item_types);
     let zig_error_type = method
         .error_type
         .as_ref()
