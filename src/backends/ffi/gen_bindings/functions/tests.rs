@@ -139,3 +139,27 @@ fn panic_footer_uses_existing_failure_sentinel() {
     let status_footer = gen_function_wrapper_footer(&Some("i32".to_string()), &TypeRef::Unit, true);
     assert!(status_footer.contains("-1"));
 }
+
+#[test]
+fn scalar_handle_override_controls_parameter_failure_sentinel() {
+    let parameter = ParamDef {
+        name: "source".to_string(),
+        ty: TypeRef::String,
+        ..ParamDef::default()
+    };
+    let output = gen_param_conversion_with_enums(
+        &parameter,
+        &ParamConversionContext {
+            has_error: false,
+            is_bytes_result: false,
+            return_type: &TypeRef::String,
+            ffi_return_type: Some("AlefHandle"),
+            core_import: "sample_lib",
+            path_map: &AHashMap::new(),
+            enum_names: &AHashSet::new(),
+        },
+    );
+
+    assert!(output.contains("return 0;"), "{output}");
+    assert!(!output.contains("return std::ptr::null_mut();"), "{output}");
+}

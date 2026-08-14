@@ -224,10 +224,11 @@ pub(super) fn null_return_value(ty: &TypeRef) -> &'static str {
 }
 
 pub(super) fn ffi_null_return_value<'a>(ty: &TypeRef, ffi_return_type: Option<&'a str>) -> &'a str {
-    if ffi_return_type.is_some_and(|return_type| return_type.starts_with("*const ")) {
-        "std::ptr::null()"
-    } else {
-        null_return_value(ty)
+    match ffi_return_type {
+        Some("AlefHandle") => "0",
+        Some(return_type) if return_type.starts_with("*const ") => "std::ptr::null()",
+        Some(return_type) if return_type.starts_with("*mut ") => "std::ptr::null_mut()",
+        _ => null_return_value(ty),
     }
 }
 
