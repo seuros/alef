@@ -312,6 +312,13 @@ pub struct ValidationResult {
     pub effective_level: ValidationLevel,
     pub message: Option<String>,
     pub duration_ms: u64,
+    /// True when the snippet passed below the requested level solely because its validator
+    /// declares a lower `max_level`. That ceiling is a capability statement, not a quality
+    /// signal, so strict mode must not treat it as a failure — otherwise requesting a level
+    /// any validator caps below is structurally unsatisfiable. Downgrades from any other
+    /// cause leave this false and still fail strict. ~keep
+    #[serde(default)]
+    pub capability_capped: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -324,6 +331,10 @@ pub struct RunSummary {
     pub skipped: usize,
     pub errors: usize,
     pub unavailable: usize,
+    /// Passing snippets whose level was limited by their validator's declared ceiling.
+    /// Reported so a strict run can say what it accepted rather than hiding it. ~keep
+    #[serde(default)]
+    pub capability_capped: usize,
     pub results: Vec<ValidationResult>,
 }
 
@@ -339,10 +350,14 @@ impl RunSummary {
             skipped: 0,
             errors: 0,
             unavailable: 0,
+            capability_capped: 0,
             results,
         };
 
         for result in &summary.results {
+            if result.capability_capped {
+                summary.capability_capped += 1;
+            }
             match result.status {
                 SnippetStatus::Pass => summary.passed += 1,
                 SnippetStatus::Downgraded => summary.downgraded += 1,

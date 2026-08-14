@@ -63,6 +63,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of silently disappearing from generated Go literals.
 - **e2e/typescript**: qualify inferred enum-field metadata by its owning type so an enum field cannot poison a
   same-named scalar field on another generated DTO.
+- **snippets/strict**: treat a validator's declared `max_level` as a capability ceiling rather than a downgrade.
+  A snippet that passes at its validator's maximum was reported as downgraded, and `strict` fails on any downgrade,
+  so requesting a level that any validator caps below — `typecheck` with zig capping at `compile`, or toml/json/yaml
+  capping at `syntax` — could never pass however healthy the environment was, and the only consumer workaround was
+  lowering the level for every other language too. Such results now pass, carry a `capability_capped` flag, are
+  counted in the run summary, and are surfaced through an explicit warning. Annotation-driven downgrades and
+  environmental failures (unavailable toolchains, timeouts, errors) are unchanged and still fail strict.
 - **jni**: request the core crate's configured feature set in the generated JNI `Cargo.toml`. Features were read only
   from `[crates.kotlin_android] features`, so a consumer that omits that key got a dependency on the core crate's
   default features while the generated shim still called into feature-gated modules — the crate then failed to compile

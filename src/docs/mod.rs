@@ -480,6 +480,14 @@ fn validate_snippets(
                 summary.downgraded
             );
         }
+        if summary.capability_capped > 0 {
+            tracing::warn!(
+                capped = summary.capability_capped,
+                "docs.snippets validated {} snippet(s) below the requested level because their validator caps lower; \
+                 these pass strict mode, because the level is unreachable for that language rather than degraded",
+                summary.capability_capped
+            );
+        }
         if summary.unavailable > 0 {
             tracing::warn!(
                 "docs.snippets skipped {} snippet validation(s) because required toolchains were unavailable",
