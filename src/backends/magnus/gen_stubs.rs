@@ -326,11 +326,13 @@ fn gen_type_stub(
         lines.push("".to_string());
     }
 
-    let accessor = if typ.has_default {
-        "attr_accessor"
-    } else {
-        "attr_reader"
-    };
+    // ~keep Always a reader. `attr_accessor` additionally declares `name=`, and the binding
+    // defines no writer for any field: `gen_field_accessor` emits one zero-arity getter, and
+    // `module_class_method_register` is the only registration template, so nothing ever reaches
+    // Ruby as a setter. Keying this off `has_default` declared a writer on every field of every
+    // defaulted struct — steep then accepts an assignment that raises `NoMethodError` at runtime,
+    // which is exactly the stub-vs-extension drift these files exist to prevent.
+    let accessor = "attr_reader";
     let mut emitted_attr_names: ahash::AHashSet<&str> = ahash::AHashSet::default();
     for f in binding_fields(&typ.fields) {
         let field_type = rbs_accessor_type(f);

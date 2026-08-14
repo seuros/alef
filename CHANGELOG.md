@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fixture whose expectation legitimately ends in a newline could never be satisfied, and a genuine trailing-whitespace
   regression was silently absorbed. Neither side is normalized now.
 
+- **magnus**: declare `.rbs` attributes read-only. `attr_accessor` was emitted for every field of a defaulted
+  struct, but the binding defines no writer for any field, so steep green-lit assignments that raise
+  `NoMethodError`.
 - **magnus**: declare each `.rbs` attribute as the accessor the extension actually emits. `Json` is mapped to
   `String` recursively, because the binding serializes it before Ruby sees it — `json_value` promised a parsed
   document that never arrives, so steep accepted `page.extracted_data["key"]` on a `String`. Nullability now

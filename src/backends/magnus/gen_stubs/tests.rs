@@ -368,6 +368,39 @@ fn function_param_of_trait_interface_type_is_substituted_to_underscore_prefixed_
     );
 }
 
+/// A defaulted struct must still declare read-only attributes.
+///
+/// ~keep `attr_accessor` also declares `name=`, and the binding defines no writer for any field —
+/// `gen_field_accessor` emits a single zero-arity getter and there is no registration template for
+/// a setter. Declaring writers let steep green-light an assignment that raises `NoMethodError`.
+#[test]
+fn defaulted_struct_attributes_are_read_only() {
+    use crate::core::ir::{ApiSurface, TypeDef};
+
+    let typ = TypeDef {
+        name: "Options".to_string(),
+        rust_path: "test_lib::Options".to_string(),
+        fields: vec![field("retries", TypeRef::Primitive(PrimitiveType::U32))],
+        has_default: true,
+        ..Default::default()
+    };
+    let api = ApiSurface {
+        types: vec![typ],
+        ..Default::default()
+    };
+
+    let stub = super::gen_stubs(&api, "test_lib", false, &ahash::AHashMap::new(), &[]);
+
+    assert!(
+        stub.contains("attr_reader retries: Integer"),
+        "a defaulted struct's fields must be readable:\n{stub}"
+    );
+    assert!(
+        !stub.contains("attr_accessor"),
+        "the binding defines no setter, so no attribute may declare one:\n{stub}"
+    );
+}
+
 /// The declared type of each attribute, as it appears in the emitted stub.
 fn declared_attr_types(stub: &str) -> std::collections::BTreeMap<String, String> {
     stub.lines()
