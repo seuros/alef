@@ -760,7 +760,7 @@ pub unsafe extern "C" fn {fn_start}(
 
     let requests = [
         HandleRequest {{ handle: client, expected_type: std::any::TypeId::of::<{owner_ty}>() }},
-        HandleRequest {{ handle: req, expected_type: std::any::TypeId::of::<{core_import}::{request_type}>() }},
+        HandleRequest {{ handle: req, expected_type: std::any::TypeId::of::<{request_type}>() }},
     ];
     let values = match acquire_handles(&requests) {{
         Ok(values) => values,
@@ -777,7 +777,7 @@ pub unsafe extern "C" fn {fn_start}(
         Ok(value) => value,
         Err(error) => {{ set_handle_error(&error); return 0; }}
     }};
-    let request_ptr = match locked_handle_ptr::<{core_import}::{request_type}>(&mut guards, req) {{
+    let request_ptr = match locked_handle_ptr::<{request_type}>(&mut guards, req) {{
         Ok(value) => value,
         Err(error) => {{ set_handle_error(&error); return 0; }}
     }};

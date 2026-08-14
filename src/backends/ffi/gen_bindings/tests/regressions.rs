@@ -584,6 +584,15 @@ type = "ChatRequest"
         lib.content.contains("acquire_handles(&requests)"),
         "inputs must be validated together"
     );
+    assert!(
+        lib.content.contains("TypeId::of::<my_lib::ChatRequest>()"),
+        "qualified request types must be used verbatim"
+    );
+    assert!(
+        lib.content.contains("locked_handle_ptr::<my_lib::ChatRequest>"),
+        "request handle lookup must not duplicate the configured module path"
+    );
+    assert!(!lib.content.contains("my_lib::my_lib::ChatRequest"));
 
     // SAFETY comments must be present
     assert!(
