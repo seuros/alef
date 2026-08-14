@@ -161,6 +161,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   misplaced settings; extension maps remain open where arbitrary names are part of the schema.
 - **ffi/java**: always emit JSON constructors for serializable FFI types and declare matching Java lifecycle handles,
   including types reached through generated facade fields rather than direct function parameters.
+- **go/visitor**: keep options-field visitor context and result types out of generic binding and method emission, so
+  generated Go packages no longer call FFI symbols intentionally omitted for borrowed visitor-associated types.
 
 - **kotlin-android**: locate the configured JNI crate by walking from the generated Gradle project, accept an
   explicit manifest override, and copy host libraries from the Cargo workspace target directory.

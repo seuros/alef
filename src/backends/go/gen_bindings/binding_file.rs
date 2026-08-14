@@ -27,6 +27,14 @@ pub(super) fn strip_trailing_whitespace(content: &str) -> String {
     result
 }
 
+fn body_uses_qualified_name(body: &str, qualified_name: &str) -> bool {
+    body.lines().any(|line| {
+        line.split("//")
+            .next()
+            .is_some_and(|code| code.contains(qualified_name))
+    })
+}
+
 /// Run `gofmt -s` on generated Go code. Falls back to the original if gofmt is unavailable.
 pub(super) fn format_go_code(code: &str) -> String {
     use std::io::Write;
@@ -226,11 +234,12 @@ pub(super) fn gen_go_file(
     }
 
     let bridge_associated_types = config.bridge_associated_types();
-    let visitor_types: std::collections::HashSet<&str> = if !bridge_param_names.is_empty() {
-        bridge_associated_types.iter().map(|s| s.as_str()).collect()
-    } else {
-        std::collections::HashSet::new()
-    };
+    let visitor_types: std::collections::HashSet<&str> =
+        if visitor_bridge_cfg.is_some() || !bridge_param_names.is_empty() {
+            bridge_associated_types.iter().map(|s| s.as_str()).collect()
+        } else {
+            std::collections::HashSet::new()
+        };
 
     // Go type identifiers the loop below emits; disambiguates collisions via `go_free_function_name`. ~keep
     let reserved_type_names: HashSet<String> = api
@@ -430,7 +439,7 @@ pub(super) fn gen_go_file(
     for typ in api
         .types
         .iter()
-        .filter(|typ| !typ.is_trait && !exclude_types.contains(&typ.name))
+        .filter(|typ| !typ.is_trait && !visitor_types.contains(typ.name.as_str()) && !exclude_types.contains(&typ.name))
     {
         if typ.is_opaque && error_names.contains(typ.name.as_str()) {
             continue;
@@ -503,26 +512,23 @@ pub(super) fn gen_go_file(
         }
     }
 
-    let has_opaque_types = api.types.iter().any(|t| t.is_opaque);
-    let has_sync_functions = api.functions.iter().any(|f| !f.is_async);
-    let has_non_static_methods = api.types.iter().any(|t| t.methods.iter().any(|m| !m.is_static));
-    let needs_json_and_unsafe = has_sync_functions || has_non_static_methods;
+    let has_opaque_types = api.types.iter().any(|typ| typ.is_opaque);
+    let has_sync_functions = api.functions.iter().any(|function| !function.is_async);
+    let has_non_static_methods = api
+        .types
+        .iter()
+        .filter(|typ| !visitor_types.contains(typ.name.as_str()))
+        .any(|typ| typ.methods.iter().any(|method| !method.is_static));
+    let needs_json = has_sync_functions || has_non_static_methods;
 
     let mut imports = vec!["fmt"];
-    if needs_json_and_unsafe {
+    if needs_json {
         imports.insert(0, "encoding/json");
-        let has_runtime_usage = body.lines().any(|line| {
-            if let Some(code_part) = line.split("//").next() {
-                code_part.contains("runtime.")
-            } else {
-                false
-            }
-        });
-        if has_runtime_usage {
-            imports.push("runtime");
-        }
-        imports.push("unsafe");
-    } else if has_opaque_types {
+    }
+    if body_uses_qualified_name(&body, "runtime.") {
+        imports.push("runtime");
+    }
+    if needs_json || has_opaque_types || body_uses_qualified_name(&body, "unsafe.") {
         imports.push("unsafe");
     }
     if !api.errors.is_empty() {
