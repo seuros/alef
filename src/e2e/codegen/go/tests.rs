@@ -1142,3 +1142,52 @@ fn assertion_without_an_index_gets_no_non_empty_precondition() {
         "the fixture's own not_empty check must be emitted verbatim; got:\n{out}"
     );
 }
+
+/// `len()` does not compile against a Go numeric scalar (e.g. `float64`). A sibling
+/// `greater_than_or_equal` assertion against a JSON number on the same field proves the
+/// field is a scalar number, so `not_empty` must skip the `len()` call entirely rather than
+/// emit code that fails to build. Reverting the fix reintroduces
+/// `if len(result.Results[0].QualityScore) == 0 {`, which does not compile.
+#[test]
+fn not_empty_on_a_numeric_scalar_field_emits_no_len_call() {
+    let out = render_indexed_assertion_function(vec![
+        Assertion {
+            assertion_type: "not_empty".to_string(),
+            field: Some("results[0].quality_score".to_string()),
+            ..Default::default()
+        },
+        Assertion {
+            assertion_type: "greater_than_or_equal".to_string(),
+            field: Some("results[0].quality_score".to_string()),
+            value: Some(serde_json::json!(0.0)),
+            ..Default::default()
+        },
+    ]);
+
+    assert!(
+        !out.contains("len(result.Results[0].QualityScore)"),
+        "not_empty on a numeric scalar must not call len(), which does not compile against \
+         a scalar Go type; got:\n{out}"
+    );
+    assert!(
+        !out.contains("t.Errorf(\"expected non-empty value\")"),
+        "a numeric scalar always carries a value in Go, so not_empty has nothing to check; got:\n{out}"
+    );
+}
+
+/// A field with no numeric sibling assertion is presumed sized (string/slice/array/map), so
+/// `not_empty` must keep using `len()` — the fix narrows only the proven-scalar case, it does
+/// not stop measuring collections and strings.
+#[test]
+fn not_empty_on_a_sized_field_still_uses_len() {
+    let out = render_indexed_assertion_function(vec![Assertion {
+        assertion_type: "not_empty".to_string(),
+        field: Some("results[0].content".to_string()),
+        ..Default::default()
+    }]);
+
+    assert!(
+        out.contains("\tif len(result.Results[0].Content) == 0 {\n\t\tt.Errorf(\"expected non-empty value\")\n\t}\n"),
+        "not_empty on a field with no numeric sibling assertion must still use len(); got:\n{out}"
+    );
+}

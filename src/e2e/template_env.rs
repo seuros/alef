@@ -165,7 +165,6 @@ static TEMPLATES: &[(&str, &str)] = &[
     ),
     ("r/description.jinja", include_str!("templates/r/description.jinja")),
     ("r/snippet_body.jinja", include_str!("templates/r/snippet_body.jinja")),
-    ("r/assertion.jinja", include_str!("templates/r/assertion.jinja")),
     (
         "r/visitor_method.jinja",
         include_str!("templates/r/visitor_method.jinja"),
@@ -530,7 +529,6 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/wasm/globalSetup.ts.jinja"),
     ),
     ("wasm/tsconfig.jinja", include_str!("templates/wasm/tsconfig.jinja")),
-    ("wasm/assertion.jinja", include_str!("templates/wasm/assertion.jinja")),
     (
         "wasm/visitor_method.jinja",
         include_str!("templates/wasm/visitor_method.jinja"),

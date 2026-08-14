@@ -16,6 +16,7 @@ pub(super) fn render_assertion(
     import_alias: &str,
     field_resolver: &FieldResolver,
     optional_locals: &std::collections::HashMap<String, String>,
+    numeric_scalar_fields: &std::collections::HashSet<&str>,
     result_is_simple: bool,
     result_is_array: bool,
     is_streaming: bool,
@@ -512,17 +513,28 @@ pub(super) fn render_assertion(
             }
         }
         "not_empty" => {
+            let resolved_field = assertion.field.as_deref().unwrap_or("");
             let field_is_array = {
-                let rf = assertion.field.as_deref().unwrap_or("");
-                let rn = field_resolver.resolve(rf);
+                let rn = field_resolver.resolve(resolved_field);
                 field_resolver.is_array(rn)
             };
+            // `len()` only compiles against a sized Go type (string, slice, array, map,
+            // channel). A field that some *other* assertion in this fixture compares
+            // numerically (`equals`/`greater_than[_or_equal]`/`less_than[_or_equal]`
+            // against a JSON number) is proven to be a scalar number, not a sized type —
+            // `not_empty` cannot call `len()` on it without failing to build. A required
+            // numeric scalar always carries a value in Go (there is no zero-length state
+            // to detect), so the check degrades to a no-op, matching how `not_empty`
+            // already treats "no meaningful check applies" for e.g. `not_error`.
+            let is_numeric_scalar = !is_optional && !field_is_array && numeric_scalar_fields.contains(resolved_field);
             if is_optional && !field_is_array {
                 let _ = writeln!(out_ref, "\tif {field_expr} == nil {{");
             } else if is_optional && field_is_slice {
                 let _ = writeln!(out_ref, "\tif {field_expr} == nil || len({field_expr}) == 0 {{");
             } else if is_optional {
                 let _ = writeln!(out_ref, "\tif {field_expr} == nil || len(*{field_expr}) == 0 {{");
+            } else if is_numeric_scalar {
+                return;
             } else {
                 let _ = writeln!(out_ref, "\tif len({field_expr}) == 0 {{");
             }
