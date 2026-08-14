@@ -89,42 +89,6 @@ pub(in crate::backends::go::gen_bindings) fn gen_last_error_helper(
     )
 }
 
-#[cfg(test)]
-mod last_error_tests {
-    use super::*;
-    use crate::core::ir::{ErrorDef, ErrorVariant};
-
-    #[test]
-    fn typed_errors_dispatch_by_numeric_taxonomy_code() {
-        let error = ErrorDef {
-            name: "RequestError".to_string(),
-            rust_path: "sample::RequestError".to_string(),
-            variants: vec![ErrorVariant {
-                name: "InvalidInput".to_string(),
-                is_unit: true,
-                ..Default::default()
-            }],
-            original_rust_path: String::new(),
-            doc: String::new(),
-            methods: Vec::new(),
-            binding_excluded: false,
-            binding_exclusion_reason: None,
-            version: Default::default(),
-        };
-        let api = crate::core::ir::ApiSurface {
-            errors: vec![error],
-            ..Default::default()
-        };
-        let code = api.error_taxonomy()[0].code;
-
-        let helper = gen_last_error_helper(&api, "sample");
-
-        assert!(helper.contains(&format!("case {code}:")));
-        assert!(helper.contains("return ErrInvalidInput"));
-        assert!(helper.contains("fmt.Errorf(\"[%d] %s\", code, message)"));
-    }
-}
-
 /// Emit Go-convention doc comment lines for an exported symbol into `out`.
 ///
 /// Go's revive linter requires that the first line of a doc comment starts with
@@ -340,5 +304,41 @@ fn emit_godoc_sections(out: &mut String, sections: &crate::codegen::doc_emission
             }
             let _ = in_fence;
         }
+    }
+}
+
+#[cfg(test)]
+mod last_error_tests {
+    use super::*;
+    use crate::core::ir::{ErrorDef, ErrorVariant};
+
+    #[test]
+    fn typed_errors_dispatch_by_numeric_taxonomy_code() {
+        let error = ErrorDef {
+            name: "RequestError".to_string(),
+            rust_path: "sample::RequestError".to_string(),
+            variants: vec![ErrorVariant {
+                name: "InvalidInput".to_string(),
+                is_unit: true,
+                ..Default::default()
+            }],
+            original_rust_path: String::new(),
+            doc: String::new(),
+            methods: Vec::new(),
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        };
+        let api = crate::core::ir::ApiSurface {
+            errors: vec![error],
+            ..Default::default()
+        };
+        let code = api.error_taxonomy()[0].code;
+
+        let helper = gen_last_error_helper(&api, "sample");
+
+        assert!(helper.contains(&format!("case {code}:")));
+        assert!(helper.contains("return ErrInvalidInput"));
+        assert!(helper.contains("fmt.Errorf(\"[%d] %s\", code, message)"));
     }
 }
