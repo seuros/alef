@@ -127,7 +127,13 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
     }
     imports.extend(visitor_imports);
     let referenced_code = format!("{}\n{args}\n{client_setup}", setup_lines.join("\n"));
-    if let Some(name) = options_type
+    // Every imported type name goes through the same prefixing helper the body
+    // uses. For wasm the emitted code constructs prefixed classes
+    // (`WasmExtractInput`), so an unprefixed import names a symbol the package
+    // does not export -- `render_test_file` prefixes at its own import sites for
+    // exactly this reason. Non-wasm languages pass through unchanged.
+    let import_name = |name: &str| wasm_prefixed_wrapped_type(lang, name, type_defs, enums, wasm_type_prefix);
+    if let Some(name) = options_type.as_deref().map(import_name)
         && referenced_code.contains(&name)
     {
         imports.insert(name);
@@ -136,13 +142,14 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
         nested_types
             .into_values()
             .chain(enum_fields.into_values())
+            .map(|name| import_name(&name))
             .filter(|name| referenced_code.contains(name)),
     );
     for arg in recipe.args {
         if arg.arg_type == "json_object"
             && let Some(type_name) = &arg.element_type
         {
-            let type_name = canonical_ts_type_name(lang, type_name, config);
+            let type_name = import_name(&canonical_ts_type_name(lang, type_name, config));
             if referenced_code.contains(&type_name) {
                 imports.insert(type_name);
             }

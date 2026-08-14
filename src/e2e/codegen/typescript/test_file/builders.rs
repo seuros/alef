@@ -367,6 +367,11 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
             // Look up by both snake_case (fixture key) and camelCase (alef.toml override key
             // convention) so the alef.toml `enum_fields = { codeBlockStyle = "..." }` style
             // matches fixtures written with snake_case keys.
+            //
+            // Prefix wasm-wrapped enums exactly as the typed branch above does:
+            // the package exports `WasmExtractInputKind`, so a bare
+            // `ExtractInputKind.Uri` references an undefined name.
+            let enum_type = wasm_prefixed_wrapped_type(lang, enum_type, type_defs, enums, wasm_type_prefix);
             if let serde_json::Value::String(s) = val {
                 stmts.push(format!("{var}.{camel_key} = {enum_type}.{};", s.to_upper_camel_case()));
             } else {
