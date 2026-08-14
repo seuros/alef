@@ -42,6 +42,14 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/vtable_ref_delegation_method.jinja"),
     ),
     (
+        "options_field_bridge_setter.rs.jinja",
+        include_str!("templates/options_field_bridge_setter.rs.jinja"),
+    ),
+    (
+        "options_field_bridge_function.rs.jinja",
+        include_str!("templates/options_field_bridge_function.rs.jinja"),
+    ),
+    (
         "vtable_struct_header.jinja",
         include_str!("templates/vtable_struct_header.jinja"),
     ),

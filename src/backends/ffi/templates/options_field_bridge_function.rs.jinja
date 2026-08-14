@@ -1,0 +1,49 @@
+/// Run `{{ function_name }}` with configured options-field bridge support.
+///
+/// Returns an owned `{{ return_type_name }}` handle on success, or zero on failure. Check
+/// `{{ prefix }}_last_error_code` / `{{ prefix }}_last_error_context` for error details. Free
+/// the returned handle with `{{ prefix }}_{{ return_type_snake }}_free`.
+///
+/// If a bridge was attached to `{{ options_param_name }}`, it is cloned into the core call.
+///
+/// # Safety
+///
+/// String pointers must be valid and NUL-terminated for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn {{ ffi_function_name }}(
+{{ params }}
+) -> AlefHandle {
+    catch_ffi_panic(0, || {
+        clear_last_error();
+{{ null_checks }}{{ conversions }}
+        let {{ options_param_name }}_rs: Option<{{ core_import }}::{{ options_type_name }}> =
+            if {{ options_param_name }} == 0 {
+                None
+            } else {
+                match with_handle::<{{ core_import }}::{{ options_type_name }}, _>(
+                    {{ options_param_name }},
+                    Clone::clone,
+                ) {
+                    Ok(options) => Some(options),
+                    Err(error) => {
+                        set_handle_error(&error);
+                        return 0;
+                    }
+                }
+            };
+
+        match {{ core_function_path }}({{ call_args }}) {
+            Ok(result) => match insert_handle(result) {
+                Ok(handle) => handle,
+                Err(error) => {
+                    set_handle_error(&error);
+                    0
+                }
+            },
+            Err(error) => {
+                set_last_error(2, &error.to_string());
+                0
+            }
+        }
+    })
+}

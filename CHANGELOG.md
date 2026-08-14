@@ -35,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **e2e/fixture**: accept a `skip.languages` id naming a known e2e target that isn't configured in this run, so a
   consumer holding a backend out of `[languages]` keeps its skip entries valid. Typo'd ids still fail, and `"ffi"`
   stays rejected because `Language::Ffi` maps to the `"c"` generator.
+- **ffi/e2e/c**: keep options-field bridge functions, options, results, and visitor callbacks on the scalar
+  generational `AlefHandle` ABI used by every ordinary managed value. The special options-field bridge bypass still
+  emitted raw pointers after the 0.61 handle migration, while its JSON and visitor constructors returned scalar
+  handles; generated C tests and snippets therefore failed strict compilation in both pointer-to-integer directions.
 - **tests**: refresh Kotlin Android, Swift, and Zig snapshots so the checked-in expectations cover the integrated
   JNI path discovery, serde bridge grouping, numeric error dispatch, and fallible string ownership behavior.
 - **ffi/scaffold**: declare every feature named by a `#[cfg(feature = "X")]` gate the codegen emits into the

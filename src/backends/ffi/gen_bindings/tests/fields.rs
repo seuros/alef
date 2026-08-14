@@ -189,7 +189,11 @@ fn test_named_field_non_clone_does_not_return_borrow_as_owned() {
     let files = backend.generate_bindings(&api, &config).unwrap();
     let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
 
-    let accessor = lib.content.split("fn my_lib_holder_inner").nth(1).expect("field accessor");
+    let accessor = lib
+        .content
+        .split("fn my_lib_holder_inner")
+        .nth(1)
+        .expect("field accessor");
     assert!(
         !accessor.contains(".clone()"),
         "non-Clone opaque Named field must not emit .clone() in accessor:\n{}",
@@ -363,13 +367,25 @@ result_type = "WalkOutcome"
         "options-field mode must not emit the legacy with_visitor wrapper"
     );
     assert!(
-        lib.content.contains("visitor: *mut SynVisitor"),
-        "options-field setter must accept *mut SynVisitor when visitor_callbacks is enabled"
+        lib.content
+            .contains("fn syn_options_set_renderer(options: AlefHandle, visitor: AlefHandle)"),
+        "options-field setter must use the public scalar managed-handle ABI"
     );
     assert!(
         !lib.content.contains("visitor: *mut SynSyntaxWalkerBridge"),
         "options-field setter must not require the trait-bridge handle when visitor_callbacks is enabled"
     );
+    assert!(
+        lib.content.contains("options: AlefHandle") && lib.content.contains(") -> AlefHandle"),
+        "options-field wrapper parameters and results must use scalar managed handles"
+    );
+    assert!(
+        lib.content.contains("with_handle::<my_lib::ParseOptions")
+            && lib.content.contains("with_handle_mut::<SynVisitor")
+            && lib.content.contains("insert_handle(result)"),
+        "options-field wrapper must resolve every managed value through the handle registry"
+    );
+    syn::parse_file(&lib.content).expect("scalar options-field bridge output must parse as Rust");
     assert!(
         !lib.content.contains("SynSyntaxWalkerBridge"),
         "legacy visitor callbacks must not ship an unattached generic bridge with an independent destructor"
@@ -458,12 +474,16 @@ options_field = "renderer"
         "must generate IR-derived symbol"
     );
     assert!(
-        lib.content.contains("settings: *const my_lib::RenderSettings"),
-        "must use configured options type"
+        lib.content.contains("settings: AlefHandle"),
+        "must carry the configured options type through the managed handle ABI"
     );
     assert!(
-        lib.content.contains(") -> *mut my_lib::RenderedDocument"),
-        "must use actual return type"
+        lib.content.contains(") -> AlefHandle"),
+        "must carry the actual return type through the managed handle ABI"
+    );
+    assert!(
+        lib.content.contains("with_handle::<my_lib::RenderSettings") && lib.content.contains("insert_handle(result)"),
+        "must resolve options and register results through the handle registry"
     );
     assert!(
         lib.content
@@ -478,6 +498,7 @@ options_field = "renderer"
         !lib.content.contains("ConversionOptions") && !lib.content.contains("ConversionResult"),
         "must not leak conversion-shaped type names in generic wrapper"
     );
+    syn::parse_file(&lib.content).expect("generic scalar options-field bridge output must parse as Rust");
 }
 
 /// Regression: a field marked `binding_excluded` (e.g. a global `[crates.exclude].fields`

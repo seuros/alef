@@ -286,7 +286,7 @@ mod tests {
             "int32_t sample_unregister_sample_backend(const char *, char **);\n",
             "void sample_free_string(char *);\n",
         );
-        super::super::snippet_regressions::compile_snippet(&rendered, header);
+        super::super::snippet_regressions::compile_snippet(&rendered, "sample_ffi.h", header);
         run_cleanup_harness(&rendered, header);
     }
 

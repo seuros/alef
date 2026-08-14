@@ -1,0 +1,53 @@
+/// Attach a vtable visitor bridge to a `{{ options_type_name }}` options handle.
+///
+/// The `{{ handle_type }}` encapsulates C callbacks invoked during conversion. Neither handle
+/// is consumed; both must be freed independently after every conversion using the options
+/// handle has completed. Pass `visitor = 0` to clear a previously attached visitor.
+///
+/// # Safety
+///
+/// `options` must be a live handle returned by `{{ prefix }}_{{ options_type_snake }}_from_json`
+/// or an equivalent constructor. `visitor` must be zero or a live handle returned by
+/// `{{ handle_constructor }}`. The visitor handle must remain live while the options handle
+/// can be used for conversion.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn {{ function_name }}(options: AlefHandle, visitor: AlefHandle) {
+    catch_ffi_panic((), || {
+        if options == 0 {
+            return;
+        }
+        if visitor == 0 {
+            if let Err(error) =
+                with_handle_mut::<{{ core_import }}::{{ options_type_name }}, _>(options, |options_ref| {
+                    options_ref.{{ field_name }} = None;
+                })
+            {
+                set_handle_error(&error);
+            }
+            return;
+        }
+
+        if let Err(error) = with_handle::<{{ handle_type }}, _>(visitor, |_| ()) {
+            set_handle_error(&error);
+            return;
+        }
+
+        // `VtableRef` resolves the registry-owned visitor for each callback invocation.
+        struct VtableRef(AlefHandle);
+
+        impl std::fmt::Debug for VtableRef {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.debug_tuple("VtableRef").finish()
+            }
+        }
+
+        impl {{ trait_path }} for VtableRef {
+{{ delegation_methods }}        }
+
+        if let Err(error) = with_handle_mut::<{{ core_import }}::{{ options_type_name }}, _>(options, |options_ref| {
+            options_ref.{{ field_name }} = Some(std::sync::Arc::new(std::sync::Mutex::new(VtableRef(visitor))));
+        }) {
+            set_handle_error(&error);
+        }
+    })
+}

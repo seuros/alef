@@ -57,7 +57,6 @@ pub(super) fn render_visitor_test_file(
     // FFI naming pattern instead of reading the trait_bridge.context_type
     // (which names the Rust-core type, not the FFI re-export).
     let visitor_context_type = format!("{prefix_upper}{visitor_type_stem}Context");
-    let visitor_handle_type = format!("{prefix_upper}{visitor_type_stem}Visitor");
 
     for (i, fixture) in fixtures.iter().enumerate() {
         let fn_name = sanitize_ident(&fixture.id);
@@ -120,11 +119,15 @@ pub(super) fn render_visitor_test_file(
         let _ = writeln!(out);
 
         // Create visitor handle.
-        let _ = writeln!(
-            out,
-            "    {visitor_handle_type}* _visitor = {prefix}_visitor_create(&_callbacks);"
-        );
-        let _ = writeln!(out, "    assert(_visitor != NULL && \"visitor create failed\");");
+        out.push_str(&crate::e2e::template_env::render(
+            "c/managed_handle_create.jinja",
+            minijinja::context! {
+                prefix_upper => &prefix_upper,
+                handle => "_visitor",
+                expression => format!("{prefix}_visitor_create(&_callbacks)"),
+                failure_message => "visitor create failed",
+            },
+        ));
         let _ = writeln!(out);
 
         // Create options handle.
@@ -559,6 +562,7 @@ fn c_visitor_placeholder_to_arg(method: &str, name: &str) -> String {
 #[cfg(test)]
 mod visitor_tests {
     use super::super::c_visitor_fixture_has_typed_call;
+    use super::super::snippet_regressions::compile_snippet;
     use super::{render_visitor_snippet, render_visitor_test_file};
     use crate::core::config::e2e::{CallConfig, CallOverride, E2eConfig};
     use crate::core::config::{ResolvedCrateConfig, TraitBridgeConfig};
@@ -688,6 +692,41 @@ mod visitor_tests {
         assert!(!content.contains("void test_custom_names"));
         assert!(!content.contains("alef_json_get_string"));
         assert!(!content.contains("krz_render_output_to_json"));
+    }
+
+    #[test]
+    fn c_visitor_snippet_compiles_against_scalar_managed_handle_abi() {
+        let fixture = visitor_fixture();
+        let content = render_visitor_snippet(
+            &fixture,
+            "krz.h",
+            "krz",
+            &e2e_config_with_c_call(),
+            &crate_config_with_visitor_metadata(),
+        )
+        .expect("visitor snippet renders");
+
+        compile_snippet(
+            &content,
+            "krz.h",
+            concat!(
+                "#include <stddef.h>\n",
+                "#include <stdint.h>\n",
+                "typedef uint64_t KRZAlefHandle;\n",
+                "typedef struct KRZKrzContext KRZKrzContext;\n",
+                "typedef struct KRZKrzVisitor KRZKrzVisitor;\n",
+                "typedef struct KRZKrzVisitorCallbacks {\n",
+                "  int32_t (*visit_text)(const KRZKrzContext *, void *, const char *, char **, size_t *);\n",
+                "} KRZKrzVisitorCallbacks;\n",
+                "KRZAlefHandle krz_visitor_create(const KRZKrzVisitorCallbacks *callbacks);\n",
+                "void krz_visitor_free(KRZAlefHandle visitor);\n",
+                "KRZAlefHandle krz_render_config_from_json(const char *json);\n",
+                "void krz_render_config_free(KRZAlefHandle options);\n",
+                "void krz_options_set_visitor(KRZAlefHandle options, KRZAlefHandle visitor);\n",
+                "KRZAlefHandle krz_render_document(const char *html, KRZAlefHandle options);\n",
+                "void krz_render_output_free(KRZAlefHandle result);\n",
+            ),
+        );
     }
 
     #[test]

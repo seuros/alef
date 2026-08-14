@@ -76,6 +76,10 @@ static TEMPLATES: &[(&str, &str)] = &[
     ),
     ("c/typed_handle.jinja", include_str!("templates/c/typed_handle.jinja")),
     (
+        "c/managed_handle_create.jinja",
+        include_str!("templates/c/managed_handle_create.jinja"),
+    ),
+    (
         "c/typed_handle_free.jinja",
         include_str!("templates/c/typed_handle_free.jinja"),
     ),

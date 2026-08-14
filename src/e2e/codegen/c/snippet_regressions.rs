@@ -15,7 +15,7 @@ fn json_arg(name: &str, field: &str, element_type: &str) -> crate::e2e::config::
     }
 }
 
-pub(super) fn compile_snippet(rendered: &str, header: &str) {
+pub(super) fn compile_snippet(rendered: &str, header_name: &str, header: &str) {
     let Some(compiler) = ["cc", "clang", "gcc"]
         .into_iter()
         .find(|candidate| which::which(candidate).is_ok())
@@ -23,7 +23,7 @@ pub(super) fn compile_snippet(rendered: &str, header: &str) {
         return;
     };
     let directory = tempfile::tempdir().expect("temporary C snippet directory");
-    std::fs::write(directory.path().join("sample_ffi.h"), header).expect("write neutral C header");
+    std::fs::write(directory.path().join(header_name), header).expect("write neutral C header");
     let source = directory.path().join("snippet.c");
     std::fs::write(&source, rendered).expect("write generated C snippet");
     let output = std::process::Command::new(compiler)
@@ -78,6 +78,7 @@ fn whole_input_typed_file_snippet_constructs_and_owns_the_public_handle() {
     );
     compile_snippet(
         &rendered,
+        "sample_ffi.h",
         concat!(
             "#include <stdint.h>\n",
             "typedef uint64_t SAMPLEAlefHandle;\n",
@@ -147,6 +148,7 @@ fn multiple_typed_args_and_ir_return_shape_match_the_public_abi() {
     assert!(!rendered.contains("ObsoleteOptions"), "{rendered}");
     compile_snippet(
         &rendered,
+        "sample_ffi.h",
         concat!(
             "#include <stdint.h>\n",
             "typedef uint64_t SAMPLEAlefHandle;\n",
@@ -192,6 +194,10 @@ fn list_return_uses_owned_json_string_abi() {
     assert!(!rendered.contains("SAMPLEList"), "{rendered}");
     compile_snippet(
         &rendered,
-        concat!("char *sample_list_items(void);\n", "void sample_free_string(char *value);\n"),
+        "sample_ffi.h",
+        concat!(
+            "char *sample_list_items(void);\n",
+            "void sample_free_string(char *value);\n"
+        ),
     );
 }
