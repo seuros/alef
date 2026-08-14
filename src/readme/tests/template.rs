@@ -3,10 +3,36 @@
 
 use super::super::*;
 use super::*;
-use crate::readme::template::render_performance_table;
+use crate::readme::template::{escape_markdown_heading_text, render_performance_table};
 use minijinja::Value;
 use std::fs;
 use std::path::PathBuf;
+
+// --- escape_markdown_heading_text: general rule, not just "C#" ---
+
+#[test]
+fn should_escape_a_single_trailing_hash() {
+    assert_eq!(escape_markdown_heading_text("C#"), "C\\#");
+}
+
+#[test]
+fn should_escape_every_character_in_a_run_of_trailing_hashes() {
+    assert_eq!(escape_markdown_heading_text("Foo##"), "Foo\\#\\#");
+}
+
+#[test]
+fn should_leave_a_mid_string_hash_untouched() {
+    // A `#` that isn't at the end of the name is never ambiguous with an ATX
+    // closing sequence, so it must not be escaped.
+    assert_eq!(escape_markdown_heading_text("C# (.NET)"), "C# (.NET)");
+}
+
+#[test]
+fn should_leave_names_without_a_trailing_hash_untouched() {
+    for name in ["Python", "Dart / Flutter", "Kotlin (Android)", ""] {
+        assert_eq!(escape_markdown_heading_text(name), name);
+    }
+}
 
 // --- render_performance_table: ops/sec table ---
 
@@ -93,8 +119,16 @@ fn test_template_with_output_pattern() {
     let _ = fs::remove_dir_all(&tmp);
 }
 
+// A language with a `crates.readme.languages.<lang>` entry has explicitly opted
+// into template-rendered README content (badges, sections, snippets). If that
+// template can't actually be rendered -- a typo'd `template` filename, a missing
+// `template_dir`, or any other reason `try_render_configured_readme` comes back
+// empty -- generation must fail loudly instead of silently substituting the
+// generic hardcoded placeholder and shipping it with the configured content
+// missing and no error (#555). This pins the GENERAL rule (any misrendering of an
+// explicitly configured language is an error), not a specific broken filename.
 #[test]
-fn test_template_readme_missing_template_falls_back() {
+fn should_fail_loudly_when_configured_language_template_does_not_exist() {
     let tmp = std::env::temp_dir().join("alef_readme_test_missing_tmpl");
     let _ = fs::remove_dir_all(&tmp);
     fs::create_dir_all(&tmp).unwrap();
@@ -121,11 +155,112 @@ fn test_template_readme_missing_template_falls_back() {
     config.workspace_root = Some(tmp.clone());
 
     let api = test_api();
+    let err = generate_readmes(&api, &config, &[Language::Python])
+        .expect_err("a configured-but-unrenderable language must fail generation, not fall back silently");
+    let message = err.to_string();
+    assert!(
+        message.contains("crates.readme.languages.python"),
+        "error should name the offending config key, got: {message}"
+    );
+    assert!(
+        !message.to_lowercase().contains("pip install"),
+        "error must not carry rendered fallback content, got: {message}"
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+// The positive counterpart: a language configured with a template that DOES
+// render must produce the rendered content, never the generic hardcoded
+// placeholder -- pinning that configured sections survive generation.
+#[test]
+fn should_render_configured_template_content_not_the_generic_fallback() {
+    let tmp = std::env::temp_dir().join("alef_readme_test_configured_renders");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).unwrap();
+    fs::write(
+        tmp.join("lang.md"),
+        "# {{ name }}\n\n## What This Package Provides\n\nDistinctive configured section marker.\n",
+    )
+    .unwrap();
+
+    let mut config = test_config();
+    let mut lang_map = std::collections::HashMap::new();
+    lang_map.insert(
+        "python".to_string(),
+        serde_json::json!({
+            "template": "lang.md",
+            "output_path": "packages/python/README.md"
+        }),
+    );
+    config.readme = Some(ReadmeConfig {
+        template_dir: Some(tmp.clone()),
+        snippets_dir: None,
+        config: None,
+        output_pattern: None,
+        discord_url: None,
+        banner_url: None,
+        languages: lang_map,
+        targets: std::collections::HashMap::new(),
+    });
+    config.workspace_root = Some(tmp.clone());
+
+    let api = test_api();
     let files = generate_readmes(&api, &config, &[Language::Python]).unwrap();
     assert_eq!(files.len(), 1);
     assert!(
-        files[0].content.contains("pip install"),
-        "Expected hardcoded fallback content, got: {}",
+        files[0].content.contains("Distinctive configured section marker."),
+        "expected the configured template's content, got: {}",
+        files[0].content
+    );
+    assert!(
+        !files[0].content.contains("pip install"),
+        "must not contain the generic hardcoded fallback's install instructions, got: {}",
+        files[0].content
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+// End-to-end: a `name` ending in a markdown-significant character survives full
+// template rendering. Uses "C#" as one concrete instance of the general rule (any
+// name ending in `#`), matching the real `crates.readme.languages.csharp` config.
+#[test]
+fn should_render_a_heading_with_trailing_hash_in_display_name_escaped() {
+    let tmp = std::env::temp_dir().join("alef_readme_test_heading_hash");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).unwrap();
+    fs::write(tmp.join("lang.md"), "# {{ name }}\n").unwrap();
+
+    let mut config = test_config();
+    let mut lang_map = std::collections::HashMap::new();
+    lang_map.insert(
+        "csharp".to_string(),
+        serde_json::json!({
+            "template": "lang.md",
+            "name": "C#",
+            "output_path": "packages/csharp/README.md"
+        }),
+    );
+    config.readme = Some(ReadmeConfig {
+        template_dir: Some(tmp.clone()),
+        snippets_dir: None,
+        config: None,
+        output_pattern: None,
+        discord_url: None,
+        banner_url: None,
+        languages: lang_map,
+        targets: std::collections::HashMap::new(),
+    });
+    config.workspace_root = Some(tmp.clone());
+
+    let api = test_api();
+    let files = generate_readmes(&api, &config, &[Language::Csharp]).unwrap();
+    assert_eq!(files.len(), 1);
+    assert!(
+        files[0].content.starts_with("# C\\#"),
+        "expected the heading's trailing `#` to be backslash-escaped so it can't be \
+         mistaken for an ATX closing sequence, got: {}",
         files[0].content
     );
 

@@ -2,10 +2,10 @@ use crate::core::backend::GeneratedFile;
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::ApiSurface;
 use crate::scaffold::naming::{swift_min_ios, swift_min_macos};
-use crate::scaffold::scaffold_meta;
+use crate::scaffold::{readme_language_configured, scaffold_meta};
 use std::path::PathBuf;
 
-pub(crate) fn scaffold_swift(_api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+pub(crate) fn scaffold_swift(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
     let meta = scaffold_meta(config);
     let module = config.swift_module();
     let min_macos_major = swift_min_macos(config).split('.').next().unwrap_or("13").to_string();
@@ -234,6 +234,14 @@ public enum RustBridgePlaceholder {{}}
         .map(|license| format!("\n## License\n\n{license}\n"))
         .unwrap_or_default();
 
+    // `.package(path: "packages/swift")` is a local filesystem path: it only
+    // resolves inside a checkout of this monorepo and is unusable by any
+    // consumer of a published package. This placeholder README only ships when
+    // the language has no `[crates.readme.languages.swift]` config yet (see the
+    // `readme_language_configured` guard below), but even then it must document
+    // an installable reference, not a repo-relative path. ~keep
+    let repository = config.github_repo();
+    let version = &api.version;
     let readme = format!(
         r#"# {module}
 
@@ -244,7 +252,7 @@ public enum RustBridgePlaceholder {{}}
 Add to your `Package.swift`:
 
 ```swift
-.package(path: "packages/swift"),
+.package(url: "{repository}", from: "{version}"),
 ```
 
 ## Building
@@ -418,16 +426,31 @@ let package = Package(
             generated_header: false,
         },
         GeneratedFile {
-            path: PathBuf::from("packages/swift/README.md"),
-            content: readme,
-            generated_header: false,
-        },
-        GeneratedFile {
             path: PathBuf::from("packages/swift/Examples/Demo/main.swift"),
             content: demo_swift,
             generated_header: false,
         },
     ];
+    // The README module (`crate::readme`) owns `packages/swift/README.md` end-to-end
+    // once `[crates.readme.languages.swift]` is configured — badges, "What This
+    // Package Provides", Quick Start, feature/OCR sections, snippets. Emitting this
+    // placeholder alongside that config makes scaffold a second, independent writer
+    // for the same path: a run that only scaffolds (`alef scaffold`, a
+    // `--lang`-scoped pass, or one that errors before the README stage) would ship
+    // this skeleton note as the final content with the configured sections silently
+    // dropped and no error (#555). Inserted at its original position (before the
+    // Demo example) rather than appended, so file order is unchanged for languages
+    // that still rely on this placeholder. ~keep
+    if !readme_language_configured(config, "swift") {
+        files.insert(
+            9,
+            GeneratedFile {
+                path: PathBuf::from("packages/swift/README.md"),
+                content: readme,
+                generated_header: false,
+            },
+        );
+    }
     if let Some(root_package_swift) = root_package_swift {
         files.insert(
             0,

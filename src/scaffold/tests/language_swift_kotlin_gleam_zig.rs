@@ -229,6 +229,30 @@ fn test_scaffold_swift() {
     );
 }
 
+// Regression for #555: once `[crates.readme.languages.swift]` is configured, the
+// README module (`crate::readme`) owns `packages/swift/README.md` end-to-end, and
+// scaffold must not emit a second, independent copy at the same path. A run that
+// only scaffolds (or errors before the README stage runs) would otherwise ship
+// this skeleton note as the final content with every configured section silently
+// dropped.
+#[test]
+fn should_not_emit_placeholder_readme_when_readme_module_configures_swift() {
+    let config = test_config_from_toml(
+        r#"
+[crates.readme.languages.swift]
+template = "language_package.md"
+"#,
+    );
+    let api = test_api();
+    let all_files = scaffold(&api, &config, &[Language::Swift]).unwrap();
+    let files = language_files(&all_files);
+    assert!(
+        files.iter().all(|f| f.path != Path::new("packages/swift/README.md")),
+        "scaffold must not emit packages/swift/README.md once the README module is \
+         configured for swift (#555)"
+    );
+}
+
 #[test]
 fn test_scaffold_kotlin() {
     let config = test_config();
@@ -506,6 +530,25 @@ fn test_scaffold_zig() {
     assert!(
         files.iter().all(|f| !f.path.starts_with(".github/workflows")),
         "Zig scaffold must not emit GitHub workflows"
+    );
+}
+
+// Regression for #555: see `should_not_emit_placeholder_readme_when_readme_module_configures_swift`.
+#[test]
+fn should_not_emit_placeholder_readme_when_readme_module_configures_zig() {
+    let config = test_config_from_toml(
+        r#"
+[crates.readme.languages.zig]
+template = "language_package.md"
+"#,
+    );
+    let api = test_api();
+    let all_files = scaffold(&api, &config, &[Language::Zig]).unwrap();
+    let files = language_files(&all_files);
+    assert!(
+        files.iter().all(|f| f.path != Path::new("packages/zig/README.md")),
+        "scaffold must not emit packages/zig/README.md once the README module is \
+         configured for zig (#555)"
     );
 }
 

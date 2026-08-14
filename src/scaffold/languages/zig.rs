@@ -2,7 +2,7 @@ use crate::core::backend::GeneratedFile;
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::ApiSurface;
 use crate::core::template_versions::toolchain;
-use crate::scaffold::scaffold_meta;
+use crate::scaffold::{readme_language_configured, scaffold_meta};
 use std::path::PathBuf;
 
 pub(crate) fn scaffold_zig(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
@@ -194,7 +194,7 @@ Add to your `build.zig.zon`:
         module_name = module_name,
     );
 
-    Ok(vec![
+    let mut files = vec![
         GeneratedFile {
             path: PathBuf::from("packages/zig/build.zig"),
             content: build_zig,
@@ -216,11 +216,6 @@ Add to your `build.zig.zon`:
             generated_header: false,
         },
         GeneratedFile {
-            path: PathBuf::from("packages/zig/README.md"),
-            content: readme,
-            generated_header: false,
-        },
-        GeneratedFile {
             path: PathBuf::from("packages/zig/examples/example.zig"),
             content: example_zig.to_string(),
             generated_header: false,
@@ -230,7 +225,23 @@ Add to your `build.zig.zon`:
             content: main_zig.to_string(),
             generated_header: false,
         },
-    ])
+    ];
+    // See the matching comment in `scaffold_swift`: once `[crates.readme.languages.zig]`
+    // is configured, the README module owns this path end-to-end, and scaffold must not
+    // compete with it as a second writer (#555). Inserted at its original position
+    // (after `.editorconfig`, before the examples) rather than appended, so file order
+    // is unchanged for languages that still rely on this placeholder. ~keep
+    if !readme_language_configured(config, "zig") {
+        files.insert(
+            4,
+            GeneratedFile {
+                path: PathBuf::from("packages/zig/README.md"),
+                content: readme,
+                generated_header: false,
+            },
+        );
+    }
+    Ok(files)
 }
 
 /// Derive a deterministic 64-bit fingerprint from the package name.

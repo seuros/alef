@@ -249,7 +249,7 @@ fn render_template_readme(
 
     let mut ctx: HashMap<&str, Value> = HashMap::new();
     ctx.insert("version", Value::from(api.version.clone()));
-    ctx.insert("name", Value::from(name.clone()));
+    ctx.insert("name", Value::from(escape_markdown_heading_text(name)));
     ctx.insert("description", Value::from(description));
     ctx.insert("license", Value::from(license));
     ctx.insert("repository", Value::from(repository));
@@ -271,6 +271,18 @@ fn render_template_readme(
                 if s.contains("{{") {
                     let rendered = env.render_str(s, &ctx).unwrap_or_else(|_| s.clone());
                     Value::from(rendered)
+                } else if key == "name" {
+                    // Every shipped README template renders `{{ name }}` as the H1
+                    // heading (`# {{ name }}`). A configured display name ending in a
+                    // markdown-significant character -- most concretely `#`, as in
+                    // "C#" -- is genuinely ambiguous per CommonMark's ATX heading
+                    // closing-sequence rule, and downstream markdown formatters that
+                    // apply that rule liberally (e.g. treating any trailing `#` as a
+                    // closing sequence, not just one preceded by a space) strip it,
+                    // silently truncating "C#" to "C" on every regen (#555). Escaping
+                    // it here protects every template that interpolates `{{ name }}`
+                    // without requiring template authors to remember a filter. ~keep
+                    Value::from(escape_markdown_heading_text(s))
                 } else {
                     json_to_minijinja_value(val)
                 }
@@ -490,4 +502,32 @@ pub(super) fn render_performance_table(perf: &Value, _name: &str) -> String {
 /// Convert a `serde_json::Value` into a `minijinja::Value` via serde serialization.
 pub(super) fn json_to_minijinja_value(json: &serde_json::Value) -> Value {
     Value::from_serialize(json)
+}
+
+/// Backslash-escape a trailing run of `#` characters so a display name can be safely
+/// interpolated into a Markdown ATX heading (`# {{ name }}`).
+///
+/// Per CommonMark, an ATX heading may end in an optional closing sequence of `#`s,
+/// but only when that sequence is preceded by a space (`# Title #` closes; `# C#`
+/// does not, since the `#` immediately follows `C` with no space). Some downstream
+/// Markdown formatters implement the closing-sequence rule more liberally --
+/// stripping any trailing `#`s regardless of the preceding character -- which
+/// silently truncates a heading like `# C#` to `# C` on every reformat (#555).
+/// `\#` renders as a literal `#` in CommonMark and is unambiguous under either
+/// interpretation, so escaping only the trailing run (not `#`s in the middle of the
+/// name, which are never ambiguous) fixes the general case: any display name ending
+/// in one or more `#` characters, not just the literal string "C#".
+pub(super) fn escape_markdown_heading_text(name: &str) -> String {
+    let trailing_hashes = name.chars().rev().take_while(|&c| c == '#').count();
+    if trailing_hashes == 0 {
+        return name.to_string();
+    }
+    let split_at = name.len() - trailing_hashes;
+    let (prefix, hashes) = name.split_at(split_at);
+    let mut escaped = String::with_capacity(name.len() + trailing_hashes);
+    escaped.push_str(prefix);
+    for _ in hashes.chars() {
+        escaped.push_str("\\#");
+    }
+    escaped
 }

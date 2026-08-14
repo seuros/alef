@@ -698,6 +698,32 @@ pub fn scaffold_meta(config: &ResolvedCrateConfig) -> ScaffoldMeta {
     }
 }
 
+/// Returns true when `crates.readme.languages.<lang_code>` is configured for this
+/// crate, meaning the README module in [`crate::readme`] owns `packages/<lang>/README.md`
+/// end-to-end (badges, "What This Package Provides", Quick Start, feature/OCR
+/// sections, snippets).
+///
+/// A handful of scaffold language modules (currently Swift, Dart, Zig) also emit a
+/// minimal placeholder `README.md` alongside their package skeleton, predating the
+/// languages having any `[crates.readme.languages.*]` entry at all. That placeholder
+/// is a second, independent writer for the exact output path the README module
+/// targets: `alef all --clean` always has the README stage overwrite it afterwards,
+/// but any run that only performs scaffolding (`alef scaffold`, a `--lang`-scoped
+/// scaffold-only pass, or a run that errors out before reaching the README stage)
+/// leaves the placeholder as the final, committed content — silently discarding
+/// every section the crate's `alef.toml` configured, with no error and no diff
+/// signal (#555). Scaffold modules must call this and skip emitting their own
+/// `README.md` once the language has real README config, so there is only ever one
+/// writer for that path and the file is either the fully rendered template or (for
+/// an as-yet-unconfigured language) the historical placeholder — never a silent mix
+/// of the two depending on which command happened to run last. ~keep
+pub(crate) fn readme_language_configured(config: &ResolvedCrateConfig, lang_code: &str) -> bool {
+    config
+        .readme
+        .as_ref()
+        .is_some_and(|readme| readme.languages.contains_key(lang_code))
+}
+
 /// Escape special characters for XML text content.
 pub fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")

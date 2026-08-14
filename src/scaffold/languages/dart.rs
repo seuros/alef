@@ -3,7 +3,7 @@ use crate::core::backend::GeneratedFile;
 use crate::core::config::{DartStyle, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
 use crate::core::template_versions::{pub_dev, toolchain};
-use crate::scaffold::scaffold_meta;
+use crate::scaffold::{readme_language_configured, scaffold_meta};
 use std::path::PathBuf;
 
 pub(crate) fn scaffold_dart(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
@@ -296,11 +296,6 @@ void main() {{
             generated_header: false,
         },
         GeneratedFile {
-            path: PathBuf::from("packages/dart/README.md"),
-            content: readme,
-            generated_header: false,
-        },
-        GeneratedFile {
             path: PathBuf::from(format!("packages/dart/example/{module_name}_example.dart")),
             content: example_dart,
             generated_header: false,
@@ -311,6 +306,21 @@ void main() {{
             generated_header: false,
         },
     ];
+    // See the matching comment in `scaffold_swift`: once `[crates.readme.languages.dart]`
+    // is configured, the README module owns this path end-to-end, and scaffold must not
+    // compete with it as a second writer (#555). Inserted at its original position
+    // (after `.editorconfig`, before the example) rather than appended, so file order
+    // is unchanged for languages that still rely on this placeholder. ~keep
+    if !readme_language_configured(config, "dart") {
+        files.insert(
+            6,
+            GeneratedFile {
+                path: PathBuf::from("packages/dart/README.md"),
+                content: readme,
+                generated_header: false,
+            },
+        );
+    }
 
     if matches!(style, DartStyle::Ffi) {
         let build_dart = format!(

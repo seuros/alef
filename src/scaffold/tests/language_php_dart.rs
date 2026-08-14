@@ -403,6 +403,27 @@ fn test_scaffold_dart() {
     );
 }
 
+// Regression for #555: once `[crates.readme.languages.dart]` is configured, the
+// README module (`crate::readme`) owns `packages/dart/README.md` end-to-end, and
+// scaffold must not emit a second, independent copy at the same path.
+#[test]
+fn should_not_emit_placeholder_readme_when_readme_module_configures_dart() {
+    let config = test_config_from_toml(
+        r#"
+[crates.readme.languages.dart]
+template = "language_package.md"
+"#,
+    );
+    let api = test_api();
+    let all_files = scaffold(&api, &config, &[Language::Dart]).unwrap();
+    let files = language_files(&all_files);
+    assert!(
+        files.iter().all(|f| f.path != Path::new("packages/dart/README.md")),
+        "scaffold must not emit packages/dart/README.md once the README module is \
+         configured for dart (#555)"
+    );
+}
+
 #[test]
 fn test_scaffold_dart_ffi_style() {
     let config = test_config_from_toml(

@@ -58,20 +58,70 @@ fn generate_readme(
         return Ok(None);
     }
 
-    if let Some(readme_cfg) = &config.readme
-        && let Some(template_dir) = &readme_cfg.template_dir
-    {
-        let workspace_root = config.workspace_root.clone().unwrap_or_else(|| PathBuf::from("."));
-        let abs_template_dir = workspace_root.join(template_dir);
-        if abs_template_dir.exists()
-            && let Some(file) =
-                template::try_template_readme(api, config, lang, readme_cfg, &workspace_root, &abs_template_dir)?
-        {
-            return Ok(Some(file));
-        }
+    if let Some(file) = try_render_configured_readme(api, config, lang)? {
+        return Ok(Some(file));
+    }
+
+    let lang_code = paths::lang_code(lang);
+    if readme_language_declares_a_template(config, lang_code) {
+        anyhow::bail!(
+            "crates.readme.languages.{lang_code} names a `template`, but README generation did not render it -- \
+             refusing to silently substitute the generic placeholder README and discard the configured content \
+             (#555). Fix the template, `crates.readme.template_dir`, or the `crates.readme.languages.{lang_code}` \
+             entry so it renders, or drop the entry's `template` key if a generic placeholder README is intended."
+        );
     }
 
     Ok(Some(fallback::generate_readme_hardcoded(api, config, lang)?))
+}
+
+/// Returns true when `crates.readme.languages.<lang_code>` names a `template`.
+///
+/// The discriminator is the `template` key, not the mere existence of the entry.
+/// An entry that only relocates output (`{ "output_path": "..." }`) is asking for
+/// the generic placeholder README *at a different path* — a legitimate, long-standing
+/// configuration, and one the caller cannot express any other way, since deleting the
+/// entry would also lose the path. Treating any entry as "must render a template"
+/// makes that configuration impossible to write.
+///
+/// An entry that does name a template is the #555 case: rendering it is the only
+/// reason the entry exists, so failing to render must fail loudly rather than silently
+/// ship the placeholder in place of the configured badges, sections, and snippets.
+fn readme_language_declares_a_template(config: &ResolvedCrateConfig, lang_code: &str) -> bool {
+    config.readme.as_ref().is_some_and(|readme_cfg| {
+        readme_cfg
+            .languages
+            .get(lang_code)
+            .and_then(|entry| entry.get("template"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|template| !template.trim().is_empty())
+    })
+}
+
+/// Attempt to render a language's README from `crates.readme.template_dir`.
+///
+/// Returns `Ok(None)` whenever no template-based render was possible (no `readme`
+/// config, no `template_dir`, the directory doesn't exist, or the language has no
+/// entry and no legacy YAML `config` fallback), signalling the caller to either fall
+/// back to the hardcoded generator (unconfigured languages) or fail loudly
+/// (explicitly configured languages — see [`readme_language_explicitly_configured`]).
+fn try_render_configured_readme(
+    api: &ApiSurface,
+    config: &ResolvedCrateConfig,
+    lang: Language,
+) -> anyhow::Result<Option<GeneratedFile>> {
+    let Some(readme_cfg) = &config.readme else {
+        return Ok(None);
+    };
+    let Some(template_dir) = &readme_cfg.template_dir else {
+        return Ok(None);
+    };
+    let workspace_root = config.workspace_root.clone().unwrap_or_else(|| PathBuf::from("."));
+    let abs_template_dir = workspace_root.join(template_dir);
+    if !abs_template_dir.exists() {
+        return Ok(None);
+    }
+    template::try_template_readme(api, config, lang, readme_cfg, &workspace_root, &abs_template_dir)
 }
 
 fn generate_readme_targets(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
