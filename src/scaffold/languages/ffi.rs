@@ -139,21 +139,49 @@ pub(crate) fn scaffold_ffi(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
         .map(|f| f.as_str())
         .filter(|f| *f != "serde")
         .collect();
-    let core_features_default_list = passthrough_feature_names
+    // Cargo features are per-crate: `full = ["<core>/full"]` enabling `X` on the dependency
+    // does NOT create feature `X` here, so a `#[cfg(feature = "X")]` the codegen emits into
+    // this crate is unsatisfiable unless this crate declares `X` itself. An undeclared gate is
+    // never true, which silently drops the export from the cdylib while cbindgen still declares
+    // it in the header -- a link failure for every C-ABI consumer. Declare every feature the
+    // emitted surface actually gates on. ~keep
+    let extra_declared: &[String] = config
+        .ffi
+        .as_ref()
+        .map(|c| c.extra_features.as_slice())
+        .unwrap_or(&[]);
+    let emitted_cfg_features: Vec<String> = crate::codegen::cfg::collect_cfg_features(api)
+        .into_iter()
+        .filter(|name| {
+            !name.is_empty()
+                && name != "serde"
+                && !passthrough_feature_names.contains(&name.as_str())
+                && !extra_declared.iter().any(|declared| declared == name)
+        })
+        .collect();
+    // `extra_features` stays declare-only by design (mutually-exclusive alternatives such as
+    // `wasm-http`); features discovered from emitted gates default ON, preserving the surface
+    // the gate was written to expose while keeping it switchable. ~keep
+    let default_feature_names: Vec<&str> = passthrough_feature_names
+        .iter()
+        .copied()
+        .chain(emitted_cfg_features.iter().map(String::as_str))
+        .collect();
+    let core_features_default_list = default_feature_names
         .iter()
         .map(|f| format!("\"{f}\""))
         .collect::<Vec<_>>()
         .join(", ");
-    let mut core_features_passthrough_block = if passthrough_feature_names.is_empty() {
+    let mut core_features_passthrough_block = if default_feature_names.is_empty() {
         String::new()
     } else {
-        passthrough_feature_names
+        default_feature_names
             .iter()
             .map(|f| format!("{f} = [\"{}/{f}\"]", config.name))
             .collect::<Vec<_>>()
             .join("\n")
     };
-    if let Some(line) = crate::scaffold::android_target_feature_line(config, &passthrough_feature_names) {
+    if let Some(line) = crate::scaffold::android_target_feature_line(config, &default_feature_names) {
         if core_features_passthrough_block.is_empty() {
             core_features_passthrough_block = line;
         } else {
@@ -493,5 +521,161 @@ c_return_type = "TSLanguage"
             "no capsule dep should be injected when package is unset, got:\n{}",
             cargo.content
         );
+    }
+
+    fn features_section(cargo: &str) -> &str {
+        let start = cargo.find("[features]").expect("features table emitted");
+        let rest = &cargo[start..];
+        rest.find("\n[").map(|end| &rest[..end]).unwrap_or(rest)
+    }
+
+    fn minimal_config() -> ResolvedCrateConfig {
+        resolve_config(
+            r#"
+[workspace]
+languages = ["ffi"]
+[[crates]]
+name = "my-lib"
+sources = []
+"#,
+        )
+    }
+
+    /// A `#[cfg(feature = "X")]` on an emitted type must make the FFI crate declare `X`.
+    /// Cargo features are per-crate, so an undeclared gate can never be satisfied and the
+    /// export is silently dropped from the cdylib while cbindgen still declares it.
+    #[test]
+    fn ffi_cargo_toml_declares_features_named_by_emitted_type_cfg_gates() {
+        let api = ApiSurface {
+            crate_name: "my-lib".to_string(),
+            types: vec![crate::core::ir::TypeDef {
+                name: "BudgetConfig".to_string(),
+                rust_path: "my_lib::BudgetConfig".to_string(),
+                cfg: Some(r#"feature = "tower""#.to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let files = scaffold_ffi(&api, &minimal_config()).expect("scaffold");
+        let cargo = &files
+            .iter()
+            .find(|f| f.path.ends_with("Cargo.toml"))
+            .expect("ffi Cargo.toml emitted")
+            .content;
+        let features = features_section(cargo);
+        assert!(
+            features.contains(r#"tower = ["my-lib/tower"]"#),
+            "gate feature must be declared as a passthrough, got:\n{features}"
+        );
+        assert!(
+            features.contains("default = [") && features.contains("\"tower\""),
+            "gate feature must default ON so the gated export survives, got:\n{features}"
+        );
+    }
+
+    /// Same invariant for a gate on a function rather than a type -- the regression that
+    /// deleted `count_tokens`-style exports came in through the function path.
+    #[test]
+    fn ffi_cargo_toml_declares_features_named_by_emitted_function_cfg_gates() {
+        let api = ApiSurface {
+            crate_name: "my-lib".to_string(),
+            functions: vec![crate::core::ir::FunctionDef {
+                name: "count_tokens".to_string(),
+                cfg: Some(r#"feature = "tokenizer""#.to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let files = scaffold_ffi(&api, &minimal_config()).expect("scaffold");
+        let cargo = &files
+            .iter()
+            .find(|f| f.path.ends_with("Cargo.toml"))
+            .expect("ffi Cargo.toml emitted")
+            .content;
+        let features = features_section(cargo);
+        assert!(
+            features.contains(r#"tokenizer = ["my-lib/tokenizer"]"#),
+            "function gate feature must be declared as a passthrough, got:\n{features}"
+        );
+    }
+
+    /// `extra_features` is documented as declare-but-do-not-enable, for mutually-exclusive
+    /// alternatives such as a `wasm-http` backend. Discovering the same name in an emitted
+    /// gate must not promote it into `default`.
+    #[test]
+    fn ffi_cargo_toml_keeps_extra_features_out_of_default_even_when_gated() {
+        let config = resolve_config(
+            r#"
+[workspace]
+languages = ["ffi"]
+[[crates]]
+name = "my-lib"
+sources = []
+[crates.ffi]
+extra_features = ["wasm-http"]
+"#,
+        );
+        let api = ApiSurface {
+            crate_name: "my-lib".to_string(),
+            functions: vec![crate::core::ir::FunctionDef {
+                name: "fetch".to_string(),
+                cfg: Some(r#"feature = "wasm-http""#.to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let files = scaffold_ffi(&api, &config).expect("scaffold");
+        let cargo = &files
+            .iter()
+            .find(|f| f.path.ends_with("Cargo.toml"))
+            .expect("ffi Cargo.toml emitted")
+            .content;
+        let features = features_section(cargo);
+        assert!(
+            features.contains(r#"wasm-http = ["my-lib/wasm-http"]"#),
+            "extra_features entry must still be declared, got:\n{features}"
+        );
+        let default_line = features
+            .lines()
+            .find(|line| line.starts_with("default = ["))
+            .expect("default line emitted");
+        assert!(
+            !default_line.contains("wasm-http"),
+            "extra_features must stay opt-in, got: {default_line}"
+        );
+    }
+
+    /// Parity invariant, stated without reference to any consumer: every feature named by a
+    /// `#[cfg(feature = ...)]` in the emitted surface appears in this crate's `[features]`.
+    #[test]
+    fn ffi_cargo_toml_declares_every_feature_named_by_any_emitted_gate() {
+        let api = ApiSurface {
+            crate_name: "my-lib".to_string(),
+            types: vec![crate::core::ir::TypeDef {
+                name: "CacheConfig".to_string(),
+                rust_path: "my_lib::CacheConfig".to_string(),
+                cfg: Some(r#"any(feature = "tower", feature = "opendal-cache")"#.to_string()),
+                ..Default::default()
+            }],
+            functions: vec![crate::core::ir::FunctionDef {
+                name: "record_cost_usd".to_string(),
+                cfg: Some(r#"feature = "metrics""#.to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let files = scaffold_ffi(&api, &minimal_config()).expect("scaffold");
+        let cargo = &files
+            .iter()
+            .find(|f| f.path.ends_with("Cargo.toml"))
+            .expect("ffi Cargo.toml emitted")
+            .content;
+        let features = features_section(cargo);
+        for name in ["tower", "opendal-cache", "metrics"] {
+            assert!(
+                features.contains(&format!(r#"{name} = ["my-lib/{name}"]"#)),
+                "feature `{name}` is gated on but never declared, got:\n{features}"
+            );
+        }
     }
 }

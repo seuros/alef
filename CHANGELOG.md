@@ -28,6 +28,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stays rejected because `Language::Ffi` maps to the `"c"` generator.
 - **tests**: refresh Kotlin Android, Swift, and Zig snapshots so the checked-in expectations cover the integrated
   JNI path discovery, serde bridge grouping, numeric error dispatch, and fallible string ownership behavior.
+- **ffi/scaffold**: declare every feature named by a `#[cfg(feature = "X")]` gate the codegen emits into the
+  generated FFI crate. Cargo features are per-crate, so a wrapper whose `[features]` table forwards only
+  `full = ["<core>/full"]` never defines `X` itself, even when `full` enables `X` on the core dependency. The
+  emitted gate was therefore unsatisfiable under *every* feature selection: `rustc` reported it as an
+  `unexpected cfg condition value` warning and silently dropped the item, while `cbindgen` — which does not
+  evaluate the gate — kept declaring it in the header. The crate still built with exit 0, so the failure surfaced
+  only downstream, as a link error or `dlsym` miss for every C-ABI consumer against a header that promises symbols
+  the `cdylib` does not export. Features discovered from emitted gates are now declared as passthroughs and default
+  ON, preserving the surface each gate was written to expose while keeping it switchable; `[crates.ffi]
+  extra_features` keeps its documented declare-but-do-not-enable behaviour for mutually-exclusive alternatives such
+  as a `wasm-http` backend, and a gate naming one of those entries does not promote it into `default`. This mirrors
+  the feature collection the dart, wasm, swift, and extendr backends already perform.
 - **kotlin-android**: emit a handle wrapper class only for opaque types some visible top-level function returns.
   A type that is `is_opaque` but that nothing returns cannot be constructed from Kotlin at all, yet still got a
   `<TypeName>.kt` whose `close()` called `nativeFree<TypeName>` — a symbol the Bridge object never declares and the
