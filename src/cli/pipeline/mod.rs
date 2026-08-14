@@ -21,10 +21,10 @@ pub use format::{format_generated, warn_missing_formatters};
 pub(crate) use format::{install_poly_hooks, poly_format, poly_format_strict};
 pub(crate) use generate::{apply_shebang_chmod, check_ffi_header_freshness, ensure_ffi_header_freshness};
 pub use generate::{
-    collect_alef_headered_paths, diff_files, finalize_hashes, generate, generate_public_api, generate_service_api,
-    generate_stubs, generate_sweep_roots, managed_generated_files, managed_output_paths, normalize_content, readme,
-    scaffold, sweep_manifest_orphans, sweep_orphans, targeted_e2e_sweep_roots, write_files, write_files_report,
-    write_scaffold_files, write_scaffold_files_report, write_scaffold_files_with_overwrite,
+    collect_alef_headered_paths, diff_files, finalize_hashes, finalize_hashes_sweeping, generate, generate_public_api,
+    generate_service_api, generate_stubs, generate_sweep_roots, managed_generated_files, managed_output_paths,
+    normalize_content, readme, scaffold, sweep_manifest_orphans, sweep_orphans, targeted_e2e_sweep_roots, write_files,
+    write_files_report, write_scaffold_files, write_scaffold_files_report, write_scaffold_files_with_overwrite,
 };
 pub use helpers::{init, run_optional};
 pub use version::sync_versions;

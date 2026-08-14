@@ -195,8 +195,23 @@ pub fn sweep_manifest_orphans(
 ///
 /// Used by the `all` pipeline to gather existing registry-mode e2e files
 /// (`test_apps/`) so their `alef:hash:` lines can be re-stamped after the
-/// sources hash changes — without regenerating their content.
+/// sources hash changes — without regenerating their content. Also used by
+/// [`super::write::finalize_hashes_sweeping`] as a self-healing safety net:
+/// matching on the generated-file **marker** (not on an already-present hash)
+/// is deliberate here — a file can be alef-owned and still be missing its
+/// `alef:hash:` line (freshly written and not yet finalized, or stripped by
+/// an older/interrupted run), and those are exactly the files that need to be
+/// found so they can be re-stamped. Matching on `extract_hash(..).is_some()`
+/// instead would make an already-unstamped file permanently invisible to this
+/// scan, which is the bug this function exists to fix.
 pub fn collect_alef_headered_paths(root: &std::path::Path) -> std::collections::HashSet<std::path::PathBuf> {
+    fn is_alef_owned(path: &std::path::Path) -> bool {
+        let Ok(content) = std::fs::read_to_string(path) else {
+            return false;
+        };
+        crate::core::hash::content_has_alef_marker(&content)
+    }
+
     let mut paths = std::collections::HashSet::new();
     if !root.exists() {
         return paths;
@@ -229,7 +244,7 @@ pub fn collect_alef_headered_paths(root: &std::path::Path) -> std::collections::
                     continue;
                 }
                 stack.push(path);
-            } else if ft.is_file() && path_is_alef_owned(&path) {
+            } else if ft.is_file() && is_alef_owned(&path) {
                 paths.insert(path);
             }
         }

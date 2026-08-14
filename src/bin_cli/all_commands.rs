@@ -425,7 +425,20 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 }
 
                 tracing::info!("Finalising hashes...");
-                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
+                // Sweeping (not the plain path-tracked `finalize_hashes` used by the
+                // earlier per-stage checkpoints above) so that a language dropped from
+                // `bindings` by the per-language cache in `pipeline::generate` -- and
+                // therefore never added to `current_gen_paths` -- still gets its
+                // on-disk output re-stamped from `cleanup_roots`. Safe to run after
+                // `sweep_manifest_orphans` above: it clones `current_gen_paths` rather
+                // than mutating it, so the orphan sweep already saw the untouched,
+                // precisely-tracked set.
+                pipeline::finalize_hashes_sweeping(
+                    &current_gen_paths,
+                    &cleanup_roots,
+                    &sources_hash,
+                    &alef_toml_bytes,
+                )?;
 
                 grand_binding_count += binding_count;
                 grand_stub_count += stub_count;

@@ -146,7 +146,6 @@ pub fn content_has_alef_marker(content: &str) -> bool {
 
 /// How far into a file the header marker is searched for.
 const MARKER_SCAN_LINES: usize = 10;
-
 /// Blake3 hash of a content string, returned as hex.
 ///
 /// Used by the IR / language caches and any caller that needs a hash of an

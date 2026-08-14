@@ -110,8 +110,10 @@ pub(crate) fn apply_shebang_chmod(_path: &std::path::Path, _content: &str) -> an
 ///
 /// Rust files are formatted with `rustfmt` before writing so prek's `cargo fmt`
 /// hook is a no-op on regenerated content. The embedded `alef:hash:<hex>`
-/// value is a **per-file source+output** hash from
-/// [`hash::compute_file_hash`]: `blake3(sources_hash || file_content_without_hash_line)`.
+/// value is a **per-file inputs+output** hash from [`hash::compute_file_hash`]:
+/// `blake3("sources" || inputs_hash || "content" || file_content_without_hash_line)`,
+/// where `inputs_hash` is [`hash::compute_inputs_hash`] (the generation-inputs
+/// fingerprint, not the emitted file content).
 ///
 /// Hashes are written in two passes by the caller:
 /// 1. `write_files` writes content with the header but **no hash line** (the
@@ -250,4 +252,44 @@ pub fn finalize_hashes(
         Ok(())
     })?;
     Ok(updated.into_inner())
+}
+
+/// Like [`finalize_hashes`], but self-healing: before stamping, unions `paths`
+/// with every alef-headered file already on disk under `roots` (via
+/// [`super::orphans::collect_alef_headered_paths`]).
+///
+/// `finalize_hashes` only re-stamps the paths it is handed, and callers build
+/// that set from **this run's** in-memory generated-file lists. A language
+/// whose generation was skipped because its content hash matched the
+/// per-language cache (`generation::generate`) contributes no files to that
+/// list, so any output it owns never reaches `finalize_hashes` even if that
+/// output is missing its `alef:hash:` line — e.g. because it was written by a
+/// version of alef that stripped the hash on write and never got a chance to
+/// finalize it, or because a previous run was interrupted between the two
+/// passes. Once a file like that fails to appear in an explicit path set once,
+/// pure path-tracking can never recover it: the same cache hit drops it again
+/// on every subsequent run.
+///
+/// Scanning `roots` (the languages' own output directories -- see
+/// [`super::orphans::generate_sweep_roots`] -- never the whole repository)
+/// closes that gap by going to the filesystem instead of trusting in-memory
+/// bookkeeping: every alef-headered file that physically exists under `roots`
+/// gets its hash re-derived from its current on-disk content, regardless of
+/// whether this run's generation touched it. Because the per-file stamping in
+/// `finalize_hashes` is itself idempotent (it always recomputes from current
+/// content and only writes when the result differs), sweeping the same file
+/// twice -- once via explicit tracking, once via the directory scan -- is
+/// harmless; `paths` is a `HashSet`; duplicates collapse before any file is
+/// touched.
+pub fn finalize_hashes_sweeping(
+    paths: &std::collections::HashSet<std::path::PathBuf>,
+    roots: &[std::path::PathBuf],
+    sources_hash: &str,
+    alef_toml_bytes: &[u8],
+) -> anyhow::Result<usize> {
+    let mut swept = paths.clone();
+    for root in roots {
+        swept.extend(super::orphans::collect_alef_headered_paths(root));
+    }
+    finalize_hashes(&swept, sources_hash, alef_toml_bytes)
 }
