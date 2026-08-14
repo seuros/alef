@@ -44,6 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **codegen**: preserve public associated serde default providers as callable Rust paths instead of treating every
   `#[serde(default = "Type::function")]` as private and attempting structural JSON recovery, which failed when the
   owning configuration contained required nested named fields.
+- **snippets**: stop the shared batch timeout from truncating to zero for the first validator in a batch.
+  `remaining_batch_timeout` floored the time left via `Duration::as_secs`, so the near-full budget the very first
+  caller sees (a few elapsed nanoseconds short of a whole second) rounded down to 0 and the freshly added
+  zero-budget guard rejected every snippet in the batch without running any of them — a batch validated nothing,
+  silently. The remainder now rounds up to the next whole second instead of down.
 - **e2e/ruby**: compare `equals` assertions exactly. Ruby stripped both the actual and the expected value, which is
   symmetric and so never produced an unsatisfiable assertion, but it also made a genuine trailing-whitespace
   regression invisible in Ruby while every other backend compares exactly. String coercion is kept; normalization is
