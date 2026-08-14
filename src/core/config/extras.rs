@@ -31,6 +31,34 @@ pub enum Language {
     Jni,
 }
 
+impl Language {
+    /// ~keep Every `Language` variant, so name lists can be derived from the enum
+    /// rather than hand-maintained alongside it. Enumerated by hand because
+    /// `Language` has no derive-based variant iterator.
+    pub const ALL: [Language; 20] = [
+        Self::Python,
+        Self::Node,
+        Self::Ruby,
+        Self::Php,
+        Self::Elixir,
+        Self::Wasm,
+        Self::Ffi,
+        Self::Go,
+        Self::Java,
+        Self::Csharp,
+        Self::R,
+        Self::Rust,
+        Self::Kotlin,
+        Self::KotlinAndroid,
+        Self::Swift,
+        Self::Dart,
+        Self::Gleam,
+        Self::Zig,
+        Self::C,
+        Self::Jni,
+    ];
+}
+
 impl std::fmt::Display for Language {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -226,5 +254,37 @@ mod tests {
         assert!(!is_known_language("wasm32"));
         assert!(!is_known_language("kotlin-android"));
         assert!(!is_known_language(""));
+    }
+
+    #[test]
+    fn all_lists_every_variant() {
+        for language in Language::ALL {
+            // ~keep: exhaustive over Language, so adding a variant stops this file
+            // compiling until it is also added to ALL — nothing else enforces that.
+            match language {
+                Language::Python
+                | Language::Node
+                | Language::Ruby
+                | Language::Php
+                | Language::Elixir
+                | Language::Wasm
+                | Language::Ffi
+                | Language::Go
+                | Language::Java
+                | Language::Csharp
+                | Language::R
+                | Language::Rust
+                | Language::Kotlin
+                | Language::KotlinAndroid
+                | Language::Swift
+                | Language::Dart
+                | Language::Gleam
+                | Language::Zig
+                | Language::C
+                | Language::Jni => {}
+            }
+        }
+        let distinct: std::collections::HashSet<String> = Language::ALL.iter().map(ToString::to_string).collect();
+        assert_eq!(distinct.len(), Language::ALL.len(), "Language::ALL must not repeat a variant");
     }
 }

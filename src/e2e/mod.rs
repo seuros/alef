@@ -50,6 +50,27 @@ pub fn default_e2e_languages(scaffolded: &[Language]) -> Vec<String> {
     names
 }
 
+/// ~keep The complete set of names `default_e2e_languages` can ever produce, across
+/// every possible `Language` variant — not just the ones scaffolded in the
+/// current run.
+///
+/// Derived by running [`Language::ALL`] through the same mapping
+/// `default_e2e_languages` uses, so the two can never drift apart. This is
+/// deliberately NOT `core::config::extras::is_known_language`: that function
+/// matches on `Language`'s `Display` output and so accepts `"ffi"`, but
+/// `default_e2e_languages` maps `Language::Ffi` to the `"c"` generator —
+/// `"ffi"` never appears as an actual e2e target name and must stay rejected.
+pub fn known_e2e_target_names() -> Vec<String> {
+    let mut names = default_e2e_languages(&Language::ALL);
+    let mut deduped: Vec<String> = Vec::with_capacity(names.len());
+    for name in names.drain(..) {
+        if !deduped.contains(&name) {
+            deduped.push(name);
+        }
+    }
+    deduped
+}
+
 /// Generate e2e test projects from fixtures.
 ///
 /// Returns the list of generated files. The caller is responsible for writing

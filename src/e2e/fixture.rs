@@ -895,28 +895,41 @@ fn normalize_fixture_value(mut value: serde_json::Value) -> serde_json::Value {
 /// Validate that every id in every fixture's `skip.languages` refers to a
 /// known e2e generator target.
 ///
-/// A `skip.languages` id that is not an actual generator target silently
+/// ~keep A `skip.languages` id that is not an actual generator target silently
 /// matches nothing in [`SkipDirective::should_skip`], so the fixture keeps
-/// running everywhere the author thought it was disabled. This is checked
-/// once, up front, against the full configured target list — not the
-/// (possibly `--lang`-filtered) set being generated in this invocation — so
-/// the check behaves the same regardless of which subset is being generated.
+/// running everywhere the author thought it was disabled. So an id passes when
+/// it is either configured for this run or in
+/// [`crate::e2e::known_e2e_target_names`] — a real target the consumer simply
+/// hasn't scaffolded, where matching nothing is correct and harmless.
 ///
-/// Returns an error naming the offending fixture, the bad id, and the valid
-/// set as soon as the first unknown id is found.
+/// `"ffi"` stays rejected even though `Language::Ffi` exists: it maps to the
+/// `"c"` generator, so `"ffi"` itself never matches anything.
+///
+/// Returns an error naming the offending fixture, its source path, the bad
+/// id, and the valid set as soon as the first unknown id is found.
 pub fn validate_skip_languages(fixtures: &[Fixture], valid_languages: &[String]) -> Result<()> {
+    let known_targets = crate::e2e::known_e2e_target_names();
     for fixture in fixtures {
         let Some(skip) = &fixture.skip else {
             continue;
         };
         for language in &skip.languages {
-            if !valid_languages.iter().any(|valid| valid == language) {
+            let is_configured = valid_languages.iter().any(|valid| valid == language);
+            let is_known_target = known_targets.iter().any(|known| known == language);
+            if !is_configured && !is_known_target {
+                let mut valid_ids = valid_languages.to_vec();
+                for known in &known_targets {
+                    if !valid_ids.contains(known) {
+                        valid_ids.push(known.clone());
+                    }
+                }
                 bail!(
-                    "fixture '{}' ({}) has unknown skip.languages id '{}'; valid ids are: {}",
+                    "fixture '{}' ({}) has skip.languages id '{}' that is not a known e2e target \
+                     (check for a typo); valid ids are: {}",
                     fixture.id,
                     fixture.source,
                     language,
-                    valid_languages.join(", ")
+                    valid_ids.join(", ")
                 );
             }
         }
@@ -1303,6 +1316,76 @@ mod tests {
             "error should name the bad id: {message}"
         );
         assert!(message.contains("python"), "error should list valid ids: {message}");
+    }
+
+    #[test]
+    fn validate_skip_languages_accepts_known_target_not_in_configured_list() {
+        let json = r#"{
+            "id": "held_back_skip",
+            "description": "Skips a target the consumer hasn't scaffolded yet",
+            "input": {},
+            "assertions": [],
+            "skip": {"languages": ["csharp"], "reason": "design-held backend"}
+        }"#;
+        let fixture: Fixture = serde_json::from_str(json).unwrap();
+        let valid = vec!["python".to_string(), "node".to_string(), "rust".to_string()];
+        assert!(
+            validate_skip_languages(&[fixture], &valid).is_ok(),
+            "a known e2e target should validate even when it isn't in the configured list"
+        );
+    }
+
+    #[test]
+    fn validate_skip_languages_rejects_typo_id_even_when_similar_to_known_target() {
+        let json = r#"{
+            "id": "typo_skip",
+            "description": "Skips a typo'd target name",
+            "input": {},
+            "assertions": [],
+            "skip": {"languages": ["c#", "wasm32"], "reason": "typo"}
+        }"#;
+        let fixture: Fixture = serde_json::from_str(json).unwrap();
+        let valid = vec!["python".to_string(), "node".to_string(), "rust".to_string()];
+        let err = validate_skip_languages(&[fixture], &valid).expect_err("typo id must still fail validation");
+        let message = err.to_string();
+        assert!(message.contains("typo_skip"), "error should name the fixture: {message}");
+        assert!(message.contains("c#"), "error should name the bad id: {message}");
+        assert!(
+            message.contains("not a known e2e target"),
+            "error should say the id is not a known e2e target: {message}"
+        );
+    }
+
+    #[test]
+    fn validate_skip_languages_rejects_ffi_display_name_but_accepts_c() {
+        let ffi_json = r#"{
+            "id": "ffi_display_skip",
+            "description": "Uses Language::Ffi's Display output, not its e2e target name",
+            "input": {},
+            "assertions": [],
+            "skip": {"languages": ["ffi"], "reason": "wrong id"}
+        }"#;
+        let ffi_fixture: Fixture = serde_json::from_str(ffi_json).unwrap();
+        let valid = vec!["python".to_string(), "rust".to_string()];
+        let err =
+            validate_skip_languages(&[ffi_fixture], &valid).expect_err("'ffi' is not an e2e target and must fail");
+        assert!(
+            err.to_string().contains("not a known e2e target"),
+            "'ffi' must be rejected because default_e2e_languages maps Language::Ffi to \"c\": {err}"
+        );
+
+        let c_json = r#"{
+            "id": "c_target_skip",
+            "description": "Uses the real e2e target name for the FFI binding",
+            "input": {},
+            "assertions": [],
+            "skip": {"languages": ["c"], "reason": "not applicable"}
+        }"#;
+        let c_fixture: Fixture = serde_json::from_str(c_json).unwrap();
+        assert!(
+            validate_skip_languages(&[c_fixture], &valid).is_ok(),
+            "'c' is the real e2e target name that Language::Ffi maps to and must be accepted"
+        );
     }
 
     #[test]
