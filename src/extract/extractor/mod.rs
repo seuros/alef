@@ -25,7 +25,7 @@ use self::helpers::{
     extract_version_annotation, is_pub, is_test_gated, is_thiserror_enum, resolve_result_alias_scope,
 };
 use self::paths::{apply_parent_reexport_shortening, derive_module_path};
-use self::postprocess::{resolve_newtypes, resolve_trait_sources};
+use self::postprocess::{resolve_newtypes, resolve_public_default_functions, resolve_trait_sources};
 use self::reexports::{extract_module, resolve_use_tree};
 use self::types::{extract_enum, extract_error_enum, extract_struct};
 
@@ -109,6 +109,8 @@ pub fn extract(
     // `#[cfg(all(feature = "X-presets", not(feature = "X")))]`) are intentionally NOT collapsed
 
     resolve_trait_sources(&mut surface);
+
+    resolve_public_default_functions(&mut surface);
 
     resolve_newtypes(&mut surface);
 

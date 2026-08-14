@@ -65,6 +65,40 @@ fn test_serde_function_default_preserves_runtime_provider() {
 }
 
 #[test]
+fn public_associated_serde_default_is_resolved_as_callable() {
+    let source = r#"
+        pub struct NetworkPolicy;
+
+        impl NetworkPolicy {
+            pub fn from_environment() -> Self {
+                Self
+            }
+        }
+
+        pub struct ClientConfig {
+            #[serde(default = "NetworkPolicy::from_environment")]
+            pub policy: NetworkPolicy,
+            pub nested: RequiredSettings,
+        }
+
+        pub struct RequiredSettings {
+            pub label: String,
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let config = surface.types.iter().find(|typ| typ.name == "ClientConfig").unwrap();
+    let policy = config.fields.iter().find(|field| field.name == "policy").unwrap();
+
+    assert_eq!(
+        policy.typed_default,
+        Some(crate::core::ir::DefaultValue::PublicFunctionCall(
+            "test_crate::NetworkPolicy::from_environment".to_string()
+        ))
+    );
+}
+
+#[test]
 fn test_impl_default_without_fn_default() {
     let source = r#"
         pub struct Incomplete {

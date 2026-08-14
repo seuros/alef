@@ -648,7 +648,7 @@ fn typed_default_to_python(
             }
         }
         DefaultValue::None => "None".to_string(),
-        DefaultValue::FunctionCall(_) => "None".to_string(),
+        DefaultValue::FunctionCall(_) | DefaultValue::PublicFunctionCall(_) => "None".to_string(),
     }
 }
 

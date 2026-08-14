@@ -215,6 +215,13 @@ pub fn default_value_for_field(field: &FieldDef, language: &str) -> String {
                 ),
                 _ => "null".to_string(),
             },
+            DefaultValue::PublicFunctionCall(path) => match language {
+                "python" => "None".to_string(),
+                "ruby" => "nil".to_string(),
+                "go" => "nil".to_string(),
+                "rust" => format!("{path}()"),
+                _ => "null".to_string(),
+            },
         };
     }
 

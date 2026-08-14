@@ -976,3 +976,24 @@ fn contextual_failure_names_crate_type_field_and_uncallable_function() {
         );
     }
 }
+
+#[test]
+fn public_associated_default_bypasses_structural_deserialize_placeholders() {
+    let mut typ = grid_cell_type();
+    typ.name = "ClientConfig".to_string();
+    typ.rust_path = "sample_core::ClientConfig".to_string();
+    typ.fields.push(FieldDef {
+        ..make_field("nested", TypeRef::Named("RequiredSettings".to_string()))
+    });
+    let field = FieldDef {
+        typed_default: Some(DefaultValue::PublicFunctionCall(
+            "sample_core::NetworkPolicy::from_environment".to_string(),
+        )),
+        ..make_field("policy", TypeRef::Named("NetworkPolicy".to_string()))
+    };
+
+    assert_eq!(
+        default_value_for_field_in_type(&field, "rust", &typ),
+        "sample_core::NetworkPolicy::from_environment()"
+    );
+}

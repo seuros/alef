@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicit manifest override, and copy host libraries from the Cargo workspace target directory.
 
 ### Fixed
+- **codegen**: preserve public associated serde default providers as callable Rust paths instead of treating every
+  `#[serde(default = "Type::function")]` as private and attempting structural JSON recovery, which failed when the
+  owning configuration contained required nested named fields.
 - **e2e/ruby**: compare `equals` assertions exactly. Ruby stripped both the actual and the expected value, which is
   symmetric and so never produced an unsatisfiable assertion, but it also made a genuine trailing-whitespace
   regression invisible in Ruby while every other backend compares exactly. String coercion is kept; normalization is

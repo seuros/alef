@@ -227,7 +227,7 @@ fn render_default_value(
         DefaultValue::EnumVariant(variant) => render_enum_variant_default(ty, variant, enums),
         DefaultValue::Empty => zero_value_for_type(ty, type_defs, enums),
         DefaultValue::None => Some("null".to_string()),
-        DefaultValue::FunctionCall(_) => None,
+        DefaultValue::FunctionCall(_) | DefaultValue::PublicFunctionCall(_) => None,
     }
 }
 

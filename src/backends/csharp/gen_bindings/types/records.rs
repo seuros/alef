@@ -237,7 +237,7 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_record_type(
                     }
                 }
                 Some(DefaultValue::None) => "null".to_string(),
-                Some(DefaultValue::FunctionCall(_)) => "null".to_string(),
+                Some(DefaultValue::FunctionCall(_) | DefaultValue::PublicFunctionCall(_)) => "null".to_string(),
                 Some(DefaultValue::Empty) | None => match &field.ty {
                     TypeRef::Vec(_) if field.sanitized => "null".to_string(),
                     TypeRef::Vec(_) => "[]".to_string(),
