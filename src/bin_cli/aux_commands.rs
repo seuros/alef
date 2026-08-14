@@ -132,7 +132,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         if cache::is_stage_cached(&e2e_crate.name, cache_key, &stage_hash) {
                             let cached_paths = cache::read_stage_paths(&e2e_crate.name, cache_key);
                             grand_count += cached_paths.len();
-                            crate::e2e::format::run_formatters_for_cached_paths(&cached_paths, &base_dir, e2e_ref)?;
+                            crate::e2e::format::warn_deferred(&crate::e2e::format::run_formatters_for_cached_paths(
+                                &cached_paths,
+                                &base_dir,
+                                e2e_ref,
+                            )?);
                             if let Some(snippets) = &this_e2e_config.snippets {
                                 let coverage_path = base_dir
                                     .join(&snippets.output)
@@ -166,7 +170,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             .iter()
                             .any(|file| report.changed_paths.contains(&base_dir.join(&file.path)))
                         {
-                            crate::e2e::format::run_formatters(&managed_files, e2e_ref)?;
+                            crate::e2e::format::warn_deferred(&crate::e2e::format::run_formatters(&managed_files, e2e_ref)?);
                         }
 
                         let output_paths: Vec<PathBuf> = managed_files.iter().map(|f| base_dir.join(&f.path)).collect();
@@ -342,7 +346,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let stage_hash = cache::compute_stage_hash(&ir_json, &cache_key, &config_toml, &fixture_hash);
                         if !clean && cache::is_stage_cached(&e2e_crate.name, &cache_key, &stage_hash) {
                             let cached_paths = cache::read_stage_paths(&e2e_crate.name, &cache_key);
-                            crate::e2e::format::run_formatters_for_cached_paths(&cached_paths, &base_dir, e2e_ref)?;
+                            crate::e2e::format::warn_deferred(&crate::e2e::format::run_formatters_for_cached_paths(
+                                &cached_paths,
+                                &base_dir,
+                                e2e_ref,
+                            )?);
                             tracing::info!("Test apps up to date (cached)");
                             continue;
                         }
@@ -419,7 +427,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             .iter()
                             .any(|file| report.changed_paths.contains(&base_dir.join(&file.path)))
                         {
-                            crate::e2e::format::run_formatters(&managed_files, e2e_ref)?;
+                            crate::e2e::format::warn_deferred(&crate::e2e::format::run_formatters(&managed_files, e2e_ref)?);
                         }
 
                         let output_paths: Vec<PathBuf> = managed_files.iter().map(|f| base_dir.join(&f.path)).collect();

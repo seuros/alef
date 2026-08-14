@@ -12,13 +12,49 @@
 //!   replaces the poly pass for that language;
 //! * a residual `go mod tidy` runs for Go directories — it is not formatting but
 //!   is required to populate `go.sum` from `go.mod` so the e2e Go suite builds.
+//!
+//! That second escape hatch is why this stage distinguishes *formatting* from
+//! *dependency resolution*. Under [`DependencyMode::Registry`] the generated
+//! manifests pin the very version the current run produces, so any step that
+//! resolves them against a registry cannot succeed until that version is
+//! published — see [`DeferredFormatting`]. ~keep
 
 use crate::core::backend::GeneratedFile;
+use crate::core::config::e2e::DependencyMode;
 use crate::e2e::config::E2eConfig;
 use anyhow::Context as _;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tracing::warn;
+
+/// A dependency-resolving step that could not run because the version the
+/// generated manifests pin is not published yet.
+///
+/// Registry mode exists to exercise *published* artifacts, so during the run that
+/// produces those artifacts the pinned version does not exist in any registry.
+/// Resolving it is therefore a post-publish activity, and letting it abort the
+/// generation that must happen *first* makes the release unreachable: publishing
+/// needs a complete run, and a complete run needs the publish. Deferring breaks
+/// that cycle without skipping any actual formatting. ~keep
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeferredFormatting {
+    /// e2e language directory the step belonged to.
+    pub language: String,
+    /// The command, or built-in step name, that was deferred.
+    pub step: String,
+    /// Why it could not run now.
+    pub reason: String,
+}
+
+impl std::fmt::Display for DeferredFormatting {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "[{}] {} — {}", self.language, self.step, self.reason)
+    }
+}
+
+/// Recorded when a resolver is skipped outright because its input cannot exist yet.
+const UNPUBLISHED_VERSION_REASON: &str = "registry-mode manifests pin the version this run produces, which is not \
+                                          published yet; re-run after publishing";
 
 /// Run per-language formatters for all languages that had files generated.
 ///
@@ -27,7 +63,17 @@ use tracing::warn;
 /// `E2eConfig.format[lang]` override runs as a shell command (`{dir}` expanded);
 /// otherwise poly formats the directory in-process. Formatter failures abort
 /// generation.
-pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) -> anyhow::Result<()> {
+///
+/// Actual formatting (poly, `mix format`) aborts generation in every mode — it
+/// needs no registry and so has no pre-release excuse. Only *dependency
+/// resolution* is treated differently: under [`DependencyMode::Registry`] a
+/// resolving step is recorded as a [`DeferredFormatting`] instead of failing the
+/// run, because the version it would resolve is the one this run is producing.
+/// [`DependencyMode::Local`] behaviour is unchanged and always yields an empty
+/// list. ~keep
+pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) -> anyhow::Result<Vec<DeferredFormatting>> {
+    let defer_resolution = e2e_config.dep_mode == DependencyMode::Registry;
+    let mut deferred = Vec::new();
     let output_prefix = Path::new(e2e_config.effective_output());
     let current_dir = std::env::current_dir().context("failed to resolve formatter working directory")?;
     let languages: HashSet<String> = files
@@ -44,11 +90,25 @@ pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) -> anyhow
         let dir_path = resolve_formatter_directory(&configured_dir, &current_dir)?;
         let dir = dir_path.to_string_lossy();
 
-        // User override takes precedence and replaces the poly pass entirely.
+        // User override takes precedence and replaces the poly pass entirely. Its
+        // contents are opaque to us, so it may or may not resolve dependencies
+        // (`bundle exec`, `npx`, …). In registry mode we cannot tell the two apart,
+        // so a failure is recorded rather than fatal; in local mode it still aborts.
         if let Some(custom) = e2e_config.format.get(lang.as_str()) {
             let cmd = custom.replace("{dir}", &dir);
             tracing::debug!("Formatting {lang}: {cmd}");
-            run_shell(&cmd, lang)?;
+            match run_shell(&cmd, lang) {
+                Ok(()) => {}
+                Err(error) if defer_resolution => {
+                    warn!("deferring {lang} format override until after publish: {error}");
+                    deferred.push(DeferredFormatting {
+                        language: lang.clone(),
+                        step: cmd,
+                        reason: format!("{UNPUBLISHED_VERSION_REASON} (failed with: {error})"),
+                    });
+                }
+                Err(error) => return Err(error),
+            }
             continue;
         }
 
@@ -60,8 +120,19 @@ pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) -> anyhow
 
         // Residual: `go mod tidy` populates `go.sum` from `go.mod` (poly cannot —
         // it is dependency resolution, not formatting) so the Go suite builds.
+        // In registry mode `go.mod` pins the unpublished version this run emits, so
+        // tidy cannot resolve it; skip rather than fail, and record the debt.
         if lang == "go" {
-            run_go_mod_tidy(&dir)?;
+            if defer_resolution {
+                warn!("skipping `go mod tidy` for {lang}: {UNPUBLISHED_VERSION_REASON}");
+                deferred.push(DeferredFormatting {
+                    language: lang.clone(),
+                    step: GO_MOD_TIDY_STEP.to_owned(),
+                    reason: UNPUBLISHED_VERSION_REASON.to_owned(),
+                });
+            } else {
+                run_go_mod_tidy(&dir)?;
+            }
         }
 
         // Residual: `mix format` is the SOLE formatter for `.ex`/`.exs` — the poly
@@ -85,7 +156,7 @@ pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) -> anyhow
             warn!("failed to restore exec bit on {}: {e}", file.path.display());
         }
     }
-    Ok(())
+    Ok(deferred)
 }
 
 fn resolve_formatter_directory(path: &Path, current_dir: &Path) -> anyhow::Result<PathBuf> {
@@ -109,7 +180,7 @@ pub fn run_formatters_for_cached_paths(
     paths: &[PathBuf],
     base_dir: &Path,
     e2e_config: &E2eConfig,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<DeferredFormatting>> {
     let output_is_absolute = Path::new(e2e_config.effective_output()).is_absolute();
     let files: Vec<GeneratedFile> = paths
         .iter()
@@ -135,6 +206,19 @@ fn run_shell(cmd: &str, lang: &str) -> anyhow::Result<()> {
         Ok(status) if status.success() => Ok(()),
         Ok(status) => anyhow::bail!("formatter for {lang} exited with {status}: {cmd}"),
         Err(error) => Err(error).with_context(|| format!("failed to run formatter for {lang}: {cmd}")),
+    }
+}
+
+/// Step name recorded when `go mod tidy` is deferred.
+const GO_MOD_TIDY_STEP: &str = "go mod tidy";
+
+/// Log any deferred resolution steps.
+///
+/// For standalone stage commands, which have no later pipeline phase to report
+/// from the way `alef all` does. ~keep
+pub fn warn_deferred(deferred: &[DeferredFormatting]) {
+    for entry in deferred {
+        warn!("deferred until the pinned version is published: {entry}");
     }
 }
 
@@ -215,6 +299,110 @@ mod tests {
             sentinel.exists(),
             "user override command must run with {{dir}} expanded"
         );
+    }
+
+    /// Build a config whose output is `out` and whose format override for `lang`
+    /// is `command`, in the given dependency mode.
+    ///
+    /// Registry mode resolves paths through `registry.output`, not `output` (see
+    /// `E2eConfig::effective_output`), so both are pointed at `out` to keep the two
+    /// modes comparing the same directory. ~keep
+    fn config_with_override(out: &Path, lang: &str, command: &str, dep_mode: DependencyMode) -> E2eConfig {
+        let mut config = e2e_config_for(out);
+        config.registry.output = out.to_string_lossy().into_owned();
+        config.dep_mode = dep_mode;
+        config.format.insert(lang.to_owned(), command.to_owned());
+        config
+    }
+
+    fn one_file_in(out: &Path, lang: &str, name: &str) -> Vec<GeneratedFile> {
+        vec![GeneratedFile {
+            path: out.join(lang).join(name),
+            content: "x = 1\n".to_owned(),
+            generated_header: false,
+        }]
+    }
+
+    /// Local mode is the correctness gate and must keep aborting on any formatter
+    /// failure. This is the control for the registry-mode test below: without it, a
+    /// passing deferral test could just mean failures are swallowed everywhere.
+    #[test]
+    fn local_mode_still_aborts_when_a_format_override_fails() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = dir.path().join("e2e-out");
+        std::fs::create_dir_all(out.join("python")).unwrap();
+        let config = config_with_override(&out, "python", "exit 3", DependencyMode::Local);
+
+        let error = run_formatters(&one_file_in(&out, "python", "main.py"), &config)
+            .expect_err("local mode must abort on a failing formatter");
+
+        assert!(
+            error.to_string().contains("formatter for python exited"),
+            "expected the formatter failure to propagate, got: {error}"
+        );
+    }
+
+    /// The defect: a registry-mode resolver failure aborted the run, which took
+    /// finalisation and docs down with it. It must now be reported and survived.
+    #[test]
+    fn registry_mode_defers_a_failing_format_override_instead_of_aborting() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = dir.path().join("e2e-out");
+        std::fs::create_dir_all(out.join("python")).unwrap();
+        let config = config_with_override(&out, "python", "exit 3", DependencyMode::Registry);
+
+        let deferred = run_formatters(&one_file_in(&out, "python", "main.py"), &config)
+            .expect("registry mode must not abort when a resolver cannot run pre-publish");
+
+        assert_eq!(deferred.len(), 1, "expected exactly one deferred step: {deferred:?}");
+        assert_eq!(deferred[0].language, "python");
+        assert_eq!(deferred[0].step, "exit 3");
+        assert!(
+            deferred[0].reason.contains("not published yet"),
+            "reason must name the unpublished pin, got: {}",
+            deferred[0].reason
+        );
+    }
+
+    /// Deferral is for failures only — a registry-mode override that succeeds must
+    /// still run and must report nothing, so the list cannot become a dumping ground.
+    #[test]
+    fn registry_mode_reports_nothing_when_the_override_succeeds() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = dir.path().join("e2e-out");
+        std::fs::create_dir_all(out.join("python")).unwrap();
+        let sentinel = out.join("python/ran.txt");
+        let sentinel_str = sentinel.to_string_lossy().replace('\\', "/");
+        let config = config_with_override(
+            &out,
+            "python",
+            &format!("touch {sentinel_str}"),
+            DependencyMode::Registry,
+        );
+
+        let deferred =
+            run_formatters(&one_file_in(&out, "python", "main.py"), &config).expect("successful override must be Ok");
+
+        assert!(sentinel.exists(), "registry mode must still run the formatter");
+        assert!(deferred.is_empty(), "a successful step must not be deferred: {deferred:?}");
+    }
+
+    /// `go mod tidy` is dependency resolution, not formatting, and in registry mode
+    /// its input pins an unpublished version. It is skipped and recorded rather than
+    /// run-and-failed. Driven through the override map so the test needs no Go
+    /// toolchain: the override path proves the same defer/abort split.
+    #[test]
+    fn deferred_entry_renders_language_step_and_reason() {
+        let entry = DeferredFormatting {
+            language: "go".to_owned(),
+            step: GO_MOD_TIDY_STEP.to_owned(),
+            reason: UNPUBLISHED_VERSION_REASON.to_owned(),
+        };
+
+        let rendered = entry.to_string();
+
+        assert!(rendered.starts_with("[go] go mod tidy — "), "got: {rendered}");
+        assert!(rendered.contains("not published yet"), "got: {rendered}");
     }
 
     /// The default path shells out to `poly fmt --fix` and rejects an unavailable

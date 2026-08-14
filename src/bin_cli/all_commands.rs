@@ -7,6 +7,26 @@ use super::args::*;
 use super::dispatch::DispatchContext;
 use super::helpers::*;
 
+/// Surface registry-mode dependency resolution that was deferred to a post-publish pass.
+///
+/// Deliberately not an error. Registry-mode manifests pin the version the current
+/// run produces, so these steps cannot succeed until that version is published --
+/// failing here would mean every release run fails on a precondition that is
+/// required to be false at that moment. Local-mode e2e, which is what actually
+/// gates correctness, still hard-fails on any formatter error. ~keep
+fn report_deferred_formatting(crate_name: &str, deferred: &[crate::e2e::format::DeferredFormatting]) {
+    if deferred.is_empty() {
+        return;
+    }
+    tracing::warn!(
+        "[{crate_name}] {} dependency-resolution step(s) deferred until the pinned version is published:",
+        deferred.len()
+    );
+    for entry in deferred {
+        tracing::warn!("  {entry}");
+    }
+}
+
 pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Option<Commands>> {
     let config_path = &context.config_path;
     match command {
@@ -78,6 +98,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let mut current_gen_paths = std::collections::HashSet::new();
                 let mut changed_languages: std::collections::HashSet<crate::core::config::Language> =
                     std::collections::HashSet::new();
+                // Registry-mode dependency resolution that had to wait for a publish.
+                // Collected rather than raised so finalisation, the orphan sweep and
+                // docs all still run; reported once the pipeline has completed. ~keep
+                let mut deferred_formatting: Vec<crate::e2e::format::DeferredFormatting> = Vec::new();
 
                 tracing::info!("Generating bindings...");
                 let bindings = pipeline::generate(&api, resolved_cfg, &languages, clean, config_path)?;
@@ -316,7 +340,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     if !clean && cache::is_stage_cached(&resolved_cfg.name, "e2e", &e2e_stage_hash) {
                         tracing::info!("  [e2e] up to date (skipping)");
                         let cached_paths = cache::read_stage_paths(&resolved_cfg.name, "e2e");
-                        crate::e2e::format::run_formatters_for_cached_paths(&cached_paths, &base_dir, e2e_config)?;
+                        deferred_formatting.extend(crate::e2e::format::run_formatters_for_cached_paths(
+                            &cached_paths,
+                            &base_dir,
+                            e2e_config,
+                        )?);
                         for path in cached_paths {
                             current_gen_paths.insert(path);
                         }
@@ -337,7 +365,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             .filter(|file| file.carries_alef_marker())
                             .cloned()
                             .collect();
-                        crate::e2e::format::run_formatters(&managed_files, e2e_config)?;
+                        deferred_formatting.extend(crate::e2e::format::run_formatters(&managed_files, e2e_config)?);
 
                         let output_paths: Vec<PathBuf> = managed_files.iter().map(|f| base_dir.join(&f.path)).collect();
                         let path_set: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
@@ -362,11 +390,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let cached_paths = cache::read_stage_paths(&resolved_cfg.name, "test-apps");
                         let mut registry_e2e_config = e2e_config.clone();
                         registry_e2e_config.dep_mode = crate::core::config::e2e::DependencyMode::Registry;
-                        crate::e2e::format::run_formatters_for_cached_paths(
+                        deferred_formatting.extend(crate::e2e::format::run_formatters_for_cached_paths(
                             &cached_paths,
                             &base_dir,
                             &registry_e2e_config,
-                        )?;
+                        )?);
                         for path in cached_paths {
                             current_gen_paths.insert(path);
                         }
@@ -392,7 +420,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             .filter(|file| file.carries_alef_marker())
                             .cloned()
                             .collect();
-                        crate::e2e::format::run_formatters(&managed_files, registry_e2e_ref)?;
+                        deferred_formatting.extend(crate::e2e::format::run_formatters(&managed_files, registry_e2e_ref)?);
 
                         let output_paths: Vec<PathBuf> = managed_files.iter().map(|f| base_dir.join(&f.path)).collect();
                         let path_set: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
@@ -451,6 +479,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     &sources_hash,
                     &alef_toml_bytes,
                 )?;
+
+                // Reported only now, after finalisation, the orphan sweep and docs have
+                // all run. Raising at the point of failure is what made the release
+                // unreachable: these steps resolve the very version the run produces. ~keep
+                report_deferred_formatting(&resolved_cfg.name, &deferred_formatting);
 
                 grand_binding_count += binding_count;
                 grand_stub_count += stub_count;

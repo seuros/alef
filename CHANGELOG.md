@@ -40,6 +40,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extra_features` keeps its documented declare-but-do-not-enable behaviour for mutually-exclusive alternatives such
   as a `wasm-http` backend, and a gate naming one of those entries does not promote it into `default`. This mirrors
   the feature collection the dart, wasm, swift, and extendr backends already perform.
+- **e2e**: stop registry-mode dependency resolution from making a release unreachable. Registry-mode test apps pin
+  the version the current run produces, so any post-generation step that resolves those manifests against a registry
+  (`go mod tidy`, or a user `format` override shelling out to a resolver such as `bundle exec`) cannot succeed until
+  that version is published — while publishing requires the run to finish first. The failure aborted
+  `run_formatters` mid-stage, so `finalize_hashes` for the test apps, the orphan sweep, the stage cache write and the
+  entire **docs** stage never ran: one unpublished package left the test apps unstamped and every generated docs page
+  stale, and re-running could not converge. Formatting itself is unchanged and still aborts generation in every mode
+  — poly and `mix format` need no registry, so they have no pre-release excuse. Only dependency resolution is
+  deferred, and only under `DependencyMode::Registry`: `go mod tidy` is skipped and recorded, and a failing user
+  `format` override is recorded rather than fatal. `run_formatters` now returns the deferred steps as
+  `Vec<DeferredFormatting>`, which `alef all` reports once the pipeline has completed. `DependencyMode::Local` — the
+  mode that actually gates correctness — is behaviourally identical and always yields an empty list.
+  **API-visible:** `run_formatters` and `run_formatters_for_cached_paths` return `Vec<DeferredFormatting>` instead of
+  `()`.
 - **kotlin-android**: emit a handle wrapper class only for opaque types some visible top-level function returns.
   A type that is `is_opaque` but that nothing returns cannot be constructed from Kotlin at all, yet still got a
   `<TypeName>.kt` whose `close()` called `nativeFree<TypeName>` — a symbol the Bridge object never declares and the
