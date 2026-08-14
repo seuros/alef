@@ -19,6 +19,10 @@ pub struct KotlinAndroidConfig {
     /// See [`crate::core::config::HostCapsuleTypeConfig`].
     #[serde(default)]
     pub capsule_types: HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
+    /// Affirms every configured capsule wrapper uses the exact native runtime instance ~keep
+    /// and ownership contract that produced its pointer. ~keep
+    #[serde(default)]
+    pub shares_native_runtime: bool,
     /// JVM-style package for Kotlin bindings (e.g. `dev.sample_core`).
     /// Defaults to the crate name.
     #[serde(default)]
@@ -69,4 +73,27 @@ pub struct KotlinAndroidConfig {
     /// `[crate] features` for this language's binding crate.
     #[serde(default)]
     pub features: Option<Vec<String>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shares_native_runtime_is_accepted_from_toml() {
+        let parsed = toml::from_str::<KotlinAndroidConfig>("shares_native_runtime = true");
+        let config = parsed.unwrap_or_else(|error| {
+            panic!(
+                "the capsule gate tells users to set `[crates.kotlin_android].shares_native_runtime = true`, \
+                 so that key must parse; got: {error}"
+            )
+        });
+        assert!(config.shares_native_runtime);
+    }
+
+    #[test]
+    fn shares_native_runtime_defaults_to_false() {
+        let config = toml::from_str::<KotlinAndroidConfig>("").expect("empty config parses");
+        assert!(!config.shares_native_runtime);
+    }
 }

@@ -227,7 +227,11 @@ fn validate_capsule_ffi_parity(config: &ResolvedCrateConfig) -> anyhow::Result<(
     let Some(android) = &config.kotlin_android else {
         return Ok(());
     };
-    crate::core::config::languages::require_shared_native_runtime(&android.capsule_types, false, "kotlin_android")?;
+    crate::core::config::languages::require_shared_native_runtime(
+        &android.capsule_types,
+        android.shares_native_runtime,
+        "kotlin_android",
+    )?;
     let ffi_capsules = config.ffi.as_ref().map(|ffi| &ffi.capsule_types);
     let mut missing_ffi: Vec<_> = android
         .capsule_types
@@ -364,6 +368,49 @@ fn apply_kotlin_post_processing(files: &mut [GeneratedFile]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn config_with_undeclared_capsule(shares_native_runtime: bool) -> ResolvedCrateConfig {
+        let mut capsule_types = std::collections::HashMap::new();
+        capsule_types.insert(
+            "Language".to_string(),
+            crate::core::config::HostCapsuleTypeConfig {
+                host_type: "io.github.treesitter.ktreesitter.Language".to_string(),
+                ..Default::default()
+            },
+        );
+        ResolvedCrateConfig {
+            kotlin_android: Some(crate::core::config::KotlinAndroidConfig {
+                capsule_types,
+                shares_native_runtime,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn undeclared_capsule_contract_is_rejected_by_the_gate() {
+        let error = validate_capsule_ffi_parity(&config_with_undeclared_capsule(false))
+            .expect_err("an undeclared capsule contract must not pass the gate");
+        assert!(
+            error.to_string().contains("cannot safely wrap native pointers"),
+            "expected the capsule gate error, got: {error}"
+        );
+    }
+
+    #[test]
+    fn shares_native_runtime_is_read_from_config_and_clears_the_gate() {
+        let error = validate_capsule_ffi_parity(&config_with_undeclared_capsule(true))
+            .expect_err("the FFI-parity check still applies once the gate is cleared");
+        assert!(
+            !error.to_string().contains("cannot safely wrap native pointers"),
+            "`shares_native_runtime = true` was ignored — the gate still fired: {error}"
+        );
+        assert!(
+            error.to_string().contains("matching FFI capsule definitions"),
+            "expected to reach the FFI-parity check, got: {error}"
+        );
+    }
 
     #[test]
     fn strip_kotlin_source_suffix_extracts_project_root() {
