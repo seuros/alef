@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **generate/verify**: stamp every emitted file carrying an Alef marker, including backends that template their own
   marker while intentionally leaving `generated_header` disabled.
 - **ffi**: fail generation when generated FFI exports and the on-disk cbindgen header come from different runs.
+- **ffi**: declare enum `_free`/`_to_json`/`_to_string`/`_from_json` companions over the same scalar `AlefHandle`
+  every producer returns for that enum, instead of a `TYPE *`/`const TYPE *` struct pointer. Every FFI producer
+  (function returns, method returns, field accessors, and JSON constructors) hands out `Named` types — enums
+  included — through `insert_handle`, never `Box::into_raw`, so the mismatched pointer signature made the
+  generated C header describe two incompatible shapes for the same handle and broke consumer codegen (e.g. Go
+  `cannot use ... as *_Ctype_struct_... value`) for any enum with data-carrying variants.
 - **codegen/conversions**: use one tuple-variant predicate for enum definitions and `From` conversions so
   adjacently tagged tuple variants and untagged struct variants emit matching Rust syntax (#232).
 - **snippets**: enforce one timeout budget across every snippet in a validation batch and terminate timed-out

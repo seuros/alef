@@ -437,11 +437,13 @@ pub(super) fn gen_enum_from_i32_rs_helper(enum_def: &EnumDef, core_import: &str)
     )
 }
 
-/// Generate a `_free` function for an enum type returned as a heap-allocated pointer.
+/// Generate a `_free` function for an enum type stored behind a scalar `AlefHandle`.
 ///
-/// These are needed when a function returns `*mut EnumType` (via `Box::into_raw`), and the
-/// caller must free the allocation. This applies to enums that derive `Copy`/`Clone` but are
-/// returned through the pointer-based FFI API (e.g. field accessor methods on struct types).
+/// These are needed whenever an enum value crosses the FFI boundary as a return value,
+/// method return, or field value: every producer in `gen_bindings` hands out such values
+/// via `insert_handle` (see `value_to_c_conversion.jinja`'s `named_enum`/`named_clone`
+/// arms and `gen_type_to_json`/`gen_type_free`), never a raw pointer, so the matching
+/// `_free` must consume the same scalar handle and release it via `remove_handle`.
 pub(super) fn gen_enum_free(enum_def: &EnumDef, prefix: &str, core_import: &str) -> String {
     let enum_snake = c_symbol_component(&enum_def.name);
     let enum_name = &enum_def.name;
@@ -458,7 +460,7 @@ pub(super) fn gen_enum_free(enum_def: &EnumDef, prefix: &str, core_import: &str)
     )
 }
 
-/// Generate a `_to_json` function for an enum type returned as a heap-allocated pointer.
+/// Generate a `_to_json` function for an enum type stored behind a scalar `AlefHandle`.
 ///
 /// Serializes the enum to a JSON string using serde. Only generated for enums that
 /// derive `Serialize` (i.e. `has_serde` is true).
@@ -478,7 +480,7 @@ pub(super) fn gen_enum_to_json(enum_def: &EnumDef, prefix: &str, core_import: &s
     )
 }
 
-/// Generate a `_to_string` function for an enum type returned as a heap-allocated pointer.
+/// Generate a `_to_string` function for an enum type stored behind a scalar `AlefHandle`.
 ///
 /// Renders the unit-variant name as serde would serialize it (e.g.
 /// `BatchStatus::Completed` → `"completed"`), but stripped of the surrounding
@@ -503,8 +505,9 @@ pub(super) fn gen_enum_to_string(enum_def: &EnumDef, prefix: &str, core_import: 
 
 /// Generate a `_from_json` function for an enum type (for parameter passing from Java).
 ///
-/// Deserializes the enum from a JSON string. Only generated for enums that
-/// derive `Deserialize` (i.e. `has_serde` is true).
+/// Deserializes the enum from a JSON string and returns a scalar `AlefHandle`, mirroring
+/// `gen_type_from_json`. Only generated for enums that derive `Deserialize` (i.e.
+/// `has_serde` is true).
 pub(super) fn gen_enum_from_json(enum_def: &EnumDef, prefix: &str, core_import: &str) -> String {
     let enum_snake = c_symbol_component(&enum_def.name);
     let enum_name = &enum_def.name;
