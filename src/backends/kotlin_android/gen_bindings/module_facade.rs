@@ -33,7 +33,15 @@ pub(super) fn emit_module_kt(
     let opaque_type_names = opaque_type_names(api);
     let visible_functions = visible_functions(api, config);
 
-    handle_wrappers::emit_handle_wrappers(api, config, kotlin_source_dir, package, files, &bridge_name);
+    handle_wrappers::emit_handle_wrappers(
+        api,
+        config,
+        kotlin_source_dir,
+        package,
+        files,
+        &bridge_name,
+        &visible_functions,
+    );
     if visible_functions.is_empty() {
         return;
     }

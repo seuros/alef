@@ -677,6 +677,134 @@ fn handle_only_opaque_returns_wrapper_class_and_accepts_wrapper_params() {
     );
 }
 
+/// Same API as `make_handle_only_api`, plus an extra opaque, method-less type
+/// (`OrphanCounter`, shaped like xberg's `TokenCounter`) that no visible
+/// top-level function returns or takes as a parameter — it is public in the
+/// Rust source but has no alef-exposed constructor path.
+fn make_handle_only_api_with_unreachable_type() -> ApiSurface {
+    let mut api = make_handle_only_api();
+    api.types.push(TypeDef {
+        name: "OrphanCounter".into(),
+        rust_path: "demo::OrphanCounter".into(),
+        original_rust_path: String::new(),
+        fields: vec![],
+        methods: vec![],
+        is_opaque: true,
+        is_clone: false,
+        is_copy: false,
+        doc: String::new(),
+        cfg: None,
+        is_trait: false,
+        has_default: false,
+        has_stripped_cfg_fields: false,
+        is_return_type: false,
+        serde_rename_all: None,
+        has_serde: false,
+        super_traits: vec![],
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        is_variant_wrapper: false,
+        has_lifetime_params: false,
+        has_private_fields: false,
+        version: Default::default(),
+    });
+    api
+}
+
+/// Regression (task #560): an opaque, method-less type that no visible
+/// top-level function returns or takes as a parameter (xberg's `TokenCounter`
+/// shape — public in Rust, but with no alef-exposed constructor path) must
+/// NOT get a `<TypeName>.kt` wrapper class. Emitting one previously produced
+/// a `close()` calling `XbergBridge.nativeFreeTokenCounter(...)`, a symbol
+/// the Bridge object never declared (`Unresolved reference` at compile time)
+/// and the native JNI shim never implemented either — the type can never be
+/// legitimately constructed from Kotlin in the first place, so the wrapper
+/// was pure dead weight pointing at nothing.
+#[test]
+fn unreachable_opaque_type_gets_no_wrapper_class_or_dangling_destructor_reference() {
+    let api = make_handle_only_api_with_unreachable_type();
+    let config = make_opaque_factory_config();
+    let files = KotlinAndroidBackend.generate_bindings(&api, &config).unwrap();
+
+    assert!(
+        !files
+            .iter()
+            .any(|f| f.path.file_name().and_then(|n| n.to_str()) == Some("OrphanCounter.kt")),
+        "OrphanCounter is never returned by a visible function, so no wrapper class \
+         should be emitted for it; files: {:?}",
+        files.iter().map(|f| f.path.display().to_string()).collect::<Vec<_>>(),
+    );
+
+    for file in &files {
+        assert!(
+            !file.content.contains("OrphanCounter"),
+            "no generated file should reference the unreachable OrphanCounter type; \
+             found in {}:\n{}",
+            file.path.display(),
+            file.content,
+        );
+    }
+
+    let bridge_kt = files
+        .iter()
+        .find(|f| f.path.file_name().and_then(|n| n.to_str()) == Some("DemoBridge.kt"))
+        .expect("DemoBridge.kt must be emitted");
+    assert!(
+        !bridge_kt.content.contains("nativeFreeOrphanCounter"),
+        "the Bridge object must not declare a destructor for a type nothing can construct; \
+         got:\n{}",
+        bridge_kt.content,
+    );
+
+    // Still emitted correctly for the reachable handle-only type in the same run —
+    // the fix must narrow reachability, not break it (see
+    // `handle_only_opaque_returns_wrapper_class_and_accepts_wrapper_params`).
+    assert!(
+        files
+            .iter()
+            .any(|f| f.path.file_name().and_then(|n| n.to_str()) == Some("CrawlEngineHandle.kt")),
+        "CrawlEngineHandle is returned by a visible function and must still get a wrapper"
+    );
+}
+
+/// General regression (task #560): every `Bridge.native...` call referenced
+/// from ANY generated `.kt` file must have a matching `external fun`
+/// declaration in the Bridge object. This is the invariant `nativeFreeTokenCounter`
+/// violated — a Kotlin call site referencing a native symbol the Bridge object
+/// never declares does not compile (`Unresolved reference`). Catches the next
+/// instance of the same drift, not just this one type.
+#[test]
+fn every_referenced_bridge_native_call_has_a_matching_external_fun_declaration() {
+    let api = make_handle_only_api_with_unreachable_type();
+    let config = make_opaque_factory_config();
+    let files = KotlinAndroidBackend.generate_bindings(&api, &config).unwrap();
+
+    let bridge_kt = files
+        .iter()
+        .find(|f| f.path.file_name().and_then(|n| n.to_str()) == Some("DemoBridge.kt"))
+        .expect("DemoBridge.kt must be emitted");
+
+    let declared_pattern = regex::Regex::new(r"external fun (\w+)\(").unwrap();
+    let declared: std::collections::HashSet<&str> = declared_pattern
+        .captures_iter(&bridge_kt.content)
+        .map(|c| c.get(1).unwrap().as_str())
+        .collect();
+
+    let call_pattern = regex::Regex::new(r"DemoBridge\.(\w+)\(").unwrap();
+    for file in &files {
+        for capture in call_pattern.captures_iter(&file.content) {
+            let called = capture.get(1).unwrap().as_str();
+            assert!(
+                declared.contains(called),
+                "{} calls DemoBridge.{called}(...), but DemoBridge.kt has no \
+                 `external fun {called}(` declaration; this call would fail to \
+                 compile with 'Unresolved reference'. Declared: {declared:?}",
+                file.path.display(),
+            );
+        }
+    }
+}
+
 fn make_optional_params_api() -> ApiSurface {
     let chat_method = MethodDef {
         name: "chat".into(),

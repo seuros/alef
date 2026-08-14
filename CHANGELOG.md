@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **kotlin-android**: emit a handle wrapper class only for opaque types some visible top-level function returns.
+  A type that is `is_opaque` but that nothing returns cannot be constructed from Kotlin at all, yet still got a
+  `<TypeName>.kt` whose `close()` called `nativeFree<TypeName>` — a symbol the Bridge object never declares and the
+  native JNI shim never implements, so the generated module failed to compile with `Unresolved reference` on a class
+  no caller could have instantiated. Matches the reachability predicate the JNI shim generator and the Bridge
+  destructor emitter already apply.
 - **jni/scaffold**: inherit the core crate's configured feature set when Kotlin Android does not provide a
   backend-specific override, while preserving explicit per-backend features.
 - **e2e/wasm (tests)**: cover the fully-excluded-category path through `WasmCodegen::generate`, not only through the
