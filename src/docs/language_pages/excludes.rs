@@ -51,7 +51,7 @@ pub(super) fn language_excludes(config: &ResolvedCrateConfig, lang: Language) ->
         }
         Language::Java => {
             if let Some(c) = &config.java {
-                types.extend(c.exclude_types.iter().cloned());
+                extend_excludes(&mut functions, &mut types, &c.exclude_functions, &c.exclude_types);
             }
             if let Some(c) = &config.ffi {
                 extend_excludes(&mut functions, &mut types, &c.exclude_functions, &c.exclude_types);

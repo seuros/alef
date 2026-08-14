@@ -3467,6 +3467,14 @@
           },
           "description": "DTO-specific configuration (e.g., builder mode)."
         },
+        "exclude_functions": {
+          "default": [],
+          "description": "Functions to exclude from Java binding generation, unioned with\n`[crates.ffi].exclude_functions`.\n\nUse this for functions that must stay in the C ABI (and therefore out of\n`[crates.ffi].exclude_functions`) for other bindings, but that this Java binding\nwants to hide from its own public surface. Mirrors `GoConfig::exclude_functions`\nand `CSharpConfig::exclude_functions`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "exclude_types": {
           "default": [],
           "description": "Types to exclude from Java binding generation.\n\nJava's Panama bindings call the generated C FFI directly, so types excluded from\n`[crates.ffi].exclude_types` are also excluded automatically by the Java backend.",

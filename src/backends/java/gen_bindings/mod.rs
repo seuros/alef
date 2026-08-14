@@ -126,6 +126,23 @@ fn api_without_trait_bridge_managed_functions(
     filtered
 }
 
+/// Drop functions named by `[crates.java].exclude_functions` from the surface every Java
+/// emitter reads.
+///
+/// Filtered here rather than inside an emitter because three of them walk `api.functions`
+/// independently -- `native_lib.rs`, `ffi_class.rs` (twice) and `facade.rs` -- so hiding the
+/// function in one still leaks it from the others.
+///
+/// Deliberately NOT unioned into `native_lib.rs`'s `ffi_excluded` set: that set marks symbols
+/// as absent from the C ABI, whereas a Java-excluded function is still exported by the FFI
+/// crate and merely hidden from Java's surface. Conflating the two would declare a present
+/// symbol optional.
+fn api_without_java_excluded_functions(api: &ApiSurface, excluded: &HashSet<String>) -> ApiSurface {
+    let mut filtered = api.clone();
+    filtered.functions.retain(|func| !excluded.contains(&func.name));
+    filtered
+}
+
 impl Backend for JavaBackend {
     fn name(&self) -> &str {
         "java"
@@ -166,6 +183,18 @@ impl Backend for JavaBackend {
             &bridge_filtered_api
         } else {
             api
+        };
+        let java_excluded: HashSet<String> = config
+            .java
+            .as_ref()
+            .map(|java| java.exclude_functions.iter().cloned().collect())
+            .unwrap_or_default();
+        let java_filtered_api;
+        let api = if java_excluded.is_empty() {
+            api
+        } else {
+            java_filtered_api = api_without_java_excluded_functions(api, &java_excluded);
+            &java_filtered_api
         };
         let deduped_api = api.with_deduped_functions();
         let api = &deduped_api;
@@ -506,6 +535,18 @@ impl Backend for JavaBackend {
             &bridge_filtered_api
         } else {
             api
+        };
+        let java_excluded: HashSet<String> = config
+            .java
+            .as_ref()
+            .map(|java| java.exclude_functions.iter().cloned().collect())
+            .unwrap_or_default();
+        let java_filtered_api;
+        let api = if java_excluded.is_empty() {
+            api
+        } else {
+            java_filtered_api = api_without_java_excluded_functions(api, &java_excluded);
+            &java_filtered_api
         };
         let deduped_api = api.with_deduped_functions();
         let api = &deduped_api;

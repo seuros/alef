@@ -40,6 +40,15 @@ pub struct JavaConfig {
     /// `[crates.ffi].exclude_types` are also excluded automatically by the Java backend.
     #[serde(default)]
     pub exclude_types: Vec<String>,
+    /// Functions to exclude from Java binding generation, unioned with
+    /// `[crates.ffi].exclude_functions`.
+    ///
+    /// Use this for functions that must stay in the C ABI (and therefore out of
+    /// `[crates.ffi].exclude_functions`) for other bindings, but that this Java binding
+    /// wants to hide from its own public surface. Mirrors `GoConfig::exclude_functions`
+    /// and `CSharpConfig::exclude_functions`.
+    #[serde(default)]
+    pub exclude_functions: Vec<String>,
     /// Override the serde rename_all strategy for JSON field names (e.g. "camelCase", "snake_case").
     /// When set, this takes priority over the IR type-level serde_rename_all.
     #[serde(default)]
