@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **generate/verify**: stamp every emitted file carrying an Alef marker, including backends that template their own
   marker while intentionally leaving `generated_header` disabled.
 - **ffi**: fail generation when generated FFI exports and the on-disk cbindgen header come from different runs.
+- **ffi**: declare the callback-style streaming method wrapper's `client` parameter over the same scalar
+  `AlefHandle` every producer of that client type returns, instead of a `TYPE *`/`const TYPE *` struct pointer.
+  Every FFI producer hands out client types through `insert_handle`, never `Box::into_raw`, so the mismatched
+  pointer parameter made the generated Rust and the generated C header describe two incompatible shapes for the
+  same handle, and no caller holding a valid client handle could invoke a streaming method without a cast that
+  was wrong by construction.
 - **ffi**: declare enum `_free`/`_to_json`/`_to_string`/`_from_json` companions over the same scalar `AlefHandle`
   every producer returns for that enum, instead of a `TYPE *`/`const TYPE *` struct pointer. Every FFI producer
   (function returns, method returns, field accessors, and JSON constructors) hands out `Named` types — enums

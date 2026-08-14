@@ -18,6 +18,7 @@ fn emitted_code_blocks_preserve_newline_after_safety_comments() {
 }
 use crate::backends::ffi::gen_bindings::types::gen_field_accessor;
 use crate::core::backend::Backend;
+use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::*;
 
 #[test]
@@ -604,6 +605,145 @@ type = "ChatRequest"
         lib.content.contains("set_last_error"),
         "_next must call set_last_error on error"
     );
+}
+
+/// A client type whose handle is produced by an ordinary function (`connect`, mirroring a
+/// constructor) and consumed by the callback-style streaming FFI wrapper emitted from
+/// `streaming_method_wrapper.jinja`. Every FFI producer hands out `Named` types — client
+/// types included — as a scalar `AlefHandle` via `insert_handle`, never `Box::into_raw`,
+/// so the streaming wrapper's `client` parameter must accept that same scalar shape rather
+/// than a `TYPE *`/`const TYPE *` struct pointer built by construction from a handle that
+/// was never a raw pointer to begin with.
+fn streaming_client_api() -> (ApiSurface, ResolvedCrateConfig) {
+    let config = resolved_one(
+        r#"
+[workspace]
+languages = ["ffi"]
+
+[[crates]]
+name = "my-lib"
+sources = ["src/lib.rs"]
+
+[crates.ffi]
+prefix = "ml"
+
+[[crates.adapters]]
+name = "chat_stream"
+pattern = "streaming"
+core_path = "chat_stream"
+owner_type = "DefaultClient"
+item_type = "ChatChunk"
+error_type = "MyError"
+request_type = "my_lib::ChatRequest"
+
+[[crates.adapters.params]]
+name = "req"
+type = "ChatRequest"
+"#,
+    );
+    let api = ApiSurface {
+        crate_name: "my-lib".to_string(),
+        version: "1.0.0".to_string(),
+        types: vec![TypeDef {
+            name: "DefaultClient".to_string(),
+            rust_path: "my_lib::DefaultClient".to_string(),
+            is_opaque: true,
+            methods: vec![MethodDef {
+                name: "chat_stream".to_string(),
+                params: vec![],
+                return_type: TypeRef::Unit,
+                is_async: true,
+                error_type: Some("MyError".to_string()),
+                receiver: Some(ReceiverKind::Ref),
+                ..MethodDef::default()
+            }],
+            ..TypeDef::default()
+        }],
+        functions: vec![FunctionDef {
+            name: "connect".to_string(),
+            rust_path: "my_lib::connect".to_string(),
+            return_type: TypeRef::Named("DefaultClient".to_string()),
+            ..FunctionDef::default()
+        }],
+        ..ApiSurface::default()
+    };
+    (api, config)
+}
+
+/// C ABI regression: the streaming wrapper's `client` parameter must be declared as the same
+/// scalar `AlefHandle` every producer of that type returns, not a `TYPE *`/`const TYPE *`
+/// struct pointer. Before the fix, `streaming_method_wrapper.jinja` unconditionally declared
+/// `client: *const {{ qualified }}`, so cbindgen rendered a pointer-shaped C parameter for a
+/// handle that was never a raw pointer, and a caller holding a valid client handle from any
+/// producer could not call the streaming entry point without a cast that is wrong by
+/// construction.
+#[test]
+fn streaming_wrapper_client_param_is_scalar_handle_not_struct_pointer() {
+    let (api, config) = streaming_client_api();
+    let backend = FfiBackend;
+
+    let files = backend.generate_bindings(&api, &config).unwrap();
+    let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+    let sig_marker = "pub unsafe extern \"C\" fn ml_default_client_chat_stream(";
+    let sig_start = lib
+        .content
+        .find(sig_marker)
+        .unwrap_or_else(|| panic!("streaming wrapper must be emitted, got:\n{}", lib.content));
+    let after_start = &lib.content[sig_start..];
+    let sig_end = after_start.find(") -> i32").expect("streaming wrapper must return i32");
+    let signature = &after_start[..sig_end];
+
+    assert!(
+        signature.contains("client: AlefHandle"),
+        "streaming wrapper's client parameter must be a scalar AlefHandle, got:\n{signature}"
+    );
+    assert!(
+        !signature.contains("*const my_lib::DefaultClient") && !signature.contains("*mut my_lib::DefaultClient"),
+        "streaming wrapper's declared signature must not accept the client as a struct pointer, got:\n{signature}"
+    );
+
+    syn::parse_file(&lib.content).expect("streaming wrapper output must parse as valid Rust");
+}
+
+/// Rustc-consistency regression: the streaming wrapper's `client` handle must be resolved
+/// through the same `acquire_handles`/`locked_handle_ptr` registry idiom every other consumer
+/// of a client handle uses (see `null_check_self_ref.jinja` and `gen_stream_handle_functions`'s
+/// own `_start` function, which already got this right), and must agree with what an ordinary
+/// producer function (`connect`) hands out for the same type.
+#[test]
+fn streaming_wrapper_client_handle_agrees_with_producer_and_uses_registry() {
+    let (api, config) = streaming_client_api();
+    let backend = FfiBackend;
+
+    let files = backend.generate_bindings(&api, &config).unwrap();
+    let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+    assert!(
+        lib.content.contains("fn ml_connect(") && lib.content.contains(") -> AlefHandle"),
+        "producer function must hand out a scalar handle, got:\n{}",
+        lib.content
+    );
+
+    let streaming_fn = lib
+        .content
+        .split("fn ml_default_client_chat_stream(")
+        .nth(1)
+        .expect("streaming wrapper must be emitted");
+    assert!(
+        streaming_fn.contains("TypeId::of::<my_lib::DefaultClient>()"),
+        "streaming wrapper must validate the client handle against the qualified client type, got:\n{streaming_fn}"
+    );
+    assert!(
+        streaming_fn.contains("locked_handle_ptr::<my_lib::DefaultClient>"),
+        "streaming wrapper must resolve the client handle through the shared registry, not a raw cast, got:\n{streaming_fn}"
+    );
+    assert!(
+        !lib.content.contains("my_lib::my_lib::DefaultClient"),
+        "qualified client type must not duplicate the configured module path"
+    );
+
+    syn::parse_file(&lib.content).expect("streaming wrapper output must parse as valid Rust");
 }
 
 #[test]
