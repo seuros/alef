@@ -343,6 +343,39 @@ impl E2eCodegen for WasmCodegen {
         let wasm_type_prefix = config.wasm_type_prefix();
         for (group, active) in groups.iter().zip(active_per_group.iter()) {
             if active.is_empty() {
+                // Every fixture in this category was excluded for wasm (fixture-level
+                // `skip.languages: ["wasm"]`, per-call `skip_languages`, or a static
+                // `[crates.wasm].languages` gap). Previously this silently dropped the
+                // whole category with no generated output and no signal — 54 `visitor`
+                // fixtures vanished with no warning or CI failure. Emit a visible
+                // placeholder suite (mirroring kotlin_android's `ExcludedBindingsTest.kt`)
+                // and log a warning so the omission shows up in generation output.
+                if !group.fixtures.is_empty() {
+                    let reasons: Vec<(String, String)> = group
+                        .fixtures
+                        .iter()
+                        .map(|fixture| {
+                            let reason = fixture
+                                .skip
+                                .as_ref()
+                                .filter(|s| s.should_skip(lang))
+                                .and_then(|s| s.reason.clone())
+                                .unwrap_or_else(|| "excluded for wasm e2e generation".to_string());
+                            (fixture.id.clone(), reason)
+                        })
+                        .collect();
+                    tracing::warn!(
+                        category = %group.category,
+                        excluded_count = reasons.len(),
+                        "wasm e2e: entire fixture category excluded for wasm — emitting placeholder skip suite instead of silently omitting it"
+                    );
+                    let filename = format!("{}.test.ts", sanitize_filename(&group.category));
+                    files.push(GeneratedFile {
+                        path: tests_base.join(filename),
+                        content: render_wasm_excluded_category(&group.category, &reasons),
+                        generated_header: true,
+                    });
+                }
                 continue;
             }
             let filename = format!("{}.test.ts", sanitize_filename(&group.category));
@@ -467,6 +500,23 @@ describe("smoke", () => {{
 }});
 "#
     )
+}
+
+/// Render a placeholder vitest suite for a fixture category whose every
+/// fixture was excluded for wasm. Each fixture becomes a named `it.skip`
+/// case carrying its exclusion reason, so the omission is visible in test
+/// output and reports instead of the category disappearing without a trace.
+fn render_wasm_excluded_category(category: &str, reasons: &[(String, String)]) -> String {
+    let header = hash::header(CommentStyle::DoubleSlash);
+    let mut out = header;
+    out.push_str("import { describe, it } from \"vitest\";\n\n");
+    let _ = writeln!(out, "describe({category:?}, () => {{");
+    for (id, reason) in reasons {
+        let _ = writeln!(out, "    // {reason}");
+        let _ = writeln!(out, "    it.skip({id:?}, () => {{}});");
+    }
+    out.push_str("});\n");
+    out
 }
 
 fn snake_to_camel(s: &str) -> String {

@@ -169,3 +169,32 @@ fn render_setup_emits_e2e_env_assignments_alphabetically() {
         "empty env map should not emit any env assignments, got:\n{empty_setup}"
     );
 }
+
+#[test]
+fn render_wasm_excluded_category_emits_named_skip_cases_with_reasons() {
+    // When every fixture in a category is excluded for wasm (e.g. the whole
+    // `visitor` category), the generator must not silently drop the category —
+    // it emits a placeholder suite naming each excluded fixture and its reason.
+    let reasons = vec![
+        (
+            "visitor_skip_heading".to_string(),
+            "WASM visitor bridge not yet exposed via @xberg-io/html-to-markdown-wasm public API".to_string(),
+        ),
+        ("visitor_custom_output".to_string(), "excluded for wasm e2e generation".to_string()),
+    ];
+    let content = render_wasm_excluded_category("visitor", &reasons);
+
+    assert!(content.contains("describe(\"visitor\""), "must name the category:\n{content}");
+    assert!(
+        content.contains("it.skip(\"visitor_skip_heading\""),
+        "must name each excluded fixture as a skipped case:\n{content}"
+    );
+    assert!(
+        content.contains("it.skip(\"visitor_custom_output\""),
+        "must name each excluded fixture as a skipped case:\n{content}"
+    );
+    assert!(
+        content.contains("WASM visitor bridge not yet exposed"),
+        "must surface the per-fixture skip reason:\n{content}"
+    );
+}
