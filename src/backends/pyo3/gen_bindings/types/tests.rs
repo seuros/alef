@@ -1,5 +1,5 @@
-use super::{EmitContext, python_field_type};
-use crate::core::ir::{PrimitiveType, TypeRef};
+use super::{EmitContext, python_field_type, type_has_from_json};
+use crate::core::ir::{ApiSurface, FieldDef, PrimitiveType, TypeDef, TypeRef};
 use ahash::AHashSet;
 
 /// Build the three name-sets `python_field_type` consults: plain enums, data enums, and the
@@ -233,4 +233,57 @@ fn test_primitive_unaffected_by_context() {
     );
     assert_eq!(options, "bool");
     assert_eq!(native, "bool");
+}
+
+fn widget_request() -> TypeDef {
+    TypeDef {
+        name: "WidgetRequest".to_string(),
+        rust_path: "my_lib::WidgetRequest".to_string(),
+        fields: vec![FieldDef {
+            name: "label".to_string(),
+            ty: TypeRef::String,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+/// The gate `gen_bindings::mod` uses to inject a raw-text `from_json` staticmethod: crate-wide
+/// serde availability plus the type being in the core<->binding convertible set.
+#[test]
+fn type_has_from_json_true_for_a_convertible_type_when_crate_has_serde() {
+    let typ = widget_request();
+    let api = ApiSurface {
+        types: vec![typ.clone()],
+        ..Default::default()
+    };
+
+    assert!(type_has_from_json(&typ, &api, true));
+}
+
+#[test]
+fn type_has_from_json_false_when_crate_has_no_serde() {
+    let typ = widget_request();
+    let api = ApiSurface {
+        types: vec![typ.clone()],
+        ..Default::default()
+    };
+
+    assert!(!type_has_from_json(&typ, &api, false));
+}
+
+/// Opaque types are excluded from `core_to_binding_convertible_types` up front, so an opaque
+/// type never gets a `from_json` staticmethod even when the crate has serde.
+#[test]
+fn type_has_from_json_false_for_an_opaque_type() {
+    let typ = TypeDef {
+        is_opaque: true,
+        ..widget_request()
+    };
+    let api = ApiSurface {
+        types: vec![typ.clone()],
+        ..Default::default()
+    };
+
+    assert!(!type_has_from_json(&typ, &api, true));
 }
