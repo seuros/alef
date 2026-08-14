@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **snippets**: preserve extension-owned fixture descriptions while validating generated documentation language
+  identities.
 - **napi**: allow string-enum field literals alongside the nominal TypeScript enum using values derived from the
   canonical enum emitter.
 - **kotlin-android**: treat a DTO as default-constructible only when every emitted constructor parameter has a

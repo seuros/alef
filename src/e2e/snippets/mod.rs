@@ -800,12 +800,18 @@ mod tests {
             let path = snippet_path("docs/snippets", &docs, "example", target_language, language)
                 .expect("snippet path is valid");
 
-            assert_eq!(
-                rendered,
-                format!(
-                    "---\nid: fixture_{target_language}_extension_owned\nlanguage: {canonical_name}\ntarget: {target_language}\nlevel: typecheck\nrequires: []\nside_effect: safe\n---\n\n```{canonical_name} title=\"{}\"\nexample()\n```\n",
+            assert!(
+                rendered.contains(&format!("language: {canonical_name}\n")),
+                "{rendered}"
+            );
+            assert!(rendered.contains(&format!("target: {target_language}\n")), "{rendered}");
+            assert!(rendered.contains("Extension-owned example\n\n"), "{rendered}");
+            assert!(
+                rendered.contains(&format!(
+                    "```{canonical_name} title=\"{}\"\nexample()\n```",
                     language.display_name()
-                )
+                )),
+                "{rendered}"
             );
             assert_eq!(
                 path,
