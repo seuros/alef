@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **e2e/typescript**: qualify inferred enum-field metadata by its owning type so an enum field cannot poison a
+  same-named scalar field on another generated DTO.
 - **ffi/all**: rebuild a missing or stale cbindgen header after all FFI source-writing stages and validate the refreshed
   declarations in the same `alef all --clean` run, instead of failing once and requiring a manual Cargo build before
   an identical second generation could succeed.

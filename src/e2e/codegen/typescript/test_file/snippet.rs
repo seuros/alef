@@ -202,7 +202,15 @@ fn infer_enum_fields(
         for field in &type_def.fields {
             let Some(named) = named_type(&field.ty) else { continue };
             if enums.iter().any(|definition| definition.name == named) {
-                fields.entry(field.name.clone()).or_insert_with(|| named.to_string());
+                // Key by owning-type + field, not the bare field name: this map
+                // accumulates entries from every type reachable in the call's whole
+                // type graph (see the two `infer_enum_fields` calls in
+                // `render_snippet_body`), so two unrelated structs that happen to
+                // share a field name (e.g. `TranscriptionConfig.model: WhisperModel`
+                // and `LlmConfig.model: String`) must not collide on one key.
+                fields
+                    .entry(enum_field_key(&type_def.name, &field.name))
+                    .or_insert_with(|| named.to_string());
             } else if type_defs.iter().any(|definition| definition.name == named) {
                 pending.push(named.to_string());
             }
@@ -247,6 +255,79 @@ mod tests {
             args: Vec::new(),
             assertion_recipes: Vec::new(),
         }
+    }
+
+    #[test]
+    fn same_named_field_in_unrelated_struct_is_not_inferred_as_enum() {
+        // Regression for #578: `infer_enum_fields` used to key its result on the
+        // bare field name, so a genuinely enum-typed field on one struct
+        // (`TranscriptionConfig.model: WhisperModel`) poisoned an unrelated
+        // same-named `String` field on a different struct (`LlmConfig.model`)
+        // reachable from the same call's type graph.
+        let type_defs = [
+            TypeDef {
+                name: "TranscriptionConfig".into(),
+                fields: vec![crate::core::ir::FieldDef {
+                    name: "model".into(),
+                    ty: crate::core::ir::TypeRef::Named("WhisperModel".into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            TypeDef {
+                name: "LlmConfig".into(),
+                fields: vec![crate::core::ir::FieldDef {
+                    name: "model".into(),
+                    ty: crate::core::ir::TypeRef::String,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ];
+        let enums = [EnumDef {
+            name: "WhisperModel".into(),
+            ..Default::default()
+        }];
+
+        // Mirrors `render_snippet_body`, which accumulates `infer_enum_fields`
+        // results from multiple type roots (the call's options type and each
+        // argument's element type) into one shared map.
+        let mut enum_fields = std::collections::HashMap::new();
+        infer_enum_fields(Some("TranscriptionConfig"), &type_defs, &enums, &mut enum_fields);
+        infer_enum_fields(Some("LlmConfig"), &type_defs, &enums, &mut enum_fields);
+
+        let llm_object = serde_json::json!({"model": "openai/gpt-4o-mini"});
+        let llm_expression = ts_builder_expression(
+            llm_object.as_object().expect("object"),
+            "LlmConfig",
+            &Default::default(),
+            "node",
+            &enum_fields,
+            &Default::default(),
+            &type_defs,
+            &enums,
+            "",
+            &[],
+        );
+        assert_eq!(llm_expression, "{ model: \"openai/gpt-4o-mini\" } as LlmConfig");
+
+        let transcription_object = serde_json::json!({"model": "base"});
+        let transcription_expression = ts_builder_expression(
+            transcription_object.as_object().expect("object"),
+            "TranscriptionConfig",
+            &Default::default(),
+            "node",
+            &enum_fields,
+            &Default::default(),
+            &type_defs,
+            &enums,
+            "",
+            &[],
+        );
+        assert_eq!(
+            transcription_expression,
+            "{ model: WhisperModel.Base } as TranscriptionConfig"
+        );
     }
 
     #[test]

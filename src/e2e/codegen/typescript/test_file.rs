@@ -37,8 +37,9 @@ pub(in crate::e2e::codegen::typescript::test_file) use cache::{
 };
 pub(super) use helpers::resolve_node_function_name;
 pub(in crate::e2e::codegen::typescript::test_file) use helpers::{
-    canonical_ts_type_name, extract_bridge_cleanup, has_bytes_file_reads, has_later_arg_value, has_trait_bridge_args,
-    is_typescript_primitive_element_type, strip_setup_metadata, ts_method_helper_import,
+    canonical_ts_type_name, enum_field_key, extract_bridge_cleanup, has_bytes_file_reads, has_later_arg_value,
+    has_trait_bridge_args, is_typescript_primitive_element_type, resolve_enum_type, strip_setup_metadata,
+    ts_method_helper_import,
 };
 pub(in crate::e2e::codegen::typescript::test_file) use http::render_http_test_case;
 pub(in crate::e2e::codegen::typescript::test_file) use test_case::render_test_case;

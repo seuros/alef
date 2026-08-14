@@ -212,3 +212,39 @@ pub(in crate::e2e::codegen::typescript::test_file) fn canonical_ts_type_name(
         type_name.to_string()
     }
 }
+
+/// Build the qualified `enum_fields` key used for automatically inferred entries:
+/// the owning IR struct name plus the field name. Qualifying by owner prevents two
+/// same-named fields on unrelated structs (e.g. `TranscriptionConfig.model:
+/// WhisperModel` and `LlmConfig.model: String`) from colliding in the single
+/// `enum_fields` map threaded through snippet rendering — `infer_enum_fields` walks
+/// the whole reachable type graph from a call's options/argument types into one
+/// shared map, so a bare field name is not a safe key.
+pub(in crate::e2e::codegen::typescript::test_file) fn enum_field_key(owner_type: &str, field: &str) -> String {
+    format!("{owner_type}::{field}")
+}
+
+/// Resolve the enum type name for `field`, preferring an owner-qualified match
+/// (populated by `infer_enum_fields`) over a bare-name match (populated by
+/// alef.toml's `enum_fields` overrides, which predate the owner-qualified form and
+/// are authored by a human scoped to one call/type context rather than inferred
+/// automatically across the whole type graph).
+///
+/// `owner_type` is `None` when the caller has no IR-resolved owning type for
+/// `field` at this point (e.g. array elements re-entering `node_value_expression`
+/// with a synthetic empty field name) — only the bare-name form is consulted then.
+pub(in crate::e2e::codegen::typescript::test_file) fn resolve_enum_type<'a>(
+    enum_fields: &'a std::collections::HashMap<String, String>,
+    owner_type: Option<&str>,
+    field: &str,
+    camel_field: &str,
+) -> Option<&'a String> {
+    if let Some(owner_type) = owner_type
+        && let Some(enum_type) = enum_fields
+            .get(enum_field_key(owner_type, field).as_str())
+            .or_else(|| enum_fields.get(enum_field_key(owner_type, camel_field).as_str()))
+    {
+        return Some(enum_type);
+    }
+    enum_fields.get(field).or_else(|| enum_fields.get(camel_field))
+}
