@@ -36,6 +36,7 @@ pub(super) fn render_test_function(
     handle_dict_types: &HashSet<String>,
     force_bind_result: bool,
     convertible_types: &ahash::AHashSet<String>,
+    crate_has_serde: bool,
 ) {
     let fn_name = sanitize_ident(&fixture.id);
     let description = &fixture.description;
@@ -89,14 +90,15 @@ pub(super) fn render_test_function(
         .or(top_level_options_via)
         .unwrap_or(options_via);
     // Only honor "from_json" when the pyo3 backend actually injects a from_json()
-    // staticmethod for this type (gated on has_serde AND core→binding convertibility) —
-    // every DTO still has a plain kwargs constructor, so downgrading keeps the emitted
-    // call valid. ~keep
+    // staticmethod for this type (gated on per-type has_serde AND crate-level serde
+    // availability AND core→binding convertibility) — every DTO still has a plain kwargs
+    // constructor, so downgrading keeps the emitted call valid. ~keep
     let effective_options_via = helpers::effective_options_via_for_type(
         effective_options_via,
         effective_options_type,
         type_defs,
         convertible_types,
+        crate_has_serde,
     );
 
     let desc_with_period = if description.ends_with('.') {
@@ -375,6 +377,7 @@ mod tests {
             &HashSet::new(),
             false,
             &ahash::AHashSet::new(),
+            false,
         );
         assert!(out.contains("pytest.mark.skip"), "got: {out}");
         assert!(out.contains("not supported"), "got: {out}");

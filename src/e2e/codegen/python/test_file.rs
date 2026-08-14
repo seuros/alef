@@ -75,17 +75,19 @@ pub(super) fn render_test_file(
             })
             .unwrap_or(options_via)
     };
-    // Only honor "from_json" when the pyo3 backend actually injects a from_json()
-    // staticmethod for this type (gated on has_serde AND core→binding convertibility) — every
-    // DTO still has a plain kwargs constructor, so downgrading keeps the emitted call and its
-    // import valid. Computed once per file/snippet render; `type_defs`/`enums` don't change
-    // across fixtures in the same category. ~keep
+    // Only honor "from_json" when the pyo3 backend actually injects a from_json() staticmethod
+    // for this type (gated on per-type has_serde AND crate-level serde availability AND
+    // core→binding convertibility) — every DTO still has a plain kwargs constructor, so
+    // downgrading keeps the emitted call and its import valid. Computed once per file/snippet
+    // render; `type_defs`/`enums`/`config` don't change across fixtures in the same category. ~keep
     let convertible_types = helpers::core_to_binding_convertible_types(type_defs, enums);
+    let crate_has_serde = crate::backends::pyo3::gen_bindings::crate_has_serde(config);
     let effective_options_via = helpers::effective_options_via_for_type(
         effective_options_via,
         effective_options_type.as_deref(),
         type_defs,
         &convertible_types,
+        crate_has_serde,
     );
 
     let enum_fields = resolve_enum_fields(e2e_config);
@@ -357,6 +359,7 @@ pub(super) fn render_test_file(
             &used_config_types,
             type_defs,
             &convertible_types,
+            crate_has_serde,
             &mut thirdparty_from,
         );
     }
@@ -389,6 +392,7 @@ pub(super) fn render_test_file(
                 handle_dict_types,
                 force_bind_result,
                 &convertible_types,
+                crate_has_serde,
             );
         }
         let _ = writeln!(fixtures_body);
@@ -450,6 +454,7 @@ fn build_thirdparty_imports(
     used_config_types: &BTreeSet<String>,
     type_defs: &[crate::core::ir::TypeDef],
     convertible_types: &ahash::AHashSet<String>,
+    crate_has_serde: bool,
     thirdparty_from: &mut Vec<String>,
 ) {
     let handle_constructors: Vec<String> = e2e_config
@@ -673,6 +678,7 @@ fn build_thirdparty_imports(
                 Some(opts_type.as_str()),
                 type_defs,
                 convertible_types,
+                crate_has_serde,
             ) == "from_json"
         {
             let native_mod = py_override.from_json_module.as_deref().unwrap_or(module);
@@ -766,6 +772,7 @@ mod tests {
             &used_config_types,
             &[],
             &ahash::AHashSet::new(),
+            false,
             &mut thirdparty_from,
         );
 

@@ -718,20 +718,24 @@ pub(super) fn collect_named_types_filtered(
 
 /// Crate-wide serde availability for the pyo3 binding output, detected exactly as
 /// `generate_bindings` detects it. Lets callers that don't already have `has_serde` in scope
-/// (the `.pyi` stub generator) compute the identical value instead of re-deriving it. ~keep
-pub(in crate::backends::pyo3) fn crate_has_serde(config: &ResolvedCrateConfig) -> bool {
+/// (the `.pyi` stub generator, and the e2e python snippet emitter that mirrors this gate) compute
+/// the identical value instead of re-deriving it. `pub(crate)` so `e2e::codegen::python` can call
+/// it too — see `crate::codegen::conversions::pyo3_from_json_eligible`. ~keep
+pub(crate) fn crate_has_serde(config: &ResolvedCrateConfig) -> bool {
     let output_dir = resolve_output_dir(config.output_paths.get("python"), &config.name, "crates/{name}-py/src/");
     detect_serde_available(&output_dir)
 }
 
-/// True when the pyo3 backend gives `typ` a `from_json` staticmethod: `has_serde` (the crate
-/// declares `serde` + `serde_json`) and `typ` is in the core<->binding convertible set (opaque
-/// types and types with inconvertible fields are excluded). This is the single predicate behind
-/// both the raw-text `#[pymethods]` injection in `gen_bindings::mod` and the `def from_json`
-/// declaration `gen_stubs` emits — call it from both instead of re-checking the two conditions
-/// separately, so the emitted method and its stub can never drift apart. ~keep
+/// True when the pyo3 backend gives `typ` a `from_json` staticmethod. Delegates to the shared
+/// [`crate::codegen::conversions::pyo3_from_json_eligible`] predicate — the single source of
+/// truth also consumed by the e2e python snippet emitter — so this call site never re-derives
+/// the eligibility conditions on its own. This is the predicate behind both the raw-text
+/// `#[pymethods]` injection in `gen_bindings::mod` and the `def from_json` declaration
+/// `gen_stubs` emits — call it from both instead of re-checking the conditions separately, so
+/// the emitted method and its stub can never drift apart. ~keep
 pub(in crate::backends::pyo3) fn type_has_from_json(typ: &TypeDef, api: &ApiSurface, has_serde: bool) -> bool {
-    has_serde && crate::codegen::conversions::core_to_binding_convertible_types(api, &[]).contains(&typ.name)
+    let convertible = crate::codegen::conversions::core_to_binding_convertible_types(api, &[]);
+    crate::codegen::conversions::pyo3_from_json_eligible(typ, has_serde, &convertible)
 }
 
 #[cfg(test)]

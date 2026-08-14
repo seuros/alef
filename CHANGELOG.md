@@ -68,6 +68,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **snippets**: isolate per-target validation-session preparation failures so healthy language sessions still run
   while strict validation reports the affected target as an error.
 - **snippets/c/go**: model public FFI handles as scalar `AlefHandle` values and use zero as the invalid-handle sentinel.
+- **pyo3/e2e-python**: unify the two independent `from_json` eligibility checks — pyo3's `#[pymethods]`
+  injection/`.pyi` stub gate read crate-level serde availability only, while the e2e python snippet emitter's
+  gate read per-type serde derives only — into one shared `pyo3_from_json_eligible` predicate
+  (`src/codegen/conversions/helpers/eligibility.rs`) requiring per-type serde derives, crate-level serde
+  availability, and core<->binding convertibility. The two gates could disagree for a crate whose types carry
+  serde derives but whose Python binding crate lacks `serde`/`serde_json`, or vice versa; both call sites now
+  delegate to the shared predicate instead of each re-deriving it.
 
 - **fixtures/readme**: separate reader-facing fixture inputs, result presentation, and error intent from test data,
   and allow individual README snippet mappings to migrate between roots without breaking sibling mappings.

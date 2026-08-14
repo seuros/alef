@@ -189,6 +189,21 @@ pub fn can_generate_conversion(typ: &TypeDef, convertible: &AHashSet<String>) ->
     convertible.contains(&typ.name)
 }
 
+/// Whether the pyo3 backend gives `typ` a `from_json` staticmethod. Requires all three,
+/// independently necessary, conditions: `typ` itself derives `serde::Deserialize`
+/// (`TypeDef::has_serde` — without it there is no `Deserialize` impl to parse into), the
+/// binding crate has `serde` + `serde_json` available (`crate_has_serde` — without it neither
+/// `serde_json::from_str` nor the derive macros compile), and `typ` is in the core<->binding
+/// convertible set (opaque types and types with inconvertible fields are excluded).
+///
+/// This is the single predicate shared by pyo3's raw-text `#[pymethods]` injection, its `.pyi`
+/// stub declaration, and the e2e python snippet emitter's `from_json()` call-site selection —
+/// call it from all three instead of re-checking the conditions separately, so the compiled
+/// extension, its stub, and the doc snippets that call `from_json()` can never drift apart. ~keep
+pub fn pyo3_from_json_eligible(typ: &TypeDef, crate_has_serde: bool, convertible_types: &AHashSet<String>) -> bool {
+    crate_has_serde && typ.has_serde && convertible_types.contains(&typ.name)
+}
+
 pub(crate) fn is_field_convertible(
     ty: &TypeRef,
     convertible_enums: &AHashSet<&str>,

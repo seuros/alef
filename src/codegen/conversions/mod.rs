@@ -23,7 +23,7 @@ pub use helpers::{
     can_generate_enum_conversion, can_generate_enum_conversion_from_core, convertible_types, core_enum_path,
     core_enum_path_remapped, core_to_binding_convertible_types, core_to_binding_match_arm, core_type_path,
     core_type_path_remapped, field_references_excluded_type, has_sanitized_fields, input_type_names, is_tuple_variant,
-    resolve_named_path,
+    pyo3_from_json_eligible, resolve_named_path,
 };
 
 #[cfg(test)]

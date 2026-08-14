@@ -19,7 +19,10 @@ mod support_items;
 #[cfg(test)]
 mod tests;
 pub mod types;
-pub(in crate::backends::pyo3) use types::{crate_has_serde, options_dataclass_type_names, type_has_from_json};
+pub(in crate::backends::pyo3) use types::{options_dataclass_type_names, type_has_from_json};
+// pub(crate): e2e::codegen::python calls this to mirror the pyo3 backend's crate-level serde
+// detection when computing the shared from_json eligibility predicate. ~keep
+pub(crate) use types::crate_has_serde;
 pub(in crate::backends::pyo3) mod wire_schema;
 
 use crate::backends::pyo3::type_map::Pyo3Mapper;

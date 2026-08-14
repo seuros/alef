@@ -101,18 +101,22 @@ pub(super) fn core_to_binding_convertible_types(
 const PYO3_STUB_DECLARES_FROM_JSON: bool = false;
 
 /// Mirrors pyo3's own gate for injecting a `from_json()` staticmethod into a type's generated
-/// Rust `impl` block: `has_serde && core_to_binding_convertible_types(api, &[]).contains(name)`
-/// (see `src/backends/pyo3/gen_bindings/mod.rs`). Kept as a standalone predicate — independent
-/// of whether the `.pyi` stub actually declares that method, see
-/// [`PYO3_STUB_DECLARES_FROM_JSON`] — so it stays correct and testable on its own even while the
-/// stub gap keeps it unused by [`effective_options_via_for_type`] below. ~keep
+/// Rust `impl` block — the shared [`crate::codegen::conversions::pyo3_from_json_eligible`]
+/// predicate, requiring per-type serde derives, crate-level serde availability, and
+/// core<->binding convertibility (see `src/backends/pyo3/gen_bindings/types.rs`). Kept as a
+/// standalone predicate — independent of whether the `.pyi` stub actually declares that method,
+/// see [`PYO3_STUB_DECLARES_FROM_JSON`] — so it stays correct and testable on its own even while
+/// the stub gap keeps it unused by [`effective_options_via_for_type`] below. ~keep
 pub(super) fn pyo3_would_inject_from_json(
     name: &str,
     type_defs: &[crate::core::ir::TypeDef],
     convertible_types: &ahash::AHashSet<String>,
+    crate_has_serde: bool,
 ) -> bool {
-    let has_serde = type_defs.iter().find(|t| t.name == name).is_some_and(|t| t.has_serde);
-    has_serde && convertible_types.contains(name)
+    type_defs
+        .iter()
+        .find(|t| t.name == name)
+        .is_some_and(|t| crate::codegen::conversions::pyo3_from_json_eligible(t, crate_has_serde, convertible_types))
 }
 
 /// Downgrade `options_via` from `"from_json"` to `"kwargs"` unless the target type actually
@@ -127,12 +131,14 @@ pub(super) fn effective_options_via_for_type<'a>(
     options_type: Option<&str>,
     type_defs: &[crate::core::ir::TypeDef],
     convertible_types: &ahash::AHashSet<String>,
+    crate_has_serde: bool,
 ) -> &'a str {
     if options_via != "from_json" {
         return options_via;
     }
     let is_declared = PYO3_STUB_DECLARES_FROM_JSON
-        && options_type.is_some_and(|name| pyo3_would_inject_from_json(name, type_defs, convertible_types));
+        && options_type
+            .is_some_and(|name| pyo3_would_inject_from_json(name, type_defs, convertible_types, crate_has_serde));
     if is_declared { options_via } else { "kwargs" }
 }
 
@@ -253,10 +259,12 @@ mod tests {
         matches!(classify_bytes_value("/9j/4AAQSkZJRgABAQEASABIAAD"), BytesKind::Base64);
     }
 
-    // --- pyo3_would_inject_from_json: the Rust-codegen gate, independent of the stub gap ---
+    // --- pyo3_would_inject_from_json: the shared pyo3_from_json_eligible gate, independent of
+    // the stub gap. All three conditions — per-type has_serde, crate-level has_serde, and
+    // convertibility — are independently necessary. ---
 
     #[test]
-    fn pyo3_would_inject_from_json_true_when_type_has_serde_and_is_convertible() {
+    fn pyo3_would_inject_from_json_true_when_all_three_conditions_hold() {
         let type_defs = vec![crate::core::ir::TypeDef {
             name: "WidgetRequest".to_string(),
             has_serde: true,
@@ -268,7 +276,12 @@ mod tests {
             "test setup: a plain fieldless type must be convertible"
         );
 
-        assert!(pyo3_would_inject_from_json("WidgetRequest", &type_defs, &convertible));
+        assert!(pyo3_would_inject_from_json(
+            "WidgetRequest",
+            &type_defs,
+            &convertible,
+            true
+        ));
     }
 
     #[test]
@@ -280,7 +293,12 @@ mod tests {
         }];
         let convertible = core_to_binding_convertible_types(&type_defs, &[]);
 
-        assert!(!pyo3_would_inject_from_json("WidgetRequest", &type_defs, &convertible));
+        assert!(!pyo3_would_inject_from_json(
+            "WidgetRequest",
+            &type_defs,
+            &convertible,
+            true
+        ));
     }
 
     /// Mirrors the measured liter-llm defect: `has_serde` alone is not the pyo3 gate. A
@@ -307,7 +325,36 @@ mod tests {
             "test setup: an unresolved field type must fail convertibility"
         );
 
-        assert!(!pyo3_would_inject_from_json("WidgetRequest", &type_defs, &convertible));
+        assert!(!pyo3_would_inject_from_json(
+            "WidgetRequest",
+            &type_defs,
+            &convertible,
+            true
+        ));
+    }
+
+    /// The unified predicate's third independent condition: even a per-type-serde,
+    /// convertible type must not get `from_json` when the binding crate itself lacks
+    /// `serde`/`serde_json` — `serde_json::from_str` wouldn't compile there.
+    #[test]
+    fn pyo3_would_inject_from_json_false_when_crate_lacks_serde() {
+        let type_defs = vec![crate::core::ir::TypeDef {
+            name: "WidgetRequest".to_string(),
+            has_serde: true,
+            ..Default::default()
+        }];
+        let convertible = core_to_binding_convertible_types(&type_defs, &[]);
+        assert!(
+            convertible.contains("WidgetRequest"),
+            "test setup: a plain fieldless type must be convertible"
+        );
+
+        assert!(!pyo3_would_inject_from_json(
+            "WidgetRequest",
+            &type_defs,
+            &convertible,
+            false
+        ));
     }
 
     // --- effective_options_via_for_type: what the emitter actually does today ---
@@ -326,10 +373,15 @@ mod tests {
             ..Default::default()
         }];
         let convertible = core_to_binding_convertible_types(&type_defs, &[]);
-        assert!(pyo3_would_inject_from_json("WidgetRequest", &type_defs, &convertible));
+        assert!(pyo3_would_inject_from_json(
+            "WidgetRequest",
+            &type_defs,
+            &convertible,
+            true
+        ));
 
         assert_eq!(
-            effective_options_via_for_type("from_json", Some("WidgetRequest"), &type_defs, &convertible),
+            effective_options_via_for_type("from_json", Some("WidgetRequest"), &type_defs, &convertible, true),
             "kwargs"
         );
     }
@@ -344,7 +396,22 @@ mod tests {
         let convertible = core_to_binding_convertible_types(&type_defs, &[]);
 
         assert_eq!(
-            effective_options_via_for_type("from_json", Some("WidgetRequest"), &type_defs, &convertible),
+            effective_options_via_for_type("from_json", Some("WidgetRequest"), &type_defs, &convertible, true),
+            "kwargs"
+        );
+    }
+
+    #[test]
+    fn effective_options_via_for_type_downgrades_to_kwargs_when_crate_lacks_serde() {
+        let type_defs = vec![crate::core::ir::TypeDef {
+            name: "WidgetRequest".to_string(),
+            has_serde: true,
+            ..Default::default()
+        }];
+        let convertible = core_to_binding_convertible_types(&type_defs, &[]);
+
+        assert_eq!(
+            effective_options_via_for_type("from_json", Some("WidgetRequest"), &type_defs, &convertible, false),
             "kwargs"
         );
     }
@@ -353,7 +420,7 @@ mod tests {
     fn effective_options_via_for_type_downgrades_to_kwargs_when_type_is_unknown() {
         let convertible = core_to_binding_convertible_types(&[], &[]);
         assert_eq!(
-            effective_options_via_for_type("from_json", Some("WidgetRequest"), &[], &convertible),
+            effective_options_via_for_type("from_json", Some("WidgetRequest"), &[], &convertible, true),
             "kwargs"
         );
     }
@@ -361,9 +428,12 @@ mod tests {
     #[test]
     fn effective_options_via_for_type_leaves_non_from_json_values_untouched() {
         let convertible = core_to_binding_convertible_types(&[], &[]);
-        assert_eq!(effective_options_via_for_type("dict", None, &[], &convertible), "dict");
         assert_eq!(
-            effective_options_via_for_type("kwargs", None, &[], &convertible),
+            effective_options_via_for_type("dict", None, &[], &convertible, true),
+            "dict"
+        );
+        assert_eq!(
+            effective_options_via_for_type("kwargs", None, &[], &convertible, true),
             "kwargs"
         );
     }
