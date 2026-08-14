@@ -1,5 +1,120 @@
 use super::*;
 
+/// Every composer.json the PHP scaffold emits, as (path, content).
+///
+/// ~keep Declares `php` in the workspace languages deliberately. `resolve_output_paths` inserts an
+/// entry for every ENABLED language — falling back to the output template when the crate sets no
+/// explicit path — so `output_paths` only carries a `php` key when php is enabled. A fixture that
+/// omits it can never exercise the co-located branch, and would silently assert the split layout
+/// while claiming to test co-location.
+fn php_manifests(workspace_languages: &str, extra_crate_config: &str) -> Vec<(String, String)> {
+    let cfg: crate::core::config::NewAlefConfig = toml::from_str(&format!(
+        r#"
+[workspace]
+languages = [{workspace_languages}]
+
+[[crates]]
+name = "my-lib"
+sources = ["src/lib.rs"]
+
+[crates.scaffold]
+description = "Test library"
+license = "MIT"
+repository = "https://github.com/test/my-lib"
+authors = ["Alice"]
+keywords = ["test"]
+{extra_crate_config}
+"#,
+    ))
+    .expect("valid toml");
+    let config = cfg.resolve().expect("resolve ok").remove(0);
+
+    scaffold(&test_api(), &config, &[Language::Php])
+        .unwrap()
+        .into_iter()
+        .filter(|f| f.path.to_string_lossy().ends_with("composer.json"))
+        .map(|f| (f.path.to_string_lossy().into_owned(), f.content))
+        .collect()
+}
+
+/// ~keep The co-located layout must emit exactly ONE manifest. Both manifests render the same
+/// composer `name`, so a second one beside the classes publishes a duplicate of the package
+/// identity into the consumer's repository — and nothing can resolve it, because Packagist reads
+/// the repository root and every consumer reference targets the class directory, not the manifest.
+/// This shipped into six consumer repositories before anyone noticed.
+#[test]
+fn co_located_layout_emits_exactly_one_manifest() {
+    let manifests = php_manifests("\"php\"", "[crates.output]\nphp = \"crates/my-lib-php/src/\"\n");
+
+    let paths: Vec<&str> = manifests.iter().map(|(path, _)| path.as_str()).collect();
+    assert_eq!(
+        paths,
+        vec!["composer.json"],
+        "co-located layout must emit only the root manifest"
+    );
+    assert!(
+        manifests[0].1.contains("crates/my-lib-php/src/"),
+        "the root manifest must autoload the co-located class directory; got:\n{}",
+        manifests[0].1
+    );
+}
+
+/// ~keep The co-located branch does not actually require `[crates.output] php`. Enabling php is
+/// enough, because `resolve_output_paths` inserts a template-resolved entry for every enabled
+/// language, so `output_paths.contains_key("php")` is true either way. This pins that, because it
+/// means the split branch below is unreachable for any real consumer and the flag's name promises
+/// a narrower condition than it tests.
+#[test]
+fn enabling_php_alone_selects_the_co_located_layout() {
+    let manifests = php_manifests("\"php\"", "");
+
+    let paths: Vec<&str> = manifests.iter().map(|(path, _)| path.as_str()).collect();
+    assert_eq!(
+        paths,
+        vec!["composer.json"],
+        "an enabled php language resolves an output path, so the layout is co-located"
+    );
+}
+
+/// ~keep The split layout keeps both: there the classes live under `packages/php/src/`, so the
+/// package-dir manifest is the installable package and the root one exists so the repository itself
+/// resolves. Dropping the package manifest unconditionally would break those consumers.
+///
+/// Reaching this branch requires scaffolding php while php is NOT an enabled workspace language —
+/// see `enabling_php_alone_selects_the_co_located_layout` for why. The branch is therefore
+/// preserved for safety rather than because a current consumer exercises it.
+#[test]
+fn split_layout_still_emits_root_and_package_manifests() {
+    let manifests = php_manifests("\"python\", \"node\"", "");
+
+    let mut paths: Vec<&str> = manifests.iter().map(|(path, _)| path.as_str()).collect();
+    paths.sort_unstable();
+    assert_eq!(
+        paths,
+        vec!["composer.json", "packages/php/composer.json"],
+        "split layout must keep both manifests"
+    );
+
+    let package = manifests
+        .iter()
+        .find(|(path, _)| path == "packages/php/composer.json")
+        .expect("package manifest");
+    assert!(
+        package.1.contains("\"src/\""),
+        "the package manifest autoloads its nested src/; got:\n{}",
+        package.1
+    );
+    let root = manifests
+        .iter()
+        .find(|(path, _)| path == "composer.json")
+        .expect("root manifest");
+    assert!(
+        root.1.contains("packages/php/src/"),
+        "the root manifest reaches through to the package sources; got:\n{}",
+        root.1
+    );
+}
+
 #[test]
 fn test_scaffold_php_omits_phpstan_and_cs_fixer_configs() {
     let config = test_config();

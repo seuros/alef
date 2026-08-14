@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicit manifest override, and copy host libraries from the Cargo workspace target directory.
 
 ### Fixed
+- **scaffold/php**: emit exactly one composer.json per layout. The co-located layout now emits only the
+  repository-root manifest; the package-directory copy is kept for the split layout, where it is the
+  installable package. Both rendered the same composer `name`, so every co-located consumer carried a
+  second, unreachable declaration of its own published package — Packagist reads the repository root, and
+  consumer references target the class directory rather than the manifest.
 - **ffi**: preserve registration methods' domain error types when a service owner is absent, and return the scalar
   zero sentinel when an opaque constructor rejects an enum discriminant.
 - **e2e/snippets**: assert the whole rendered snippet document in the canonical-language test instead of a set of
