@@ -28,6 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **config generation**: report every Rust-binding field whose serde default function cannot be preserved in one
   actionable generation error instead of panicking on the first field. The diagnostic now identifies each owning
   type, field, and function and explains the public, unconditional static-method or literal-default remedies.
+- **validate**: compare csproj `AssemblyVersion`/`FileVersion` in the 4-component .NET form rather than against raw
+  canonical SemVer. The generator stamps both fields through `to_dotnet_assembly_version` — `1.17.0` becomes
+  `1.17.0.0`, and a prerelease such as `1.9.0-rc.48` becomes `1.9.0.0` — because .NET rejects SemVer prereleases in
+  those attributes. `alef validate versions` compared all four csproj fields against the raw canonical string, so the
+  two assembly fields could never match and every consumer with C# enabled reported permanent mismatches on output
+  alef itself is required to produce. Under `--exit-code` that is a permanently red release gate. `Version` and
+  `InformationalVersion` carry the full SemVer and keep comparing raw, so the four-component form is still rejected
+  there.
+
 - **csharp**: only emit the `Register<Trait>` facade when the trait bridge declares a `register_fn`. The facade calls
   `NativeMethods.Register<Trait>`, which is generated solely for bridges that have a native register function, so a
   bridge configured without one produced a call to an undeclared member — `CS0117`, failing the whole package build.

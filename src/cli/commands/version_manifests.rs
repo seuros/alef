@@ -19,6 +19,7 @@ fn collect_csproj_checks(
     checks: &mut Vec<VersionCheck>,
 ) {
     let directory = config.package_dir(Language::Csharp);
+    let assembly_version = crate::core::version::to_dotnet_assembly_version(canonical);
     for path in glob_under(workspace_root, &directory, "**/*.csproj") {
         let Some(content) = std::fs::read_to_string(&path).ok() else {
             continue;
@@ -27,7 +28,15 @@ fn collect_csproj_checks(
             let Some(found) = read_xml_element(&content, field) else {
                 continue;
             };
-            push_check(checks, workspace_root, &path, Some(field), found, canonical);
+            // ~keep The generator stamps these two fields through `to_dotnet_assembly_version`
+            // because .NET rejects SemVer prereleases in them, so comparing against raw
+            // canonical would flag alef's own required output as a mismatch forever.
+            // `Version` and `InformationalVersion` carry the full SemVer and compare raw.
+            let expected = match field {
+                "AssemblyVersion" | "FileVersion" => assembly_version.as_str(),
+                _ => canonical,
+            };
+            push_check(checks, workspace_root, &path, Some(field), found, expected);
         }
     }
 }
@@ -258,6 +267,95 @@ mod tests {
                 project_checks
                     .iter()
                     .any(|check| check.label.ends_with(&format!("#{field}")) && !check.matches)
+            );
+        }
+    }
+
+    /// Write a csproj whose four version fields carry exactly what the generator
+    /// emits for `canonical`, then return its checks.
+    fn generator_shaped_csproj_checks(canonical: &str) -> Vec<VersionCheck> {
+        let temp = workspace(canonical);
+        let project = temp.path().join("packages/csharp/src/Sample/Sample.csproj");
+        std::fs::create_dir_all(project.parent().expect("project parent")).expect("project directory");
+        let assembly = crate::core::version::to_dotnet_assembly_version(canonical);
+        std::fs::write(
+            &project,
+            format!(
+                "<Project><PropertyGroup>\
+                 <Version>{canonical}</Version>\
+                 <AssemblyVersion>{assembly}</AssemblyVersion>\
+                 <FileVersion>{assembly}</FileVersion>\
+                 <InformationalVersion>{canonical}</InformationalVersion>\
+                 </PropertyGroup></Project>",
+            ),
+        )
+        .expect("csproj");
+
+        collect(&config(temp.path()), temp.path(), canonical)
+            .into_iter()
+            .filter(|check| check.label.contains("Sample.csproj#"))
+            .collect()
+    }
+
+    #[test]
+    fn generated_four_component_assembly_version_is_not_reported_as_a_mismatch() {
+        let checks = generator_shaped_csproj_checks("1.17.0");
+        assert_eq!(checks.len(), 4);
+        for check in &checks {
+            assert!(
+                check.matches,
+                "generator output must validate clean, but {} reported {:?}",
+                check.label, check.found
+            );
+        }
+    }
+
+    #[test]
+    fn prerelease_assembly_version_matches_while_semver_fields_keep_the_prerelease() {
+        let checks = generator_shaped_csproj_checks("1.9.0-rc.48");
+        let find = |suffix: &str| {
+            checks
+                .iter()
+                .find(|check| check.label.ends_with(suffix))
+                .unwrap_or_else(|| panic!("missing {suffix}"))
+        };
+        for suffix in ["#AssemblyVersion", "#FileVersion"] {
+            let check = find(suffix);
+            assert!(check.matches, "{suffix} should match: {:?}", check.found);
+            assert_eq!(check.found.as_deref(), Some("1.9.0.0"));
+        }
+        for suffix in ["#Version", "#InformationalVersion"] {
+            let check = find(suffix);
+            assert!(check.matches, "{suffix} should match: {:?}", check.found);
+            assert_eq!(check.found.as_deref(), Some("1.9.0-rc.48"));
+        }
+    }
+
+    #[test]
+    fn semver_fields_still_reject_the_four_component_assembly_form() {
+        let temp = workspace("1.17.0");
+        let project = temp.path().join("packages/csharp/src/Sample/Sample.csproj");
+        std::fs::create_dir_all(project.parent().expect("project parent")).expect("project directory");
+        std::fs::write(
+            &project,
+            concat!(
+                "<Project><PropertyGroup>",
+                "<Version>1.17.0.0</Version>",
+                "<InformationalVersion>1.17.0.0</InformationalVersion>",
+                "</PropertyGroup></Project>",
+            ),
+        )
+        .expect("csproj");
+
+        let checks = collect(&config(temp.path()), temp.path(), "1.17.0");
+        for suffix in ["#Version", "#InformationalVersion"] {
+            let check = checks
+                .iter()
+                .find(|check| check.label.ends_with(suffix))
+                .unwrap_or_else(|| panic!("missing {suffix}"));
+            assert!(
+                !check.matches,
+                "{suffix} carries full SemVer and must not accept the assembly form"
             );
         }
     }
