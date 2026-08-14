@@ -6,6 +6,7 @@ mod generate;
 mod helpers;
 mod version;
 mod version_core;
+mod version_csharp;
 mod version_python;
 mod version_regen;
 mod version_registry;

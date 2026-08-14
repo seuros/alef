@@ -623,3 +623,62 @@ fn sync_versions_skips_publish_false_workspace_member_but_updates_others() {
         "publish = false member must not pick up the new release version:\n{priv_shim}"
     );
 }
+
+#[test]
+fn sync_versions_bumps_publish_false_rust_registry_test_app_package() {
+    use crate::core::config::NewAlefConfig;
+
+    let _guard = CWD_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let original_cwd = std::env::current_dir().expect("cwd");
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    let test_app_dir = root.join("verification_apps/rust");
+    std::fs::create_dir_all(&test_app_dir).expect("mkdir rust test app");
+    std::fs::write(
+        root.join("Cargo.toml"),
+        concat!(
+            "[workspace]\nresolver = \"2\"\nmembers = []\nexclude = [\"verification_apps/rust\"]\n\n",
+            "[workspace.package]\nversion = \"1.2.3-rc.4\"\n",
+        ),
+    )
+    .expect("write root Cargo.toml");
+    std::fs::write(
+        test_app_dir.join("Cargo.toml"),
+        concat!(
+            "[workspace]\n\n",
+            "[package]\nname = \"example-e2e-rust\"\nversion = \"1.2.2\"\nedition = \"2024\"\npublish = false\n\n",
+            "[dependencies]\nexample = \"1.2.3-rc.4\"\n",
+        ),
+    )
+    .expect("write rust test-app Cargo.toml");
+    let alef_toml = format!(
+        concat!(
+            "[workspace]\nlanguages = [\"rust\"]\n\n",
+            "[[crates]]\nname = \"example\"\nsources = []\nversion_from = \"{}\"\n\n",
+            "[crates.e2e]\nfixtures = \"fixtures\"\nlanguages = [\"rust\"]\n\n",
+            "[crates.e2e.call]\nmodule = \"example\"\nfunction = \"parse\"\n\n",
+            "[crates.e2e.registry]\noutput = \"verification_apps\"\n\n",
+            "[crates.e2e.registry.packages.rust]\nname = \"example\"\nversion = \"1.2.3-rc.4\"\n",
+        ),
+        root.join("Cargo.toml").display().to_string().replace('\\', "/")
+    );
+    let alef_toml_path = root.join("alef.toml");
+    std::fs::write(&alef_toml_path, &alef_toml).expect("write alef.toml");
+    let config: NewAlefConfig = toml::from_str(&alef_toml).expect("parse alef.toml");
+    let resolved = config.resolve().expect("resolve config").remove(0);
+
+    std::env::set_current_dir(root).expect("set cwd");
+    let result = sync_versions(&resolved, &alef_toml_path, None, true, true, None);
+    let _ = std::env::set_current_dir(original_cwd);
+    result.expect("sync versions");
+
+    let manifest = std::fs::read_to_string(test_app_dir.join("Cargo.toml")).expect("read test-app manifest");
+    assert!(
+        manifest.contains("version = \"1.2.3-rc.4\""),
+        "registry Rust test-app package version must track the consumer: {manifest}"
+    );
+    assert!(
+        manifest.contains("publish = false"),
+        "publish policy must be preserved: {manifest}"
+    );
+}

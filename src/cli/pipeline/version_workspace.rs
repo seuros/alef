@@ -2,7 +2,29 @@ use std::collections::HashSet;
 use std::path::Path;
 use tracing::debug;
 
+use crate::core::config::ResolvedCrateConfig;
+
 use super::version_core::{patch_cargo_crates_io_version, patch_workspace_dep_versions, write_version_to_cargo_toml};
+
+pub(super) fn sync_rust_test_app_version(
+    config: &ResolvedCrateConfig,
+    version: &str,
+    updated: &mut Vec<String>,
+    any_cargo_toml_modified: &mut bool,
+) {
+    let Some(e2e_config) = config.e2e.as_ref() else {
+        return;
+    };
+    let path = Path::new(&e2e_config.registry.output).join("rust/Cargo.toml");
+    let path_string = path.to_string_lossy().to_string();
+    if !path.exists() || write_version_to_cargo_toml(&path_string, version).is_err() {
+        return;
+    }
+    if !updated.contains(&path_string) {
+        updated.push(path_string);
+        *any_cargo_toml_modified = true;
+    }
+}
 
 pub(super) fn sync_workspace_cargo_toml_versions(
     crate_name: &str,

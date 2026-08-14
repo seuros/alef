@@ -8,6 +8,7 @@ use super::version_core::{
     bump_version, package_json_is_private, patch_workspace_dep_versions, read_version, to_pep440,
     write_version_to_cargo_toml,
 };
+use super::version_csharp::sync_csharp_project_versions;
 use super::version_python::sync_python_versions;
 use super::version_regen::{regenerate_readmes, regenerate_scaffold_after_sync, regenerate_test_apps_after_sync};
 use super::version_registry::sync_registry_package_versions;
@@ -18,7 +19,7 @@ use super::version_text::{
     sync_docs_version_badges, sync_e2e_dart_pubspec_lock, sync_e2e_go_mod, sync_e2e_java_pom, sync_gemfile_lock,
     sync_go_native_setup_sentinel, sync_swift_binary_release_url,
 };
-use super::version_workspace::sync_workspace_cargo_toml_versions;
+use super::version_workspace::{sync_rust_test_app_version, sync_workspace_cargo_toml_versions};
 use crate::core::version::{to_r_version, to_rubygems_prerelease};
 
 /// Regex for matching semantic version strings.
@@ -65,6 +66,7 @@ pub fn sync_versions(
     let mut text_replacement_paths: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
 
     sync_workspace_cargo_toml_versions(&config.name, &version, &mut updated, &mut any_cargo_toml_modified);
+    sync_rust_test_app_version(config, &version, &mut updated, &mut any_cargo_toml_modified);
 
     let python_version = to_pep440(&version);
     sync_python_versions(config, &version, &python_version, &mut updated)?;
@@ -191,19 +193,8 @@ pub fn sync_versions(
         .flatten()
     {
         if let Ok(content) = std::fs::read_to_string(&entry) {
-            let mut working = content.clone();
-            if let Some(rewritten) = replace_version_pattern(&working, r#"<Version>[^<]*</Version>"#, &version) {
-                working = rewritten;
-            }
-            if let Some(rewritten) = replace_version_pattern(
-                &working,
-                r#"<InformationalVersion>[^<]*</InformationalVersion>"#,
-                &version,
-            ) {
-                working = rewritten;
-            }
-            if working != content {
-                std::fs::write(&entry, &working)?;
+            if let Some(rewritten) = sync_csharp_project_versions(&content, &version) {
+                std::fs::write(&entry, &rewritten)?;
                 updated.push(entry.to_string_lossy().to_string());
             }
         }

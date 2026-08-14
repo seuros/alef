@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **pipeline/cache**: discover and re-stamp Alef-owned generated files omitted from a cache-hit language's in-memory
   path set, including files whose provenance hash line was previously stripped.
+- **sync-versions**: keep C# assembly/file versions and the registry Rust test-app package version aligned with the
+  consumer SemVer; .NET assembly fields now use the required four-component numeric form.
 - **scaffold/poly**: lower configured exclusions separately for discovery gitignore semantics and hook glob matching,
   preventing nested fixture over-pruning and missed nested build/vendor directories.
 - **docs/zig**: render function and enum-value identifiers in snake_case while retaining PascalCase type names in
