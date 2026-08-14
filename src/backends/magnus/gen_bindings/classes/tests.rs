@@ -54,6 +54,46 @@ fn make_typedef(name: &str, fields: Vec<FieldDef>) -> TypeDef {
 }
 
 #[test]
+fn explicit_default_impl_preserves_serde_default_fn_instead_of_type_zero_value() {
+    // Regression: this generator exists *because* a struct has field-level defaults that differ
+    // from the derived Default, yet it called the context-free `default_value_for_field` and so
+    // emitted `Default::default()` for `#[serde(default = "path")]` fields — the exact value it
+    // was written to avoid. Against html-to-markdown's real `GridCell` that shipped
+    // `GridCell.default().row_span == 0` while `default_span()` returns 1, and the kwargs
+    // constructor in the same generated file returned the correct 1: two different defaults for
+    // one field. ~keep
+    let mut span = make_field("row_span", TypeRef::Primitive(crate::core::ir::PrimitiveType::U32), false);
+    span.typed_default = Some(crate::core::ir::DefaultValue::FunctionCall("default_span".to_string()));
+
+    let mut typ = make_typedef(
+        "GridCell",
+        vec![
+            make_field("content", TypeRef::String, false),
+            make_field("row", TypeRef::Primitive(crate::core::ir::PrimitiveType::U32), false),
+            span,
+        ],
+    );
+    typ.has_serde = true;
+
+    let map_fn = |ty: &TypeRef| match ty {
+        TypeRef::String => "String".to_string(),
+        _ => "u32".to_string(),
+    };
+
+    let output = gen_struct_default_impl_explicit(&typ, &map_fn, &[])
+        .expect("a struct with a field-level default must get an explicit Default impl");
+
+    assert!(
+        !output.contains("row_span: Default::default()"),
+        "row_span must not fall back to the type's zero value, which is not `default_span()`:\n{output}"
+    );
+    assert!(
+        output.contains("serde_json::from_str::<test_lib::GridCell>"),
+        "row_span must recover the real serde default by deserializing a stub:\n{output}"
+    );
+}
+
+#[test]
 fn gen_enum_unit_variants_emit_ruby_symbols() {
     let enum_def = EnumDef {
         name: "Status".to_string(),
