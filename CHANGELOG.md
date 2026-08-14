@@ -32,7 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a requirement Alef has no pinned version for fails with the config key to add instead of resolving silently.
 - **ffi**: verify cbindgen declarations against the FFI source after writing it, so a stale-header failure leaves Cargo
   the new source it must rebuild instead of trapping generation in a rebuild loop; declaration matching also accepts
-  formatted line breaks while retaining exact symbol boundaries.
+  formatted line breaks while retaining exact symbol boundaries, and includes exports from generated modules such as
+  `service.rs` rather than treating their valid header declarations as removed.
 - **codegen**: preserve public associated serde default providers as callable Rust paths instead of treating every
   `#[serde(default = "Type::function")]` as private and attempting structural JSON recovery, which failed when the
   owning configuration contained required nested named fields.

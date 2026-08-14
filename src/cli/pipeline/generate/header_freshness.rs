@@ -15,10 +15,7 @@ use std::path::{Path, PathBuf};
 /// leave the new Rust source on disk so the requested Cargo build can refresh the
 /// header rather than rebuilding the old source forever. ~keep
 pub(crate) fn check_ffi_header_freshness(config: &ResolvedCrateConfig, base_dir: &Path) -> anyhow::Result<()> {
-    let source_path = ffi_source_path(config, base_dir);
-    let source = std::fs::read_to_string(&source_path)
-        .with_context(|| format!("failed to read generated FFI source at {}", source_path.display()))?;
-    let exported = exported_symbols(&source);
+    let exported = exported_symbols_in_dir(&ffi_source_root(config, base_dir))?;
     if exported.is_empty() {
         return Ok(());
     }
@@ -70,8 +67,8 @@ fn drift_message(header_path: &Path, missing: &[&String], removed: &[&String]) -
     message
 }
 
-fn ffi_source_path(config: &ResolvedCrateConfig, base_dir: &Path) -> PathBuf {
-    ffi_crate_root(config, base_dir).join("src/lib.rs")
+fn ffi_source_root(config: &ResolvedCrateConfig, base_dir: &Path) -> PathBuf {
+    ffi_crate_root(config, base_dir).join("src")
 }
 
 /// Resolve the header the same way the Zig backend does, so there is one
@@ -87,6 +84,29 @@ fn ffi_crate_root(config: &ResolvedCrateConfig, base_dir: &Path) -> PathBuf {
     let crate_path = config.ffi_crate_path();
     let crate_root = crate_path.strip_prefix("../../").unwrap_or(&crate_path);
     base_dir.join(crate_root)
+}
+
+fn exported_symbols_in_dir(source_root: &Path) -> anyhow::Result<BTreeSet<String>> {
+    let mut source_paths = walkdir::WalkDir::new(source_root)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|entry| match entry {
+            Ok(entry) if entry.file_type().is_file() && entry.path().extension().is_some_and(|ext| ext == "rs") => {
+                Some(Ok(entry.into_path()))
+            }
+            Ok(_) => None,
+            Err(error) => Some(Err(error)),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    source_paths.sort();
+
+    let mut exports = BTreeSet::new();
+    for source_path in source_paths {
+        let source = std::fs::read_to_string(&source_path)
+            .with_context(|| format!("failed to read generated FFI source at {}", source_path.display()))?;
+        exports.extend(exported_symbols(&source));
+    }
+    Ok(exports)
 }
 
 /// Collect the `#[no_mangle] extern "C"` function names the generated source
@@ -238,6 +258,26 @@ pub unsafe extern "C" fn sample_node_context_tag_name<'context>(
         assert_eq!(
             exported_symbols(source),
             BTreeSet::from(["sample_node_context_tag_name".to_owned()])
+        );
+    }
+
+    #[test]
+    fn should_collect_exports_from_service_modules() {
+        let directory = tempfile::tempdir().expect("temporary FFI source root");
+        std::fs::write(
+            directory.path().join("lib.rs"),
+            "#[unsafe(no_mangle)]\npub unsafe extern \"C\" fn sample_open() {}\n",
+        )
+        .expect("write root module");
+        std::fs::write(
+            directory.path().join("service.rs"),
+            "#[unsafe(no_mangle)]\npub unsafe extern \"C\" fn sample_app_register() {}\n",
+        )
+        .expect("write service module");
+
+        assert_eq!(
+            exported_symbols_in_dir(directory.path()).expect("collect module exports"),
+            BTreeSet::from(["sample_app_register".to_owned(), "sample_open".to_owned()])
         );
     }
 
