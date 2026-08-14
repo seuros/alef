@@ -1,5 +1,5 @@
 use crate::core::backend::GeneratedFile;
-use crate::core::config::{FfiTargetDepOverride, ResolvedCrateConfig};
+use crate::core::config::{FfiTargetDepOverride, Language, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
 use crate::core::template_versions as tv;
 use std::path::PathBuf;
@@ -82,18 +82,12 @@ pub(crate) fn scaffold_jni(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
     let jni_crate_name = format!("{}-jni", config.jni_crate_base());
     let jni_lib_name = config.jni_lib_name();
 
-    let features: Vec<String> = config
-        .kotlin_android
-        .as_ref()
-        .and_then(|k| k.features.as_ref())
-        .map(|f| f.iter().map(|s| format!("\"{s}\"")).collect())
-        .unwrap_or_default();
-
-    let features_str = if features.is_empty() {
-        String::new()
-    } else {
-        format!(", features = [{}]", features.join(", "))
-    };
+    // Route through `core_dep_features` rather than reading `[crates.kotlin_android] features`
+    // directly: that lookup falls back to the top-level `features` when the paired section
+    // omits them, which every other binding scaffolder already gets. Reading the section alone
+    // left the JNI manifest on the core crate's default features while the generated shim
+    // called into feature-gated modules, so the crate could not compile. ~keep
+    let features_str = crate::scaffold::core_dep_features(config, Language::KotlinAndroid);
 
     let umbrella_dep_name = &config.name;
 
@@ -703,6 +697,73 @@ namespace = "dev.sample_crate.demo"
         assert!(
             pkg < meta && meta < lib && lib < deps,
             "section order must be [package] < [package.metadata.cargo-machete] < [lib] < [dependencies]; got:\n{cargo_toml}"
+        );
+    }
+
+    /// The generated JNI shim calls whatever the core crate's configured feature set exposes,
+    /// so its manifest must request that same set. Reading `[crates.kotlin_android] features`
+    /// alone left the dependency on the core crate's defaults whenever the paired section
+    /// omitted the key, and the shim then failed to compile against feature-gated modules.
+    #[test]
+    fn scaffold_jni_core_dep_inherits_top_level_features_when_kotlin_android_omits_them() {
+        let config = resolved_one(
+            r#"
+[workspace]
+languages = ["kotlin_android", "jni"]
+
+[[crates]]
+name = "demo-llm"
+sources = ["src/lib.rs"]
+features = ["native-http", "full"]
+
+[crates.kotlin_android]
+package = "dev.sample_crate.demo"
+namespace = "dev.sample_crate.demo"
+"#,
+        );
+
+        let api = ApiSurface::default();
+        let files = scaffold_jni(&api, &config).unwrap();
+        let cargo_toml = &files[0].content;
+
+        assert!(
+            cargo_toml.contains(r#"features = ["native-http", "full"]"#),
+            "core dep must inherit the top-level feature set; got:\n{cargo_toml}"
+        );
+    }
+
+    /// An explicit `[crates.kotlin_android] features` still wins over the top-level set, so
+    /// the inheritance above is a fallback rather than an override.
+    #[test]
+    fn scaffold_jni_core_dep_prefers_explicit_kotlin_android_features() {
+        let config = resolved_one(
+            r#"
+[workspace]
+languages = ["kotlin_android", "jni"]
+
+[[crates]]
+name = "demo-llm"
+sources = ["src/lib.rs"]
+features = ["native-http", "full"]
+
+[crates.kotlin_android]
+package = "dev.sample_crate.demo"
+namespace = "dev.sample_crate.demo"
+features = ["android-http"]
+"#,
+        );
+
+        let api = ApiSurface::default();
+        let files = scaffold_jni(&api, &config).unwrap();
+        let cargo_toml = &files[0].content;
+
+        assert!(
+            cargo_toml.contains(r#"features = ["android-http"]"#),
+            "explicit kotlin_android features must win; got:\n{cargo_toml}"
+        );
+        assert!(
+            !cargo_toml.contains("native-http"),
+            "top-level features must not leak in when overridden; got:\n{cargo_toml}"
         );
     }
 }
