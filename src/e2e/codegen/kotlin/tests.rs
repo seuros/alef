@@ -1220,3 +1220,157 @@ fn build_gradle_kotlin_omits_junit_platform_launcher_without_http_fixtures() {
         "build.gradle.kts must not declare junit-platform-launcher without HTTP fixtures, got:\n{out}"
     );
 }
+
+/// Regression for the InteractionTest.kt compile break: a fixture field path
+/// carrying a virtual namespace prefix (`interaction.`, stripped by
+/// `accessor()` via `namespace_stripped_path` when it builds `field_expr`)
+/// must still be recognized as a `fields_json_scalar` field when the
+/// consumer's `alef.toml` configures the *stripped* struct path
+/// (`action_results[].data`, not `interaction.action_results[].data`).
+/// Before this fix `field_is_json_scalar` compared against the unstripped
+/// fixture path and always missed, so the field fell through to the plain
+/// `.orEmpty()` fallback — which does not resolve on `Any?` (a JSON-scalar
+/// field's real Kotlin type) and left the generated e2e module uncompilable.
+#[test]
+fn assertion_json_scalar_matches_namespace_stripped_path() {
+    let resolver = FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::from(["action_results[].data".to_string()]),
+        &HashSet::from(["action_results".to_string()]),
+        &HashSet::from(["action_results".to_string()]),
+        &HashSet::new(),
+    );
+    let assertion = Assertion {
+        assertion_type: "contains".to_string(),
+        field: Some("interaction.action_results[0].data".to_string()),
+        value: Some(serde_json::json!("JS Test Page")),
+        values: None,
+        method: None,
+        check: None,
+        args: None,
+        return_type: None,
+    };
+    let mut out = String::new();
+    render_assertion(
+        &mut out,
+        &assertion,
+        "result",
+        "",
+        &resolver,
+        false,
+        false,
+        &HashSet::new(),
+        &HashSet::from(["action_results[].data".to_string()]),
+        &HashMap::new(),
+        false,
+        true,
+    );
+    assert!(
+        !out.contains(".data.orEmpty()"),
+        "must not emit a bare `.orEmpty()` on the Any? field behind a namespace-prefixed path, got:\n{out}"
+    );
+    assert!(
+        out.contains(".data?.toString().orEmpty().contains(\"JS Test Page\")"),
+        "expected the null-safe stringify path for the namespace-prefixed json-scalar field, got:\n{out}"
+    );
+}
+
+/// Companion negative case for the namespace-stripped lookup above: a field
+/// behind the same `interaction.` prefix that is only in `fields_optional`
+/// (a genuine `String?`, not a JSON scalar) must keep emitting the plain
+/// `.orEmpty()` fallback. This is the test that would catch an over-broad fix
+/// that treats every namespace-stripped optional field as a JSON scalar.
+#[test]
+fn assertion_namespace_stripped_string_field_still_uses_plain_or_empty() {
+    let resolver = FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::from(["action_results[].action_type".to_string()]),
+        &HashSet::from(["action_results".to_string()]),
+        &HashSet::from(["action_results".to_string()]),
+        &HashSet::new(),
+    );
+    let assertion = Assertion {
+        assertion_type: "contains".to_string(),
+        field: Some("interaction.action_results[0].action_type".to_string()),
+        value: Some(serde_json::json!("executeJs")),
+        values: None,
+        method: None,
+        check: None,
+        args: None,
+        return_type: None,
+    };
+    let mut out = String::new();
+    render_assertion(
+        &mut out,
+        &assertion,
+        "result",
+        "",
+        &resolver,
+        false,
+        false,
+        &HashSet::new(),
+        // No `fields_json_scalar` entry for `action_type` — it is a real `String?`.
+        &HashSet::from(["action_results[].data".to_string()]),
+        &HashMap::new(),
+        false,
+        true,
+    );
+    assert!(
+        out.contains(".actionType.orEmpty().contains(\"executeJs\")"),
+        "expected the plain .orEmpty() fallback for a genuinely nullable String field, got:\n{out}"
+    );
+    assert!(
+        !out.contains("?.toString().orEmpty()"),
+        "a non-json-scalar field must not be routed through the Any? stringify path, got:\n{out}"
+    );
+}
+
+/// Field-path spelling: `fields_json_scalar` (like `fields_optional`) accepts
+/// both the array-wildcard spelling (`action_results[].data`) and the
+/// dotted/de-indexed spelling (`action_results.data`) that the consumer's
+/// `alef.toml` also lists side by side for other keys. Both must resolve to
+/// the same JSON-scalar classification for a concrete indexed fixture path.
+#[test]
+fn assertion_json_scalar_accepts_both_bracket_and_dotted_spellings() {
+    let make_resolver = || {
+        FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::from(["action_results[].data".to_string()]),
+            &HashSet::from(["action_results".to_string()]),
+            &HashSet::from(["action_results".to_string()]),
+            &HashSet::new(),
+        )
+    };
+    let assertion = Assertion {
+        assertion_type: "contains".to_string(),
+        field: Some("action_results[0].data".to_string()),
+        value: Some(serde_json::json!("JS Test Page")),
+        values: None,
+        method: None,
+        check: None,
+        args: None,
+        return_type: None,
+    };
+
+    for spelling in ["action_results[].data", "action_results.data"] {
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            "",
+            &make_resolver(),
+            false,
+            false,
+            &HashSet::new(),
+            &HashSet::from([spelling.to_string()]),
+            &HashMap::new(),
+            false,
+            true,
+        );
+        assert!(
+            out.contains(".data?.toString().orEmpty().contains"),
+            "spelling `{spelling}` must resolve as a json-scalar field, got:\n{out}"
+        );
+    }
+}

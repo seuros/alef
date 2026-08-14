@@ -230,13 +230,10 @@ pub(super) fn render_assertion(
     // `.orEmpty()` does not resolve on `Any?` — see `field_is_json_scalar` usage
     // below, where the string-context expression falls back to a null-safe
     // stringify instead.
-    let field_is_json_scalar = assertion.field.as_deref().is_some_and(|field| {
-        let resolved = field_resolver.resolve(field);
-        let normalized = crate::e2e::field_access::normalize_indices_to_wildcards(resolved);
-        json_scalar_fields.contains(field)
-            || json_scalar_fields.contains(resolved)
-            || json_scalar_fields.contains(normalized.as_str())
-    });
+    let field_is_json_scalar = assertion
+        .field
+        .as_deref()
+        .is_some_and(|field| field_resolver.is_json_scalar(field, json_scalar_fields));
 
     // Determine if this field is a display_as_text field (e.g., AssistantContent).
     // These fields have a `.text()` accessor that extracts the plain-text representation.

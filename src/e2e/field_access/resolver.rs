@@ -3,7 +3,7 @@ use super::optional_renderers::{
     render_kotlin_android_with_optionals, render_kotlin_with_optionals, render_php_with_getters,
     render_rust_with_optionals, render_typescript_with_optionals, render_zig_with_optionals,
 };
-use super::parse::{normalize_numeric_indices, parse_path, strip_numeric_indices};
+use super::parse::{normalize_indices_to_wildcards, normalize_numeric_indices, parse_path, strip_numeric_indices};
 use super::renderers::{render_accessor, render_swift_with_first_class_map};
 use super::types::{DartFirstClassMap, FieldResolver, PathSegment, PhpGetterMap, StringyField, SwiftFirstClassMap};
 use std::collections::{HashMap, HashSet};
@@ -406,6 +406,46 @@ impl FieldResolver {
     /// Check if a resolved field is an array/Vec type.
     pub fn is_array(&self, field: &str) -> bool {
         self.array_fields.contains(field)
+    }
+
+    /// Check whether `field` (a raw or already-resolved fixture path) is
+    /// configured as a `fields_json_scalar` entry — i.e. its Kotlin type is
+    /// an untyped JSON scalar (`Any?`, from `Option<serde_json::Value>`)
+    /// rather than `Option<String>`, so `.orEmpty()` is undefined on it.
+    ///
+    /// Consults `json_scalar_fields` (a per-call resolved set, not stored on
+    /// the resolver) against every spelling `fields_optional`/`is_optional`
+    /// already treats as interchangeable — bracket-wildcard (`a[].b`) and
+    /// fully de-indexed (`a.b`) — and, mirroring `is_optional`'s namespace
+    /// fallback, against the path with a virtual grouping prefix (e.g.
+    /// `interaction.`) stripped. Fixture field paths like
+    /// `interaction.action_results[0].data` resolve to the struct path
+    /// `action_results[0].data` for accessor generation via
+    /// `namespace_stripped_path`; the same stripped path must be consulted
+    /// here so `fields_json_scalar` entries configured against the struct
+    /// path (not the virtual fixture namespace) are honored.
+    pub fn is_json_scalar(&self, field: &str, json_scalar_fields: &HashSet<String>) -> bool {
+        if Self::matches_json_scalar_spelling(field, json_scalar_fields) {
+            return true;
+        }
+        let resolved = self.resolve(field);
+        if resolved != field && Self::matches_json_scalar_spelling(resolved, json_scalar_fields) {
+            return true;
+        }
+        self.namespace_stripped_path(resolved)
+            .is_some_and(|stripped| Self::matches_json_scalar_spelling(stripped, json_scalar_fields))
+    }
+
+    fn matches_json_scalar_spelling(path: &str, json_scalar_fields: &HashSet<String>) -> bool {
+        if json_scalar_fields.contains(path) {
+            return true;
+        }
+        let normalized = normalize_indices_to_wildcards(path);
+        if normalized != path && json_scalar_fields.contains(normalized.as_str()) {
+            return true;
+        }
+        let de_indexed = strip_numeric_indices(path);
+        de_indexed != path && json_scalar_fields.contains(de_indexed.as_str())
     }
 
     pub fn is_enum(&self, field: &str) -> bool {

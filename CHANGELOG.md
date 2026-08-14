@@ -27,6 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   renderer. The existing unit test called `render_wasm_excluded_category` directly, so it verified the renderer but
   never that `generate` invoked it — reintroducing the silent-drop regression left all seven wasm unit tests green.
   The new integration test drives `generate` end to end and fails when the category is dropped.
+- **e2e/kotlin**: honor `fields_json_scalar` for fixture field paths that carry a virtual namespace prefix (e.g.
+  `interaction.action_results[0].data`), and accept the same bracket-wildcard/de-indexed spellings already
+  interchangeable in `fields_optional`. `field_is_json_scalar` compared the raw fixture path directly against
+  the configured set, but `accessor()` strips the namespace prefix before building the field expression — so a
+  `fields_json_scalar` entry configured against the stripped struct path (`action_results[].data`) never
+  matched, and the field fell through to the plain `.orEmpty()` fallback. `.orEmpty()` is a `String?`
+  extension undefined on the `Any?` a JSON-scalar field actually has, leaving the generated Kotlin e2e module
+  uncompilable.
 - **magnus**: apply a field's real `#[serde(default = "...")]` value instead of raising `missing required
   field` for it. Any `Named`-typed field without an `EnumVariant` typed default was treated as required,
   which also caught fields that carry a genuine callable default (`FunctionCall`/`PublicFunctionCall`) —
