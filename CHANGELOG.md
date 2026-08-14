@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **dart**: keep config parameters optional for serde function defaults by delegating to generated JSON
+  construction, preserving the source default instead of synthesizing a zero value.
 - **rustler**: JSON-encode default-valued records at public boundaries, report malformed payloads with context, and
   preserve async, error, and fluent-resource return shapes.
 - **generate/verify**: stamp every emitted file carrying an Alef marker, including backends that template their own

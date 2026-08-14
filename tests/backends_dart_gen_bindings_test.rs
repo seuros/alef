@@ -740,6 +740,119 @@ fn default_config_param_uses_default_constructor_for_empty_default_type() {
 }
 
 #[test]
+fn default_config_param_falls_back_to_from_json_for_function_call_defaults() {
+    // `#[serde(default = "path")]` reaches the IR as `DefaultValue::FunctionCall`, whose body
+    // alef never sees, so no literal can be synthesized for the field. The config parameter
+    // must still be optional — deferring to the generated `create<Type>FromJson` helper lets
+    // serde produce the value on the Rust side.
+    let mut threshold = make_field("threshold", TypeRef::Primitive(PrimitiveType::U32), false);
+    threshold.typed_default = Some(DefaultValue::FunctionCall("default_threshold".to_string()));
+    let mut sink_config = make_type("SinkConfig", vec![threshold]);
+    sink_config.has_default = true;
+    sink_config.has_serde = true;
+
+    let api = ApiSurface {
+        crate_name: "demo-crate".into(),
+        version: "0.1.0".into(),
+        types: vec![sink_config],
+        functions: vec![FunctionDef {
+            name: "drain".into(),
+            rust_path: "demo::drain".into(),
+            original_rust_path: String::new(),
+            params: vec![make_param("config", TypeRef::Named("SinkConfig".to_string()))],
+            return_type: TypeRef::Unit,
+            is_async: false,
+            error_type: None,
+            doc: String::new(),
+            cfg: None,
+            sanitized: false,
+            return_sanitized: false,
+            returns_ref: false,
+            returns_cow: false,
+            return_newtype_wrapper: None,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+
+    let files = DartBackend.generate_bindings(&api, &make_config()).unwrap();
+    let content = find_dart_src(&files).expect("src dart file should be emitted");
+
+    assert!(
+        content.contains("static Future<void> drain({SinkConfig? config}) async {"),
+        "config should be optional even when a field default is a function call: {content}"
+    );
+    assert!(
+        content.contains("config: config ?? await createSinkConfigFromJson(json: '{}')"),
+        "config should fall back to the from-json bridge helper: {content}"
+    );
+}
+
+#[test]
+fn default_config_param_stays_required_without_a_from_json_helper() {
+    // No serde on the type means `gen_rust_crate` emits no `create<Type>FromJson` helper, so
+    // the fallback must not name one. The parameter stays required rather than emitting a
+    // call to a function that was never generated.
+    let mut threshold = make_field("threshold", TypeRef::Primitive(PrimitiveType::U32), false);
+    threshold.typed_default = Some(DefaultValue::FunctionCall("default_threshold".to_string()));
+    let mut sink_config = make_type("SinkConfig", vec![threshold]);
+    sink_config.has_default = true;
+    sink_config.has_serde = false;
+
+    let api = ApiSurface {
+        crate_name: "demo-crate".into(),
+        version: "0.1.0".into(),
+        types: vec![sink_config],
+        functions: vec![FunctionDef {
+            name: "drain".into(),
+            rust_path: "demo::drain".into(),
+            original_rust_path: String::new(),
+            params: vec![make_param("config", TypeRef::Named("SinkConfig".to_string()))],
+            return_type: TypeRef::Unit,
+            is_async: false,
+            error_type: None,
+            doc: String::new(),
+            cfg: None,
+            sanitized: false,
+            return_sanitized: false,
+            returns_ref: false,
+            returns_cow: false,
+            return_newtype_wrapper: None,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+
+    let files = DartBackend.generate_bindings(&api, &make_config()).unwrap();
+    let content = find_dart_src(&files).expect("src dart file should be emitted");
+
+    assert!(
+        content.contains("static Future<void> drain(SinkConfig config) async {"),
+        "config should stay required without a from-json helper: {content}"
+    );
+    assert!(
+        !content.contains("createSinkConfigFromJson"),
+        "must not call a helper that was never generated: {content}"
+    );
+}
+
+#[test]
 fn default_config_param_synthesizes_expression_from_type_metadata() {
     let mut enabled = make_field("enabled", TypeRef::Primitive(PrimitiveType::Bool), false);
     enabled.typed_default = Some(DefaultValue::BoolLiteral(true));
