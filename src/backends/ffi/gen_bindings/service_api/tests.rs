@@ -183,6 +183,20 @@ fn test_handler_bridge_frees_response_before_deserializing() {
         "resp_ptr must be freed before the fallible deserialize, otherwise a malformed \
          response leaks the C-allocated buffer:\n{rs}"
     );
+
+    // Freeing before the parse is only sound because the response was copied out of the C buffer
+    // first. Without `into_owned()` the borrow would still point into the freed allocation and the
+    // ordering asserted above would turn the leak into a use-after-free — a strictly worse defect
+    // that the ordering assertion alone cannot see. ~keep
+    let owned_pos = rs
+        .find(".to_string_lossy().into_owned()")
+        .expect("handler bridge must copy the response out of the C buffer before freeing it");
+
+    assert!(
+        owned_pos < free_pos,
+        "the response must be copied into an owned String before free(resp_ptr); otherwise \
+         `resp_json` borrows freed memory:\n{rs}"
+    );
 }
 
 #[test]
