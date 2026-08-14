@@ -409,7 +409,11 @@ pub struct RegistrationVariant {
     /// A backend looks up its name here first; when an entry is found its `style`,
     /// `handler_shape`, and `method_prefix` win over the variant-global values.
     /// Missing keys fall through to the variant-global defaults transparently.
-    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "std::collections::HashMap::is_empty",
+        serialize_with = "super::ordered_serde::serialize_map"
+    )]
     pub language_overrides: std::collections::HashMap<String, RegistrationVariantLanguageOverride>,
 }
 
