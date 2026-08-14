@@ -255,7 +255,7 @@ pub(super) fn render_assertion(
         "equals" => {
             if let Some(expected) = &assertion.value {
                 let r_val = json_to_r(expected, false);
-                let _ = writeln!(out, "  expect_equal(trimws({field_expr}), {r_val})");
+                let _ = writeln!(out, "  expect_equal({field_expr}, {r_val})");
             }
         }
         "contains" => {

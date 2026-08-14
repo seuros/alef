@@ -815,7 +815,7 @@ fn render_method_result_assertion(
                     let c_val = json_to_c(val);
                     let _ = writeln!(
                         out,
-                        "        assert(str_trim_eq(_method_result, {c_val}) == 0 && \"method_result equals assertion failed\");"
+                        "        assert(strcmp(_method_result, {c_val}) == 0 && \"method_result equals assertion failed\");"
                     );
                 }
             }

@@ -769,7 +769,7 @@ pub(super) fn render_test_function(
                         if val.is_string() {
                             let _ = writeln!(
                                 out,
-                                "    assert({result_var} != NULL && str_trim_eq({result_var}, {c_val}) == 0 && \"equals assertion failed\");"
+                                "    assert({result_var} != NULL && strcmp({result_var}, {c_val}) == 0 && \"equals assertion failed\");"
                             );
                         } else {
                             let _ = writeln!(

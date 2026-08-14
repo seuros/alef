@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **e2e/wasm**: stop silently dropping a fixture category when every fixture in it is excluded for wasm (e.g. an
   entire `visitor` category skipped via `skip.languages`); emit a placeholder suite naming each excluded fixture and
   its reason, and log a warning, instead of generating no output at all.
+- **e2e/r, e2e/c**: stop trimming only the actual side of an `equals` assertion. R wrapped the result in `trimws(...)`
+  while emitting the fixture's expected literal verbatim, and C routed string equals through a helper that trimmed
+  trailing whitespace off the actual value only; both made assertions against expected values with a legitimate
+  trailing newline permanently unsatisfiable. `equals` now compares both sides exactly, matching every other
+  generated language.
 
 ## [0.61.0] - 2026-08-14
 

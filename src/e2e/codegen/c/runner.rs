@@ -78,36 +78,6 @@ pub(super) fn render_test_runner_header(
     let _ = writeln!(out, "    return; \\");
     let _ = writeln!(out, "}} while (0)");
     let _ = writeln!(out);
-    // Trim helper for comparing strings that may have trailing whitespace/newlines.
-    let _ = writeln!(out, "/**");
-    let _ = writeln!(
-        out,
-        " * Compare a string against an expected value, trimming trailing whitespace."
-    );
-    let _ = writeln!(
-        out,
-        " * Returns 0 if the trimmed actual string equals the expected string."
-    );
-    let _ = writeln!(out, " */");
-    let _ = writeln!(
-        out,
-        "static inline int str_trim_eq(const char *actual, const char *expected) {{"
-    );
-    let _ = writeln!(
-        out,
-        "    if (actual == NULL || expected == NULL) return actual != expected;"
-    );
-    let _ = writeln!(out, "    size_t alen = strlen(actual);");
-    let _ = writeln!(
-        out,
-        "    while (alen > 0 && (actual[alen-1] == ' ' || actual[alen-1] == '\\n' || actual[alen-1] == '\\r' || actual[alen-1] == '\\t')) alen--;"
-    );
-    let _ = writeln!(out, "    size_t elen = strlen(expected);");
-    let _ = writeln!(out, "    if (alen != elen) return 1;");
-    let _ = writeln!(out, "    return memcmp(actual, expected, elen);");
-    let _ = writeln!(out, "}}");
-    let _ = writeln!(out);
-
     // Forward declaration so alef_json_get_string can fall through to the
     // object/array extractor for non-string values without reordering the helpers.
     let _ = writeln!(
