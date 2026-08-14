@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ffi/all**: rebuild a missing or stale cbindgen header after all FFI source-writing stages and validate the refreshed
   declarations in the same `alef all --clean` run, instead of failing once and requiring a manual Cargo build before
   an identical second generation could succeed.
+- **jni**: honor `crates.jni.exclude_functions` when emitting top-level and instance-method shims, alongside the
+  paired Kotlin and Kotlin Android exclusion lists.
 - **scaffold/php**: emit exactly one composer.json per layout. The co-located layout now emits only the
   repository-root manifest; the package-directory copy is kept for the split layout, where it is the
   installable package. Both rendered the same composer `name`, so every co-located consumer carried a

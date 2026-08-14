@@ -95,11 +95,18 @@ fn emit_jni_lib_header(api: &ApiSurface, config: &ResolvedCrateConfig, package: 
 }
 
 fn jni_excluded_functions(config: &ResolvedCrateConfig) -> std::collections::HashSet<&str> {
-    config
+    let mut excluded: std::collections::HashSet<&str> = config
         .kotlin_android
         .as_ref()
         .map(|android| android.exclude_functions.iter().map(String::as_str).collect())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if let Some(kotlin) = config.kotlin.as_ref() {
+        excluded.extend(kotlin.exclude_functions.iter().map(String::as_str));
+    }
+    if let Some(jni) = config.jni.as_ref() {
+        excluded.extend(jni.exclude_functions.iter().map(String::as_str));
+    }
+    excluded
 }
 
 fn jni_excluded_types(config: &ResolvedCrateConfig) -> std::collections::HashSet<&str> {

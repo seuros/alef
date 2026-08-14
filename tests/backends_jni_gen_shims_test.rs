@@ -324,6 +324,34 @@ fn snapshot_runtime_helpers_present() {
 }
 
 #[test]
+fn jni_exclude_functions_filters_top_level_functions_and_methods() {
+    let api = make_demo_api();
+    let config = resolved_one(
+        r#"
+[workspace]
+languages = ["kotlin_android", "jni"]
+
+[[crates]]
+name = "demo"
+sources = ["src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.sample_crate.demo"
+
+[crates.jni]
+exclude_functions = ["create_client", "ping"]
+"#,
+    );
+
+    let files = JniBackend.generate_bindings(&api, &config).unwrap();
+    let content = &files[0].content;
+
+    assert!(!content.contains("nativeCreateClient"));
+    assert!(!content.contains("nativeDemoClientPing"));
+    assert!(content.contains("nativeDemoClientDoThing"));
+}
+
+#[test]
 fn snapshot_constructor_symbol_and_body() {
     let api = make_demo_api();
     let config = make_demo_config();
