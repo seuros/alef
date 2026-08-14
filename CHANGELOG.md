@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **e2e/snippets**: prune previously generated snippet files that a later successful run no longer produces, using
+  recorded generation ownership and language-scoped path differences without deleting hand-authored files.
 - **pipeline/cache**: discover and re-stamp Alef-owned generated files omitted from a cache-hit language's in-memory
   path set, including files whose provenance hash line was previously stripped.
 - **sync-versions**: keep C# assembly/file versions and the registry Rust test-app package version aligned with the

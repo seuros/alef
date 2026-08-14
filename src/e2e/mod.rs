@@ -204,6 +204,7 @@ pub fn generate_e2e(
             functions,
         )?;
         report_snippet_coverage(&report.coverage);
+        prune_orphaned_snippets(Path::new(&snippet_config.output), &report.coverage);
         ensure_snippet_coverage_complete(&report.coverage)?;
         let coverage_content =
             serde_json::to_string_pretty(&report.coverage).context("failed to serialize snippet coverage manifest")?;
@@ -306,6 +307,43 @@ fn ensure_snippet_coverage_complete(coverage: &snippets::SnippetCoverageLedger) 
     )
 }
 
+/// Delete previously alef-generated snippet files that this run no longer
+/// produces.
+///
+/// Without this pass, a fixture that stops rendering (e.g. its recipe starts
+/// requiring an extension that isn't registered) keeps its stale
+/// previous-run `.md` file on disk forever: [`generate_e2e`] only returns
+/// files for keys it *did* generate this run, and the generic
+/// `alef:hash:`-header orphan sweeps
+/// (`crate::cli::pipeline::sweep_orphans`, `crate::cli::pipeline::sweep_manifest_orphans`)
+/// never see it: snippet files are written with `generated_header: false` so
+/// they never carry that marker.
+///
+/// See [`snippets::coverage::orphaned_paths`] for the ownership predicate —
+/// only a path recorded in the *previous* run's own coverage manifest is
+/// ever a deletion candidate, and only for a language this run actually
+/// evaluated. That keeps a `--lang`-filtered or cached run from
+/// mass-deleting another language's still-valid output, and keeps a
+/// hand-authored file untouched.
+///
+/// Best-effort: a missing or unreadable previous manifest (first run, or one
+/// predating this ledger format) means "nothing to prune yet", not an
+/// error — pruning must never turn a routine `generate` into a hard failure.
+fn prune_orphaned_snippets(output_root: &Path, coverage: &snippets::SnippetCoverageLedger) {
+    let manifest_path = output_root.join(snippets::COVERAGE_MANIFEST);
+    let Ok(previous) = coverage_cache::read_coverage_manifest(&manifest_path) else {
+        return;
+    };
+    for relative in snippets::coverage::orphaned_paths(&previous, coverage) {
+        let path = output_root.join(&relative);
+        match std::fs::remove_file(&path) {
+            Ok(()) => info!("Pruned orphaned snippet: {}", path.display()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => warn!("failed to prune orphaned snippet {}: {error}", path.display()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +381,118 @@ mod tests {
         };
 
         ensure_snippet_coverage_complete(&coverage).expect("documented exception is intentional");
+    }
+
+    fn key(fixture_id: &str, language: &str) -> snippets::SnippetCoverageKey {
+        snippets::SnippetCoverageKey {
+            fixture_id: fixture_id.into(),
+            language: language.into(),
+        }
+    }
+
+    fn metadata(fixture_id: &str, language: &str, path: &str) -> snippets::GeneratedSnippetMetadata {
+        snippets::GeneratedSnippetMetadata {
+            key: key(fixture_id, language),
+            path: std::path::PathBuf::from(path),
+            language: language.into(),
+            target: language.into(),
+            session: language.into(),
+            requires: Vec::new(),
+            side_effect: crate::e2e::fixture::SideEffectClass::Safe,
+        }
+    }
+
+    fn write_previous_manifest(output_root: &Path, metadata_entries: Vec<snippets::GeneratedSnippetMetadata>) {
+        let ledger = snippets::SnippetCoverageLedger {
+            format_version: snippets::COVERAGE_MANIFEST_VERSION,
+            generated_paths: metadata_entries.iter().map(|entry| entry.path.clone()).collect(),
+            generated: metadata_entries.iter().map(|entry| entry.key.clone()).collect(),
+            expected: metadata_entries.iter().map(|entry| entry.key.clone()).collect(),
+            generated_metadata: metadata_entries,
+            missing: Vec::new(),
+            documented_exceptions: Vec::new(),
+        };
+        std::fs::write(
+            output_root.join(snippets::COVERAGE_MANIFEST),
+            serde_json::to_string_pretty(&ledger).expect("serialize previous coverage ledger"),
+        )
+        .expect("write previous coverage manifest");
+    }
+
+    /// A fixture that stopped rendering between runs must have its stale
+    /// on-disk `.md` file deleted, not left behind for `alef verify` to keep
+    /// validating forever. This is task #542.
+    #[test]
+    fn prune_orphaned_snippets_deletes_a_file_this_run_no_longer_generates() {
+        let directory = tempfile::tempdir().expect("temporary output directory");
+        let output_root = directory.path();
+        let generated_dir = output_root.join("python");
+        std::fs::create_dir_all(&generated_dir).expect("python output dir");
+        let stale_file = generated_dir.join("register_ocr_backend_trait_bridge.md");
+        std::fs::write(&stale_file, "stale 0.60.0 content\n").expect("write stale snippet");
+
+        write_previous_manifest(
+            output_root,
+            vec![metadata(
+                "register_ocr_backend_trait_bridge",
+                "python",
+                "python/register_ocr_backend_trait_bridge.md",
+            )],
+        );
+
+        // The key was evaluated this run and rejected: it is in `expected`
+        // but produced no file.
+        let current = snippets::SnippetCoverageLedger {
+            format_version: snippets::COVERAGE_MANIFEST_VERSION,
+            expected: vec![key("register_ocr_backend_trait_bridge", "python")],
+            missing: vec![snippets::MissingSnippet {
+                key: key("register_ocr_backend_trait_bridge", "python"),
+                reason: "test-backend fixture requires an extension-owned documentation recipe".into(),
+            }],
+            ..Default::default()
+        };
+
+        prune_orphaned_snippets(output_root, &current);
+
+        assert!(
+            !stale_file.exists(),
+            "expected {} to be pruned, but it still exists",
+            stale_file.display()
+        );
+    }
+
+    /// A hand-authored `.md` file that alef never generated (absent from the
+    /// previous run's `generated_metadata`) must never be deleted, even if a
+    /// fixture with a colliding id/language key is reported as `missing`.
+    #[test]
+    fn prune_orphaned_snippets_never_deletes_a_file_alef_does_not_own() {
+        let directory = tempfile::tempdir().expect("temporary output directory");
+        let output_root = directory.path();
+        let hand_authored_dir = output_root.join("python");
+        std::fs::create_dir_all(&hand_authored_dir).expect("python output dir");
+        let hand_authored_file = hand_authored_dir.join("register_ocr_backend_trait_bridge.md");
+        std::fs::write(&hand_authored_file, "hand-authored recipe, not alef output\n").expect("write hand-authored");
+
+        // The previous manifest never claims this path: alef never generated it.
+        write_previous_manifest(output_root, Vec::new());
+
+        let current = snippets::SnippetCoverageLedger {
+            format_version: snippets::COVERAGE_MANIFEST_VERSION,
+            expected: vec![key("register_ocr_backend_trait_bridge", "python")],
+            missing: vec![snippets::MissingSnippet {
+                key: key("register_ocr_backend_trait_bridge", "python"),
+                reason: "test-backend fixture requires an extension-owned documentation recipe".into(),
+            }],
+            ..Default::default()
+        };
+
+        prune_orphaned_snippets(output_root, &current);
+
+        assert!(
+            hand_authored_file.exists(),
+            "hand-authored file must survive: {}",
+            hand_authored_file.display()
+        );
     }
 
     #[test]
