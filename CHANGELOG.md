@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **swift**: emit reachable opaque-handle type aliases even when no capsule mapping is configured, while avoiding
+  duplicate declarations for client and capsule types.
 - **e2e/dart**: emit trait-bridge stub factories in standalone snippets and avoid binding `Future<void>` calls to a
   result variable.
 - **e2e/snippets**: prune previously generated snippet files that a later successful run no longer produces, using

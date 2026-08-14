@@ -3167,3 +3167,113 @@ fn opaque_type_returned_from_free_function_emits_forwarder() {
         content
     );
 }
+
+/// General regression for task #541: every public type the Swift emitter puts into
+/// `RustBridge` must also be reachable from the `Xberg` module — either as a
+/// `public typealias X = RustBridge.X` (opaque handle) or a first-class
+/// `public struct X` (Codable DTO).
+///
+/// Root cause: opaque handle types with methods (structs whose fields are all
+/// private — registries, compiled validators, counters, …) were only aliased
+/// when the crate happened to declare unrelated `[crates.swift].capsule_types`
+/// config. Crates without capsule config (the common case) left such types
+/// nameable only via `RustBridge.X`, unreachable from the plain `import
+/// RustBridge` in `Xberg.swift`.
+///
+/// This asserts the *general* rule by iterating every type in the surface
+/// rather than hardcoding the previously-broken names, so it keeps guarding
+/// the invariant however the mix of opaque/DTO shapes evolves.
+#[test]
+fn every_public_type_is_reachable_from_xberg_module() {
+    use alef::core::ir::{MethodDef, ReceiverKind};
+
+    let opaque_handle_with_methods = TypeDef {
+        methods: vec![MethodDef {
+            name: "lookup".into(),
+            params: vec![],
+            return_type: TypeRef::String,
+            is_async: false,
+            is_static: false,
+            error_type: None,
+            doc: String::new(),
+            receiver: Some(ReceiverKind::Ref),
+            sanitized: false,
+            trait_source: None,
+            returns_ref: false,
+            returns_cow: false,
+            return_newtype_wrapper: None,
+            has_default_impl: false,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }],
+        is_opaque: true,
+        has_serde: false,
+        ..make_type("HandleRegistry", vec![])
+    };
+
+    let opaque_handle_no_methods = TypeDef {
+        is_opaque: true,
+        has_serde: false,
+        ..make_type("MarkerHandle", vec![])
+    };
+
+    let first_class_dto = TypeDef {
+        has_serde: true,
+        ..make_type(
+            "Point",
+            vec![
+                make_field("x_coord", TypeRef::Primitive(PrimitiveType::I32), false),
+                make_field("y_coord", TypeRef::Primitive(PrimitiveType::I32), false),
+            ],
+        )
+    };
+
+    // A serde struct whose field type is not first-class-representable (Path)
+    // must fall through to a typealias instead of a native struct — still
+    // reachable, just via the other emission path.
+    let typealias_fallback_dto = TypeDef {
+        has_serde: true,
+        ..make_type("ConfigWithPath", vec![make_field("root", TypeRef::Path, false)])
+    };
+
+    let api = ApiSurface {
+        crate_name: "demo".into(),
+        version: "0.1.0".into(),
+        types: vec![
+            opaque_handle_with_methods,
+            opaque_handle_no_methods,
+            first_class_dto,
+            typealias_fallback_dto,
+        ],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+
+    // Deliberately no `[crates.swift]` capsule config — this must not matter.
+    let files = SwiftBackend.generate_bindings(&api, &make_config()).unwrap();
+    let content = &files
+        .iter()
+        .find(|f| f.path.to_string_lossy().ends_with(".swift"))
+        .expect("must have swift file")
+        .content;
+
+    for ty in &api.types {
+        let typealias = format!("public typealias {0} = RustBridge.{0}", ty.name);
+        let public_struct = format!("public struct {}", ty.name);
+        assert!(
+            content.contains(&typealias) || content.contains(&public_struct),
+            "type `{}` (is_opaque={}, has_serde={}) is not reachable from the Xberg module — \
+             missing both `{typealias}` and `{public_struct}`. Content:\n{content}",
+            ty.name,
+            ty.is_opaque,
+            ty.has_serde,
+        );
+    }
+}

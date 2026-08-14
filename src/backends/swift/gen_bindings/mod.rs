@@ -117,24 +117,44 @@ impl Backend for SwiftBackend {
 
         let mut body = String::new();
 
-        let capsule_present = config
+        // Types with a configured `client_constructor_body` get a real `public class`
+        // via `emit_client_class` below instead of a typealias — excluded here to
+        // avoid a duplicate declaration.
+        let client_constructor_types: std::collections::HashSet<&str> = config
             .swift
             .as_ref()
-            .map(|c| !c.capsule_types.is_empty())
-            .unwrap_or(false);
-        if capsule_present {
-            let mut aliases: Vec<String> = api
-                .types
-                .iter()
-                .filter(|t| t.is_opaque && !t.methods.is_empty() && !exclude_types.contains(&t.name))
-                .map(|t| format!("public typealias {0} = RustBridge.{0}", t.name))
-                .collect();
-            aliases.sort();
-            aliases.dedup();
-            if !aliases.is_empty() {
-                body.push_str(&aliases.join("\n"));
-                body.push_str("\n\n");
-            }
+            .map(|c| c.client_constructor_body.keys().map(String::as_str).collect())
+            .unwrap_or_default();
+        // Types configured as `capsule_types` are bridged to a native host type
+        // (e.g. Foundation) via a dedicated forwarder, not a plain `RustBridge`
+        // typealias — excluded here for the same reason.
+        let capsule_type_names: std::collections::HashSet<&str> = config
+            .swift
+            .as_ref()
+            .map(|c| c.capsule_types.keys().map(String::as_str).collect())
+            .unwrap_or_default();
+
+        // Opaque RustBridge handle types with methods (e.g. registries, compiled
+        // validators — any struct whose fields are all private) are never picked up
+        // by the main DTO/typealias loop below: its filter deliberately defers to
+        // this block for `is_opaque && !methods.is_empty()` types. This alias is
+        // unconditional — it must not be gated on unrelated per-crate Swift config
+        // (previously gated on `capsule_types` being non-empty, which left every
+        // crate without capsule config unable to name these types outside
+        // `RustBridge` at all). See task #541.
+        let mut opaque_handle_aliases: Vec<String> = api
+            .types
+            .iter()
+            .filter(|t| !t.is_trait && t.is_opaque && !t.methods.is_empty() && !exclude_types.contains(&t.name))
+            .filter(|t| !client_constructor_types.contains(t.name.as_str()))
+            .filter(|t| !capsule_type_names.contains(t.name.as_str()))
+            .map(|t| format!("public typealias {0} = RustBridge.{0}", t.name))
+            .collect();
+        opaque_handle_aliases.sort();
+        opaque_handle_aliases.dedup();
+        if !opaque_handle_aliases.is_empty() {
+            body.push_str(&opaque_handle_aliases.join("\n"));
+            body.push_str("\n\n");
         }
 
         let unit_serde_enum_names: std::collections::HashSet<String> = api
@@ -258,11 +278,6 @@ impl Backend for SwiftBackend {
             body.push('\n');
         }
 
-        let client_constructor_types: std::collections::HashSet<&str> = config
-            .swift
-            .as_ref()
-            .map(|c| c.client_constructor_body.keys().map(String::as_str).collect())
-            .unwrap_or_default();
         let first_class_types: std::collections::HashSet<String> = api
             .types
             .iter()
