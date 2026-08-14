@@ -470,6 +470,42 @@ mod tests {
         assert!(!result.contains("Custom"));
     }
 
+    /// `node_context.jinja` closes each record parameter with
+    /// `{% if not loop.last %},{% endif +%}` — the `+` on `endif` is load bearing:
+    /// minijinja's `trim_blocks(true)` (set in `template_env::make_env`) strips the
+    /// newline following *any* block tag, including an inline `{% endif %}` that
+    /// closes a same-line conditional, so without `+%}` every field's line ending
+    /// is eaten and the whole parameter list collapses onto one line. The prior
+    /// test above only asserts substrings via `.contains`, which passes whether or
+    /// not the fields share a line, so it cannot catch that regression. Assert the
+    /// exact per-field line layout instead so reintroducing the bug (dropping the
+    /// `+`, or reintroducing the dash on the loop's `endfor` — see `node_context.jinja`
+    /// for why that dash independently defeats the `+`) fails this test.
+    #[test]
+    fn node_context_places_each_field_on_its_own_line() {
+        let api = api();
+        let bridge_cfg = bridge_cfg(Some("RenderContext"), Some("FlowDecision"));
+        let trait_def = api.types.iter().find(|typ| typ.name == "MarkupVisitor").unwrap();
+        let files = gen_visitor_files("Sample", &api, &bridge_cfg, trait_def);
+        let context = &files[0].1;
+
+        let record_lines: Vec<&str> = context
+            .lines()
+            .skip_while(|line| !line.starts_with("public record RenderContext("))
+            .skip(1)
+            .take_while(|line| *line != ");")
+            .collect();
+
+        assert_eq!(
+            record_lines,
+            vec![
+                "    [property: JsonPropertyName(\"node_kind\")] string Kind,",
+                "    [property: JsonPropertyName(\"depth\")] ulong Depth",
+            ],
+            "each record parameter must render on its own line; got:\n{context}"
+        );
+    }
+
     #[test]
     fn skips_visitor_files_when_metadata_is_absent() {
         let api = api();

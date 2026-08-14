@@ -852,3 +852,67 @@ pub(crate) fn gen_native_lib(
 
     out
 }
+
+#[cfg(test)]
+mod tests {
+    /// Number of required-symbol entries rendered in this test's fixture context.
+    /// Kept as a named constant so the assertion below documents its own expected
+    /// line count instead of a bare magic number.
+    const SYMBOL_COUNT: usize = 3;
+
+    /// `native_lib.jinja`'s `REQUIRED_SYMBOLS` loop separates each entry with
+    /// `{% if not loop.last %},{% endif +%}` — the trailing `+` on `endif` is load
+    /// bearing: minijinja's `trim_blocks(true)` (set in `template_env::make_env`)
+    /// strips the newline that immediately follows *any* block tag, including an
+    /// inline `{% endif %}` that closes a same-line conditional. Without `+%}`
+    /// every iteration's line ending is eaten and all entries collapse onto one
+    /// line, which is exactly what shipped in `packages/java/io/xberg/NativeLib.java`
+    /// and tripped checkstyle's LineLengthCheck. Render the template directly and
+    /// assert one quoted symbol per output line so a regression (dropping the `+`)
+    /// fails this test instead of only surfacing downstream in a generated package.
+    #[test]
+    fn required_symbols_array_renders_one_entry_per_line() {
+        // Alphabetical, matching the `BTreeSet<String>` order `gen_native_lib`
+        // actually feeds into this template's `required_symbols` context value.
+        let required_symbols = vec![
+            "xberg_extract_free_string".to_string(),
+            "xberg_last_error_code".to_string(),
+            "xberg_last_error_context".to_string(),
+        ];
+        assert_eq!(required_symbols.len(), SYMBOL_COUNT);
+
+        let rendered = crate::backends::java::template_env::render(
+            "native_lib.jinja",
+            minijinja::context! {
+                class_name => "NativeLib",
+                lib_name => "xberg",
+                library_environment_prefix => "XBERG",
+                prefix => "xberg",
+                prefix_upper => "XBERG",
+                required_symbols => required_symbols,
+                function_handles => Vec::<String>::new(),
+                accessor_handles => Vec::<String>::new(),
+                builder_handles => Vec::<String>::new(),
+                trait_handles => Vec::<String>::new(),
+                visitor_handles => "",
+            },
+        );
+
+        let array_body: Vec<&str> = rendered
+            .lines()
+            .skip_while(|line| !line.contains("REQUIRED_SYMBOLS = {"))
+            .skip(1)
+            .take_while(|line| !line.trim_start().starts_with("};"))
+            .collect();
+
+        assert_eq!(
+            array_body,
+            vec![
+                "        \"xberg_extract_free_string\",",
+                "        \"xberg_last_error_code\",",
+                "        \"xberg_last_error_context\"",
+            ],
+            "each REQUIRED_SYMBOLS entry must render on its own line; got:\n{rendered}"
+        );
+    }
+}
