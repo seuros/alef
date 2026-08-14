@@ -34,6 +34,7 @@ pub enum KotlinTarget {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct KotlinConfig {
     pub package: Option<String>,
     #[serde(default)]

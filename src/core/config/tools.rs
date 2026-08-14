@@ -27,6 +27,7 @@ const DEFAULT_NODE_PM: &str = "pnpm";
 ///
 /// All fields are optional; getters return the documented default when unset.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ToolsConfig {
     /// Python package manager. One of: `"uv"`, `"pip"`, `"poetry"`. Default: `"uv"`.
     #[serde(default)]

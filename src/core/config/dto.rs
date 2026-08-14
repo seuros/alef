@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 /// Controls what type system is used for generated public API types in each language
 /// (e.g., Python `@dataclass` vs `TypedDict` vs `pydantic.BaseModel`).
 #[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DtoConfig {
     /// Python input type style (default: dataclass).
     #[serde(default)]
@@ -117,6 +118,7 @@ pub enum JavaBuilderMode {
 
 /// Java-specific DTO configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct JavaDtoConfig {
     /// Builder mode: auto (default), always, or never.
     #[serde(default)]

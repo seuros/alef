@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CSharpConfig {
     /// Map of Rust type name -> host-native capsule (Language-passthrough) config.
     /// When set, functions returning the type construct the host runtime's native

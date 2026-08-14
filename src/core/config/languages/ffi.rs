@@ -27,6 +27,7 @@ use std::collections::HashMap;
 /// package_version = "1.0"
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FfiCapsuleTypeConfig {
     /// Fully-qualified Rust pointee type produced by `value.into_raw()`.
     /// The generated body casts to `*const {into_raw_type}`.
@@ -48,6 +49,7 @@ pub struct FfiCapsuleTypeConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FfiConfig {
     pub prefix: Option<String>,
     #[serde(default = "default_error_style")]
@@ -139,6 +141,7 @@ pub struct FfiConfig {
 /// A per-target replacement for the core-crate feature set emitted into the
 /// generated FFI Cargo.toml. See [`FfiConfig::target_dep_overrides`].
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FfiTargetDepOverride {
     /// Cargo cfg expression, without the surrounding `cfg(...)`.
     /// Example: `all(target_os = "android", target_arch = "x86_64")`.

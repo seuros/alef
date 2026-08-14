@@ -6,6 +6,7 @@ use crate::core::config::extras::Language;
 /// Custom modules that alef should declare (mod X;) but not generate.
 /// These are hand-written modules imported by the generated lib.rs.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CustomModulesConfig {
     #[serde(default)]
     pub python: Vec<String>,
@@ -60,6 +61,7 @@ impl CustomModulesConfig {
 
 /// Custom classes/functions from hand-written modules to register in module init.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CustomRegistration {
     #[serde(default)]
     pub classes: Vec<String>,
@@ -71,6 +73,7 @@ pub struct CustomRegistration {
 
 /// Per-language custom registrations.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CustomRegistrationsConfig {
     #[serde(default)]
     pub python: Option<CustomRegistration>,

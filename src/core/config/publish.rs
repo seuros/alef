@@ -6,6 +6,7 @@ use super::output::StringOrVec;
 
 /// Configuration for the `alef publish` command group.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PublishConfig {
     /// Path to the core Rust crate directory to vendor.
     /// Auto-detected from `[crate].sources` if absent.
@@ -17,6 +18,7 @@ pub struct PublishConfig {
 
 /// Per-language publish configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PublishLanguageConfig {
     /// Shell command that must exit 0 for publish steps to run; skip with warning on failure.
     pub precondition: Option<String>,

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use super::FfiTargetDepOverride;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ElixirConfig {
     pub app_name: Option<String>,
     #[serde(default)]

@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 /// Root e2e configuration from `[e2e]` section of alef.toml.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct E2eConfig {
     /// Directory containing fixture JSON files (default: "fixtures").
     #[serde(default = "default_fixtures_dir")]

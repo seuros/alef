@@ -15,6 +15,7 @@ pub enum RouteCallForm {
 }
 /// Per-language harness config overrides.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct HarnessOverride {
     /// Method to register handlers (overrides HarnessConfig.register_method)
     #[serde(default)]
@@ -46,6 +47,7 @@ pub struct HarnessOverride {
 /// and serves requests. This config provides the language-agnostic knobs that
 /// control harness code generation.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct HarnessConfig {
     /// Module/package to import the SUT app from (e.g., "my_app")
     #[serde(default)]

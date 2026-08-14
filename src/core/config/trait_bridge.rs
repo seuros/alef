@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Configuration for generating trait bridge code that allows foreign language
 /// objects to implement Rust traits via FFI.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TraitBridgeConfig {
     /// Name of the Rust trait to bridge (e.g., `"OcrBackend"`).
     pub trait_name: String,

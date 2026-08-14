@@ -23,6 +23,7 @@ use std::collections::BTreeMap;
 /// (Go, Zig, Kotlin `testImplementation`) collapse both buckets into one at the
 /// emitter level.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ManifestExtras {
     /// Runtime dependencies (e.g. `dependencies` in package.json, `requires` in
     /// pyproject, `dependencies` in composer.json).

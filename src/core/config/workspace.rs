@@ -32,6 +32,7 @@ use super::tools::ToolsConfig;
 
 /// One parameter in a [`ClientConstructorConfig`].
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ConstructorParam {
     /// Parameter name as it appears in the generated function signature.
     pub name: String,
@@ -47,6 +48,7 @@ pub struct ConstructorParam {
 /// body is the `body` template string with `{type_name}` and `{source_path}`
 /// substituted.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ClientConstructorConfig {
     /// Ordered list of constructor parameters.
     #[serde(default)]

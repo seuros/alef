@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct WasmConfig {
     /// npm package name for the WASM package. Defaults to the Node package
     /// name with a trailing `-node` removed, plus `-wasm`.

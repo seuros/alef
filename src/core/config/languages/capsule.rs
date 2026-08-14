@@ -59,6 +59,7 @@ pub enum HostDestructor {
 /// abi_compatible = true
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct HostCapsuleTypeConfig {
     /// The host ecosystem's `Language` type, used as the return-type annotation in the
     /// generated binding (e.g. `"*my_pkg.Language"` for Go, `"MyLib.Language"` for Swift).

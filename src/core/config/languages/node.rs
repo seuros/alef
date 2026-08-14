@@ -21,6 +21,7 @@ use super::FfiTargetDepOverride;
 /// type_tag = { lower = "0x8AF2E5212AD58ABF", upper = "0xD5006CAD83ABBA16" }
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct NodeCapsuleTypeConfig {
     /// User-facing class name in the ecosystem library (e.g. `"Language"`).
     /// Emitted as the return-type annotation in the generated `index.d.ts`.
@@ -47,6 +48,7 @@ pub struct NodeCapsuleTypeConfig {
 
 /// An N-API `napi_type_tag` value, expressed as two 64-bit hex strings.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct NapiTypeTagConfig {
     /// Lower 64 bits of the tag, hex (e.g. `"0x8AF2E5212AD58ABF"`).
     pub lower: String,
@@ -63,6 +65,7 @@ fn default_node_capsule_property_name() -> String {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct NodeConfig {
     pub package_name: Option<String>,
     /// Per-language feature override. When set, these features are used instead of

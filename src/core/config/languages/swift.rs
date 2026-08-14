@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SwiftConfig {
     /// Map of Rust type name -> host-native capsule (Language-passthrough) config.
     /// When set, functions returning the type construct the host runtime's native
@@ -147,6 +148,7 @@ pub struct SwiftConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SwiftTargetDepOverride {
     /// Cargo `cfg(...)` predicate (without the `cfg(...)` wrapper). Example:
     /// `target_os = "ios"`.

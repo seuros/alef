@@ -56,6 +56,7 @@ impl CapsuleTypeConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PythonConfig {
     pub module_name: Option<String>,
     pub async_runtime: Option<String>,

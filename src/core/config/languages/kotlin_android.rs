@@ -10,6 +10,7 @@ use std::collections::HashMap;
 /// coordinates, ABI list, and the bundled Java facade emitted into
 /// `src/main/java/` so the AAR is self-contained.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct KotlinAndroidConfig {
     /// Map of Rust type name -> host-native capsule (Language-passthrough) config.
     /// When set, functions returning the type construct the host runtime's native

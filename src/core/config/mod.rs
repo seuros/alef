@@ -72,6 +72,7 @@ pub use workspace::WorkspaceConfig;
 
 /// A source crate group for multi-crate extraction.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SourceCrate {
     /// Crate name (hyphens converted to underscores for rust_path).
     pub name: String,
@@ -113,6 +114,7 @@ fn default_true() -> bool {
 /// All flags default to `true`; set to `false` to skip a pass.
 /// Can be overridden per-language via `[generate_overrides.<lang>]`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GenerateConfig {
     /// Generate low-level struct wrappers, From impls, module init (default: true)
     #[serde(default = "default_true")]

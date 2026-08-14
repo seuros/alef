@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use super::{FfiTargetDepOverride, StubsConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RubyConfig {
     pub gem_name: Option<String>,
     pub stubs: Option<StubsConfig>,

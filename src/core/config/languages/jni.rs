@@ -12,6 +12,7 @@ use super::FfiTargetDepOverride;
 /// `"sample-markdown-rs"`) but you want the JNI crate to live at
 /// `crates/sample-markdown-jni/` to match every other binding crate.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct JniConfig {
     /// Override the JNI crate directory name.
     ///
