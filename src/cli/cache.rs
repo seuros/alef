@@ -238,6 +238,46 @@ pub fn read_lang_manifest(crate_name: &str, lang: &str) -> Vec<PathBuf> {
     }
 }
 
+/// Replace the crate-wide scaffold-ownership manifest with every path the
+/// current run's scaffold pass emitted, deliberately including
+/// `generated_header: false` seeds (`composer.json`, `package.json`, ...) that
+/// carry no `alef:hash:` marker and are therefore invisible to
+/// [`write_lang_manifest`]'s `carries_alef_marker()` filter.
+///
+/// This is the sole durable record that lets `sweep_manifest_orphans`'s
+/// unmarkable-manifest route (see `path_is_reclaimable` in
+/// `generate/orphans.rs`) reclaim a manifest a later run stops emitting (e.g. a
+/// co-located/split PHP layout toggle that drops a second `composer.json`), and
+/// it doubles as the current-run "keep" evidence that stops a manifest still
+/// being written from ever being mistaken for an orphan of itself.
+///
+/// Crate-scoped rather than per-language like [`write_lang_manifest`] because
+/// `scaffold()` returns a flat, unpartitioned file list; callers that only run
+/// scaffold for a `--lang` subset must not call this, or the write here would
+/// clobber the recorded paths for every other language's manifests.
+pub fn write_scaffold_manifest(crate_name: &str, output_paths: &[PathBuf]) -> anyhow::Result<()> {
+    let dir = hashes_dir(crate_name);
+    fs::create_dir_all(&dir)?;
+    write_manifest(&dir.join("scaffold-ownership.manifest"), output_paths)
+}
+
+/// Read the previous run's scaffold-ownership manifest written by
+/// [`write_scaffold_manifest`]. Empty when scaffold has never run for this
+/// crate under this mechanism (including every run before this manifest was
+/// introduced) -- callers must tolerate an empty result as "no known prior
+/// scaffold state" rather than "nothing was ever scaffolded".
+pub fn read_scaffold_manifest(crate_name: &str) -> Vec<PathBuf> {
+    let manifest_path = hashes_dir(crate_name).join("scaffold-ownership.manifest");
+    match fs::read_to_string(manifest_path) {
+        Ok(content) => content
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(PathBuf::from)
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
 /// Compute hash for a generation stage (stubs, docs, readme, scaffold, e2e).
 /// `extra` allows including additional content (e.g., fixture files for e2e).
 /// The alef binary's identity is included so that locally rebuilt binaries
@@ -535,5 +575,92 @@ mod tests {
         std::fs::write(&manifest, "").expect("write empty manifest");
 
         assert!(!outputs_exist(&manifest));
+    }
+
+    /// Serialize tests that mutate the process-global current directory, mirroring
+    /// the lock in `cli::pipeline::version_tests` -- `write_scaffold_manifest`/
+    /// `read_scaffold_manifest` resolve `.alef/<crate>/hashes/` relative to CWD,
+    /// so concurrent tempdir-based tests below would race without it. ~keep
+    static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// `write_scaffold_manifest` must round-trip through `read_scaffold_manifest`,
+    /// sorted and deduplicated like every other manifest. This is the durable
+    /// record `sweep_manifest_orphans`'s unmarkable-manifest route depends on to
+    /// know a `composer.json`/`package.json` path was scaffold's on a prior run --
+    /// without it, `read_scaffold_manifest` (which does not exist on unfixed code)
+    /// cannot be called at all.
+    #[test]
+    fn scaffold_manifest_round_trips_through_write_and_read() {
+        let _guard = CWD_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let original_cwd = std::env::current_dir().expect("cwd");
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::env::set_current_dir(tmp.path()).expect("chdir into tempdir");
+
+        let composer = tmp.path().join("packages/php/composer.json");
+        let cargo_toml = tmp.path().join("Cargo.toml");
+        let write_result = write_scaffold_manifest("sample-crate", &[composer.clone(), cargo_toml.clone()]);
+        let read_back = read_scaffold_manifest("sample-crate");
+
+        let _ = std::env::set_current_dir(&original_cwd);
+        write_result.expect("write scaffold manifest");
+        assert_eq!(
+            read_back,
+            vec![cargo_toml, composer],
+            "manifest must round-trip both paths in sorted order"
+        );
+    }
+
+    /// A crate that has never had scaffold run under this mechanism (including
+    /// every run before it existed) must read back empty rather than erroring --
+    /// callers treat an empty result as "no known prior scaffold state", never as
+    /// proof nothing was ever scaffolded.
+    #[test]
+    fn scaffold_manifest_reads_empty_when_never_written() {
+        let _guard = CWD_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let original_cwd = std::env::current_dir().expect("cwd");
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::env::set_current_dir(tmp.path()).expect("chdir into tempdir");
+
+        let read_back = read_scaffold_manifest("never-scaffolded-crate");
+
+        let _ = std::env::set_current_dir(&original_cwd);
+        assert_eq!(read_back, Vec::<PathBuf>::new());
+    }
+
+    /// End-to-end regression for the crawlberg `composer.json` orphan: proves the
+    /// `write_scaffold_manifest`/`read_scaffold_manifest` wiring is what lets
+    /// `sweep_manifest_orphans` reclaim an unmarkable manifest a later run stops
+    /// emitting. Before this manifest existed, nothing ever recorded
+    /// `composer.json`'s path -- `write_lang_manifest` and every
+    /// `generate-{lang}-ownership` stage filter scaffold paths through
+    /// `carries_alef_marker()`, which `composer.json` never satisfies (it is
+    /// emitted with `generated_header: false`) -- so `sweep_manifest_orphans` was
+    /// always called with an empty `previous_paths` for this file and could never
+    /// reach it, regardless of how permissive `path_is_reclaimable` is. On unfixed
+    /// code, `previous_scaffold` here is empty (no prior-run record exists), so
+    /// `sweep_manifest_orphans` skips `composer_json` entirely and `removed` is 0,
+    /// failing the `assert_eq!(removed, 1, ...)` below.
+    #[test]
+    fn scaffold_manifest_wiring_lets_next_run_reclaim_dropped_manifest() {
+        let _guard = CWD_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let original_cwd = std::env::current_dir().expect("cwd");
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::env::set_current_dir(tmp.path()).expect("chdir into tempdir");
+
+        let package_dir = tmp.path().join("packages/php");
+        std::fs::create_dir_all(&package_dir).expect("create package dir");
+        let composer_json = package_dir.join("composer.json");
+        std::fs::write(&composer_json, "{\n  \"name\": \"acme/demo\"\n}\n").expect("write composer.json");
+
+        write_scaffold_manifest("crawlberg-php", &[composer_json.clone()]).expect("write manifest for run 1");
+
+        let previous_scaffold = read_scaffold_manifest("crawlberg-php");
+        let keep = std::collections::HashSet::new();
+        let removed =
+            crate::cli::pipeline::sweep_manifest_orphans(&previous_scaffold, &keep, &[package_dir]).expect("sweep");
+
+        let _ = std::env::set_current_dir(&original_cwd);
+        assert_eq!(removed, 1, "composer.json recorded by run 1's manifest must be reclaimed in run 2");
+        assert!(!composer_json.exists(), "orphaned composer.json must be deleted");
     }
 }

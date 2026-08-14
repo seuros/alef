@@ -143,11 +143,23 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 tracing::info!("Generating scaffolding...");
+                // `alef all` always resolves the crate's full configured language set (there is
+                // no `--lang` filter on this command), so the crate-wide scaffold manifest below
+                // is always written from a complete file list and never clobbers another
+                // language's recorded paths. See `write_scaffold_manifest`'s doc for why a
+                // `--lang`-filtered caller must not call it. ~keep
+                let previous_scaffold_paths = cache::read_scaffold_manifest(&resolved_cfg.name);
                 let scaffold_files = pipeline::scaffold(&api, resolved_cfg, &languages, config_path)?;
                 let scaffold_count = pipeline::write_scaffold_files_with_overwrite(&scaffold_files, &base_dir, clean)?;
+                let scaffold_output_paths: Vec<PathBuf> =
+                    scaffold_files.iter().map(|file| base_dir.join(&file.path)).collect();
                 for file in scaffold_files.iter().filter(|file| file.carries_alef_marker()) {
                     current_gen_paths.insert(base_dir.join(&file.path));
                 }
+                let scaffold_keep: std::collections::HashSet<PathBuf> = scaffold_output_paths.iter().cloned().collect();
+                let scaffold_sweep_roots = pipeline::generate_sweep_roots(&languages, false, resolved_cfg, &base_dir);
+                pipeline::sweep_manifest_orphans(&previous_scaffold_paths, &scaffold_keep, &scaffold_sweep_roots)?;
+                cache::write_scaffold_manifest(&resolved_cfg.name, &scaffold_output_paths)?;
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 tracing::info!("Running post-build processing...");

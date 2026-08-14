@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   renderer. The existing unit test called `render_wasm_excluded_category` directly, so it verified the renderer but
   never that `generate` invoked it — reintroducing the silent-drop regression left all seven wasm unit tests green.
   The new integration test drives `generate` end to end and fails when the category is dropped.
+- **generate**: record scaffold-emitted manifest paths (`composer.json`, `package.json`) in a durable
+  per-crate manifest and reclaim them, along with their package-manager lockfile siblings, when a later
+  `alef all` run stops emitting them at that path. Every existing orphan-cleanup input (`write_lang_manifest`,
+  the `generate-{lang}-ownership` stage) filters scaffold paths through `carries_alef_marker()`, which a
+  `generated_header: false` manifest never satisfies, so `sweep_manifest_orphans` was always called with an
+  empty `previous_paths` for these files and could never reach manifests left behind by a layout change, even under
+  `--clean`. The marker-free route is confined to an explicit two-name allowlist of
+  manifests that are structurally incapable of carrying a marker; a lockfile is never reclaimed on its own
+  provenance, only as a cascade of its manifest being reclaimed.
 - **generate**: refuse to write a `generated_header: true` scaffold/e2e file over pre-existing content that
   carries no `alef:hash:` marker, instead of stamping or overwriting it unconditionally. A plain `alef all
   --clean` run could silently claim and stamp hand-written files because the write path only ever asked "does this
