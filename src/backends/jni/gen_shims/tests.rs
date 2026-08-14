@@ -240,7 +240,6 @@ features = ["decoder"]
 [[crates.jni.target_dep_overrides]]
 cfg = 'target_os = "android"'
 features = ["mobile"]
-default_features = false
 "#,
         )
         .expect("fixture config parses");
@@ -314,7 +313,6 @@ namespace = "dev.sample_crate"
 [[crates.jni.target_dep_overrides]]
 cfg = 'target_os = "android"'
 features = ["mobile"]
-default_features = false
 "#,
         )
         .expect("fixture config parses");
