@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **e2e/wasm (tests)**: cover the fully-excluded-category path through `WasmCodegen::generate`, not only through the
+  renderer. The existing unit test called `render_wasm_excluded_category` directly, so it verified the renderer but
+  never that `generate` invoked it — reintroducing the silent-drop regression left all seven wasm unit tests green.
+  The new integration test drives `generate` end to end and fails when the category is dropped.
 - **e2e/wasm**: stop silently dropping a fixture category when every fixture in it is excluded for wasm (e.g. an
   entire `visitor` category skipped via `skip.languages`); emit a placeholder suite naming each excluded fixture and
   its reason, and log a warning, instead of generating no output at all.
