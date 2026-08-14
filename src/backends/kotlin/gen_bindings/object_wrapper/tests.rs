@@ -750,3 +750,84 @@ fn binding_excluded_field_is_omitted_from_dto() {
         "binding_excluded field must be omitted entirely; got:\n{out}",
     );
 }
+
+/// A Rust `Default` impl is not enough to make the emitted Kotlin data class constructible with
+/// no arguments: every constructor parameter must also carry a Kotlin default. A non-optional
+/// scalar with no typed default emits a bare `val count: Int`, so `Counters()` would not compile.
+#[test]
+fn default_constructible_excludes_types_with_a_bare_constructor_parameter() {
+    let counters = crate::core::ir::TypeDef {
+        name: "Counters".to_string(),
+        rust_path: "crate::Counters".to_string(),
+        fields: vec![make_field("count", TypeRef::Primitive(crate::core::ir::PrimitiveType::I32))],
+        has_default: true,
+        ..Default::default()
+    };
+
+    let constructible = default_constructible_type_names(
+        std::slice::from_ref(&counters),
+        &std::collections::HashMap::new(),
+    );
+
+    assert!(
+        !constructible.contains("Counters"),
+        "a type with a bare `val count: Int` parameter is not default-constructible; got {constructible:?}",
+    );
+}
+
+/// Types whose every parameter defaults — here a `Vec` (`= emptyList()`) and an `Option`
+/// (`= null`) — stay in the set.
+#[test]
+fn default_constructible_keeps_types_whose_every_parameter_defaults() {
+    let mut maybe_name = make_field("name", TypeRef::String);
+    maybe_name.optional = true;
+    let settings = crate::core::ir::TypeDef {
+        name: "Settings".to_string(),
+        rust_path: "crate::Settings".to_string(),
+        fields: vec![make_field("tags", TypeRef::Vec(Box::new(TypeRef::String))), maybe_name],
+        has_default: true,
+        ..Default::default()
+    };
+
+    let constructible =
+        default_constructible_type_names(std::slice::from_ref(&settings), &std::collections::HashMap::new());
+
+    assert!(
+        constructible.contains("Settings"),
+        "every parameter defaults, so the type is default-constructible; got {constructible:?}",
+    );
+}
+
+/// The set must be a greatest fixpoint, not a single pass. `Outer`'s only field defaults to
+/// `Inner()`, which is valid only while `Inner` is itself constructible — so dropping `Inner`
+/// has to drop `Outer` on a later iteration.
+#[test]
+fn default_constructible_propagates_removal_to_dependent_types() {
+    let inner = crate::core::ir::TypeDef {
+        name: "Inner".to_string(),
+        rust_path: "crate::Inner".to_string(),
+        fields: vec![make_field("count", TypeRef::Primitive(crate::core::ir::PrimitiveType::I32))],
+        has_default: true,
+        ..Default::default()
+    };
+    let mut nested = make_field("inner", TypeRef::Named("Inner".to_string()));
+    nested.typed_default = Some(crate::core::ir::DefaultValue::Empty);
+    let outer = crate::core::ir::TypeDef {
+        name: "Outer".to_string(),
+        rust_path: "crate::Outer".to_string(),
+        fields: vec![nested],
+        has_default: true,
+        ..Default::default()
+    };
+
+    let constructible = default_constructible_type_names(&[inner, outer], &std::collections::HashMap::new());
+
+    assert!(
+        !constructible.contains("Inner"),
+        "Inner has a bare parameter; got {constructible:?}",
+    );
+    assert!(
+        !constructible.contains("Outer"),
+        "Outer defaulted to `Inner()`, so dropping Inner must drop Outer too; got {constructible:?}",
+    );
+}

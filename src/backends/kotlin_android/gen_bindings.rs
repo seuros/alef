@@ -22,8 +22,8 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::backends::kotlin::{
-    ValueMethodBridge, emit_enum_pub, emit_error_type_pub, emit_jni_bridge_object, emit_jni_client_class,
-    emit_type_pub_with_defaults_sealed_and_constructible,
+    ValueMethodBridge, default_constructible_type_names, emit_enum_pub, emit_error_type_pub, emit_jni_bridge_object,
+    emit_jni_client_class, emit_type_pub_with_defaults_sealed_and_constructible,
 };
 use crate::backends::kotlin_android::naming::kotlin_package;
 use crate::backends::kotlin_android::template_env;
@@ -95,12 +95,10 @@ pub fn emit(api: &ApiSurface, config: &ResolvedCrateConfig, kotlin_source_dir: &
         .map(|en| en.name.clone())
         .collect();
 
-    let default_constructible_types: std::collections::HashSet<String> = api
-        .types
-        .iter()
-        .filter(|t| !t.is_trait && !t.is_opaque && t.has_default)
-        .map(|t| t.name.clone())
-        .collect();
+    // A Rust `Default` impl alone does not make the emitted data class constructible with no
+    // arguments — every constructor parameter must also carry a Kotlin default. See
+    // `default_constructible_type_names`.
+    let default_constructible_types = default_constructible_type_names(&api.types, &enum_defaults);
 
     // Data-class instance methods are bridged through the JNI shim crate; the
     // shared predicate keeps this list identical to the `external fun`s the
