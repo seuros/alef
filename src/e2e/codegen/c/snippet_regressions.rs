@@ -79,12 +79,12 @@ fn whole_input_typed_file_snippet_constructs_and_owns_the_public_handle() {
     compile_snippet(
         &rendered,
         concat!(
-            "typedef struct SAMPLEDocumentInput SAMPLEDocumentInput;\n",
-            "typedef struct SAMPLEDocumentResult SAMPLEDocumentResult;\n",
-            "SAMPLEDocumentInput *sample_document_input_from_json(const char *json);\n",
-            "void sample_document_input_free(SAMPLEDocumentInput *input);\n",
-            "SAMPLEDocumentResult *sample_process(SAMPLEDocumentInput *input);\n",
-            "void sample_document_result_free(SAMPLEDocumentResult *result);\n",
+            "#include <stdint.h>\n",
+            "typedef uint64_t SAMPLEAlefHandle;\n",
+            "SAMPLEAlefHandle sample_document_input_from_json(const char *json);\n",
+            "void sample_document_input_free(SAMPLEAlefHandle input);\n",
+            "SAMPLEAlefHandle sample_process(SAMPLEAlefHandle input);\n",
+            "void sample_document_result_free(SAMPLEAlefHandle result);\n",
         ),
     );
 }
@@ -143,20 +143,19 @@ fn multiple_typed_args_and_ir_return_shape_match_the_public_abi() {
         rendered.contains("sample_convert(source_handle, settings_handle)"),
         "{rendered}"
     );
-    assert!(rendered.contains("SAMPLEConversionReceipt* result"), "{rendered}");
+    assert!(rendered.contains("SAMPLEAlefHandle result"), "{rendered}");
     assert!(!rendered.contains("ObsoleteOptions"), "{rendered}");
     compile_snippet(
         &rendered,
         concat!(
-            "typedef struct SAMPLESourceInput SAMPLESourceInput;\n",
-            "typedef struct SAMPLEConvertSettings SAMPLEConvertSettings;\n",
-            "typedef struct SAMPLEConversionReceipt SAMPLEConversionReceipt;\n",
-            "SAMPLESourceInput *sample_source_input_from_json(const char *json);\n",
-            "SAMPLEConvertSettings *sample_convert_settings_from_json(const char *json);\n",
-            "void sample_source_input_free(SAMPLESourceInput *value);\n",
-            "void sample_convert_settings_free(SAMPLEConvertSettings *value);\n",
-            "SAMPLEConversionReceipt *sample_convert(SAMPLESourceInput *source, SAMPLEConvertSettings *settings);\n",
-            "void sample_conversion_receipt_free(SAMPLEConversionReceipt *result);\n",
+            "#include <stdint.h>\n",
+            "typedef uint64_t SAMPLEAlefHandle;\n",
+            "SAMPLEAlefHandle sample_source_input_from_json(const char *json);\n",
+            "SAMPLEAlefHandle sample_convert_settings_from_json(const char *json);\n",
+            "void sample_source_input_free(SAMPLEAlefHandle value);\n",
+            "void sample_convert_settings_free(SAMPLEAlefHandle value);\n",
+            "SAMPLEAlefHandle sample_convert(SAMPLEAlefHandle source, SAMPLEAlefHandle settings);\n",
+            "void sample_conversion_receipt_free(SAMPLEAlefHandle result);\n",
         ),
     );
 }

@@ -189,14 +189,14 @@ pub(super) fn emit_nested_accessor(
                 if !intermediate_handles.iter().any(|(h, _)| h == &handle_var) {
                     let _ = writeln!(
                         out,
-                        "    {prefix_upper}{opaque_type}* {handle_var} = {accessor_fn}({current_handle});"
+                        "    {prefix_upper}AlefHandle {handle_var} = {accessor_fn}({current_handle});"
                     );
                     intermediate_handles.push((handle_var.clone(), opaque_snake.clone()));
                 }
                 // Treat the handle itself as the local_var for later assertions.
                 // Map local_var → handle_var so render_assertion uses the handle name.
                 if local_var != handle_var {
-                    let _ = writeln!(out, "    {prefix_upper}{opaque_type}* {local_var} = {handle_var};");
+                    let _ = writeln!(out, "    {prefix_upper}AlefHandle {local_var} = {handle_var};");
                 }
                 return Some(opaque_snake); // return type name so caller can register opaque handle cleanup
             }
@@ -273,10 +273,10 @@ pub(super) fn emit_nested_accessor(
             if !intermediate_handles.iter().any(|(h, _)| h == &handle_var) {
                 let _ = writeln!(
                     out,
-                    "    {prefix_upper}{return_type_pascal}* {handle_var} = \
+                    "    {prefix_upper}AlefHandle {handle_var} = \
                      {accessor_fn}({current_handle});"
                 );
-                let _ = writeln!(out, "    assert({handle_var} != NULL);");
+                let _ = writeln!(out, "    assert({handle_var} != 0);");
                 intermediate_handles.push((handle_var.clone(), return_snake.clone()));
             }
 
@@ -975,7 +975,7 @@ mod tests {
             &types,
         );
 
-        assert!(output.contains("SAMPLEExtractionSummary* summary_handle"), "{output}");
+        assert!(output.contains("SAMPLEAlefHandle summary_handle"), "{output}");
         assert!(output.contains("sample_extraction_result_summary(result)"), "{output}");
         assert!(output.contains("uint64_t summary_processed"), "{output}");
     }
