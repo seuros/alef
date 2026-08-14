@@ -239,8 +239,13 @@ mod tests {
         );
     }
 
+    // `emit_error_set` stopped emitting the `_from_ffi_msg_*` prefix-matcher in
+    // a6f094df5 ("feat(go-zig): map typed errors by native code"); dispatch now
+    // goes exclusively through the numeric FFI taxonomy code in
+    // `helpers::emit_helpers`/`_error_with_message` (see
+    // `error_with_message_dispatches_to_each_declared_error` in helpers.rs). ~keep
     #[test]
-    fn emit_error_set_emits_from_ffi_msg_helper() {
+    fn emit_error_set_emits_only_the_error_set() {
         let error = ErrorDef {
             name: "MyError".into(),
             rust_path: "x::MyError".into(),
@@ -256,14 +261,23 @@ mod tests {
         let mut out = String::new();
         emit_error_set(&error, &mut out);
 
-        assert!(out.contains("};\n"), "expected closing brace of error set:\n{out}");
         assert!(
-            out.contains("inline fn _from_ffi_msg_MyError(msg_opt: ?[]const u8) MyError {"),
-            "expected matcher emission after error set:\n{out}"
+            out.contains("pub const MyError = error{"),
+            "expected error set header:\n{out}"
+        );
+        assert!(out.contains("Boom,"), "expected Boom variant:\n{out}");
+        assert!(
+            out.contains("OutOfMemory,"),
+            "expected implicit OutOfMemory variant:\n{out}"
         );
         assert!(
-            out.contains("if (std.mem.startsWith(u8, msg, \"Boom happened:\")) return error.Boom;"),
-            "expected Boom dispatch (with whitespace-trimmed prefix):\n{out}"
+            out.trim_end().ends_with("};"),
+            "expected closing brace of error set:\n{out}"
+        );
+        assert!(
+            !out.contains("_from_ffi_msg_"),
+            "message-prefix dispatch was replaced by numeric taxonomy-code dispatch \
+             in helpers::_error_with_message and must not be emitted here:\n{out}"
         );
     }
 }
