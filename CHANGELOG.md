@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **e2e/wasm**: stop silently dropping a fixture category when every fixture in it is excluded for wasm (e.g. an
+  entire `visitor` category skipped via `skip.languages`); emit a placeholder suite naming each excluded fixture and
+  its reason, and log a warning, instead of generating no output at all.
+
 ## [0.61.0] - 2026-08-14
 
 ### Changed (BREAKING)
