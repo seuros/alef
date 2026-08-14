@@ -368,6 +368,55 @@ fn function_param_of_trait_interface_type_is_substituted_to_underscore_prefixed_
     );
 }
 
+/// `initialize`'s keywords must accept what the generated kwargs constructor actually converts.
+///
+/// ~keep A genuine cross-artifact check: it generates the *extension* constructor and the *stub*
+/// from one TypeDef and compares them, rather than asserting a literal on either side alone. The
+/// failure it guards is quiet — `String::try_convert` on a Ruby Hash does not raise, it yields
+/// `None` and the field falls back to its default, so a caller steep approved gets a silently
+/// wrong value instead of an error.
+#[test]
+fn initialize_keywords_match_the_kwargs_constructor_contract() {
+    use crate::backends::magnus::type_map::MagnusMapper;
+    use crate::codegen::config_gen::gen_magnus_kwargs_constructor;
+    use crate::codegen::type_mapper::TypeMapper;
+    use crate::core::ir::{ApiSurface, TypeDef};
+
+    let typ = TypeDef {
+        name: "Payload".to_string(),
+        rust_path: "test_lib::Payload".to_string(),
+        fields: vec![
+            optional_field("payload", TypeRef::Json),
+            field("rows", TypeRef::Vec(Box::new(TypeRef::Json))),
+        ],
+        has_default: true,
+        ..Default::default()
+    };
+
+    let extension = gen_magnus_kwargs_constructor(&typ, &|ty| MagnusMapper.map_type(ty));
+    let api = ApiSurface {
+        types: vec![typ],
+        ..Default::default()
+    };
+    let stub = super::gen_stubs(&api, "test_lib", false, &ahash::AHashMap::new(), &[]);
+    let initialize = stub
+        .lines()
+        .find(|line| line.trim_start().starts_with("def initialize:"))
+        .unwrap_or_else(|| panic!("initialize must be declared:\n{stub}"));
+
+    assert!(
+        extension.contains("String::try_convert"),
+        "the constructor is expected to convert a Json keyword through String:\n{extension}"
+    );
+    assert!(
+        !initialize.contains("json_value"),
+        "`{initialize}` promises a parsed document, but the constructor converts with \
+         `String::try_convert`, which yields None on a Hash and falls back to the default:\n{extension}"
+    );
+    assert!(initialize.contains("?payload: String"), "got: {initialize}");
+    assert!(initialize.contains("?rows: Array[String]"), "got: {initialize}");
+}
+
 /// A defaulted struct must still declare read-only attributes.
 ///
 /// ~keep `attr_accessor` also declares `name=`, and the binding defines no writer for any field —

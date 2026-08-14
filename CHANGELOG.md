@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fixture whose expectation legitimately ends in a newline could never be satisfied, and a genuine trailing-whitespace
   regression was silently absorbed. Neither side is normalized now.
 
+- **magnus**: marshal `initialize`'s keyword types the same way as the accessors. The kwargs constructor
+  converts each field with `<mapped type>::try_convert` and `Json` maps to `String`, so a `json_value`
+  keyword promised a parsed document the constructor cannot accept — `try_convert` yields `None` on a Hash
+  and the field silently falls back to its default rather than raising.
 - **magnus**: declare `.rbs` attributes read-only. `attr_accessor` was emitted for every field of a defaulted
   struct, but the binding defines no writer for any field, so steep green-lit assignments that raise
   `NoMethodError`.

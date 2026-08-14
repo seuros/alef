@@ -359,7 +359,12 @@ fn gen_type_stub(
         .iter()
         .filter(|f| !f.binding_excluded)
         .map(|f| {
-            let field_type = rbs_type(&f.ty);
+            // ~keep Same marshalling as the accessors. The kwargs constructor converts each field
+            // with `<mapped type>::try_convert`, and `MagnusMapper` maps Json to String, so a Json
+            // keyword takes a serialized String. Declaring `json_value` here let steep accept
+            // `Foo.new(data: {a: 1})`, where `String::try_convert` fails and the field silently
+            // falls back to its default instead of raising — a wrong value, not an error.
+            let field_type = rbs_marshalled_type(&f.ty);
             if typ.has_default {
                 format!("?{}: {}", f.name, field_type)
             } else if f.optional {
