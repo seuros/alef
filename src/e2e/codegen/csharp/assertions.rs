@@ -540,15 +540,14 @@ pub(super) fn render_assertion(
             }
         }
         "not_empty" => {
-            // Detect non-nullable: if expression has ! operator or is a method call
-            let field_is_nullable = !field_expr.contains('!') && !field_expr.contains(")");
+            // The non-collection arm boxes the field and pattern-matches it, so it needs no
+            // nullability guess to stay compilable.
             let rendered = crate::e2e::template_env::render(
                 "csharp/assertion.jinja",
                 minijinja::context! {
                     assertion_type => "not_empty",
                     field_expr => field_expr.clone(),
                     field_needs_json_serialize => field_needs_json_serialize,
-                    field_is_nullable => field_is_nullable,
                 },
             );
             out.push_str(&rendered);

@@ -233,7 +233,7 @@ pub(super) fn render_assertion(
                     }
                 }
                 "not_empty" => {
-                    let _ = writeln!(out, "      assert {expr} != []");
+                    let _ = writeln!(out, "      assert {expr} not in [nil, \"\", [], %{{}}]");
                 }
                 "is_empty" => {
                     let _ = writeln!(out, "      assert {expr} == []");
@@ -394,7 +394,7 @@ pub(super) fn render_assertion(
             }
         }
         "not_empty" => {
-            let _ = writeln!(out, "      assert {field_expr} != \"\"");
+            let _ = writeln!(out, "      assert {field_expr} not in [nil, \"\", [], %{{}}]");
         }
         "is_empty" => {
             if is_numeric {
@@ -725,6 +725,39 @@ mod tests {
             emitted,
             render_for("hello"),
             "trailing newline must still change the emitted assertion"
+        );
+    }
+
+    fn render_not_empty(field: Option<&str>, is_streaming: bool) -> String {
+        let assertion = Assertion {
+            assertion_type: "not_empty".to_string(),
+            field: field.map(str::to_string),
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &empty_resolver(),
+            "Sample",
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            is_streaming,
+        );
+        out
+    }
+
+    #[test]
+    fn not_empty_rejects_every_empty_shape_for_values_and_streams() {
+        assert_eq!(
+            render_not_empty(None, false).trim(),
+            "assert result not in [nil, \"\", [], %{}]"
+        );
+        assert_eq!(
+            render_not_empty(Some("chunks"), true).trim(),
+            "assert result not in [nil, \"\", [], %{}]"
         );
     }
 

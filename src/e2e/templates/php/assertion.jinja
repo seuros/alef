@@ -50,7 +50,12 @@
     $this->assertStringNotContainsString({{ val }}, {{ field_expr }});
 {% endfor %}
 {% elif assertion_type == "not_empty" %}
-    $this->assertNotEmpty({{ field_expr }});
+{# assertNotEmpty() routes through empty(), which rejects a legitimate 0, 0.0, "0" and false. #}
+{% if field_is_array %}
+    $this->assertGreaterThan(0, count({{ field_expr }} ?? []), 'expected non-empty value');
+{% else %}
+    $this->assertNotSame('', {{ field_expr }} ?? '', 'expected non-empty value');
+{% endif %}
 {% elif assertion_type == "is_empty" %}
     $this->assertEmpty({{ field_expr }});
 {% elif assertion_type == "contains_any" %}

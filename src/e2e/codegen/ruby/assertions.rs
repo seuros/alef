@@ -27,7 +27,11 @@ pub(super) fn render_assertion(
     {
         match assertion.assertion_type.as_str() {
             "not_empty" => {
-                out.push_str(&format!("    expect({result_var}.to_s).not_to be_empty\n"));
+                // `.to_s` stringifies before measuring, so an empty collection becomes "[]"
+                // and the check can never fail. Ask the value itself whether it is empty.
+                out.push_str(&format!(
+                    "    expect({result_var}.respond_to?(:empty?) ? !{result_var}.empty? : !{result_var}.nil?).to be(true)\n"
+                ));
                 return;
             }
             "is_empty" => {

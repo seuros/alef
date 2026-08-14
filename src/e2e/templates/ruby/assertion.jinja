@@ -43,7 +43,9 @@
     expect({{ field_expr }}.to_s).not_to include({{ expected_val }})
 {% endif %}
 {% elif assertion_type == "not_empty" %}
-    expect({{ field_expr }}.to_s).not_to be_empty
+{# `.to_s` stringifies before measuring, so `[]` becomes "[]" and the check can never fail on an empty #}
+{# collection. Ask the value itself whether it is empty; scalars have no `empty?` and only need to be present. #}
+    expect({{ field_expr }}.respond_to?(:empty?) ? !{{ field_expr }}.empty? : !{{ field_expr }}.nil?).to be(true)
 {% elif assertion_type == "is_empty" %}
     expect({{ field_expr }}.nil? || {{ field_expr }}.empty?).to be(true)
 {% elif assertion_type == "contains_any" %}

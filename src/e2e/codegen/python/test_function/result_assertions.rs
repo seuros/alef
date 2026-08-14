@@ -176,7 +176,12 @@ fn emit_streaming_virtual_assertion(out: &mut String, assertion: &Assertion, fie
             }
         }
         "not_empty" => {
-            let _ = writeln!(out, "    assert {expr}  # noqa: S101");
+            // Bare truthiness would reject a legitimate 0/0.0/False. Only sized values
+            // carry an emptiness notion; everything else just has to be present.
+            let _ = writeln!(
+                out,
+                "    assert {expr} is not None and (not hasattr({expr}, \"__len__\") or len({expr}) > 0)  # noqa: S101"
+            );
         }
         "is_empty" => {
             let _ = writeln!(out, "    assert not {expr}  # noqa: S101");
@@ -281,6 +286,20 @@ mod tests {
         emit_streaming_virtual_assertion(&mut out, &assertion, "chunks", "chunks");
 
         assert!(out.contains("assert len(chunks) >= 1"), "got: {out}");
+    }
+
+    #[test]
+    fn not_empty_for_python_streaming_rejects_empty_chunks_but_accepts_zero() {
+        let mut out = String::new();
+        let assertion = assertion("not_empty", Some("chunks"), None);
+
+        emit_streaming_virtual_assertion(&mut out, &assertion, "chunks", "chunks");
+
+        // Bare `assert chunks` fails on a legitimate 0, 0.0 or False.
+        assert_eq!(
+            out.trim(),
+            "assert chunks is not None and (not hasattr(chunks, \"__len__\") or len(chunks) > 0)  # noqa: S101"
+        );
     }
 
     #[test]

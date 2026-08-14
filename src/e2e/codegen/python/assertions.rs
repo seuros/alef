@@ -639,7 +639,7 @@ mod tests {
     }
 
     #[test]
-    fn render_assertion_not_empty_emits_assert() {
+    fn not_empty_for_python_rejects_empty_sized_values_but_accepts_zero() {
         let resolver = empty_resolver();
         let assertion = make_assertion("not_empty", None, None);
         let mut out = String::new();
@@ -652,7 +652,11 @@ mod tests {
             &HashMap::new(),
             false,
         );
-        assert!(out.contains("assert result"), "got: {out}");
+        // Bare `assert result` fails on a legitimate 0, 0.0 or False.
+        assert_eq!(
+            out.trim(),
+            "assert result is not None and (not hasattr(result, \"__len__\") or len(result) > 0)  # noqa: S101"
+        );
     }
 
     /// Regression test for a one-sided-strip bug: `.strip()` was applied to the actual value

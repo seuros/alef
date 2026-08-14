@@ -269,7 +269,14 @@ fn render_synthetic_field_assertion(
                         }
                     }
                     "not_empty" => {
-                        out.push_str(&format!("    expect({expr}).toBeTruthy();\n"));
+                        out.push_str(&crate::e2e::template_env::render(
+                            "typescript/assertion.jinja",
+                            minijinja::context! {
+                                assertion_type => "not_empty",
+                                field_expr => expr.clone(),
+                                field_is_optional => false,
+                            },
+                        ));
                     }
                     "is_empty" => {
                         out.push_str(&format!("    expect({expr}).toBeFalsy();\n"));
@@ -930,6 +937,26 @@ mod tests {
             false,
         );
         assert!(out.contains(".length"), "got: {out}");
+    }
+
+    #[test]
+    fn streaming_not_empty_rejects_empty_chunks_without_rejecting_zero() {
+        let resolver = empty_resolver();
+        let assertion = make_assertion("not_empty", Some("chunks"), None);
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            false,
+            &HashMap::new(),
+            "node",
+            true,
+        );
+        assert!(!out.contains("toBeTruthy"), "got: {out}");
+        assert!(out.contains("expect(_v.length).toBeGreaterThan(0);"), "got: {out}");
+        assert!(out.contains("expect(_v).not.toBeNull();"), "got: {out}");
     }
 
     #[test]
