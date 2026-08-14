@@ -820,4 +820,82 @@ mod tests {
             .expect("run Rust compiler");
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     }
+
+    /// `extract_batch`-shaped fixtures pass an array (`Vec<ExtractInput>`, `element_type =
+    /// Some("ExtractInput")`) whose docs file pointer targets one element of that array
+    /// (e.g. `/1/bytes`, mirroring `fixtures/batch/bytes_happy.json`). The `_json` binding is
+    /// mutated in place via `pointer_mut` before being deserialized, so it must be declared
+    /// `let mut`, exactly like the single-object case covered by
+    /// `docs_nested_bytes_replace_the_typed_json_field` above.
+    #[test]
+    fn should_emit_mut_binding_when_batch_array_element_is_mutably_borrowed_via_docs_file() {
+        let (lines, expression) = render_rust_arg(
+            "inputs",
+            &serde_json::json!([
+                {"kind": "bytes", "bytes": [1, 2, 3], "mime_type": "text/plain"},
+                {"kind": "bytes", "bytes": "placeholder", "mime_type": "text/html"}
+            ]),
+            "json_object",
+            false,
+            "sample",
+            "fixture",
+            None,
+            true,
+            Some("ExtractInput"),
+            "test_documents",
+            false,
+            None,
+            &[FixtureDocsFileInput {
+                field: "/1/bytes".into(),
+                path: "html/html.html".into(),
+            }],
+            false,
+            false,
+        );
+
+        assert_eq!(expression, "inputs");
+        let rendered = lines.join("\n");
+        assert!(rendered.contains("let mut inputs_json:"), "{rendered}");
+        assert!(
+            rendered.contains(r##"inputs_json.pointer_mut(r#"/1/bytes"#)"##),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("serde_json::from_value::<Vec<ExtractInput>>(inputs_json).unwrap()"),
+            "{rendered}"
+        );
+    }
+
+    /// Sibling control for the test above: a `json_object` arg with no docs file replacement
+    /// never calls `pointer_mut`, so the binding must stay immutable. This guards against a
+    /// blanket `let mut` fix that would trip Rust's `unused_mut` lint on every other
+    /// `json_object` argument in the generated e2e suite.
+    #[test]
+    fn should_not_emit_mut_binding_when_json_object_arg_has_no_docs_file() {
+        let (lines, expression) = render_rust_arg(
+            "inputs",
+            &serde_json::json!([
+                {"kind": "bytes", "bytes": [1, 2, 3], "mime_type": "text/plain"}
+            ]),
+            "json_object",
+            false,
+            "sample",
+            "fixture",
+            None,
+            true,
+            Some("ExtractInput"),
+            "test_documents",
+            false,
+            None,
+            &[],
+            false,
+            false,
+        );
+
+        assert_eq!(expression, "inputs");
+        let rendered = lines.join("\n");
+        assert!(rendered.contains("let inputs_json:"), "{rendered}");
+        assert!(!rendered.contains("mut"), "{rendered}");
+        assert!(!rendered.contains("pointer_mut"), "{rendered}");
+    }
 }

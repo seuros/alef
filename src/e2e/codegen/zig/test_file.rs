@@ -822,6 +822,86 @@ mod snippet_tests {
         assert!(rendered.contains("if (_stream_handle == 0)"));
         assert!(!rendered.contains("@ptrCast(_client._handle)"));
     }
+
+    /// Fixture shared by the snippet/test-target pair below: a `json_object` arg whose docs
+    /// presentation replaces a nested field with a file read (mirrors the batch `bytes_happy`
+    /// fixture that drives `test_documents/html/html.html` into `/inputs/1/bytes`). The file
+    /// read is emitted by `render_docs_json`, the SAME emitter `generate()` (test target) and
+    /// `render_snippet_body()` (snippet target) both call through `build_args_and_setup`.
+    fn docs_bytes_fixture_and_config() -> (Fixture, E2eConfig) {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "docs_nested_bytes_snippet",
+            "description": "Process a document loaded from disk",
+            "input": {"content": "ignored"},
+            "assertions": [],
+            "docs": {
+                "topic": "guides",
+                "presentation": {
+                    "files": [{"field": "/content", "path": "document.pdf"}]
+                }
+            }
+        }))
+        .expect("fixture");
+
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "process".into();
+        e2e.call.args = vec![crate::e2e::config::ArgMapping {
+            name: "input".into(),
+            field: "input".into(),
+            arg_type: "json_object".into(),
+            optional: false,
+            owned: true,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }];
+        (fixture, e2e)
+    }
+
+    /// Doc snippets compile as standalone `pub fn main()` executables, not `zig test`
+    /// binaries — `std.testing.io` is only valid inside `builtin.is_test` code (Zig rejects
+    /// it with "not testing" otherwise). The docs-file read must therefore never reference
+    /// `std.testing`, regardless of target.
+    #[test]
+    fn snippet_target_never_references_std_testing_for_a_docs_bytes_input() {
+        let (fixture, e2e) = docs_bytes_fixture_and_config();
+
+        let rendered = render_snippet_body(&fixture, &e2e, "sample", "sample", &ResolvedCrateConfig::default(), &[])
+            .expect("snippet renders");
+
+        assert!(rendered.contains("readFileAlloc"), "{rendered}");
+        assert!(rendered.contains("std.Io.Threaded"), "{rendered}");
+        assert!(!rendered.contains("std.testing"), "{rendered}");
+    }
+
+    /// Sibling control for the snippet-target assertion above: the SAME fixture, rendered
+    /// through the e2e test-file generator, still imports `std.testing` (legitimate inside a
+    /// `test { ... }` block) — proving the fix removed the *dependency* on `std.testing.io`
+    /// from the shared file-read emitter without stripping `std.testing` from the target
+    /// that is actually allowed to reference it.
+    #[test]
+    fn test_target_still_references_std_testing_for_the_same_docs_bytes_input() {
+        let (fixture, e2e) = docs_bytes_fixture_and_config();
+
+        let rendered = render_test_file(
+            "guides",
+            &[&fixture],
+            &e2e,
+            "process",
+            "result",
+            &e2e.call.args,
+            "sample",
+            "sample",
+            &ResolvedCrateConfig::default(),
+            &[],
+        );
+
+        assert!(rendered.contains("const testing = std.testing;"), "{rendered}");
+        assert!(rendered.contains("readFileAlloc"), "{rendered}");
+        assert!(rendered.contains("std.Io.Threaded"), "{rendered}");
+        assert!(!rendered.contains("std.testing.io"), "{rendered}");
+    }
 }
 
 #[cfg(test)]
