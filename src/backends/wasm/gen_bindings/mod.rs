@@ -177,6 +177,7 @@ impl Backend for WasmBackend {
     }
 
     fn generate_bindings(&self, api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+        crate::codegen::config_gen::validate_rust_default_functions(api)?;
         // wrapper delegates to the core crate (which resolves the cfg) and emits no `#[cfg]` gate,
         // so two same-named entries would otherwise produce duplicate `#[wasm_bindgen]` fns.
         let deduped_api = api.with_deduped_functions();

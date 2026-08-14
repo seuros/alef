@@ -23,6 +23,7 @@ pub fn gen_constructor_with_renames(
             cfg.option_duration_on_defaults,
             field_renames,
             cfg.never_skip_cfg_field_names,
+            typ,
         )
     } else {
         crate::codegen::shared::constructor_parts_with_renames_and_cfg_restore(

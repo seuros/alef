@@ -1,4 +1,4 @@
-use crate::core::ir::{DefaultValue, FieldDef, MethodDef, ParamDef, PrimitiveType, ReceiverKind, TypeRef};
+use crate::core::ir::{DefaultValue, FieldDef, MethodDef, ParamDef, PrimitiveType, ReceiverKind, TypeDef, TypeRef};
 use ahash::AHashSet;
 use std::collections::{HashMap, HashSet};
 
@@ -394,19 +394,38 @@ pub fn function_sig_defaults(params: &[ParamDef]) -> String {
         .join(", ")
 }
 
-/// Format a DefaultValue as Rust code for the target language.
+/// Format a field's `DefaultValue` as Rust code for the target language.
 /// Used by backends generating config constructors with defaults.
 ///
-/// `field_ty` is the declared type of the field the default applies to. serde requires a
-/// `#[serde(default = "path")]` function to return exactly the field's type, so when `field_ty`
-/// is `TypeRef::Named` the call in `FunctionCall`/`PublicFunctionCall` returns the *core* crate's
-/// type. Every caller of `format_default_value` (currently only the wasm backend's
-/// `config_constructor_parts_with_options`) maps `Named` fields to a distinct binding wrapper
-/// type, so the literal call needs `.into()` to become the type the constructor parameter
-/// expects — otherwise the emitted assignment is an `E0308` type mismatch (wrapper vs. core
-/// type). Every other `DefaultValue` variant already produces a value in the field's own
-/// representation and needs no conversion.
-pub fn format_default_value(default: &DefaultValue, field_ty: &TypeRef) -> String {
+/// `typ` is the owning type of `field`, needed because a `#[serde(default = "path")]`
+/// function (`DefaultValue::FunctionCall`) is frequently private to the source crate and/or
+/// `#[cfg(feature = "serde")]`-gated: emitting `path()` directly into a generated binding
+/// crate does not compile (`E0425`). `FunctionCall` and `PublicFunctionCall` defaults are
+/// therefore both routed through [`crate::codegen::config_gen::default_value_for_field_in_type`],
+/// the same recovery mechanism the Magnus/NAPI/PHP/Rustler backends use: `PublicFunctionCall`
+/// is already known-callable and is emitted as a direct `path()` call, while `FunctionCall`
+/// is recovered by deserializing a minimal JSON stub through the owning type's own
+/// `Deserialize` impl (or, when that is not possible, a `compile_error!` naming the
+/// unrecoverable field — callers MUST also call
+/// [`crate::codegen::config_gen::validate_rust_default_functions`] before generation so that
+/// case fails generation instead of shipping uncompilable Rust).
+///
+/// The declared type of `field` matters for a second, independent reason: serde requires a
+/// `#[serde(default = "path")]` function to return exactly the field's type, so when that type
+/// is `TypeRef::Named` the recovered expression evaluates to the *core* crate's type. Every
+/// caller of `format_default_value` (currently the wasm backend's
+/// `config_constructor_parts_with_options`, and — via the shared `gen_constructor` generator —
+/// the extendr and pyo3 backends) maps `Named` fields to a distinct binding wrapper type, so
+/// the recovered value needs `.into()` to become the type the constructor parameter expects —
+/// otherwise the emitted assignment is an `E0308` type mismatch (wrapper vs. core type). A
+/// `compile_error!` recovery failure is left unconverted: it never compiles regardless, and
+/// appending `.into()` would only obscure the diagnostic. Every other `DefaultValue` variant
+/// already produces a value in the field's own representation and needs no conversion.
+pub fn format_default_value(field: &FieldDef, typ: &TypeDef) -> String {
+    let default = field
+        .typed_default
+        .as_ref()
+        .expect("format_default_value: caller must have already confirmed field.typed_default is Some");
     match default {
         DefaultValue::BoolLiteral(b) => format!("{}", b),
         DefaultValue::StringLiteral(s) => format!("\"{}\".to_string()", s.escape_default()),
@@ -422,11 +441,12 @@ pub fn format_default_value(default: &DefaultValue, field_ty: &TypeRef) -> Strin
         DefaultValue::EnumVariant(v) => v.clone(),
         DefaultValue::Empty => "Default::default()".to_string(),
         DefaultValue::None => "None".to_string(),
-        DefaultValue::FunctionCall(path) | DefaultValue::PublicFunctionCall(path) => {
-            if matches!(field_ty, TypeRef::Named(_)) {
-                format!("{path}().into()")
+        DefaultValue::FunctionCall(_) | DefaultValue::PublicFunctionCall(_) => {
+            let recovered = crate::codegen::config_gen::default_value_for_field_in_type(field, "rust", typ);
+            if matches!(field.ty, TypeRef::Named(_)) && !recovered.starts_with("compile_error!") {
+                format!("{recovered}.into()")
             } else {
-                format!("{path}()")
+                recovered
             }
         }
     }
@@ -446,8 +466,9 @@ pub fn config_constructor_parts_with_options(
     fields: &[FieldDef],
     type_mapper: &dyn Fn(&TypeRef) -> String,
     option_duration_on_defaults: bool,
+    typ: &TypeDef,
 ) -> (String, String, String) {
-    config_constructor_parts_with_options_cfg(fields, type_mapper, option_duration_on_defaults, false)
+    config_constructor_parts_with_options_cfg(fields, type_mapper, option_duration_on_defaults, false, typ)
 }
 
 pub fn config_constructor_parts_with_options_cfg(
@@ -455,6 +476,7 @@ pub fn config_constructor_parts_with_options_cfg(
     type_mapper: &dyn Fn(&TypeRef) -> String,
     option_duration_on_defaults: bool,
     optionalize_all_defaults: bool,
+    typ: &TypeDef,
 ) -> (String, String, String) {
     config_constructor_parts_inner(
         fields,
@@ -463,6 +485,7 @@ pub fn config_constructor_parts_with_options_cfg(
         optionalize_all_defaults,
         None,
         &[],
+        typ,
     )
 }
 
@@ -472,6 +495,7 @@ pub fn config_constructor_parts_with_renames(
     type_mapper: &dyn Fn(&TypeRef) -> String,
     option_duration_on_defaults: bool,
     field_renames: Option<&HashMap<String, String>>,
+    typ: &TypeDef,
 ) -> (String, String, String) {
     config_constructor_parts_inner(
         fields,
@@ -480,6 +504,7 @@ pub fn config_constructor_parts_with_renames(
         false,
         field_renames,
         &[],
+        typ,
     )
 }
 
@@ -491,6 +516,7 @@ pub fn config_constructor_parts_with_renames_and_cfg_restore(
     option_duration_on_defaults: bool,
     field_renames: Option<&HashMap<String, String>>,
     never_skip_cfg_field_names: &[String],
+    typ: &TypeDef,
 ) -> (String, String, String) {
     config_constructor_parts_inner(
         fields,
@@ -499,14 +525,16 @@ pub fn config_constructor_parts_with_renames_and_cfg_restore(
         false,
         field_renames,
         never_skip_cfg_field_names,
+        typ,
     )
 }
 
 pub fn config_constructor_parts(
     fields: &[FieldDef],
     type_mapper: &dyn Fn(&TypeRef) -> String,
+    typ: &TypeDef,
 ) -> (String, String, String) {
-    config_constructor_parts_inner(fields, type_mapper, false, false, None, &[])
+    config_constructor_parts_inner(fields, type_mapper, false, false, None, &[], typ)
 }
 
 fn config_constructor_parts_inner(
@@ -516,6 +544,7 @@ fn config_constructor_parts_inner(
     optionalize_all_defaults: bool,
     field_renames: Option<&HashMap<String, String>>,
     never_skip_cfg_field_names: &[String],
+    typ: &TypeDef,
 ) -> (String, String, String) {
     let mut sorted_fields: Vec<&FieldDef> = fields
         .iter()
@@ -569,7 +598,7 @@ fn config_constructor_parts_inner(
                         format!("{}: {}.unwrap_or_default()", binding_name, f.name)
                     }
                     _ => {
-                        let default_val = format_default_value(typed_default, &f.ty);
+                        let default_val = format_default_value(f, typ);
                         // clippy::unnecessary_lazy_evaluations; use unwrap_or_else for heap types.
                         match typed_default {
                             DefaultValue::BoolLiteral(_)
@@ -690,46 +719,6 @@ fn collect_clippy_lints(text: &str) -> HashSet<&str> {
 mod tests {
     use super::*;
 
-    /// A `#[serde(default = "path")]` function must return exactly the field's declared type
-    /// (serde's own contract). When that type is `Named` — a mirrored/wrapped type in the
-    /// binding surface, e.g. wasm's `WasmSsrfPolicy` wrapping core `SsrfPolicy` — the literal
-    /// `path()` call yields the *core* type, so the constructor assignment needs `.into()` to
-    /// become the wrapper type the field actually holds. Covers the "converts" half of the
-    /// wasm constructor-default fix: reverting the `.into()` append in `format_default_value`
-    /// makes this fail.
-    #[test]
-    fn format_default_value_named_function_call_appends_into() {
-        let default = DefaultValue::PublicFunctionCall("crawlberg::SsrfPolicy::from_env".to_string());
-        let ty = TypeRef::Named("SsrfPolicy".to_string());
-        assert_eq!(
-            format_default_value(&default, &ty),
-            "crawlberg::SsrfPolicy::from_env().into()"
-        );
-    }
-
-    /// A plain `FunctionCall` (not yet resolved to a public method) on a Named field must be
-    /// converted identically to `PublicFunctionCall` — the variant only tracks whether the path
-    /// is known to be callable from a binding crate, not whether a conversion is needed.
-    #[test]
-    fn format_default_value_named_plain_function_call_appends_into() {
-        let default = DefaultValue::FunctionCall("defaults::retry_limit".to_string());
-        let ty = TypeRef::Named("RetryLimit".to_string());
-        assert_eq!(format_default_value(&default, &ty), "defaults::retry_limit().into()");
-    }
-
-    /// A default function returning a non-`Named` type (e.g. `String`, `u32`) needs no
-    /// conversion — the call's return type already matches the field's binding representation.
-    /// Guards against over-broadly appending `.into()` to every function-call default.
-    #[test]
-    fn format_default_value_non_named_function_call_has_no_into() {
-        let default = DefaultValue::PublicFunctionCall("crawlberg::defaults::retry_limit".to_string());
-        let ty = TypeRef::Primitive(PrimitiveType::U32);
-        assert_eq!(
-            format_default_value(&default, &ty),
-            "crawlberg::defaults::retry_limit()"
-        );
-    }
-
     fn named_default_field(name: &str, type_name: &str, default_path: &str) -> FieldDef {
         FieldDef {
             name: name.to_string(),
@@ -737,6 +726,154 @@ mod tests {
             typed_default: Some(DefaultValue::PublicFunctionCall(default_path.to_string())),
             ..Default::default()
         }
+    }
+
+    /// A minimal owning `TypeDef` for `fields`, with `has_serde` set so
+    /// `rust_default_via_source_deserialize` recovery can be attempted against it.
+    fn owning_type(rust_path: &str, type_name: &str, fields: Vec<FieldDef>) -> TypeDef {
+        TypeDef {
+            name: type_name.to_string(),
+            rust_path: rust_path.to_string(),
+            fields,
+            has_serde: true,
+            ..Default::default()
+        }
+    }
+
+    /// A `#[serde(default = "path")]` function must return exactly the field's declared type
+    /// (serde's own contract). When that type is `Named` — a mirrored/wrapped type in the
+    /// binding surface, e.g. wasm's `WasmSsrfPolicy` wrapping core `SsrfPolicy` — the literal
+    /// `path()` call yields the *core* type, so the constructor assignment needs `.into()` to
+    /// become the wrapper type the field actually holds. `PublicFunctionCall` is already known
+    /// callable from a binding crate, so no deserialize-recovery is needed — only the `.into()`
+    /// conversion. Covers the "converts" half of the wasm constructor-default fix.
+    #[test]
+    fn format_default_value_named_function_call_appends_into() {
+        let field = named_default_field("ssrf", "SsrfPolicy", "crawlberg::SsrfPolicy::from_env");
+        let typ = owning_type("crawlberg::CrawlConfig", "CrawlConfig", vec![field.clone()]);
+        assert_eq!(
+            format_default_value(&field, &typ),
+            "crawlberg::SsrfPolicy::from_env().into()"
+        );
+    }
+
+    /// A default function returning a non-`Named` type (e.g. `String`, `u32`) needs no
+    /// conversion — the call's return type already matches the field's binding representation.
+    /// Guards against over-broadly appending `.into()` to every function-call default.
+    #[test]
+    fn format_default_value_non_named_function_call_has_no_into() {
+        let field = FieldDef {
+            name: "retry_limit".to_string(),
+            ty: TypeRef::Primitive(PrimitiveType::U32),
+            typed_default: Some(DefaultValue::PublicFunctionCall(
+                "crawlberg::defaults::retry_limit".to_string(),
+            )),
+            ..Default::default()
+        };
+        let typ = owning_type("crawlberg::CrawlConfig", "CrawlConfig", vec![field.clone()]);
+        assert_eq!(
+            format_default_value(&field, &typ),
+            "crawlberg::defaults::retry_limit()"
+        );
+    }
+
+    /// The defect this fix addresses: a private (plain `FunctionCall`, not yet resolved to a
+    /// public method) `#[serde(default = "path")]` function on a non-`Named` field must never
+    /// be emitted as a direct `path()` call — `path` is frequently not `pub` and/or
+    /// `#[cfg(feature = "serde")]`-gated, so the generated binding crate cannot call it
+    /// (`E0425`, the exact wasm `xberg-wasm` defect: `default_archive_depth()`,
+    /// `default_xberg_crawl_config()`, `default_late_interaction_model()` are all unresolved
+    /// in the generated `lib.rs`). It must instead be recovered by deserializing a minimal
+    /// JSON stub through the owning type's own `Deserialize` impl. No `.into()` is needed here
+    /// because the field's own type already matches what the recovery expression evaluates to.
+    #[test]
+    fn wasm_constructor_recovers_private_serde_default_via_deserialize() {
+        let field = FieldDef {
+            name: "max_archive_depth".to_string(),
+            ty: TypeRef::Primitive(PrimitiveType::U32),
+            typed_default: Some(DefaultValue::FunctionCall("default_archive_depth".to_string())),
+            ..Default::default()
+        };
+        let typ = owning_type("xberg::ExtractionConfig", "ExtractionConfig", vec![field.clone()]);
+
+        let rendered = format_default_value(&field, &typ);
+
+        assert_eq!(
+            rendered,
+            "serde_json::from_str::<xberg::ExtractionConfig>(r#\"{}\"#).expect(\"alef-generated default JSON for \
+             `ExtractionConfig` failed to deserialize\").max_archive_depth"
+        );
+        assert!(
+            !rendered.contains("default_archive_depth()"),
+            "the private source-crate function must never be emitted as a bare callable: {rendered}"
+        );
+    }
+
+    /// Same private-`FunctionCall` recovery as
+    /// `wasm_constructor_recovers_private_serde_default_via_deserialize`, but on a `Named`
+    /// field (mirroring wasm's `crawl: crawlberg::CrawlConfig` field, whose
+    /// `default_xberg_crawl_config()` default is private): the recovered expression evaluates
+    /// to the *core* type, so wasm's distinct wrapper struct field needs `.into()` appended —
+    /// the exact conversion `format_default_value`'s doc comment requires for `Named` fields.
+    #[test]
+    fn wasm_constructor_appends_into_for_named_field_default() {
+        let field = FieldDef {
+            name: "crawl".to_string(),
+            ty: TypeRef::Named("CrawlConfig".to_string()),
+            typed_default: Some(DefaultValue::FunctionCall("default_xberg_crawl_config".to_string())),
+            ..Default::default()
+        };
+        let typ = owning_type("xberg::ExtractionConfig", "ExtractionConfig", vec![field.clone()]);
+
+        let rendered = format_default_value(&field, &typ);
+
+        assert_eq!(
+            rendered,
+            "serde_json::from_str::<xberg::ExtractionConfig>(r#\"{}\"#).expect(\"alef-generated default JSON for \
+             `ExtractionConfig` failed to deserialize\").crawl.into()"
+        );
+    }
+
+    /// When the owning type cannot support deserialize-recovery (here: a required sibling of
+    /// `Named` type has no safe JSON placeholder), generation must fail loudly with a
+    /// `compile_error!` naming the field and the uncallable function — never fall back to a
+    /// bare `path()` call (uncompilable) or to `Default::default()` (compiles but silently
+    /// ships the wrong value). Production generation is protected from ever emitting this
+    /// string by `validate_rust_default_functions`, which the wasm backend must call before
+    /// generating bindings.
+    #[test]
+    fn wasm_constructor_default_recovery_failure_emits_compile_error() {
+        let owner_field = FieldDef {
+            name: "owner".to_string(),
+            ty: TypeRef::Named("Author".to_string()),
+            ..Default::default()
+        };
+        let retry_field = FieldDef {
+            name: "retry_limit".to_string(),
+            ty: TypeRef::Primitive(PrimitiveType::U32),
+            typed_default: Some(DefaultValue::FunctionCall("defaults::retry_limit".to_string())),
+            ..Default::default()
+        };
+        let typ = owning_type(
+            "xberg::RetryHolder",
+            "RetryHolder",
+            vec![owner_field, retry_field.clone()],
+        );
+
+        let rendered = format_default_value(&retry_field, &typ);
+
+        assert!(
+            rendered.starts_with("compile_error!"),
+            "unrecoverable private default must fail generation, not a bare path call: {rendered}"
+        );
+        assert!(
+            rendered.contains("defaults::retry_limit") && rendered.contains("retry_limit"),
+            "the failure must name the uncallable function and the field: {rendered}"
+        );
+        assert!(
+            !rendered.contains("defaults::retry_limit()"),
+            "the uncallable source function must never be emitted as a callable: {rendered}"
+        );
     }
 
     /// End-to-end check of the exact call wasm's `gen_new_method` makes
@@ -750,17 +887,50 @@ mod tests {
     #[test]
     fn config_constructor_parts_named_default_field_applies_and_converts() {
         let field = named_default_field("ssrf", "SsrfPolicy", "crawlberg::SsrfPolicy::from_env");
-        let fields = vec![field];
+        let fields = vec![field.clone()];
         let type_mapper = |ty: &TypeRef| match ty {
             TypeRef::Named(name) => format!("Wasm{name}"),
             _ => "String".to_string(),
         };
+        let typ = owning_type("crawlberg::CrawlConfig", "CrawlConfig", vec![field]);
 
-        let (_, _, assignments) = config_constructor_parts_with_options(&fields, &type_mapper, true);
+        let (_, _, assignments) = config_constructor_parts_with_options(&fields, &type_mapper, true, &typ);
 
         assert!(
             assignments.contains("ssrf.unwrap_or_else(|| crawlberg::SsrfPolicy::from_env().into())"),
             "expected an unwrap_or_else default that converts via .into(), got: {assignments}"
+        );
+    }
+
+    /// End-to-end check that a genuinely private serde default (plain `FunctionCall`, the wasm
+    /// `E0425` shape) is recovered rather than emitted as a bare call, through the exact same
+    /// `config_constructor_parts_with_options` entry point wasm's `gen_new_method` calls.
+    #[test]
+    fn config_constructor_parts_private_default_field_recovers_via_deserialize() {
+        let field = FieldDef {
+            name: "max_archive_depth".to_string(),
+            ty: TypeRef::Primitive(PrimitiveType::U32),
+            typed_default: Some(DefaultValue::FunctionCall("default_archive_depth".to_string())),
+            ..Default::default()
+        };
+        let fields = vec![field.clone()];
+        let type_mapper = |ty: &TypeRef| match ty {
+            TypeRef::Named(name) => format!("Wasm{name}"),
+            _ => "u32".to_string(),
+        };
+        let typ = owning_type("xberg::ExtractionConfig", "ExtractionConfig", vec![field]);
+
+        let (_, _, assignments) = config_constructor_parts_with_options(&fields, &type_mapper, true, &typ);
+
+        assert!(
+            assignments.contains(
+                "max_archive_depth.unwrap_or_else(|| serde_json::from_str::<xberg::ExtractionConfig>(r#\"{}\"#)"
+            ) && assignments.contains(".max_archive_depth)"),
+            "expected an unwrap_or_else default that recovers via deserialize, got: {assignments}"
+        );
+        assert!(
+            !assignments.contains("default_archive_depth()"),
+            "the private source-crate function must never be emitted as a bare callable: {assignments}"
         );
     }
 }

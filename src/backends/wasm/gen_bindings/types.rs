@@ -659,7 +659,7 @@ fn gen_new_method(
     let field_names: Vec<String> = filtered_fields.iter().map(|f| f.name.clone()).collect();
 
     let (param_list, _, assignments) = if typ.has_default {
-        crate::codegen::shared::config_constructor_parts_with_options(&filtered_fields, &map_fn, true)
+        crate::codegen::shared::config_constructor_parts_with_options(&filtered_fields, &map_fn, true, typ)
     } else {
         constructor_parts(&filtered_fields, &map_fn)
     };
