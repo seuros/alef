@@ -318,17 +318,6 @@ pub(super) fn render_assertion(
         })
     };
 
-    // For string equality, trim trailing whitespace to handle trailing newlines.
-    // Only apply trim() when the expected value is a string — calling trim() on int/bool
-    // throws TypeError in PHP 8.4+.
-    let trimmed_field_expr_for = |expected: &serde_json::Value| -> String {
-        if expected.is_string() {
-            format!("trim({})", field_expr)
-        } else {
-            field_expr.clone()
-        }
-    };
-
     // Prepare template context.
     let assertion_type = assertion.assertion_type.as_str();
     let has_php_val = assertion.value.is_some();
@@ -340,8 +329,6 @@ pub(super) fn render_assertion(
         None if assertion_type == "equals" => "null".to_string(),
         None => String::new(),
     };
-    let trimmed_field_expr = trimmed_field_expr_for(assertion.value.as_ref().unwrap_or(&serde_json::Value::Null));
-    let is_string_val = assertion.value.as_ref().is_some_and(|v| v.is_string());
     // values_php is consumed by `contains`, `contains_all`, and `not_contains` loops.
     // Fall back to wrapping the singular `value` so single-entry fixtures still emit one
     // assertion call per value instead of an empty loop.
@@ -390,8 +377,6 @@ pub(super) fn render_assertion(
             field_expr => field_expr,
             php_val => php_val,
             has_php_val => has_php_val,
-            trimmed_field_expr => trimmed_field_expr,
-            is_string_val => is_string_val,
             field_is_array => field_is_array,
             values_php => values_php,
             contains_any_checks => contains_any_checks,
@@ -442,5 +427,94 @@ pub(super) fn build_php_method_call(result_var: &str, method_name: &str, args: O
         format!("${result_var}->{method_name}()")
     } else {
         format!("${result_var}->{method_name}({extra_args})")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, HashMap, HashSet};
+
+    use super::*;
+
+    fn empty_resolver() -> FieldResolver {
+        FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+    }
+
+    /// Regression test for a one-sided-trim bug: `trim()` wrapped the actual value while the
+    /// fixture `expected` literal was emitted verbatim. Fixture expectations may legitimately
+    /// end in `\n`, so trimming only one side made those assertions impossible to satisfy —
+    /// and trimming both would silently mask real trailing-whitespace regressions. Equals is
+    /// exact: neither side is normalized.
+    /// Control for the trim fix: the tightened contract must still DISCRIMINATE values that
+    /// differ only in trailing whitespace. If either side were normalized, the emitted
+    /// assertion for "hello\n" and for "hello" would be identical and a real trailing-newline
+    /// regression would pass unnoticed.
+    #[test]
+    fn render_assertion_equals_still_discriminates_trailing_whitespace() {
+        let render_for = |value: &str| {
+            let resolver = empty_resolver();
+            let assertion = Assertion {
+                assertion_type: "equals".to_string(),
+                field: None,
+                value: Some(serde_json::Value::String(value.into())),
+                ..Default::default()
+            };
+            let mut out = String::new();
+            render_assertion(
+                &mut out,
+                &assertion,
+                "result",
+                &resolver,
+                true,
+                false,
+                &BTreeMap::new(),
+                false,
+            );
+            out
+        };
+        let emitted = render_for("hello\n");
+        // The actual side must be the bare expression: any normalizing call (trim/strip/
+        // case-folding) wrapped around it would silently accept a mismatched value.
+        assert_eq!(
+            emitted, "            $this->assertEquals(\"hello\\n\", $result);\n",
+            "emitted assertion drifted: {emitted}"
+        );
+        // And a value differing only by the trailing newline must still produce a
+        // different expectation, proving trailing whitespace is discriminated.
+        assert_ne!(
+            emitted,
+            render_for("hello"),
+            "trailing newline must still change the emitted assertion"
+        );
+    }
+
+    #[test]
+    fn render_assertion_equals_string_compares_exactly_without_trim() {
+        let resolver = empty_resolver();
+        let assertion = Assertion {
+            assertion_type: "equals".to_string(),
+            field: None,
+            value: Some(serde_json::Value::String("hello\n".into())),
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            true,
+            false,
+            &BTreeMap::new(),
+            false,
+        );
+        assert!(!out.contains("trim("), "equals must not trim either side; got: {out}");
+        assert!(out.contains("assertEquals("), "got: {out}");
     }
 }

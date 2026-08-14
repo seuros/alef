@@ -655,10 +655,52 @@ mod tests {
         assert!(out.contains("assert result"), "got: {out}");
     }
 
+    /// Regression test for a one-sided-strip bug: `.strip()` was applied to the actual value
+    /// while the fixture `expected` literal was emitted verbatim. Fixture expectations may
+    /// legitimately end in `\n`, so stripping only one side made those assertions impossible
+    /// to satisfy — and stripping both would silently mask real trailing-whitespace
+    /// regressions. Equals is exact: neither side is normalized.
+    /// Control for the trim fix: the tightened contract must still DISCRIMINATE values that
+    /// differ only in trailing whitespace. If either side were normalized, the emitted
+    /// assertion for "hello\n" and for "hello" would be identical and a real trailing-newline
+    /// regression would pass unnoticed.
     #[test]
-    fn render_assertion_equals_string_uses_strip() {
+    fn render_assertion_equals_still_discriminates_trailing_whitespace() {
+        let render_for = |value: &str| {
+            let resolver = empty_resolver();
+            let assertion = make_assertion("equals", None, Some(serde_json::Value::String(value.into())));
+            let mut out = String::new();
+            render_assertion(
+                &mut out,
+                &assertion,
+                "result",
+                &resolver,
+                &HashSet::new(),
+                &HashMap::new(),
+                false,
+            );
+            out
+        };
+        let emitted = render_for("hello\n");
+        // The actual side must be the bare expression: any normalizing call (trim/strip/
+        // case-folding) wrapped around it would silently accept a mismatched value.
+        assert_eq!(
+            emitted, "    assert result == \"hello\\n\"  # noqa: S101\n",
+            "emitted assertion drifted: {emitted}"
+        );
+        // And a value differing only by the trailing newline must still produce a
+        // different expectation, proving trailing whitespace is discriminated.
+        assert_ne!(
+            emitted,
+            render_for("hello"),
+            "trailing newline must still change the emitted assertion"
+        );
+    }
+
+    #[test]
+    fn render_assertion_equals_string_compares_exactly_without_strip() {
         let resolver = empty_resolver();
-        let assertion = make_assertion("equals", None, Some(serde_json::Value::String("hello".into())));
+        let assertion = make_assertion("equals", None, Some(serde_json::Value::String("hello\n".into())));
         let mut out = String::new();
         render_assertion(
             &mut out,
@@ -669,7 +711,11 @@ mod tests {
             &HashMap::new(),
             false,
         );
-        assert!(out.contains(".strip()"), "got: {out}");
+        assert!(
+            !out.contains(".strip()"),
+            "equals must not strip either side; got: {out}"
+        );
+        assert!(out.contains("assert result =="), "got: {out}");
     }
 
     #[test]

@@ -20,8 +20,12 @@ pub(super) fn render_equals_assertion(
         if val.is_string() {
             // When the field is Optional<String> and was NOT pre-unwrapped to a local
             // var (e.g. inside a result_is_vec iteration where the call-site unwrap
-            // pass is skipped), emit `.as_deref().unwrap_or("").trim()` so the
-            // expression is `&str` rather than `Option<String>`.
+            // pass is skipped), emit `.as_deref().unwrap_or("")` so the expression is
+            // `&str` rather than `Option<String>`.
+            // ~keep: intentionally NOT trimming here — fixture `expected` values are
+            // captured verbatim (including trailing newlines the converter legitimately
+            // emits), so trimming only the actual side made those assertions
+            // unsatisfiable. Neither side is trimmed; exact equality is the contract.
             let is_opt_str_not_unwrapped = assertion.field.as_ref().is_some_and(|f| {
                 let resolved = field_resolver.resolve(f);
                 let is_opt = field_resolver.is_optional(resolved);
@@ -471,6 +475,115 @@ mod tests {
         let mut out = String::new();
         render_equals_assertion(&mut out, &assertion, "result", false, &resolver);
         assert!(out.contains("result.to_string()"), "got: {out}");
+    }
+
+    /// Regression test for a one-sided-trim bug: `.trim()` was previously appended to the
+    /// actual-value expression but fixture `expected` values are captured verbatim (they may
+    /// legitimately end in `\n`), making such assertions impossible to satisfy. Equals
+    /// assertions must compare the full, untrimmed value on both sides across every field
+    /// shape the generator can emit (plain, optional-not-unwrapped, display-as-text).
+    /// Control for the trim fix: the tightened contract must still DISCRIMINATE values that
+    /// differ only in trailing whitespace. If either side were normalized, the emitted
+    /// assertion for "hello\n" and for "hello" would be identical and a real trailing-newline
+    /// regression would pass unnoticed.
+    #[test]
+    fn render_equals_assertion_still_discriminates_trailing_whitespace() {
+        let render_for = |value: &str| {
+            let resolver = empty_resolver();
+            let assertion = make_assertion("equals", None, Some(serde_json::Value::String(value.into())));
+            let mut out = String::new();
+            render_equals_assertion(&mut out, &assertion, "result", false, &resolver);
+            out
+        };
+        let emitted = render_for("hello\n");
+        // The actual side must be the bare expression: any normalizing call (trim/strip/
+        // case-folding) wrapped around it would silently accept a mismatched value.
+        assert_eq!(
+            emitted, "    assert_eq!(result.to_string(), r#\"hello\n\"#, \"equals assertion failed\");\n",
+            "emitted assertion drifted: {emitted}"
+        );
+        // And a value differing only by the trailing newline must still produce a
+        // different expectation, proving trailing whitespace is discriminated.
+        assert_ne!(
+            emitted,
+            render_for("hello"),
+            "trailing newline must still change the emitted assertion"
+        );
+    }
+
+    #[test]
+    fn render_equals_assertion_never_trims_either_side() {
+        let plain_resolver = empty_resolver();
+        let mut out = String::new();
+        render_equals_assertion(
+            &mut out,
+            &make_assertion("equals", None, Some(serde_json::Value::String("hello\n".into()))),
+            "result",
+            false,
+            &plain_resolver,
+        );
+        assert!(!out.contains(".trim()"), "plain field must not trim; got: {out}");
+
+        let mut optional = HashSet::new();
+        optional.insert("content".to_string());
+        let optional_resolver = FieldResolver::new(
+            &HashMap::new(),
+            &optional,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        let mut out = String::new();
+        render_equals_assertion(
+            &mut out,
+            &make_assertion(
+                "equals",
+                Some("content"),
+                Some(serde_json::Value::String("hi\n".into())),
+            ),
+            "result.content",
+            false,
+            &optional_resolver,
+        );
+        assert!(
+            !out.contains(".trim()"),
+            "optional-not-unwrapped field must not trim; got: {out}"
+        );
+
+        let dat_resolver = display_as_text_resolver();
+        let mut out = String::new();
+        render_equals_assertion(
+            &mut out,
+            &make_assertion(
+                "equals",
+                Some("content"),
+                Some(serde_json::Value::String("hello\n".into())),
+            ),
+            "result.content",
+            false,
+            &dat_resolver,
+        );
+        assert!(
+            !out.contains(".trim()"),
+            "display-as-text optional field must not trim; got: {out}"
+        );
+
+        let mut out = String::new();
+        render_equals_assertion(
+            &mut out,
+            &make_assertion(
+                "equals",
+                Some("content"),
+                Some(serde_json::Value::String("hello\n".into())),
+            ),
+            "_content",
+            true,
+            &dat_resolver,
+        );
+        assert!(
+            !out.contains(".trim()"),
+            "already-unwrapped field must not trim; got: {out}"
+        );
     }
 
     /// When a field is `Option<String>` (NOT display_as_text) and not pre-unwrapped,

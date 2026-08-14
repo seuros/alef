@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicit manifest override, and copy host libraries from the Cargo workspace target directory.
 
 ### Fixed
+- **e2e**: compare `equals` assertions exactly in generated Python, PHP, Rust, TypeScript and WASM tests. The actual
+  value was normalized with `.trim()`/`.strip()` while the fixture `expected` literal was emitted verbatim, so a
+  fixture whose expectation legitimately ends in a newline could never be satisfied, and a genuine trailing-whitespace
+  regression was silently absorbed. Neither side is normalized now.
 
 - **snippets**: preserve extension-owned fixture descriptions while validating generated documentation language
   identities.

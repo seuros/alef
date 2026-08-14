@@ -21,21 +21,21 @@
 {% if is_string_val %}
 {% if is_format_metadata %}
 {% if field_is_optional %}
-    expect((_alefE2eFormatMetadataDisplay({{ field_expr }}) ?? "").trim()).toBe({{ js_val }});
+    expect((_alefE2eFormatMetadataDisplay({{ field_expr }}) ?? "")).toBe({{ js_val }});
 {% else %}
-    expect(_alefE2eFormatMetadataDisplay({{ field_expr }}).trim()).toBe({{ js_val }});
+    expect(_alefE2eFormatMetadataDisplay({{ field_expr }})).toBe({{ js_val }});
 {% endif %}
 {% elif is_enum_field %}
 {% if field_is_optional %}
-    expect((String({{ field_expr }}) ?? "").trim()).toBe({{ js_val }});
+    expect((String({{ field_expr }}) ?? "")).toBe({{ js_val }});
 {% else %}
-    expect(String({{ field_expr }}).trim()).toBe({{ js_val }});
+    expect(String({{ field_expr }})).toBe({{ js_val }});
 {% endif %}
 {% else %}
 {% if field_is_optional %}
-    expect(({{ field_expr }} ?? "").trim()).toBe({{ js_val }});
+    expect(({{ field_expr }} ?? "")).toBe({{ js_val }});
 {% else %}
-    expect({{ field_expr }}.trim()).toBe({{ js_val }});
+    expect({{ field_expr }}).toBe({{ js_val }});
 {% endif %}
 {% endif %}
 {% else %}

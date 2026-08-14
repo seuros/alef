@@ -845,6 +845,75 @@ mod tests {
         }
     }
 
+    /// Regression test for a one-sided-trim bug: `.trim()` wrapped the actual value while
+    /// the fixture `expected` literal was emitted verbatim. Fixture expectations may
+    /// legitimately end in `\n`, so trimming only one side made those assertions impossible
+    /// to satisfy — and trimming both would silently mask real trailing-whitespace
+    /// regressions. Equals is exact: neither side is normalized. Covers both the
+    /// `typescript` and `wasm` templates, which share this renderer.
+    #[test]
+    fn render_assertion_equals_string_compares_exactly_without_trim() {
+        for lang in ["typescript", "wasm"] {
+            let resolver = empty_resolver();
+            let assertion = make_assertion("equals", None, Some(serde_json::Value::String("hello\n".into())));
+            let mut out = String::new();
+            render_assertion(
+                &mut out,
+                &assertion,
+                "result",
+                &resolver,
+                true,
+                &HashMap::new(),
+                lang,
+                false,
+            );
+            assert!(
+                !out.contains(".trim()"),
+                "[{lang}] equals must not trim either side; got: {out}"
+            );
+            assert!(out.contains(".toBe("), "[{lang}] got: {out}");
+        }
+    }
+
+    /// Control for the trim fix: the tightened contract must still DISCRIMINATE values that
+    /// differ only in trailing whitespace. If either side were normalized, the emitted
+    /// assertion for "hello\n" and for "hello" would be identical and a real trailing-newline
+    /// regression would pass unnoticed. They must differ, and the expected literal must be
+    /// carried through verbatim.
+    #[test]
+    fn render_assertion_equals_still_discriminates_trailing_whitespace() {
+        for lang in ["typescript", "wasm"] {
+            let render_for = |value: &str| {
+                let resolver = empty_resolver();
+                let assertion = make_assertion("equals", None, Some(serde_json::Value::String(value.into())));
+                let mut out = String::new();
+                render_assertion(
+                    &mut out,
+                    &assertion,
+                    "result",
+                    &resolver,
+                    true,
+                    &HashMap::new(),
+                    lang,
+                    false,
+                );
+                out
+            };
+            let with_newline = render_for("hello\n");
+            let without_newline = render_for("hello");
+            // The actual side must be the bare expression: any normalizing call (trim/
+            // case-folding) wrapped around it would silently accept a mismatched value.
+            assert_eq!(
+                with_newline, "    expect(result).toBe(\"hello\\n\");\n",
+                "[{lang}] emitted assertion drifted: {with_newline}"
+            );
+            assert_ne!(
+                with_newline, without_newline,
+                "[{lang}] trailing newline must still change the emitted assertion"
+            );
+        }
+    }
+
     #[test]
     fn render_assertion_not_empty_emits_length_check() {
         let resolver = empty_resolver();
@@ -864,9 +933,9 @@ mod tests {
     }
 
     #[test]
-    fn render_assertion_equals_string_trims() {
+    fn render_assertion_equals_string_compares_exactly_for_node() {
         let resolver = empty_resolver();
-        let assertion = make_assertion("equals", None, Some(serde_json::Value::String("hello".into())));
+        let assertion = make_assertion("equals", None, Some(serde_json::Value::String("hello\n".into())));
         let mut out = String::new();
         render_assertion(
             &mut out,
@@ -878,7 +947,7 @@ mod tests {
             "node",
             false,
         );
-        assert!(out.contains(".trim()"), "got: {out}");
+        assert!(!out.contains(".trim()"), "equals must not trim either side; got: {out}");
     }
 
     #[test]

@@ -26,7 +26,7 @@
 {% if is_enum %}
     assert _alef_e2e_text({{ field_access }}).lower() {{ op }} {{ expected_val }}.lower()  # noqa: S101
 {% else %}
-    assert {{ field_access }}.strip() {{ op }} {{ expected_val }}  # noqa: S101
+    assert {{ field_access }} {{ op }} {{ expected_val }}  # noqa: S101
 {% endif %}
 {% else %}
     assert {{ field_access }} {{ op }} {{ expected_val }}  # noqa: S101

@@ -5,8 +5,6 @@
    - field_expr: PHP expression for the field
    - php_val: formatted PHP value (or empty string)
    - has_php_val: bool
-   - trimmed_field_expr: field_expr with trim() wrapper
-   - is_string_val: bool
    - field_is_array: bool indicating if field is an array type
    - values_php: array of PHP-formatted strings
    - contains_any_checks: array of PHP check strings
@@ -20,11 +18,7 @@
    - bool_is_true: bool
 #}
 {% if assertion_type == "equals" %}
-{% if is_string_val %}
-    $this->assertEquals({{ php_val }}, {{ trimmed_field_expr }});
-{% else %}
     $this->assertEquals({{ php_val }}, {{ field_expr }});
-{% endif %}
 {% elif assertion_type == "contains" %}
 {% if field_is_array %}
     $found = false;

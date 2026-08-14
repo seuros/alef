@@ -20,7 +20,7 @@
 #}
 {% if assertion_type == "equals" %}
 {% if is_string_val %}
-    expect({{ field_expr }}.trim()).toBe({{ js_val }});
+    expect({{ field_expr }}).toBe({{ js_val }});
 {% else %}
     expect({{ field_expr }}).toBe({{ js_val }});
 {% endif %}
