@@ -560,6 +560,14 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/service_api_py_decorator_body.py.jinja"),
     ),
     (
+        "service_api_py_decorator_overload_header.py.jinja",
+        include_str!("templates/service_api_py_decorator_overload_header.py.jinja"),
+    ),
+    (
+        "service_api_py_decorator_overload_body.py.jinja",
+        include_str!("templates/service_api_py_decorator_overload_body.py.jinja"),
+    ),
+    (
         "service_api_py_registration_method_header.py.jinja",
         include_str!("templates/service_api_py_registration_method_header.py.jinja"),
     ),

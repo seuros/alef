@@ -164,6 +164,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **config/services**: accept registration variant `languages` maps and carry each canonical language's style,
+  handler shape, and method prefix through extraction into service generation. Python decorator overrides now use
+  their registered overload templates instead of failing after config parsing.
 - **ffi/services**: carry an explicit response-deallocator callback beside every service handler callback and invoke
   it after copying the response but before fallible deserialization. Rust previously called process-global `free()`
   on host allocations, including C# `Marshal.StringToCoTaskMemUTF8` memory, which crosses allocator families and can

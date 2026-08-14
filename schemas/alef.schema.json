@@ -5846,6 +5846,37 @@
       ],
       "type": "object"
     },
+    "RegistrationVariantLanguageOverrideSpec": {
+      "additionalProperties": false,
+      "description": "Config entry for a per-language style override on a registration variant.\n\nPlaced in `alef.toml` as:\n\n```toml\n[crates.services.registrations.variants.languages.csharp]\nstyle = \"attribute\"\nmethod_prefix = \"Map\"\n```",
+      "properties": {
+        "handler_shape": {
+          "default": null,
+          "description": "Override for the handler shape.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "method_prefix": {
+          "default": null,
+          "description": "Language-specific prefix for the verb method name (e.g. `\"Map\"` → `MapGet`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "style": {
+          "default": null,
+          "description": "Override for the emission style.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "RegistrationVariantSpec": {
       "description": "A named shortcut over a base [`RegistrationSpec`] with one or more pinned\nparameter values.\n\nThe variant's emitted method takes the **non-pinned** subset of the base's\nmetadata params and forwards them, along with the handler, to the base\nregistration with the pinned values substituted in. For library-supplied\nenum overrides, the pinned value is the variant *name* (e.g. `\"GET\"`); the\nextractor resolves it against the param type's [`crate::core::ir::EnumDef`] variants. For\nnon-enum types, the pinned value is a verbatim expression in the host\nlanguage's Rust bridge.\n\n```toml\n[[crates.services.registrations.variants]]\nname = \"get\"\nfixed = { method = \"GET\" }\nstyle = \"verb_decorator\"\n```",
       "properties": {
@@ -5863,6 +5894,14 @@
           },
           "default": {},
           "description": "Map of base-registration metadata-param name → pinned value expression.\nFor enum-typed params, the value is the enum variant name. For other\ntypes, the value is a verbatim expression substituted in the wrapper\nconstructor call.",
+          "type": "object"
+        },
+        "languages": {
+          "additionalProperties": {
+            "$ref": "#/$defs/RegistrationVariantLanguageOverrideSpec"
+          },
+          "default": {},
+          "description": "Per-language overrides keyed by canonical language name.",
           "type": "object"
         },
         "name": {

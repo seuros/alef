@@ -286,12 +286,14 @@ pub trait IntoHandler {}
             fixed: [("method".to_owned(), "Get".to_owned())].into_iter().collect(),
             doc: None,
             style: None,
+            languages: Default::default(),
         },
         RegistrationVariantSpec {
             name: "post".to_owned(),
             fixed: [("method".to_owned(), "Post".to_owned())].into_iter().collect(),
             doc: None,
             style: None,
+            languages: Default::default(),
         },
     ];
     cfg.services[0].entrypoints.retain(|e| e.method != "into_router");
@@ -380,6 +382,7 @@ pub trait IntoHandler {}
             .collect(),
         doc: None,
         style: None,
+        languages: Default::default(),
     }];
     cfg.services[0].entrypoints.retain(|e| e.method != "into_router");
     let warnings = extract_services(&mut surface, &cfg);
@@ -419,6 +422,7 @@ pub trait IntoHandler {}
         fixed: [("method".to_owned(), "Get".to_owned())].into_iter().collect(),
         doc: None,
         style: Some("future_magic".to_owned()),
+        languages: Default::default(),
     }];
     cfg.services[0].entrypoints.retain(|e| e.method != "into_router");
 

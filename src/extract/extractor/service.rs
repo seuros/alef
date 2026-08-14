@@ -15,8 +15,8 @@ use crate::core::config::ResolvedCrateConfig;
 use crate::core::config::service::{HandlerContractConfig, RegistrationVariantSpec, ServiceConfig};
 use crate::core::ir::{
     ApiSurface, EntrypointDef, EntrypointKind, HandlerContractDef, HandlerShape, MethodDef, ParamDef, RegistrationDef,
-    RegistrationVariant, RegistrationVariantOverride, RegistrationVariantStyle, ServiceDef, TypeRef,
-    WrapperConstructorArg, WrapperConstructorCall,
+    RegistrationVariant, RegistrationVariantLanguageOverride, RegistrationVariantOverride, RegistrationVariantStyle,
+    ServiceDef, TypeRef, WrapperConstructorArg, WrapperConstructorCall,
 };
 
 /// Run the service extraction pass in-place on `surface`.
@@ -422,6 +422,9 @@ fn parse_variant_style(s: Option<&str>) -> Result<RegistrationVariantStyle, Stri
     match s {
         Some("builder") => Ok(RegistrationVariantStyle::Builder),
         Some("verb_decorator") => Ok(RegistrationVariantStyle::VerbDecorator),
+        Some("decorator") => Ok(RegistrationVariantStyle::Decorator),
+        Some("attribute") => Ok(RegistrationVariantStyle::Attribute),
+        Some("dsl") => Ok(RegistrationVariantStyle::Dsl),
         Some("hybrid") | None => Ok(RegistrationVariantStyle::Hybrid),
         Some(style) => Err(format!("unknown registration variant style `{style}`")),
     }
@@ -439,6 +442,36 @@ fn parse_handler_shape(s: Option<&str>) -> Result<HandlerShape, String> {
         Some("introspect_params") => Ok(HandlerShape::IntrospectParams),
         Some(shape) => Err(format!("unknown registration handler_shape `{shape}`")),
     }
+}
+
+fn resolve_language_overrides(
+    spec: &RegistrationVariantSpec,
+) -> Result<std::collections::HashMap<String, RegistrationVariantLanguageOverride>, String> {
+    let mut resolved = std::collections::HashMap::with_capacity(spec.languages.len());
+    for (language, language_spec) in &spec.languages {
+        if !crate::core::config::is_known_language(language) {
+            return Err(format!("unknown language override `{language}`"));
+        }
+        let style = language_spec
+            .style
+            .as_deref()
+            .map(|value| parse_variant_style(Some(value)))
+            .transpose()?;
+        let handler_shape = language_spec
+            .handler_shape
+            .as_deref()
+            .map(|value| parse_handler_shape(Some(value)))
+            .transpose()?;
+        resolved.insert(
+            language.clone(),
+            RegistrationVariantLanguageOverride {
+                style,
+                handler_shape,
+                method_prefix: language_spec.method_prefix.clone(),
+            },
+        );
+    }
+    Ok(resolved)
 }
 
 /// Resolve the [`RegistrationVariantSpec`] entries declared in `alef.toml` into
@@ -470,11 +503,17 @@ fn resolve_variants(
     let wrapper = find_wrapper_constructor(surface, metadata_params);
     let mut out = Vec::with_capacity(reg_spec.variants.len());
     for v_spec in &reg_spec.variants {
-        let resolved = if let Some(w) = &wrapper {
+        let mut resolved = if let Some(w) = &wrapper {
             resolve_via_wrapper(surface, svc_cfg, reg_spec, v_spec, metadata_params, w)?
         } else {
             resolve_via_direct(surface, svc_cfg, reg_spec, v_spec, metadata_params)?
         };
+        resolved.language_overrides = resolve_language_overrides(v_spec).map_err(|message| {
+            format!(
+                "service `{}` registration `{}` variant `{}`: {message}",
+                svc_cfg.owner_type, reg_spec.method, v_spec.name
+            )
+        })?;
         out.push(resolved);
     }
     Ok(out)

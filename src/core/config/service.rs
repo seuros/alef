@@ -108,6 +108,9 @@ pub struct RegistrationVariantSpec {
     /// - `"hybrid"` — emit both forms (default).
     #[serde(default)]
     pub style: Option<String>,
+    /// Per-language overrides keyed by canonical language name.
+    #[serde(default)]
+    pub languages: std::collections::BTreeMap<String, RegistrationVariantLanguageOverrideSpec>,
 }
 
 /// Per-entrypoint configuration inside a `[[crates.services]]` table.
