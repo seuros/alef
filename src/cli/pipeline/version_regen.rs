@@ -189,7 +189,7 @@ pub(super) fn regenerate_readmes(config: &ResolvedCrateConfig, config_path: &std
     let count = super::generate::write_scaffold_files_with_overwrite(&readme_files, &base_dir, true)?;
     let paths: std::collections::HashSet<std::path::PathBuf> = readme_files
         .iter()
-        .filter(|file| file.generated_header)
+        .filter(|file| file.carries_alef_marker())
         .map(|file| base_dir.join(&file.path))
         .collect();
     super::generate::finalize_hashes(&paths, &sources_hash, &alef_toml_bytes)?;

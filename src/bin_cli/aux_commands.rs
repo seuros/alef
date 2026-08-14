@@ -33,7 +33,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             let mut binding_count: usize = 0;
             let mut all_paths = std::collections::HashSet::new();
             for (lang_key, lang_files) in &bindings {
-                for file in lang_files.iter().filter(|file| file.generated_header) {
+                for file in lang_files.iter().filter(|file| file.carries_alef_marker()) {
                     all_paths.insert(base_dir.join(&file.path));
                 }
                 let single = vec![(*lang_key, lang_files.clone())];
@@ -43,7 +43,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             tracing::info!("  Generating scaffolding...");
             let scaffold_files = pipeline::scaffold(&api, resolved_cfg, &languages, config_path)?;
             let scaffold_count = pipeline::write_scaffold_files(&scaffold_files, &base_dir)?;
-            for file in scaffold_files.iter().filter(|file| file.generated_header) {
+            for file in scaffold_files.iter().filter(|file| file.carries_alef_marker()) {
                 all_paths.insert(base_dir.join(&file.path));
             }
 
@@ -358,8 +358,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
                         let report = pipeline::write_scaffold_files_report(&files, &base_dir, true)?;
                         let count = report.changed_count();
-                        let managed_files: Vec<_> =
-                            files.iter().filter(|file| file.generated_header).cloned().collect();
+                        let managed_files: Vec<_> = files
+                            .iter()
+                            .filter(|file| file.carries_alef_marker())
+                            .cloned()
+                            .collect();
 
                         let generated_langs: Vec<String> = languages
                             .map(|ls| ls.iter().map(|s| s.to_string()).collect())

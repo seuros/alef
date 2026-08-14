@@ -87,7 +87,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             *language,
                             generated
                                 .iter()
-                                .filter(|file| file.generated_header)
+                                .filter(|file| file.carries_alef_marker())
                                 .map(|file| base_dir.join(&file.path))
                                 .collect(),
                         )
@@ -125,7 +125,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 for (lang, lang_files) in &files {
                     generated_paths.extend(lang_files.iter().map(|file| base_dir.join(&file.path)));
                     let lang_str = lang.to_string();
-                    for file in lang_files.iter().filter(|file| file.generated_header) {
+                    for file in lang_files.iter().filter(|file| file.carries_alef_marker()) {
                         current_gen_paths.insert(base_dir.join(&file.path));
                     }
 
@@ -169,7 +169,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                                 .map(|file| base_dir.join(&file.path)),
                         );
                         for (_, files) in &svc_files {
-                            for file in files.iter().filter(|file| file.generated_header) {
+                            for file in files.iter().filter(|file| file.carries_alef_marker()) {
                                 current_gen_paths.insert(base_dir.join(&file.path));
                             }
                         }
@@ -181,7 +181,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             language_output_paths.entry(*language).or_default().extend(
                                 generated
                                     .iter()
-                                    .filter(|file| file.generated_header)
+                                    .filter(|file| file.carries_alef_marker())
                                     .map(|file| base_dir.join(&file.path)),
                             );
                         }
@@ -230,7 +230,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             !api_hashes.is_empty() && api_hashes.iter().all(|(p, h)| stored_api.get(p) == Some(h));
 
                         for (_, files) in &public_api_files {
-                            for file in files.iter().filter(|file| file.generated_header) {
+                            for file in files.iter().filter(|file| file.carries_alef_marker()) {
                                 current_gen_paths.insert(base_dir.join(&file.path));
                             }
                         }
@@ -242,7 +242,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             language_output_paths.entry(*language).or_default().extend(
                                 generated
                                     .iter()
-                                    .filter(|file| file.generated_header)
+                                    .filter(|file| file.carries_alef_marker())
                                     .map(|file| base_dir.join(&file.path)),
                             );
                         }
@@ -294,7 +294,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         !stub_hashes.is_empty() && stub_hashes.iter().all(|(p, h)| stored_stubs.get(p) == Some(h));
 
                     for (_, files) in &stub_files {
-                        for file in files.iter().filter(|file| file.generated_header) {
+                        for file in files.iter().filter(|file| file.carries_alef_marker()) {
                             current_gen_paths.insert(base_dir.join(&file.path));
                         }
                     }
@@ -306,7 +306,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         language_output_paths.entry(*language).or_default().extend(
                             generated
                                 .iter()
-                                .filter(|file| file.generated_header)
+                                .filter(|file| file.carries_alef_marker())
                                 .map(|file| base_dir.join(&file.path)),
                         );
                     }
@@ -466,7 +466,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     .iter()
                     .flat_map(|(_, fs)| {
                         fs.iter()
-                            .filter(|file| file.generated_header)
+                            .filter(|file| file.carries_alef_marker())
                             .map(|file| base_dir.join(&file.path))
                     })
                     .collect();
@@ -518,7 +518,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let count = pipeline::write_scaffold_files(&files, &base_dir)?;
                 let output_paths: Vec<PathBuf> = files
                     .iter()
-                    .filter(|file| file.generated_header)
+                    .filter(|file| file.carries_alef_marker())
                     .map(|file| base_dir.join(&file.path))
                     .collect();
                 let scaffold_paths: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
@@ -579,7 +579,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let count = pipeline::write_scaffold_files_with_overwrite(&files, &base_dir, true)?;
                 let output_paths: Vec<PathBuf> = files
                     .iter()
-                    .filter(|file| file.generated_header)
+                    .filter(|file| file.carries_alef_marker())
                     .map(|file| base_dir.join(&file.path))
                     .collect();
                 let readme_paths: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
@@ -631,7 +631,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let count = report.changed_count();
                 let output_paths: Vec<PathBuf> = files
                     .iter()
-                    .filter(|file| file.generated_header)
+                    .filter(|file| file.carries_alef_marker())
                     .map(|file| base_dir.join(&file.path))
                     .collect();
                 let doc_paths: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
