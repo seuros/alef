@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   substring probes, so `level`, `requires` and `side_effect` are pinned again; a renderer emitting a bogus value for
   any of them previously satisfied the probes.
 
+- **snippets/check**: build Rust snippet sessions with the crate's declared features in `alef snippets check`, the
+  same merge `alef docs` already performs. The command dropped them, so the path dependency in the generated
+  snippet-check manifest resolved with default features only and every snippet importing a feature-gated module
+  failed with `unresolved import`.
 - **e2e/snippets**: declare the `serde_json` dependency that generated Rust snippet bodies name. A `json_object`
   argument makes the Rust recipe emit `serde_json::from_str(…)`/`serde_json::from_value(…)`, but the snippet
   frontmatter and coverage ledger both reported `requires: []`, so the Rust snippet validator built its check
