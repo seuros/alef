@@ -1,4 +1,3 @@
-use super::header_freshness::check_ffi_header_freshness;
 use super::validation::validate_generation_api;
 use crate::cli::{cache, registry};
 use crate::core::backend::GeneratedFile;
@@ -87,8 +86,6 @@ pub fn generate(
             Ok((*lang, files))
         })
         .collect::<anyhow::Result<_>>()?;
-
-    check_ffi_header_freshness(&results, config, &std::env::current_dir().unwrap_or_default())?;
 
     Ok(results)
 }

@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicit manifest override, and copy host libraries from the Cargo workspace target directory.
 
 ### Fixed
+
+- **ffi**: verify cbindgen declarations against the FFI source after writing it, so a stale-header failure leaves Cargo
+  the new source it must rebuild instead of trapping generation in a rebuild loop; declaration matching also accepts
+  formatted line breaks while retaining exact symbol boundaries.
 - **codegen**: preserve public associated serde default providers as callable Rust paths instead of treating every
   `#[serde(default = "Type::function")]` as private and attempting structural JSON recovery, which failed when the
   owning configuration contained required nested named fields.

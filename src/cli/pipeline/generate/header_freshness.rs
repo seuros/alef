@@ -1,27 +1,24 @@
-use crate::core::backend::GeneratedFile;
-use crate::core::config::{Language, ResolvedCrateConfig};
+use crate::core::config::ResolvedCrateConfig;
+use anyhow::Context as _;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-/// Fail generation when the on-disk C header and the freshly generated FFI
-/// exports come from different runs.
+/// Fail generation when the on-disk C header and FFI source come from different
+/// runs.
 ///
 /// The header is produced by cbindgen inside the *consumer's* `build.rs`, so it
 /// only refreshes on `cargo build` — never on `alef generate`. Alef nonetheless
 /// reads it back during generation (the Zig backend vendors it into
 /// `packages/zig/include/`, and consumer build scripts fan it out further), so a
 /// bare `alef generate` can publish a header describing the previous run's ABI
-/// while reporting success. This check makes that divergence loud instead of
-/// silent. ~keep
-pub(super) fn check_ffi_header_freshness(
-    results: &[(Language, Vec<GeneratedFile>)],
-    config: &ResolvedCrateConfig,
-    base_dir: &Path,
-) -> anyhow::Result<()> {
-    let Some(source) = generated_ffi_source(results) else {
-        return Ok(());
-    };
-    let exported = exported_symbols(source);
+/// while reporting success. Call this after writing bindings: a failing run must
+/// leave the new Rust source on disk so the requested Cargo build can refresh the
+/// header rather than rebuilding the old source forever. ~keep
+pub(crate) fn check_ffi_header_freshness(config: &ResolvedCrateConfig, base_dir: &Path) -> anyhow::Result<()> {
+    let source_path = ffi_source_path(config, base_dir);
+    let source = std::fs::read_to_string(&source_path)
+        .with_context(|| format!("failed to read generated FFI source at {}", source_path.display()))?;
+    let exported = exported_symbols(&source);
     if exported.is_empty() {
         return Ok(());
     }
@@ -73,24 +70,23 @@ fn drift_message(header_path: &Path, missing: &[&String], removed: &[&String]) -
     message
 }
 
-/// Locate the generated FFI crate's `src/lib.rs` among this run's output.
-fn generated_ffi_source(results: &[(Language, Vec<GeneratedFile>)]) -> Option<&str> {
-    results
-        .iter()
-        .find(|(lang, _)| *lang == Language::Ffi)?
-        .1
-        .iter()
-        .find(|file| file.path.ends_with("src/lib.rs"))
-        .map(|file| file.content.as_str())
+fn ffi_source_path(config: &ResolvedCrateConfig, base_dir: &Path) -> PathBuf {
+    ffi_crate_root(config, base_dir).join("src/lib.rs")
 }
 
 /// Resolve the header the same way the Zig backend does, so there is one
 /// resolution rule rather than two. `ffi_header_name` already carries the
 /// `.h` suffix. ~keep
 fn ffi_header_path(config: &ResolvedCrateConfig, base_dir: &Path) -> PathBuf {
+    ffi_crate_root(config, base_dir)
+        .join("include")
+        .join(config.ffi_header_name())
+}
+
+fn ffi_crate_root(config: &ResolvedCrateConfig, base_dir: &Path) -> PathBuf {
     let crate_path = config.ffi_crate_path();
     let crate_root = crate_path.strip_prefix("../../").unwrap_or(&crate_path);
-    base_dir.join(crate_root).join("include").join(config.ffi_header_name())
+    base_dir.join(crate_root)
 }
 
 /// Collect the `#[no_mangle] extern "C"` function names the generated source
@@ -134,34 +130,65 @@ fn extern_c_fn_name(line: &str) -> Option<String> {
 /// Collect prefixed snake_case function names declared by the header.
 ///
 /// cbindgen emits function names in snake_case and type names in PascalCase, so
-/// the case of the character after the prefix discriminates the two. Lines
-/// opening or continuing a doc comment are skipped, so a symbol merely mentioned
-/// in prose is not mistaken for a declaration. ~keep
+/// the case of the character after the prefix discriminates the two. Comments
+/// are removed before scanning so a symbol merely mentioned in prose is not
+/// mistaken for a declaration. Whitespace before `(` is accepted because C
+/// formatters may split a long declaration after its function name. ~keep
 fn header_declared_functions(header: &str, prefix: &str) -> BTreeSet<String> {
     let mut declared = BTreeSet::new();
     let needle = format!("{prefix}_");
+    let code = strip_c_comments(header);
 
-    for line in header.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("//") || trimmed.starts_with('*') || trimmed.starts_with("/*") {
+    for (offset, _) in code.match_indices(&needle) {
+        if offset > 0 && is_identifier_char(code.as_bytes()[offset - 1]) {
             continue;
         }
-        for (offset, _) in trimmed.match_indices(&needle) {
-            if offset > 0 && is_identifier_char(trimmed.as_bytes()[offset - 1]) {
-                continue;
-            }
-            let candidate: String = trimmed[offset..]
-                .chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_')
-                .collect();
-            let follows = trimmed[offset + candidate.len()..].starts_with('(');
-            if follows && !candidate.chars().any(|c| c.is_uppercase()) {
-                declared.insert(candidate);
-            }
+        let candidate: String = code[offset..]
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        let suffix = &code[offset + candidate.len()..];
+        let is_declaration = suffix.trim_start().starts_with('(');
+        if is_declaration && !candidate.chars().any(|c| c.is_uppercase()) {
+            declared.insert(candidate);
         }
     }
 
     declared
+}
+
+fn strip_c_comments(source: &str) -> String {
+    let mut code = String::with_capacity(source.len());
+    let mut chars = source.chars().peekable();
+    let mut in_block_comment = false;
+
+    while let Some(character) = chars.next() {
+        if in_block_comment {
+            if character == '*' && chars.peek() == Some(&'/') {
+                chars.next();
+                in_block_comment = false;
+            }
+            continue;
+        }
+        if character == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            in_block_comment = true;
+            continue;
+        }
+        if character == '/' && chars.peek() == Some(&'/') {
+            chars.next();
+            for comment_character in chars.by_ref() {
+                if comment_character == '\n' {
+                    code.push('\n');
+                    break;
+                }
+            }
+            continue;
+        }
+        code.push(character);
+    }
+
+    code
 }
 
 fn is_identifier_char(byte: u8) -> bool {
@@ -198,6 +225,23 @@ pub extern "C" fn my_lib_internal_helper() {
     }
 
     #[test]
+    fn should_collect_lifetime_bearing_exports() {
+        let source = r#"
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sample_node_context_tag_name<'context>(
+    context: &'context SampleNodeContext<'context>,
+) -> *const std::ffi::c_char {
+    std::ptr::null()
+}
+"#;
+
+        assert_eq!(
+            exported_symbols(source),
+            BTreeSet::from(["sample_node_context_tag_name".to_owned()])
+        );
+    }
+
+    #[test]
     fn should_collect_declared_functions_ignoring_types_and_prose() {
         let header = r#"
 /* This file is auto-generated by cbindgen. DO NOT EDIT. */
@@ -217,6 +261,42 @@ void my_lib_close(AlefHandle handle);
             BTreeSet::from(["my_lib_open".to_owned(), "my_lib_close".to_owned()]),
             "prose mentions and PascalCase type names must not count as declarations"
         );
+    }
+
+    #[test]
+    fn should_collect_exact_symbols_from_wrapped_declarations() {
+        let header = r#"
+/** sample_node_context_tag_name() and sample_options_default() are documented here. */
+const char *sample_node_context_tag_name
+(
+    const struct SampleNodeContext *context
+);
+
+SampleAlefHandle sample_options_default (void);
+SampleAlefHandle sample_options_default_value(void);
+"#;
+
+        assert_eq!(
+            header_declared_functions(header, "sample"),
+            BTreeSet::from([
+                "sample_node_context_tag_name".to_owned(),
+                "sample_options_default".to_owned(),
+                "sample_options_default_value".to_owned(),
+            ])
+        );
+    }
+
+    #[test]
+    fn should_not_accept_partial_or_commented_symbol_matches() {
+        let header = r#"
+// void sample_options_default(void);
+void prefix_sample_options_default(void);
+void sample_options_default_suffix(void);
+"#;
+
+        let declared = header_declared_functions(header, "sample");
+        assert!(!declared.contains("sample_options_default"));
+        assert!(declared.contains("sample_options_default_suffix"));
     }
 
     #[test]

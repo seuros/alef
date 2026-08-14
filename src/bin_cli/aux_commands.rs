@@ -39,6 +39,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let single = vec![(*lang_key, lang_files.clone())];
                 binding_count += pipeline::write_files(&single, &base_dir)?;
             }
+            if languages.contains(&crate::core::config::Language::Ffi) {
+                pipeline::check_ffi_header_freshness(resolved_cfg, &base_dir)?;
+            }
 
             tracing::info!("  Generating scaffolding...");
             let scaffold_files = pipeline::scaffold(&api, resolved_cfg, &languages, config_path)?;
