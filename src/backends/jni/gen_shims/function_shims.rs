@@ -1,237 +1,304 @@
+struct FunctionReturnShape<'a> {
+    capsule: Option<(&'a crate::core::config::FfiCapsuleTypeConfig, bool)>,
+    opaque: bool,
+    optional_opaque: bool,
+}
+
+struct FunctionParamProjection {
+    signature: String,
+    unmarshal: String,
+    call_arg: String,
+}
+
 /// Emit a shim for a top-level API function.
-///
-/// When the return type is an opaque named type the function returns `jlong`
-/// (a raw `Box::into_raw` pointer) rather than a JSON-encoded `jstring`.
-/// When a parameter is an opaque named type it is received as `jlong` and
-/// dereferenced via an unsafe pointer cast — the Kotlin caller holds the
-/// handle as a `Long` that was previously obtained from the constructor shim.
 #[allow(clippy::too_many_arguments)]
 fn emit_function_shim(
     out: &mut String,
     symbol: &str,
-    rust_path: &str,
-    params: &[ParamDef],
-    return_type: &TypeRef,
-    is_async: bool,
-    has_error: bool,
+    function: &crate::core::ir::FunctionDef,
     opaque_type_names: &std::collections::HashSet<&str>,
     capsule_types: &std::collections::HashMap<String, crate::core::config::FfiCapsuleTypeConfig>,
     core_crate_prefix: &str,
 ) {
-    let path = rust_path.replace('-', "_");
-    let from_prefix = format!("{}::", core_crate_prefix.replace('-', "_"));
-    let core_fn = if path.starts_with(&from_prefix) {
-        path.replacen(&from_prefix, "core_crate::", 1)
-    } else if let Some((_sibling_crate, item)) = path.split_once("::") {
-        // A free function resolved into a sibling workspace crate (e.g. a graphql
-        // schema builder). Reach it through the umbrella facade by its item path,
-        // mirroring how opaque *types* are referenced as `core_crate::<Type>`
-        // rather than `core_crate::<origin_crate>::<Type>`. The umbrella re-exports
-        // these items, so the generated crate needs no direct dependency on the
-        // sibling crate; `core_crate::<origin_crate>::<item>` would not resolve. ~keep
-        format!("core_crate::{item}")
-    } else {
-        format!("core_crate::{path}")
-    };
-
-    let is_opaque_return = matches!(return_type, TypeRef::Named(n) if opaque_type_names.contains(n.as_str()));
-    let capsule_return = match return_type {
-        TypeRef::Named(name) => capsule_types.get(name),
-        _ => None,
-    };
-    let ret_decl = if is_opaque_return {
-        " -> jlong".to_string()
-    } else {
-        method_return_type_decl(return_type)
-    };
-    let err_null = if is_opaque_return {
-        "0"
-    } else {
-        method_return_null(return_type)
-    };
-
-    let mut param_sigs = String::new();
-    let mut unmarshal = String::new();
-    let mut call_args = String::new();
-
-    for p in params {
-        let rust_name = p.name.replace('-', "_");
-        let base_ty = match &p.ty {
-            TypeRef::Optional(inner) => inner.as_ref(),
-            other => other,
-        };
-        match base_ty {
-            TypeRef::String => {
-                param_sigs.push_str(&render_param_decl(&rust_name, "JString"));
-                unmarshal.push_str(&render_string_unmarshal(&rust_name, err_null));
-                if p.optional {
-                    let some_payload = if p.is_ref {
-                        format!("&{rust_name}")
-                    } else {
-                        rust_name.clone()
-                    };
-                    call_args.push_str("if ");
-                    call_args.push_str(&rust_name);
-                    call_args.push_str(".is_empty() { None } else { Some(");
-                    call_args.push_str(&some_payload);
-                    call_args.push_str(") }");
-                } else if p.is_ref {
-                    call_args.push('&');
-                    call_args.push_str(&rust_name);
-                } else {
-                    call_args.push_str(&rust_name);
-                }
-            }
-            TypeRef::Primitive(prim) => {
-                let jni_ty = jni_primitive_type(prim);
-                param_sigs.push_str(&render_param_decl(&rust_name, jni_ty));
-                let cast = primitive_cast(prim);
-                let cast_expr = if cast.is_empty() {
-                    rust_name.clone()
-                } else {
-                    format!("{rust_name} as {cast}")
-                };
-                if p.optional {
-                    let zero_lit = primitive_zero_literal(prim);
-                    if let Some(zero) = zero_lit {
-                        call_args.push_str("if ");
-                        call_args.push_str(&rust_name);
-                        call_args.push_str(" != ");
-                        call_args.push_str(zero);
-                        call_args.push_str(" { Some(");
-                        call_args.push_str(&cast_expr);
-                        call_args.push_str(") } else { None }");
-                    } else {
-                        call_args.push_str("Some(");
-                        call_args.push_str(&cast_expr);
-                        call_args.push(')');
-                    }
-                } else {
-                    call_args.push_str(&cast_expr);
-                }
-            }
-            TypeRef::Vec(inner) if matches!(inner.as_ref(), TypeRef::Primitive(PrimitiveType::U8)) => {
-                param_sigs.push_str(&render_param_decl(&rust_name, "JString"));
-                unmarshal.push_str(&render_base64_bytes_unmarshal(&rust_name, err_null, p.optional));
-                call_args.push_str(&bytes_call_arg(&rust_name, p.optional, p.is_ref));
-            }
-            TypeRef::Bytes => {
-                param_sigs.push_str(&render_param_decl(&rust_name, "JString"));
-                unmarshal.push_str(&render_base64_bytes_unmarshal(&rust_name, err_null, p.optional));
-                call_args.push_str(&bytes_call_arg(&rust_name, p.optional, p.is_ref));
-            }
-            TypeRef::Path => {
-                param_sigs.push_str(&render_param_decl(&rust_name, "JString"));
-                unmarshal.push_str(&render_string_unmarshal(&rust_name, err_null));
-                unmarshal.push_str(&format!(
-                    "    let {rust_name} = std::path::PathBuf::from({rust_name});\n"
-                ));
-                if p.optional {
-                    call_args.push_str("if ");
-                    call_args.push_str(&rust_name);
-                    call_args.push_str(".as_os_str().is_empty() { None } else { Some(");
-                    call_args.push_str(&rust_name);
-                    call_args.push_str(") }");
-                } else if p.is_ref {
-                    call_args.push('&');
-                    call_args.push_str(&rust_name);
-                } else {
-                    call_args.push_str(&rust_name);
-                }
-            }
-            TypeRef::Named(type_name) if opaque_type_names.contains(type_name.as_str()) => {
-                // SAFETY: the Kotlin caller holds a Long obtained from the matching
-                param_sigs.push_str(&render_param_decl(&rust_name, "jlong"));
-                let type_path = format!("core_crate::{type_name}");
-                unmarshal.push_str(&template_env::render(
-                    "opaque_handle_unmarshal.rs.jinja",
-                    context! {
-                        name => rust_name,
-                        type_path => type_path,
-                        ret_null => err_null,
-                    },
-                ));
-                call_args.push_str(&rust_name);
-            }
-            _ => {
-                param_sigs.push_str(&render_param_decl(&rust_name, "JString"));
-                let type_path = type_ref_to_core_path_with_btree(base_ty, "core_crate", p.map_is_btree);
-                if p.optional {
-                    unmarshal.push_str(&render_complex_unmarshal(&rust_name, &type_path, err_null, true));
-                    call_args.push_str(&rust_name);
-                } else {
-                    unmarshal.push_str(&render_complex_unmarshal(&rust_name, &type_path, err_null, false));
-                    if p.is_ref && p.is_mut {
-                        unmarshal.push_str(&format!("    let mut {rust_name} = {rust_name};\n"));
-                    }
-                    if needs_vec_string_refs(p, base_ty) {
-                        unmarshal.push_str(&render_vec_string_refs_binding(&rust_name));
-                        call_args.push_str(&vec_string_refs_arg(&rust_name));
-                    } else if p.is_ref {
-                        if p.is_mut {
-                            call_args.push_str("&mut ");
-                        } else {
-                            call_args.push('&');
-                        }
-                        call_args.push_str(&rust_name);
-                    } else {
-                        call_args.push_str(&rust_name);
-                    }
-                }
-            }
-        }
-        call_args.push_str(", ");
-    }
-    if call_args.ends_with(", ") {
-        call_args.truncate(call_args.len() - 2);
-    }
-
+    let shape = function_return_shape(&function.return_type, opaque_type_names, capsule_types);
+    let return_null = function_return_null(&function.return_type, &shape);
+    let (param_sigs, unmarshal, call_args) = project_function_params(&function.params, opaque_type_names, return_null);
     out.push_str(&template_env::render(
         "function_shim_open.rs.jinja",
         context! {
             symbol => symbol,
             param_sigs => param_sigs,
-            ret_decl => ret_decl,
+            ret_decl => function_return_declaration(&function.return_type, &shape),
         },
     ));
-
     out.push_str(&unmarshal);
-
-    let raw_call = if call_args.is_empty() {
-        format!("{core_fn}()")
+    let core_function = core_function_path(&function.rust_path, core_crate_prefix);
+    let call = if call_args.is_empty() {
+        format!("{core_function}()")
     } else {
-        format!("{core_fn}({call_args})")
+        format!("{core_function}({call_args})")
     };
+    emit_function_return(out, function, &shape, &call, return_null);
+}
 
-    if has_error {
-        let mut ok_body = String::new();
-        if is_opaque_return {
-            if let Some(capsule) = capsule_return {
-                ok_body.push_str(&format!(
-                    "            v.into_raw() as *const {} as jlong\n",
-                    capsule.into_raw_type
-                ));
-            } else {
-                ok_body.push_str("            Box::into_raw(Box::new(v)) as jlong\n");
-            }
-        } else {
-            emit_return_marshal_with_indent(&mut ok_body, return_type, "            ", err_null);
-        }
-        render_call_result_body(out, &raw_call, is_async, true, err_null, &ok_body, "");
-    } else {
-        let mut value_body = String::new();
-        if is_opaque_return {
-            if let Some(capsule) = capsule_return {
-                value_body.push_str(&format!(
-                    "    v.into_raw() as *const {} as jlong\n",
-                    capsule.into_raw_type
-                ));
-            } else {
-                value_body.push_str("    Box::into_raw(Box::new(v)) as jlong\n");
-            }
-        } else {
-            emit_return_marshal_with_indent(&mut value_body, return_type, "    ", err_null);
-        }
-        render_call_result_body(out, &raw_call, is_async, false, err_null, "", &value_body);
+fn function_return_shape<'a>(
+    return_type: &TypeRef,
+    opaque_type_names: &std::collections::HashSet<&str>,
+    capsule_types: &'a std::collections::HashMap<String, crate::core::config::FfiCapsuleTypeConfig>,
+) -> FunctionReturnShape<'a> {
+    let opaque = matches!(return_type, TypeRef::Named(name) if opaque_type_names.contains(name.as_str()));
+    let optional_opaque = matches!(
+        return_type,
+        TypeRef::Optional(inner)
+            if matches!(inner.as_ref(), TypeRef::Named(name) if opaque_type_names.contains(name.as_str()))
+    );
+    let capsule = match return_type {
+        TypeRef::Named(name) => capsule_types.get(name).map(|config| (config, false)),
+        TypeRef::Optional(inner) => match inner.as_ref() {
+            TypeRef::Named(name) => capsule_types.get(name).map(|config| (config, true)),
+            _ => None,
+        },
+        _ => None,
+    };
+    FunctionReturnShape {
+        capsule,
+        opaque,
+        optional_opaque,
     }
+}
+
+fn function_return_declaration(return_type: &TypeRef, shape: &FunctionReturnShape<'_>) -> String {
+    if shape.opaque || shape.optional_opaque || shape.capsule.is_some() {
+        " -> jlong".to_string()
+    } else {
+        method_return_type_decl(return_type)
+    }
+}
+
+fn function_return_null<'a>(return_type: &'a TypeRef, shape: &FunctionReturnShape<'_>) -> &'a str {
+    if shape.opaque || shape.optional_opaque || shape.capsule.is_some() {
+        "0"
+    } else {
+        method_return_null(return_type)
+    }
+}
+
+fn core_function_path(rust_path: &str, core_crate_prefix: &str) -> String {
+    let path = rust_path.replace('-', "_");
+    let prefix = format!("{}::", core_crate_prefix.replace('-', "_"));
+    if path.starts_with(&prefix) {
+        path.replacen(&prefix, "core_crate::", 1)
+    } else if let Some((_sibling_crate, item)) = path.split_once("::") {
+        format!("core_crate::{item}")
+    } else {
+        format!("core_crate::{path}")
+    }
+}
+
+fn project_function_params(
+    params: &[ParamDef],
+    opaque_type_names: &std::collections::HashSet<&str>,
+    return_null: &str,
+) -> (String, String, String) {
+    let mut signatures = String::new();
+    let mut unmarshal = String::new();
+    let mut call_args = Vec::new();
+    for param in params {
+        let projection = project_function_param(param, opaque_type_names, return_null);
+        signatures.push_str(&projection.signature);
+        unmarshal.push_str(&projection.unmarshal);
+        call_args.push(projection.call_arg);
+    }
+    (signatures, unmarshal, call_args.join(", "))
+}
+
+fn project_function_param(
+    param: &ParamDef,
+    opaque_type_names: &std::collections::HashSet<&str>,
+    return_null: &str,
+) -> FunctionParamProjection {
+    let rust_name = param.name.replace('-', "_");
+    let base_type = method_param_base_type(param);
+    match base_type {
+        TypeRef::String => project_string_function_param(param, &rust_name, return_null),
+        TypeRef::Primitive(primitive) => project_primitive_function_param(param, primitive, &rust_name),
+        TypeRef::Vec(inner) if matches!(inner.as_ref(), TypeRef::Primitive(PrimitiveType::U8)) => {
+            project_bytes_function_param(param, &rust_name, return_null)
+        }
+        TypeRef::Bytes => project_bytes_function_param(param, &rust_name, return_null),
+        TypeRef::Path => project_path_function_param(param, &rust_name, return_null),
+        TypeRef::Named(type_name) if opaque_type_names.contains(type_name.as_str()) => {
+            project_opaque_function_param(type_name, &rust_name, return_null)
+        }
+        _ => project_complex_function_param(param, base_type, &rust_name, return_null),
+    }
+}
+
+fn project_string_function_param(param: &ParamDef, rust_name: &str, return_null: &str) -> FunctionParamProjection {
+    let call_arg = if param.optional {
+        let payload = if param.is_ref {
+            format!("&{rust_name}")
+        } else {
+            rust_name.to_string()
+        };
+        format!("if {rust_name}.is_empty() {{ None }} else {{ Some({payload}) }}")
+    } else if param.is_ref {
+        format!("&{rust_name}")
+    } else {
+        rust_name.to_string()
+    };
+    FunctionParamProjection {
+        signature: render_param_decl(rust_name, "JString"),
+        unmarshal: render_string_unmarshal(rust_name, return_null),
+        call_arg,
+    }
+}
+
+fn project_primitive_function_param(
+    param: &ParamDef,
+    primitive: &PrimitiveType,
+    rust_name: &str,
+) -> FunctionParamProjection {
+    let cast = primitive_cast(primitive);
+    let cast_expression = if cast.is_empty() {
+        rust_name.to_string()
+    } else {
+        format!("{rust_name} as {cast}")
+    };
+    let call_arg = if param.optional {
+        primitive_zero_literal(primitive).map_or_else(
+            || format!("Some({cast_expression})"),
+            |zero| format!("if {rust_name} != {zero} {{ Some({cast_expression}) }} else {{ None }}"),
+        )
+    } else {
+        cast_expression
+    };
+    FunctionParamProjection {
+        signature: render_param_decl(rust_name, jni_primitive_type(primitive)),
+        unmarshal: String::new(),
+        call_arg,
+    }
+}
+
+fn project_bytes_function_param(param: &ParamDef, rust_name: &str, return_null: &str) -> FunctionParamProjection {
+    FunctionParamProjection {
+        signature: render_param_decl(rust_name, "JString"),
+        unmarshal: render_base64_bytes_unmarshal(rust_name, return_null, param.optional),
+        call_arg: bytes_call_arg(rust_name, param.optional, param.is_ref),
+    }
+}
+
+fn project_path_function_param(param: &ParamDef, rust_name: &str, return_null: &str) -> FunctionParamProjection {
+    let mut unmarshal = render_string_unmarshal(rust_name, return_null);
+    unmarshal.push_str(&format!(
+        "    let {rust_name} = std::path::PathBuf::from({rust_name});\n"
+    ));
+    let call_arg = if param.optional {
+        format!("if {rust_name}.as_os_str().is_empty() {{ None }} else {{ Some({rust_name}) }}")
+    } else if param.is_ref {
+        format!("&{rust_name}")
+    } else {
+        rust_name.to_string()
+    };
+    FunctionParamProjection {
+        signature: render_param_decl(rust_name, "JString"),
+        unmarshal,
+        call_arg,
+    }
+}
+
+fn project_opaque_function_param(type_name: &str, rust_name: &str, return_null: &str) -> FunctionParamProjection {
+    FunctionParamProjection {
+        signature: render_param_decl(rust_name, "jlong"),
+        unmarshal: template_env::render(
+            "opaque_handle_unmarshal.rs.jinja",
+            context! {
+                name => rust_name,
+                type_path => format!("core_crate::{type_name}"),
+                ret_null => return_null,
+            },
+        ),
+        call_arg: rust_name.to_string(),
+    }
+}
+
+fn project_complex_function_param(
+    param: &ParamDef,
+    base_type: &TypeRef,
+    rust_name: &str,
+    return_null: &str,
+) -> FunctionParamProjection {
+    let type_path = type_ref_to_core_path_with_btree(base_type, "core_crate", param.map_is_btree);
+    let mut unmarshal = render_complex_unmarshal(rust_name, &type_path, return_null, param.optional);
+    if param.is_ref && param.is_mut && !param.optional {
+        unmarshal.push_str(&format!("    let mut {rust_name} = {rust_name};\n"));
+    }
+    let call_arg = if param.optional {
+        rust_name.to_string()
+    } else if needs_vec_string_refs(param, base_type) {
+        unmarshal.push_str(&render_vec_string_refs_binding(rust_name));
+        vec_string_refs_arg(rust_name)
+    } else if param.is_ref && param.is_mut {
+        format!("&mut {rust_name}")
+    } else if param.is_ref {
+        format!("&{rust_name}")
+    } else {
+        rust_name.to_string()
+    };
+    FunctionParamProjection {
+        signature: render_param_decl(rust_name, "JString"),
+        unmarshal,
+        call_arg,
+    }
+}
+
+fn emit_function_return(
+    out: &mut String,
+    function: &crate::core::ir::FunctionDef,
+    shape: &FunctionReturnShape<'_>,
+    call: &str,
+    return_null: &str,
+) {
+    let has_error = function.error_type.is_some();
+    let indent = if has_error { "            " } else { "    " };
+    let body = render_function_return_body(function, shape, indent, return_null);
+    let (ok_body, value_body) = if has_error {
+        (body.as_str(), "")
+    } else {
+        ("", body.as_str())
+    };
+    render_call_result_body(
+        out,
+        call,
+        function.is_async,
+        has_error,
+        return_null,
+        ok_body,
+        value_body,
+    );
+}
+
+fn render_function_return_body(
+    function: &crate::core::ir::FunctionDef,
+    shape: &FunctionReturnShape<'_>,
+    indent: &str,
+    return_null: &str,
+) -> String {
+    if let Some((capsule, optional)) = shape.capsule {
+        return render_method_capsule_return(capsule, optional, function.returns_ref, function.returns_cow, indent);
+    }
+    if shape.opaque {
+        let value = capsule_owned_value("v", function.returns_ref, function.returns_cow);
+        return format!("{indent}Box::into_raw(Box::new({value})) as jlong\n");
+    }
+    if shape.optional_opaque {
+        let value = capsule_owned_value("inner", function.returns_ref, function.returns_cow);
+        return format!(
+            "{indent}match v {{\n{indent}    None => 0i64,\n{indent}    Some(inner) => \
+             Box::into_raw(Box::new({value})) as jlong,\n{indent}}}\n"
+        );
+    }
+    let mut body = String::new();
+    emit_return_marshal_with_indent(&mut body, &function.return_type, indent, return_null);
+    body
 }

@@ -146,7 +146,7 @@ impl Backend for KotlinAndroidBackend {
     fn generate_bindings(&self, api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
         let config = config.clone().with_kotlin_ffi_style(KotlinFfiStyle::Jni);
         let config = &config;
-
+        validate_capsule_ffi_parity(config)?;
         let exclude_types = effective_exclude_types(config);
         let filtered_api;
         let api = if exclude_types.is_empty() {
@@ -155,72 +155,8 @@ impl Backend for KotlinAndroidBackend {
             filtered_api = api_without_excluded_types(api, &exclude_types);
             &filtered_api
         };
-
         let layout = ProjectLayout::resolve(config);
-
-        let mut files = vec![
-            GeneratedFile {
-                path: layout.package_root.join("build.gradle.kts"),
-                content: gen_build_gradle::emit(config),
-                generated_header: false,
-            },
-            GeneratedFile {
-                path: layout.package_root.join("gradle.properties"),
-                content: gen_gradle_properties::emit(),
-                generated_header: false,
-            },
-            GeneratedFile {
-                path: layout.package_root.join("settings.gradle.kts"),
-                content: gen_settings_gradle::emit(config),
-                generated_header: false,
-            },
-            GeneratedFile {
-                path: layout.package_root.join("gradle/wrapper/gradle-wrapper.properties"),
-                content: gradle_wrapper::render_gradle_wrapper_properties(),
-                generated_header: false,
-            },
-            GeneratedFile {
-                path: layout.package_root.join("gradlew"),
-                content: gradle_wrapper::GRADLE_WRAPPER_UNIX.to_string(),
-                generated_header: false,
-            },
-            GeneratedFile {
-                path: layout.package_root.join("gradlew.bat"),
-                content: gradle_wrapper::GRADLE_WRAPPER_WINDOWS.to_string(),
-                generated_header: false,
-            },
-            GeneratedFile {
-                path: layout.package_root.join("gradle/wrapper/gradle-wrapper.jar"),
-                content: gradle_wrapper::get_gradle_wrapper_jar_base64(),
-                generated_header: false,
-            },
-            GeneratedFile {
-                path: layout.package_root.join("src/main/AndroidManifest.xml"),
-                content: gen_manifest::emit(config),
-                generated_header: false,
-            },
-            GeneratedFile {
-                path: layout.package_root.join("consumer-rules.pro"),
-                content: gen_proguard::emit_consumer(config),
-                generated_header: false,
-            },
-            GeneratedFile {
-                path: layout.package_root.join("proguard-rules.pro"),
-                content: gen_proguard::emit_module(),
-                generated_header: false,
-            },
-            GeneratedFile {
-                path: layout.package_root.join(".gitignore"),
-                content: gen_gitignore::emit(),
-                generated_header: false,
-            },
-            GeneratedFile {
-                path: layout.package_root.join(".editorconfig"),
-                content: gen_editorconfig::emit(),
-                generated_header: false,
-            },
-        ];
-
+        let mut files = emit_android_project_scaffolding(config, &layout);
         files.extend(gen_jni_skeleton::emit(config, &layout.package_root));
         let deduped_api = effective_codegen_api(api, config);
         files.extend(gen_bindings::emit(&deduped_api, config, &layout.kotlin_source_dir));
@@ -239,13 +175,75 @@ impl Backend for KotlinAndroidBackend {
     }
 }
 
+fn emit_android_project_scaffolding(config: &ResolvedCrateConfig, layout: &ProjectLayout) -> Vec<GeneratedFile> {
+    let root = &layout.package_root;
+    vec![
+        android_project_file(root, "build.gradle.kts", gen_build_gradle::emit(config)),
+        android_project_file(root, "gradle.properties", gen_gradle_properties::emit()),
+        android_project_file(root, "settings.gradle.kts", gen_settings_gradle::emit(config)),
+        android_project_file(
+            root,
+            "gradle/wrapper/gradle-wrapper.properties",
+            gradle_wrapper::render_gradle_wrapper_properties(),
+        ),
+        android_project_file(root, "gradlew", gradle_wrapper::GRADLE_WRAPPER_UNIX.to_string()),
+        android_project_file(root, "gradlew.bat", gradle_wrapper::GRADLE_WRAPPER_WINDOWS.to_string()),
+        android_project_file(
+            root,
+            "gradle/wrapper/gradle-wrapper.jar",
+            gradle_wrapper::get_gradle_wrapper_jar_base64(),
+        ),
+        android_project_file(root, "src/main/AndroidManifest.xml", gen_manifest::emit(config)),
+        android_project_file(root, "consumer-rules.pro", gen_proguard::emit_consumer(config)),
+        android_project_file(root, "proguard-rules.pro", gen_proguard::emit_module()),
+        android_project_file(root, ".gitignore", gen_gitignore::emit()),
+        android_project_file(root, ".editorconfig", gen_editorconfig::emit()),
+    ]
+}
+
+fn android_project_file(root: &Path, relative_path: &str, content: String) -> GeneratedFile {
+    GeneratedFile {
+        path: root.join(relative_path),
+        content,
+        generated_header: false,
+    }
+}
+
 fn effective_codegen_api(api: &ApiSurface, config: &ResolvedCrateConfig) -> ApiSurface {
     let enabled_features: std::collections::HashSet<&str> = config
         .features_for_language(Language::KotlinAndroid)
         .iter()
         .map(String::as_str)
         .collect();
-    api.with_cfg_filtered_deep(&enabled_features).with_deduped_functions()
+    let mut api = api.with_cfg_filtered_deep(&enabled_features).with_deduped_functions();
+    if let Some(android) = &config.kotlin_android {
+        api.types
+            .retain(|type_def| !android.capsule_types.contains_key(&type_def.name));
+    }
+    api
+}
+
+fn validate_capsule_ffi_parity(config: &ResolvedCrateConfig) -> anyhow::Result<()> {
+    let Some(android) = &config.kotlin_android else {
+        return Ok(());
+    };
+    crate::core::config::languages::require_shared_native_runtime(&android.capsule_types, false, "kotlin_android")?;
+    let ffi_capsules = config.ffi.as_ref().map(|ffi| &ffi.capsule_types);
+    let mut missing_ffi: Vec<_> = android
+        .capsule_types
+        .keys()
+        .filter(|name| ffi_capsules.is_none_or(|capsules| !capsules.contains_key(*name)))
+        .cloned()
+        .collect();
+    missing_ffi.sort_unstable();
+    if !missing_ffi.is_empty() {
+        anyhow::bail!(
+            "kotlin_android capsule types require matching FFI capsule definitions: {}; \
+             add each type under `[crates.ffi.capsule_types.<Type>]`",
+            missing_ffi.join(", ")
+        );
+    }
+    Ok(())
 }
 
 /// Resolved Android-AAR project paths.

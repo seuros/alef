@@ -190,6 +190,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         "jni_passthrough_body.jinja",
         include_str!("templates/jni_passthrough_body.jinja"),
     ),
+    (
+        "jni_capsule_body.jinja",
+        include_str!("templates/jni_capsule_body.jinja"),
+    ),
     ("jni_opaque_body.jinja", include_str!("templates/jni_opaque_body.jinja")),
     (
         "jni_opaque_optional_body.jinja",

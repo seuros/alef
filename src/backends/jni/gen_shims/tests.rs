@@ -631,25 +631,7 @@ exclude_types = ["Loader"]
 
     #[test]
     fn capsule_language_returns_raw_grammar_pointer_without_box_destructor() {
-        let raw: crate::core::config::NewAlefConfig = toml::from_str(
-            r#"
-[workspace]
-languages = ["kotlin_android", "jni", "ffi"]
-[[crates]]
-name = "sample"
-sources = ["src/lib.rs"]
-[crates.kotlin_android]
-package = "dev.sample"
-[crates.kotlin_android.capsule_types.Language]
-host_type = "dev.runtime.Language"
-construct_expr = "dev.runtime.Language({ptr})"
-[crates.ffi.capsule_types.Language]
-into_raw_type = "tree_sitter::ffi::TSLanguage"
-c_return_type = "TSLanguage"
-"#,
-        )
-        .expect("valid config");
-        let config = raw.resolve().expect("resolved config").remove(0);
+        let config = capsule_fixture_config();
         let function = crate::core::ir::FunctionDef {
             name: "language_sample".into(),
             rust_path: "sample::language_sample".into(),
@@ -669,9 +651,122 @@ c_return_type = "TSLanguage"
             content.contains("v.into_raw() as *const tree_sitter::ffi::TSLanguage as jlong"),
             "capsule return must mirror the C FFI raw-pointer transfer: {content}"
         );
-        assert!(!content.contains("Box::into_raw(Box::new(v))"), "capsule must not box Language: {content}");
-        assert!(!content.contains("nativeFreeLanguage"), "host runtime owns the raw language pointer: {content}");
+        assert!(
+            !content.contains("Box::into_raw(Box::new(v))"),
+            "capsule must not box Language: {content}"
+        );
+        assert!(
+            !content.contains("nativeFreeLanguage"),
+            "host runtime owns the raw language pointer: {content}"
+        );
         syn::parse_file(&content).expect("generated JNI crate parses");
+    }
+
+    fn capsule_fixture_config() -> crate::core::config::ResolvedCrateConfig {
+        let raw: crate::core::config::NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["kotlin_android", "jni", "ffi"]
+[[crates]]
+name = "sample"
+sources = ["src/lib.rs"]
+[crates.kotlin_android]
+package = "dev.sample"
+[crates.kotlin_android.capsule_types.Language]
+host_type = "dev.runtime.Language"
+construct_expr = "dev.runtime.Language({ptr})"
+[crates.ffi.capsule_types.Language]
+into_raw_type = "tree_sitter::ffi::TSLanguage"
+c_return_type = "TSLanguage"
+"#,
+        )
+        .expect("valid config");
+        raw.resolve().expect("resolved config").remove(0)
+    }
+
+    #[test]
+    fn capsule_client_methods_return_raw_grammar_pointers_without_boxes() {
+        let api = crate::core::ir::ApiSurface {
+            types: vec![
+                crate::core::ir::TypeDef {
+                    name: "LanguageRegistry".into(),
+                    is_opaque: true,
+                    methods: vec![
+                        capsule_method("get_language", TypeRef::Named("Language".into()), true),
+                        capsule_method(
+                            "find_language",
+                            TypeRef::Optional(Box::new(TypeRef::Named("Language".into()))),
+                            false,
+                        ),
+                    ],
+                    ..Default::default()
+                },
+                crate::core::ir::TypeDef {
+                    name: "Language".into(),
+                    is_opaque: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let content = emit_lib_rs(&api, &capsule_fixture_config());
+
+        assert!(
+            content.contains("v.into_raw() as *const tree_sitter::ffi::TSLanguage as jlong"),
+            "direct method capsule must return its raw grammar pointer: {content}"
+        );
+        assert!(
+            content.contains("Some(inner) => inner.into_raw() as *const tree_sitter::ffi::TSLanguage as jlong"),
+            "optional method capsule must map Some to the raw grammar pointer: {content}"
+        );
+        assert!(
+            !content.contains("Box::into_raw(Box::new(v))"),
+            "capsule must not box Language: {content}"
+        );
+        syn::parse_file(&content).expect("generated JNI crate parses");
+    }
+
+    #[test]
+    fn capsule_client_methods_own_borrowed_and_cow_values_before_raw_transfer() {
+        let mut borrowed = capsule_method("borrowed_language", TypeRef::Named("Language".into()), true);
+        borrowed.returns_ref = true;
+        let mut optional_borrowed = capsule_method(
+            "optional_borrowed_language",
+            TypeRef::Optional(Box::new(TypeRef::Named("Language".into()))),
+            false,
+        );
+        optional_borrowed.returns_ref = true;
+        let mut cow = capsule_method("cow_language", TypeRef::Named("Language".into()), false);
+        cow.returns_ref = true;
+        cow.returns_cow = true;
+        let content = emit_lib_rs(
+            &api_with_client_methods(vec![borrowed, optional_borrowed, cow]),
+            &capsule_fixture_config(),
+        );
+
+        assert!(
+            content.contains("v.clone().into_raw() as *const tree_sitter::ffi::TSLanguage as jlong"),
+            "borrowed capsule must be cloned before ownership transfer: {content}"
+        );
+        assert!(
+            content.contains("Some(inner) => inner.clone().into_raw() as *const tree_sitter::ffi::TSLanguage as jlong"),
+            "optional borrowed capsule must clone Some before ownership transfer: {content}"
+        );
+        assert!(
+            content.contains("v.into_owned().into_raw() as *const tree_sitter::ffi::TSLanguage as jlong"),
+            "Cow capsule must become owned before ownership transfer: {content}"
+        );
+        syn::parse_file(&content).expect("generated JNI crate parses");
+    }
+
+    fn capsule_method(name: &str, return_type: TypeRef, fallible: bool) -> crate::core::ir::MethodDef {
+        crate::core::ir::MethodDef {
+            name: name.into(),
+            return_type,
+            error_type: fallible.then(|| "LanguageError".into()),
+            ..Default::default()
+        }
     }
 
     #[test]

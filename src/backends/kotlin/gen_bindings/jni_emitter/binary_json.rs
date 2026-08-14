@@ -101,24 +101,39 @@ fn jni_return_type(ty: &TypeRef) -> &'static str {
 /// Map an IR `TypeRef` to a JNI-compatible Kotlin type string for top-level function
 /// return types, where opaque named types become `Long` (raw handle) instead of `String`.
 fn jni_return_type_for_function(ty: &TypeRef, opaque_type_names: &std::collections::HashSet<&str>) -> &'static str {
-    if let TypeRef::Named(n) = ty
-        && opaque_type_names.contains(n.as_str())
+    if let Some(type_name) = named_return_type(ty)
+        && opaque_type_names.contains(type_name)
     {
         return "Long";
     }
     jni_return_type(ty)
 }
 
+fn named_return_type(ty: &TypeRef) -> Option<&str> {
+    match ty {
+        TypeRef::Named(type_name) => Some(type_name),
+        TypeRef::Optional(inner) => match inner.as_ref() {
+            TypeRef::Named(type_name) => Some(type_name),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Map an IR `TypeRef` to a JNI-compatible Kotlin type string for instance method
 /// return types, where opaque named types become `Long` (raw handle) instead of `String`.
 #[allow(dead_code)]
-fn jni_return_type_for_method(ty: &TypeRef, opaque_type_names: &std::collections::HashSet<&str>) -> &'static str {
+fn jni_return_type_for_method(
+    ty: &TypeRef,
+    opaque_type_names: &std::collections::HashSet<&str>,
+    capsule_types: &std::collections::HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
+) -> &'static str {
     let base = match ty {
         TypeRef::Optional(inner) => inner.as_ref(),
         other => other,
     };
     if let TypeRef::Named(n) = base
-        && opaque_type_names.contains(n.as_str())
+        && (opaque_type_names.contains(n.as_str()) || capsule_types.contains_key(n))
     {
         return "Long";
     }

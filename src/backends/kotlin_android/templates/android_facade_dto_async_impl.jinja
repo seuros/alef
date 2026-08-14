@@ -1,0 +1,1 @@
+    suspend fun {{ method_name }}({{ params }}): {{ return_type }} = withContext(Dispatchers.IO) { val resultJson = {{ bridge_call }}; mapper.readValue(resultJson, {{ return_class }}::class.java) }

@@ -1,0 +1,11 @@
+{% if is_async %}
+        val capsulePtr = withContext(Dispatchers.IO) { {{ bridge_call }} }
+{% else %}
+        val capsulePtr = {{ bridge_call }}
+{% endif %}
+{% if optional %}
+        return if (capsulePtr == 0L) null else {{ construct_expr }}
+{% else %}
+        check(capsulePtr != 0L) { "Unexpected null return from native method" }
+        return {{ construct_expr }}
+{% endif %}

@@ -96,7 +96,7 @@ fn capsule_wrapper_constructs_host_language_without_alef_close_path() {
     let mut body = String::new();
     emit_capsule_function_wrapper(&mut body, &func, "SampleBridge", &cfg);
 
-    assert!(body.contains("return dev.runtime.Language(cLangPtr)"), "{body}");
+    assert!(body.contains("return dev.runtime.Language(capsulePtr)"), "{body}");
     assert!(
         !body.contains("nativeFreeLanguage"),
         "capsule ownership belongs to the host runtime: {body}"

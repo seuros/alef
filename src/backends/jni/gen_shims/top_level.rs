@@ -1,102 +1,196 @@
 pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> String {
     let package = jni_kotlin_package(config);
     let bridge = bridge_class_name(&config.name);
-    let core_crate = core_use_path(config);
-    let error_class = resolve_error_class(config, &package);
-    let enabled_features: std::collections::HashSet<&str> = config
+    let filtered_api = filtered_jni_api(api, config);
+    let excluded_functions = jni_excluded_functions(config);
+    let excluded_types = jni_excluded_types(config);
+    let trait_bridge_functions = jni_trait_bridge_function_names(config);
+    let visible_functions = visible_jni_functions(
+        api,
+        &filtered_api,
+        config,
+        &excluded_functions,
+        &excluded_types,
+        &trait_bridge_functions,
+    );
+    let opaque_types = jni_opaque_type_names(&filtered_api);
+    let capsule_types = jni_capsule_types(config);
+    let mut out = emit_jni_lib_header(&filtered_api, config, &package);
+    emit_top_level_function_shims(
+        &mut out,
+        &visible_functions,
+        config,
+        &package,
+        &bridge,
+        &opaque_types,
+        &capsule_types,
+    );
+    emit_jni_type_shims(
+        &mut out,
+        &visible_functions,
+        &filtered_api,
+        config,
+        &excluded_functions,
+        &excluded_types,
+        &opaque_types,
+        &capsule_types,
+        &package,
+        &bridge,
+    );
+    emit_trait_bridge_shims(&mut out, config, &filtered_api, &package, &bridge);
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_jni_type_shims(
+    out: &mut String,
+    visible_functions: &[crate::core::ir::FunctionDef],
+    api: &ApiSurface,
+    config: &ResolvedCrateConfig,
+    excluded_functions: &std::collections::HashSet<&str>,
+    excluded_types: &std::collections::HashSet<&str>,
+    opaque_types: &std::collections::HashSet<&str>,
+    capsule_types: &std::collections::HashMap<String, crate::core::config::FfiCapsuleTypeConfig>,
+    package: &str,
+    bridge: &str,
+) {
+    let client_types = jni_client_types(api, config, excluded_types);
+    emit_jni_client_type_shims(out, &client_types, api, config, package, bridge, excluded_functions);
+    emit_jni_value_type_shims(out, api, excluded_types, package, bridge);
+    emit_opaque_return_destructors(
+        out,
+        visible_functions,
+        &client_types,
+        api,
+        opaque_types,
+        capsule_types,
+        package,
+        bridge,
+    );
+}
+
+fn filtered_jni_api(api: &ApiSurface, config: &ResolvedCrateConfig) -> ApiSurface {
+    let enabled_features = config
         .features_for_language(Language::KotlinAndroid)
         .iter()
         .map(String::as_str)
         .collect();
-    let cfg_filtered_api = api.with_cfg_filtered_deep(&enabled_features);
+    api.with_cfg_filtered_deep(&enabled_features)
+}
 
-    let mut out = String::new();
-
-    out.push_str(&template_env::render(
+fn emit_jni_lib_header(api: &ApiSurface, config: &ResolvedCrateConfig, package: &str) -> String {
+    let mut out = template_env::render(
         "lib_header.rs.jinja",
         context! {
-            core_crate => core_crate,
-            error_class => error_class,
+            core_crate => core_use_path(config),
+            error_class => resolve_error_class(config, package),
             crate_attributes => crate::codegen::shared::format_crate_attributes(&config.crate_attributes),
         },
-    ));
-
-    for trait_path in collect_trait_imports(&cfg_filtered_api) {
+    );
+    for trait_path in collect_trait_imports(api) {
         out.push_str(&format!("use {trait_path};\n"));
     }
-
     emit_runtime_helpers(&mut out);
+    out
+}
 
-    let exclude_functions: std::collections::HashSet<&str> = config
+fn jni_excluded_functions(config: &ResolvedCrateConfig) -> std::collections::HashSet<&str> {
+    config
         .kotlin_android
         .as_ref()
-        .map(|c| c.exclude_functions.iter().map(String::as_str).collect())
-        .unwrap_or_default();
+        .map(|android| android.exclude_functions.iter().map(String::as_str).collect())
+        .unwrap_or_default()
+}
 
-    // Type-level exclusions inherited from the shared `[crates.ffi].exclude_types`
-    // plus the paired `[crates.kotlin_android].exclude_types` list, mirroring the
-    // kotlin_android binding backend's `effective_exclude_types`. Without this the
-    // JNI shims expose opaque client types (and any top-level function whose
-    // signature references them) that every other FFI-derived binding drops.
-    let exclude_types: std::collections::HashSet<&str> = {
-        let mut set: std::collections::HashSet<&str> = config
-            .ffi
-            .as_ref()
-            .map(|ffi| ffi.exclude_types.iter().map(String::as_str).collect())
-            .unwrap_or_default();
-        if let Some(ka) = config.kotlin_android.as_ref() {
-            set.extend(ka.exclude_types.iter().map(String::as_str));
-        }
-        set
-    };
-    let signature_references_excluded = |params: &[ParamDef], return_type: &TypeRef| -> bool {
-        let references_excluded = |ty: &TypeRef| exclude_types.iter().any(|name| ty.references_named(name));
-        references_excluded(return_type) || params.iter().any(|param| references_excluded(&param.ty))
-    };
-
-    let trait_bridge_fn_names: std::collections::HashSet<&str> = config
-        .trait_bridges
-        .iter()
-        .flat_map(|b| {
-            [&b.register_fn, &b.unregister_fn, &b.clear_fn]
-                .into_iter()
-                .filter_map(|opt| opt.as_deref())
-        })
-        .collect();
-
-    // JNI exposes one native symbol per function, so select the variant compiled by the
-    // configured Android feature set before collapsing same-named real/fallback entries. ~keep
-    let deduped_functions = crate::codegen::fn_dedup::dedup_same_name_functions(&cfg_filtered_api.functions);
-    let candidate_functions: Vec<&crate::core::ir::FunctionDef> = if jni_target_overrides(config).is_empty() {
-        deduped_functions.iter().collect()
-    } else {
-        api.functions.iter().collect()
-    };
-    let visible_functions: Vec<_> = candidate_functions
-        .iter()
-        .filter(|f| {
-            !f.sanitized
-                && !exclude_functions.contains(f.name.as_str())
-                && !trait_bridge_fn_names.contains(f.name.as_str())
-                && !signature_references_excluded(&f.params, &f.return_type)
-        })
-        .collect();
-
-    let opaque_type_names: std::collections::HashSet<&str> = cfg_filtered_api
-        .types
-        .iter()
-        .filter(|t| t.is_opaque && !t.is_trait)
-        .map(|t| t.name.as_str())
-        .collect();
-    let ffi_capsule_types = config
+fn jni_excluded_types(config: &ResolvedCrateConfig) -> std::collections::HashSet<&str> {
+    let mut excluded: std::collections::HashSet<&str> = config
         .ffi
         .as_ref()
-        .map(|ffi| &ffi.capsule_types)
-        .cloned()
+        .map(|ffi| ffi.exclude_types.iter().map(String::as_str).collect())
         .unwrap_or_default();
+    if let Some(android) = config.kotlin_android.as_ref() {
+        excluded.extend(android.exclude_types.iter().map(String::as_str));
+    }
+    excluded
+}
 
-    for f in &visible_functions {
-        let Some(target_predicate) = jni_target_predicate(f.cfg.as_deref(), config) else {
+fn jni_trait_bridge_function_names(config: &ResolvedCrateConfig) -> std::collections::HashSet<&str> {
+    config
+        .trait_bridges
+        .iter()
+        .flat_map(|bridge| {
+            [&bridge.register_fn, &bridge.unregister_fn, &bridge.clear_fn]
+                .into_iter()
+                .filter_map(|name| name.as_deref())
+        })
+        .collect()
+}
+
+fn visible_jni_functions(
+    api: &ApiSurface,
+    filtered_api: &ApiSurface,
+    config: &ResolvedCrateConfig,
+    excluded_functions: &std::collections::HashSet<&str>,
+    excluded_types: &std::collections::HashSet<&str>,
+    trait_bridge_functions: &std::collections::HashSet<&str>,
+) -> Vec<crate::core::ir::FunctionDef> {
+    let deduped = crate::codegen::fn_dedup::dedup_same_name_functions(&filtered_api.functions);
+    let candidates = if jni_target_overrides(config).is_empty() {
+        deduped
+    } else {
+        api.functions.clone()
+    };
+    candidates
+        .into_iter()
+        .filter(|function| {
+            !function.sanitized
+                && !excluded_functions.contains(function.name.as_str())
+                && !trait_bridge_functions.contains(function.name.as_str())
+                && !jni_signature_references_excluded(function, excluded_types)
+        })
+        .collect()
+}
+
+fn jni_signature_references_excluded(
+    function: &crate::core::ir::FunctionDef,
+    excluded_types: &std::collections::HashSet<&str>,
+) -> bool {
+    let references_excluded = |type_ref: &TypeRef| {
+        excluded_types
+            .iter()
+            .any(|type_name| type_ref.references_named(type_name))
+    };
+    references_excluded(&function.return_type) || function.params.iter().any(|param| references_excluded(&param.ty))
+}
+
+fn jni_capsule_types(
+    config: &ResolvedCrateConfig,
+) -> std::collections::HashMap<String, crate::core::config::FfiCapsuleTypeConfig> {
+    let Some(android) = config.kotlin_android.as_ref() else {
+        return std::collections::HashMap::new();
+    };
+    config
+        .ffi
+        .as_ref()
+        .into_iter()
+        .flat_map(|ffi| ffi.capsule_types.iter())
+        .filter(|(type_name, _)| android.capsule_types.contains_key(*type_name))
+        .map(|(type_name, capsule)| (type_name.clone(), capsule.clone()))
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_top_level_function_shims(
+    out: &mut String,
+    functions: &[crate::core::ir::FunctionDef],
+    config: &ResolvedCrateConfig,
+    package: &str,
+    bridge: &str,
+    opaque_types: &std::collections::HashSet<&str>,
+    capsule_types: &std::collections::HashMap<String, crate::core::config::FfiCapsuleTypeConfig>,
+) {
+    for function in functions {
+        let Some(target_predicate) = jni_target_predicate(function.cfg.as_deref(), config) else {
             continue;
         };
         if let Some(predicate) = target_predicate {
@@ -105,88 +199,142 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
                 context! { predicate => predicate },
             ));
         }
-        let method_name = bridge_method_name("", &f.name);
-        let symbol = jni_symbol(&package, &bridge, &method_name);
-        emit_function_shim(
-            &mut out,
-            &symbol,
-            &f.rust_path,
-            &f.params,
-            &f.return_type,
-            f.is_async,
-            f.error_type.is_some(),
-            &opaque_type_names,
-            &ffi_capsule_types,
-            &config.name,
-        );
+        let symbol = jni_symbol(package, bridge, &bridge_method_name("", &function.name));
+        emit_function_shim(out, &symbol, function, opaque_types, capsule_types, &config.name);
     }
+}
 
-    let streaming_owner_types: std::collections::HashSet<&str> = config
+fn jni_client_types<'a>(
+    api: &'a ApiSurface,
+    config: &ResolvedCrateConfig,
+    excluded_types: &std::collections::HashSet<&str>,
+) -> Vec<&'a TypeDef> {
+    let streaming_owners: std::collections::HashSet<&str> = config
         .adapters
         .iter()
         .filter(|adapter| matches!(adapter.pattern, AdapterPattern::Streaming))
         .filter_map(|adapter| adapter.owner_type.as_deref())
         .collect();
-    let client_types: Vec<_> = cfg_filtered_api
-        .types
+    api.types
         .iter()
-        .filter(|t| {
-            t.is_opaque
-                && !t.is_trait
-                && !exclude_types.contains(t.name.as_str())
-                && (t.methods.iter().any(|m| !m.sanitized && !m.is_static)
-                    || streaming_owner_types.contains(t.name.as_str()))
+        .filter(|type_def| {
+            type_def.is_opaque
+                && !type_def.is_trait
+                && !excluded_types.contains(type_def.name.as_str())
+                && (type_def
+                    .methods
+                    .iter()
+                    .any(|method| !method.sanitized && !method.is_static)
+                    || streaming_owners.contains(type_def.name.as_str()))
         })
-        .collect();
-    let client_type_names: std::collections::HashSet<&str> = client_types.iter().map(|t| t.name.as_str()).collect();
+        .collect()
+}
 
-    for ty in &client_types {
+#[allow(clippy::too_many_arguments)]
+fn emit_jni_client_type_shims(
+    out: &mut String,
+    client_types: &[&TypeDef],
+    api: &ApiSurface,
+    config: &ResolvedCrateConfig,
+    package: &str,
+    bridge: &str,
+    excluded_functions: &std::collections::HashSet<&str>,
+) {
+    let opaque_types = jni_opaque_type_names(api);
+    for type_def in client_types {
         emit_client_shims(
-            &mut out,
-            ty,
-            &cfg_filtered_api,
+            out,
+            type_def,
+            api,
             config,
-            &package,
-            &bridge,
-            &exclude_functions,
-            &opaque_type_names,
+            package,
+            bridge,
+            excluded_functions,
+            &opaque_types,
         );
     }
+}
 
-    // Instance methods on value (data-class) types. These carry no handle, so the
-    // shim rebuilds the receiver from JSON — see `value_method_shims.rs`.
-    let serde_type_names = value_bridge_serde_type_names(&cfg_filtered_api);
-    for ty in cfg_filtered_api
-        .types
-        .iter()
-        .filter(|t| !t.is_opaque && !t.is_trait && !t.binding_excluded && !exclude_types.contains(t.name.as_str()))
-    {
-        emit_value_type_shims(&mut out, ty, &package, &bridge, &serde_type_names);
+fn emit_jni_value_type_shims(
+    out: &mut String,
+    api: &ApiSurface,
+    excluded_types: &std::collections::HashSet<&str>,
+    package: &str,
+    bridge: &str,
+) {
+    let serde_types = value_bridge_serde_type_names(api);
+    for type_def in api.types.iter().filter(|type_def| {
+        !type_def.is_opaque
+            && !type_def.is_trait
+            && !type_def.binding_excluded
+            && !excluded_types.contains(type_def.name.as_str())
+    }) {
+        emit_value_type_shims(out, type_def, package, bridge, &serde_types);
     }
+}
 
-    let top_level_opaque_returns: std::collections::HashSet<&str> = visible_functions
-        .iter()
-        .filter_map(|f| {
-            if let TypeRef::Named(n) = &f.return_type
-                && opaque_type_names.contains(n.as_str())
-                && !ffi_capsule_types.contains_key(n)
-                && !client_type_names.contains(n.as_str())
-            {
-                return Some(n.as_str());
-            }
-            None
+#[allow(clippy::too_many_arguments)]
+fn emit_opaque_return_destructors(
+    out: &mut String,
+    functions: &[crate::core::ir::FunctionDef],
+    client_types: &[&TypeDef],
+    api: &ApiSurface,
+    opaque_types: &std::collections::HashSet<&str>,
+    capsule_types: &std::collections::HashMap<String, crate::core::config::FfiCapsuleTypeConfig>,
+    package: &str,
+    bridge: &str,
+) {
+    let client_names = client_types.iter().map(|type_def| type_def.name.as_str()).collect();
+    let return_names = opaque_return_names(functions, api, opaque_types, capsule_types, &client_names);
+    for type_name in return_names {
+        let symbol = jni_symbol(package, bridge, &destructor_method_name(type_name));
+        emit_destructor_shim(out, &symbol, type_name);
+    }
+}
+
+fn opaque_return_names<'a>(
+    functions: &'a [crate::core::ir::FunctionDef],
+    api: &'a ApiSurface,
+    opaque_types: &std::collections::HashSet<&str>,
+    capsule_types: &std::collections::HashMap<String, crate::core::config::FfiCapsuleTypeConfig>,
+    client_names: &std::collections::HashSet<&str>,
+) -> std::collections::HashSet<&'a str> {
+    let function_returns = functions.iter().map(|function| &function.return_type);
+    let method_returns = api.types.iter().flat_map(|type_def| {
+        type_def
+            .methods
+            .iter()
+            .filter(|method| !method.sanitized && !method.is_static)
+            .map(|method| &method.return_type)
+    });
+    function_returns
+        .chain(method_returns)
+        .filter_map(named_return_type)
+        .filter(|type_name| {
+            opaque_types.contains(*type_name)
+                && !capsule_types.contains_key(*type_name)
+                && !client_names.contains(*type_name)
         })
-        .collect();
+        .collect()
+}
 
-    for type_name in &top_level_opaque_returns {
-        let free_name = destructor_method_name(type_name);
-        let free_symbol = jni_symbol(&package, &bridge, &free_name);
-        emit_destructor_shim(&mut out, &free_symbol, type_name);
+fn named_return_type(type_ref: &TypeRef) -> Option<&str> {
+    match type_ref {
+        TypeRef::Named(type_name) => Some(type_name),
+        TypeRef::Optional(inner) => match inner.as_ref() {
+            TypeRef::Named(type_name) => Some(type_name),
+            _ => None,
+        },
+        _ => None,
     }
+}
 
-    emit_trait_bridge_shims(&mut out, config, &cfg_filtered_api, &package, &bridge);
-
-    out
+fn jni_opaque_type_names(api: &ApiSurface) -> std::collections::HashSet<&str> {
+    api.types
+        .iter()
+        .filter(|type_def| type_def.is_opaque && !type_def.is_trait)
+        .map(|type_def| type_def.name.as_str())
+        .collect()
 }
 
 fn jni_target_overrides(config: &ResolvedCrateConfig) -> &[crate::core::config::FfiTargetDepOverride] {
