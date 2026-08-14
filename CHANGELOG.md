@@ -17,8 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (both symbol sets exist in the C header) but handed the second adapter's stream handle to the first adapter's
   native functions — a runtime handle type-confusion bug, not a missing feature. Colliding adapters now each get a
   uniquely named struct derived from the adapter's own name. **Consumer-visible:** where a collision exists the
-  shared `{ItemType}Stream` type is renamed — crawlberg's `CrawlEventStream` becomes `CrawlStream` and
-  `BatchCrawlStream`. Zig code naming the old type explicitly must be updated. Types with a single streaming adapter
+  shared `{ItemType}Stream` type is renamed to adapter-specific stream types. Zig code naming the old type explicitly
+  must be updated. Types with a single streaming adapter
   keep their existing name.
 
 ### Fixed
@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   renderer. The existing unit test called `render_wasm_excluded_category` directly, so it verified the renderer but
   never that `generate` invoked it — reintroducing the silent-drop regression left all seven wasm unit tests green.
   The new integration test drives `generate` end to end and fails when the category is dropped.
+- **wasm**: convert a `#[serde(default = "...")]` function's return value into the field's wrapper type in
+  generated constructors. A defaulted field whose type is `Named` (e.g. `ssrf: SsrfPolicy`) is mapped to a
+  distinct binding wrapper (`WasmSsrfPolicy`), but the constructor's fallback expression called the core
+  default function directly without `.into()` — an `E0308` type
+  mismatch that broke every wasm build with a defaulted, wrapped-type field.
 - **e2e/wasm**: stop silently dropping a fixture category when every fixture in it is excluded for wasm (e.g. an
   entire `visitor` category skipped via `skip.languages`); emit a placeholder suite naming each excluded fixture and
   its reason, and log a warning, instead of generating no output at all.

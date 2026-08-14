@@ -396,7 +396,17 @@ pub fn function_sig_defaults(params: &[ParamDef]) -> String {
 
 /// Format a DefaultValue as Rust code for the target language.
 /// Used by backends generating config constructors with defaults.
-pub fn format_default_value(default: &DefaultValue) -> String {
+///
+/// `field_ty` is the declared type of the field the default applies to. serde requires a
+/// `#[serde(default = "path")]` function to return exactly the field's type, so when `field_ty`
+/// is `TypeRef::Named` the call in `FunctionCall`/`PublicFunctionCall` returns the *core* crate's
+/// type. Every caller of `format_default_value` (currently only the wasm backend's
+/// `config_constructor_parts_with_options`) maps `Named` fields to a distinct binding wrapper
+/// type, so the literal call needs `.into()` to become the type the constructor parameter
+/// expects — otherwise the emitted assignment is an `E0308` type mismatch (wrapper vs. core
+/// type). Every other `DefaultValue` variant already produces a value in the field's own
+/// representation and needs no conversion.
+pub fn format_default_value(default: &DefaultValue, field_ty: &TypeRef) -> String {
     match default {
         DefaultValue::BoolLiteral(b) => format!("{}", b),
         DefaultValue::StringLiteral(s) => format!("\"{}\".to_string()", s.escape_default()),
@@ -412,7 +422,13 @@ pub fn format_default_value(default: &DefaultValue) -> String {
         DefaultValue::EnumVariant(v) => v.clone(),
         DefaultValue::Empty => "Default::default()".to_string(),
         DefaultValue::None => "None".to_string(),
-        DefaultValue::FunctionCall(path) | DefaultValue::PublicFunctionCall(path) => format!("{path}()"),
+        DefaultValue::FunctionCall(path) | DefaultValue::PublicFunctionCall(path) => {
+            if matches!(field_ty, TypeRef::Named(_)) {
+                format!("{path}().into()")
+            } else {
+                format!("{path}()")
+            }
+        }
     }
 }
 
@@ -553,7 +569,7 @@ fn config_constructor_parts_inner(
                         format!("{}: {}.unwrap_or_default()", binding_name, f.name)
                     }
                     _ => {
-                        let default_val = format_default_value(typed_default);
+                        let default_val = format_default_value(typed_default, &f.ty);
                         // clippy::unnecessary_lazy_evaluations; use unwrap_or_else for heap types.
                         match typed_default {
                             DefaultValue::BoolLiteral(_)
@@ -668,4 +684,83 @@ fn collect_clippy_lints(text: &str) -> HashSet<&str> {
         rest = &rest[token_end..];
     }
     lints
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `#[serde(default = "path")]` function must return exactly the field's declared type
+    /// (serde's own contract). When that type is `Named` — a mirrored/wrapped type in the
+    /// binding surface, e.g. wasm's `WasmSsrfPolicy` wrapping core `SsrfPolicy` — the literal
+    /// `path()` call yields the *core* type, so the constructor assignment needs `.into()` to
+    /// become the wrapper type the field actually holds. Covers the "converts" half of the
+    /// wasm constructor-default fix: reverting the `.into()` append in `format_default_value`
+    /// makes this fail.
+    #[test]
+    fn format_default_value_named_function_call_appends_into() {
+        let default = DefaultValue::PublicFunctionCall("crawlberg::SsrfPolicy::from_env".to_string());
+        let ty = TypeRef::Named("SsrfPolicy".to_string());
+        assert_eq!(
+            format_default_value(&default, &ty),
+            "crawlberg::SsrfPolicy::from_env().into()"
+        );
+    }
+
+    /// A plain `FunctionCall` (not yet resolved to a public method) on a Named field must be
+    /// converted identically to `PublicFunctionCall` — the variant only tracks whether the path
+    /// is known to be callable from a binding crate, not whether a conversion is needed.
+    #[test]
+    fn format_default_value_named_plain_function_call_appends_into() {
+        let default = DefaultValue::FunctionCall("defaults::retry_limit".to_string());
+        let ty = TypeRef::Named("RetryLimit".to_string());
+        assert_eq!(format_default_value(&default, &ty), "defaults::retry_limit().into()");
+    }
+
+    /// A default function returning a non-`Named` type (e.g. `String`, `u32`) needs no
+    /// conversion — the call's return type already matches the field's binding representation.
+    /// Guards against over-broadly appending `.into()` to every function-call default.
+    #[test]
+    fn format_default_value_non_named_function_call_has_no_into() {
+        let default = DefaultValue::PublicFunctionCall("crawlberg::defaults::retry_limit".to_string());
+        let ty = TypeRef::Primitive(PrimitiveType::U32);
+        assert_eq!(
+            format_default_value(&default, &ty),
+            "crawlberg::defaults::retry_limit()"
+        );
+    }
+
+    fn named_default_field(name: &str, type_name: &str, default_path: &str) -> FieldDef {
+        FieldDef {
+            name: name.to_string(),
+            ty: TypeRef::Named(type_name.to_string()),
+            typed_default: Some(DefaultValue::PublicFunctionCall(default_path.to_string())),
+            ..Default::default()
+        }
+    }
+
+    /// End-to-end check of the exact call wasm's `gen_new_method` makes
+    /// (`config_constructor_parts_with_options`, mirroring the `ssrf: SsrfPolicy` field with
+    /// `#[serde(default = "SsrfPolicy::from_env")]`): the constructor assignment must both
+    /// *apply* the default when the JS caller omits the field (an `unwrap_or_else` fallback,
+    /// which wasm already did before this fix) and *convert* the core default value into the
+    /// wrapper type via `.into()` (the regression this fix addresses — see
+    /// `format_default_value_named_function_call_appends_into` for the isolated unit check of
+    /// just that half).
+    #[test]
+    fn config_constructor_parts_named_default_field_applies_and_converts() {
+        let field = named_default_field("ssrf", "SsrfPolicy", "crawlberg::SsrfPolicy::from_env");
+        let fields = vec![field];
+        let type_mapper = |ty: &TypeRef| match ty {
+            TypeRef::Named(name) => format!("Wasm{name}"),
+            _ => "String".to_string(),
+        };
+
+        let (_, _, assignments) = config_constructor_parts_with_options(&fields, &type_mapper, true);
+
+        assert!(
+            assignments.contains("ssrf.unwrap_or_else(|| crawlberg::SsrfPolicy::from_env().into())"),
+            "expected an unwrap_or_else default that converts via .into(), got: {assignments}"
+        );
+    }
 }
