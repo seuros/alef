@@ -27,6 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   renderer. The existing unit test called `render_wasm_excluded_category` directly, so it verified the renderer but
   never that `generate` invoked it — reintroducing the silent-drop regression left all seven wasm unit tests green.
   The new integration test drives `generate` end to end and fails when the category is dropped.
+- **magnus**: apply a field's real `#[serde(default = "...")]` value instead of raising `missing required
+  field` for it. Any `Named`-typed field without an `EnumVariant` typed default was treated as required,
+  which also caught fields that carry a genuine callable default (`FunctionCall`/`PublicFunctionCall`) —
+  silently dropping the default and forcing Ruby callers to pass the field explicitly, even though the
+  generated `.rbs` stub still declared it optional. The default's return value is converted with `.into()`
+  for the same reason as the wasm fix: Magnus mirrors `Named` types into their own `#[magnus::wrap]` struct,
+  a distinct Rust type from the core one under the same short name.
 - **wasm**: convert a `#[serde(default = "...")]` function's return value into the field's wrapper type in
   generated constructors. A defaulted field whose type is `Named` (e.g. `ssrf: SsrfPolicy`) is mapped to a
   distinct binding wrapper (`WasmSsrfPolicy`), but the constructor's fallback expression called the core

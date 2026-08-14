@@ -41,6 +41,11 @@ fn gen_magnus_hash_constructor(typ: &TypeDef, type_mapper: &dyn Fn(&TypeRef) -> 
             let inner_type = type_mapper(effective_inner_ty);
             let type_prefix = as_type_path_prefix(&inner_type);
 
+            let has_callable_default = matches!(
+                &field.typed_default,
+                Some(DefaultValue::FunctionCall(_) | DefaultValue::PublicFunctionCall(_))
+            );
+
             let assignment = if is_optional {
                 format!(
                     "kwargs.get(ruby.to_symbol(\"{}\")).and_then(|v| {}::try_convert(v).ok()),",
@@ -53,6 +58,7 @@ fn gen_magnus_hash_constructor(typ: &TypeDef, type_mapper: &dyn Fn(&TypeRef) -> 
                 )
             } else if matches!(effective_inner_ty, TypeRef::Named(_))
                 && !matches!(&field.typed_default, Some(DefaultValue::EnumVariant(_)))
+                && !has_callable_default
             {
                 // Magnus-wrapped structs (`#[magnus::wrap]`) never implement
                 format!(
@@ -70,9 +76,19 @@ fn gen_magnus_hash_constructor(typ: &TypeDef, type_mapper: &dyn Fn(&TypeRef) -> 
                 } else {
                     default_value_for_field_in_type(field, "rust", typ)
                 };
+                // A `#[serde(default = "path")]` function returns the field's own core type
+                // (serde's contract). When that type is `Named`, Magnus mirrors it into its own
+                // `#[magnus::wrap]` struct of the same short name but a distinct Rust type from
+                // the core one, so the call's return value needs `.into()` to become the type
+                // this field actually holds — otherwise the assignment is an E0308 mismatch.
+                let default_expr = if has_callable_default && matches!(effective_inner_ty, TypeRef::Named(_)) {
+                    format!("{default_str}.into()")
+                } else {
+                    default_str
+                };
                 format!(
                     "kwargs.get(ruby.to_symbol(\"{}\")).and_then(|v| {}::try_convert(v).ok()).unwrap_or({}),",
-                    field.name, type_prefix, default_str
+                    field.name, type_prefix, default_expr
                 )
             };
 

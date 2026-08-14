@@ -164,6 +164,60 @@ fn test_gen_magnus_kwargs_constructor_hash_path_for_many_fields() {
     );
 }
 
+/// A field with a real `#[serde(default = "Type::static_fn")]` default (resolved to
+/// `PublicFunctionCall` once the fn is confirmed to be a public static method on a mirrored
+/// type — see `resolve_public_default_functions`) must NOT be treated as a required Ruby
+/// keyword argument, even though its type is `Named`. Covers the "applies" half of the
+/// magnus fix: reverting the `!has_callable_default` guard on the required-field branch makes
+/// this fail (the field falls back into the `ok_or_else("missing required field")` error path).
+#[test]
+fn test_gen_magnus_kwargs_constructor_named_function_call_default_is_not_required() {
+    let mut typ = make_test_type();
+    typ.fields.push(FieldDef {
+        name: "ssrf".to_string(),
+        ty: TypeRef::Named("SsrfPolicy".to_string()),
+        typed_default: Some(DefaultValue::PublicFunctionCall(
+            "crawlberg::SsrfPolicy::from_env".to_string(),
+        )),
+        ..Default::default()
+    });
+    let output = gen_magnus_kwargs_constructor(&typ, &simple_type_mapper);
+
+    assert!(
+        !output.contains("missing required field: ssrf"),
+        "a field with a real serde default must not become a required argument; got:\n{output}"
+    );
+    assert!(
+        output.contains("unwrap_or(crawlberg::SsrfPolicy::from_env()"),
+        "expected the constructor to call the real default fn; got:\n{output}"
+    );
+}
+
+/// The `#[serde(default = "...")]` function returns the field's core type; Magnus mirrors
+/// `Named` types into its own `#[magnus::wrap]` struct, a distinct Rust type from the core one
+/// under the same short name, so the call needs `.into()` to become the type the field holds.
+/// Covers the "converts" half of the magnus fix: reverting the `.into()` append (while keeping
+/// the required-field guard fix) makes this fail while
+/// `test_gen_magnus_kwargs_constructor_named_function_call_default_is_not_required` still passes.
+#[test]
+fn test_gen_magnus_kwargs_constructor_named_function_call_default_converts_into_wrapper() {
+    let mut typ = make_test_type();
+    typ.fields.push(FieldDef {
+        name: "ssrf".to_string(),
+        ty: TypeRef::Named("SsrfPolicy".to_string()),
+        typed_default: Some(DefaultValue::PublicFunctionCall(
+            "crawlberg::SsrfPolicy::from_env".to_string(),
+        )),
+        ..Default::default()
+    });
+    let output = gen_magnus_kwargs_constructor(&typ, &simple_type_mapper);
+
+    assert!(
+        output.contains("ssrf: kwargs.get(ruby.to_symbol(\"ssrf\")).and_then(|v| SsrfPolicy::try_convert(v).ok()).unwrap_or(crawlberg::SsrfPolicy::from_env().into()),"),
+        "expected the default to be converted into the wrapper type via .into(); got:\n{output}"
+    );
+}
+
 #[test]
 fn test_gen_php_kwargs_constructor_basic() {
     let typ = make_test_type();
