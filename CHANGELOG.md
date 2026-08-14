@@ -98,6 +98,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **java/service**: bind service constructors, owners, metadata, registration variants, and entrypoints with the
   scalar `AlefHandle` carriers and canonical C export names emitted by the FFI backend; marshal text metadata to
   native segments, invoke Panama handles with typed arguments, and validate the service symbols at load time.
+- **extract/ffi**: recognize serde implementations that derive one direction and implement the other manually, so
+  named parameters such as authorization configuration emit the FFI JSON constructor their Java and C# wrappers call.
 - **config**: reject unknown keys in closed Alef configuration sections instead of silently discarding misspelled or
   misplaced settings; extension maps remain open where arbitrary names are part of the schema.
 - **ffi/java**: always emit JSON constructors for serializable FFI types and declare matching Java lifecycle handles,

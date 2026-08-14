@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 use crate::extract::type_resolver;
 
 use self::functions::{
-    collect_manual_serde_type_names, detect_receiver, extract_function, extract_impl_block, extract_params,
+    collect_complete_serde_type_names, detect_receiver, extract_function, extract_impl_block, extract_params,
     resolve_return_type,
 };
 use self::helpers::{
@@ -517,16 +517,16 @@ fn extract_items(
         }
     }
 
-    // The struct/enum extractor only sets has_serde=true when #[derive(Serialize, Deserialize)]
-    let manual_serde_names = collect_manual_serde_type_names(items);
-    if !manual_serde_names.is_empty() {
+    // Merge derive and manual impl evidence so asymmetric serde implementations are recognized.
+    let complete_serde_names = collect_complete_serde_type_names(items);
+    if !complete_serde_names.is_empty() {
         for typ in &mut surface.types {
-            if !typ.has_serde && manual_serde_names.contains(&typ.name) {
+            if !typ.has_serde && complete_serde_names.contains(&typ.name) {
                 typ.has_serde = true;
             }
         }
         for enum_def in &mut surface.enums {
-            if !enum_def.has_serde && manual_serde_names.contains(&enum_def.name) {
+            if !enum_def.has_serde && complete_serde_names.contains(&enum_def.name) {
                 enum_def.has_serde = true;
             }
         }

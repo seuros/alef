@@ -47,6 +47,92 @@ fn test_has_serde_via_manual_impls_detected() {
 }
 
 #[test]
+fn test_has_serde_with_derived_serialize_and_manual_deserialize() {
+    let source = r#"
+        #[derive(Clone, serde::Serialize)]
+        pub struct AuthorizationConfig {
+            pub required_roles: Vec<String>,
+        }
+
+        impl<'de> serde::Deserialize<'de> for AuthorizationConfig {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                unimplemented!()
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    assert_eq!(surface.types.len(), 1);
+    assert!(
+        surface.types[0].has_serde,
+        "derived Serialize plus manual Deserialize must set has_serde=true"
+    );
+}
+
+#[test]
+fn test_has_serde_with_manual_serialize_and_derived_deserialize() {
+    let source = r#"
+        #[derive(Clone, serde::Deserialize)]
+        pub struct AuthorizationConfig {
+            pub required_roles: Vec<String>,
+        }
+
+        impl serde::Serialize for AuthorizationConfig {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                unimplemented!()
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    assert_eq!(surface.types.len(), 1);
+    assert!(
+        surface.types[0].has_serde,
+        "manual Serialize plus derived Deserialize must set has_serde=true"
+    );
+}
+
+fn mixed_serde_parameter_surface() -> ApiSurface {
+    extract_from_source(
+        r#"
+        #[derive(Clone, serde::Serialize)]
+        pub struct AuthorizationConfig {
+            pub required_roles: Vec<String>,
+        }
+
+        impl<'de> serde::Deserialize<'de> for AuthorizationConfig {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                unimplemented!()
+            }
+        }
+
+        pub fn authorize(config: AuthorizationConfig) {}
+        "#,
+    )
+}
+
+#[test]
+fn mixed_serde_named_parameter_symbols_match_all_ffi_hosts() {
+    use crate::backends::{csharp::CsharpBackend, ffi::FfiBackend, java::JavaBackend};
+    use crate::core::backend::Backend;
+    use crate::core::config::ResolvedCrateConfig;
+
+    let surface = mixed_serde_parameter_surface();
+    let config = ResolvedCrateConfig {
+        name: "test".to_owned(),
+        ..ResolvedCrateConfig::default()
+    };
+    let ffi = FfiBackend.generate_bindings(&surface, &config).expect("generate FFI");
+    let java = JavaBackend.generate_bindings(&surface, &config).expect("generate Java");
+    let csharp = CsharpBackend.generate_bindings(&surface, &config).expect("generate C#");
+    let symbol = "test_authorization_config_from_json";
+
+    assert!(ffi.iter().any(|file| file.content.contains(symbol)));
+    assert!(java.iter().any(|file| file.content.contains(symbol)));
+    assert!(csharp.iter().any(|file| file.content.contains(symbol)));
+}
+
+#[test]
 fn test_has_serde_with_lifetime_parameterised_manual_impls() {
     let source = r#"
         #[derive(Clone, Debug)]

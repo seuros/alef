@@ -10,4 +10,4 @@ pub(crate) use impl_blocks::extract_impl_block;
 pub(crate) use methods::extract_method;
 pub(crate) use params::{detect_receiver, extract_params};
 pub(crate) use returns::{resolve_return_type, unwrap_future_return};
-pub(crate) use serde::collect_manual_serde_type_names;
+pub(crate) use serde::collect_complete_serde_type_names;
