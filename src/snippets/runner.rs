@@ -7,8 +7,8 @@ use crate::snippets::types::{
 use crate::snippets::validators::ValidatorRegistry;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Mutex;
-use std::time::Instant;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 pub struct RunnerConfig {
     pub level: ValidationLevel,
@@ -68,7 +68,7 @@ pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config
                 let preparation_error = session_preparation_error(snippet, &sessions, &session_errors);
                 let session = session_for(snippet, &sessions);
                 let lock = session_key(snippet, &sessions).and_then(|key| session_locks.get(key));
-                let result = validate_one(snippet, registry, config, session, lock, preparation_error);
+                let result = validate_one(snippet, registry, config, session, lock, preparation_error, None);
                 let should_stop =
                     preparation_error.is_none() && matches!(result.status, SnippetStatus::Fail | SnippetStatus::Error);
                 results.push(result);
@@ -79,6 +79,14 @@ pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config
             results
         } else {
             let batched = validate_batches(snippets, registry, config, &sessions, &session_errors, &session_locks);
+            let batch_deadlines = snippets
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| batched[*index].is_none())
+                .filter_map(|(_, snippet)| {
+                    validation_batch_key(snippet, registry, config, &sessions).map(|key| (key, OnceLock::new()))
+                })
+                .collect::<BTreeMap<_, _>>();
             snippets
                 .par_iter()
                 .enumerate()
@@ -88,7 +96,9 @@ pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config
                     }
                     let session = session_for(snippet, &sessions);
                     let lock = session_key(snippet, &sessions).and_then(|key| session_locks.get(key));
-                    validate_one(snippet, registry, config, session, lock, None)
+                    let batch_started = validation_batch_key(snippet, registry, config, &sessions)
+                        .and_then(|key| batch_deadlines.get(&key));
+                    validate_one(snippet, registry, config, session, lock, None, batch_started)
                 })
                 .collect()
         }
@@ -98,6 +108,30 @@ pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config
 }
 
 type BatchKey = (crate::snippets::types::Language, Option<String>, ValidationLevel);
+
+fn validation_batch_key(
+    snippet: &Snippet,
+    registry: &ValidatorRegistry,
+    config: &RunnerConfig,
+    sessions: &HashMap<String, crate::snippets::session::ValidationSession>,
+) -> Option<BatchKey> {
+    let session = session_for(snippet, sessions);
+    batch_level(snippet, registry, config, session).map(|level| {
+        (
+            snippet.language,
+            session_key(snippet, sessions).map(str::to_string),
+            level,
+        )
+    })
+}
+
+fn remaining_batch_timeout(started: &OnceLock<Instant>, timeout_secs: u64) -> u64 {
+    let deadline = *started.get_or_init(Instant::now) + Duration::from_secs(timeout_secs);
+    deadline
+        .checked_duration_since(Instant::now())
+        .map(|remaining| remaining.as_secs())
+        .unwrap_or(0)
+}
 
 struct ValidationOutcome {
     status: SnippetStatus,
@@ -285,6 +319,7 @@ fn validate_one(
     session: Option<&crate::snippets::session::ValidationSession>,
     session_lock: Option<&Mutex<()>>,
     session_preparation_error: Option<&str>,
+    batch_started: Option<&OnceLock<Instant>>,
 ) -> ValidationResult {
     if let Some(message) = session_preparation_error {
         return result(
@@ -351,7 +386,18 @@ fn validate_one(
     }
 
     let start = Instant::now();
-    let validation = || validator.validate_in_session(snippet, effective_level, config.timeout_secs, session);
+    let validation = || {
+        let timeout_secs = batch_started.map_or(config.timeout_secs, |started| {
+            remaining_batch_timeout(started, config.timeout_secs)
+        });
+        if timeout_secs == 0 {
+            return Err(crate::snippets::error::Error::Timeout {
+                command: format!("{} validation batch", snippet.language),
+                timeout_secs: config.timeout_secs,
+            });
+        }
+        validator.validate_in_session(snippet, effective_level, timeout_secs, session)
+    };
     let validation_result = match session_lock {
         Some(lock) => match lock.lock() {
             Ok(_guard) => validation(),
@@ -494,6 +540,39 @@ mod tests {
         language: crate::snippets::types::Language,
         batches: Arc<Mutex<Vec<(crate::snippets::types::Language, usize, bool)>>>,
         singles: Arc<Mutex<usize>>,
+    }
+
+    #[cfg(unix)]
+    struct TimeoutValidator {
+        calls: Arc<Mutex<usize>>,
+    }
+
+    #[cfg(unix)]
+    impl SnippetValidator for TimeoutValidator {
+        fn language(&self) -> crate::snippets::types::Language {
+            crate::snippets::types::Language::Bash
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn validate(
+            &self,
+            _snippet: &Snippet,
+            _level: ValidationLevel,
+            timeout_secs: u64,
+        ) -> Result<(SnippetStatus, Option<String>)> {
+            *self.calls.lock().expect("call count") += 1;
+            let mut command = std::process::Command::new("sh");
+            command.args(["-c", "sleep 30 & wait"]);
+            crate::snippets::validators::run_command(&mut command, timeout_secs)?;
+            Ok((SnippetStatus::Pass, None))
+        }
+
+        fn max_level(&self) -> ValidationLevel {
+            ValidationLevel::Run
+        }
     }
 
     impl SnippetValidator for RecordingValidator {
@@ -790,5 +869,39 @@ mod tests {
             batches.lock().expect("batch records").as_slice(),
             &[(crate::snippets::types::Language::Rust, 1, false)]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timeout_is_shared_by_all_snippets_in_a_validation_batch() {
+        let calls = Arc::new(Mutex::new(0));
+        let mut registry = ValidatorRegistry::new();
+        registry.register(Box::new(TimeoutValidator {
+            calls: Arc::clone(&calls),
+        }));
+        let mut snippets = vec![network_snippet(), network_snippet()];
+        for snippet in &mut snippets {
+            snippet.language = crate::snippets::types::Language::Bash;
+        }
+        let config = RunnerConfig {
+            level: ValidationLevel::Run,
+            parallelism: 1,
+            timeout_secs: 1,
+            cache_dir: None,
+            ..RunnerConfig::default()
+        };
+
+        let started = Instant::now();
+        let summary = run_validation(&snippets, &registry, &config).expect("validation completes");
+
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert_eq!(*calls.lock().expect("call count"), 1);
+        assert_eq!(summary.errors, 2);
+        assert!(summary.results.iter().all(|value| {
+            value
+                .message
+                .as_deref()
+                .is_some_and(|message| message.contains("timed out after 1s"))
+        }));
     }
 }

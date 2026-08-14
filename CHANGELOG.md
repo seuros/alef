@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **snippets**: enforce one timeout budget across every snippet in a validation batch and terminate timed-out
+  toolchain process groups so descendant processes cannot keep docs generation alive.
 - **validate versions**: discover nested C#, Dart, Zig, and Cargo lock manifests, validate all C# assembly version
   fields and every local lock package against its manifest, and normalize doubled path separators in diagnostics.
 - **ffi**: preserve fully qualified streaming request types when emitting handle validation and lookup code.
