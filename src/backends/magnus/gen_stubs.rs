@@ -1,4 +1,4 @@
-use crate::backends::magnus::type_map::rbs_type;
+use crate::backends::magnus::type_map::{rbs_marshalled_type, rbs_type};
 use crate::codegen::shared::{binding_fields, substitute_excluded_types, substitute_trait_interfaces};
 use crate::core::config::TraitBridgeConfig;
 use crate::core::hash::{self, CommentStyle};
@@ -285,6 +285,27 @@ fn gen_opaque_type_stub(
 }
 
 /// Generate a Ruby type stub for a struct.
+/// The RBS type of a generated field accessor, mirroring `classes::gen_field_accessor`.
+///
+/// ~keep Nullability follows the accessor, not the owning type's `has_default`. The stub used to
+/// append `?` to every field of a defaulted struct, on the reasoning that such a struct can be
+/// built empty — but the accessor derives its own optionality from `field.optional`, so a
+/// non-optional collection on a defaulted struct really does return a bare `Vec<String>` that can
+/// never be nil. Declaring it nilable forces callers into a nil branch that cannot be reached, and
+/// steep flags the unreachable code they write to satisfy it.
+fn rbs_accessor_type(field: &crate::core::ir::FieldDef) -> String {
+    let base = match &field.ty {
+        TypeRef::Optional(inner) => rbs_marshalled_type(inner),
+        ty => rbs_marshalled_type(ty),
+    };
+    let is_optional = field.optional || matches!(field.ty, TypeRef::Optional(_));
+    if is_optional && !base.ends_with('?') {
+        format!("{base}?")
+    } else {
+        base
+    }
+}
+
 fn gen_type_stub(
     typ: &TypeDef,
     emit_docstrings: bool,
@@ -312,10 +333,7 @@ fn gen_type_stub(
     };
     let mut emitted_attr_names: ahash::AHashSet<&str> = ahash::AHashSet::default();
     for f in binding_fields(&typ.fields) {
-        let mut field_type = rbs_type(&f.ty);
-        if typ.has_default && !field_type.ends_with('?') {
-            field_type.push('?');
-        }
+        let field_type = rbs_accessor_type(f);
         if emit_docstrings && !f.doc.is_empty() {
             for line in f.doc.lines() {
                 let line = line.trim();

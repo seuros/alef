@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fixture whose expectation legitimately ends in a newline could never be satisfied, and a genuine trailing-whitespace
   regression was silently absorbed. Neither side is normalized now.
 
+- **magnus**: declare each `.rbs` attribute as the accessor the extension actually emits. `Json` is mapped to
+  `String` recursively, because the binding serializes it before Ruby sees it — `json_value` promised a parsed
+  document that never arrives, so steep accepted `page.extracted_data["key"]` on a `String`. Nullability now
+  follows the field's own optionality rather than the owning type's `has_default`, which had been nil-wrapping
+  accessors that can never return nil.
 - **e2e/rust**: share one field-aware containment predicate across `contains`, `contains_all`, `not_contains`, and
   `contains_any`, so enum and collection fields no longer emit assertions that fail to compile. Only `contains`
   handled those field kinds; the other three emitted a plain `.contains()` call that an enum does not have and
