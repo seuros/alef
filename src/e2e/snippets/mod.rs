@@ -394,7 +394,19 @@ fn render_snippet_body(
         .filter(|function| !function.trim().is_empty())
         .or_else(|| (!call.function.trim().is_empty()).then_some(call.function.as_str()))
         .or_else(|| {
-            matches!(language, "c" | "c_ffi" | "ffi")
+            // The naive identity fallback below derives a symbol name from the raw
+            // `fixture.call` config text (`register_fn`/`unregister_fn`/`clear_fn`), which
+            // can diverge from what the FFI backend actually generates (see
+            // `trait_bridge_function_identity`'s doc comment). A fixture author who set
+            // `skip.languages` for this language has already declared that the harness
+            // (and by extension this naive fallback) cannot speak for it here; only trust
+            // the fallback when the fixture is not skipped for this language. Fixtures with
+            // a real, extension-owned recipe never reach this branch — the extension loop
+            // above already returned their body, and `recipe_policy::extension_owned_recipe_kind`
+            // already bailed for fixtures that require one but lack it.
+            let skipped_for_language =
+                fixture.skip.as_ref().is_some_and(|skip| skip.should_skip(language));
+            (!skipped_for_language && matches!(language, "c" | "c_ffi" | "ffi"))
                 .then(|| crate::e2e::codegen::recipe::trait_bridge_function_identity(context.crate_config, fixture))
                 .flatten()
         })
@@ -1195,6 +1207,149 @@ mod tests {
 
         assert_eq!(report.coverage.generated, report.coverage.expected);
         assert!(report.coverage.missing.is_empty());
+    }
+
+    /// Regression test for the `c` plugin-api doc snippets that called a symbol
+    /// that does not exist (`xberg_clear_ocr_backends` instead of the real
+    /// `xberg_clear_ocr_backend`). Those fixtures are `skip.languages = ["c"]`
+    /// because the C API cannot expose a host-language callback, have no
+    /// extension-owned recipe, and no per-language call override — so the naive
+    /// `trait_bridge_function_identity` fallback must not run for them; the
+    /// pair should land in `coverage.missing`, not produce a broken snippet.
+    #[test]
+    fn skipped_fixture_without_extension_recipe_omits_c_snippet_and_records_missing() {
+        let mut fixture = documented_fixture();
+        fixture.call = Some("clear_ocr_backends".into());
+        fixture.skip = Some(crate::e2e::fixture::SkipDirective {
+            languages: vec!["c".into()],
+            reason: Some("The C API does not expose the clear call that pairs with registration".into()),
+        });
+        let e2e = E2eConfig::default();
+        let snippet_config = SnippetConfig {
+            output: "docs/snippets".into(),
+            ..SnippetConfig::default()
+        };
+        let crate_config = ResolvedCrateConfig {
+            name: "xberg".into(),
+            trait_bridges: vec![crate::core::config::TraitBridgeConfig {
+                trait_name: "OcrBackend".into(),
+                clear_fn: Some("clear_ocr_backends".into()),
+                ..Default::default()
+            }],
+            ..ResolvedCrateConfig::default()
+        };
+        let context = SnippetRenderContext {
+            e2e: &e2e,
+            crate_config: &crate_config,
+            type_defs: &[],
+            enums: &[],
+            functions: &[],
+        };
+
+        let report =
+            generate_snippet_report_with_extensions(&[fixture], &["c".into()], &snippet_config, &context, &[])
+                .expect("a skipped fixture with no recipe belongs in the coverage ledger, not an error");
+
+        assert!(report.snippets.is_empty());
+        assert!(report.coverage.generated.is_empty());
+        assert_eq!(report.coverage.missing.len(), 1);
+        assert_eq!(
+            report.coverage.missing[0].reason,
+            "built-in `c` snippet recipe has no function identity; configure a call function or provide an extension-owned documentation recipe"
+        );
+    }
+
+    /// Companion to the regression test above: a fixture skipped for `c` but
+    /// backed by an extension-owned recipe must still render — doc rendering
+    /// stays independent of test-harness skips whenever a real recipe exists.
+    /// The extension loop in `render_snippet_body` runs before the skip check
+    /// this fix introduces, so this must keep passing unchanged.
+    #[test]
+    fn skipped_c_fixture_with_extension_owned_recipe_still_renders() {
+        let mut fixture = documented_fixture();
+        fixture.call = Some("clear_ocr_backends".into());
+        fixture.skip = Some(crate::e2e::fixture::SkipDirective {
+            languages: vec!["c".into()],
+            reason: Some("The C API does not expose the clear call that pairs with registration".into()),
+        });
+        let e2e = E2eConfig::default();
+        let snippet_config = SnippetConfig {
+            output: "docs/snippets".into(),
+            ..SnippetConfig::default()
+        };
+        let crate_config = ResolvedCrateConfig::default();
+        let extensions: Vec<Box<dyn crate::Extension>> = vec![Box::new(FixtureExtension {
+            body: "extension_call()",
+        })];
+        let context = SnippetRenderContext {
+            e2e: &e2e,
+            crate_config: &crate_config,
+            type_defs: &[],
+            enums: &[],
+            functions: &[],
+        };
+
+        let report = generate_snippet_report_with_extensions(
+            &[fixture],
+            &["c".into()],
+            &snippet_config,
+            &context,
+            &extensions,
+        )
+        .expect("an extension-owned recipe renders even when the harness skips this language");
+
+        assert_eq!(report.coverage.generated.len(), 1);
+        assert!(report.coverage.missing.is_empty());
+        assert_eq!(report.snippets.len(), 1);
+        assert!(report.snippets[0].file.content.contains("extension_call()"));
+    }
+
+    /// A fixture that is not skipped for `c` keeps using the naive
+    /// `trait_bridge_function_identity` fallback exactly as before — this fix
+    /// only gates the fallback on `SkipDirective::should_skip`, so an unskipped
+    /// fixture must render identically to the pre-fix behaviour.
+    #[test]
+    fn not_skipped_c_fixture_renders_naive_trait_bridge_identity_as_before() {
+        let mut fixture = documented_fixture();
+        fixture.call = Some("clear_ocr_backends".into());
+        let e2e = E2eConfig::default();
+        let snippet_config = SnippetConfig {
+            output: "docs/snippets".into(),
+            ..SnippetConfig::default()
+        };
+        let crate_config = ResolvedCrateConfig {
+            name: "xberg".into(),
+            trait_bridges: vec![crate::core::config::TraitBridgeConfig {
+                trait_name: "OcrBackend".into(),
+                clear_fn: Some("clear_ocr_backends".into()),
+                ..Default::default()
+            }],
+            ..ResolvedCrateConfig::default()
+        };
+        let context = SnippetRenderContext {
+            e2e: &e2e,
+            crate_config: &crate_config,
+            type_defs: &[],
+            enums: &[],
+            functions: &[],
+        };
+
+        let report =
+            generate_snippet_report_with_extensions(&[fixture], &["c".into()], &snippet_config, &context, &[])
+                .expect("an unskipped fixture with a resolvable trait-bridge identity still generates a C snippet");
+
+        assert_eq!(report.coverage.generated.len(), 1);
+        assert!(report.coverage.missing.is_empty());
+        assert_eq!(report.snippets.len(), 1);
+        // The naive fallback still resolves the identity from the raw `clear_fn` config text,
+        // so the emitted call keeps the (wrong, pluralised) name — that is the pre-existing
+        // behaviour this test pins for the not-skipped case. The trailing `NULL` is the C
+        // out-error argument the void-call builder always appends.
+        assert!(
+            report.snippets[0].file.content.contains("xberg_clear_ocr_backends(NULL);"),
+            "expected the unchanged naive-identity call, got:\n{}",
+            report.snippets[0].file.content
+        );
     }
 
     #[test]
