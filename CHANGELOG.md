@@ -40,6 +40,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `options_via = "from_json"`. Construct via the type's plain kwargs constructor instead, stop importing that type
   from both the public module and the native bindings module in the same file, and bind the call result whenever
   the snippet template is going to print it instead of discarding the return value and printing an unbound name.
+- **e2e/snippets**: give the Python, Go, Dart, and TypeScript snippet generators a crate-name-derived
+  `"{PascalCase(crate name)}Error"` fallback for the error type they import/catch, instead of the bare literal
+  `"Error"`, which almost never names a real generated type. Scoped to the four snippet emitters via a shared
+  `snippet_error_type_name` helper — `ResolvedCrateConfig::error_type_name()` itself is unchanged and still
+  defaults to `"Error"`, since 11 Rust-generating backends (extendr, rustler, wasm, php, magnus, ffi, swift, pyo3,
+  jni, napi) consume it through `error_constructor_expr()` to generate Rust, and some consumer crates genuinely
+  name their error type `Error`.
 - **snippets**: enforce one timeout budget across every snippet in a validation batch and terminate timed-out
   toolchain process groups so descendant processes cannot keep docs generation alive.
 - **cache**: serialize IR maps and sets in canonical order so unchanged inputs retain stable IR and backend cache hashes.

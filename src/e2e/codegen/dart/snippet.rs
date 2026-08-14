@@ -65,7 +65,7 @@ pub(super) fn render_snippet_body(
             statements => statements, needs_json => needs_json,
             needs_io => needs_io,
             expects_error => expects_error,
-            error_type => config.error_type_name(),
+            error_type => crate::e2e::codegen::snippet_error_type_name(config),
             result_var => call.result_var,
             returns_void => call.returns_void,
         },

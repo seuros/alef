@@ -180,7 +180,7 @@ impl super::E2eCodegen for PythonE2eCodegen {
             force_bind_result,
         );
         let (imports, body, is_async) = extract_python_snippet(&test_file)?;
-        let error_type = config.error_type_name();
+        let error_type = super::snippet_error_type_name(config);
         let mut imports = imports.into_iter().map(str::to_string).collect::<Vec<_>>();
         if expects_error {
             imports.push(format!(
