@@ -282,6 +282,78 @@ fn test_accessor_kotlin_optional_field_after_indexed_array() {
     );
 }
 
+/// Regression (alef #583): `FieldResolver::is_optional` normalises indices
+/// when checking whether a fixture field is optional, so a config entry like
+/// `"results[0].metadata.format"` (the exact key xberg's alef.toml uses after
+/// commit 60c9081200 relocated its config under a batch `results[]` root) is
+/// recognised as optional regardless of how the caller phrases the path.
+///
+/// The per-language "_with_optionals" renderers, however, rebuild their own
+/// `optional_fields` lookup key by walking path segments one at a time, and
+/// several of them (typescript/node, csharp, zig) never re-appended the
+/// normalised `"[0]"` suffix after crossing the `ArrayField` segment for
+/// `results[0]`. Their internal lookup for `"results[0].metadata.format"`
+/// then silently degraded to a bare `"results.metadata.format"` key, which
+/// never matches the config entry — so the assertion layer (`is_optional`)
+/// and the emitted accessor chain DISAGREED: the field was optional, but the
+/// generated code never guarded the access. For Zig this is not a latent
+/// bug: `.?` is mandatory to traverse `?T`, so the missing unwrap is a hard
+/// compile error.
+///
+/// Fix: every renderer now tracks its lookup key through the shared
+/// `push_key_field_name` / `push_key_index_suffix` helpers, which always
+/// normalise indexed segments to a literal `"[0]"` suffix — the same
+/// convention `FieldResolver::is_optional` uses.
+fn indexed_optional_resolver() -> FieldResolver {
+    let mut fields = HashMap::new();
+    fields.insert("excel".to_string(), "results[0].metadata.format.excel".to_string());
+    let mut optional = HashSet::new();
+    optional.insert("results[0].metadata.format".to_string());
+    let mut arrays = HashSet::new();
+    arrays.insert("results".to_string());
+    FieldResolver::new(&fields, &optional, &HashSet::new(), &arrays, &HashSet::new())
+}
+
+#[test]
+fn test_accessor_typescript_optional_field_after_indexed_array_agrees_with_is_optional() {
+    let r = indexed_optional_resolver();
+    assert!(r.is_optional("results[0].metadata.format"));
+    assert_eq!(
+        r.accessor("excel", "node", "result"),
+        "result.results[0].metadata.format?.excel"
+    );
+}
+
+#[test]
+fn test_accessor_csharp_optional_field_after_indexed_array_agrees_with_is_optional() {
+    let r = indexed_optional_resolver();
+    assert!(r.is_optional("results[0].metadata.format"));
+    assert_eq!(
+        r.accessor("excel", "csharp", "result"),
+        "result.Results[0].Metadata.Format!.Excel"
+    );
+}
+
+#[test]
+fn test_accessor_zig_optional_field_after_indexed_array_agrees_with_is_optional() {
+    let r = indexed_optional_resolver();
+    assert!(r.is_optional("results[0].metadata.format"));
+    assert_eq!(
+        r.accessor("excel", "zig", "result"),
+        "result.results[0].metadata.format.?.excel"
+    );
+}
+
+#[test]
+fn test_accessor_rust_optional_field_after_indexed_array_agrees_with_is_optional() {
+    let r = indexed_optional_resolver();
+    assert!(r.is_optional("results[0].metadata.format"));
+    assert_eq!(
+        r.accessor("excel", "rust", "result"),
+        "result.results[0].metadata.format.as_ref().unwrap().excel"
+    );
+}
+
 #[test]
 fn test_accessor_csharp() {
     let r = make_resolver();
