@@ -244,7 +244,7 @@ fn service_c_arg_expr_with_marshal(
                         \t\treturn err\n\
                         \t}}\n\
                         \t{var_name} := C.{ffi_prefix}_{type_name_snake}_from_json(C.CString(string({var_name}JSON)))\n\
-                        \tif {var_name} == nil {{\n\
+                        \tif {var_name} == 0 {{\n\
                         \t\treturn errors.New(\"{type_name} config failed\")\n\
                         \t}}\n\
                         \tdefer C.{ffi_prefix}_{type_name_snake}_free({var_name})\n"

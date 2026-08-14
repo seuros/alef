@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cleanup until post-build succeeds while preserving non-header generator and scaffold outputs.
 - **snippets**: isolate per-target validation-session preparation failures so healthy language sessions still run
   while strict validation reports the affected target as an error.
+- **snippets/c/go**: model public FFI handles as scalar `AlefHandle` values and use zero as the invalid-handle sentinel.
 
 - **fixtures/readme**: separate reader-facing fixture inputs, result presentation, and error intent from test data,
   and allow individual README snippet mappings to migrate between roots without breaking sibling mappings.

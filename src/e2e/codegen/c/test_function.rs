@@ -300,7 +300,7 @@ pub(super) fn render_test_function(
     // factory function, calls {prefix}_default_client_{function_name}(client, req),
     // then frees result, request handles, and client.
     if let Some(factory) = client_factory {
-        let Some(client_owner_type) = resolve_c_client_owner_type(config, type_defs, function_name) else {
+        let Some(_client_owner_type) = resolve_c_client_owner_type(config, type_defs, function_name) else {
             render_c_diagnostic_skip(
                 out,
                 "client_factory is configured but C e2e could not resolve the client owner type",
@@ -343,7 +343,7 @@ pub(super) fn render_test_function(
                     out.push_str(&docs_setup);
                     let _ = writeln!(
                         out,
-                        "    {prefix_upper}{request_type_pascal}* {var_name} = \
+                        "    {prefix_upper}AlefHandle {var_name} = \
                              {prefix}_{request_type_snake}_from_json({json_expr});"
                     );
                     out.push_str(&docs_cleanup);
@@ -360,7 +360,7 @@ pub(super) fn render_test_function(
                             minijinja::context! { variable => var_name },
                         ));
                     } else {
-                        let _ = writeln!(out, "    assert({var_name} != NULL && \"failed to build request\");");
+                        let _ = writeln!(out, "    assert({var_name} != 0 && \"failed to build request\");");
                     }
                     request_handle_vars.push((arg.name.clone(), var_name));
                 }
@@ -416,7 +416,7 @@ pub(super) fn render_test_function(
             let _ = writeln!(out, "    const char* _base_url_arg = use_mock ? base_url_buf : NULL;");
             let _ = writeln!(
                 out,
-                "    {prefix_upper}{client_owner_type}* client = {prefix}_{factory}(api_key, _base_url_arg, (uint64_t)-1, (uint32_t)-1, NULL);"
+                "    {prefix_upper}AlefHandle client = {prefix}_{factory}(api_key, _base_url_arg, (uint64_t)-1, (uint32_t)-1, NULL);"
             );
         } else if has_mock {
             let _ = writeln!(out, "    const char* mock_base = getenv(\"MOCK_SERVER_URL\");");
@@ -428,15 +428,15 @@ pub(super) fn render_test_function(
             );
             let _ = writeln!(
                 out,
-                "    {prefix_upper}{client_owner_type}* client = {prefix}_{factory}(\"test-key\", base_url, (uint64_t)-1, (uint32_t)-1, NULL);"
+                "    {prefix_upper}AlefHandle client = {prefix}_{factory}(\"test-key\", base_url, (uint64_t)-1, (uint32_t)-1, NULL);"
             );
         } else {
             let _ = writeln!(
                 out,
-                "    {prefix_upper}{client_owner_type}* client = {prefix}_{factory}(\"test-key\", NULL, (uint64_t)-1, (uint32_t)-1, NULL);"
+                "    {prefix_upper}AlefHandle client = {prefix}_{factory}(\"test-key\", NULL, (uint64_t)-1, (uint32_t)-1, NULL);"
             );
         }
-        let _ = writeln!(out, "    assert(client != NULL && \"failed to create client\");");
+        let _ = writeln!(out, "    assert(client != 0 && \"failed to create client\");");
 
         let method_args = if request_handle_vars.is_empty() && inline_method_args.is_empty() && extra_args.is_empty() {
             String::new()
@@ -455,23 +455,23 @@ pub(super) fn render_test_function(
         if expects_error {
             let _ = writeln!(
                 out,
-                "    {prefix_upper}{result_type_name}* {result_var} = {call_fn}(client{method_args});"
+                "    {prefix_upper}AlefHandle {result_var} = {call_fn}(client{method_args});"
             );
             for (_, var_name) in &request_handle_vars {
                 let req_snake = var_name.strip_suffix("_handle").unwrap_or(var_name);
                 let _ = writeln!(out, "    {prefix}_{req_snake}_free({var_name});");
             }
             let _ = writeln!(out, "    {prefix}_default_client_free(client);");
-            let _ = writeln!(out, "    assert({result_var} == NULL && \"expected call to fail\");");
+            let _ = writeln!(out, "    assert({result_var} == 0 && \"expected call to fail\");");
             let _ = writeln!(out, "}}");
             return;
         }
 
         let _ = writeln!(
             out,
-            "    {prefix_upper}{result_type_name}* {result_var} = {call_fn}(client{method_args});"
+            "    {prefix_upper}AlefHandle {result_var} = {call_fn}(client{method_args});"
         );
-        let _ = writeln!(out, "    assert({result_var} != NULL && \"expected call to succeed\");");
+        let _ = writeln!(out, "    assert({result_var} != 0 && \"expected call to succeed\");");
 
         let mut intermediate_handles: Vec<(String, String)> = Vec::new();
         let mut accessed_fields: Vec<(String, String, bool)> = Vec::new();
@@ -551,7 +551,7 @@ pub(super) fn render_test_function(
                         // Opaque struct handle: cannot be read as char*.
                         let _ = writeln!(
                             out,
-                            "    {prefix_upper}{handle_pascal}* {local_var} = {accessor_fn}({result_var});"
+                            "    {prefix_upper}AlefHandle {local_var} = {accessor_fn}({result_var});"
                         );
                         opaque_handle_locals.insert(local_var.clone(), handle_pascal.to_snake_case());
                     } else {
@@ -906,10 +906,10 @@ pub(super) fn render_test_function(
     if expects_error {
         let _ = writeln!(
             out,
-            "    {prefix_upper}{result_type_name}* {result_var} = {prefixed_fn}({args_str});"
+            "    {prefix_upper}AlefHandle {result_var} = {prefixed_fn}({args_str});"
         );
         render_typed_arg_cleanup(out, prefix, &typed_arg_cleanup);
-        let _ = writeln!(out, "    assert({result_var} == NULL && \"expected call to fail\");");
+        let _ = writeln!(out, "    assert({result_var} == 0 && \"expected call to fail\");");
         let _ = writeln!(out, "}}");
         return;
     }
@@ -917,9 +917,9 @@ pub(super) fn render_test_function(
     // The FFI returns an opaque handle; extract the content string from it.
     let _ = writeln!(
         out,
-        "    {prefix_upper}{result_type_name}* {result_var} = {prefixed_fn}({args_str});"
+        "    {prefix_upper}AlefHandle {result_var} = {prefixed_fn}({args_str});"
     );
-    let _ = writeln!(out, "    assert({result_var} != NULL && \"expected call to succeed\");");
+    let _ = writeln!(out, "    assert({result_var} != 0 && \"expected call to succeed\");");
 
     // Collect fields accessed by assertions so we can emit accessor calls.
     // C FFI uses the opaque handle pattern: {prefix}_conversion_result_{field}(handle).
@@ -1012,7 +1012,7 @@ pub(super) fn render_test_function(
                 {
                     let _ = writeln!(
                         out,
-                        "    {prefix_upper}{handle_pascal}* {local_var} = {accessor_fn}({result_var});"
+                        "    {prefix_upper}AlefHandle {local_var} = {accessor_fn}({result_var});"
                     );
                     opaque_handle_locals.insert(local_var.clone(), handle_pascal.to_snake_case());
                 } else {

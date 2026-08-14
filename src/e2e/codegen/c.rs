@@ -139,9 +139,9 @@ fn try_emit_enum_accessor(
     let handle_var = format!("{local_var}_handle");
     let _ = writeln!(
         out,
-        "    {prefix_upper}{enum_pascal}* {handle_var} = {accessor_fn}({parent_handle});"
+        "    {prefix_upper}AlefHandle {handle_var} = {accessor_fn}({parent_handle});"
     );
-    let _ = writeln!(out, "    assert({handle_var} != NULL);");
+    let _ = writeln!(out, "    assert({handle_var} != 0);");
     let _ = writeln!(
         out,
         "    char* {local_var} = {prefix}_{enum_snake}_to_string({handle_var});"

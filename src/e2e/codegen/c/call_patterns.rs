@@ -66,27 +66,27 @@ pub(super) fn render_engine_factory_test_function(
     // --- engine setup ---
     let _ = writeln!(
         out,
-        "    {prefix_upper}{config_type}* config_handle = \
+        "    {prefix_upper}AlefHandle config_handle = \
          {prefix}_{config_snake}_from_json(\"{config_escaped}\");"
     );
     if expects_error {
         // Config parsing may legitimately fail for error fixtures (e.g. invalid config
         // rejected by the FFI layer). Return early — that counts as the expected failure.
-        let _ = writeln!(out, "    if (config_handle == NULL) {{ ALEF_TEST_PASS(); }}");
+        let _ = writeln!(out, "    if (config_handle == 0) {{ ALEF_TEST_PASS(); }}");
     } else {
-        let _ = writeln!(out, "    assert(config_handle != NULL && \"failed to parse config\");");
+        let _ = writeln!(out, "    assert(config_handle != 0 && \"failed to parse config\");");
     }
     let _ = writeln!(
         out,
-        "    {prefix_upper}CrawlEngineHandle* engine = {prefix}_create_engine(config_handle);"
+        "    {prefix_upper}AlefHandle engine = {prefix}_create_engine(config_handle);"
     );
     let _ = writeln!(out, "    {prefix}_{config_snake}_free(config_handle);");
     if expects_error {
         // Engine creation may legitimately fail for error fixtures (e.g. invalid config
         // rejected at engine-creation time). Return early — that counts as the expected failure.
-        let _ = writeln!(out, "    if (engine == NULL) {{ ALEF_TEST_PASS(); }}");
+        let _ = writeln!(out, "    if (engine == 0) {{ ALEF_TEST_PASS(); }}");
     } else {
-        let _ = writeln!(out, "    assert(engine != NULL && \"failed to create engine\");");
+        let _ = writeln!(out, "    assert(engine != 0 && \"failed to create engine\");");
     }
 
     // --- URL construction ---
@@ -178,11 +178,11 @@ pub(super) fn render_engine_factory_test_function(
             let raw_snake = raw_type.to_snake_case();
             let _ = writeln!(
                 out,
-                "    {prefix_upper}{raw_type}* {result_var} = {prefix}_{function_name}(engine, url{extra_call_args});"
+                "    {prefix_upper}AlefHandle {result_var} = {prefix}_{function_name}(engine, url{extra_call_args});"
             );
             let _ = writeln!(
                 out,
-                "    if ({result_var} != NULL) {prefix}_{raw_snake}_free({result_var});"
+                "    if ({result_var} != 0) {prefix}_{raw_snake}_free({result_var});"
             );
             let _ = writeln!(out, "    {prefix}_crawl_engine_handle_free(engine);");
             let _ = writeln!(out, "}}");
@@ -192,7 +192,7 @@ pub(super) fn render_engine_factory_test_function(
 
     let _ = writeln!(
         out,
-        "    {prefix_upper}{result_type_name}* {result_var} = {prefix}_{function_name}(engine, url{extra_call_args});"
+        "    {prefix_upper}AlefHandle {result_var} = {prefix}_{function_name}(engine, url{extra_call_args});"
     );
 
     // When no assertions can be verified (all skipped or error-only), use a soft
@@ -201,14 +201,14 @@ pub(super) fn render_engine_factory_test_function(
         let result_type_snake = result_type_name.to_snake_case();
         let _ = writeln!(
             out,
-            "    if ({result_var} != NULL) {prefix}_{result_type_snake}_free({result_var});"
+            "    if ({result_var} != 0) {prefix}_{result_type_snake}_free({result_var});"
         );
         let _ = writeln!(out, "    {prefix}_crawl_engine_handle_free(engine);");
         let _ = writeln!(out, "}}");
         return;
     }
 
-    let _ = writeln!(out, "    assert({result_var} != NULL && \"expected call to succeed\");");
+    let _ = writeln!(out, "    assert({result_var} != 0 && \"expected call to succeed\");");
 
     // --- field assertions ---
     let mut intermediate_handles: Vec<(String, String)> = Vec::new();
@@ -291,7 +291,7 @@ pub(super) fn render_engine_factory_test_function(
                 {
                     let _ = writeln!(
                         out,
-                        "    {prefix_upper}{handle_pascal}* {local_var} = {accessor_fn}({result_var});"
+                        "    {prefix_upper}AlefHandle {local_var} = {accessor_fn}({result_var});"
                     );
                     opaque_handle_locals.insert(local_var.clone(), handle_pascal.to_snake_case());
                 } else {
@@ -379,7 +379,7 @@ pub(super) fn render_bytes_test_function(
     options_type_name: &str,
     result_type_name: &str,
     factory: &str,
-    client_owner_type: &str,
+    _client_owner_type: &str,
     expects_error: bool,
 ) {
     let prefix_upper = prefix.to_uppercase();
@@ -408,7 +408,7 @@ pub(super) fn render_bytes_test_function(
                     let escaped = escape_c(&json_str);
                     let _ = writeln!(
                         out,
-                        "    {prefix_upper}{request_type_pascal}* {var_name} = \
+                        "    {prefix_upper}AlefHandle {var_name} = \
                              {prefix}_{request_type_snake}_from_json(\"{escaped}\");"
                     );
                     if expects_error {
@@ -424,7 +424,7 @@ pub(super) fn render_bytes_test_function(
                             minijinja::context! { variable => var_name },
                         ));
                     } else {
-                        let _ = writeln!(out, "    assert({var_name} != NULL && \"failed to build request\");");
+                        let _ = writeln!(out, "    assert({var_name} != 0 && \"failed to build request\");");
                     }
                     request_handle_vars.push((arg.name.clone(), var_name));
                 }
@@ -469,15 +469,15 @@ pub(super) fn render_bytes_test_function(
         // request deadline) and breaks every HTTP fixture.
         let _ = writeln!(
             out,
-            "    {prefix_upper}{client_owner_type}* client = {prefix}_{factory}(\"test-key\", base_url, (uint64_t)-1, (uint32_t)-1, NULL);"
+            "    {prefix_upper}AlefHandle client = {prefix}_{factory}(\"test-key\", base_url, (uint64_t)-1, (uint32_t)-1, NULL);"
         );
     } else {
         let _ = writeln!(
             out,
-            "    {prefix_upper}{client_owner_type}* client = {prefix}_{factory}(\"test-key\", NULL, (uint64_t)-1, (uint32_t)-1, NULL);"
+            "    {prefix_upper}AlefHandle client = {prefix}_{factory}(\"test-key\", NULL, (uint64_t)-1, (uint32_t)-1, NULL);"
         );
     }
-    let _ = writeln!(out, "    assert(client != NULL && \"failed to create client\");");
+    let _ = writeln!(out, "    assert(client != 0 && \"failed to create client\");");
 
     // Out-params for the byte buffer.
     let _ = writeln!(out, "    uint8_t* out_ptr = NULL;");

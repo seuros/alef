@@ -353,3 +353,59 @@ fn test_registration_variant_wrapper_call_emits_free_args() {
     assert!(go.contains("C.CString(path)"), "missing CString(path) in:\n{go}");
     assert!(!go.contains("\"GET\""), "fixed arg must not be re-emitted:\n{go}");
 }
+
+#[test]
+fn marshalled_dto_handle_uses_scalar_zero_sentinel() {
+    let api = ApiSurface {
+        types: vec![crate::core::ir::TypeDef {
+            name: "Config".into(),
+            has_serde: true,
+            ..crate::core::ir::TypeDef::default()
+        }],
+        ..ApiSurface::default()
+    };
+    let (setup, argument) =
+        service_c_arg_expr_with_marshal("config", &TypeRef::Named("Config".into()), &api, "SAMPLE", "sample");
+    assert_eq!(argument, "c_config");
+    assert!(setup.contains("if c_config == 0"), "{setup}");
+    assert!(!setup.contains("if c_config == nil"), "{setup}");
+
+    let Some(go) = which::which("go").ok() else {
+        return;
+    };
+    let directory = tempfile::tempdir().expect("temporary Go scalar-handle directory");
+    let source = format!(
+        r#"package sample
+/*
+#include <stdint.h>
+#include <stdlib.h>
+typedef uint64_t SAMPLEAlefHandle;
+static SAMPLEAlefHandle sample_config_from_json(char *value) {{ (void)value; return 0; }}
+static void sample_config_free(SAMPLEAlefHandle value) {{ (void)value; }}
+*/
+import "C"
+import (
+    "encoding/json"
+    "errors"
+)
+type Config struct{{}}
+func use(config Config) error {{
+{setup}
+    _ = {argument}
+    return nil
+}}
+"#
+    );
+    std::fs::write(directory.path().join("scalar_handle.go"), source).expect("write neutral Go source");
+    let output = std::process::Command::new(go)
+        .args(["test", "./..."])
+        .env("GO111MODULE", "off")
+        .current_dir(directory.path())
+        .output()
+        .expect("run Go compiler");
+    assert!(
+        output.status.success(),
+        "generated Go scalar-handle setup failed to compile:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

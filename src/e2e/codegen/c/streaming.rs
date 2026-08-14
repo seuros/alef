@@ -4,7 +4,7 @@ use crate::core::config::{AdapterPattern, ResolvedCrateConfig};
 use crate::e2e::codegen::transform_json_keys_for_language;
 use crate::e2e::escape::escape_c;
 use crate::e2e::fixture::{Assertion, Fixture};
-use heck::{ToPascalCase, ToSnakeCase};
+use heck::ToSnakeCase;
 use std::fmt::Write as FmtWrite;
 
 pub(super) struct CStreamingAdapterMetadata {
@@ -106,7 +106,6 @@ pub(super) fn render_streaming_test_function(
     let stream_start = format!("{prefix}_{owner_snake}_{adapter_name}_start");
     let stream_next = format!("{prefix}_{owner_snake}_{adapter_name}_next");
     let stream_free = format!("{prefix}_{owner_snake}_{adapter_name}_free");
-    let owner_type = &streaming.owner_type;
 
     let mut request_var: Option<String> = None;
     for arg in args {
@@ -128,10 +127,10 @@ pub(super) fn render_streaming_test_function(
                 let escaped = escape_c(&json_str);
                 let _ = writeln!(
                     out,
-                    "    {prefix_upper}{request_type_pascal}* {var_name} = \
+                    "    {prefix_upper}AlefHandle {var_name} = \
                          {prefix}_{request_type_snake}_from_json(\"{escaped}\");"
                 );
-                let _ = writeln!(out, "    assert({var_name} != NULL && \"failed to build request\");");
+                let _ = writeln!(out, "    assert({var_name} != 0 && \"failed to build request\");");
                 request_var = Some(var_name);
                 break;
             }
@@ -156,7 +155,7 @@ pub(super) fn render_streaming_test_function(
         let _ = writeln!(out, "    const char* _base_url_arg = use_mock ? base_url_buf : NULL;");
         let _ = writeln!(
             out,
-            "    {prefix_upper}{owner_type}* client = {prefix}_{client_factory}(api_key, _base_url_arg, (uint64_t)-1, (uint32_t)-1, NULL);"
+            "    {prefix_upper}AlefHandle client = {prefix}_{client_factory}(api_key, _base_url_arg, (uint64_t)-1, (uint32_t)-1, NULL);"
         );
     } else if has_mock {
         let _ = writeln!(out, "    const char* mock_base = getenv(\"MOCK_SERVER_URL\");");
@@ -172,32 +171,29 @@ pub(super) fn render_streaming_test_function(
         // request deadline) and breaks every HTTP fixture.
         let _ = writeln!(
             out,
-            "    {prefix_upper}{owner_type}* client = {prefix}_{client_factory}(\"test-key\", base_url, (uint64_t)-1, (uint32_t)-1, NULL);"
+            "    {prefix_upper}AlefHandle client = {prefix}_{client_factory}(\"test-key\", base_url, (uint64_t)-1, (uint32_t)-1, NULL);"
         );
     } else {
         let _ = writeln!(
             out,
-            "    {prefix_upper}{owner_type}* client = {prefix}_{client_factory}(\"test-key\", NULL, (uint64_t)-1, (uint32_t)-1, NULL);"
+            "    {prefix_upper}AlefHandle client = {prefix}_{client_factory}(\"test-key\", NULL, (uint64_t)-1, (uint32_t)-1, NULL);"
         );
     }
-    let _ = writeln!(out, "    assert(client != NULL && \"failed to create client\");");
+    let _ = writeln!(out, "    assert(client != 0 && \"failed to create client\");");
 
     // The streaming opaque handle is a Rust type named `{Prefix}{Owner}{Method}StreamHandle`;
     // cbindgen additionally prepends the configured uppercase type-name `prefix` (e.g. `SAMPLELLM`),
     // exactly as it does for ordinary opaque handle types like `{prefix_upper}{owner_type}`.
-    let pascal_prefix = prefix.to_pascal_case();
-    let pascal_owner = streaming.owner_type.to_pascal_case();
-    let pascal_name = streaming.adapter_name.to_pascal_case();
     let _ = writeln!(
         out,
-        "    {prefix_upper}{pascal_prefix}{pascal_owner}{pascal_name}StreamHandle* stream_handle = \
+        "    {prefix_upper}AlefHandle stream_handle = \
          {stream_start}(client, {req_handle});"
     );
 
     if expects_error {
         let _ = writeln!(
             out,
-            "    assert(stream_handle == NULL && \"expected stream-start to fail\");"
+            "    assert(stream_handle == 0 && \"expected stream-start to fail\");"
         );
         if request_var.is_some() {
             let _ = writeln!(out, "    {prefix}_{req_snake}_free({req_handle});");
@@ -209,7 +205,7 @@ pub(super) fn render_streaming_test_function(
 
     let _ = writeln!(
         out,
-        "    assert(stream_handle != NULL && \"expected stream-start to succeed\");"
+        "    assert(stream_handle != 0 && \"expected stream-start to succeed\");"
     );
 
     let _ = writeln!(out, "    size_t chunks_count = 0;");
@@ -224,9 +220,9 @@ pub(super) fn render_streaming_test_function(
     let _ = writeln!(out, "    while (1) {{");
     let _ = writeln!(
         out,
-        "        {prefix_upper}{item_type_pascal}* {result_var} = {stream_next}(stream_handle);"
+        "        {prefix_upper}AlefHandle {result_var} = {stream_next}(stream_handle);"
     );
-    let _ = writeln!(out, "        if ({result_var} == NULL) {{");
+    let _ = writeln!(out, "        if ({result_var} == 0) {{");
     let _ = writeln!(
         out,
         "            if ({prefix}_last_error_code() == 0) {{ stream_complete = 1; }}"

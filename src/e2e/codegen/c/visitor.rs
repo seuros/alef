@@ -130,9 +130,9 @@ pub(super) fn render_visitor_test_file(
         // Create options handle.
         let _ = writeln!(
             out,
-            "    {prefix_upper}{options_type_name}* _options = {prefix}_{options_type_snake}_from_json(\"{options_escaped}\");"
+            "    {prefix_upper}AlefHandle _options = {prefix}_{options_type_snake}_from_json(\"{options_escaped}\");"
         );
-        let _ = writeln!(out, "    assert(_options != NULL && \"options from_json failed\");");
+        let _ = writeln!(out, "    assert(_options != 0 && \"options from_json failed\");");
         let _ = writeln!(out);
 
         // Attach visitor to options.
@@ -142,9 +142,9 @@ pub(super) fn render_visitor_test_file(
         // Call the configured C FFI function.
         let _ = writeln!(
             out,
-            "    {prefix_upper}{result_type_name}* _result = {function_name}(\"{html_escaped}\", _options);"
+            "    {prefix_upper}AlefHandle _result = {function_name}(\"{html_escaped}\", _options);"
         );
-        let _ = writeln!(out, "    assert(_result != NULL && \"visitor call failed\");");
+        let _ = writeln!(out, "    assert(_result != 0 && \"visitor call failed\");");
         let _ = writeln!(out);
 
         if !fixture.assertions.is_empty() {
@@ -646,8 +646,8 @@ mod visitor_tests {
 
         assert!(content.contains("KRZKrzVisitorCallbacks _callbacks"));
         assert!(content.contains("const KRZKrzContext* _ctx"));
-        assert!(content.contains("KRZRenderConfig* _options = krz_render_config_from_json"));
-        assert!(content.contains("KRZRenderOutput* _result = krz_render_document"));
+        assert!(content.contains("KRZAlefHandle _options = krz_render_config_from_json"));
+        assert!(content.contains("KRZAlefHandle _result = krz_render_document"));
         assert!(content.contains("char* _json = krz_render_output_to_json(_result);"));
         assert!(content.contains("krz_render_output_free(_result);"));
         assert!(content.contains("krz_render_config_free(_options);"));
@@ -682,7 +682,7 @@ mod visitor_tests {
         .expect("visitor snippet renders");
 
         assert!(content.contains("static int32_t c_visitor_custom_names_visit_text"));
-        assert!(content.contains("KRZRenderOutput* _result = krz_render_document"));
+        assert!(content.contains("KRZAlefHandle _result = krz_render_document"));
         assert!(content.contains("int main(void)"));
         assert!(!content.contains("test_runner.h"));
         assert!(!content.contains("void test_custom_names"));
