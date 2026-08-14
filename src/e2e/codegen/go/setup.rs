@@ -41,7 +41,17 @@ fn native_go_dto_literal_at(
         .fields
         .iter()
         .filter_map(|field| {
-            let value = object.get(&field.name)?;
+            // Fixture JSON is authored in wire format (the same JSON the binding's
+            // `json.Unmarshal` accepts), so it must be looked up by the field's
+            // resolved wire name — not the Rust field identifier — exactly like the
+            // Go binding backend resolves the `json:"..."` tag in
+            // `backends::go::gen_bindings::types::structs::gen_struct_type`.
+            let wire_name = crate::codegen::naming::wire_field_name(
+                &field.name,
+                field.serde_rename.as_deref(),
+                definition.serde_rename_all.as_deref(),
+            );
+            let value = object.get(&wire_name).or_else(|| object.get(&field.name))?;
             let field_pointer = format!("{pointer}/{}", field.name);
             let optional = matches!(field.ty, crate::core::ir::TypeRef::Optional(_))
                 || field.optional
@@ -596,5 +606,50 @@ mod file_dto_tests {
         )
         .expect("native DTO");
         assert!(rendered.contains("Content: mustReadFile(`guide.pdf`)"), "{rendered}");
+    }
+
+    /// Pins the defect behind task #540: the Go binding backend
+    /// (`backends::go::gen_bindings::types::structs::gen_struct_type`) exports a struct
+    /// field named after the Rust field identifier and tags it with the field's resolved
+    /// `#[serde(rename)]` wire name, e.g. Rust `max_characters` (`#[serde(rename =
+    /// "max_chars")]`) becomes Go `MaxCharacters *uint \`json:"max_chars,omitempty"\``.
+    ///
+    /// Fixture JSON is authored in that same wire format — the format `json.Unmarshal`
+    /// would actually accept — so the Go snippet's native DTO-literal builder must look
+    /// values up by the wire name and then still emit the BINDING's Go identifier
+    /// (`MaxCharacters`, not `MaxChars`). Before the fix, `native_go_dto_literal_at`
+    /// looked values up under the raw Rust field name (`max_characters`), which is absent
+    /// from wire-format fixture JSON, so the field was silently dropped from the emitted
+    /// struct literal instead of being rendered under the binding's identifier.
+    #[test]
+    fn go_snippet_uses_binding_field_identifier_not_wire_name() {
+        let types = [TypeDef {
+            name: "ChunkingConfig".into(),
+            fields: vec![FieldDef {
+                name: "max_characters".into(),
+                ty: TypeRef::Primitive(crate::core::ir::PrimitiveType::Usize),
+                serde_rename: Some("max_chars".into()),
+                ..FieldDef::default()
+            }],
+            ..TypeDef::default()
+        }];
+        let rendered = native_go_dto_literal(
+            &serde_json::json!({"max_chars": 300}),
+            "ChunkingConfig",
+            "xberg",
+            &types,
+            &[],
+        )
+        .expect("native DTO");
+
+        assert!(
+            rendered.contains("MaxCharacters: 300"),
+            "expected the binding's Go identifier `MaxCharacters` (matching \
+             `to_go_name(\"max_characters\")`) keyed by the wire name `max_chars`, got: {rendered}"
+        );
+        assert!(
+            !rendered.contains("MaxChars:"),
+            "must not PascalCase the serde wire name into an unknown field identifier: {rendered}"
+        );
     }
 }
