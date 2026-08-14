@@ -721,6 +721,7 @@ mod capsule_tests {
             package: String::new(),
             package_version: String::new(),
             construct_expr: construct_expr.to_string(),
+            ..Default::default()
         }
     }
 

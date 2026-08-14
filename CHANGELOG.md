@@ -87,8 +87,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fallbacks.
 - **go/zig**: map native failures to typed binding errors by stable numeric FFI taxonomy codes instead of parsing
   human-readable error messages.
-- **Java/C#**: require an explicit shared-native-runtime contract before wrapping capsule pointers, and protect C#
-  service calls and callback registrations with SafeHandle lifetime guards.
+- **Java/C#**: require either a shared-native-runtime contract or an explicit borrowed-static, ABI-compatible,
+  no-destructor capsule contract before wrapping native pointers, and protect C# service calls and callback
+  registrations with SafeHandle lifetime guards.
 - **ffi**: report stable, collision-checked per-variant error taxonomy codes while preserving reserved conversion and
   panic codes.
 - **JNI/Kotlin Android**: transfer configured capsule values as their raw host pointers instead of boxed Rust

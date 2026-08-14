@@ -567,6 +567,7 @@ fn capsule_function_returns_host_type() {
             package: "io.github.tree-sitter:jtreesitter".to_string(),
             package_version: "0.25.0".to_string(),
             construct_expr: "new Language({ptr})".to_string(),
+            ..Default::default()
         },
     );
 

@@ -355,6 +355,7 @@ mod tests {
                 package: String::new(),
                 package_version: String::new(),
                 construct_expr: String::new(),
+                ..Default::default()
             },
         );
         let mut out = String::new();
@@ -384,6 +385,7 @@ mod tests {
                 package: String::new(),
                 package_version: String::new(),
                 construct_expr: String::new(),
+                ..Default::default()
             },
         );
         let mut out = String::new();
