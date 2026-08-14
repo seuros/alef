@@ -1,6 +1,5 @@
-use super::shared::{
-    render_async_body, render_deser_line, render_named_deser_line, render_preamble, resolve_core_type_path,
-};
+use super::default_deserialization::render_fallible_deser_line;
+use super::shared::{render_async_body, render_named_deser_line, render_preamble, resolve_core_type_path};
 use crate::backends::rustler::gen_bindings::types::gen_rustler_wrap_return;
 use crate::backends::rustler::template_env;
 use crate::backends::rustler::type_map::RustlerMapper;
@@ -98,10 +97,12 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_async_function(
                 if let TypeRef::Named(n) = &p.ty
                     && default_types.contains(n) {
                         let core_ty = resolve_core_type_path(n, types_by_name, core_import);
-                        deser_lines.push(render_deser_line(
-                            "default_deser_with_error.rs.jinja",
+                        deser_lines.push(render_fallible_deser_line(
                             &p.name,
+                            &format!("{}_core", p.name),
                             &core_ty,
+                            true,
+                            &nif_fn_name,
                         ));
                         if p.optional {
                             return format!("{}_core", p.name);
@@ -120,18 +121,28 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_async_function(
                         && !opaque_types.contains(inner_name.as_str()) {
                             let inner_ty = resolve_core_type_path(inner_name, types_by_name, core_import);
                             let core_ty = format!("Vec<{inner_ty}>");
-                            deser_lines.push(if func.error_type.is_some() {
-                                format!(
-                                    "let {pname}_core: {core_ty} = {pname}.map(|s| serde_json::from_str::<{core_ty}>(&s).map_err(|e| e.to_string())).transpose()?.unwrap_or_default();",
-                                    pname = p.name,
+                            deser_lines.push(render_fallible_deser_line(
+                                &p.name,
+                                &format!("{}_core_option", p.name),
+                                &core_ty,
+                                true,
+                                &nif_fn_name,
+                            ));
+                            deser_lines.push(
+                                template_env::render(
+                                    "rust_let_binding.jinja",
+                                    minijinja::context! {
+                                        var_name => if p.is_ref && p.is_mut { format!("mut {}_core", p.name) } else { format!("{}_core", p.name) },
+                                        var_type => &core_ty,
+                                        expr => &format!("{}_core_option.unwrap_or_default()", p.name),
+                                    },
                                 )
-                            } else {
-                                format!(
-                                    "let {pname}_core: {core_ty} = {pname}.and_then(|s| serde_json::from_str::<{core_ty}>(&s).ok()).unwrap_or_default();",
-                                    pname = p.name,
-                                )
-                            });
-                            return if p.is_ref {
+                                .trim_end()
+                                .to_string(),
+                            );
+                            return if p.is_ref && p.is_mut {
+                                format!("&mut {}_core", p.name)
+                            } else if p.is_ref {
                                 format!("&{}_core", p.name)
                             } else {
                                 format!("{}_core", p.name)
@@ -190,6 +201,26 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_async_function(
                         } else {
                             p.name.clone()
                         }
+                    }
+                    TypeRef::Json => {
+                        if p.optional {
+                            deser_lines.push(render_fallible_deser_line(
+                                &p.name,
+                                &format!("{}_json", p.name),
+                                "serde_json::Value",
+                                true,
+                                &nif_fn_name,
+                            ));
+                        } else {
+                            deser_lines.push(render_fallible_deser_line(
+                                &p.name,
+                                &format!("{}_json", p.name),
+                                "serde_json::Value",
+                                false,
+                                &nif_fn_name,
+                            ));
+                        }
+                        format!("{}_json", p.name)
                     }
                     TypeRef::Duration => format!("std::time::Duration::from_millis({})", p.name),
                     TypeRef::Vec(inner) => {

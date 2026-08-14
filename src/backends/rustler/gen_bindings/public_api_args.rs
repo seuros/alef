@@ -22,6 +22,69 @@ pub(in crate::backends::rustler::gen_bindings) fn json_encode_param_indices(
         .collect()
 }
 
+pub(in crate::backends::rustler::gen_bindings) fn has_fallible_deserialization_params(
+    params: &[ParamDef],
+    opaque_types: &AHashSet<String>,
+    default_types: &AHashSet<String>,
+) -> bool {
+    params.iter().any(|param| match &param.ty {
+        TypeRef::Named(name) => default_types.contains(name),
+        TypeRef::Vec(inner) => {
+            matches!(inner.as_ref(), TypeRef::Named(name) if !opaque_types.contains(name))
+        }
+        TypeRef::Json => true,
+        _ => false,
+    })
+}
+
+pub(in crate::backends::rustler::gen_bindings) fn function_deserialization_introduces_result(
+    function: &crate::core::ir::FunctionDef,
+    opaque_types: &AHashSet<String>,
+    default_types: &AHashSet<String>,
+) -> bool {
+    if function.is_async || function.error_type.is_some() {
+        return false;
+    }
+    let has_default = function
+        .params
+        .iter()
+        .any(|param| matches!(&param.ty, TypeRef::Named(name) if default_types.contains(name)));
+    let has_named_vec = function.params.iter().any(|param| {
+        matches!(&param.ty, TypeRef::Vec(inner) if matches!(inner.as_ref(), TypeRef::Named(name) if !opaque_types.contains(name)))
+    });
+    let can_delegate =
+        crate::codegen::shared::can_auto_delegate_function(function, opaque_types) || has_default || has_named_vec;
+    can_delegate && has_fallible_deserialization_params(&function.params, opaque_types, default_types)
+}
+
+pub(in crate::backends::rustler::gen_bindings) fn method_deserialization_introduces_result(
+    method: &crate::core::ir::MethodDef,
+    is_opaque: bool,
+    opaque_types: &AHashSet<String>,
+    default_types: &AHashSet<String>,
+) -> bool {
+    if method.is_async || method.error_type.is_some() {
+        return false;
+    }
+    let has_default = method
+        .params
+        .iter()
+        .any(|param| matches!(&param.ty, TypeRef::Named(name) if default_types.contains(name)));
+    let can_delegate_refmut = is_opaque
+        && matches!(method.receiver, Some(crate::core::ir::ReceiverKind::RefMut))
+        && method.trait_source.is_none()
+        && !method.sanitized
+        && method.params.iter().all(|param| {
+            !param.sanitized
+                && crate::codegen::shared::is_delegatable_param(&param.ty, opaque_types)
+                && !crate::codegen::shared::is_named_ref_param_pub(param, opaque_types)
+        })
+        && crate::codegen::shared::is_delegatable_return(&method.return_type);
+    let can_delegate =
+        crate::codegen::shared::can_auto_delegate(method, opaque_types) || has_default || can_delegate_refmut;
+    can_delegate && has_fallible_deserialization_params(&method.params, opaque_types, default_types)
+}
+
 /// Map a param index → tagged-enum name when the param's type (or its `Vec<_>` element)
 /// is a serde-tagged enum (`#[serde(tag = "...")]`). Used by the wrapper to insert a
 /// per-enum `encode_<EnumName>/1` helper call before `Jason.encode!`, so callers can pass

@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **rustler**: JSON-encode default-valued records at public boundaries, report malformed payloads with context, and
+  preserve async, error, and fluent-resource return shapes.
 - **generate/verify**: stamp every emitted file carrying an Alef marker, including backends that template their own
   marker while intentionally leaving `generated_header` disabled.
 - **ffi**: fail generation when generated FFI exports and the on-disk cbindgen header come from different runs.

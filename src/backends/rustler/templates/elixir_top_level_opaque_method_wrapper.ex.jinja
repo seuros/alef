@@ -1,0 +1,23 @@
+{% if doc_first %}
+  @doc "{{ doc_first }}"
+{% endif %}{% if def_args %}  def {{ func_name }}({{ def_args }}) do
+{% else %}  def {{ func_name }} do
+{% endif %}{% if returns_self %}{% if preserve_result %}    case {{ native_mod }}.{{ func_name }}({{ call_args }}) do
+      {:ok, ref} -> {:ok, %{{ app_module }}.{{ type_name }}{ref: ref}}
+      {:error, error} -> {:error, error}
+    end
+{% elif unwrap_result %}    ref =
+      case {{ native_mod }}.{{ func_name }}({{ call_args }}) do
+        {:ok, value} -> value
+        {:error, error} -> raise ArgumentError, error
+      end
+{% else %}    ref = {{ native_mod }}.{{ func_name }}({{ call_args }})
+{% endif %}
+{% if not preserve_result %}    %{{ app_module }}.{{ type_name }}{ref: ref}
+{% endif %}
+{% elif unwrap_result %}    case {{ native_mod }}.{{ func_name }}({{ call_args }}) do
+      {:ok, value} -> value
+      {:error, error} -> raise ArgumentError, error
+    end
+{% else %}    {{ native_mod }}.{{ func_name }}({{ call_args }})
+{% endif %}  end

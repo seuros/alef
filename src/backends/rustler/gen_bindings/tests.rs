@@ -4,6 +4,9 @@ use crate::core::config::ResolvedCrateConfig;
 use crate::core::config::new_config::NewAlefConfig;
 use crate::core::ir::ApiSurface;
 
+mod config_marshalling_fixtures;
+mod config_marshalling_tests;
+
 fn test_config() -> ResolvedCrateConfig {
     let toml = r#"
 [workspace]
@@ -356,6 +359,26 @@ fn test_default_typed_named_param_is_json_encoded_in_public_wrapper() {
         "default-typed Named params must forward nil and pre-encoded strings as-is and JSON-encode \
          native terms before the NIF call; body:\n{body}"
     );
+}
+
+#[test]
+fn opaque_methods_should_json_encode_default_typed_named_params() {
+    config_marshalling_tests::assert_opaque_methods_json_encode_named_params();
+}
+
+#[test]
+fn public_sync_wrappers_should_unwrap_deserialization_results_and_preserve_success_values() {
+    config_marshalling_tests::assert_public_sync_wrapper_contracts();
+}
+
+#[test]
+fn returns_self_wrappers_should_preserve_async_and_explicit_error_result_shapes() {
+    config_marshalling_tests::assert_returns_self_result_shapes();
+}
+
+#[test]
+fn json_deserialization_should_be_fallible_only_when_the_generated_body_parses_json() {
+    config_marshalling_tests::assert_json_deserialization_contracts();
 }
 
 /// The encoder helper must define dedicated clauses for each variant shape:

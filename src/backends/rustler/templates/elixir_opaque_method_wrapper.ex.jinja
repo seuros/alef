@@ -1,6 +1,21 @@
 {% if doc_first %}  @doc "{{ doc_first }}"
 {% endif %}  def {{ method_name }}({{ def_args }}) do
-{% if returns_self %}    ref = Native.{{ nif_fn }}({{ call_args }})
-    %__MODULE__{ref: ref}
+{% if returns_self %}{% if preserve_result %}    case Native.{{ nif_fn }}({{ call_args }}) do
+      {:ok, ref} -> {:ok, %__MODULE__{ref: ref}}
+      {:error, error} -> {:error, error}
+    end
+{% elif unwrap_result %}    ref =
+      case Native.{{ nif_fn }}({{ call_args }}) do
+        {:ok, value} -> value
+        {:error, error} -> raise ArgumentError, error
+      end
+{% else %}    ref = Native.{{ nif_fn }}({{ call_args }})
+{% endif %}
+{% if not preserve_result %}    %__MODULE__{ref: ref}
+{% endif %}
+{% elif unwrap_result %}    case Native.{{ nif_fn }}({{ call_args }}) do
+      {:ok, value} -> value
+      {:error, error} -> raise ArgumentError, error
+    end
 {% else %}    Native.{{ nif_fn }}({{ call_args }})
 {% endif %}  end

@@ -4,7 +4,7 @@ use crate::codegen::shared::binding_fields;
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::hash::{self, CommentStyle};
 use crate::core::ir::{TypeDef, TypeRef};
-use ahash::AHashSet;
+use ahash::{AHashMap, AHashSet};
 use heck::ToSnakeCase;
 use std::collections::HashMap;
 
@@ -147,10 +147,21 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_struct_module(
 /// `gen_bindings/functions.rs`). Methods that map to a `Streaming` adapter
 /// emit a `Stream.unfold/2`-based wrapper that drives the underlying
 /// `_start`/`_next` NIF pair instead of attempting a sync call.
+#[cfg(test)]
 pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_opaque_module(
     typ: &TypeDef,
     app_module: &str,
     config: &ResolvedCrateConfig,
+) -> String {
+    gen_elixir_opaque_module_with_types(typ, app_module, config, &AHashSet::new(), &AHashSet::new())
+}
+
+pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_opaque_module_with_types(
+    typ: &TypeDef,
+    app_module: &str,
+    config: &ResolvedCrateConfig,
+    opaque_types: &AHashSet<String>,
+    default_types: &AHashSet<String>,
 ) -> String {
     let mut out = String::with_capacity(512);
 
@@ -224,10 +235,21 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_opaque_module(
                 def_args.push("obj".to_string());
                 start_call_args.push("obj.ref".to_string());
             }
-            for p in &method.params {
+            let json_encode_params = crate::backends::rustler::gen_bindings::public_api_args::json_encode_param_indices(
+                &method.params,
+                opaque_types,
+                default_types,
+            );
+            let tagged_enum_params = AHashMap::new();
+            for (index, p) in method.params.iter().enumerate() {
                 let safe = elixir_safe_param_name(&p.name);
                 def_args.push(safe.clone());
-                start_call_args.push(safe);
+                start_call_args.push(crate::backends::rustler::gen_bindings::public_api_args::nif_arg(
+                    index,
+                    &safe,
+                    &json_encode_params,
+                    &tagged_enum_params,
+                ));
             }
 
             let doc_first = method.doc.lines().next().unwrap_or("").replace('"', "\\\"");
@@ -262,10 +284,21 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_opaque_module(
             def_args.push("obj".to_string());
             call_args.push("obj.ref".to_string());
         }
-        for p in &method.params {
+        let json_encode_params = crate::backends::rustler::gen_bindings::public_api_args::json_encode_param_indices(
+            &method.params,
+            opaque_types,
+            default_types,
+        );
+        let tagged_enum_params = AHashMap::new();
+        for (index, p) in method.params.iter().enumerate() {
             let safe = elixir_safe_param_name(&p.name);
             def_args.push(safe.clone());
-            call_args.push(safe);
+            call_args.push(crate::backends::rustler::gen_bindings::public_api_args::nif_arg(
+                index,
+                &safe,
+                &json_encode_params,
+                &tagged_enum_params,
+            ));
         }
 
         let doc_first = method.doc.lines().next().unwrap_or("").replace('"', "\\\"");
@@ -277,6 +310,13 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_opaque_module(
         // methods silently degrade the struct to a bare `reference()` after
         // the first chained call (the NIF returns a raw ref, not a struct). ~keep
         let returns_self = matches!(&method.return_type, TypeRef::Named(n) if n == &typ.name);
+        let unwrap_deserialization_result =
+            crate::backends::rustler::gen_bindings::public_api_args::method_deserialization_introduces_result(
+                method,
+                true,
+                opaque_types,
+                default_types,
+            );
 
         if !doc_first.is_empty() && !out.is_empty() && !out.ends_with("\n\n") {
             out.push('\n');
@@ -289,6 +329,8 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_opaque_module(
                 method_name => &method_name,
                 def_args => &def_args.join(", "),
                 returns_self => returns_self,
+                unwrap_result => unwrap_deserialization_result,
+                preserve_result => method.is_async || method.error_type.is_some(),
                 nif_fn => &nif_fn,
                 call_args => &call_args.join(", "),
             },

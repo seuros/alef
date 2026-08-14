@@ -1,5 +1,5 @@
 use super::args::gen_rustler_method_call_args;
-use super::default_deserialization::build_default_deser_preamble;
+use super::default_deserialization::{build_default_deser_preamble, render_json_string_param, render_ok_expression};
 use super::shared::{
     render_method_call, render_method_call_with_preamble, render_result_body, render_wrapped_body,
     resolve_core_type_path,
@@ -40,6 +40,11 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_method(
     };
 
     for p in &method.params {
+        if matches!(&p.ty, TypeRef::Vec(inner) if matches!(inner.as_ref(), TypeRef::Named(name) if !opaque_types.contains(name)))
+        {
+            params.push(render_json_string_param(&p.name));
+            continue;
+        }
         if let TypeRef::Named(n) = &p.ty {
             if opaque_types.contains(n) {
                 params.push(format!("{}: rustler::ResourceArc<{}>", p.name, n));
@@ -65,8 +70,6 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_method(
 
     let return_type =
         crate::backends::rustler::gen_bindings::helpers::map_return_type(&method.return_type, mapper, opaque_types);
-    let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
-
     let has_default_params = method
         .params
         .iter()
@@ -83,12 +86,24 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_method(
         && shared::is_delegatable_return(&method.return_type);
     let can_delegate =
         shared::can_auto_delegate(method, opaque_types) || has_default_params || can_delegate_refmut_opaque;
+    let deserialization_introduces_result =
+        crate::backends::rustler::gen_bindings::public_api_args::method_deserialization_introduces_result(
+            method,
+            is_opaque,
+            opaque_types,
+            default_types,
+        );
+    let return_annotation = mapper.wrap_return(
+        &return_type,
+        method.error_type.is_some() || deserialization_introduces_result,
+    );
 
     let deser_preamble = build_default_deser_preamble(
         &method.params,
+        opaque_types,
         default_types,
         core_import,
-        method.error_type.is_some(),
+        &method_fn_name,
         types_by_name,
     );
 
@@ -189,7 +204,7 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_method(
             if deser_preamble.is_empty() {
                 inner
             } else {
-                render_wrapped_body(&deser_preamble, &inner)
+                render_wrapped_body(&deser_preamble, &render_ok_expression(&inner))
             }
         }
     } else {

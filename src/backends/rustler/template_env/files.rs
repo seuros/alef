@@ -72,6 +72,14 @@ pub(super) static TEMPLATES: &[(&str, &str)] = &[
         include_str!("../templates/default_deser_without_error.rs.jinja"),
     ),
     (
+        "rust_json_string_param.rs.jinja",
+        include_str!("../templates/rust_json_string_param.rs.jinja"),
+    ),
+    (
+        "rust_ok_expression.rs.jinja",
+        include_str!("../templates/rust_ok_expression.rs.jinja"),
+    ),
+    (
         "visitor_field_options_setup.rs.jinja",
         include_str!("../templates/visitor_field_options_setup.rs.jinja"),
     ),
@@ -200,6 +208,10 @@ pub(super) static TEMPLATES: &[(&str, &str)] = &[
         include_str!("../templates/elixir_keyword_opts_wrapper.ex.jinja"),
     ),
     (
+        "elixir_public_nif_call.ex.jinja",
+        include_str!("../templates/elixir_public_nif_call.ex.jinja"),
+    ),
+    (
         "elixir_error_spec.ex.jinja",
         include_str!("../templates/elixir_error_spec.ex.jinja"),
     ),
@@ -238,6 +250,10 @@ pub(super) static TEMPLATES: &[(&str, &str)] = &[
     (
         "elixir_top_level_opaque_method.ex.jinja",
         include_str!("../templates/elixir_top_level_opaque_method.ex.jinja"),
+    ),
+    (
+        "elixir_top_level_opaque_method_wrapper.ex.jinja",
+        include_str!("../templates/elixir_top_level_opaque_method_wrapper.ex.jinja"),
     ),
     (
         "elixir_trait_behaviour.ex.jinja",

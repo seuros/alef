@@ -78,6 +78,19 @@ pub(super) fn gen_rustler_method_call_args(
                     format!("{}_json", p.name)
                 }
             }
+            TypeRef::Vec(inner)
+                if matches!(inner.as_ref(), TypeRef::Named(name) if !opaque_types.contains(name.as_str())) =>
+            {
+                if p.optional {
+                    format!("{}_core", p.name)
+                } else if p.is_ref && p.is_mut {
+                    format!("&mut {}_core", p.name)
+                } else if p.is_ref {
+                    format!("&{}_core", p.name)
+                } else {
+                    format!("{}_core", p.name)
+                }
+            }
             TypeRef::Vec(_) => {
                 if p.is_ref && p.is_mut {
                     format!("&mut {}_mut", p.name)
