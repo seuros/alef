@@ -270,14 +270,13 @@ pub(super) fn render_assertion(
             || per_call_enum_fields.contains_key(f)
             || per_call_enum_fields.contains_key(resolved)
     });
-    // For string equality on simple-result calls we want `.to_s.strip` to absorb
-    // trailing whitespace, but for numeric/bool simple results that coercion turns
-    // `0` into `"0"` and the `eq(0)` Integer comparison fails. Only fold `.to_s.strip`
-    // into the simple-result path when the expected value is a string; otherwise
-    // keep the raw expression so numeric/bool comparisons stay typed.
+    // ~keep String coercion only, never whitespace normalization: coercing a numeric or bool
+    // simple result turns `0` into `"0"` and the `eq(0)` Integer comparison fails, so `.to_s`
+    // is folded in only when the expected value is a string. The equals arm adds the `.to_s`
+    // for that case, so the raw expression is kept here.
     let expected_is_string = assertion.value.as_ref().is_some_and(|v| v.is_string());
     let stripped_field_expr = if result_is_simple && expected_is_string {
-        format!("{field_expr}.to_s.strip")
+        field_expr.clone()
     } else if field_is_enum {
         format!("{field_expr}.to_s")
     } else {
@@ -301,19 +300,16 @@ pub(super) fn render_assertion(
                     .map(|b| if b { "true" } else { "false" })
                     .unwrap_or("");
                 let rb_val = json_to_ruby(expected);
-                // Mirror Python's `expr.strip() == expected.strip()` pattern when comparing
-                // string values: converters commonly emit a trailing newline that fixture
-                // authors don't write into the expected string.
+                // ~keep Coerce to String for comparison but normalize neither side. Ruby used to
+                // strip both, which is symmetric and so never produced an unsatisfiable
+                // assertion — but it also made a real trailing-whitespace regression invisible
+                // in Ruby alone, while every other backend now compares exactly.
                 let cmp_expr = if expected.is_string() && !field_is_enum {
-                    format!("{stripped_field_expr}.to_s.strip")
+                    format!("{stripped_field_expr}.to_s")
                 } else {
                     stripped_field_expr.clone()
                 };
-                let cmp_expected = if expected.is_string() && !field_is_enum {
-                    format!("{rb_val}.strip")
-                } else {
-                    rb_val
-                };
+                let cmp_expected = rb_val;
 
                 let rendered = crate::e2e::template_env::render(
                     "ruby/assertion.jinja",
@@ -662,5 +658,73 @@ pub(super) fn build_ruby_method_call(
             format!("{call_receiver}.run_query({result_var}, \"{language}\", \"{query_source}\", source)")
         }
         _ => format!("{result_var}.{method_name}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::e2e::fixture::Assertion;
+
+    fn empty_resolver() -> FieldResolver {
+        FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+    }
+
+    fn render(expected: serde_json::Value, result_is_simple: bool) -> String {
+        let assertion = Assertion {
+            assertion_type: "equals".to_string(),
+            field: None,
+            value: Some(expected),
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &empty_resolver(),
+            result_is_simple,
+            &E2eConfig::default(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        out
+    }
+
+    /// ~keep Ruby normalized BOTH sides, which is symmetric and so never produced an
+    /// unsatisfiable assertion — but it also made a genuine trailing-whitespace regression
+    /// invisible in Ruby while every other backend compares exactly.
+    #[test]
+    fn equals_does_not_normalize_either_side() {
+        for simple in [true, false] {
+            let out = render(serde_json::Value::String("hello\n".into()), simple);
+            assert!(!out.contains(".strip"), "equals must not strip either side; got: {out}");
+        }
+    }
+
+    /// Control: an exact snapshot, not a `!contains` probe. A `!contains(".strip")` assertion
+    /// alone would still pass if the expected literal silently lost its trailing newline, so
+    /// pin the whole emitted line on both sides.
+    #[test]
+    fn equals_emits_the_newline_terminated_expected_verbatim() {
+        assert_eq!(
+            render(serde_json::Value::String("hello\n".into()), true),
+            "    expect(result.to_s).to eq(\"hello\\n\")\n"
+        );
+    }
+
+    /// Control: a numeric expected value must stay typed — no `.to_s` coercion — or an
+    /// `eq(0)` Integer comparison would compare against the String `"0"` and fail.
+    #[test]
+    fn equals_keeps_numeric_comparisons_typed() {
+        let out = render(serde_json::json!(0), true);
+        assert!(!out.contains(".to_s"), "numeric equals must stay typed; got: {out}");
+        assert!(out.contains("eq(0)"), "got: {out}");
     }
 }

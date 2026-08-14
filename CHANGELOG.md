@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicit manifest override, and copy host libraries from the Cargo workspace target directory.
 
 ### Fixed
+- **e2e/ruby**: compare `equals` assertions exactly. Ruby stripped both the actual and the expected value, which is
+  symmetric and so never produced an unsatisfiable assertion, but it also made a genuine trailing-whitespace
+  regression invisible in Ruby while every other backend compares exactly. String coercion is kept; normalization is
+  not.
 - **e2e/elixir**: stop normalizing the actual value in generated `equals` and `is_empty` assertions. `is_empty`
   emitted `String.trim(actual) == ""`, which passes for a whitespace-only value that Python's falsy check and
   TypeScript's length check both reject — so one fixture assertion disagreed across languages.

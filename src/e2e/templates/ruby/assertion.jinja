@@ -3,7 +3,7 @@
    Context variables:
    - assertion_type: assertion type ("equals", "contains", etc.)
    - field_expr: Ruby expression for the field
-   - stripped_field_expr: field_expr with .to_s.strip (for equals on simple result)
+   - stripped_field_expr: field_expr coerced with .to_s where needed (never whitespace-normalized)
    - field_is_array: bool
    - expected_val: Ruby-formatted value string
    - is_boolean_val: bool
