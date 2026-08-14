@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **jni/scaffold**: inherit the core crate's configured feature set when Kotlin Android does not provide a
+  backend-specific override, while preserving explicit per-backend features.
 - **e2e/wasm (tests)**: cover the fully-excluded-category path through `WasmCodegen::generate`, not only through the
   renderer. The existing unit test called `render_wasm_excluded_category` directly, so it verified the renderer but
   never that `generate` invoked it — reintroducing the silent-drop regression left all seven wasm unit tests green.
