@@ -17,6 +17,34 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Ownership contract for the native pointer wrapped by a host capsule.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PointerOwnership {
+    /// The host wrapper owns and may destroy the pointer.
+    #[default]
+    Owned,
+    /// The pointer has static lifetime and must never be destroyed by the host wrapper.
+    BorrowedStatic,
+    /// The pointer participates in a reference-counted ownership protocol.
+    Refcounted,
+    /// The pointer belongs to a WebAssembly runtime rather than the host native runtime.
+    Wasm,
+}
+
+/// Destructor behavior of the host wrapper around a capsule pointer.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HostDestructor {
+    /// The wrapper invokes a destructor from the same native runtime.
+    #[default]
+    SharedRuntime,
+    /// The wrapper has no destructor path for the pointer.
+    None,
+    /// The wrapper invokes an ABI-stable destructor that is explicitly a no-op.
+    AbiNoop,
+}
+
 /// Host-native capsule config for a single type in one C-ABI family backend.
 ///
 /// TOML form (Go example):
@@ -26,8 +54,12 @@ use serde::{Deserialize, Serialize};
 /// package = "github.com/example/go-my-lib"
 /// package_version = "v1.0.0"
 /// construct_expr = "my_pkg.NewLanguage(unsafe.Pointer({ptr}))"
+/// pointer_ownership = "borrowed_static"
+/// host_destructor = "none"
+/// abi_compatible = true
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct HostCapsuleTypeConfig {
     /// The host ecosystem's `Language` type, used as the return-type annotation in the
     /// generated binding (e.g. `"*my_pkg.Language"` for Go, `"MyLib.Language"` for Swift).
@@ -46,6 +78,17 @@ pub struct HostCapsuleTypeConfig {
     /// the FFI boundary. **Required** — backends error at emission time when this is empty.
     #[serde(default)]
     pub construct_expr: String,
+    /// Ownership contract for the native pointer. Defaults to `owned`, which requires a
+    /// shared native runtime unless a stronger safe contract is declared.
+    #[serde(default)]
+    pub pointer_ownership: PointerOwnership,
+    /// Destructor behavior of the host wrapper. Defaults to `shared_runtime`.
+    #[serde(default)]
+    pub host_destructor: HostDestructor,
+    /// Affirms that the host wrapper's pointer representation is ABI-compatible with the
+    /// pointer returned by Alef's FFI boundary.
+    #[serde(default)]
+    pub abi_compatible: bool,
 }
 
 impl HostCapsuleTypeConfig {
@@ -103,14 +146,36 @@ pub fn require_shared_native_runtime(
     if shares_native_runtime || capsule_types.is_empty() {
         return Ok(());
     }
-    let mut type_names: Vec<_> = capsule_types.keys().map(String::as_str).collect();
-    type_names.sort_unstable();
+
+    let mut unsafe_capsules: Vec<_> = capsule_types
+        .iter()
+        .filter_map(|(type_name, config)| borrowed_static_contract_error(type_name, config))
+        .collect();
+    if unsafe_capsules.is_empty() {
+        return Ok(());
+    }
+    unsafe_capsules.sort_unstable();
     anyhow::bail!(
-        "capsule type(s) `{}` in backend `{backend}` cannot safely wrap native pointers: \
-         `[crates.{backend}].shares_native_runtime = true` is required and affirms every configured host wrapper \
-         uses the exact same native runtime and ownership contract",
-        type_names.join("`, `")
+        "capsule configuration in backend `{backend}` cannot safely wrap native pointers: {}; \
+         declare a complete borrowed-static ABI-compatible no-destructor contract for every listed capsule, \
+         or set `[crates.{backend}].shares_native_runtime = true` only when every configured host wrapper uses \
+         the exact same native runtime and ownership contract",
+        unsafe_capsules.join("; ")
     )
+}
+
+fn borrowed_static_contract_error(type_name: &str, config: &HostCapsuleTypeConfig) -> Option<String> {
+    let mut reasons = Vec::new();
+    if config.pointer_ownership != PointerOwnership::BorrowedStatic {
+        reasons.push("`pointer_ownership = \"borrowed_static\"` is required");
+    }
+    if !config.abi_compatible {
+        reasons.push("`abi_compatible = true` is required");
+    }
+    if !matches!(config.host_destructor, HostDestructor::None | HostDestructor::AbiNoop) {
+        reasons.push("`host_destructor = \"none\"` or `host_destructor = \"abi_noop\"` is required");
+    }
+    (!reasons.is_empty()).then(|| format!("capsule type `{type_name}`: {}", reasons.join(", ")))
 }
 
 /// Extract the Zig import name from a capsule `host_type` expression.
@@ -155,6 +220,7 @@ mod tests {
             package: String::new(),
             package_version: String::new(),
             construct_expr: construct_expr.to_string(),
+            ..Default::default()
         }
     }
 
@@ -201,7 +267,124 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("[crates.java].shares_native_runtime = true"));
         assert!(message.contains("Language"));
+        assert!(message.contains("borrowed-static ABI-compatible no-destructor contract"));
         assert!(message.contains("exact same native runtime and ownership contract"));
+
+        require_shared_native_runtime(&capsule_types, true, "java").unwrap();
+    }
+
+    #[test]
+    fn defaults_require_shared_native_runtime() {
+        let cfg: HostCapsuleTypeConfig = toml::from_str(r#"host_type = "Language""#).unwrap();
+        assert_eq!(cfg.pointer_ownership, PointerOwnership::Owned);
+        assert_eq!(cfg.host_destructor, HostDestructor::SharedRuntime);
+        assert!(!cfg.abi_compatible);
+
+        let capsule_types = std::collections::HashMap::from([("Language".to_string(), cfg)]);
+        let message = require_shared_native_runtime(&capsule_types, false, "java")
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains("Language"));
+        assert!(message.contains("pointer_ownership = \"borrowed_static\""));
+    }
+
+    #[test]
+    fn borrowed_static_without_destructor_and_abi_compatible_is_safe_without_shared_runtime() {
+        let cfg: HostCapsuleTypeConfig = toml::from_str(
+            r#"
+host_type = "Language"
+pointer_ownership = "borrowed_static"
+host_destructor = "none"
+abi_compatible = true
+"#,
+        )
+        .unwrap();
+        let capsule_types = std::collections::HashMap::from([("Language".to_string(), cfg)]);
+
+        require_shared_native_runtime(&capsule_types, false, "java").unwrap();
+    }
+
+    #[test]
+    fn borrowed_static_with_abi_noop_destructor_is_safe_without_shared_runtime() {
+        let mut cfg = make_cfg("Language", "new Language({ptr})");
+        cfg.pointer_ownership = PointerOwnership::BorrowedStatic;
+        cfg.host_destructor = HostDestructor::AbiNoop;
+        cfg.abi_compatible = true;
+        let capsule_types = std::collections::HashMap::from([("Language".to_string(), cfg)]);
+
+        require_shared_native_runtime(&capsule_types, false, "csharp").unwrap();
+    }
+
+    #[test]
+    fn borrowed_static_without_abi_compatibility_is_rejected() {
+        let mut cfg = make_cfg("Language", "new Language({ptr})");
+        cfg.pointer_ownership = PointerOwnership::BorrowedStatic;
+        cfg.host_destructor = HostDestructor::None;
+        let capsule_types = std::collections::HashMap::from([("Language".to_string(), cfg)]);
+
+        let message = require_shared_native_runtime(&capsule_types, false, "java")
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains("abi_compatible = true"));
+    }
+
+    #[test]
+    fn shared_runtime_destructor_is_rejected_without_shared_runtime() {
+        let mut cfg = make_cfg("Language", "new Language({ptr})");
+        cfg.pointer_ownership = PointerOwnership::BorrowedStatic;
+        cfg.abi_compatible = true;
+        let capsule_types = std::collections::HashMap::from([("Language".to_string(), cfg)]);
+
+        let message = require_shared_native_runtime(&capsule_types, false, "java")
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains("host_destructor = \"none\"") || message.contains("host_destructor = \"abi_noop\""));
+    }
+
+    #[test]
+    fn unsafe_mixed_map_names_only_the_unsafe_capsule() {
+        let mut safe = make_cfg("Language", "new Language({ptr})");
+        safe.pointer_ownership = PointerOwnership::BorrowedStatic;
+        safe.host_destructor = HostDestructor::None;
+        safe.abi_compatible = true;
+        let unsafe_capsule = make_cfg("Query", "new Query({ptr})");
+        let capsule_types =
+            std::collections::HashMap::from([("Language".to_string(), safe), ("Query".to_string(), unsafe_capsule)]);
+
+        let message = require_shared_native_runtime(&capsule_types, false, "java")
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains("Query"));
+        assert!(!message.contains("capsule type `Language`"));
+    }
+
+    #[test]
+    fn all_ownership_contract_values_parse_and_unsafe_values_fail_closed() {
+        for ownership in ["owned", "refcounted", "wasm"] {
+            let cfg: HostCapsuleTypeConfig = toml::from_str(&format!(
+                r#"
+host_type = "Language"
+pointer_ownership = "{ownership}"
+host_destructor = "none"
+abi_compatible = true
+"#
+            ))
+            .unwrap();
+            let capsule_types = std::collections::HashMap::from([("Language".to_string(), cfg)]);
+            let message = require_shared_native_runtime(&capsule_types, false, "java")
+                .unwrap_err()
+                .to_string();
+            assert!(
+                message.contains("borrowed_static"),
+                "unexpected error for {ownership}: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn shares_native_runtime_preserves_legacy_capsule_acceptance() {
+        let capsule_types =
+            std::collections::HashMap::from([("Language".to_string(), make_cfg("Language", "new Language({ptr})"))]);
 
         require_shared_native_runtime(&capsule_types, true, "java").unwrap();
     }

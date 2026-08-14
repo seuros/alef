@@ -61,7 +61,18 @@
 {% endfor %}
 {% endif %}
 {% elif assertion_type == "not_empty" %}
-    try testing.expect({{ field_expr }} != .null);
+{# `!= .null` only rejects JSON null — an empty array or an empty string sailed through. Measure the value #}
+{# itself; scalar tags (bool/integer/float) have no emptiness notion so a legitimate 0 still passes. #}
+    {
+        const _ne = {{ field_expr }};
+        try testing.expect(switch (_ne) {
+            .null => false,
+            .string => |_s| _s.len > 0,
+            .array => |_a| _a.items.len > 0,
+            .object => |_o| _o.count() > 0,
+            else => true,
+        });
+    }
 {% elif assertion_type == "is_empty" %}
     {
         const _iv = {{ field_expr }};

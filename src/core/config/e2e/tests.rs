@@ -22,6 +22,26 @@ fn test_documents_dir_explicit_override_wins() {
 }
 
 #[test]
+fn error_field_aliases_deserialize_without_weakening_strict_config() {
+    let cfg: E2eConfig = toml::from_str(
+        r#"
+[call]
+function = "run"
+
+[error_field_aliases]
+status = "status_code"
+"#,
+    )
+    .expect("declared error field aliases must deserialize");
+
+    assert_eq!(
+        cfg.error_field_aliases.get("status").map(String::as_str),
+        Some("status_code")
+    );
+    assert!(toml::from_str::<E2eConfig>("unknown = true\n[call]\nfunction = \"run\"\n").is_err());
+}
+
+#[test]
 fn test_documents_relative_from_at_lang_root_returns_two_dots_up() {
     let cfg = empty_e2e_with_test_documents("test_documents");
     assert_eq!(cfg.test_documents_relative_from(0), "../../test_documents");
@@ -566,4 +586,40 @@ item_type = "Event"
     let cfg: E2eConfig = toml::from_str(toml).expect("must deserialize streaming table recipe");
     assert_eq!(cfg.call.streaming_enabled(), Some(true));
     assert_eq!(cfg.call.streaming_item_type(), Some("Event"));
+}
+
+// --- deny_unknown_fields regression coverage ---
+
+/// Regression test for the root-cause defect: field-classification keys
+/// (`fields_optional`, `fields_array`, `fields_enum`, `result_fields`,
+/// `fields_method_calls`) belong directly on `[e2e]`. A consumer that
+/// misnests them one level deeper — under `[e2e.snippets]` — used to have
+/// them silently discarded twice over: once by `SnippetConfig` lacking
+/// `deny_unknown_fields`, and (had they instead been misnested under some
+/// other already-known `[e2e]` sub-table, or mistyped at the top level)
+/// again by `E2eConfig` itself lacking it. This test pins the top-level case:
+/// an unrecognised key directly under `[e2e]` must be a hard error.
+///
+/// Without `#[serde(deny_unknown_fields)]` on `E2eConfig` this test fails:
+/// `toml::from_str` returns `Ok(..)` and `results_fields` (the typo) is
+/// silently dropped instead of surfacing as a config error.
+#[test]
+fn unknown_top_level_e2e_key_is_rejected_not_silently_dropped() {
+    let toml_src = r#"
+        [call]
+        function = "f"
+
+        results_fields = ["pages"]
+    "#;
+    let err = toml::from_str::<E2eConfig>(toml_src)
+        .expect_err("an unrecognised top-level [e2e] key must be rejected, not silently dropped");
+    let message = err.to_string();
+    assert!(
+        message.contains("results_fields"),
+        "error must name the offending key: {message}"
+    );
+    assert!(
+        message.contains("unknown field"),
+        "error must be serde's unknown-field diagnostic: {message}"
+    );
 }

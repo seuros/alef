@@ -7,6 +7,20 @@ use crate::e2e::fixture::Fixture;
 
 use super::args::{KotlinArgsContext, build_args_and_setup};
 
+/// `build_args_and_setup` is shared with the e2e test emitter, whose generated test
+/// class declares a companion-object `MAPPER` constant that its output references.
+/// A docs snippet is a standalone `fun main()` with no such companion object, and no
+/// binding exposes a public `MAPPER`, so every reference has to be rebound onto the
+/// local `mapper` the snippet template declares for itself. This applies to the
+/// argument list as much as to the setup lines: a typed-array argument is emitted
+/// inline as `listOf(MAPPER.readValue(...), ...)` and never reaches `setup_lines`.
+const TEST_CLASS_MAPPER_REFERENCE: &str = "MAPPER.";
+const SNIPPET_MAPPER_REFERENCE: &str = "mapper.";
+
+fn rebind_mapper_references(source: &str) -> String {
+    source.replace(TEST_CLASS_MAPPER_REFERENCE, SNIPPET_MAPPER_REFERENCE)
+}
+
 pub(crate) fn render_snippet_body(
     fixture: &Fixture,
     e2e_config: &E2eConfig,
@@ -80,7 +94,7 @@ pub(crate) fn render_snippet_body(
     );
     let mut setup_lines = setup_lines
         .into_iter()
-        .map(|line| line.replace("MAPPER", "mapper"))
+        .map(|line| rebind_mapper_references(&line))
         .collect::<Vec<_>>();
     if let Some(visitor) = &fixture.visitor
         && let Some(visitor_args) = super::visitor::attach_visitor(&mut setup_lines, &args, visitor, config, type_defs)
@@ -94,6 +108,7 @@ pub(crate) fn render_snippet_body(
             format!("{args}, {}", recipe.extra_args.join(", "))
         };
     }
+    args = rebind_mapper_references(&args);
     let client_factory = overrides.and_then(|value| value.client_factory.as_deref()).or_else(|| {
         e2e_config
             .call
@@ -101,7 +116,8 @@ pub(crate) fn render_snippet_body(
             .get(lang)
             .and_then(|value| value.client_factory.as_deref())
     });
-    let needs_mapper = setup_lines.iter().any(|line| line.contains("mapper"));
+    let needs_mapper = args.contains(SNIPPET_MAPPER_REFERENCE)
+        || setup_lines.iter().any(|line| line.contains(SNIPPET_MAPPER_REFERENCE));
     let is_async = client_factory.is_some() || call.r#async;
     let package_name = if kotlin_android_style {
         config
@@ -163,6 +179,101 @@ mod tests {
             input: serde_json::Value::Null,
             ..Fixture::default()
         }
+    }
+
+    const BYTES_ELEMENT: &str = r#"mapper.readValue("{\"kind\":\"bytes\"}", ExtractInput::class.java)"#;
+    const URI_ELEMENT: &str = r#"mapper.readValue("{\"kind\":\"uri\"}", ExtractInput::class.java)"#;
+
+    fn line_containing<'a>(body: &'a str, needle: &str) -> &'a str {
+        body.lines()
+            .find(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("no line contains {needle} in:\n{body}"))
+            .trim()
+    }
+
+    /// A batch call whose typed-array argument is materialised inline in the call
+    /// expression rather than in a setup line.
+    fn batch_call() -> CallConfig {
+        CallConfig {
+            function: "extract_batch".into(),
+            result_var: "result".into(),
+            args: vec![crate::e2e::config::ArgMapping {
+                name: "inputs".into(),
+                field: "inputs".into(),
+                arg_type: "json_object".into(),
+                optional: false,
+                owned: false,
+                element_type: Some("ExtractInput".into()),
+                go_type: None,
+                vec_inner_is_ref: false,
+                trait_name: None,
+            }],
+            ..CallConfig::default()
+        }
+    }
+
+    fn batch_fixture() -> Fixture {
+        Fixture {
+            id: "extract_batch_bytes_happy".into(),
+            description: "Extract several documents in one batch".into(),
+            input: serde_json::json!({"inputs": [{"kind": "bytes"}, {"kind": "uri"}]}),
+            ..Fixture::default()
+        }
+    }
+
+    fn batch_snippet(kotlin_android_style: bool) -> String {
+        let config = ResolvedCrateConfig {
+            name: "xberg".into(),
+            ..ResolvedCrateConfig::default()
+        };
+        render_snippet_body(
+            &batch_fixture(),
+            &E2eConfig {
+                call: batch_call(),
+                ..E2eConfig::default()
+            },
+            &config,
+            &[],
+            kotlin_android_style,
+        )
+    }
+
+    #[test]
+    fn android_batch_snippet_binds_list_elements_to_the_locally_declared_mapper() {
+        let body = batch_snippet(true);
+
+        assert!(
+            !body.contains("MAPPER"),
+            "the snippet must not reference the test class's private MAPPER, got:\n{body}"
+        );
+        assert!(
+            body.contains("import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper"),
+            "{body}"
+        );
+        assert!(body.contains("    val mapper = jacksonObjectMapper()"), "{body}");
+        assert_eq!(
+            line_containing(&body, "extractBatch"),
+            format!("val result = Xberg.extractBatch(listOf({BYTES_ELEMENT}, {URI_ELEMENT}))")
+        );
+    }
+
+    #[test]
+    fn jvm_batch_snippet_binds_list_elements_to_the_locally_declared_mapper() {
+        let body = batch_snippet(false);
+
+        assert!(
+            !body.contains("MAPPER"),
+            "the snippet must not reference the test class's private MAPPER, got:\n{body}"
+        );
+        assert!(
+            body.contains("import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper"),
+            "{body}"
+        );
+        assert!(body.contains("    val mapper = jacksonObjectMapper()"), "{body}");
+        assert_eq!(
+            line_containing(&body, "extractBatch"),
+            format!("val result = Xberg.extractBatch(listOf({BYTES_ELEMENT}, {URI_ELEMENT}))")
+        );
     }
 
     #[test]

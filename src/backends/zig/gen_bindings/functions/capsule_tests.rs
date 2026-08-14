@@ -51,6 +51,7 @@ fn emit_function_constructs_host_language_for_capsule_return() {
             package: "https://github.com/example/zig-my-lib".to_string(),
             package_version: String::new(),
             construct_expr: "my_mod.Language.fromRaw(@ptrCast({ptr}))".to_string(),
+            ..Default::default()
         },
     );
     let mut out = String::new();
@@ -89,6 +90,7 @@ fn emit_function_errors_when_construct_expr_empty() {
             package: String::new(),
             package_version: String::new(),
             construct_expr: String::new(),
+            ..Default::default()
         },
     );
     let mut out = String::new();
@@ -123,6 +125,7 @@ fn emit_function_errors_when_host_type_empty() {
             package: String::new(),
             package_version: String::new(),
             construct_expr: "my_mod.Language.fromRaw(@ptrCast({ptr}))".to_string(),
+            ..Default::default()
         },
     );
     let mut out = String::new();

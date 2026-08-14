@@ -34,6 +34,7 @@ fn extract_from_source(source: &str) -> ApiSurface {
         &mut rwa,
     )
     .unwrap();
+    resolve_public_default_functions(&mut surface);
     resolve_newtypes(&mut surface);
     surface
 }

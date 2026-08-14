@@ -259,7 +259,10 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool) -> ExitCod
             return ExitCode::FAILURE;
         }
     };
-    let Some(config) = resolved.iter().find_map(|krate| krate.docs.as_ref()?.snippets.as_ref()) else {
+    let Some((crate_config, config)) = resolved
+        .iter()
+        .find_map(|krate| Some((krate, krate.docs.as_ref()?.snippets.as_ref()?)))
+    else {
         tracing::error!("no [workspace.docs.snippets] or [crates.docs.snippets] configuration found");
         return ExitCode::FAILURE;
     };
@@ -308,7 +311,7 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool) -> ExitCod
         allowed_side_effects,
         cache_dir: use_cache.then(|| root.join(config.cache_dir())),
         changed_only: use_cache,
-        sessions: match configured_sessions(config, root) {
+        sessions: match configured_sessions(config, root, &crate_config.features) {
             Ok(sessions) => sessions,
             Err(error) => {
                 tracing::error!("{error}");
@@ -356,6 +359,7 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool) -> ExitCod
 fn configured_sessions(
     config: &crate::core::config::DocsSnippetsConfig,
     root: &std::path::Path,
+    crate_features: &[String],
 ) -> Result<std::collections::HashMap<String, SessionSpec>, String> {
     let root = if root.is_absolute() {
         root.to_path_buf()
@@ -371,6 +375,12 @@ fn configured_sessions(
         if language == Language::Unknown {
             return Err(format!("unknown docs.snippets session target `{target}`"));
         }
+        let mut rust_features = session.rust_features.clone();
+        if language == Language::Rust {
+            rust_features.extend(crate_features.iter().cloned());
+            rust_features.sort();
+            rust_features.dedup();
+        }
         let spec = SessionSpec {
             language,
             working_directory: root.join(&session.cwd),
@@ -378,7 +388,7 @@ fn configured_sessions(
             before: session.before.clone(),
             env: session.env.clone(),
             include_paths: session.include_paths.iter().map(|path| root.join(path)).collect(),
-            rust_features: session.rust_features.clone(),
+            rust_features,
             rust_dependencies: session.rust_dependencies.clone(),
         };
         if sessions.insert(normalized.clone(), spec).is_some() {
@@ -653,7 +663,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        let sessions = configured_sessions(&config, &root).expect("known target");
+        let sessions = configured_sessions(&config, &root, &[]).expect("known target");
         assert_eq!(sessions["wasm"].language, Language::TypeScript);
         assert_eq!(sessions["wasm"].working_directory, root.join("bindings/wasm"));
 
@@ -661,6 +671,44 @@ mod tests {
             "unsupported-runtime".into(),
             crate::core::config::output::DocsSnippetSessionConfig::default(),
         );
-        assert!(configured_sessions(&config, &root).is_err());
+        assert!(configured_sessions(&config, &root, &[]).is_err());
+    }
+
+    #[test]
+    fn configured_rust_session_enables_crate_features_so_gated_modules_resolve() {
+        let root = std::env::current_dir()
+            .expect("current directory")
+            .join("neutral-workspace");
+        let mut config = crate::core::config::DocsSnippetsConfig::default();
+        config.sessions.insert(
+            "rust".into(),
+            crate::core::config::output::DocsSnippetSessionConfig {
+                cwd: "crates/sample-core".into(),
+                rust_features: vec!["telemetry".into()],
+                ..Default::default()
+            },
+        );
+        config.sessions.insert(
+            "wasm".into(),
+            crate::core::config::output::DocsSnippetSessionConfig {
+                cwd: "bindings/wasm".into(),
+                ..Default::default()
+            },
+        );
+        let crate_features = vec!["plugins".to_string(), "telemetry".to_string()];
+
+        let sessions = configured_sessions(&config, &root, &crate_features).expect("known targets");
+
+        assert_eq!(sessions["rust"].language, Language::Rust);
+        assert_eq!(
+            sessions["rust"].rust_features,
+            vec!["plugins".to_string(), "telemetry".to_string()],
+            "a Rust snippet session must build the path dependency with the crate's declared features, \
+             otherwise snippets importing a feature-gated module fail with `unresolved import`"
+        );
+        assert!(
+            sessions["wasm"].rust_features.is_empty(),
+            "crate features must not leak into non-Rust sessions"
+        );
     }
 }

@@ -11,6 +11,7 @@ pub use citation::{CitationAuthor, CitationConfig};
 pub use sync::{SyncConfig, TextReplacement};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ExcludeConfig {
     #[serde(default)]
     pub types: Vec<String>,
@@ -25,6 +26,7 @@ pub struct ExcludeConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct IncludeConfig {
     #[serde(default)]
     pub types: Vec<String>,
@@ -33,6 +35,7 @@ pub struct IncludeConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct OutputConfig {
     pub python: Option<PathBuf>,
     pub node: Option<PathBuf>,
@@ -54,6 +57,7 @@ pub struct OutputConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ScaffoldConfig {
     pub description: Option<String>,
     pub license: Option<String>,
@@ -73,6 +77,7 @@ pub struct ScaffoldConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GeneratedHeaderConfig {
     /// URL shown in generated-file headers for issue reporting and docs.
     #[serde(default)]
@@ -91,6 +96,7 @@ pub struct GeneratedHeaderConfig {
 /// across polyglot repos. Override individual targets via `targets`, or inject
 /// repo-specific `[env]` entries via `env`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ScaffoldCargo {
     /// Per-target cross-compile / rustflags overrides. Defaults emit the canonical
     /// 6-target template (macOS dynamic_lookup, Windows MSVC rust-lld x64+i686,
@@ -123,6 +129,7 @@ impl Default for ScaffoldCargo {
 
 /// Per-target opt-out flags. All default to `true`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ScaffoldCargoTargets {
     #[serde(default = "default_true")]
     pub macos_dynamic_lookup: bool,
@@ -173,6 +180,7 @@ pub enum ScaffoldCargoEnvValue {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ReadmeConfig {
     pub template_dir: Option<PathBuf>,
     pub snippets_dir: Option<PathBuf>,
@@ -195,6 +203,7 @@ pub struct ReadmeConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DocsConfig {
     /// Directory for generated API/CLI/MCP reference markdown. Defaults to
     /// `docs/reference` when unset.
@@ -252,6 +261,7 @@ impl DocsConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DocsSourceConfig {
     /// Enable this reference extractor. Defaults to true when the table exists.
     #[serde(default)]
@@ -306,6 +316,7 @@ impl DocsSourceConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DocsLlmsConfig {
     /// Minijinja template path for llms.txt. Required when this table is present.
     #[serde(default)]
@@ -340,6 +351,7 @@ impl DocsLlmsConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DocsSkillsConfig {
     /// Base directory for skill templates. When `templates` is empty, Alef expects
     /// `api/SKILL.md.jinja`, `cli/SKILL.md.jinja`, and `mcp/SKILL.md.jinja`
@@ -391,6 +403,7 @@ impl DocsSkillsConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DocsSkillTemplateConfig {
     /// Template path. Relative paths are resolved against `skills.template_dir`
     /// when set, otherwise the repository root.
@@ -403,6 +416,7 @@ pub struct DocsSkillTemplateConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DocsSnippetsConfig {
     /// Snippet roots to discover.
     #[serde(default)]
@@ -458,6 +472,7 @@ pub struct DocsSnippetsConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DocsSnippetSessionConfig {
     /// Working directory used to resolve the generated local package.
     pub cwd: PathBuf,
@@ -482,6 +497,7 @@ pub struct DocsSnippetSessionConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DocsSnippetRustDependencyConfig {
     /// Cargo package version requirement.
     pub version: String,
@@ -596,6 +612,7 @@ impl StringOrVec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct LintConfig {
     /// Shell command that must exit 0 for lint to run; skip with warning on failure.
     pub precondition: Option<String>,
@@ -607,6 +624,7 @@ pub struct LintConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateConfig {
     /// Shell command that must exit 0 for update to run; skip with warning on failure.
     pub precondition: Option<String>,
@@ -619,6 +637,7 @@ pub struct UpdateConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TestAppRunConfig {
     /// Shell command that must exit 0 for the test-app run to proceed; skip with warning on failure.
     pub precondition: Option<String>,
@@ -630,6 +649,7 @@ pub struct TestAppRunConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TestConfig {
     /// Shell command that must exit 0 for test to run; skip with warning on failure.
     pub precondition: Option<String>,
@@ -644,6 +664,7 @@ pub struct TestConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SetupConfig {
     /// Shell command that must exit 0 for setup to run; skip with warning on failure.
     pub precondition: Option<String>,
@@ -666,6 +687,7 @@ pub struct SetupConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CleanConfig {
     /// Shell command that must exit 0 for clean to run; skip with warning on failure.
     pub precondition: Option<String>,
@@ -676,6 +698,7 @@ pub struct CleanConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct BuildCommandConfig {
     /// Shell command that must exit 0 for build to run; skip with warning on failure.
     pub precondition: Option<String>,
@@ -726,6 +749,7 @@ fn default_setup_timeout() -> u64 {
 ///
 /// Per-crate explicit paths in [`OutputConfig`] always win over a workspace template.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct OutputTemplate {
     pub python: Option<String>,
     pub node: Option<String>,

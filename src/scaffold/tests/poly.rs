@@ -107,7 +107,7 @@ fn poly_toml_drives_hooks_builtins_and_excludes() {
         c.contains("commit = { stages = [\"commit-msg\"] }"),
         "commit builtin must run on commit-msg"
     );
-    assert!(c.contains("[discovery]") && c.contains("\"target/**\""));
+    assert!(c.contains("[discovery]") && c.contains("\"**/target/**\""));
     assert!(c.contains("lint = { exclude = ["));
     assert!(c.contains("fmt = { exclude = ["));
     assert!(c.contains("file_safety = { exclude = ["));
@@ -319,11 +319,11 @@ fn poly_toml_arrays_use_taplos_two_space_indent() {
     let c = &poly_toml(&files).content;
 
     assert!(
-        c.contains("\n  \"target/**\","),
+        c.contains("\n  \"**/target/**\","),
         "multi-line array entries must be indented 2 spaces; got:\n{c}"
     );
     assert!(
-        !c.contains("\n    \"target/**\","),
+        !c.contains("\n    \"**/target/**\","),
         "4-space indent is not taplo-canonical and never survives `poly fmt`; got:\n{c}"
     );
 }
@@ -357,20 +357,26 @@ fn poly_toml_omits_mix_tool_without_elixir() {
     assert!(!c.contains("[tools.mix]"), "no mix tool without Elixir; got:\n{c}");
 }
 
+/// Regression test for the discovery/hooks anchoring split: `[discovery] exclude`
+/// (gitignore semantics via `ignore::overrides`) and the `[hooks.builtin]`
+/// lint/fmt/file_safety excludes (whole-path semantics via `globset`) must NO
+/// LONGER carry the identical literal for a bare author-supplied glob — that was
+/// exactly the bug (a bare pattern unanchored in gitignore semantics, matching
+/// any depth, silently became root-anchored-only under whole-path globset
+/// matching, and vice versa). An explicit `**/` prefix remains the one case where
+/// both matchers legitimately read the SAME string.
 #[test]
-fn poly_toml_extra_excludes_appear_in_discovery_and_hooks() {
-    let config = test_config_with_poly(r#"exclude = ["vendor/generated/**", "third-party/**"]"#);
+fn poly_toml_extra_excludes_split_scope_between_discovery_and_hooks() {
+    let config = test_config_with_poly(r#"exclude = ["vendor/generated/**", "**/third-party/**"]"#);
     let api = test_api();
     let files = scaffold(&api, &config, &[Language::Python]).unwrap();
     let c = &poly_toml(&files).content;
 
+    // Bare pattern (no anchor marker) defaults to root-anchored: `[discovery]`
+    // gets an explicit leading `/`.
     assert!(
-        c.contains("\"vendor/generated/**\","),
-        "[discovery] exclude must contain repo-extra glob"
-    );
-    assert!(
-        c.contains("\"third-party/**\","),
-        "[discovery] exclude must contain second repo-extra glob"
+        c.contains("\"/vendor/generated/**\","),
+        "[discovery] exclude must root-anchor a bare author-supplied glob; got:\n{c}"
     );
 
     let lint_pos = c.find("lint = { exclude =").expect("lint builtin present");
@@ -383,11 +389,133 @@ fn poly_toml_extra_excludes_appear_in_discovery_and_hooks() {
         let after = &c[builtin_pos..];
         assert!(
             after.contains("\"vendor/generated/**\","),
-            "builtin at pos {builtin_pos} must include repo-extra exclude"
+            "builtin at pos {builtin_pos} must carry the bare (unanchored) form"
+        );
+        assert!(
+            !after.contains("\"/vendor/generated/**\","),
+            "builtin at pos {builtin_pos} must NOT carry the [discovery] `/` anchor"
         );
     }
 
-    assert!(c.contains("\"target/**\","), "built-in excludes must be preserved");
+    // An explicit `**/` prefix is the any-depth escape hatch: both matchers read
+    // the identical literal string.
+    assert!(
+        c.contains("\"**/third-party/**\","),
+        "[discovery] exclude must preserve an explicit **/ any-depth glob verbatim; got:\n{c}"
+    );
+    let after_lint = &c[lint_pos..];
+    assert!(
+        after_lint.contains("\"**/third-party/**\","),
+        "hooks builtins must carry the SAME **/ any-depth glob as [discovery]"
+    );
+
+    // Second defect fixed by the same change: alef's own `target/**` is now
+    // any-depth everywhere, so it actually excludes nested `crates/*/target/**`
+    // in the hooks builtins (previously bare `target/**` under globset whole-path
+    // matching only matched a root-level `target/`).
+    assert!(
+        c.contains("\"**/target/**\","),
+        "built-in target/** must be any-depth in [discovery]; got:\n{c}"
+    );
+    assert!(
+        after_lint.contains("\"**/target/**\","),
+        "built-in target/** must be any-depth in the hooks builtins too; got:\n{c}"
+    );
+}
+
+/// A bare author-supplied glob with no anchor marker defaults to root-anchored:
+/// `/` prefix under gitignore semantics in `[discovery]`, and bare (no prefix
+/// needed — whole-path globset matching already only matches from the start of
+/// the path) in the hooks builtins.
+#[test]
+fn poly_toml_bare_extra_exclude_is_root_anchored_in_discovery_but_bare_in_hooks() {
+    let config = test_config_with_poly(r#"exclude = ["build-cache/**"]"#);
+    let api = test_api();
+    let files = scaffold(&api, &config, &[Language::Python]).unwrap();
+    let c = &poly_toml(&files).content;
+
+    assert!(
+        c.contains("\"/build-cache/**\","),
+        "[discovery] exclude must root-anchor the bare glob with a leading /; got:\n{c}"
+    );
+    let lint_pos = c.find("lint = { exclude =").expect("lint builtin present");
+    let after = &c[lint_pos..];
+    assert!(
+        after.contains("\"build-cache/**\","),
+        "hooks builtin must carry the bare glob with no anchor prefix; got:\n{c}"
+    );
+    assert!(
+        !after.contains("\"/build-cache/**\","),
+        "hooks builtin must NOT carry the [discovery] `/` anchor; got:\n{c}"
+    );
+}
+
+/// An explicit `**/` prefix on an author-supplied glob is the any-depth escape
+/// hatch: both matchers read the identical literal string.
+#[test]
+fn poly_toml_any_depth_extra_exclude_is_identical_in_discovery_and_hooks() {
+    let config = test_config_with_poly(r#"exclude = ["**/generated-cache/**"]"#);
+    let api = test_api();
+    let files = scaffold(&api, &config, &[Language::Python]).unwrap();
+    let c = &poly_toml(&files).content;
+
+    assert!(
+        c.contains("\"**/generated-cache/**\","),
+        "[discovery] exclude must preserve the explicit **/ glob verbatim; got:\n{c}"
+    );
+    let lint_pos = c.find("lint = { exclude =").expect("lint builtin present");
+    let after = &c[lint_pos..];
+    assert!(
+        after.contains("\"**/generated-cache/**\","),
+        "hooks builtin must carry the IDENTICAL **/ glob; got:\n{c}"
+    );
+}
+
+/// A leading-slash input must be re-anchored, not doubled: `/foo/**` strips its
+/// own `/` before [`classify_extra`] re-adds one for `[discovery]`.
+#[test]
+fn poly_toml_leading_slash_extra_exclude_is_root_anchored_without_double_slash() {
+    let config = test_config_with_poly(r#"exclude = ["/foo/**"]"#);
+    let api = test_api();
+    let files = scaffold(&api, &config, &[Language::Python]).unwrap();
+    let c = &poly_toml(&files).content;
+
+    assert!(
+        c.contains("\"/foo/**\","),
+        "leading-slash input must round-trip to a single leading /; got:\n{c}"
+    );
+    assert!(
+        !c.contains("\"//foo/**\","),
+        "leading slash must be stripped before re-anchoring, not doubled; got:\n{c}"
+    );
+    let lint_pos = c.find("lint = { exclude =").expect("lint builtin present");
+    let after = &c[lint_pos..];
+    assert!(
+        after.contains("\"foo/**\","),
+        "hooks builtin must carry the bare (unslashed) form; got:\n{c}"
+    );
+}
+
+/// A multi-segment bare pattern must default to root-anchored exactly like a
+/// single-segment one — scope is tagged by [`classify_extra`], never inferred
+/// from how many `/` characters the pattern contains.
+#[test]
+fn poly_toml_multi_segment_bare_extra_exclude_defaults_root_anchored() {
+    let config = test_config_with_poly(r#"exclude = ["a/b/**"]"#);
+    let api = test_api();
+    let files = scaffold(&api, &config, &[Language::Python]).unwrap();
+    let c = &poly_toml(&files).content;
+
+    assert!(
+        c.contains("\"/a/b/**\","),
+        "a multi-segment bare glob must default root-anchored, same as a single-segment one; got:\n{c}"
+    );
+    let lint_pos = c.find("lint = { exclude =").expect("lint builtin present");
+    let after = &c[lint_pos..];
+    assert!(
+        after.contains("\"a/b/**\","),
+        "hooks builtin must carry the bare form; got:\n{c}"
+    );
 }
 
 #[test]
@@ -659,7 +787,7 @@ fn poly_toml_file_safety_exclude_only_appends_to_file_safety() {
         "second file-safety-exclude glob must appear in file_safety builtin"
     );
     assert!(
-        fs_region.contains("\"target/**\","),
+        fs_region.contains("\"**/target/**\","),
         "default file_safety excludes preserved"
     );
 

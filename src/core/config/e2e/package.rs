@@ -18,6 +18,7 @@ pub enum DependencyMode {
 }
 /// Configuration for registry-mode e2e generation (`alef e2e generate --registry`).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RegistryConfig {
     /// Output directory for registry-mode test apps (default: "test_apps").
     #[serde(default = "default_test_apps_dir")]
@@ -85,6 +86,7 @@ impl Default for RegistryConfig {
 /// expect_contains = "# Hi"
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct HomebrewCliTest {
     /// Short identifier used in `PASS:` / `FAIL:` reporting.
     pub name: String,
@@ -99,6 +101,7 @@ pub struct HomebrewCliTest {
 
 /// Per-language package reference configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PackageRef {
     /// Package/crate/gem/module name.
     #[serde(default)]

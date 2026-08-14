@@ -91,7 +91,8 @@ pub fn emit_streaming_jni_external_funs(out: &mut String, config: &ResolvedCrate
 fn emit_method_jni_external_funs(
     out: &mut String,
     api: &ApiSurface,
-    exclude_functions: &std::collections::HashSet<&str>,
+    exclude_functions: &std::collections::HashSet<String>,
+    capsule_types: &std::collections::HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
     exception_class: &str,
     emitted_destructor_names: &mut std::collections::HashSet<String>,
 ) {
@@ -113,31 +114,58 @@ fn emit_method_jni_external_funs(
 
     out.push_str("\n    // JNI external funs for client instance methods.\n");
     for ty in &client_types {
-        let owner_pascal = to_pascal_case(&ty.name);
-        for method in ty.methods.iter().filter(|m| !m.sanitized && !m.is_static) {
-            if exclude_functions.contains(method.name.as_str()) {
-                continue;
-            }
-            let native_name = format!("native{owner_pascal}{}", to_pascal_case(&method.name));
-            let return_ty = jni_return_type_for_method(&method.return_type, &opaque_type_names);
-            let params = if method.params.is_empty() {
-                "handle: Long".to_string()
-            } else if method.params.len() == 1 && is_binary_param_type(&method.params[0].ty) {
-                format!("handle: Long, {}: ByteArray", to_lower_camel(&method.params[0].name))
-            } else {
-                "handle: Long, requestJson: String".to_string()
-            };
-            push_jni_external_fun(
-                out,
-                &native_name,
-                &params,
-                non_unit_return_type(&method.return_type, return_ty),
-                Some(exception_class),
-            );
-        }
-        let free_name = format!("nativeFree{owner_pascal}");
+        emit_type_method_jni_external_funs(
+            out,
+            ty,
+            exclude_functions,
+            exception_class,
+            &opaque_type_names,
+            capsule_types,
+        );
+        let free_name = format!("nativeFree{}", to_pascal_case(&ty.name));
         push_jni_external_fun(out, &free_name, "handle: Long", None, None);
         emitted_destructor_names.insert(free_name);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_type_method_jni_external_funs(
+    out: &mut String,
+    type_def: &crate::core::ir::TypeDef,
+    exclude_functions: &std::collections::HashSet<String>,
+    exception_class: &str,
+    opaque_type_names: &std::collections::HashSet<&str>,
+    capsule_types: &std::collections::HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
+) {
+    let owner_pascal = to_pascal_case(&type_def.name);
+    for method in type_def
+        .methods
+        .iter()
+        .filter(|method| !method.sanitized && !method.is_static)
+    {
+        if exclude_functions.contains(method.name.as_str()) {
+            continue;
+        }
+        let native_name = format!("native{owner_pascal}{}", to_pascal_case(&method.name));
+        let return_type = jni_return_type_for_method(&method.return_type, opaque_type_names, capsule_types);
+        let params = method_jni_params(method);
+        push_jni_external_fun(
+            out,
+            &native_name,
+            &params,
+            non_unit_return_type(&method.return_type, return_type),
+            Some(exception_class),
+        );
+    }
+}
+
+fn method_jni_params(method: &crate::core::ir::MethodDef) -> String {
+    if method.params.is_empty() {
+        "handle: Long".to_string()
+    } else if method.params.len() == 1 && is_binary_param_type(&method.params[0].ty) {
+        format!("handle: Long, {}: ByteArray", to_lower_camel(&method.params[0].name))
+    } else {
+        "handle: Long, requestJson: String".to_string()
     }
 }
 
@@ -186,9 +214,9 @@ pub(in crate::backends::kotlin::gen_bindings::jni_emitter) fn is_capsule_functio
     func: &crate::core::ir::FunctionDef,
     capsule_types: &std::collections::HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
 ) -> bool {
-    if let crate::core::ir::TypeRef::Named(name) = &func.return_type {
-        capsule_types.contains_key(name.as_str())
-    } else {
-        false
-    }
+    let base_type = match &func.return_type {
+        crate::core::ir::TypeRef::Optional(inner) => inner.as_ref(),
+        other => other,
+    };
+    matches!(base_type, crate::core::ir::TypeRef::Named(name) if capsule_types.contains_key(name))
 }

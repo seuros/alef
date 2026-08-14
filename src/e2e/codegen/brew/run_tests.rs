@@ -180,7 +180,18 @@ pub(super) fn render_run_tests(categories: &[String], env: &HashMap<String, Stri
     let _ = writeln!(out);
     let _ = writeln!(out, "assert_not_empty() {{");
     let _ = writeln!(out, "  local actual=\"$1\" label=\"$2\"");
-    let _ = writeln!(out, "  if [ -z \"$actual\" ]; then");
+    let _ = writeln!(
+        out,
+        "  # `jq -r` renders JSON null and empty containers as the literal text \"null\", \"[]\" and \"{{}}\","
+    );
+    let _ = writeln!(
+        out,
+        "  # so a bare emptiness test would pass on them. A legitimate 0 or false still renders as text and passes."
+    );
+    let _ = writeln!(
+        out,
+        "  if [ -z \"$actual\" ] || [ \"$actual\" = \"null\" ] || [ \"$actual\" = \"[]\" ] || [ \"$actual\" = \"{{}}\" ]; then"
+    );
     let _ = writeln!(out, "    echo \"FAIL [$label]: expected non-empty value\" >&2");
     let _ = writeln!(out, "    return 1");
     let _ = writeln!(out, "  fi");
@@ -318,6 +329,22 @@ mod tests {
         assert!(
             script.lines().any(|l| l.starts_with("  ") && !l.starts_with("   ")),
             "render_run_tests should emit at least one 2-space-indented line; got:\n{script}",
+        );
+    }
+
+    /// Assertion values are extracted with `jq -r`, which renders JSON null and empty
+    /// containers as the literal text "null", "[]" and "{}". A bare `-z` test therefore
+    /// passed on every one of them while still reading as coverage. A legitimate `0` or
+    /// `false` also renders as text and must keep passing.
+    #[test]
+    fn not_empty_for_brew_rejects_the_json_renderings_of_empty_values() {
+        let script = render_run_tests(&["auth".to_string()], &HashMap::new(), "sample-cli");
+        assert!(
+            script.contains(
+                "  if [ -z \"$actual\" ] || [ \"$actual\" = \"null\" ] || [ \"$actual\" = \"[]\" ] \
+                 || [ \"$actual\" = \"{}\" ]; then"
+            ),
+            "got: {script}"
         );
     }
 

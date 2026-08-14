@@ -1,183 +1,227 @@
-/// Emit `DefaultClient.kt` for the JNI mode.
-///
-/// Emits a `class DefaultClient internal constructor(internal val handle: Long) :
-/// AutoCloseable` with:
-/// - One `suspend fun` per non-sanitized, non-static instance method, calling
-///   `<Module>Bridge.native<Method>(handle, ...)`.
-/// - One `Flow<ChunkType>` streaming method per adapter owned by this type,
-///   using `callbackFlow` + `handle` (not `inner`) as the first JNI argument.
-/// - `override fun close() { <Module>Bridge.nativeFree<ClassName>(handle) }`
-///
-/// Returns `None` when no client types (opaque, with instance methods) exist.
+/// Inputs shared while emitting a JNI client class file.
+struct JniClientInputs<'a> {
+    client_types: Vec<&'a crate::core::ir::TypeDef>,
+    exclude_functions: std::collections::HashSet<&'a str>,
+    bridge_name: String,
+    package: String,
+    opaque_type_names: std::collections::HashSet<&'a str>,
+    streaming_adapters: Vec<&'a crate::core::config::AdapterConfig>,
+}
+
+/// Emit `DefaultClient.kt` for JNI mode, or `None` when no client type exists.
 pub fn emit_jni_client_class(
     api: &ApiSurface,
     config: &ResolvedCrateConfig,
     package: Option<&str>,
 ) -> Option<GeneratedFile> {
-    let is_client_type = |t: &&crate::core::ir::TypeDef| {
-        t.is_opaque && !t.is_trait && t.methods.iter().any(|m| !m.sanitized && !m.is_static)
-    };
-    let client_types: Vec<_> = api.types.iter().filter(is_client_type).collect();
+    let inputs = jni_client_inputs(api, config, package)?;
+    let mut imports = collect_jni_client_imports(&inputs);
+    collect_jni_client_type_imports(&inputs, &mut imports);
+    let mut body = String::new();
+    for type_def in &inputs.client_types {
+        emit_jni_client_type(type_def, api, config, &inputs, &mut body, &mut imports);
+    }
+    let content = template_env::render(
+        "jni_client_file.jinja",
+        minijinja::context! {
+            package => inputs.package,
+            imports => imports.into_iter().collect::<Vec<_>>(),
+            body => body,
+        },
+    );
+    Some(GeneratedFile {
+        path: jni_output_path(config, "DefaultClient.kt"),
+        content,
+        generated_header: false,
+    })
+}
+
+fn jni_client_inputs<'a>(
+    api: &'a ApiSurface,
+    config: &'a ResolvedCrateConfig,
+    package: Option<&str>,
+) -> Option<JniClientInputs<'a>> {
+    let client_types: Vec<_> = api
+        .types
+        .iter()
+        .filter(|type_def| {
+            type_def.is_opaque
+                && !type_def.is_trait
+                && type_def
+                    .methods
+                    .iter()
+                    .any(|method| !method.sanitized && !method.is_static)
+        })
+        .collect();
     if client_types.is_empty() {
         return None;
     }
-
-    let exclude_functions: std::collections::HashSet<&str> = config
+    let exclude_functions = config
         .kotlin_android
         .as_ref()
-        .map(|c| c.exclude_functions.iter().map(String::as_str).collect())
+        .map(|android| android.exclude_functions.iter().map(String::as_str).collect())
         .or_else(|| {
             config
                 .kotlin
                 .as_ref()
-                .map(|k| k.exclude_functions.iter().map(String::as_str).collect())
+                .map(|kotlin| kotlin.exclude_functions.iter().map(String::as_str).collect())
         })
         .unwrap_or_default();
+    Some(JniClientInputs {
+        streaming_adapters: jni_client_streaming_adapters(config, &client_types),
+        client_types,
+        exclude_functions,
+        bridge_name: format!("{}Bridge", to_pascal_case(&config.name)),
+        package: package
+            .map(str::to_string)
+            .unwrap_or_else(|| jni_kotlin_package(config)),
+        opaque_type_names: opaque_type_names(api),
+    })
+}
 
-    let module_name = to_pascal_case(&config.name);
-    let bridge_name = format!("{module_name}Bridge");
-    let pkg = package
-        .map(str::to_string)
-        .unwrap_or_else(|| jni_kotlin_package(config));
-
-    let opaque_type_names: std::collections::HashSet<&str> = api
-        .types
+fn jni_client_streaming_adapters<'a>(
+    config: &'a ResolvedCrateConfig,
+    client_types: &[&crate::core::ir::TypeDef],
+) -> Vec<&'a crate::core::config::AdapterConfig> {
+    config
+        .adapters
         .iter()
-        .filter(|t| t.is_opaque && !t.is_trait)
-        .map(|t| t.name.as_str())
-        .collect();
+        .filter(|adapter| matches!(adapter.pattern, AdapterPattern::Streaming))
+        .filter(|adapter| !adapter.skip_languages.iter().any(|language| language == "kotlin"))
+        .filter(|adapter| {
+            adapter
+                .owner_type
+                .as_deref()
+                .is_some_and(|owner| client_types.iter().any(|type_def| type_def.name == owner))
+        })
+        .collect()
+}
 
-    let mut imports: BTreeSet<String> = BTreeSet::new();
-    let mut body = String::new();
-
-    let has_async = client_types
-        .iter()
-        .any(|t| t.methods.iter().any(|m| !m.sanitized && m.is_async));
-    if has_async {
+fn collect_jni_client_imports(inputs: &JniClientInputs<'_>) -> BTreeSet<String> {
+    let mut imports = BTreeSet::new();
+    let has_async = inputs.client_types.iter().any(|type_def| {
+        type_def
+            .methods
+            .iter()
+            .any(|method| !method.sanitized && method.is_async)
+    });
+    if has_async || !inputs.streaming_adapters.is_empty() {
         imports.insert("import kotlinx.coroutines.Dispatchers".to_string());
         imports.insert("import kotlinx.coroutines.withContext".to_string());
     }
-
-    let streaming_adapters: Vec<_> = config
-        .adapters
-        .iter()
-        .filter(|a| matches!(a.pattern, AdapterPattern::Streaming))
-        .filter(|a| !a.skip_languages.iter().any(|l| l == "kotlin"))
-        .filter(|a| {
-            a.owner_type
-                .as_deref()
-                .map(|owner| client_types.iter().any(|t| t.name == owner))
-                .unwrap_or(false)
-        })
-        .collect();
-
-    if !streaming_adapters.is_empty() {
-        imports.insert("import kotlinx.coroutines.Dispatchers".to_string());
-        imports.insert("import kotlinx.coroutines.withContext".to_string());
+    if !inputs.streaming_adapters.is_empty() {
         imports.insert("import kotlinx.coroutines.flow.Flow".to_string());
         imports.insert("import kotlinx.coroutines.flow.callbackFlow".to_string());
         imports.insert("import kotlinx.coroutines.channels.awaitClose".to_string());
     }
+    imports
+}
 
-    for ty in &client_types {
-        let class_name = &ty.name;
-
-        for m in ty.methods.iter().filter(|m| !m.sanitized && !m.is_static) {
-            kotlin_type_with_string_imports(&m.return_type, false, &mut imports);
-            for p in &m.params {
-                format_param_with_imports(p, &mut imports);
-            }
-        }
-        for adapter in streaming_adapters
-            .iter()
-            .filter(|a| a.owner_type.as_deref() == Some(class_name.as_str()))
-        {
-            if let Some(item) = adapter.item_type.as_deref() {
-                let _ = item;
-            }
-        }
-
-        body.push_str(&template_env::render(
-            "jni_client_class_header.jinja",
-            minijinja::context! {
-                class_name => class_name,
-            },
-        ));
-
-        let has_json_methods = ty
+fn collect_jni_client_type_imports(inputs: &JniClientInputs<'_>, imports: &mut BTreeSet<String>) {
+    for type_def in &inputs.client_types {
+        for method in type_def
             .methods
             .iter()
-            .filter(|m| !m.sanitized && !m.is_static)
-            .any(|m| !m.params.is_empty() || needs_json_deserialize(&m.return_type));
-        let ctor_config = config.client_constructors.get(class_name.as_str());
-        let needs_companion = has_json_methods || ctor_config.is_some();
-        if needs_companion {
-            body.push_str("    companion object {\n");
-            if has_json_methods {
-                body.push_str("        private val MAPPER = com.fasterxml.jackson.databind.ObjectMapper()\n");
-                body.push_str("            .registerModule(com.fasterxml.jackson.datatype.jdk8.Jdk8Module())\n");
-                body.push_str("            .findAndRegisterModules()\n");
-                body.push_str(
-                    "            .setPropertyNamingStrategy(com.fasterxml.jackson.databind.PropertyNamingStrategies.SNAKE_CASE)\n",
-                );
-            }
-            if let Some(ctor) = ctor_config {
-                emit_jni_client_factory(class_name, &bridge_name, ctor, api, &mut body);
-            }
-            body.push_str("    }\n\n");
-        }
-
-        for method in ty
-            .methods
-            .iter()
-            .filter(|m| !m.sanitized && !m.is_static && !exclude_functions.contains(m.name.as_str()))
+            .filter(|method| !method.sanitized && !method.is_static)
         {
-            emit_jni_client_method(
-                method,
-                class_name,
-                &bridge_name,
-                &mut body,
-                &mut imports,
-                &opaque_type_names,
-            );
+            kotlin_type_with_string_imports(&method.return_type, false, imports);
+            for param in &method.params {
+                format_param_with_imports(param, imports);
+            }
         }
-
-        for adapter in streaming_adapters
-            .iter()
-            .filter(|a| a.owner_type.as_deref() == Some(class_name.as_str()))
-        {
-            emit_jni_streaming_client_method(adapter, class_name, &bridge_name, &mut body);
-        }
-
-        // Match the bridge external-fun declaration (bridge_object.rs / external_functions.rs)
-        // and the Rust JNI export, all of which pascal-case the owner via to_pascal_case.
-        // Using the class name verbatim here miscases acronym owners (e.g. GraphQLRouteConfig
-        // -> nativeFreeGraphQLRouteConfig) so the call fails to resolve the GraphQl-cased decl. ~keep
-        let free_name = format!("nativeFree{}", to_pascal_case(class_name));
-        body.push_str(&template_env::render(
-            "jni_client_close_method.jinja",
-            minijinja::context! {
-                bridge_name => bridge_name,
-                free_name => free_name,
-            },
-        ));
-        body.push_str("}\n");
     }
+}
 
-    let imports = imports.iter().cloned().collect::<Vec<_>>();
-    let content = template_env::render(
-        "jni_client_file.jinja",
+fn emit_jni_client_type(
+    type_def: &crate::core::ir::TypeDef,
+    api: &ApiSurface,
+    config: &ResolvedCrateConfig,
+    inputs: &JniClientInputs<'_>,
+    body: &mut String,
+    imports: &mut BTreeSet<String>,
+) {
+    body.push_str(&template_env::render(
+        "jni_client_class_header.jinja",
+        minijinja::context! { class_name => type_def.name },
+    ));
+    emit_jni_client_companion(type_def, api, config, &inputs.bridge_name, body);
+    emit_jni_client_methods(type_def, config, inputs, body, imports);
+    emit_jni_client_streaming_methods(type_def, inputs, body);
+    let free_name = format!("nativeFree{}", to_pascal_case(&type_def.name));
+    body.push_str(&template_env::render(
+        "jni_client_close_method.jinja",
         minijinja::context! {
-            package => pkg,
-            imports => imports,
-            body => body,
+            bridge_name => inputs.bridge_name,
+            free_name => free_name,
         },
-    );
+    ));
+    body.push_str("}\n");
+}
 
-    let path = jni_output_path(config, "DefaultClient.kt");
-    Some(GeneratedFile {
-        path,
-        content,
-        generated_header: false,
-    })
+fn emit_jni_client_companion(
+    type_def: &crate::core::ir::TypeDef,
+    api: &ApiSurface,
+    config: &ResolvedCrateConfig,
+    bridge_name: &str,
+    body: &mut String,
+) {
+    let has_json_methods = type_def
+        .methods
+        .iter()
+        .filter(|method| !method.sanitized && !method.is_static)
+        .any(|method| !method.params.is_empty() || needs_json_deserialize(&method.return_type));
+    let constructor = config.client_constructors.get(type_def.name.as_str());
+    if !has_json_methods && constructor.is_none() {
+        return;
+    }
+    body.push_str("    companion object {\n");
+    if has_json_methods {
+        body.push_str("        private val MAPPER = com.fasterxml.jackson.databind.ObjectMapper()\n");
+        body.push_str("            .registerModule(com.fasterxml.jackson.datatype.jdk8.Jdk8Module())\n");
+        body.push_str("            .findAndRegisterModules()\n");
+        body.push_str(
+            "            .setPropertyNamingStrategy(com.fasterxml.jackson.databind.PropertyNamingStrategies.SNAKE_CASE)\n",
+        );
+    }
+    if let Some(constructor) = constructor {
+        emit_jni_client_factory(&type_def.name, bridge_name, constructor, api, body);
+    }
+    body.push_str("    }\n\n");
+}
+
+fn emit_jni_client_methods(
+    type_def: &crate::core::ir::TypeDef,
+    config: &ResolvedCrateConfig,
+    inputs: &JniClientInputs<'_>,
+    body: &mut String,
+    imports: &mut BTreeSet<String>,
+) {
+    let methods = type_def.methods.iter().filter(|method| {
+        !method.sanitized && !method.is_static && !inputs.exclude_functions.contains(method.name.as_str())
+    });
+    for method in methods {
+        emit_jni_client_method(
+            method,
+            &type_def.name,
+            &inputs.bridge_name,
+            body,
+            imports,
+            &inputs.opaque_type_names,
+            config,
+        );
+    }
+}
+
+fn emit_jni_client_streaming_methods(
+    type_def: &crate::core::ir::TypeDef,
+    inputs: &JniClientInputs<'_>,
+    body: &mut String,
+) {
+    let adapters = inputs
+        .streaming_adapters
+        .iter()
+        .filter(|adapter| adapter.owner_type.as_deref() == Some(type_def.name.as_str()));
+    for adapter in adapters {
+        emit_jni_streaming_client_method(adapter, &type_def.name, &inputs.bridge_name, body);
+    }
 }

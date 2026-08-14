@@ -86,6 +86,62 @@ pub(super) fn variant_data_field_names(enum_def: &EnumDef) -> Vec<String> {
     names
 }
 
+/// The napi `string_enum` case name for an enum's `#[serde(rename_all)]`, if any.
+fn napi_string_enum_case(enum_def: &EnumDef) -> Option<&'static str> {
+    enum_def.serde_rename_all.as_deref().and_then(|s| match s {
+        "snake_case" => Some("snake_case"),
+        "camelCase" => Some("camelCase"),
+        "kebab-case" => Some("kebab-case"),
+        "SCREAMING_SNAKE_CASE" => Some("UPPER_SNAKE"),
+        "lowercase" => Some("lowercase"),
+        "UPPERCASE" => Some("UPPERCASE"),
+        "PascalCase" => Some("PascalCase"),
+        _ => None,
+    })
+}
+
+/// Runtime string values a `#[napi(string_enum)]` accepts, in declaration order.
+///
+/// `None` when [`gen_enum`] does not emit the enum as a string enum — tagged and untagged data
+/// enums become objects and value wrappers instead, and have no set of string literals.
+///
+/// Mirrors [`gen_enum`]: `#[napi(value = "...")]` from `#[serde(rename)]` wins per variant,
+/// otherwise napi applies the enum-wide case to the variant name.
+pub(super) fn string_enum_js_values(enum_def: &EnumDef) -> Option<Vec<String>> {
+    let has_data_variants = enum_def.variants.iter().any(|v| !v.fields.is_empty());
+    if (enum_def.serde_tag.is_some() || enum_def.serde_untagged) && has_data_variants {
+        return None;
+    }
+    if has_data_variants || enum_def.variants.is_empty() {
+        return None;
+    }
+    let case = napi_string_enum_case(enum_def);
+    Some(
+        enum_def
+            .variants
+            .iter()
+            .map(|variant| match variant.serde_rename.as_deref() {
+                Some(rename) => rename.to_string(),
+                None => apply_napi_case(&variant.name, case),
+            })
+            .collect(),
+    )
+}
+
+fn apply_napi_case(name: &str, case: Option<&str>) -> String {
+    use heck::{ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutySnakeCase, ToSnakeCase};
+    match case {
+        Some("snake_case") => name.to_snake_case(),
+        Some("camelCase") => name.to_lower_camel_case(),
+        Some("kebab-case") => name.to_kebab_case(),
+        Some("UPPER_SNAKE") => name.to_shouty_snake_case(),
+        Some("lowercase") => name.to_lowercase(),
+        Some("UPPERCASE") => name.to_uppercase(),
+        Some("PascalCase") => name.to_pascal_case(),
+        _ => name.to_string(),
+    }
+}
+
 pub(super) fn gen_enum(enum_def: &EnumDef, prefix: &str, has_serde: bool) -> String {
     let has_data_variants = enum_def.variants.iter().any(|v| !v.fields.is_empty());
     let is_tagged_data_enum = enum_def.serde_tag.is_some() && has_data_variants;
@@ -99,16 +155,7 @@ pub(super) fn gen_enum(enum_def: &EnumDef, prefix: &str, has_serde: bool) -> Str
         return gen_untagged_data_enum_as_value_wrapper(enum_def, prefix);
     }
 
-    let napi_case = enum_def.serde_rename_all.as_deref().and_then(|s| match s {
-        "snake_case" => Some("snake_case"),
-        "camelCase" => Some("camelCase"),
-        "kebab-case" => Some("kebab-case"),
-        "SCREAMING_SNAKE_CASE" => Some("UPPER_SNAKE"),
-        "lowercase" => Some("lowercase"),
-        "UPPERCASE" => Some("UPPERCASE"),
-        "PascalCase" => Some("PascalCase"),
-        _ => None,
-    });
+    let napi_case = napi_string_enum_case(enum_def);
 
     let js_name = &enum_def.name;
     let string_enum_attr = match napi_case {

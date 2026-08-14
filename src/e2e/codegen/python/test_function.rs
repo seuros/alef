@@ -13,7 +13,7 @@ use crate::e2e::escape::{escape_python, sanitize_ident};
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Fixture;
 
-use super::helpers::{is_skipped, resolve_client_factory, resolve_function_name_for_call};
+use super::helpers::{self, is_skipped, resolve_client_factory, resolve_function_name_for_call};
 use super::visitors::emit_python_visitor_method;
 use args::build_args_and_setup;
 use error_assertions::emit_error_assertion;
@@ -34,6 +34,9 @@ pub(super) fn render_test_function(
     enum_fields: &HashMap<String, String>,
     handle_nested_types: &HashMap<String, String>,
     handle_dict_types: &HashSet<String>,
+    force_bind_result: bool,
+    convertible_types: &ahash::AHashSet<String>,
+    crate_has_serde: bool,
 ) {
     let fn_name = sanitize_ident(&fixture.id);
     let description = &fixture.description;
@@ -86,6 +89,17 @@ pub(super) fn render_test_function(
         .and_then(|o| o.options_via.as_deref())
         .or(top_level_options_via)
         .unwrap_or(options_via);
+    // Only honor "from_json" when the pyo3 backend actually injects a from_json()
+    // staticmethod for this type (gated on per-type has_serde AND crate-level serde
+    // availability AND core→binding convertibility) — every DTO still has a plain kwargs
+    // constructor, so downgrading keeps the emitted call valid. ~keep
+    let effective_options_via = helpers::effective_options_via_for_type(
+        effective_options_via,
+        effective_options_type,
+        type_defs,
+        convertible_types,
+        crate_has_serde,
+    );
 
     let desc_with_period = if description.ends_with('.') {
         description.to_string()
@@ -281,6 +295,7 @@ pub(super) fn render_test_function(
         field_resolver,
         result_is_simple,
         is_streaming,
+        force_bind_result,
     );
 
     // Append trait-bridge teardown after assertions. This restores shared
@@ -360,6 +375,9 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &HashSet::new(),
+            false,
+            &ahash::AHashSet::new(),
+            false,
         );
         assert!(out.contains("pytest.mark.skip"), "got: {out}");
         assert!(out.contains("not supported"), "got: {out}");

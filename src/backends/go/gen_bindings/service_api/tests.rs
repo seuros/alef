@@ -168,6 +168,48 @@ fn test_gen_service_go_produces_valid_go() {
     assert!(go.contains("owner C.uint64_t"));
 }
 
+/// `service_c_imports_comment.jinja`'s per-registration and per-entrypoint C param
+/// loops close with `{% for param in ... %}...{{ param.name }}{% endfor +%}` — the
+/// `+` on `endfor` is load bearing: minijinja's `trim_blocks(true)` (set in
+/// `template_env::make_env`) strips the newline following *any* block tag,
+/// including a `{% endfor %}` that closes a same-line loop, so without `+%}` the
+/// closing `// );` line merges onto the last parameter's comment line instead of
+/// starting its own. This fixture's `add_handler` registration has two metadata
+/// params and its `run` entrypoint has one, so both loops execute and both need
+/// their trailing `// );` on a line of its own.
+#[test]
+fn service_c_imports_comment_puts_closing_paren_on_its_own_line() {
+    let api = make_fixture_surface();
+    let config = ResolvedCrateConfig {
+        name: "test_crate".to_owned(),
+        ..ResolvedCrateConfig::default()
+    };
+
+    let go = gen_service_go(&api, &config, "binding", "TEST_CRATE");
+
+    assert!(
+        go.contains(concat!(
+            "// extern int test_crate_test_service_register_add_handler(\n",
+            "//     TestServiceOpaque* owner,\n",
+            "//     char* (*callback)(void*, const char*),\n",
+            "//     void* context,\n",
+            "//     const char* method,\n",
+            "//     const char* path\n",
+            "// );\n",
+        )),
+        "registration comment block did not render with `// );` on its own line:\n{go}"
+    );
+    assert!(
+        go.contains(concat!(
+            "// extern void test_crate_test_service_ep_run(\n",
+            "//     TestServiceOpaque* owner,\n",
+            "//     const char* addr\n",
+            "// );\n",
+        )),
+        "entrypoint comment block did not render with `// );` on its own line:\n{go}"
+    );
+}
+
 #[test]
 fn test_service_struct_is_generated() {
     let api = make_fixture_surface();

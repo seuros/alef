@@ -19,14 +19,17 @@ mod support_items;
 #[cfg(test)]
 mod tests;
 pub mod types;
-pub(in crate::backends::pyo3) use types::options_dataclass_type_names;
+pub(in crate::backends::pyo3) use types::{options_dataclass_type_names, type_has_from_json};
+// pub(crate): e2e::codegen::python calls this to mirror the pyo3 backend's crate-level serde
+// detection when computing the shared from_json eligibility predicate. ~keep
+pub(crate) use types::crate_has_serde;
 pub(in crate::backends::pyo3) mod wire_schema;
 
 use crate::backends::pyo3::type_map::Pyo3Mapper;
 use crate::codegen::builder::RustFileBuilder;
 use crate::codegen::generators;
 use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile};
-use crate::core::config::{AdapterPattern, Language, ResolvedCrateConfig, detect_serde_available, resolve_output_dir};
+use crate::core::config::{AdapterPattern, Language, ResolvedCrateConfig, resolve_output_dir};
 use crate::core::ir::ApiSurface;
 use ahash::AHashSet;
 use std::path::PathBuf;
@@ -78,7 +81,7 @@ impl Backend for Pyo3Backend {
         let core_import = config.core_import_name();
 
         let output_dir = resolve_output_dir(config.output_paths.get("python"), &config.name, "crates/{name}-py/src/");
-        let has_serde = detect_serde_available(&output_dir);
+        let has_serde = crate_has_serde(config);
         let mut cfg = config::binding_config(&core_import, has_serde);
         let mut cfg_unsendable = config::unsendable_binding_config(&core_import, has_serde);
 
@@ -473,9 +476,7 @@ impl Backend for Pyo3Backend {
                     api,
                 );
                 // Inject from_json staticmethod into the existing #[pymethods] block when serde
-                if has_serde
-                    && crate::codegen::conversions::core_to_binding_convertible_types(api, &[]).contains(&typ.name)
-                {
+                if types::type_has_from_json(typ, api, has_serde) {
                     let from_json_method = "    #[staticmethod]\n    \
                          fn from_json(json_str: String) -> pyo3::PyResult<Self> {\n        \
                          serde_json::from_str::<Self>(&json_str)\n            \

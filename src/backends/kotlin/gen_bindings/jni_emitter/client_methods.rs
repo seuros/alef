@@ -5,25 +5,25 @@ fn emit_jni_client_method(
     out: &mut String,
     imports: &mut BTreeSet<String>,
     opaque_type_names: &std::collections::HashSet<&str>,
+    config: &ResolvedCrateConfig,
 ) {
-    if !m.doc.is_empty() {
-        for line in m.doc.lines() {
-            out.push_str(&template_env::render(
-                "line_comment.jinja",
-                minijinja::context! {
-                    indent => "    ",
-                    line => line,
-                },
-            ));
+    emit_jni_client_method_docs(m, out);
+    let capsule = match jni_capsule_projection(&m.return_type, config) {
+        Ok(capsule) => capsule,
+        Err(error) => {
+            emit_jni_client_line_comment(out, &format!("ALEF ERROR: {error}"));
+            return;
         }
-    }
+    };
     let method_name = to_lower_camel(&m.name);
     let native_name = format!("native{}{}", to_pascal_case(class_name), to_pascal_case(&m.name));
     let async_kw = if m.is_async { "suspend " } else { "" };
 
     let params_with_types: Vec<String> = m.params.iter().map(|p| format_param_with_imports(p, imports)).collect();
 
-    let wrapper_return_ty = if is_binary_return_type(&m.return_type) {
+    let wrapper_return_ty = if let Some(capsule) = &capsule {
+        capsule.host_type.clone()
+    } else if is_binary_return_type(&m.return_type) {
         "ByteArray".to_string()
     } else if is_optional_binary_return_type(&m.return_type) {
         "ByteArray?".to_string()
@@ -42,10 +42,84 @@ fn emit_jni_client_method(
     ));
 
     let bridge_call = build_bridge_call(m, bridge_name, &native_name);
-
-    emit_method_body(m, out, &bridge_call, imports, opaque_type_names);
-
+    emit_jni_client_method_body(m, out, imports, opaque_type_names, &bridge_call, capsule);
     out.push_str("    }\n\n");
+}
+
+fn emit_jni_client_method_body(
+    method: &crate::core::ir::MethodDef,
+    out: &mut String,
+    imports: &mut BTreeSet<String>,
+    opaque_type_names: &std::collections::HashSet<&str>,
+    bridge_call: &str,
+    capsule: Option<JniCapsuleProjection>,
+) {
+    if let Some(capsule) = capsule {
+        out.push_str(&template_env::render(
+            "jni_capsule_body.jinja",
+            minijinja::context! {
+                is_async => method.is_async,
+                bridge_call => bridge_call,
+                construct_expr => capsule.construct_expr,
+                optional => capsule.optional,
+            },
+        ));
+    } else {
+        emit_method_body(method, out, bridge_call, imports, opaque_type_names);
+    }
+}
+
+struct JniCapsuleProjection {
+    host_type: String,
+    construct_expr: String,
+    optional: bool,
+}
+
+fn emit_jni_client_method_docs(m: &crate::core::ir::MethodDef, out: &mut String) {
+    for line in m.doc.lines() {
+        emit_jni_client_line_comment(out, line);
+    }
+}
+
+fn emit_jni_client_line_comment(out: &mut String, line: &str) {
+    out.push_str(&template_env::render(
+        "line_comment.jinja",
+        minijinja::context! {
+            indent => "    ",
+            line => line,
+        },
+    ));
+}
+
+fn jni_capsule_projection(
+    return_type: &TypeRef,
+    config: &ResolvedCrateConfig,
+) -> anyhow::Result<Option<JniCapsuleProjection>> {
+    let (type_name, optional) = match return_type {
+        TypeRef::Named(type_name) => (type_name, false),
+        TypeRef::Optional(inner) => match inner.as_ref() {
+            TypeRef::Named(type_name) => (type_name, true),
+            _ => return Ok(None),
+        },
+        _ => return Ok(None),
+    };
+    let Some(capsule) = config
+        .kotlin_android
+        .as_ref()
+        .and_then(|android| android.capsule_types.get(type_name))
+    else {
+        return Ok(None);
+    };
+    let host_type = capsule.required_host_type(type_name, "kotlin_android")?;
+    Ok(Some(JniCapsuleProjection {
+        host_type: if optional {
+            format!("{}?", host_type.trim_end_matches('?'))
+        } else {
+            host_type.to_string()
+        },
+        construct_expr: capsule.construct_required("capsulePtr", type_name, "kotlin_android")?,
+        optional,
+    }))
 }
 
 /// Build the expression that calls the bridge, including any JSON serialisation.

@@ -193,7 +193,7 @@ pub(super) fn render_snippet_body(
             call_expr => call_expr, result_var => call.result_var, returns_error => returns_error,
             returns_void => call.returns_void,
             expects_error => expects_error,
-            error_type => config.error_type_name(),
+            error_type => crate::e2e::codegen::snippet_error_type_name(config),
             import_alias => import_alias,
         },
     )

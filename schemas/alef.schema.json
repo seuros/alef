@@ -1875,7 +1875,7 @@
             "type": "string"
           },
           "default": {},
-          "description": "Astro content collection names mapped to the snippet root they load.",
+          "description": "Astro content collection names mapped to the snippet root they load. ~keep",
           "type": "object"
         },
         "deny_unclassified": {
@@ -3277,12 +3277,22 @@
       "type": "object"
     },
     "HostCapsuleTypeConfig": {
-      "description": "Host-native capsule config for a single type in one C-ABI family backend.\n\nTOML form (Go example):\n```toml\n[crates.go.capsule_types.Language]\nhost_type = \"*my_pkg.Language\"\npackage = \"github.com/example/go-my-lib\"\npackage_version = \"v1.0.0\"\nconstruct_expr = \"my_pkg.NewLanguage(unsafe.Pointer({ptr}))\"\n```",
+      "description": "Host-native capsule config for a single type in one C-ABI family backend.\n\nTOML form (Go example):\n```toml\n[crates.go.capsule_types.Language]\nhost_type = \"*my_pkg.Language\"\npackage = \"github.com/example/go-my-lib\"\npackage_version = \"v1.0.0\"\nconstruct_expr = \"my_pkg.NewLanguage(unsafe.Pointer({ptr}))\"\npointer_ownership = \"borrowed_static\"\nhost_destructor = \"none\"\nabi_compatible = true\n```",
       "properties": {
+        "abi_compatible": {
+          "default": false,
+          "description": "Affirms that the host wrapper's pointer representation is ABI-compatible with the\npointer returned by Alef's FFI boundary.",
+          "type": "boolean"
+        },
         "construct_expr": {
           "default": "",
           "description": "The construction expression that wraps the raw FFI pointer in the host `Language`.\nThe `{ptr}` placeholder is substituted with the raw-pointer expression produced at\nthe FFI boundary. **Required** — backends error at emission time when this is empty.",
           "type": "string"
+        },
+        "host_destructor": {
+          "$ref": "#/$defs/HostDestructor",
+          "default": "shared_runtime",
+          "description": "Destructor behavior of the host wrapper. Defaults to `shared_runtime`."
         },
         "host_type": {
           "description": "The host ecosystem's `Language` type, used as the return-type annotation in the\ngenerated binding (e.g. `\"*my_pkg.Language\"` for Go, `\"MyLib.Language\"` for Swift).\n**Required** — backends error at emission time when this is empty.",
@@ -3297,12 +3307,37 @@
           "default": "",
           "description": "The version constraint for `package`. Format is backend-specific and passed through\nverbatim to the manifest.",
           "type": "string"
+        },
+        "pointer_ownership": {
+          "$ref": "#/$defs/PointerOwnership",
+          "default": "owned",
+          "description": "Ownership contract for the native pointer. Defaults to `owned`, which requires a\nshared native runtime unless a stronger safe contract is declared."
         }
       },
       "required": [
         "host_type"
       ],
       "type": "object"
+    },
+    "HostDestructor": {
+      "description": "Destructor behavior of the host wrapper around a capsule pointer.",
+      "oneOf": [
+        {
+          "const": "shared_runtime",
+          "description": "The wrapper invokes a destructor from the same native runtime.",
+          "type": "string"
+        },
+        {
+          "const": "none",
+          "description": "The wrapper has no destructor path for the pointer.",
+          "type": "string"
+        },
+        {
+          "const": "abi_noop",
+          "description": "The wrapper invokes an ABI-stable destructor that is explicitly a no-op.",
+          "type": "string"
+        }
+      ]
     },
     "IncludeConfig": {
       "properties": {
@@ -4574,6 +4609,31 @@
         "array"
       ],
       "type": "string"
+    },
+    "PointerOwnership": {
+      "description": "Ownership contract for the native pointer wrapped by a host capsule.",
+      "oneOf": [
+        {
+          "const": "owned",
+          "description": "The host wrapper owns and may destroy the pointer.",
+          "type": "string"
+        },
+        {
+          "const": "borrowed_static",
+          "description": "The pointer has static lifetime and must never be destroyed by the host wrapper.",
+          "type": "string"
+        },
+        {
+          "const": "refcounted",
+          "description": "The pointer participates in a reference-counted ownership protocol.",
+          "type": "string"
+        },
+        {
+          "const": "wasm",
+          "description": "The pointer belongs to a WebAssembly runtime rather than the host native runtime.",
+          "type": "string"
+        }
+      ]
     },
     "PolyConfig": {
       "additionalProperties": false,

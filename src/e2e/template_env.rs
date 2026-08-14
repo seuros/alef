@@ -165,7 +165,6 @@ static TEMPLATES: &[(&str, &str)] = &[
     ),
     ("r/description.jinja", include_str!("templates/r/description.jinja")),
     ("r/snippet_body.jinja", include_str!("templates/r/snippet_body.jinja")),
-    ("r/assertion.jinja", include_str!("templates/r/assertion.jinja")),
     (
         "r/visitor_method.jinja",
         include_str!("templates/r/visitor_method.jinja"),
@@ -530,7 +529,6 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/wasm/globalSetup.ts.jinja"),
     ),
     ("wasm/tsconfig.jinja", include_str!("templates/wasm/tsconfig.jinja")),
-    ("wasm/assertion.jinja", include_str!("templates/wasm/assertion.jinja")),
     (
         "wasm/visitor_method.jinja",
         include_str!("templates/wasm/visitor_method.jinja"),
@@ -562,4 +560,208 @@ pub(crate) fn render(template_name: &str, ctx: minijinja::Value) -> String {
         .unwrap_or_else(|_| panic!("template {template_name} not found"))
         .render(ctx)
         .unwrap_or_else(|e| panic!("template {template_name} failed to render: {e}"))
+}
+
+/// `not_empty` is the one assertion that silently degrades into a no-op: a check that
+/// stringifies before measuring, or that leans on the host language's truthiness, reads
+/// as coverage while passing on empty data. Every emitter below must reject an empty
+/// collection and an empty string, and must still accept a legitimate `0` / `0.0` / `false`.
+#[cfg(test)]
+mod not_empty_tests {
+    use super::render;
+
+    /// Compare emitted code by token sequence so a template's cosmetic indentation
+    /// (which minijinja's whitespace control also influences) cannot mask a behaviour change.
+    fn code(text: &str) -> String {
+        text.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    #[test]
+    fn not_empty_for_python_rejects_empty_sized_values_but_accepts_zero() {
+        let rendered = render(
+            "python/assertion.jinja",
+            minijinja::context! { assertion_type => "not_empty", field_access => "result.content" },
+        );
+        assert_eq!(
+            rendered.trim(),
+            "assert result.content is not None and (not hasattr(result.content, \"__len__\") \
+             or len(result.content) > 0)  # noqa: S101"
+        );
+    }
+
+    #[test]
+    fn not_empty_for_php_arrays_measures_the_element_count() {
+        let rendered = render(
+            "php/assertion.jinja",
+            minijinja::context! {
+                assertion_type => "not_empty",
+                field_expr => "$result->chunks",
+                field_is_array => true,
+            },
+        );
+        assert_eq!(
+            rendered.trim(),
+            "$this->assertGreaterThan(0, count($result->chunks ?? []), 'expected non-empty value');"
+        );
+    }
+
+    #[test]
+    fn not_empty_for_php_scalars_rejects_empty_string_but_accepts_zero() {
+        let rendered = render(
+            "php/assertion.jinja",
+            minijinja::context! {
+                assertion_type => "not_empty",
+                field_expr => "$result->content",
+                field_is_array => false,
+            },
+        );
+        // assertNotEmpty() routes through empty(), which would reject 0, 0.0, "0" and false.
+        assert!(!rendered.contains("assertNotEmpty"), "got: {rendered}");
+        assert_eq!(
+            rendered.trim(),
+            "$this->assertNotSame('', $result->content ?? '', 'expected non-empty value');"
+        );
+    }
+
+    #[test]
+    fn not_empty_for_ruby_asks_the_value_not_its_string_form() {
+        let rendered = render(
+            "ruby/assertion.jinja",
+            minijinja::context! { assertion_type => "not_empty", field_expr => "result.content" },
+        );
+        // `[].to_s` is "[]" — a non-empty string — so the old form could never fail.
+        assert!(!rendered.contains(".to_s"), "got: {rendered}");
+        assert_eq!(
+            rendered.trim(),
+            "expect(result.content.respond_to?(:empty?) ? !result.content.empty? : !result.content.nil?).to be(true)"
+        );
+    }
+
+    #[test]
+    fn not_empty_for_java_measures_collections_instead_of_their_string_form() {
+        let rendered = render(
+            "java/assertion.jinja",
+            minijinja::context! {
+                assertion_type => "not_empty",
+                field_expr => "java.util.Optional.ofNullable(result.content())",
+            },
+        );
+        assert!(!rendered.contains("toString"), "got: {rendered}");
+        assert_eq!(
+            code(&rendered),
+            code(
+                "assertTrue(java.util.Optional.ofNullable(result.content()).filter(value -> switch ((Object) value) {
+                case CharSequence text -> !text.isEmpty();
+                case java.util.Collection<?> items -> !items.isEmpty();
+                case java.util.Map<?, ?> entries -> !entries.isEmpty();
+                default -> true;
+            }).isPresent(), \"expected non-empty value\");"
+            )
+        );
+    }
+
+    #[test]
+    fn not_empty_for_java_concrete_fields_still_use_is_empty() {
+        let rendered = render(
+            "java/assertion.jinja",
+            minijinja::context! { assertion_type => "not_empty", field_expr => "result.content()" },
+        );
+        assert_eq!(
+            code(&rendered),
+            code("assertFalse(result.content().isEmpty(), \"expected non-empty value\");")
+        );
+    }
+
+    #[test]
+    fn not_empty_for_csharp_pattern_matches_instead_of_stringifying() {
+        let rendered = render(
+            "csharp/assertion.jinja",
+            minijinja::context! {
+                assertion_type => "not_empty",
+                field_expr => "result.Content",
+                field_needs_json_serialize => false,
+                skipped_reason => "",
+            },
+        );
+        // `.ToString()` on a struct yields the type name, and the old `?.` form did not
+        // compile for a non-nullable value type.
+        assert!(!rendered.contains("ToString"), "got: {rendered}");
+        assert_eq!(
+            code(&rendered),
+            code(
+                "Assert.True(((object?)result.Content) switch
+            {
+                null => false,
+                string text => text.Length > 0,
+                System.Collections.ICollection items => items.Count > 0,
+                _ => true,
+            }, \"expected non-empty value\");"
+            )
+        );
+    }
+
+    #[test]
+    fn not_empty_for_csharp_collections_still_use_assert_not_empty() {
+        let rendered = render(
+            "csharp/assertion.jinja",
+            minijinja::context! {
+                assertion_type => "not_empty",
+                field_expr => "result.Chunks",
+                field_needs_json_serialize => true,
+                skipped_reason => "",
+            },
+        );
+        assert_eq!(code(&rendered), code("Assert.NotEmpty(result.Chunks);"));
+    }
+
+    #[test]
+    fn not_empty_for_zig_json_rejects_empty_array_and_empty_string() {
+        let rendered = render(
+            "zig/json_assertion.jinja",
+            minijinja::context! { assertion_type => "not_empty", field_expr => "_content" },
+        );
+        // `!= .null` accepted an empty array and an empty string.
+        assert!(!rendered.contains("!= .null"), "got: {rendered}");
+        assert_eq!(
+            code(&rendered),
+            code(
+                "{
+                const _ne = _content;
+                try testing.expect(switch (_ne) {
+                    .null => false,
+                    .string => |_s| _s.len > 0,
+                    .array => |_a| _a.items.len > 0,
+                    .object => |_o| _o.count() > 0,
+                    else => true,
+                });
+            }"
+            )
+        );
+    }
+
+    #[test]
+    fn not_empty_for_typescript_sizes_strings_and_arrays_and_accepts_zero() {
+        let rendered = render(
+            "typescript/assertion.jinja",
+            minijinja::context! {
+                assertion_type => "not_empty",
+                field_expr => "result.content",
+                field_is_optional => false,
+            },
+        );
+        assert_eq!(
+            code(&rendered),
+            code(
+                "{
+                const _v = result.content;
+                if (typeof _v === \"string\" || Array.isArray(_v)) {
+                    expect(_v.length).toBeGreaterThan(0);
+                } else {
+                    expect(_v).toBeDefined();
+                    expect(_v).not.toBeNull();
+                }
+            }"
+            )
+        );
+    }
 }

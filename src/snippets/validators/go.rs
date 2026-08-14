@@ -46,6 +46,7 @@ impl GoValidator {
                 command
             }
         };
+        Self::apply_build_cache(&mut command, dir.path());
         match session {
             Some(value) => {
                 command.current_dir(Self::project_directory(value));
@@ -61,6 +62,17 @@ impl GoValidator {
         } else {
             (SnippetStatus::Fail, Some(output))
         })
+    }
+
+    /// Give the go toolchain a build cache inside the snippet's own temp directory.
+    ///
+    /// ~keep `go build`/`vet`/`run` refuse to start without one: `run_command`'s
+    /// `sanitize_environment` allowlist carries neither `HOME` nor `GOCACHE`, and go then exits
+    /// with "build cache is required, but could not be located: GOCACHE is not defined and $HOME
+    /// is not defined" before compiling anything. Applied before `apply_environment` so a session
+    /// that configures its own `GOCACHE` still wins and keeps its cache warm across snippets.
+    fn apply_build_cache(command: &mut std::process::Command, dir: &std::path::Path) {
+        command.env("GOCACHE", dir.join("go-build-cache"));
     }
 
     fn project_directory(session: &ValidationSession) -> &std::path::Path {
@@ -184,6 +196,25 @@ mod tests {
     use std::path::PathBuf;
 
     const TOOLCHAIN_TEST_TIMEOUT_SECS: u64 = 120;
+
+    #[test]
+    fn compiles_a_snippet_under_the_sanitized_environment() {
+        if which::which("go").is_err() {
+            return;
+        }
+        let snippet = snippet("package main\n\nfunc main() {}\n");
+
+        let (status, output) =
+            GoValidator::validate_with_context(&snippet, ValidationLevel::Compile, TOOLCHAIN_TEST_TIMEOUT_SECS, None)
+                .expect("validation runs");
+
+        assert_eq!(
+            status,
+            SnippetStatus::Pass,
+            "go must compile under the sanitized environment; with neither HOME nor GOCACHE it refuses to \
+             start with \"build cache is required\" before compiling anything: {output:?}"
+        );
+    }
 
     #[test]
     fn session_manifest_resolves_a_local_module_outside_the_working_directory() {

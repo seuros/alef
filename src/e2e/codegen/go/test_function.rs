@@ -559,6 +559,22 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
         }
     }
 
+    // Fields this fixture compares numerically elsewhere (`equals`/`greater_than[_or_equal]`/
+    // `less_than[_or_equal]` against a JSON number) — proof the field is a scalar number, not
+    // a sized Go type. `not_empty` on the same field cannot call `len()` (it would not compile
+    // against e.g. `float64`), so it consults this set to skip straight to a no-op.
+    let numeric_scalar_fields: std::collections::HashSet<&str> = fixture
+        .assertions
+        .iter()
+        .filter(|a| {
+            matches!(
+                a.assertion_type.as_str(),
+                "equals" | "greater_than" | "greater_than_or_equal" | "less_than" | "less_than_or_equal"
+            ) && a.value.as_ref().is_some_and(serde_json::Value::is_number)
+        })
+        .filter_map(|a| a.field.as_deref())
+        .collect();
+
     for assertion in &fixture.assertions {
         if let Some(f) = &assertion.field
             && !f.is_empty()
@@ -597,6 +613,7 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
                             import_alias,
                             field_resolver,
                             &optional_locals,
+                            &numeric_scalar_fields,
                             result_is_simple,
                             result_is_array,
                             is_streaming,
@@ -613,6 +630,7 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
                         import_alias,
                         field_resolver,
                         &optional_locals,
+                        &numeric_scalar_fields,
                         result_is_simple,
                         result_is_array,
                         is_streaming,
@@ -630,6 +648,7 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
                         import_alias,
                         field_resolver,
                         &optional_locals,
+                        &numeric_scalar_fields,
                         result_is_simple,
                         result_is_array,
                         is_streaming,
@@ -646,6 +665,7 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
             import_alias,
             field_resolver,
             &optional_locals,
+            &numeric_scalar_fields,
             result_is_simple,
             result_is_array,
             is_streaming,

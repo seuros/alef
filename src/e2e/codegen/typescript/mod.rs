@@ -487,12 +487,20 @@ fn fixture_backend_value<'a>(
         .or_else(|| backend_input.and_then(|b| b.get(&to_camel_case(method_name))))
 }
 
-fn ts_stub_return_type(return_type: &crate::core::ir::TypeRef) -> &'static str {
+fn ts_stub_return_type(return_type: &crate::core::ir::TypeRef) -> String {
     match return_type {
-        crate::core::ir::TypeRef::Unit => "void",
-        crate::core::ir::TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool) => "boolean",
-        crate::core::ir::TypeRef::Primitive(_) => "number",
-        _ => "string",
+        crate::core::ir::TypeRef::Unit => "void".to_string(),
+        crate::core::ir::TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool) => "boolean".to_string(),
+        crate::core::ir::TypeRef::Primitive(_) => "number".to_string(),
+        // Duck-typed trait-bridge stubs must declare a TS return type matching the
+        // real napi-rs interface (e.g. `EmbeddingBackend.embed(): Promise<Array<
+        // Array<number>>>`). The stub body already emits `[]` for list-typed
+        // methods (see `default_val` above); falling through to the bare
+        // `"string"` default below mismatched that `[]` against its own
+        // declared return type (TS2322: `never[]` not assignable to `string`).
+        crate::core::ir::TypeRef::Vec(inner) => format!("Array<{}>", ts_stub_return_type(inner)),
+        crate::core::ir::TypeRef::Optional(inner) => ts_stub_return_type(inner),
+        _ => "string".to_string(),
     }
 }
 
@@ -744,6 +752,70 @@ result_var = "result"
         assert!(
             !emission.setup_block.contains("new WorkResult()"),
             "Named return type must not emit a constructor call, got: {}",
+            emission.setup_block
+        );
+    }
+
+    /// `Vec<T>`-returning trait methods (e.g. `EmbeddingBackend::embed() ->
+    /// Vec<Vec<f32>>`, `OcrBackend::supported_languages() -> Vec<String>`) must
+    /// get a matching array return-type annotation on the generated stub.
+    ///
+    /// Before this fix, `ts_stub_return_type` fell through to its `"string"`
+    /// default for any non-primitive, non-unit type -- including `Vec<T>` --
+    /// while `default_val` correctly emitted `[]` for the same type. The
+    /// mismatch between the declared `Promise<string>` and the actual `[]`
+    /// return value is a `tsc` TS2322 ("Type 'never[]' is not assignable to
+    /// type 'string'"), and it fails every generated trait-bridge stub whose
+    /// interface has an array-returning method: embedding, OCR, and reranker
+    /// backends all failed this way (see register_embedding_backend_trait_bridge.md,
+    /// register_ocr_backend_trait_bridge.md, register_reranker_backend_trait_bridge.md).
+    #[test]
+    fn emit_test_backend_ts_vec_return_type_uses_array_annotation_not_string() {
+        use crate::core::config::TraitBridgeConfig;
+        use crate::core::ir::{PrimitiveType, TypeRef};
+
+        let bridge = TraitBridgeConfig {
+            trait_name: "EmbeddingBackend".to_string(),
+            super_trait: Some("Plugin".to_string()),
+            ..Default::default()
+        };
+
+        // Vec<Vec<f32>>, matching EmbeddingBackend::embed's real return type.
+        let embed = test_method(
+            "embed",
+            TypeRef::Vec(Box::new(TypeRef::Vec(Box::new(TypeRef::Primitive(PrimitiveType::F32))))),
+            true,
+            false,
+        );
+        // Vec<String>, matching OcrBackend::supported_languages's real return type.
+        let supported_languages = test_method(
+            "supportedLanguages",
+            TypeRef::Vec(Box::new(TypeRef::String)),
+            false,
+            false,
+        );
+        let methods = [&embed, &supported_languages];
+
+        let fixture = make_fixture("vec_return_fixture", serde_json::json!({ "name": "my-embedder" }));
+        let emission = emit_test_backend(&bridge, &methods, &fixture);
+
+        assert!(
+            emission
+                .setup_block
+                .contains("async embed(): Promise<Array<Array<number>>> { return []; }"),
+            "Vec<Vec<f32>> return type must be declared as Array<Array<number>>, got: {}",
+            emission.setup_block
+        );
+        assert!(
+            emission
+                .setup_block
+                .contains("supportedLanguages(): Array<string> { return []; }"),
+            "Vec<String> return type must be declared as Array<string>, got: {}",
+            emission.setup_block
+        );
+        assert!(
+            !emission.setup_block.contains(": Promise<string> { return []; }"),
+            "an array-typed method must never declare a bare 'string' return type, got: {}",
             emission.setup_block
         );
     }

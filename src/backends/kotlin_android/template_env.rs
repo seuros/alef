@@ -39,6 +39,30 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/android_facade_expr_method.jinja"),
     ),
     (
+        "android_facade_jackson_config.jinja",
+        include_str!("templates/android_facade_jackson_config.jinja"),
+    ),
+    (
+        "android_facade_dto_async_impl.jinja",
+        include_str!("templates/android_facade_dto_async_impl.jinja"),
+    ),
+    (
+        "android_facade_generic_async_impl.jinja",
+        include_str!("templates/android_facade_generic_async_impl.jinja"),
+    ),
+    (
+        "android_streaming_mapper.jinja",
+        include_str!("templates/android_streaming_mapper.jinja"),
+    ),
+    (
+        "capsule_function_wrapper.jinja",
+        include_str!("templates/capsule_function_wrapper.jinja"),
+    ),
+    (
+        "generation_error.jinja",
+        include_str!("templates/generation_error.jinja"),
+    ),
+    (
         "trait_interface_header.jinja",
         include_str!("templates/trait_interface_header.jinja"),
     ),

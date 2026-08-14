@@ -1,4 +1,62 @@
 #[cfg(test)]
+mod not_empty_tests {
+    use super::super::assertions::render_assertion;
+    use crate::e2e::config::E2eConfig;
+    use crate::e2e::field_access::FieldResolver;
+    use crate::e2e::fixture::Assertion;
+    use std::collections::{HashMap, HashSet};
+
+    fn render_not_empty(field: Option<&str>, result_is_simple: bool) -> String {
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        let assertion = Assertion {
+            assertion_type: "not_empty".to_string(),
+            field: field.map(str::to_string),
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            result_is_simple,
+            &E2eConfig::default(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        out
+    }
+
+    /// `[].to_s` is `"[]"` — a non-empty String — so measuring the stringified value
+    /// made the assertion unfalsifiable on an empty collection.
+    #[test]
+    fn not_empty_for_ruby_asks_the_value_not_its_string_form() {
+        let out = render_not_empty(None, false);
+        assert!(!out.contains(".to_s"), "got: {out}");
+        assert_eq!(
+            out.trim(),
+            "expect(result.respond_to?(:empty?) ? !result.empty? : !result.nil?).to be(true)"
+        );
+    }
+
+    #[test]
+    fn not_empty_for_ruby_simple_results_asks_the_value_not_its_string_form() {
+        let out = render_not_empty(Some("audio"), true);
+        assert!(!out.contains(".to_s"), "got: {out}");
+        assert_eq!(
+            out.trim(),
+            "expect(result.respond_to?(:empty?) ? !result.empty? : !result.nil?).to be(true)"
+        );
+    }
+}
+
+#[cfg(test)]
 mod trait_bridge_tests {
     use super::super::project::render_spec_helper;
     use super::super::stubs::emit_test_backend;

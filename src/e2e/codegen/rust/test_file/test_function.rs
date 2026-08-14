@@ -74,12 +74,13 @@ pub fn render_test_function(
     // Per-call field resolver: overrides the file-level resolver when this call
     // declares its own result_fields / fields / fields_optional / fields_array /
     // fields_method_calls.
-    let call_field_resolver = FieldResolver::new(
+    let call_field_resolver = FieldResolver::new_with_error_aliases(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
         e2e_config.effective_result_fields(call_config),
         e2e_config.effective_fields_array(call_config),
         e2e_config.effective_fields_method_calls(call_config),
+        &e2e_config.error_field_aliases,
     )
     .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
     .with_enum_fields(e2e_config.effective_fields_enum(call_config).clone());

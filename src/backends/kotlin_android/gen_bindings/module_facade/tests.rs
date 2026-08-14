@@ -47,6 +47,7 @@ fn capsule_wrapper_errors_when_construct_expr_empty() {
         package: String::new(),
         package_version: String::new(),
         construct_expr: String::new(),
+        ..Default::default()
     };
     let mut body = String::new();
     emit_capsule_function_wrapper(&mut body, &func, "SampleBridge", &cfg);
@@ -68,6 +69,7 @@ fn capsule_wrapper_errors_when_host_type_empty() {
         package: String::new(),
         package_version: String::new(),
         construct_expr: "com.example.Language({ptr})".to_string(),
+        ..Default::default()
     };
     let mut body = String::new();
     emit_capsule_function_wrapper(&mut body, &func, "SampleBridge", &cfg);
@@ -89,11 +91,12 @@ fn capsule_wrapper_constructs_host_language_without_alef_close_path() {
         package: String::new(),
         package_version: String::new(),
         construct_expr: "dev.runtime.Language({ptr})".into(),
+        ..Default::default()
     };
     let mut body = String::new();
     emit_capsule_function_wrapper(&mut body, &func, "SampleBridge", &cfg);
 
-    assert!(body.contains("return dev.runtime.Language(cLangPtr)"), "{body}");
+    assert!(body.contains("return dev.runtime.Language(capsulePtr)"), "{body}");
     assert!(
         !body.contains("nativeFreeLanguage"),
         "capsule ownership belongs to the host runtime: {body}"

@@ -33,7 +33,16 @@
 {%- endfor -%}
 {%- elif assertion_type == "not_empty" -%}
 {%- if "Optional.ofNullable" in field_expr -%}
-        assertTrue({{ field_expr }}.filter(value -> !value.toString().isEmpty()).isPresent(), "expected non-empty value");
+{#- `value.toString()` stringifies before measuring, so an empty List renders as "[]" and the filter always -#}
+{#- kept the value. Measure the value itself; a boxed scalar has no emptiness notion and stays present. The -#}
+{#- selector is widened to Object because a pattern is only legal when it is castable to the selector type, -#}
+{#- and `Optional<String>` would reject the Collection and Map cases outright. -#}
+        assertTrue({{ field_expr }}.filter(value -> switch ((Object) value) {
+            case CharSequence text -> !text.isEmpty();
+            case java.util.Collection<?> items -> !items.isEmpty();
+            case java.util.Map<?, ?> entries -> !entries.isEmpty();
+            default -> true;
+        }).isPresent(), "expected non-empty value");
 {%- else -%}
         assertFalse({{ field_expr }}.isEmpty(), "expected non-empty value");
 {%- endif -%}

@@ -24,6 +24,27 @@ impl TypeMapper for MagnusMapper {
     }
 }
 
+/// Maps a TypeRef to the Ruby type a generated accessor actually hands back.
+///
+/// ~keep Differs from [`rbs_type`] on `Json` alone, and only because the two describe different
+/// things: `rbs_type`'s `json_value` is the shape of the *parsed* document, while the binding
+/// returns whatever [`MagnusMapper`] rendered, and `MagnusMapper::json` is `String` — the value
+/// has already been serialized by the time Ruby sees it. Declaring `json_value` on an accessor
+/// therefore tells steep that `page.extracted_data["key"]` type-checks, when at runtime it is a
+/// `String` and raises. The substitution has to recurse, or `Array[json_value]` keeps the same
+/// lie one level down. Every other case delegates, so the two stay in step by construction.
+pub fn rbs_marshalled_type(ty: &TypeRef) -> String {
+    match ty {
+        TypeRef::Json => "String".to_string(),
+        TypeRef::Optional(inner) => format!("{}?", rbs_marshalled_type(inner)),
+        TypeRef::Vec(inner) => format!("Array[{}]", rbs_marshalled_type(inner)),
+        TypeRef::Map(key, value) => {
+            format!("Hash[{}, {}]", rbs_marshalled_type(key), rbs_marshalled_type(value))
+        }
+        other => rbs_type(other),
+    }
+}
+
 /// Maps a TypeRef to its Ruby representation for .rbs stubs.
 pub fn rbs_type(ty: &TypeRef) -> String {
     match ty {

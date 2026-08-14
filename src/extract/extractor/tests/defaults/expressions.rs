@@ -291,7 +291,7 @@ fn test_field_with_hashmap_new_default() {
 }
 
 #[test]
-fn test_complex_expression_defaults_to_empty() {
+fn test_zero_arg_function_call_default_extracts_as_function_call() {
     let source = r#"
         pub struct Complex {
             pub result: u32,
@@ -314,8 +314,37 @@ fn test_complex_expression_defaults_to_empty() {
 
     assert_eq!(
         result_field.typed_default,
+        Some(crate::core::ir::DefaultValue::FunctionCall("some_function".to_string())),
+        "Zero-arg function calls should preserve the callee path as FunctionCall"
+    );
+}
+
+#[test]
+fn test_call_with_args_defaults_to_empty() {
+    let source = r#"
+        pub struct Complex {
+            pub result: u32,
+        }
+
+        impl Default for Complex {
+            fn default() -> Self {
+                Complex { result: some_function(1, 2) }
+            }
+        }
+
+        fn some_function(a: u32, b: u32) -> u32 {
+            a + b
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let complex = &surface.types[0];
+    let result_field = &complex.fields[0];
+
+    assert_eq!(
+        result_field.typed_default,
         Some(crate::core::ir::DefaultValue::Empty),
-        "Complex expressions like function calls should default to Empty"
+        "Calls with arguments cannot be faithfully represented and should default to Empty"
     );
 }
 

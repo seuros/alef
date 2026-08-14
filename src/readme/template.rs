@@ -3,7 +3,6 @@ use super::template_env;
 use crate::core::backend::GeneratedFile;
 use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
-use minijinja::value::ViaDeserialize;
 use minijinja::{Environment, Value};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -176,7 +175,28 @@ fn render_template_readme(
 
     env.add_filter(
         "include_snippet",
-        move |ViaDeserialize(mapping): ViaDeserialize<SnippetMapping>, language: String| -> Result<String, minijinja::Error> {
+        move |mapping: Value, language: String| -> Result<String, minijinja::Error> {
+            // Undefined must be caught before struct deserialization: minijinja's
+            // `Deserializer for &Value` visits an undefined value as unit, which
+            // fails both `SnippetMapping` variants and collapses into serde's
+            // generic untagged-enum "did not match any variant" message —
+            // discarding the actionable, config-key-naming error a caller needs
+            // when `snippets.<key>` was never populated (e.g. no snippets are
+            // configured for this README language at all). ~keep
+            if mapping.is_undefined() {
+                return Err(minijinja::Error::new(
+                    minijinja::ErrorKind::InvalidOperation,
+                    format!(
+                        "cannot include snippet for language `{language}`: the piped snippet reference is undefined — neither a `snippets.<key>` entry is configured for this README language nor does `crates.readme.snippets_dir` provide a fallback root"
+                    ),
+                ));
+            }
+            let mapping: SnippetMapping = SnippetMapping::deserialize(&mapping).map_err(|err| {
+                minijinja::Error::new(
+                    minijinja::ErrorKind::InvalidOperation,
+                    format!("cannot include snippet for language `{language}`: {err}"),
+                )
+            })?;
             let (path, mapping_root) = mapping.into_parts();
             let resolved_root = mapping_root.map(|root| workspace_root_for_snippets.join(root));
             let dir = resolved_root.as_ref().or(snippets_dir_clone.as_ref());

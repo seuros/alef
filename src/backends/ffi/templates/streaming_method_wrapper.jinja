@@ -3,12 +3,29 @@
 {% endif -%}
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn {{ fn_name }}(
-    client: *const {{ qualified }},
+    client: AlefHandle,
     request_json: *const std::ffi::c_char,
     callback: {{ callback_type }},
     user_data: *mut std::ffi::c_void,
 ) -> i32 {
     catch_ffi_panic(1, || {
+    clear_last_error();
+    let requests = [HandleRequest { handle: client, expected_type: std::any::TypeId::of::<{{ qualified }}>() }];
+    let values = match acquire_handles(&requests) {
+        Ok(values) => values,
+        Err(error) => { set_handle_error(&error); return -1; }
+    };
+    let mut guards = Vec::with_capacity(values.len());
+    for (token, value) in &values {
+        match value.lock() {
+            Ok(guard) => guards.push((*token, guard)),
+            Err(_) => { set_handle_error(&HandleError::RegistryPoisoned); return -1; }
+        }
+    }
+    let client: *mut {{ qualified }} = match locked_handle_ptr::<{{ qualified }}>(&mut guards, client) {
+        Ok(value) => value,
+        Err(error) => { set_handle_error(&error); return -1; }
+    };
 {{ body_indented }}
     })
 }

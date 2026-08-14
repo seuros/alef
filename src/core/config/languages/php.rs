@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use super::{FfiTargetDepOverride, StubsConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PhpConfig {
     pub extension_name: Option<String>,
     /// Cargo crate name for the PHP binding (e.g. `"parser-core-core-php"`).

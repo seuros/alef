@@ -29,6 +29,8 @@ pub enum DefaultValue {
     EnumVariant(String),
     /// A zero-argument Rust function that supplies the value at runtime. ~keep
     FunctionCall(String),
+    /// A public zero-argument Rust function callable from generated binding crates. ~keep
+    PublicFunctionCall(String),
     /// Empty collection or Default::default()
     Empty,
     /// None / null

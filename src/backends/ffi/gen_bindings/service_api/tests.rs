@@ -157,6 +157,49 @@ fn test_handler_bridge_struct_is_generated() {
 }
 
 #[test]
+fn test_handler_bridge_frees_response_before_deserializing() {
+    // Regression: the response pointer from the C callback used to leak on a deserialization
+    // failure. `serde_json::from_str(...)?` ran before free(resp_ptr), so a malformed response
+    // returned early via `?` and the host-allocated buffer was never released. free() must run
+    // unconditionally, ahead of the fallible parse, so every path (success or failure) releases
+    // ownership of the pointer. ~keep
+    let api = make_fixture_surface();
+    let config = ResolvedCrateConfig {
+        name: "test_crate".to_owned(),
+        ..ResolvedCrateConfig::default()
+    };
+
+    let rs = gen_service_rs(&api, &config);
+
+    let free_pos = rs
+        .find("free(resp_ptr as *mut c_void);")
+        .expect("handler bridge must free the response pointer");
+    let parse_pos = rs
+        .find("serde_json::from_str(&resp_json)")
+        .expect("handler bridge must deserialize the response");
+
+    assert!(
+        free_pos < parse_pos,
+        "resp_ptr must be freed before the fallible deserialize, otherwise a malformed \
+         response leaks the C-allocated buffer:\n{rs}"
+    );
+
+    // Freeing before the parse is only sound because the response was copied out of the C buffer
+    // first. Without `into_owned()` the borrow would still point into the freed allocation and the
+    // ordering asserted above would turn the leak into a use-after-free — a strictly worse defect
+    // that the ordering assertion alone cannot see. ~keep
+    let owned_pos = rs
+        .find(".to_string_lossy().into_owned()")
+        .expect("handler bridge must copy the response out of the C buffer before freeing it");
+
+    assert!(
+        owned_pos < free_pos,
+        "the response must be copied into an owned String before free(resp_ptr); otherwise \
+         `resp_json` borrows freed memory:\n{rs}"
+    );
+}
+
+#[test]
 fn test_opaque_has_constructor_and_destructor() {
     let api = make_fixture_surface();
     let config = ResolvedCrateConfig {
@@ -182,6 +225,57 @@ fn test_registration_function_exists() {
 
     assert!(rs.contains("test_crate_test_service_register_add_handler"));
     assert!(rs.contains("extern \"C\" fn(*mut c_void, *const c_char) -> *mut c_char"));
+}
+
+#[test]
+fn registration_dispatch_preserves_domain_error_type_and_compiles() {
+    let dispatch = render(
+        "service_api_registration_dispatch_result.rs.jinja",
+        minijinja::context! {
+            method_name => "route",
+            meta_args => "",
+            opaque_name => "ServiceOpaque",
+        },
+    );
+    let source = format!(
+        r#"
+#[derive(Debug)]
+struct DomainError;
+#[derive(Debug)]
+struct HandleError;
+struct Application;
+struct Owner;
+impl Owner {{
+    fn route(&mut self, _: Handler) -> Result<&mut Application, DomainError> {{
+        Err(DomainError)
+    }}
+}}
+struct ServiceOpaque {{ inner: Option<Owner> }}
+struct Handler;
+fn set_handle_error(_: &HandleError) {{}}
+fn with_handle_mut<T, R>(_: u64, body: impl FnOnce(&mut T) -> R) -> Result<R, HandleError> {{
+    let mut value = ServiceOpaque {{ inner: Some(Owner) }};
+    let erased = (&mut value as *mut ServiceOpaque).cast::<T>();
+    // SAFETY: this compile-only harness instantiates T as ServiceOpaque. ~keep
+    Ok(body(unsafe {{ &mut *erased }}))
+}}
+fn register(owner: u64, handler: Handler) -> i32 {{
+{dispatch}
+}}
+fn main() {{ assert_eq!(register(1, Handler), 1); }}
+"#
+    );
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let source_path = directory.path().join("service_registration.rs");
+    let binary_path = directory.path().join("service-registration-test");
+    std::fs::write(&source_path, source).expect("write compile harness");
+    let compile = std::process::Command::new("rustc")
+        .args(["--edition=2024", "-o"])
+        .arg(&binary_path)
+        .arg(&source_path)
+        .output()
+        .expect("run rustc");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
 }
 
 #[test]

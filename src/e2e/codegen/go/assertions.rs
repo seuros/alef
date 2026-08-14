@@ -16,6 +16,7 @@ pub(super) fn render_assertion(
     import_alias: &str,
     field_resolver: &FieldResolver,
     optional_locals: &std::collections::HashMap<String, String>,
+    numeric_scalar_fields: &std::collections::HashSet<&str>,
     result_is_simple: bool,
     result_is_array: bool,
     is_streaming: bool,
@@ -512,17 +513,28 @@ pub(super) fn render_assertion(
             }
         }
         "not_empty" => {
+            let resolved_field = assertion.field.as_deref().unwrap_or("");
             let field_is_array = {
-                let rf = assertion.field.as_deref().unwrap_or("");
-                let rn = field_resolver.resolve(rf);
+                let rn = field_resolver.resolve(resolved_field);
                 field_resolver.is_array(rn)
             };
+            // `len()` only compiles against a sized Go type (string, slice, array, map,
+            // channel). A field that some *other* assertion in this fixture compares
+            // numerically (`equals`/`greater_than[_or_equal]`/`less_than[_or_equal]`
+            // against a JSON number) is proven to be a scalar number, not a sized type —
+            // `not_empty` cannot call `len()` on it without failing to build. A required
+            // numeric scalar always carries a value in Go (there is no zero-length state
+            // to detect), so the check degrades to a no-op, matching how `not_empty`
+            // already treats "no meaningful check applies" for e.g. `not_error`.
+            let is_numeric_scalar = !is_optional && !field_is_array && numeric_scalar_fields.contains(resolved_field);
             if is_optional && !field_is_array {
                 let _ = writeln!(out_ref, "\tif {field_expr} == nil {{");
             } else if is_optional && field_is_slice {
                 let _ = writeln!(out_ref, "\tif {field_expr} == nil || len({field_expr}) == 0 {{");
             } else if is_optional {
                 let _ = writeln!(out_ref, "\tif {field_expr} == nil || len(*{field_expr}) == 0 {{");
+            } else if is_numeric_scalar {
+                return;
             } else {
                 let _ = writeln!(out_ref, "\tif len({field_expr}) == 0 {{");
             }
@@ -940,15 +952,35 @@ pub(super) fn render_assertion(
         }
     }
 
-    if let Some(ref arr) = array_guard {
-        if !assertion_buf.is_empty() {
-            let _ = writeln!(out, "\tif len({arr}) > 0 {{");
-            for line in assertion_buf.lines() {
-                let _ = writeln!(out, "\t{line}");
-            }
-            let _ = writeln!(out, "\t}}");
+    match &array_guard {
+        Some(arr) if !assertion_buf.is_empty() => {
+            emit_non_empty_precondition(out, arr);
+            out.push_str(&assertion_buf);
         }
-    } else {
-        out.push_str(&assertion_buf);
+        _ => out.push_str(&assertion_buf),
     }
+}
+
+/// Emit the `len(arr) == 0` precondition that must precede an `arr[0]` assertion.
+///
+/// A fixture that asserts on element `0` is stating that the collection has an element;
+/// wrapping the assertion in `if len(arr) > 0` instead let an empty result satisfy the
+/// whole check, so the test could not fail. `t.Fatalf` stops the test function before the
+/// index panics, matching how the generator reports every other unmet precondition.
+///
+/// The precondition is emitted once per collection per function body: `t.Fatalf` aborts,
+/// so repeating it ahead of every indexed assertion would add nothing. The de-duplication
+/// compares whole lines, so an identical check emitted at a deeper indentation (inside a
+/// nil guard, where it may not run) does not suppress the function-level one.
+fn emit_non_empty_precondition(out: &mut String, array_expr: &str) {
+    let fatal_line = format!(
+        "\t\tt.Fatalf(\"expected non-empty %s\", {})",
+        go_string_literal(array_expr)
+    );
+    if out.lines().any(|line| line == fatal_line) {
+        return;
+    }
+    let _ = writeln!(out, "\tif len({array_expr}) == 0 {{");
+    let _ = writeln!(out, "{fatal_line}");
+    let _ = writeln!(out, "\t}}");
 }

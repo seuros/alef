@@ -41,9 +41,10 @@ pub use extras::{AdapterConfig, AdapterParam, AdapterPattern, Language, is_known
 pub use languages::{
     CSharpConfig, CapsuleTypeConfig, CustomModulesConfig, CustomRegistration, CustomRegistrationsConfig, DartConfig,
     DartStyle, ElixirConfig, FfiCapsuleTypeConfig, FfiConfig, FfiTargetDepOverride, GleamConfig,
-    GleamElementConstructor, GleamElementField, GoConfig, HostCapsuleTypeConfig, JavaConfig, JniConfig,
+    GleamElementConstructor, GleamElementField, GoConfig, HostCapsuleTypeConfig, HostDestructor, JavaConfig, JniConfig,
     KotlinAndroidConfig, KotlinConfig, KotlinFfiStyle, KotlinTarget, NapiTypeTagConfig, NodeCapsuleTypeConfig,
-    NodeConfig, PhpConfig, PythonConfig, RConfig, RubyConfig, StubsConfig, SwiftConfig, WasmConfig, ZigConfig,
+    NodeConfig, PhpConfig, PointerOwnership, PythonConfig, RConfig, RubyConfig, StubsConfig, SwiftConfig, WasmConfig,
+    ZigConfig,
 };
 pub use legacy::{LegacyConfigError, LegacyKey, detect_legacy_keys};
 pub use new_config::{NewAlefConfig, ResolveError};
@@ -71,6 +72,7 @@ pub use workspace::WorkspaceConfig;
 
 /// A source crate group for multi-crate extraction.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SourceCrate {
     /// Crate name (hyphens converted to underscores for rust_path).
     pub name: String,
@@ -112,6 +114,7 @@ fn default_true() -> bool {
 /// All flags default to `true`; set to `false` to skip a pass.
 /// Can be overridden per-language via `[generate_overrides.<lang>]`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GenerateConfig {
     /// Generate low-level struct wrappers, From impls, module init (default: true)
     #[serde(default = "default_true")]

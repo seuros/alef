@@ -3538,3 +3538,81 @@ fn napi_constructor_mutex_wraps_when_type_has_mut_methods() {
         lib.content
     );
 }
+
+/// napi-rs emits a `string_enum` as a nominal TS `enum`, so `{ kind: "uri" }` — the literal the
+/// binding accepts at runtime — is rejected by tsc. The field must also admit the enum's own
+/// string values.
+#[test]
+fn string_enum_field_ts_type_admits_the_enum_string_literals() {
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "SourceRef".to_string(),
+            rust_path: "test_lib::SourceRef".to_string(),
+            fields: vec![make_field("kind", TypeRef::Named("SourceKind".to_string()), false)],
+            ..Default::default()
+        }],
+        enums: vec![EnumDef {
+            name: "SourceKind".to_string(),
+            rust_path: "test_lib::SourceKind".to_string(),
+            variants: vec![
+                EnumVariant {
+                    name: "Uri".to_string(),
+                    ..Default::default()
+                },
+                EnumVariant {
+                    name: "Bytes".to_string(),
+                    ..Default::default()
+                },
+            ],
+            serde_rename_all: Some("snake_case".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let files = NapiBackend.generate_bindings(&api, &make_config()).unwrap();
+    let content: String = files.iter().map(|f| f.content.as_str()).collect::<Vec<_>>().join("\n");
+
+    assert!(
+        content.contains(r#"ts_type = "SourceKind | 'uri' | 'bytes'""#),
+        "string-enum field should admit the enum's own literals; got:\n{content}"
+    );
+}
+
+/// Data-carrying tagged enums are emitted as objects, not string enums, so there is no set of
+/// string literals to widen to and the field must keep its nominal type.
+#[test]
+fn tagged_data_enum_field_keeps_its_nominal_ts_type() {
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "Envelope".to_string(),
+            rust_path: "test_lib::Envelope".to_string(),
+            fields: vec![make_field("payload", TypeRef::Named("Payload".to_string()), false)],
+            ..Default::default()
+        }],
+        enums: vec![EnumDef {
+            name: "Payload".to_string(),
+            rust_path: "test_lib::Payload".to_string(),
+            variants: vec![EnumVariant {
+                name: "Text".to_string(),
+                fields: vec![make_field("_0", TypeRef::String, false)],
+                ..Default::default()
+            }],
+            serde_tag: Some("type".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let files = NapiBackend.generate_bindings(&api, &make_config()).unwrap();
+    let content: String = files.iter().map(|f| f.content.as_str()).collect::<Vec<_>>().join("\n");
+
+    assert!(
+        !content.contains("ts_type = \"Payload"),
+        "a tagged data enum has no string literals to widen to; got:\n{content}"
+    );
+}

@@ -26,7 +26,7 @@
 {% if is_enum %}
     assert _alef_e2e_text({{ field_access }}).lower() {{ op }} {{ expected_val }}.lower()  # noqa: S101
 {% else %}
-    assert {{ field_access }}.strip() {{ op }} {{ expected_val }}  # noqa: S101
+    assert {{ field_access }} {{ op }} {{ expected_val }}  # noqa: S101
 {% endif %}
 {% else %}
     assert {{ field_access }} {{ op }} {{ expected_val }}  # noqa: S101
@@ -50,7 +50,9 @@
     assert {{ negated_cmp_expr }}  # noqa: S101
 {% endif %}
 {% elif assertion_type == "not_empty" %}
-    assert {{ field_access }}  # noqa: S101
+{# Bare truthiness would reject a legitimate 0/0.0/False. Only sized values carry an emptiness notion; #}
+{# everything else just has to be present. #}
+    assert {{ field_access }} is not None and (not hasattr({{ field_access }}, "__len__") or len({{ field_access }}) > 0)  # noqa: S101
 {% elif assertion_type == "is_empty" %}
     assert not {{ field_access }}  # noqa: S101
 {% elif assertion_type == "contains_any" %}

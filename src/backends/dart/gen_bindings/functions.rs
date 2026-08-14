@@ -4,19 +4,18 @@ use std::collections::BTreeSet;
 
 use crate::backends::dart::ident::dart_safe_ident;
 use crate::backends::dart::template_env;
+use crate::codegen::naming::{PublicIdentifierKind, public_host_identifier};
+use crate::core::config::Language;
 
 use super::render_type::{format_param, render_type};
 
 /// Returns `true` if the parameter is a config type that should be made optional in Dart.
 ///
-/// Parameters named `config` whose named type has a Rust `Default` implementation AND
-/// for which alef can synthesize a complete Dart constructor expression are made
-/// optional (named) in the Dart wrapper. Both conditions are required: FRB-generated DTOs use
-/// `required` named parameters for every field, so a bare `Type()` constructor only
-/// compiles when alef can emit a value for every field. When alef cannot synthesize a
-/// default (e.g. a field whose type lacks a known zero value), the config param stays
-/// required in the wrapper signature — otherwise the `config ?? Type()` fallback emits
-/// dart that fails to compile.
+/// Parameters named `config` whose named type has a Rust `Default` implementation and for
+/// which alef can produce a default expression are made optional (named) in the Dart
+/// wrapper. FRB-generated DTOs use `required` named parameters for every field, so a bare
+/// `Type()` constructor only compiles when alef can emit a value for every field — see
+/// [`config_default_expression`] for the two ways that value is obtained.
 fn is_optional_config_param(p: &crate::core::ir::ParamDef, type_defs: &[TypeDef], enums: &[EnumDef]) -> bool {
     let TypeRef::Named(name) = &p.ty else {
         return false;
@@ -24,10 +23,43 @@ fn is_optional_config_param(p: &crate::core::ir::ParamDef, type_defs: &[TypeDef]
     if p.name != "config" {
         return false;
     }
-    if !type_defs.iter().any(|ty| ty.name == *name && ty.has_default) {
-        return false;
-    }
-    default_expression_for_named_type(name, type_defs, enums).is_some()
+    config_default_expression(name, type_defs, enums).is_some()
+}
+
+/// Dart expression producing the default value for an optional `config` parameter.
+///
+/// Two strategies, in order:
+///
+/// 1. A synthesized constructor call (`Type(field: value, …)`), used when alef can emit a
+///    literal for every field.
+/// 2. The generated `create<Type>FromJson(json: '{}')` bridge helper, which round-trips an
+///    empty object through serde on the Rust side.
+///
+/// The fallback exists because strategy 1 cannot render `#[serde(default = "path")]`
+/// fields — those reach the IR as [`DefaultValue::FunctionCall`], whose body alef never
+/// sees. A single such field used to disqualify the whole type, which silently downgraded
+/// the wrapper to a required positional `config` (`ExtractionConfig` has six of them).
+/// Deferring to serde is also more faithful than the synthesized literal: it yields the
+/// value the function-call default actually returns rather than a zero value.
+///
+/// Every wrapper is `async`, so `await` is legal in the emitted default expression.
+fn config_default_expression(name: &str, type_defs: &[TypeDef], enums: &[EnumDef]) -> Option<String> {
+    default_expression_for_named_type(name, type_defs, enums)
+        .or_else(|| from_json_default_expression(name, type_defs))
+}
+
+/// `await create<Type>FromJson(json: '{}')`, or `None` when no such helper is generated.
+///
+/// Mirrors the emission predicate in `gen_rust_crate` — the helper exists for exactly the
+/// non-trait, non-opaque, serde-bearing types — so this never names a function that was
+/// not emitted.
+fn from_json_default_expression(name: &str, type_defs: &[TypeDef]) -> Option<String> {
+    let ty = type_defs.iter().find(|ty| {
+        ty.name == name && ty.has_default && ty.has_serde && !ty.is_trait && !ty.is_opaque && !ty.binding_excluded
+    })?;
+    let snake = public_host_identifier(Language::Rust, PublicIdentifierKind::Function, &ty.name);
+    let dart_fn = format!("create_{snake}_from_json").to_lower_camel_case();
+    Some(format!("await {dart_fn}(json: '{{}}')"))
 }
 
 pub(super) fn emit_function(
@@ -60,9 +92,7 @@ pub(super) fn emit_function(
 
     let config_param = f.params.iter().find(|p| is_optional_config_param(p, type_defs, enums));
     let config_default = config_param.and_then(|p| match &p.ty {
-        TypeRef::Named(n) => {
-            default_expression_for_named_type(n, type_defs, enums).map(|default| (n.as_str(), default))
-        }
+        TypeRef::Named(n) => config_default_expression(n, type_defs, enums).map(|default| (n.as_str(), default)),
         _ => None,
     });
 
@@ -197,7 +227,7 @@ fn render_default_value(
         DefaultValue::EnumVariant(variant) => render_enum_variant_default(ty, variant, enums),
         DefaultValue::Empty => zero_value_for_type(ty, type_defs, enums),
         DefaultValue::None => Some("null".to_string()),
-        DefaultValue::FunctionCall(_) => None,
+        DefaultValue::FunctionCall(_) | DefaultValue::PublicFunctionCall(_) => None,
     }
 }
 

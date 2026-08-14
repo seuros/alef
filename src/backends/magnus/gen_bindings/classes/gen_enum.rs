@@ -84,7 +84,8 @@ pub fn gen_enum(enum_def: &EnumDef) -> String {
 }
 
 fn emits_tuple_variant(enum_def: &EnumDef, variant: &crate::core::ir::EnumVariant) -> bool {
-    variant.is_tuple && (enum_def.serde_untagged || enum_def.serde_content.is_some())
+    // ~keep Delegates so the enum body emitter and the conversion match arms cannot drift.
+    crate::codegen::conversions::helpers::variant_emits_tuple_form(enum_def, variant)
 }
 
 /// Map a field type to a Rust type suitable for serde deserialization in data enums.

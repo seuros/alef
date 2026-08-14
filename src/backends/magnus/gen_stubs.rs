@@ -1,4 +1,4 @@
-use crate::backends::magnus::type_map::rbs_type;
+use crate::backends::magnus::type_map::{rbs_marshalled_type, rbs_type};
 use crate::codegen::shared::{binding_fields, substitute_excluded_types, substitute_trait_interfaces};
 use crate::core::config::TraitBridgeConfig;
 use crate::core::hash::{self, CommentStyle};
@@ -285,6 +285,27 @@ fn gen_opaque_type_stub(
 }
 
 /// Generate a Ruby type stub for a struct.
+/// The RBS type of a generated field accessor, mirroring `classes::gen_field_accessor`.
+///
+/// ~keep Nullability follows the accessor, not the owning type's `has_default`. The stub used to
+/// append `?` to every field of a defaulted struct, on the reasoning that such a struct can be
+/// built empty — but the accessor derives its own optionality from `field.optional`, so a
+/// non-optional collection on a defaulted struct really does return a bare `Vec<String>` that can
+/// never be nil. Declaring it nilable forces callers into a nil branch that cannot be reached, and
+/// steep flags the unreachable code they write to satisfy it.
+fn rbs_accessor_type(field: &crate::core::ir::FieldDef) -> String {
+    let base = match &field.ty {
+        TypeRef::Optional(inner) => rbs_marshalled_type(inner),
+        ty => rbs_marshalled_type(ty),
+    };
+    let is_optional = field.optional || matches!(field.ty, TypeRef::Optional(_));
+    if is_optional && !base.ends_with('?') {
+        format!("{base}?")
+    } else {
+        base
+    }
+}
+
 fn gen_type_stub(
     typ: &TypeDef,
     emit_docstrings: bool,
@@ -305,17 +326,16 @@ fn gen_type_stub(
         lines.push("".to_string());
     }
 
-    let accessor = if typ.has_default {
-        "attr_accessor"
-    } else {
-        "attr_reader"
-    };
+    // ~keep Always a reader. `attr_accessor` additionally declares `name=`, and the binding
+    // defines no writer for any field: `gen_field_accessor` emits one zero-arity getter, and
+    // `module_class_method_register` is the only registration template, so nothing ever reaches
+    // Ruby as a setter. Keying this off `has_default` declared a writer on every field of every
+    // defaulted struct — steep then accepts an assignment that raises `NoMethodError` at runtime,
+    // which is exactly the stub-vs-extension drift these files exist to prevent.
+    let accessor = "attr_reader";
     let mut emitted_attr_names: ahash::AHashSet<&str> = ahash::AHashSet::default();
     for f in binding_fields(&typ.fields) {
-        let mut field_type = rbs_type(&f.ty);
-        if typ.has_default && !field_type.ends_with('?') {
-            field_type.push('?');
-        }
+        let field_type = rbs_accessor_type(f);
         if emit_docstrings && !f.doc.is_empty() {
             for line in f.doc.lines() {
                 let line = line.trim();
@@ -339,7 +359,12 @@ fn gen_type_stub(
         .iter()
         .filter(|f| !f.binding_excluded)
         .map(|f| {
-            let field_type = rbs_type(&f.ty);
+            // ~keep Same marshalling as the accessors. The kwargs constructor converts each field
+            // with `<mapped type>::try_convert`, and `MagnusMapper` maps Json to String, so a Json
+            // keyword takes a serialized String. Declaring `json_value` here let steep accept
+            // `Foo.new(data: {a: 1})`, where `String::try_convert` fails and the field silently
+            // falls back to its default instead of raising — a wrong value, not an error.
+            let field_type = rbs_marshalled_type(&f.ty);
             if typ.has_default {
                 format!("?{}: {}", f.name, field_type)
             } else if f.optional {

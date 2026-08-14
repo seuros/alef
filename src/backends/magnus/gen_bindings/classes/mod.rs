@@ -779,12 +779,18 @@ pub(super) fn gen_struct_default_impl_explicit(
                     field.ty.clone()
                 };
 
-                let default_val = crate::codegen::config_gen::default_value_for_field(
+                // ~keep Must be the type-aware entry point, not `default_value_for_field`. This
+                // impl exists precisely because the struct has field-level defaults that differ
+                // from the derived Default, so the context-free fallback would emit
+                // `Default::default()` here and defeat the whole purpose: `GridCell.default()`
+                // returned row_span 0 while the kwargs constructor returned the real 1.
+                let default_val = crate::codegen::config_gen::default_value_for_field_in_type(
                     &FieldDef {
                         ty: binding_ty,
                         ..field.clone()
                     },
                     "rust",
+                    typ,
                 );
                 format!("{}: {}", field.name, default_val)
             }

@@ -18,6 +18,7 @@ fn emitted_code_blocks_preserve_newline_after_safety_comments() {
 }
 use crate::backends::ffi::gen_bindings::types::gen_field_accessor;
 use crate::core::backend::Backend;
+use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::*;
 
 #[test]
@@ -606,6 +607,145 @@ type = "ChatRequest"
     );
 }
 
+/// A client type whose handle is produced by an ordinary function (`connect`, mirroring a
+/// constructor) and consumed by the callback-style streaming FFI wrapper emitted from
+/// `streaming_method_wrapper.jinja`. Every FFI producer hands out `Named` types — client
+/// types included — as a scalar `AlefHandle` via `insert_handle`, never `Box::into_raw`,
+/// so the streaming wrapper's `client` parameter must accept that same scalar shape rather
+/// than a `TYPE *`/`const TYPE *` struct pointer built by construction from a handle that
+/// was never a raw pointer to begin with.
+fn streaming_client_api() -> (ApiSurface, ResolvedCrateConfig) {
+    let config = resolved_one(
+        r#"
+[workspace]
+languages = ["ffi"]
+
+[[crates]]
+name = "my-lib"
+sources = ["src/lib.rs"]
+
+[crates.ffi]
+prefix = "ml"
+
+[[crates.adapters]]
+name = "chat_stream"
+pattern = "streaming"
+core_path = "chat_stream"
+owner_type = "DefaultClient"
+item_type = "ChatChunk"
+error_type = "MyError"
+request_type = "my_lib::ChatRequest"
+
+[[crates.adapters.params]]
+name = "req"
+type = "ChatRequest"
+"#,
+    );
+    let api = ApiSurface {
+        crate_name: "my-lib".to_string(),
+        version: "1.0.0".to_string(),
+        types: vec![TypeDef {
+            name: "DefaultClient".to_string(),
+            rust_path: "my_lib::DefaultClient".to_string(),
+            is_opaque: true,
+            methods: vec![MethodDef {
+                name: "chat_stream".to_string(),
+                params: vec![],
+                return_type: TypeRef::Unit,
+                is_async: true,
+                error_type: Some("MyError".to_string()),
+                receiver: Some(ReceiverKind::Ref),
+                ..MethodDef::default()
+            }],
+            ..TypeDef::default()
+        }],
+        functions: vec![FunctionDef {
+            name: "connect".to_string(),
+            rust_path: "my_lib::connect".to_string(),
+            return_type: TypeRef::Named("DefaultClient".to_string()),
+            ..FunctionDef::default()
+        }],
+        ..ApiSurface::default()
+    };
+    (api, config)
+}
+
+/// C ABI regression: the streaming wrapper's `client` parameter must be declared as the same
+/// scalar `AlefHandle` every producer of that type returns, not a `TYPE *`/`const TYPE *`
+/// struct pointer. Before the fix, `streaming_method_wrapper.jinja` unconditionally declared
+/// `client: *const {{ qualified }}`, so cbindgen rendered a pointer-shaped C parameter for a
+/// handle that was never a raw pointer, and a caller holding a valid client handle from any
+/// producer could not call the streaming entry point without a cast that is wrong by
+/// construction.
+#[test]
+fn streaming_wrapper_client_param_is_scalar_handle_not_struct_pointer() {
+    let (api, config) = streaming_client_api();
+    let backend = FfiBackend;
+
+    let files = backend.generate_bindings(&api, &config).unwrap();
+    let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+    let sig_marker = "pub unsafe extern \"C\" fn ml_default_client_chat_stream(";
+    let sig_start = lib
+        .content
+        .find(sig_marker)
+        .unwrap_or_else(|| panic!("streaming wrapper must be emitted, got:\n{}", lib.content));
+    let after_start = &lib.content[sig_start..];
+    let sig_end = after_start.find(") -> i32").expect("streaming wrapper must return i32");
+    let signature = &after_start[..sig_end];
+
+    assert!(
+        signature.contains("client: AlefHandle"),
+        "streaming wrapper's client parameter must be a scalar AlefHandle, got:\n{signature}"
+    );
+    assert!(
+        !signature.contains("*const my_lib::DefaultClient") && !signature.contains("*mut my_lib::DefaultClient"),
+        "streaming wrapper's declared signature must not accept the client as a struct pointer, got:\n{signature}"
+    );
+
+    syn::parse_file(&lib.content).expect("streaming wrapper output must parse as valid Rust");
+}
+
+/// Rustc-consistency regression: the streaming wrapper's `client` handle must be resolved
+/// through the same `acquire_handles`/`locked_handle_ptr` registry idiom every other consumer
+/// of a client handle uses (see `null_check_self_ref.jinja` and `gen_stream_handle_functions`'s
+/// own `_start` function, which already got this right), and must agree with what an ordinary
+/// producer function (`connect`) hands out for the same type.
+#[test]
+fn streaming_wrapper_client_handle_agrees_with_producer_and_uses_registry() {
+    let (api, config) = streaming_client_api();
+    let backend = FfiBackend;
+
+    let files = backend.generate_bindings(&api, &config).unwrap();
+    let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+    assert!(
+        lib.content.contains("fn ml_connect(") && lib.content.contains(") -> AlefHandle"),
+        "producer function must hand out a scalar handle, got:\n{}",
+        lib.content
+    );
+
+    let streaming_fn = lib
+        .content
+        .split("fn ml_default_client_chat_stream(")
+        .nth(1)
+        .expect("streaming wrapper must be emitted");
+    assert!(
+        streaming_fn.contains("TypeId::of::<my_lib::DefaultClient>()"),
+        "streaming wrapper must validate the client handle against the qualified client type, got:\n{streaming_fn}"
+    );
+    assert!(
+        streaming_fn.contains("locked_handle_ptr::<my_lib::DefaultClient>"),
+        "streaming wrapper must resolve the client handle through the shared registry, not a raw cast, got:\n{streaming_fn}"
+    );
+    assert!(
+        !lib.content.contains("my_lib::my_lib::DefaultClient"),
+        "qualified client type must not duplicate the configured module path"
+    );
+
+    syn::parse_file(&lib.content).expect("streaming wrapper output must parse as valid Rust");
+}
+
 #[test]
 fn test_client_constructors_emits_type_new_function() {
     let config = resolved_one(
@@ -988,4 +1128,164 @@ fn overridden_named_field_accessor_returns_handle_token() {
     assert!(!code.contains("std::ptr::null_mut()"), "{code}");
     assert!(code.contains("insert_handle"), "{code}");
     syn::parse_file(&code).expect("handle-token accessor must parse");
+}
+
+/// A data-carrying enum (`Verdict`) returned by one function and taken by another,
+/// so the fixture exercises both the return-side (`_free`/`_to_json`/`_to_string`) and
+/// the parameter-side (`_from_json`, and the enum used directly as a function argument)
+/// of the enum FFI surface. `has_serde: true` makes it eligible for the JSON/string
+/// companions, matching how a real tagged-union type (e.g. an outcome or content enum)
+/// looks once extracted.
+fn scalar_handle_enum_api() -> ApiSurface {
+    let verdict = EnumDef {
+        name: "Verdict".to_string(),
+        rust_path: "my_lib::Verdict".to_string(),
+        variants: vec![
+            EnumVariant {
+                name: "Approved".to_string(),
+                ..EnumVariant::default()
+            },
+            EnumVariant {
+                name: "Rejected".to_string(),
+                fields: vec![visitor_result_string_field("reason")],
+                ..EnumVariant::default()
+            },
+        ],
+        has_serde: true,
+        ..EnumDef::default()
+    };
+    ApiSurface {
+        crate_name: "my-lib".to_string(),
+        version: "1.0.0".to_string(),
+        enums: vec![verdict],
+        functions: vec![
+            FunctionDef {
+                name: "evaluate_text".to_string(),
+                rust_path: "my_lib::evaluate_text".to_string(),
+                params: vec![ParamDef {
+                    name: "text".to_string(),
+                    ty: TypeRef::String,
+                    ..ParamDef::default()
+                }],
+                return_type: TypeRef::Named("Verdict".to_string()),
+                ..FunctionDef::default()
+            },
+            FunctionDef {
+                name: "describe_verdict".to_string(),
+                rust_path: "my_lib::describe_verdict".to_string(),
+                params: vec![ParamDef {
+                    name: "verdict".to_string(),
+                    ty: TypeRef::Named("Verdict".to_string()),
+                    ..ParamDef::default()
+                }],
+                return_type: TypeRef::String,
+                ..FunctionDef::default()
+            },
+        ],
+        ..ApiSurface::default()
+    }
+}
+
+/// C ABI regression for the alef-abi provider fix: a data-carrying enum returned by a
+/// function must have its `_free`/`_to_json`/`_to_string` companions declared over the
+/// *same* scalar `AlefHandle` the producer hands out, never a `TYPE *`/`const TYPE *`
+/// struct pointer. Before the fix, `gen_enum_free`/`gen_enum_to_json`/`gen_enum_to_string`
+/// unconditionally emitted pointer-shaped signatures for every enum that ever appeared as
+/// a return type, which cbindgen renders as an incompatible C type from the scalar
+/// `uint64_t` handle the producer function returns — this is the defect that broke the
+/// generated Go binding (`cannot use ... as *_Ctype_struct_... value`).
+#[test]
+fn enum_free_to_json_and_to_string_take_scalar_handle_matching_producer_return() {
+    let api = scalar_handle_enum_api();
+    let config = sample_config();
+    let backend = FfiBackend;
+
+    let files = backend.generate_bindings(&api, &config).unwrap();
+    let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+    assert!(
+        lib.content.contains("fn my_lib_evaluate_text(") && lib.content.contains(") -> AlefHandle"),
+        "producer function must hand out a scalar handle, got:\n{}",
+        lib.content
+    );
+    assert!(
+        lib.content.contains("fn my_lib_verdict_free(handle: AlefHandle)"),
+        "enum free must take the same scalar handle the producer returns, got:\n{}",
+        lib.content
+    );
+    assert!(
+        lib.content
+            .contains("fn my_lib_verdict_to_json(handle: AlefHandle) -> *mut c_char"),
+        "enum to_json must take a scalar handle, not a struct pointer, got:\n{}",
+        lib.content
+    );
+    assert!(
+        lib.content
+            .contains("fn my_lib_verdict_to_string(handle: AlefHandle) -> *mut c_char"),
+        "enum to_string must take a scalar handle, not a struct pointer, got:\n{}",
+        lib.content
+    );
+    assert!(
+        !lib.content.contains("*mut my_lib::Verdict") && !lib.content.contains("*const my_lib::Verdict"),
+        "no function may reference Verdict by raw pointer once it is a scalar-handle type, got:\n{}",
+        lib.content
+    );
+    assert!(
+        lib.content.contains("remove_handle::<my_lib::Verdict>(handle)"),
+        "free must release the same handle-registry slot the producer inserted into, got:\n{}",
+        lib.content
+    );
+    assert!(
+        lib.content
+            .contains("with_handle::<my_lib::Verdict, _>(handle, serde_json::to_string)"),
+        "to_json must borrow the enum out of the handle registry, not dereference a pointer, got:\n{}",
+        lib.content
+    );
+
+    syn::parse_file(&lib.content).expect("scalar-handle enum exports must parse as valid Rust");
+}
+
+/// Rustc-consistency regression: the enum's `_from_json` producer and any function that
+/// consumes the same enum *as a parameter* must agree on the scalar `AlefHandle` type too.
+/// Before the fix, `gen_enum_from_json` returned `*mut Verdict` while every consumer of an
+/// FFI-crossing enum parameter already expected `AlefHandle` — a mismatch that, unlike the
+/// return-side defect, would have failed to compile even within the single generated crate.
+/// `syn::parse_file` proves the whole generated module is still structurally valid Rust
+/// after the fix.
+#[test]
+fn enum_from_json_and_enum_valued_parameter_agree_on_scalar_alef_handle() {
+    let api = scalar_handle_enum_api();
+    let config = sample_config();
+    let backend = FfiBackend;
+
+    let files = backend.generate_bindings(&api, &config).unwrap();
+    let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+    assert!(
+        lib.content
+            .contains("fn my_lib_verdict_from_json(json: *const c_char) -> AlefHandle"),
+        "enum from_json must hand out the same scalar handle type the free function consumes, got:\n{}",
+        lib.content
+    );
+    assert!(
+        lib.content.contains("insert_handle(val)"),
+        "from_json must register the deserialized enum in the handle registry, got:\n{}",
+        lib.content
+    );
+
+    let describe = lib
+        .content
+        .split("fn my_lib_describe_verdict")
+        .nth(1)
+        .expect("describe_verdict wrapper must be emitted");
+    assert!(
+        describe.contains("verdict: AlefHandle"),
+        "a function taking the enum by value must take the same scalar handle, not a struct pointer, got:\n{describe}"
+    );
+    assert!(
+        !describe.contains("*const my_lib::Verdict") && !describe.contains("*mut my_lib::Verdict"),
+        "must not fall back to a raw pointer parameter for the enum, got:\n{describe}"
+    );
+
+    syn::parse_file(&lib.content).expect("scalar-handle enum parameter wiring must parse as valid Rust");
 }

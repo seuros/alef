@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 /// fixed = { method = "GET" }
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RegistrationSpec {
     /// Name of the method on the owner type (e.g. `"add_route"`).
     pub method: String,
@@ -80,6 +81,7 @@ pub struct RegistrationSpec {
 /// style = "verb_decorator"
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RegistrationVariantSpec {
     /// Shortcut name (e.g. `"get"`). Used as the variant method's name on the
     /// owner, transformed to each language's idiomatic casing by the backend
@@ -120,6 +122,7 @@ pub struct RegistrationVariantSpec {
 /// kind = "finalize"
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct EntrypointSpec {
     /// Name of the method on the owner type (e.g. `"run"`, `"into_router"`).
     pub method: String,
@@ -148,6 +151,7 @@ pub struct EntrypointSpec {
 /// kind = "run"
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ServiceConfig {
     /// Name of the owner/builder type in the extracted surface (e.g. `"App"`).
     pub owner_type: String,
@@ -201,6 +205,7 @@ pub struct ServiceConfig {
 /// wire_response_type = "ResponseData"
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct HandlerContractConfig {
     /// Name of the Rust trait in the surface (e.g. `"Handler"`).
     pub trait_name: String,
@@ -259,6 +264,7 @@ fn default_true() -> bool {
 /// method_prefix = "Map"
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(deny_unknown_fields)]
 pub struct RegistrationVariantLanguageOverrideSpec {
     /// Override for the emission style.
     #[serde(default)]

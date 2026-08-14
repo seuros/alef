@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct StubsConfig {
     pub output: PathBuf,
     /// When true, emit Rust `///` doc comments as stub-level docstrings.

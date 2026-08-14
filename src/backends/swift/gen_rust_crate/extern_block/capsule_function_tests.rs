@@ -14,6 +14,7 @@ fn language_capsule() -> HostCapsuleTypeConfig {
         package: "https://github.com/tree-sitter/swift-tree-sitter".to_string(),
         package_version: "0.25.0".to_string(),
         construct_expr: "SwiftTreeSitter.Language({ptr})".to_string(),
+        ..Default::default()
     }
 }
 

@@ -1,6 +1,61 @@
 #![allow(clippy::module_name_repetitions)]
 
 #[cfg(test)]
+mod not_empty_tests {
+    use super::super::assertions::render_assertion;
+    use crate::e2e::field_access::FieldResolver;
+    use crate::e2e::fixture::Assertion;
+    use std::collections::{BTreeMap, HashMap, HashSet};
+
+    fn render_not_empty(result_is_array: bool) -> String {
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        let assertion = Assertion {
+            assertion_type: "not_empty".to_string(),
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            false,
+            result_is_array,
+            &BTreeMap::new(),
+            false,
+        );
+        out
+    }
+
+    /// PHPUnit's `assertNotEmpty()` routes through `empty()`, which classifies a
+    /// legitimate `0`, `0.0`, `"0"` and `false` as empty and fails a correct result.
+    #[test]
+    fn not_empty_for_php_scalars_rejects_empty_string_but_accepts_zero() {
+        let out = render_not_empty(false);
+        assert!(!out.contains("assertNotEmpty"), "got: {out}");
+        assert_eq!(
+            out.trim(),
+            "$this->assertNotSame('', $result ?? '', 'expected non-empty value');"
+        );
+    }
+
+    #[test]
+    fn not_empty_for_php_arrays_measures_the_element_count() {
+        let out = render_not_empty(true);
+        assert_eq!(
+            out.trim(),
+            "$this->assertGreaterThan(0, count($result ?? []), 'expected non-empty value');"
+        );
+    }
+}
+
+#[cfg(test)]
 mod trait_bridge_tests {
     use crate::core::config::TraitBridgeConfig;
     use crate::core::ir::{MethodDef, ParamDef, TypeRef};

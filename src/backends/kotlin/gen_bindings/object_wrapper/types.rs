@@ -116,6 +116,69 @@ pub(super) fn kotlin_field_default(
     }
 }
 
+/// Names of types whose emitted Kotlin data class can be constructed with no arguments.
+///
+/// A Rust `Default` implementation is necessary but not sufficient. `emit_type_with_imports`
+/// gives a constructor parameter a Kotlin default only where [`kotlin_field_default`] can render
+/// one, so a `Default`-deriving type can still emit a bare `val count: Int`. Treating such a type
+/// as default-constructible makes [`render_kotlin_default`] emit `Name()`, which does not compile.
+///
+/// Computed as a greatest fixpoint: seed with every `Default`-bearing type, then repeatedly drop
+/// any whose emitted constructor still has a bare parameter. Iteration is required because
+/// [`kotlin_field_default`] consults the set while it is being built, so dropping one type can
+/// invalidate another that defaulted a field to `Dropped()`. The set only ever shrinks, so this
+/// terminates.
+pub(crate) fn default_constructible_type_names(
+    types: &[crate::core::ir::TypeDef],
+    enum_defaults: &std::collections::HashMap<String, String>,
+) -> std::collections::HashSet<String> {
+    let mut constructible: std::collections::HashSet<String> = types
+        .iter()
+        .filter(|ty| !ty.is_trait && !ty.is_opaque && ty.has_default)
+        .map(|ty| ty.name.clone())
+        .collect();
+
+    loop {
+        let dropped: Vec<String> = types
+            .iter()
+            .filter(|ty| constructible.contains(&ty.name))
+            .filter(|ty| !every_field_has_a_kotlin_default(ty, enum_defaults, &constructible))
+            .map(|ty| ty.name.clone())
+            .collect();
+        if dropped.is_empty() {
+            return constructible;
+        }
+        for name in dropped {
+            constructible.remove(&name);
+        }
+    }
+}
+
+/// Whether every constructor parameter the data class emits carries a Kotlin default.
+///
+/// Mirrors the field walk in `emit_type_with_imports`: `binding_excluded` fields are dropped
+/// entirely, and `#[serde(flatten)]` fields are always emitted nullable with `= null`.
+fn every_field_has_a_kotlin_default(
+    ty: &crate::core::ir::TypeDef,
+    enum_defaults: &std::collections::HashMap<String, String>,
+    default_constructible_types: &std::collections::HashSet<String>,
+) -> bool {
+    ty.fields
+        .iter()
+        .filter(|field| !field.binding_excluded)
+        .all(|field| {
+            field.serde_flatten
+                || !kotlin_field_default(
+                    &field.ty,
+                    field.optional,
+                    field.typed_default.as_ref(),
+                    enum_defaults,
+                    default_constructible_types,
+                )
+                .is_empty()
+        })
+}
+
 /// Render a `DefaultValue` as a Kotlin expression. Returns `None` when no
 /// rendering is possible (e.g. `Empty` on a scalar type — no Kotlin literal
 /// for "default of T" beyond what `kotlin_field_default` can synthesise).
@@ -198,7 +261,7 @@ fn render_kotlin_default(
             _ => None,
         },
         DefaultValue::None => Some("null".to_string()),
-        DefaultValue::FunctionCall(_) => None,
+        DefaultValue::FunctionCall(_) | DefaultValue::PublicFunctionCall(_) => None,
     }
 }
 

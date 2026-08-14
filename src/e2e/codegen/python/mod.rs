@@ -101,7 +101,15 @@ impl super::E2eCodegen for PythonE2eCodegen {
             }
 
             let filename = format!("test_{}.py", sanitize_filename(&group.category));
-            let content = render_test_file(&group.category, &fixtures, e2e_config, config, _type_defs, _enums);
+            let content = render_test_file(
+                &group.category,
+                &fixtures,
+                e2e_config,
+                config,
+                _type_defs,
+                _enums,
+                false,
+            );
             files.push(GeneratedFile {
                 path: output_base.join("tests").join(filename),
                 content,
@@ -148,23 +156,6 @@ impl super::E2eCodegen for PythonE2eCodegen {
             .iter()
             .any(|assertion| assertion.assertion_type == "error");
         call_fixture.assertions.clear();
-        let test_file = render_test_file(
-            &fixture.resolved_category(),
-            &[&call_fixture],
-            e2e_config,
-            config,
-            type_defs,
-            enums,
-        );
-        let (imports, body, is_async) = extract_python_snippet(&test_file)?;
-        let error_type = config.error_type_name();
-        let mut imports = imports.into_iter().map(str::to_string).collect::<Vec<_>>();
-        if expects_error {
-            imports.push(format!(
-                "from {} import {error_type}",
-                helpers::resolve_module(e2e_config)
-            ));
-        }
         let presentation = super::presentation::resolve(&call_fixture, e2e_config, "python");
         let call = e2e_config.resolve_call_for_fixture(
             call_fixture.call.as_deref(),
@@ -173,6 +164,30 @@ impl super::E2eCodegen for PythonE2eCodegen {
             &call_fixture.tags,
             &call_fixture.input,
         );
+        // The snippet template falls back to a bare `print(result_var)` whenever there is
+        // no explicit `docs.shows`/`presentation` and the call isn't void. Fixture
+        // assertions are cleared above (snippets don't render assertions), so the usual
+        // assertion-driven binding heuristic never fires here — force the call statement
+        // to bind `result_var` whenever the template is about to print it. ~keep
+        let force_bind_result = !expects_error && presentation.is_empty() && !call.returns_void;
+        let test_file = render_test_file(
+            &fixture.resolved_category(),
+            &[&call_fixture],
+            e2e_config,
+            config,
+            type_defs,
+            enums,
+            force_bind_result,
+        );
+        let (imports, body, is_async) = extract_python_snippet(&test_file)?;
+        let error_type = super::snippet_error_type_name(config);
+        let mut imports = imports.into_iter().map(str::to_string).collect::<Vec<_>>();
+        if expects_error {
+            imports.push(format!(
+                "from {} import {error_type}",
+                helpers::resolve_module(e2e_config)
+            ));
+        }
         Ok(crate::e2e::template_env::render(
             "python/snippet_body.py.jinja",
             minijinja::context! {
@@ -545,6 +560,168 @@ headingStyle = "HeadingStyle"
 
         assert!(rendered.contains("except Error as error:"), "{rendered}");
         assert!(!rendered.contains("AssertionError"), "{rendered}");
+    }
+
+    /// Builds a fictional `my-lib` config whose `create_widget` call passes a
+    /// `WidgetRequest` json_object arg via `options_via = "from_json"` — the same shape
+    /// as a real consumer config that predates the pyo3 backend actually emitting
+    /// `from_json()` for that type.
+    fn widget_snippet_config() -> (crate::e2e::config::E2eConfig, crate::core::config::ResolvedCrateConfig) {
+        use crate::core::config::NewAlefConfig;
+
+        let cfg: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["python"]
+[[crates]]
+name = "my-lib"
+sources = ["src/lib.rs"]
+[crates.e2e]
+fixtures = "fixtures"
+[crates.e2e.call]
+function = "create_widget"
+module = "my_lib"
+async = true
+[[crates.e2e.call.args]]
+name = "request"
+field = "input"
+type = "json_object"
+owned = true
+[crates.e2e.call.overrides.python]
+client_factory = "create_client"
+options_type = "WidgetRequest"
+options_via = "from_json"
+from_json_module = "my_lib._internal_bindings"
+"#,
+        )
+        .expect("config must parse");
+        let e2e = cfg.crates[0].e2e.clone().expect("e2e config");
+        let mut resolved = cfg.resolve().expect("config resolves").remove(0);
+        // `crate_has_serde` walks up from this path looking for a Cargo.toml with serde +
+        // serde_json dependencies; point it at this (alef) crate's own `src/` — whose Cargo.toml
+        // declares both — instead of the fictional `my-lib` consumer path, which resolves to a
+        // directory that doesn't exist on disk and would make the crate-level condition always
+        // false regardless of the scenario each test means to exercise. ~keep
+        resolved.output_paths.insert(
+            "python".to_string(),
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src"),
+        );
+        (e2e, resolved)
+    }
+
+    fn widget_fixture() -> Fixture {
+        serde_json::from_value(serde_json::json!({
+            "id": "create_widget_smoke",
+            "description": "Create a widget",
+            "docs": {"topic": "widgets", "stem": "create-widget", "title": "Create a widget"},
+            "input": {"name": "gadget", "count": 3},
+            "mock_response": {"status": 200, "body": {"id": "w1"}},
+            "assertions": [{"type": "not_error"}]
+        }))
+        .expect("fixture must parse")
+    }
+
+    #[test]
+    fn should_fall_back_to_kwargs_and_bind_result_when_options_type_lacks_serde() {
+        let (e2e, resolved) = widget_snippet_config();
+        let fixture = widget_fixture();
+
+        // No TypeDef for WidgetRequest is supplied — matching a type the pyo3 backend
+        // never annotated `has_serde`, so it never emitted a `from_json()` staticmethod.
+        let rendered = PythonE2eCodegen
+            .render_snippet_body(&fixture, &e2e, &resolved, &[], &[])
+            .expect("snippet renders");
+
+        assert!(
+            !rendered.contains(".from_json("),
+            "must not call from_json() on a type the backend never marked has_serde: {rendered}"
+        );
+        assert!(
+            rendered.contains("WidgetRequest(name=") || rendered.contains("WidgetRequest(count="),
+            "expected a kwargs constructor call, got: {rendered}"
+        );
+        assert!(
+            rendered.contains("result = await client.create_widget(request)"),
+            "the call result must be bound so it can be printed, got: {rendered}"
+        );
+        assert!(rendered.contains("print(result)"), "{rendered}");
+    }
+
+    /// As of `093c42f31`, the pyo3 `.pyi` stub generator declares `from_json` under the exact
+    /// same gate pyo3's Rust-codegen uses (`has_serde` and convertible — see
+    /// `helpers::pyo3_would_inject_from_json`), so a type that passes it keeps
+    /// `options_via = "from_json"` end to end and the emitted call type-checks against the
+    /// shipped stub. See `test_file::tests` for direct coverage of the import-deduplication fix
+    /// on this now-reachable from_json import branch. ~keep
+    #[test]
+    fn should_use_from_json_when_pyo3_would_inject_it() {
+        let (e2e, resolved) = widget_snippet_config();
+        let fixture = widget_fixture();
+        let type_defs = vec![crate::core::ir::TypeDef {
+            name: "WidgetRequest".to_string(),
+            has_serde: true,
+            ..Default::default()
+        }];
+
+        let rendered = PythonE2eCodegen
+            .render_snippet_body(&fixture, &e2e, &resolved, &type_defs, &[])
+            .expect("snippet renders");
+
+        assert!(
+            rendered.contains("WidgetRequest.from_json("),
+            "expected a from_json() construction now that the stub declares it: {rendered}"
+        );
+        let import_lines_with_type: Vec<&str> = rendered
+            .lines()
+            .filter(|line| line.starts_with("from ") && line.contains("WidgetRequest"))
+            .collect();
+        assert_eq!(
+            import_lines_with_type,
+            vec!["from my_lib._internal_bindings import WidgetRequest"],
+            "WidgetRequest must be imported exactly once, from the native bindings module: {rendered}"
+        );
+        assert!(
+            rendered.contains("from my_lib import create_client"),
+            "the client factory must still be imported from the public module: {rendered}"
+        );
+    }
+
+    /// Mirrors the measured liter-llm defect exactly: `has_serde` alone is not the pyo3 gate
+    /// for emitting `from_json()`. pyo3 also requires the type to pass
+    /// `core_to_binding_convertible_types` — a serde-derived type whose field references a
+    /// type that never resolves fails that second half even though `has_serde` is true, so
+    /// pyo3 never emits `from_json()` for it. This must downgrade through the full
+    /// `render_snippet_body` pipeline, not just the isolated helper. ~keep
+    #[test]
+    fn should_fall_back_to_kwargs_when_type_has_serde_but_fails_core_to_binding_convertibility() {
+        use crate::core::ir::{FieldDef, TypeDef, TypeRef};
+
+        let (e2e, resolved) = widget_snippet_config();
+        let fixture = widget_fixture();
+        let type_defs = vec![TypeDef {
+            name: "WidgetRequest".to_string(),
+            has_serde: true,
+            fields: vec![FieldDef {
+                name: "extra".to_string(),
+                ty: TypeRef::Named("UnresolvedExternalType".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }];
+
+        let rendered = PythonE2eCodegen
+            .render_snippet_body(&fixture, &e2e, &resolved, &type_defs, &[])
+            .expect("snippet renders");
+
+        assert!(
+            !rendered.contains(".from_json("),
+            "must not call from_json() on a type that fails core-to-binding convertibility \
+             even though has_serde is true: {rendered}"
+        );
+        assert!(
+            rendered.contains("WidgetRequest(name=") || rendered.contains("WidgetRequest(count="),
+            "expected a kwargs constructor call, got: {rendered}"
+        );
     }
 
     #[test]

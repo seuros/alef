@@ -241,6 +241,7 @@ fn capsule_cfg() -> crate::core::config::HostCapsuleTypeConfig {
         package: "github.com/example/go-my-lib".to_string(),
         package_version: "v1.0.0".to_string(),
         construct_expr: "my_pkg.NewLanguage(unsafe.Pointer({ptr}))".to_string(),
+        ..Default::default()
     }
 }
 
@@ -290,6 +291,7 @@ fn test_capsule_errors_when_construct_expr_empty() {
         package: String::new(),
         package_version: String::new(),
         construct_expr: String::new(),
+        ..Default::default()
     };
     let out = gen_capsule_function_wrapper(&func, "krz", &empty, &empty_s, &empty_s, &cfg, &empty_s);
     assert!(
@@ -312,6 +314,7 @@ fn test_capsule_errors_when_host_type_empty() {
         package: String::new(),
         package_version: String::new(),
         construct_expr: "my_pkg.NewLanguage(unsafe.Pointer({ptr}))".to_string(),
+        ..Default::default()
     };
     let out = gen_capsule_function_wrapper(&func, "krz", &empty, &empty_s, &empty_s, &cfg, &empty_s);
     assert!(

@@ -22,7 +22,7 @@ impl RustValidator {
         };
         let bin_dir = dir.path().join("src/bin");
         std::fs::create_dir_all(&bin_dir)?;
-        std::fs::write(dir.path().join("Cargo.toml"), Self::cargo_manifest(session)?)?;
+        std::fs::write(dir.path().join("Cargo.toml"), Self::cargo_manifest(snippets, session)?)?;
 
         let filenames = snippets
             .iter()
@@ -128,7 +128,10 @@ impl RustValidator {
         };
         let source_dir = dir.path().join("src");
         std::fs::create_dir_all(&source_dir)?;
-        std::fs::write(dir.path().join("Cargo.toml"), Self::cargo_manifest(session)?)?;
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            Self::cargo_manifest(&[snippet], session)?,
+        )?;
         let code = Self::wrap_if_fragment(&snippet.code);
         let mut source_file = std::fs::File::create(source_dir.join("main.rs"))?;
         source_file.write_all(code.as_bytes())?;
@@ -149,15 +152,61 @@ impl RustValidator {
         })
     }
 
-    fn cargo_manifest(session: Option<&ValidationSession>) -> Result<String> {
+    fn cargo_manifest(snippets: &[&Snippet], session: Option<&ValidationSession>) -> Result<String> {
         let dependency = session.map(Self::path_dependency).transpose()?.unwrap_or_default();
         let dependencies = session
             .map(Self::additional_dependencies)
             .transpose()?
             .unwrap_or_default();
+        let declared = Self::declared_dependencies(snippets, session)?;
         Ok(format!(
-            "[workspace]\n\n[package]\nname = \"snippet-check\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\n{dependency}{dependencies}"
+            "[workspace]\n\n[package]\nname = \"snippet-check\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\n{dependency}{dependencies}{declared}"
         ))
+    }
+
+    /// Resolve `crate:<name>` snippet requirements into `[dependencies]` entries.
+    ///
+    /// Session configuration wins: a crate declared under `rust_dependencies` keeps the
+    /// configured version and features and is not emitted twice.
+    fn declared_dependencies(snippets: &[&Snippet], session: Option<&ValidationSession>) -> Result<String> {
+        let configured = session.map(|session| &session.rust_dependencies);
+        let mut names = std::collections::BTreeSet::new();
+        for snippet in snippets {
+            for requirement in &snippet.metadata.requires {
+                let Some(name) = requirement.strip_prefix(crate::e2e::snippets::CRATE_REQUIREMENT_PREFIX) else {
+                    continue;
+                };
+                if configured.is_some_and(|dependencies| dependencies.contains_key(name)) {
+                    continue;
+                }
+                names.insert(name);
+            }
+        }
+        let mut rendered = String::new();
+        for name in names {
+            if !Self::valid_dependency_name(name) {
+                return Err(crate::snippets::error::Error::Other(format!(
+                    "invalid Rust snippet crate requirement `{name}`"
+                )));
+            }
+            let version = Self::pinned_dependency_version(name).ok_or_else(|| {
+                crate::snippets::error::Error::Other(format!(
+                    "Rust snippet requires crate `{name}` with no pinned version; declare it under `[docs.snippets.sessions.<target>.rust_dependencies.{name}]`"
+                ))
+            })?;
+            rendered.push_str(&format!("{name} = {version:?}\n"));
+        }
+        Ok(rendered)
+    }
+
+    /// Versions Alef can supply itself, for crates its own snippet recipes emit. ~keep
+    /// Anything else must come from session configuration, so an undeclared crate fails loudly
+    /// instead of resolving to an arbitrary version.
+    fn pinned_dependency_version(name: &str) -> Option<&'static str> {
+        match name {
+            "serde_json" => Some(crate::core::template_versions::cargo::SERDE_JSON),
+            _ => None,
+        }
     }
 
     fn path_dependency(session: &ValidationSession) -> Result<String> {
@@ -575,6 +624,86 @@ mod tests {
                 .as_deref()
                 .is_some_and(|message| message.contains("mismatched types"))
         );
+    }
+
+    #[test]
+    fn declared_crate_requirements_enter_the_snippet_manifest() {
+        let mut declared = snippet("fn main() {}");
+        declared.metadata.requires = vec!["crate:serde_json".into(), "feature:visitor".into()];
+
+        let manifest = RustValidator::cargo_manifest(&[&declared], None).expect("manifest renders");
+
+        assert!(manifest.contains("serde_json = \"1\""), "{manifest}");
+        assert!(!manifest.contains("feature:visitor"), "{manifest}");
+    }
+
+    #[test]
+    fn configured_dependencies_win_over_declared_crate_requirements() {
+        let mut declared = snippet("fn main() {}");
+        declared.metadata.requires = vec!["crate:serde_json".into()];
+        let mut session = ValidationSession {
+            working_directory: std::path::PathBuf::from("fixture"),
+            manifest: None,
+            fingerprint: "neutral-project".into(),
+            env: BTreeMap::new(),
+            include_paths: Vec::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: BTreeMap::new(),
+        };
+        session.rust_dependencies.insert(
+            "serde_json".into(),
+            crate::core::config::output::DocsSnippetRustDependencyConfig {
+                version: "1.0.100".into(),
+                features: Vec::new(),
+                default_features: false,
+            },
+        );
+
+        let configured = RustValidator::additional_dependencies(&session).expect("configured dependencies");
+        let declared_dependencies =
+            RustValidator::declared_dependencies(&[&declared], Some(&session)).expect("declared dependencies");
+
+        assert!(configured.contains("version = \"1.0.100\""), "{configured}");
+        assert_eq!(declared_dependencies, "");
+    }
+
+    #[test]
+    fn unknown_crate_requirements_fail_instead_of_resolving_silently() {
+        let mut declared = snippet("fn main() {}");
+        declared.metadata.requires = vec!["crate:not-a-pinned-crate".into()];
+
+        let error = RustValidator::cargo_manifest(&[&declared], None).expect_err("unpinned crate must fail");
+
+        assert!(error.to_string().contains("not-a-pinned-crate"), "{error}");
+    }
+
+    #[test]
+    fn declared_crate_requirement_makes_a_json_snippet_compile() {
+        if which::which("cargo").is_err() {
+            return;
+        }
+        let code = "use serde_json::Value;\n\nfn main() {\n    let options: Value = serde_json::from_str(r#\"{\"width\": 80}\"#).unwrap();\n    assert_eq!(options[\"width\"], 80);\n}\n";
+        let mut declared = snippet(code);
+        declared.metadata.requires = vec!["crate:serde_json".into()];
+        let undeclared = snippet(code);
+
+        let (declared_status, declared_output) = RustValidator::validate_with_context(
+            &declared,
+            ValidationLevel::TypeCheck,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
+            None,
+        )
+        .expect("declared snippet validates");
+        let (undeclared_status, _) = RustValidator::validate_with_context(
+            &undeclared,
+            ValidationLevel::TypeCheck,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
+            None,
+        )
+        .expect("undeclared snippet validates");
+
+        assert_eq!(declared_status, SnippetStatus::Pass, "{declared_output:?}");
+        assert_eq!(undeclared_status, SnippetStatus::Fail);
     }
 
     fn snippet(code: &str) -> Snippet {

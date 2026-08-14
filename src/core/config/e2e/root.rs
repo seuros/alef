@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 /// Root e2e configuration from `[e2e]` section of alef.toml.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct E2eConfig {
     /// Directory containing fixture JSON files (default: "fixtures").
     #[serde(default = "default_fixtures_dir")]
@@ -76,6 +77,9 @@ pub struct E2eConfig {
     /// Supports struct access (`foo.bar`), map access (`foo[key]`), direct fields.
     #[serde(default)]
     pub fields: HashMap<String, String>,
+    /// Error field aliases: maps fixture paths after `error.` to fields on the Rust error type.
+    #[serde(default)]
+    pub error_field_aliases: HashMap<String, String>,
     /// Fields that are Optional/nullable in the return type.
     /// Rust generators use .as_deref().unwrap_or("") for strings, .is_some() for structs.
     #[serde(default)]
@@ -465,6 +469,7 @@ impl Default for E2eConfig {
             extra_system_libs: HashMap::new(),
             format: HashMap::new(),
             fields: HashMap::new(),
+            error_field_aliases: HashMap::new(),
             fields_optional: HashSet::new(),
             fields_array: HashSet::new(),
             fields_method_calls: HashSet::new(),

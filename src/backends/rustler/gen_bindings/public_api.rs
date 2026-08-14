@@ -2,9 +2,11 @@ use crate::backends::rustler::gen_bindings::helpers::{
     elixir_return_typespec, elixir_safe_param_name, elixir_typespec,
 };
 use crate::backends::rustler::gen_bindings::public_api_args::{
-    emit_tagged_enum_encoder, json_encode_param_indices, keyword_nif_arg, nif_arg, tagged_enum_param_map,
+    emit_tagged_enum_encoder, function_deserialization_introduces_result, json_encode_param_indices, keyword_nif_arg,
+    nif_arg, tagged_enum_param_map,
 };
 use crate::backends::rustler::gen_bindings::public_api_delegates::append_trait_bridge_delegates;
+use crate::backends::rustler::gen_bindings::public_api_render::render_public_nif_call;
 use crate::backends::rustler::gen_bindings::public_files::{self, PublicFileContext};
 use crate::backends::rustler::template_env;
 use crate::core::backend::GeneratedFile;
@@ -133,6 +135,8 @@ pub(super) fn generate_public_api(
             .count();
 
         let json_encode_params = json_encode_param_indices(&func.params, &opaque_types, &default_types);
+        let unwrap_deserialization_result =
+            function_deserialization_introduces_result(func, &opaque_types, &default_types);
         let tagged_enum_params = tagged_enum_param_map(&func.params, &enum_lookup);
         tagged_enums_used.extend(tagged_enum_params.values().map(|param| param.enum_name.clone()));
 
@@ -252,15 +256,21 @@ pub(super) fn generate_public_api(
             }));
             let nif_call_str = nif_call_parts.join(",\n      ");
             content.push_str(&template_env::render(
-                "elixir_keyword_opts_wrapper.ex.jinja",
+                "elixir_def_simple.jinja",
                 minijinja::context! {
-                    public_func_name => &public_fn_name,
-                    nif_func_name => &nif_fn_name,
+                    func_name => &public_fn_name,
                     params => &def_params,
-                    native_mod => &native_mod,
-                    nif_call_args => &nif_call_str,
                 },
             ));
+            content.push_str(&render_public_nif_call(
+                &native_mod,
+                &nif_fn_name,
+                &nif_call_str,
+                unwrap_deserialization_result,
+                true,
+                "    ",
+            ));
+            content.push_str("  end\n\n");
         } else if arity_variants.is_empty() && trailing_optional_count == 0 && !all_params.is_empty() {
             let param_with_defaults: Vec<String> = param_types
                 .iter()
@@ -317,13 +327,13 @@ pub(super) fn generate_public_api(
                 .enumerate()
                 .map(|(i, p)| nif_arg(i, p, &json_encode_params, &tagged_enum_params))
                 .collect();
-            content.push_str(&template_env::render(
-                "elixir_def_nif_call.jinja",
-                minijinja::context! {
-                    native_mod => &native_mod,
-                    func_name => &nif_fn_name,
-                    args => &single_arity_nif_args.join(", "),
-                },
+            content.push_str(&render_public_nif_call(
+                &native_mod,
+                &nif_fn_name,
+                &single_arity_nif_args.join(", "),
+                unwrap_deserialization_result,
+                false,
+                "    ",
             ));
             content.push_str("  end\n\n");
         }
@@ -460,13 +470,13 @@ pub(super) fn generate_public_api(
                     })
                     .collect();
                 let plain_args_str = plain_args.join(", ");
-                content.push_str(&template_env::render(
-                    "elixir_visitor_plain_call.ex.jinja",
-                    minijinja::context! {
-                        native_mod => &native_mod,
-                        func_name => &nif_fn_name,
-                        args => &plain_args_str,
-                    },
+                content.push_str(&render_public_nif_call(
+                    &native_mod,
+                    &nif_fn_name,
+                    &plain_args_str,
+                    unwrap_deserialization_result,
+                    false,
+                    "      ",
                 ));
                 content.push_str("    end\n");
                 content.push_str("  end\n\n");
@@ -488,13 +498,13 @@ pub(super) fn generate_public_api(
                         params => &nil_clause_params.join(", "),
                     },
                 ));
-                content.push_str(&template_env::render(
-                    "elixir_def_nif_call.jinja",
-                    minijinja::context! {
-                        native_mod => &native_mod,
-                        func_name => &nif_fn_name,
-                        args => &nil_nif_args.join(", "),
-                    },
+                content.push_str(&render_public_nif_call(
+                    &native_mod,
+                    &nif_fn_name,
+                    &nil_nif_args.join(", "),
+                    unwrap_deserialization_result,
+                    false,
+                    "    ",
                 ));
                 content.push_str("  end\n\n");
                 continue;
@@ -563,13 +573,13 @@ pub(super) fn generate_public_api(
                         params => &arity_params.join(", "),
                     },
                 ));
-                content.push_str(&template_env::render(
-                    "elixir_def_nif_call.jinja",
-                    minijinja::context! {
-                        native_mod => &native_mod,
-                        func_name => &nif_fn_name,
-                        args => &nif_call_args.join(", "),
-                    },
+                content.push_str(&render_public_nif_call(
+                    &native_mod,
+                    &nif_fn_name,
+                    &nif_call_args.join(", "),
+                    unwrap_deserialization_result,
+                    false,
+                    "    ",
                 ));
                 content.push_str("  end\n\n");
                 continue;
@@ -582,13 +592,13 @@ pub(super) fn generate_public_api(
                         func_name => &public_fn_name,
                     },
                 ));
-                content.push_str(&template_env::render(
-                    "elixir_def_nif_call.jinja",
-                    minijinja::context! {
-                        native_mod => &native_mod,
-                        func_name => &nif_fn_name,
-                        args => &nif_call_args.join(", "),
-                    },
+                content.push_str(&render_public_nif_call(
+                    &native_mod,
+                    &nif_fn_name,
+                    &nif_call_args.join(", "),
+                    unwrap_deserialization_result,
+                    false,
+                    "    ",
                 ));
             } else {
                 content.push_str(&template_env::render(
@@ -598,13 +608,13 @@ pub(super) fn generate_public_api(
                         params => &arity_params.join(", "),
                     },
                 ));
-                content.push_str(&template_env::render(
-                    "elixir_def_nif_call.jinja",
-                    minijinja::context! {
-                        native_mod => &native_mod,
-                        func_name => &nif_fn_name,
-                        args => &nif_call_args.join(", "),
-                    },
+                content.push_str(&render_public_nif_call(
+                    &native_mod,
+                    &nif_fn_name,
+                    &nif_call_args.join(", "),
+                    unwrap_deserialization_result,
+                    false,
+                    "    ",
                 ));
             }
             content.push_str("  end\n\n");
@@ -721,58 +731,17 @@ pub(super) fn generate_public_api(
         content.push('\n');
     }
 
-    let opaque_type_names: AHashSet<&str> = api
-        .types
-        .iter()
-        .filter(|t| t.is_opaque && !t.is_trait && !exclude_types.contains(t.name.as_str()))
-        .map(|t| t.name.as_str())
-        .collect();
-    let streaming_method_keys: AHashSet<String> = config
-        .adapters
-        .iter()
-        .filter(|a| matches!(a.pattern, crate::core::config::AdapterPattern::Streaming))
-        .filter_map(|a| a.owner_type.as_deref().map(|owner| format!("{owner}.{}", a.name)))
-        .collect();
-    for typ in api.types.iter().filter(|t| opaque_type_names.contains(t.name.as_str())) {
-        let type_lc = typ.name.to_lowercase();
-        for method in typ
-            .methods
-            .iter()
-            .filter(|m| !exclude_functions.contains(m.name.as_str()))
-            .filter(|m| !streaming_method_keys.contains(&format!("{}.{}", typ.name, m.name)))
-        {
-            let method_name = method.name.to_snake_case();
-            let nif_fn = if method.is_async {
-                if method.name.ends_with("_async") {
-                    format!("{type_lc}_{method_name}")
-                } else {
-                    format!("{type_lc}_{method_name}_async")
-                }
-            } else {
-                format!("{type_lc}_{method_name}")
-            };
-
-            let mut def_args: Vec<String> = Vec::new();
-            if method.receiver.is_some() {
-                def_args.push("obj".to_string());
-            }
-            for p in &method.params {
-                def_args.push(elixir_safe_param_name(&p.name));
-            }
-            let args_str = def_args.join(", ");
-            let doc_first = method.doc.lines().next().unwrap_or("").replace('"', "\\\"");
-            content.push_str(&template_env::render(
-                "elixir_top_level_opaque_method.ex.jinja",
-                minijinja::context! {
-                    doc_first => &doc_first,
-                    func_name => &nif_fn,
-                    args => &args_str,
-                    native_mod => &native_mod,
-                },
-            ));
-            content.push('\n');
-        }
-    }
+    crate::backends::rustler::gen_bindings::public_api_opaque_methods::append_top_level_opaque_methods(
+        &mut content,
+        api,
+        config,
+        &exclude_functions,
+        &exclude_types,
+        &opaque_types,
+        &default_types,
+        &native_mod,
+        &app_module,
+    );
 
     let api_fn_names: AHashSet<String> = api.functions.iter().map(|f| f.name.clone()).collect();
     append_trait_bridge_delegates(

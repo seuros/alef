@@ -9,7 +9,7 @@ namespace {{ namespace }};
 
 /// <summary>Context passed to every visitor callback.</summary>
 public record {{ context_type }}(
-{%- for field in fields %}
-    [property: JsonPropertyName("{{ field.wire_name }}")] {{ field.cs_type }} {{ field.cs_name }}{% if not loop.last %},{% endif %}
-{%- endfor %}
+{% for field in fields %}
+    [property: JsonPropertyName("{{ field.wire_name }}")] {{ field.cs_type }} {{ field.cs_name }}{% if not loop.last %},{% endif +%}
+{% endfor %}
 );

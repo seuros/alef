@@ -243,28 +243,35 @@ pub(crate) fn scaffold_php(_api: &ApiSurface, config: &ResolvedCrateConfig) -> a
     // autoload must point at the current directory rather than a nested `src/` folder that
     // no longer exists. Unset config keeps the historical split layout. ~keep
     let co_located = config.output_paths.contains_key("php");
-    let package_autoload_src = if co_located { "" } else { "src/" };
     let root_autoload_src = if co_located {
         format!("{}/", pkg_dir.trim_end_matches('/'))
     } else {
         "packages/php/src/".to_string()
     };
 
-    let content = render_composer(package_autoload_src);
-    let root_content = render_composer(&root_autoload_src);
+    let mut files = vec![GeneratedFile {
+        path: PathBuf::from("composer.json"),
+        content: render_composer(&root_autoload_src),
+        generated_header: false,
+    }];
 
-    Ok(vec![
-        GeneratedFile {
+    // ~keep Exactly one manifest per layout. Both render the same composer `name`, and two
+    // manifests declaring one package name is ambiguous by construction. Split layout keeps the
+    // `pkg_dir` copy, because there the classes live under `packages/php/src/` and that manifest is
+    // the installable package. Co-located layout does not: the classes are in `pkg_dir` itself and
+    // the root manifest already autoloads them, so a second manifest beside them is unreachable —
+    // Packagist reads the repository root, and every consumer reference (root autoload, e2e,
+    // test_apps) targets the directory rather than the manifest. Emitting it regardless put a
+    // duplicate of the published package name into every co-located consumer.
+    if !co_located {
+        files.push(GeneratedFile {
             path: PathBuf::from(format!("{pkg_dir}/composer.json")),
-            content,
+            content: render_composer("src/"),
             generated_header: false,
-        },
-        GeneratedFile {
-            path: PathBuf::from("composer.json"),
-            content: root_content,
-            generated_header: false,
-        },
-    ])
+        });
+    }
+
+    Ok(files)
 }
 
 fn composer_package_name(config: &ResolvedCrateConfig, meta: &crate::scaffold::ScaffoldMeta) -> (String, String) {

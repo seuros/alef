@@ -1,0 +1,5 @@
+
+    private val mapper = ObjectMapper()
+        .registerModule(Jdk8Module())
+        .findAndRegisterModules()
+        .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)

@@ -209,9 +209,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
                 // napi-rs constants are PascalCase variant names. Fixtures may
                 // use the lowercase wire form (e.g. "percent"); convert it.
                 let camel_key = snake_to_camel(key);
-                let enum_type = enum_fields
-                    .get(key.as_str())
-                    .or_else(|| enum_fields.get(camel_key.as_str()));
+                let enum_type = resolve_enum_type(enum_fields, Some(type_name), key, &camel_key);
                 if let Some(enum_type) = enum_type {
                     if let serde_json::Value::String(s) = &preprocessed {
                         format!("{enum_type}.{}", s.to_upper_camel_case())
@@ -231,6 +229,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
                         field_type,
                         type_defs,
                         enums,
+                        Some(type_name),
                     )
                 }
             } else {
@@ -359,14 +358,18 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
                 "{var}.{camel_key} = {enum_type}.{};",
                 variant.to_upper_camel_case()
             ));
-        } else if let Some(enum_type) = enum_fields
-            .get(key.as_str())
-            .or_else(|| enum_fields.get(camel_key.as_str()))
-        {
+        } else if let Some(enum_type) = resolve_enum_type(enum_fields, Some(ir_owner_name), key, &camel_key) {
             // This is an enum field — generate EnumType.EnumValue.
             // Look up by both snake_case (fixture key) and camelCase (alef.toml override key
             // convention) so the alef.toml `enum_fields = { codeBlockStyle = "..." }` style
-            // matches fixtures written with snake_case keys.
+            // matches fixtures written with snake_case keys. Prefer an owner-qualified
+            // match (from `infer_enum_fields`) over a bare-name one — see
+            // `resolve_enum_type`.
+            //
+            // Prefix wasm-wrapped enums exactly as the typed branch above does:
+            // the package exports `WasmExtractInputKind`, so a bare
+            // `ExtractInputKind.Uri` references an undefined name.
+            let enum_type = wasm_prefixed_wrapped_type(lang, enum_type, type_defs, enums, wasm_type_prefix);
             if let serde_json::Value::String(s) = val {
                 stmts.push(format!("{var}.{camel_key} = {enum_type}.{};", s.to_upper_camel_case()));
             } else {
@@ -393,6 +396,10 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
     .to_string()
 }
 
+/// `owner_type` is the IR name of the struct that declares `field`, when known —
+/// see `resolve_enum_type` for why this disambiguates same-named fields on
+/// unrelated structs.
+#[allow(clippy::too_many_arguments)]
 fn node_value_expression(
     value: &serde_json::Value,
     field: &str,
@@ -402,6 +409,7 @@ fn node_value_expression(
     field_type: Option<&crate::core::ir::TypeRef>,
     type_defs: &[TypeDef],
     enums: &[EnumDef],
+    owner_type: Option<&str>,
 ) -> String {
     if let Some(file) = docs_files.iter().find(|file| file.field == pointer) {
         return crate::e2e::template_env::render(
@@ -425,7 +433,7 @@ fn node_value_expression(
         return format!("{type_name}.{}", variant.to_upper_camel_case());
     }
     let camel_field = snake_to_camel(field);
-    if let Some(enum_type) = enum_fields.get(field).or_else(|| enum_fields.get(camel_field.as_str()))
+    if let Some(enum_type) = resolve_enum_type(enum_fields, owner_type, field, &camel_field)
         && let Some(variant) = value.as_str()
     {
         return format!("{enum_type}.{}", variant.to_upper_camel_case());
@@ -456,6 +464,7 @@ fn node_value_expression(
                             nested_field_type,
                             type_defs,
                             enums,
+                            nested_type.map(|definition| definition.name.as_str()),
                         )
                     )
                 })
@@ -471,6 +480,10 @@ fn node_value_expression(
                 .iter()
                 .enumerate()
                 .map(|(index, value)| {
+                    // `field` is synthetic ("") for array elements, so there is no
+                    // owning-type-qualified key to look up here; a nested object
+                    // element's own fields resolve their owner from `element_type`
+                    // inside the recursive call's `Object` branch above.
                     node_value_expression(
                         value,
                         "",
@@ -480,6 +493,7 @@ fn node_value_expression(
                         element_type,
                         type_defs,
                         enums,
+                        None,
                     )
                 })
                 .collect::<Vec<_>>();

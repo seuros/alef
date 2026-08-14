@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GleamConfig {
     pub app_name: Option<String>,
     /// Erlang atom name for `@external(erlang, "<nif>", ...)` lookups (e.g., "my_app_nif").
@@ -78,6 +79,7 @@ pub struct GleamConfig {
 /// fixture-side `element_type` string and consumed by the e2e Gleam codegen
 /// when building `json_object` arg literals.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GleamElementConstructor {
     /// Fixture-side `element_type` value this recipe applies to (e.g.
     /// `"BatchFileItem"`).
@@ -105,6 +107,7 @@ pub struct GleamElementConstructor {
 /// * `"literal"` — emit `value` verbatim (no JSON lookup). Use for
 ///   constant fields like `config: option.None`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GleamElementField {
     /// Gleam record field name (e.g. `"path"`, `"config"`).
     pub gleam_field: String,

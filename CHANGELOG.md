@@ -15,9 +15,141 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **scaffold/poly**: lower configured exclusions separately for discovery gitignore semantics and hook glob matching,
+  preventing nested fixture over-pruning and missed nested build/vendor directories.
+- **docs/zig**: render function and enum-value identifiers in snake_case while retaining PascalCase type names in
+  generated reference pages.
+- **e2e**: use one normalized indexed-path convention across optional matching and eight accessor renderers, including
+  TypeScript, Node, C#, Zig, Kotlin, Kotlin Android, Swift, and Dart.
+- **e2e/go**: resolve fixture fields through their serde wire names so renamed DTO properties are populated instead
+  of silently disappearing from generated Go literals.
+- **e2e/typescript**: qualify inferred enum-field metadata by its owning type so an enum field cannot poison a
+  same-named scalar field on another generated DTO.
+- **ffi/all**: rebuild a missing or stale cbindgen header after all FFI source-writing stages and validate the refreshed
+  declarations in the same `alef all --clean` run, instead of failing once and requiring a manual Cargo build before
+  an identical second generation could succeed.
+- **e2e/rust**: accept `crates.e2e.error_field_aliases` and apply the configured mapping when generated Rust tests
+  assert fields on an error value.
+- **jni**: honor `crates.jni.exclude_functions` when emitting top-level and instance-method shims, alongside the
+  paired Kotlin and Kotlin Android exclusion lists.
+- **scaffold/php**: emit exactly one composer.json per layout. The co-located layout now emits only the
+  repository-root manifest; the package-directory copy is kept for the split layout, where it is the
+  installable package. Both rendered the same composer `name`, so every co-located consumer carried a
+  second, unreachable declaration of its own published package — Packagist reads the repository root, and
+  consumer references target the class directory rather than the manifest.
+- **ffi**: preserve registration methods' domain error types when a service owner is absent, and return the scalar
+  zero sentinel when an opaque constructor rejects an enum discriminant.
+- **e2e/snippets**: assert the whole rendered snippet document in the canonical-language test instead of a set of
+  substring probes, so `level`, `requires` and `side_effect` are pinned again; a renderer emitting a bogus value for
+  any of them previously satisfied the probes.
+
+- **snippets/check**: build Rust snippet sessions with the crate's declared features in `alef snippets check`, the
+  same merge `alef docs` already performs. The command dropped them, so the path dependency in the generated
+  snippet-check manifest resolved with default features only and every snippet importing a feature-gated module
+  failed with `unresolved import`.
+- **e2e/snippets**: declare the `serde_json` dependency that generated Rust snippet bodies name. A `json_object`
+  argument makes the Rust recipe emit `serde_json::from_str(…)`/`serde_json::from_value(…)`, but the snippet
+  frontmatter and coverage ledger both reported `requires: []`, so the Rust snippet validator built its check
+  project without the crate and every such snippet failed with `E0433: failed to resolve: use of undeclared crate
+  serde_json`. Rust snippets now carry a `crate:serde_json` requirement, and the Rust validator resolves
+  `crate:<name>` requirements into `[dependencies]` of the check project. Session configuration still wins: a crate
+  declared under `docs.snippets.sessions.<target>.rust_dependencies` keeps its configured version and features, and
+  a requirement Alef has no pinned version for fails with the config key to add instead of resolving silently.
+- **ffi**: verify cbindgen declarations against the FFI source after writing it, so a stale-header failure leaves Cargo
+  the new source it must rebuild instead of trapping generation in a rebuild loop; declaration matching also accepts
+  formatted line breaks while retaining exact symbol boundaries, and includes exports from generated modules such as
+  `service.rs` rather than treating their valid header declarations as removed.
+- **codegen**: preserve public associated serde default providers as callable Rust paths instead of treating every
+  `#[serde(default = "Type::function")]` as private and attempting structural JSON recovery, which failed when the
+  owning configuration contained required nested named fields.
+- **snippets**: stop the shared batch timeout from truncating to zero for the first validator in a batch.
+  `remaining_batch_timeout` floored the time left via `Duration::as_secs`, so the near-full budget the very first
+  caller sees (a few elapsed nanoseconds short of a whole second) rounded down to 0 and the freshly added
+  zero-budget guard rejected every snippet in the batch without running any of them — a batch validated nothing,
+  silently. The remainder now rounds up to the next whole second instead of down.
+- **e2e/ruby**: compare `equals` assertions exactly. Ruby stripped both the actual and the expected value, which is
+  symmetric and so never produced an unsatisfiable assertion, but it also made a genuine trailing-whitespace
+  regression invisible in Ruby while every other backend compares exactly. String coercion is kept; normalization is
+  not.
+- **e2e/elixir**: stop normalizing the actual value in generated `equals` and `is_empty` assertions. `is_empty`
+  emitted `String.trim(actual) == ""`, which passes for a whitespace-only value that Python's falsy check and
+  TypeScript's length check both reject — so one fixture assertion disagreed across languages.
+- **e2e**: compare `equals` assertions exactly in generated Python, PHP, Rust, TypeScript and WASM tests. The actual
+  value was normalized with `.trim()`/`.strip()` while the fixture `expected` literal was emitted verbatim, so a
+  fixture whose expectation legitimately ends in a newline could never be satisfied, and a genuine trailing-whitespace
+  regression was silently absorbed. Neither side is normalized now.
+
+- **magnus**: marshal `initialize`'s keyword types the same way as the accessors. The kwargs constructor
+  converts each field with `<mapped type>::try_convert` and `Json` maps to `String`, so a `json_value`
+  keyword promised a parsed document the constructor cannot accept — `try_convert` yields `None` on a Hash
+  and the field silently falls back to its default rather than raising.
+- **magnus**: declare `.rbs` attributes read-only. `attr_accessor` was emitted for every field of a defaulted
+  struct, but the binding defines no writer for any field, so steep green-lit assignments that raise
+  `NoMethodError`.
+- **magnus**: declare each `.rbs` attribute as the accessor the extension actually emits. `Json` is mapped to
+  `String` recursively, because the binding serializes it before Ruby sees it — `json_value` promised a parsed
+  document that never arrives, so steep accepted `page.extracted_data["key"]` on a `String`. Nullability now
+  follows the field's own optionality rather than the owning type's `has_default`, which had been nil-wrapping
+  accessors that can never return nil.
+- **e2e/rust**: share one field-aware containment predicate across `contains`, `contains_all`, `not_contains`, and
+  `contains_any`, so enum and collection fields no longer emit assertions that fail to compile. Only `contains`
+  handled those field kinds; the other three emitted a plain `.contains()` call that an enum does not have and
+  that compares whole collection elements. `contains`'s own output is byte-for-byte unchanged.
+- **snippets**: preserve extension-owned fixture descriptions while validating generated documentation language
+  identities.
+- **readme**: name the missing `crates.readme.snippets_dir` (or `snippets.<key>`) config again when a README
+  template's `include_snippet` call references an undefined snippet mapping, instead of surfacing serde's generic
+  "did not match any variant of untagged enum" message. Undefined values must be rejected before struct
+  deserialization of the (String | {path, root}) snippet mapping, which fails silently on the underlying cause.
+- **napi**: allow string-enum field literals alongside the nominal TypeScript enum using values derived from the
+  canonical enum emitter.
+- **kotlin-android**: treat a DTO as default-constructible only when every emitted constructor parameter has a
+  Kotlin default, including transitive nested DTO defaults.
+- **dart**: keep config parameters optional for serde function defaults by delegating to generated JSON
+  construction, preserving the source default instead of synthesizing a zero value.
+- **rustler**: JSON-encode default-valued records at public boundaries, report malformed payloads with context, and
+  preserve async, error, and fluent-resource return shapes.
+- **generate/verify**: stamp every emitted file carrying an Alef marker, including backends that template their own
+  marker while intentionally leaving `generated_header` disabled.
+- **ffi**: fail generation when generated FFI exports and the on-disk cbindgen header come from different runs.
+- **ffi**: declare the callback-style streaming method wrapper's `client` parameter over the same scalar
+  `AlefHandle` every producer of that client type returns, instead of a `TYPE *`/`const TYPE *` struct pointer.
+  Every FFI producer hands out client types through `insert_handle`, never `Box::into_raw`, so the mismatched
+  pointer parameter made the generated Rust and the generated C header describe two incompatible shapes for the
+  same handle, and no caller holding a valid client handle could invoke a streaming method without a cast that
+  was wrong by construction.
+- **ffi**: declare enum `_free`/`_to_json`/`_to_string`/`_from_json` companions over the same scalar `AlefHandle`
+  every producer returns for that enum, instead of a `TYPE *`/`const TYPE *` struct pointer. Every FFI producer
+  (function returns, method returns, field accessors, and JSON constructors) hands out `Named` types — enums
+  included — through `insert_handle`, never `Box::into_raw`, so the mismatched pointer signature made the
+  generated C header describe two incompatible shapes for the same handle and broke consumer codegen (e.g. Go
+  `cannot use ... as *_Ctype_struct_... value`) for any enum with data-carrying variants.
+- **codegen/conversions**: use one tuple-variant predicate for enum definitions and `From` conversions so
+  adjacently tagged tuple variants and untagged struct variants emit matching Rust syntax (#232).
+- **ffi/service**: free the C-allocated response pointer before deserializing it in the generated service handler
+  bridge, so a malformed response no longer leaks the buffer when parsing fails.
+- **e2e/python**: stop emitting broken generated snippets/tests for `json_object` args configured with
+  `options_via = "from_json"`. Construct via the type's plain kwargs constructor instead, stop importing that type
+  from both the public module and the native bindings module in the same file, and bind the call result whenever
+  the snippet template is going to print it instead of discarding the return value and printing an unbound name.
+- **e2e/snippets**: give the Python, Go, Dart, and TypeScript snippet generators a crate-name-derived
+  `"{PascalCase(crate name)}Error"` fallback for the error type they import/catch, instead of the bare literal
+  `"Error"`, which almost never names a real generated type. Scoped to the four snippet emitters via a shared
+  `snippet_error_type_name` helper — `ResolvedCrateConfig::error_type_name()` itself is unchanged and still
+  defaults to `"Error"`, since 11 Rust-generating backends (extendr, rustler, wasm, php, magnus, ffi, swift, pyo3,
+  jni, napi) consume it through `error_constructor_expr()` to generate Rust, and some consumer crates genuinely
+  name their error type `Error`.
 - **snippets**: enforce one timeout budget across every snippet in a validation batch and terminate timed-out
   toolchain process groups so descendant processes cannot keep docs generation alive.
 - **cache**: serialize IR maps and sets in canonical order so unchanged inputs retain stable IR and backend cache hashes.
+- **codegen/defaults**: stop emitting `#[serde(default = "path")]` functions as callable initializers in generated
+  Rust (Magnus, PHP, NAPI, Rustler) — the named function belongs to the source crate, is not `pub`, and is frequently
+  `#[cfg(feature = "serde")]`-gated, so the binding failed to compile with `E0425: cannot find function`. Generated
+  Rust now recovers the field's real value by deserializing a minimal JSON stub through the source type's own
+  `Deserialize` impl, the same mechanism `#[serde(default = "path")]` itself relies on. Where the owning type is not
+  known, generation fails with the crate, type, field, and uncallable function named, rather than substituting the
+  field type's zero value — which compiles and looks right while disagreeing with the source crate's configured
+  `default_span()` is `1`; `u32::default()` is `0`).
 - **validate versions**: discover nested C#, Dart, Zig, and Cargo lock manifests, validate all C# assembly version
   fields and every local lock package against its manifest, and normalize doubled path separators in diagnostics.
 - **ffi**: preserve fully qualified streaming request types when emitting handle validation and lookup code.
@@ -26,6 +158,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **snippets**: isolate per-target validation-session preparation failures so healthy language sessions still run
   while strict validation reports the affected target as an error.
 - **snippets/c/go**: model public FFI handles as scalar `AlefHandle` values and use zero as the invalid-handle sentinel.
+- **pyo3/e2e-python**: unify the two independent `from_json` eligibility checks — pyo3's `#[pymethods]`
+  injection/`.pyi` stub gate read crate-level serde availability only, while the e2e python snippet emitter's
+  gate read per-type serde derives only — into one shared `pyo3_from_json_eligible` predicate
+  (`src/codegen/conversions/helpers/eligibility.rs`) requiring per-type serde derives, crate-level serde
+  availability, and core<->binding convertibility. The two gates could disagree for a crate whose types carry
+  serde derives but whose Python binding crate lacks `serde`/`serde_json`, or vice versa; both call sites now
+  delegate to the shared predicate instead of each re-deriving it.
 
 - **fixtures/readme**: separate reader-facing fixture inputs, result presentation, and error intent from test data,
   and allow individual README snippet mappings to migrate between roots without breaking sibling mappings.
@@ -75,8 +214,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fallbacks.
 - **go/zig**: map native failures to typed binding errors by stable numeric FFI taxonomy codes instead of parsing
   human-readable error messages.
-- **Java/C#**: require an explicit shared-native-runtime contract before wrapping capsule pointers, and protect C#
-  service calls and callback registrations with SafeHandle lifetime guards.
+- **Java/C#**: require either a shared-native-runtime contract or an explicit borrowed-static, ABI-compatible,
+  no-destructor capsule contract before wrapping native pointers, and protect C# service calls and callback
+  registrations with SafeHandle lifetime guards.
+- **C#**: restore readable formatting and a valid `/// <summary>` doc comment block in the service templates whose
+  SafeHandle lifetime guards were reflowed onto run-together lines, including a bare `</summary>` that made the
+  generated source uncompilable.
 - **ffi**: report stable, collision-checked per-variant error taxonomy codes while preserving reserved conversion and
   panic codes.
 - **JNI/Kotlin Android**: transfer configured capsule values as their raw host pointers instead of boxed Rust

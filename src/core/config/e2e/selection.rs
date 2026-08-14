@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 /// select_when = { category = "stream", id_prefix = "batch_crawl_stream" }
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SelectWhen {
     /// Match when the fixture's resolved category equals this string.
     #[serde(default)]

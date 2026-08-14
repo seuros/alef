@@ -1,7 +1,8 @@
 use crate::codegen::naming::to_go_name;
 
 use super::optional_renderers::{
-    render_c, render_dart, render_kotlin_android, render_pascal_dot, render_php, render_r,
+    push_key_field_name, push_key_index_suffix, render_c, render_dart, render_kotlin_android, render_pascal_dot,
+    render_php, render_r,
 };
 use super::types::{PathSegment, SwiftFirstClassMap};
 use heck::{ToLowerCamelCase, ToSnakeCase};
@@ -111,10 +112,7 @@ pub(super) fn render_swift_with_first_class_map(
         }
         match seg {
             PathSegment::Field(f) => {
-                if !path_so_far.is_empty() {
-                    path_so_far.push('.');
-                }
-                path_so_far.push_str(f);
+                push_key_field_name(&mut path_so_far, seg);
                 out.push('.');
                 // Swift bindings (both first-class `public let` props and
                 // swift-bridge method names) always use lowerCamelCase.
@@ -128,10 +126,7 @@ pub(super) fn render_swift_with_first_class_map(
                 current_type = map.advance(current_type.as_deref(), f);
             }
             PathSegment::ArrayField { name, index } => {
-                if !path_so_far.is_empty() {
-                    path_so_far.push('.');
-                }
-                path_so_far.push_str(name);
+                push_key_field_name(&mut path_so_far, seg);
                 let is_optional = optional_fields.contains(&path_so_far);
                 out.push('.');
                 out.push_str(&name.to_lower_camel_case());
@@ -141,7 +136,7 @@ pub(super) fn render_swift_with_first_class_map(
                 } else {
                     out.push_str(&format!("{access}[{index}]"));
                 }
-                path_so_far.push_str("[0]");
+                push_key_index_suffix(&mut path_so_far, seg);
                 // Indexing into a Vec<Named> yields a Named element — advance current_type.
                 // Only pin opaque syntax when the array field was itself emitted in
                 // method-call mode (i.e. it's a RustVec accessor). When the owning
@@ -153,10 +148,7 @@ pub(super) fn render_swift_with_first_class_map(
                 }
             }
             PathSegment::MapAccess { field, key } => {
-                if !path_so_far.is_empty() {
-                    path_so_far.push('.');
-                }
-                path_so_far.push_str(field);
+                push_key_field_name(&mut path_so_far, seg);
                 out.push('.');
                 out.push_str(&field.to_lower_camel_case());
                 let access = if property_syntax { "" } else { "()" };
@@ -165,6 +157,7 @@ pub(super) fn render_swift_with_first_class_map(
                 } else {
                     out.push_str(&format!("{access}[\"{key}\"]"));
                 }
+                push_key_index_suffix(&mut path_so_far, seg);
                 current_type = map.advance(current_type.as_deref(), field);
             }
             PathSegment::Length => {

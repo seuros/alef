@@ -6,12 +6,12 @@
 //     {{ service_name }}Opaque* owner,
 //     char* (*callback)(void*, const char*),
 //     void* context{% for param in registration.params %},
-//     {{ param.c_type }} {{ param.name }}{% endfor %}
+//     {{ param.c_type }} {{ param.name }}{% endfor +%}
 // );
 {% endfor %}
 {% for entrypoint in entrypoints %}
 // extern {{ entrypoint.return_c_type }} {{ entrypoint.symbol }}(
 //     {{ service_name }}Opaque* owner{% for param in entrypoint.params %},
-//     {{ param.c_type }} {{ param.name }}{% endfor %}
+//     {{ param.c_type }} {{ param.name }}{% endfor +%}
 // );
 {% endfor %}

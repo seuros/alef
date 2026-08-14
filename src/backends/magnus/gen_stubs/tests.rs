@@ -368,6 +368,182 @@ fn function_param_of_trait_interface_type_is_substituted_to_underscore_prefixed_
     );
 }
 
+/// `initialize`'s keywords must accept what the generated kwargs constructor actually converts.
+///
+/// ~keep A genuine cross-artifact check: it generates the *extension* constructor and the *stub*
+/// from one TypeDef and compares them, rather than asserting a literal on either side alone. The
+/// failure it guards is quiet — `String::try_convert` on a Ruby Hash does not raise, it yields
+/// `None` and the field falls back to its default, so a caller steep approved gets a silently
+/// wrong value instead of an error.
+#[test]
+fn initialize_keywords_match_the_kwargs_constructor_contract() {
+    use crate::backends::magnus::type_map::MagnusMapper;
+    use crate::codegen::config_gen::gen_magnus_kwargs_constructor;
+    use crate::codegen::type_mapper::TypeMapper;
+    use crate::core::ir::{ApiSurface, TypeDef};
+
+    let typ = TypeDef {
+        name: "Payload".to_string(),
+        rust_path: "test_lib::Payload".to_string(),
+        fields: vec![
+            optional_field("payload", TypeRef::Json),
+            field("rows", TypeRef::Vec(Box::new(TypeRef::Json))),
+        ],
+        has_default: true,
+        ..Default::default()
+    };
+
+    let extension = gen_magnus_kwargs_constructor(&typ, &|ty| MagnusMapper.map_type(ty));
+    let api = ApiSurface {
+        types: vec![typ],
+        ..Default::default()
+    };
+    let stub = super::gen_stubs(&api, "test_lib", false, &ahash::AHashMap::new(), &[]);
+    let initialize = stub
+        .lines()
+        .find(|line| line.trim_start().starts_with("def initialize:"))
+        .unwrap_or_else(|| panic!("initialize must be declared:\n{stub}"));
+
+    assert!(
+        extension.contains("String::try_convert"),
+        "the constructor is expected to convert a Json keyword through String:\n{extension}"
+    );
+    assert!(
+        !initialize.contains("json_value"),
+        "`{initialize}` promises a parsed document, but the constructor converts with \
+         `String::try_convert`, which yields None on a Hash and falls back to the default:\n{extension}"
+    );
+    assert!(initialize.contains("?payload: String"), "got: {initialize}");
+    assert!(initialize.contains("?rows: Array[String]"), "got: {initialize}");
+}
+
+/// A defaulted struct must still declare read-only attributes.
+///
+/// ~keep `attr_accessor` also declares `name=`, and the binding defines no writer for any field —
+/// `gen_field_accessor` emits a single zero-arity getter and there is no registration template for
+/// a setter. Declaring writers let steep green-light an assignment that raises `NoMethodError`.
+#[test]
+fn defaulted_struct_attributes_are_read_only() {
+    use crate::core::ir::{ApiSurface, TypeDef};
+
+    let typ = TypeDef {
+        name: "Options".to_string(),
+        rust_path: "test_lib::Options".to_string(),
+        fields: vec![field("retries", TypeRef::Primitive(PrimitiveType::U32))],
+        has_default: true,
+        ..Default::default()
+    };
+    let api = ApiSurface {
+        types: vec![typ],
+        ..Default::default()
+    };
+
+    let stub = super::gen_stubs(&api, "test_lib", false, &ahash::AHashMap::new(), &[]);
+
+    assert!(
+        stub.contains("attr_reader retries: Integer"),
+        "a defaulted struct's fields must be readable:\n{stub}"
+    );
+    assert!(
+        !stub.contains("attr_accessor"),
+        "the binding defines no setter, so no attribute may declare one:\n{stub}"
+    );
+}
+
+/// The declared type of each attribute, as it appears in the emitted stub.
+fn declared_attr_types(stub: &str) -> std::collections::BTreeMap<String, String> {
+    stub.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let rest = line
+                .strip_prefix("attr_accessor ")
+                .or_else(|| line.strip_prefix("attr_reader "))?;
+            let (name, declared) = rest.split_once(": ")?;
+            Some((name.to_string(), declared.to_string()))
+        })
+        .collect()
+}
+
+/// Every declared accessor type must describe the accessor the binding actually emits.
+///
+/// ~keep The expectation is derived from `MagnusMapper` — the same mapper
+/// `classes::gen_field_accessor` uses to choose the accessor's Rust return type — rather than
+/// restated as a literal, so the stub and the ext cannot be edited into agreement with each other
+/// while both drift away from what Ruby receives. Two independent failures are covered: `Json`
+/// crossing as an already-serialized `String` (six fields shipped as `json_value` while the ext
+/// returned `Option<String>`), and nullability, which follows the field rather than the owning
+/// type's `has_default`.
+#[test]
+fn attr_types_match_the_accessor_the_binding_emits() {
+    use crate::backends::magnus::type_map::MagnusMapper;
+    use crate::codegen::type_mapper::TypeMapper;
+    use crate::core::ir::{ApiSurface, TypeDef};
+
+    let fields = vec![
+        optional_field("payload", TypeRef::Json),
+        field("rows", TypeRef::Vec(Box::new(TypeRef::Json))),
+        field(
+            "index",
+            TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::Json)),
+        ),
+        optional_field("label", TypeRef::String),
+        field("names", TypeRef::Vec(Box::new(TypeRef::String))),
+    ];
+
+    let typ = TypeDef {
+        name: "Payload".to_string(),
+        rust_path: "test_lib::Payload".to_string(),
+        fields: fields.clone(),
+        // A defaulted struct is the case that used to nil-wrap every attribute.
+        has_default: true,
+        ..Default::default()
+    };
+    let api = ApiSurface {
+        types: vec![typ],
+        ..Default::default()
+    };
+
+    let stub = super::gen_stubs(&api, "test_lib", false, &ahash::AHashMap::new(), &[]);
+    let declared = declared_attr_types(&stub);
+
+    for f in &fields {
+        // Mirrors `classes::gen_field_accessor`'s return-type choice exactly.
+        let accessor_return = if f.optional {
+            let inner = match &f.ty {
+                TypeRef::Optional(inner) => inner.as_ref(),
+                ty => ty,
+            };
+            MagnusMapper.optional(&MagnusMapper.map_type(inner))
+        } else {
+            MagnusMapper.map_type(&f.ty)
+        };
+        let declared = declared
+            .get(&f.name)
+            .unwrap_or_else(|| panic!("`{}` must be declared:\n{stub}", f.name));
+
+        assert_eq!(
+            declared.ends_with('?'),
+            accessor_return.starts_with("Option<"),
+            "`{}` is declared `{declared}` but the accessor returns `{accessor_return}` — \
+             nullability must follow the accessor, not the owning type's `has_default`",
+            f.name
+        );
+        assert!(
+            !declared.contains("json_value"),
+            "`{}` is declared `{declared}`, but the accessor returns `{accessor_return}`: the \
+             binding serializes Json before Ruby sees it, so `json_value` promises a parsed \
+             document that never arrives",
+            f.name
+        );
+    }
+
+    assert_eq!(declared.get("payload").map(String::as_str), Some("String?"));
+    assert_eq!(declared.get("rows").map(String::as_str), Some("Array[String]"));
+    assert_eq!(declared.get("index").map(String::as_str), Some("Hash[String, String]"));
+    assert_eq!(declared.get("label").map(String::as_str), Some("String?"));
+    assert_eq!(declared.get("names").map(String::as_str), Some("Array[String]"));
+}
+
 /// RBS rejects a class that declares an attribute and a same-named method
 /// (`RBS::DuplicatedMethodDefinition`). A core type with a public `providers` field and an
 /// inherent `providers()` method feeds both emitters, so the attribute wins and the method

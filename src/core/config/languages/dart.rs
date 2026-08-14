@@ -17,6 +17,7 @@ pub enum DartStyle {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DartConfig {
     /// Map of Rust type name -> host-native capsule (Language-passthrough) config.
     /// Dart has no idiomatic high-level tree-sitter `Language` wrapper, so the binding
@@ -146,6 +147,7 @@ pub struct DartConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DartTargetDepOverride {
     /// Cargo `cfg(...)` predicate (without the `cfg(...)` wrapper). Example:
     /// `all(target_os = "android", target_arch = "x86_64")`.

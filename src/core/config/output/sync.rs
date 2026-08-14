@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 /// A single text replacement rule for version sync. ~keep
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TextReplacement {
     /// Glob pattern for files to process. ~keep
     pub path: String,
@@ -14,6 +15,7 @@ pub struct TextReplacement {
 
 /// Configuration for the `sync-versions` command. ~keep
 #[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SyncConfig {
     /// Extra file paths to update version in (glob patterns). ~keep
     #[serde(default)]

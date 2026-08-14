@@ -129,7 +129,12 @@ fn remaining_batch_timeout(started: &OnceLock<Instant>, timeout_secs: u64) -> u6
     let deadline = *started.get_or_init(Instant::now) + Duration::from_secs(timeout_secs);
     deadline
         .checked_duration_since(Instant::now())
-        .map(|remaining| remaining.as_secs())
+        // Round the remainder up to whole seconds instead of truncating: `Duration::as_secs`
+        // floors, so a budget with only nanoseconds elapsed (the common case for the first
+        // caller right after `get_or_init`) truncates to 0 and starves every validator in the
+        // batch before any of them run. Rounding up keeps the shared deadline meaningful at
+        // whole-second granularity without ever reporting time left as none. ~keep
+        .map(|remaining| remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0))
         .unwrap_or(0)
 }
 
@@ -888,6 +893,11 @@ mod tests {
             parallelism: 1,
             timeout_secs: 1,
             cache_dir: None,
+            // network_snippet() carries SideEffectClass::Network; side_effect_rejection()
+            // skips unlisted side effects at ValidationLevel::Run before the validator
+            // ever runs (see side_effect_policy_only_blocks_execution), so it must be
+            // allow-listed here or the budget-sharing path under test never executes. ~keep
+            allowed_side_effects: vec![SideEffectClass::Network],
             ..RunnerConfig::default()
         };
 
@@ -903,5 +913,28 @@ mod tests {
                 .as_deref()
                 .is_some_and(|message| message.contains("timed out after 1s"))
         }));
+    }
+
+    // Timing-safe regression coverage for the truncation bug directly: instead of racing a
+    // real sleep against a wall-clock threshold, an already-elapsed `Instant` is seeded into
+    // the `OnceLock` so the function is exercised deterministically at a fixed, known offset. ~keep
+    #[test]
+    fn remaining_batch_timeout_rounds_up_a_still_live_budget() {
+        let started = OnceLock::new();
+        started
+            .set(Instant::now() - Duration::from_millis(1))
+            .expect("OnceLock starts empty");
+
+        assert_eq!(remaining_batch_timeout(&started, 1), 1);
+    }
+
+    #[test]
+    fn remaining_batch_timeout_reports_zero_once_the_deadline_has_passed() {
+        let started = OnceLock::new();
+        started
+            .set(Instant::now() - Duration::from_secs(2))
+            .expect("OnceLock starts empty");
+
+        assert_eq!(remaining_batch_timeout(&started, 1), 0);
     }
 }

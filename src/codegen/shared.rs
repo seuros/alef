@@ -412,7 +412,7 @@ pub fn format_default_value(default: &DefaultValue) -> String {
         DefaultValue::EnumVariant(v) => v.clone(),
         DefaultValue::Empty => "Default::default()".to_string(),
         DefaultValue::None => "None".to_string(),
-        DefaultValue::FunctionCall(path) => format!("{path}()"),
+        DefaultValue::FunctionCall(path) | DefaultValue::PublicFunctionCall(path) => format!("{path}()"),
     }
 }
 

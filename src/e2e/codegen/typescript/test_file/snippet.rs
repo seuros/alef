@@ -120,14 +120,25 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
         .assertions
         .iter()
         .any(|assertion| assertion.assertion_type == "error");
+    let error_type_name = if lang == "node" {
+        "Error".to_string()
+    } else {
+        crate::e2e::codegen::snippet_error_type_name(config)
+    };
     let mut imports = std::collections::BTreeSet::new();
     imports.insert(effective_factory.unwrap_or(&function_name).to_string());
-    if expects_error {
-        imports.insert(config.error_type_name());
+    if expects_error && lang != "node" {
+        imports.insert(error_type_name.clone());
     }
     imports.extend(visitor_imports);
     let referenced_code = format!("{}\n{args}\n{client_setup}", setup_lines.join("\n"));
-    if let Some(name) = options_type
+    // Every imported type name goes through the same prefixing helper the body
+    // uses. For wasm the emitted code constructs prefixed classes
+    // (`WasmExtractInput`), so an unprefixed import names a symbol the package
+    // does not export -- `render_test_file` prefixes at its own import sites for
+    // exactly this reason. Non-wasm languages pass through unchanged.
+    let import_name = |name: &str| wasm_prefixed_wrapped_type(lang, name, type_defs, enums, wasm_type_prefix);
+    if let Some(name) = options_type.as_deref().map(import_name)
         && referenced_code.contains(&name)
     {
         imports.insert(name);
@@ -136,13 +147,14 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
         nested_types
             .into_values()
             .chain(enum_fields.into_values())
+            .map(|name| import_name(&name))
             .filter(|name| referenced_code.contains(name)),
     );
     for arg in recipe.args {
         if arg.arg_type == "json_object"
             && let Some(type_name) = &arg.element_type
         {
-            let type_name = canonical_ts_type_name(lang, type_name, config);
+            let type_name = import_name(&canonical_ts_type_name(lang, type_name, config));
             if referenced_code.contains(&type_name) {
                 imports.insert(type_name);
             }
@@ -164,7 +176,7 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
             setup_lines => setup_lines, client_setup => client_setup, call_expr => call_expr,
             result_var => call.result_var, is_async => override_config.and_then(|value| value.r#async).unwrap_or(call.r#async),
             expects_error => expects_error,
-            error_type => config.error_type_name(),
+            error_type => error_type_name,
             returns_void => call.returns_void,
             presentation => crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang),
         },
@@ -190,7 +202,15 @@ fn infer_enum_fields(
         for field in &type_def.fields {
             let Some(named) = named_type(&field.ty) else { continue };
             if enums.iter().any(|definition| definition.name == named) {
-                fields.entry(field.name.clone()).or_insert_with(|| named.to_string());
+                // Key by owning-type + field, not the bare field name: this map
+                // accumulates entries from every type reachable in the call's whole
+                // type graph (see the two `infer_enum_fields` calls in
+                // `render_snippet_body`), so two unrelated structs that happen to
+                // share a field name (e.g. `TranscriptionConfig.model: WhisperModel`
+                // and `LlmConfig.model: String`) must not collide on one key.
+                fields
+                    .entry(enum_field_key(&type_def.name, &field.name))
+                    .or_insert_with(|| named.to_string());
             } else if type_defs.iter().any(|definition| definition.name == named) {
                 pending.push(named.to_string());
             }
@@ -235,6 +255,79 @@ mod tests {
             args: Vec::new(),
             assertion_recipes: Vec::new(),
         }
+    }
+
+    #[test]
+    fn same_named_field_in_unrelated_struct_is_not_inferred_as_enum() {
+        // Regression for #578: `infer_enum_fields` used to key its result on the
+        // bare field name, so a genuinely enum-typed field on one struct
+        // (`TranscriptionConfig.model: WhisperModel`) poisoned an unrelated
+        // same-named `String` field on a different struct (`LlmConfig.model`)
+        // reachable from the same call's type graph.
+        let type_defs = [
+            TypeDef {
+                name: "TranscriptionConfig".into(),
+                fields: vec![crate::core::ir::FieldDef {
+                    name: "model".into(),
+                    ty: crate::core::ir::TypeRef::Named("WhisperModel".into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            TypeDef {
+                name: "LlmConfig".into(),
+                fields: vec![crate::core::ir::FieldDef {
+                    name: "model".into(),
+                    ty: crate::core::ir::TypeRef::String,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ];
+        let enums = [EnumDef {
+            name: "WhisperModel".into(),
+            ..Default::default()
+        }];
+
+        // Mirrors `render_snippet_body`, which accumulates `infer_enum_fields`
+        // results from multiple type roots (the call's options type and each
+        // argument's element type) into one shared map.
+        let mut enum_fields = std::collections::HashMap::new();
+        infer_enum_fields(Some("TranscriptionConfig"), &type_defs, &enums, &mut enum_fields);
+        infer_enum_fields(Some("LlmConfig"), &type_defs, &enums, &mut enum_fields);
+
+        let llm_object = serde_json::json!({"model": "openai/gpt-4o-mini"});
+        let llm_expression = ts_builder_expression(
+            llm_object.as_object().expect("object"),
+            "LlmConfig",
+            &Default::default(),
+            "node",
+            &enum_fields,
+            &Default::default(),
+            &type_defs,
+            &enums,
+            "",
+            &[],
+        );
+        assert_eq!(llm_expression, "{ model: \"openai/gpt-4o-mini\" } as LlmConfig");
+
+        let transcription_object = serde_json::json!({"model": "base"});
+        let transcription_expression = ts_builder_expression(
+            transcription_object.as_object().expect("object"),
+            "TranscriptionConfig",
+            &Default::default(),
+            "node",
+            &enum_fields,
+            &Default::default(),
+            &type_defs,
+            &enums,
+            "",
+            &[],
+        );
+        assert_eq!(
+            transcription_expression,
+            "{ model: WhisperModel.Base } as TranscriptionConfig"
+        );
     }
 
     #[test]
@@ -406,6 +499,76 @@ mod tests {
         assert!(body.contains("error instanceof Error"));
         assert!(!body.contains("expected call to fail"));
         assert!(!body.contains("const result = await"));
+    }
+
+    /// napi-rs (the node target's FFI boundary) converts every Rust error into a
+    /// plain JS `Error` -- it never generates a named error class. A crate's
+    /// `error_type` config (e.g. `error_type = "XbergError"` in alef.toml, used
+    /// by every other language's docs snippets to build an idiomatic
+    /// `import`/`instanceof` pair) does not apply to node: importing and
+    /// `instanceof`-checking a class that the node package never exports fails
+    /// with `TS2305: Module has no exported member 'XbergError'`.
+    ///
+    /// Before this fix, node snippets used `config.error_type_name()`
+    /// unconditionally, so any crate with a custom `error_type` broke every
+    /// generated node docs snippet that expects an error (see
+    /// error_empty_mime.md, error_unsupported_mime.md, and others).
+    #[test]
+    fn node_error_snippet_uses_builtin_error_not_the_crate_error_type() {
+        let mut fixture = fixture();
+        fixture.assertions.push(crate::e2e::fixture::Assertion {
+            assertion_type: "error".into(),
+            ..Default::default()
+        });
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "parse".into();
+        e2e.call.r#async = true;
+        let config = crate::core::config::ResolvedCrateConfig {
+            error_type: Some("XbergError".into()),
+            ..Default::default()
+        };
+
+        let node_body = render_snippet_body(SnippetContext {
+            lang: "node",
+            fixture: &fixture,
+            module: "@example/library",
+            client_factory: None,
+            e2e_config: &e2e,
+            type_defs: &[],
+            enums: &[],
+            wasm_type_prefix: "",
+            config: &config,
+        });
+        assert!(
+            node_body.contains("error instanceof Error"),
+            "node must fall back to the built-in Error, got: {node_body}"
+        );
+        assert!(
+            !node_body.contains("XbergError"),
+            "node must never reference the crate error type, got: {node_body}"
+        );
+        assert!(
+            !node_body.contains("import { Error"),
+            "Error is a global -- it must not be imported, got: {node_body}"
+        );
+
+        // wasm is unaffected: wasm-bindgen DOES generate a named error export,
+        // so it must keep using the crate's configured error type name.
+        let wasm_body = render_snippet_body(SnippetContext {
+            lang: "wasm",
+            fixture: &fixture,
+            module: "@example/library",
+            client_factory: None,
+            e2e_config: &e2e,
+            type_defs: &[],
+            enums: &[],
+            wasm_type_prefix: "",
+            config: &config,
+        });
+        assert!(
+            wasm_body.contains("error instanceof XbergError"),
+            "wasm must keep using the crate's configured error type, got: {wasm_body}"
+        );
     }
 
     #[test]

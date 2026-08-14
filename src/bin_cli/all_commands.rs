@@ -86,7 +86,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 for (lang, lang_files) in &bindings {
                     let lang_str = lang.to_string();
 
-                    for file in lang_files.iter().filter(|file| file.generated_header) {
+                    for file in lang_files.iter().filter(|file| file.carries_alef_marker()) {
                         current_gen_paths.insert(base_dir.join(&file.path));
                     }
 
@@ -123,7 +123,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     let svc_files = pipeline::generate_service_api(&api, resolved_cfg, &languages)?;
                     if !svc_files.is_empty() {
                         for (_, files) in &svc_files {
-                            for file in files.iter().filter(|file| file.generated_header) {
+                            for file in files.iter().filter(|file| file.carries_alef_marker()) {
                                 current_gen_paths.insert(base_dir.join(&file.path));
                             }
                         }
@@ -145,13 +145,18 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 tracing::info!("Generating scaffolding...");
                 let scaffold_files = pipeline::scaffold(&api, resolved_cfg, &languages, config_path)?;
                 let scaffold_count = pipeline::write_scaffold_files_with_overwrite(&scaffold_files, &base_dir, clean)?;
-                for file in scaffold_files.iter().filter(|file| file.generated_header) {
+                for file in scaffold_files.iter().filter(|file| file.carries_alef_marker()) {
                     current_gen_paths.insert(base_dir.join(&file.path));
                 }
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 tracing::info!("Running post-build processing...");
                 run_required_post_builds(&languages, resolved_cfg, &base_dir)?;
+                if languages.contains(&crate::core::config::Language::Ffi) {
+                    pipeline::ensure_ffi_header_freshness(resolved_cfg, &base_dir, || {
+                        pipeline::build(resolved_cfg, &[crate::core::config::Language::Ffi], false)
+                    })?;
+                }
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 tracing::info!("Generating type stubs...");
@@ -192,7 +197,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 };
 
                 for (_, files) in &stubs {
-                    for file in files.iter().filter(|file| file.generated_header) {
+                    for file in files.iter().filter(|file| file.carries_alef_marker()) {
                         current_gen_paths.insert(base_dir.join(&file.path));
                     }
                 }
@@ -220,7 +225,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             !api_hashes.is_empty() && api_hashes.iter().all(|(p, h)| stored_api.get(p) == Some(h));
 
                         for (_, files) in &public_api_files {
-                            for file in files.iter().filter(|file| file.generated_header) {
+                            for file in files.iter().filter(|file| file.carries_alef_marker()) {
                                 current_gen_paths.insert(base_dir.join(&file.path));
                             }
                         }
@@ -251,7 +256,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let readme_languages = crate::readme::expand_configured_readme_languages(resolved_cfg, &languages);
                 let readme_files = pipeline::readme(&api, resolved_cfg, &readme_languages)?;
                 let readme_count = pipeline::write_scaffold_files_with_overwrite(&readme_files, &base_dir, true)?;
-                for file in readme_files.iter().filter(|file| file.generated_header) {
+                for file in readme_files.iter().filter(|file| file.carries_alef_marker()) {
                     current_gen_paths.insert(base_dir.join(&file.path));
                 }
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
@@ -315,8 +320,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             &api.functions,
                         )?;
                         e2e_count = pipeline::write_scaffold_files_with_overwrite(&files, &base_dir, true)?;
-                        let managed_files: Vec<_> =
-                            files.iter().filter(|file| file.generated_header).cloned().collect();
+                        let managed_files: Vec<_> = files
+                            .iter()
+                            .filter(|file| file.carries_alef_marker())
+                            .cloned()
+                            .collect();
                         crate::e2e::format::run_formatters(&managed_files, e2e_config)?;
 
                         let output_paths: Vec<PathBuf> = managed_files.iter().map(|f| base_dir.join(&f.path)).collect();
@@ -367,8 +375,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         )?;
                         let test_apps_count = pipeline::write_scaffold_files_with_overwrite(&files, &base_dir, true)?;
                         e2e_count += test_apps_count;
-                        let managed_files: Vec<_> =
-                            files.iter().filter(|file| file.generated_header).cloned().collect();
+                        let managed_files: Vec<_> = files
+                            .iter()
+                            .filter(|file| file.carries_alef_marker())
+                            .cloned()
+                            .collect();
                         crate::e2e::format::run_formatters(&managed_files, registry_e2e_ref)?;
 
                         let output_paths: Vec<PathBuf> = managed_files.iter().map(|f| base_dir.join(&f.path)).collect();
@@ -394,7 +405,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let doc_files =
                     crate::docs::generate_docs_stage(&docs_api, resolved_cfg, &doc_languages, None, &base_dir)?;
                 let doc_count = pipeline::write_scaffold_files_with_overwrite(&doc_files, &base_dir, clean)?;
-                for file in doc_files.iter().filter(|file| file.generated_header) {
+                for file in doc_files.iter().filter(|file| file.carries_alef_marker()) {
                     current_gen_paths.insert(base_dir.join(&file.path));
                 }
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;

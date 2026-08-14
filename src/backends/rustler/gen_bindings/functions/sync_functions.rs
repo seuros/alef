@@ -1,3 +1,4 @@
+use super::default_deserialization::{render_fallible_deser_line, render_ok_expression};
 use super::shared::{
     render_deser_line, render_named_deser_line, render_preamble, render_result_body, render_wrapped_body,
     resolve_core_type_path,
@@ -62,8 +63,6 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_function(
 
     let return_type =
         crate::backends::rustler::gen_bindings::helpers::map_return_type(&func.return_type, mapper, opaque_types);
-    let return_annotation = mapper.wrap_return(&return_type, func.error_type.is_some());
-
     let has_default_params = func
         .params
         .iter()
@@ -80,6 +79,16 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_function(
 
     let can_delegate =
         shared::can_auto_delegate_function(func, opaque_types) || has_default_params || has_batch_vec_params;
+    let deserialization_introduces_result =
+        crate::backends::rustler::gen_bindings::public_api_args::function_deserialization_introduces_result(
+            func,
+            opaque_types,
+            default_types,
+        );
+    let return_annotation = mapper.wrap_return(
+        &return_type,
+        func.error_type.is_some() || deserialization_introduces_result,
+    );
 
     let body = if can_delegate {
         let mut deser_lines: Vec<String> = Vec::new();
@@ -90,12 +99,13 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_function(
                 if let TypeRef::Named(n) = &p.ty
                     && default_types.contains(n) {
                         let core_ty = resolve_core_type_path(n, types_by_name, core_import);
-                        let deser_line = if func.error_type.is_some() {
-                            render_deser_line("default_deser_with_error.rs.jinja", &p.name, &core_ty)
-                        } else {
-                            render_deser_line("default_deser_without_error.rs.jinja", &p.name, &core_ty)
-                        };
-                        deser_lines.push(deser_line);
+                        deser_lines.push(render_fallible_deser_line(
+                            &p.name,
+                            &format!("{}_core", p.name),
+                            &core_ty,
+                            true,
+                            &func.name,
+                        ));
                         if p.optional {
                             return format!("{}_core", p.name);
                         } else if p.is_ref && p.is_mut {
@@ -113,19 +123,28 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_function(
                         && !opaque_types.contains(inner_name.as_str()) {
                             let inner_ty = resolve_core_type_path(inner_name, types_by_name, core_import);
                             let core_ty = format!("Vec<{}>", inner_ty);
-                            let deser_line = if func.error_type.is_some() {
-                                format!(
-                                    "let {}_core: {} = {}.map(|s| serde_json::from_str::<{}>(&s).map_err(|e| e.to_string())).transpose()?.unwrap_or_default();",
-                                    p.name, core_ty, p.name, core_ty
+                            deser_lines.push(render_fallible_deser_line(
+                                &p.name,
+                                &format!("{}_core_option", p.name),
+                                &core_ty,
+                                true,
+                                &func.name,
+                            ));
+                            deser_lines.push(
+                                template_env::render(
+                                    "rust_let_binding.jinja",
+                                    minijinja::context! {
+                                        var_name => if p.is_ref && p.is_mut { format!("mut {}_core", p.name) } else { format!("{}_core", p.name) },
+                                        var_type => &core_ty,
+                                        expr => &format!("{}_core_option.unwrap_or_default()", p.name),
+                                    },
                                 )
-                            } else {
-                                format!(
-                                    "let {}_core: {} = {}.and_then(|s| serde_json::from_str::<{}>(&s).ok()).unwrap_or_default();",
-                                    p.name, core_ty, p.name, core_ty
-                                )
-                            };
-                            deser_lines.push(deser_line);
-                            return if p.is_ref {
+                                .trim_end()
+                                .to_string(),
+                            );
+                            return if p.is_ref && p.is_mut {
+                                format!("&mut {}_core", p.name)
+                            } else if p.is_ref {
                                 format!("&{}_core", p.name)
                             } else {
                                 format!("{}_core", p.name)
@@ -207,15 +226,21 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_function(
                     }
                     TypeRef::Json => {
                         if p.optional {
-                            deser_lines.push(format!(
-                                "let {}_json: Option<serde_json::Value> = {}.map(|s| serde_json::from_str(&s)).transpose().map_err(|e| e.to_string())?;",
-                                p.name, p.name
+                            deser_lines.push(render_fallible_deser_line(
+                                &p.name,
+                                &format!("{}_json", p.name),
+                                "serde_json::Value",
+                                true,
+                                &func.name,
                             ));
                             format!("{}_json", p.name)
                         } else {
-                            deser_lines.push(format!(
-                                "let {}_json: serde_json::Value = serde_json::from_str(&{}).map_err(|e| e.to_string())?;",
-                                p.name, p.name
+                            deser_lines.push(render_fallible_deser_line(
+                                &p.name,
+                                &format!("{}_json", p.name),
+                                "serde_json::Value",
+                                false,
+                                &func.name,
                             ));
                             format!("{}_json", p.name)
                         }
@@ -273,7 +298,11 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_function(
             render_result_body(&preamble, &core_call, &wrap)
         } else {
             let wrap = gen_rustler_wrap_return(&core_call, &func.return_type, "", opaque_types, func.returns_ref);
-            render_wrapped_body(&preamble, &wrap)
+            if deserialization_introduces_result {
+                render_wrapped_body(&preamble, &render_ok_expression(&wrap))
+            } else {
+                render_wrapped_body(&preamble, &wrap)
+            }
         }
     } else if !func.sanitized && func.error_type.is_some() {
         let mut deser_lines: Vec<String> = Vec::new();
@@ -287,10 +316,12 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_function(
                     }
                     if default_types.contains(n) {
                         let core_ty = resolve_core_type_path(n, types_by_name, core_import);
-                        deser_lines.push(render_deser_line(
-                            "default_deser_with_error.rs.jinja",
+                        deser_lines.push(render_fallible_deser_line(
                             &p.name,
+                            &format!("{}_core", p.name),
                             &core_ty,
+                            true,
+                            &func.name,
                         ));
                         return if p.optional {
                             format!("{}_core", p.name)

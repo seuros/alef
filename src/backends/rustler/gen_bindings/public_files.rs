@@ -1,5 +1,6 @@
 use crate::backends::rustler::gen_bindings::helpers::{
-    gen_elixir_enum_module_with_known_types, gen_elixir_opaque_module, gen_elixir_struct_module, gen_native_ex,
+    gen_elixir_enum_module_with_known_types, gen_elixir_opaque_module_with_types, gen_elixir_struct_module,
+    gen_native_ex,
 };
 use crate::backends::rustler::template_env;
 use crate::core::backend::GeneratedFile;
@@ -184,12 +185,19 @@ fn push_opaque_module_files(
     output_dir: &str,
     files: &mut Vec<GeneratedFile>,
 ) {
+    let default_types: AHashSet<String> = api
+        .types
+        .iter()
+        .filter(|typ| typ.has_default && !typ.is_opaque)
+        .map(|typ| typ.name.clone())
+        .collect();
     for typ in api
         .types
         .iter()
         .filter(|typ| typ.is_opaque && !typ.is_trait && !context.exclude_types.contains(typ.name.as_str()))
     {
-        let opaque_content = gen_elixir_opaque_module(typ, context.app_module, config);
+        let opaque_content =
+            gen_elixir_opaque_module_with_types(typ, context.app_module, config, context.opaque_types, &default_types);
         let file_name = format!("{}.ex", typ.name.to_snake_case());
         files.push(GeneratedFile {
             path: PathBuf::from(output_dir)

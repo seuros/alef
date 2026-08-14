@@ -115,7 +115,7 @@ fn enum_return_api() -> ApiSurface {
 }
 
 #[test]
-fn test_emits_enum_to_string_for_pointer_return_enum() {
+fn test_emits_enum_to_string_for_scalar_handle_return_enum() {
     let api = enum_return_api();
     let config = sample_config();
     let backend = FfiBackend;
@@ -138,8 +138,8 @@ fn test_emits_enum_to_string_for_pointer_return_enum() {
         "expected pub unsafe extern \"C\" fn my_lib_color_to_string in emitted lib.rs"
     );
     assert!(
-        lib.content.contains("ptr: *const my_lib::Color)"),
-        "to_string should accept *const Color"
+        lib.content.contains("fn my_lib_color_to_string(handle: AlefHandle)"),
+        "to_string should accept the same scalar AlefHandle my_lib_current_color returns, not a Color pointer"
     );
     assert!(
         lib.content.contains("-> *mut c_char"),

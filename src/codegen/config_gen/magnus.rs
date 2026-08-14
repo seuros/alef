@@ -1,6 +1,6 @@
 use crate::core::ir::{DefaultValue, FieldDef, TypeDef, TypeRef};
 
-use super::shared::{constructor_fields, default_value_for_field, use_unwrap_or_default};
+use super::shared::{constructor_fields, default_value_for_field_in_type, use_unwrap_or_default};
 
 const MAGNUS_MAX_ARITY: usize = 15;
 
@@ -65,10 +65,10 @@ fn gen_magnus_hash_constructor(typ: &TypeDef, type_mapper: &dyn Fn(&TypeRef) -> 
                         use heck::ToSnakeCase;
                         format!("\"{}\".to_string()", variant.to_snake_case())
                     } else {
-                        default_value_for_field(field, "rust")
+                        default_value_for_field_in_type(field, "rust", typ)
                     }
                 } else {
-                    default_value_for_field(field, "rust")
+                    default_value_for_field_in_type(field, "rust", typ)
                 };
                 format!(
                     "kwargs.get(ruby.to_symbol(\"{}\")).and_then(|v| {}::try_convert(v).ok()).unwrap_or({}),",

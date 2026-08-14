@@ -7,7 +7,7 @@ use crate::backends::pyo3::gen_bindings::enums::sanitize_python_doc;
 use crate::backends::pyo3::type_map::python_type;
 use crate::core::config::{AdapterPattern, ResolvedCrateConfig, TraitBridgeConfig};
 use crate::core::hash::{self, CommentStyle};
-use crate::core::ir::{ApiSurface, TypeRef};
+use crate::core::ir::{ApiSurface, MethodDef, ParamDef, TypeDef, TypeRef};
 
 type OptionsFieldBridges<'a> = std::collections::HashMap<&'a str, (&'a str, Option<&'a str>, Option<&'a str>)>;
 
@@ -143,6 +143,30 @@ pub(super) fn constructor_param_type(ty: &TypeRef, api: &ApiSurface) -> String {
     }
 }
 
+/// Return `typ` unchanged, or a clone carrying a synthetic `from_json` static method entry when
+/// `gen_bindings::mod` would inject that staticmethod into the compiled `#[pymethods]` block
+/// (see [`crate::backends::pyo3::gen_bindings::type_has_from_json`]). Routing through a real
+/// `MethodDef` lets `gen_method_stub` render the declaration the same way it renders every other
+/// staticmethod, instead of a hand-written stub line that could drift from that format. ~keep
+fn with_from_json_stub<'a>(typ: &'a TypeDef, api: &ApiSurface, has_serde: bool) -> std::borrow::Cow<'a, TypeDef> {
+    if !crate::backends::pyo3::gen_bindings::type_has_from_json(typ, api, has_serde) {
+        return std::borrow::Cow::Borrowed(typ);
+    }
+    let mut augmented = typ.clone();
+    augmented.methods.push(MethodDef {
+        name: "from_json".to_string(),
+        params: vec![ParamDef {
+            name: "json_str".to_string(),
+            ty: TypeRef::String,
+            ..Default::default()
+        }],
+        return_type: TypeRef::Named(typ.name.clone()),
+        is_static: true,
+        ..Default::default()
+    });
+    std::borrow::Cow::Owned(augmented)
+}
+
 pub fn gen_stubs(
     api: &ApiSurface,
     trait_bridges: &[TraitBridgeConfig],
@@ -200,6 +224,8 @@ pub fn gen_stubs(
         .filter(|typ| !typ.is_trait && !typ.binding_excluded)
         .partition(|typ| typ.is_opaque);
 
+    let has_serde = crate::backends::pyo3::gen_bindings::crate_has_serde(config);
+
     let mut body_lines: Vec<String> = Vec::new();
 
     let mut protocol_trait_names: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -223,8 +249,9 @@ pub fn gen_stubs(
     }
 
     for typ in &non_opaque {
+        let typ_for_stub = with_from_json_stub(typ, api, has_serde);
         body_lines.push(gen_type_stub(
-            typ,
+            &typ_for_stub,
             api,
             config,
             &capsule_names,
@@ -428,7 +455,7 @@ pub(super) fn substitute_capsule_type(type_str: &str, capsule_names: &std::colle
 
 #[cfg(test)]
 mod tests {
-    use super::gen_stubs;
+    use super::{gen_stubs, gen_type_stub, with_from_json_stub};
     use crate::core::config::ResolvedCrateConfig;
     use crate::core::config::new_config::NewAlefConfig;
     use crate::core::ir::{ApiSurface, FieldDef, MethodDef, ReceiverKind, TypeDef, TypeRef};
@@ -490,6 +517,95 @@ module_name = "test_lib"
         assert_eq!(
             methods, 0,
             "the same-named method stub must be dropped, found {methods}:\n{stub}"
+        );
+    }
+
+    fn widget_request() -> TypeDef {
+        TypeDef {
+            name: "WidgetRequest".to_string(),
+            rust_path: "my_lib::WidgetRequest".to_string(),
+            has_serde: true,
+            fields: vec![FieldDef {
+                name: "label".to_string(),
+                ty: TypeRef::String,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn render_type_stub(typ: &TypeDef, api: &ApiSurface) -> String {
+        gen_type_stub(
+            typ,
+            api,
+            &python_config(),
+            &std::collections::HashSet::new(),
+            &super::OptionsFieldBridges::default(),
+            false,
+            &std::collections::HashMap::new(),
+        )
+    }
+
+    #[test]
+    fn type_stub_declares_from_json_for_a_convertible_serde_type() {
+        let typ = widget_request();
+        let api = ApiSurface {
+            types: vec![typ.clone()],
+            ..Default::default()
+        };
+
+        let typ_for_stub = with_from_json_stub(&typ, &api, true);
+        assert!(
+            typ_for_stub
+                .methods
+                .iter()
+                .any(|m| m.name == "from_json" && m.is_static),
+            "expected a synthetic from_json method entry"
+        );
+
+        let stub = render_type_stub(&typ_for_stub, &api);
+        assert!(
+            stub.contains("    @staticmethod\n    def from_json(json_str: str) -> WidgetRequest: ..."),
+            "expected a from_json staticmethod declaration:\n{stub}"
+        );
+    }
+
+    #[test]
+    fn type_stub_omits_from_json_when_crate_has_no_serde() {
+        let typ = widget_request();
+        let api = ApiSurface {
+            types: vec![typ.clone()],
+            ..Default::default()
+        };
+
+        let typ_for_stub = with_from_json_stub(&typ, &api, false);
+        assert!(!typ_for_stub.methods.iter().any(|m| m.name == "from_json"));
+
+        let stub = render_type_stub(&typ_for_stub, &api);
+        assert!(
+            !stub.contains("def from_json"),
+            "unexpected from_json declaration:\n{stub}"
+        );
+    }
+
+    #[test]
+    fn type_stub_omits_from_json_for_an_opaque_type() {
+        let typ = TypeDef {
+            is_opaque: true,
+            ..widget_request()
+        };
+        let api = ApiSurface {
+            types: vec![typ.clone()],
+            ..Default::default()
+        };
+
+        let typ_for_stub = with_from_json_stub(&typ, &api, true);
+        assert!(!typ_for_stub.methods.iter().any(|m| m.name == "from_json"));
+
+        let stub = render_type_stub(&typ_for_stub, &api);
+        assert!(
+            !stub.contains("def from_json"),
+            "unexpected from_json declaration:\n{stub}"
         );
     }
 }

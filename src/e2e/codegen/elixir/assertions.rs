@@ -233,7 +233,7 @@ pub(super) fn render_assertion(
                     }
                 }
                 "not_empty" => {
-                    let _ = writeln!(out, "      assert {expr} != []");
+                    let _ = writeln!(out, "      assert {expr} not in [nil, \"\", [], %{{}}]");
                 }
                 "is_empty" => {
                     let _ = writeln!(out, "      assert {expr} == []");
@@ -323,16 +323,6 @@ pub(super) fn render_assertion(
     } else {
         field_expr.clone()
     };
-    let trimmed_field_expr = if is_numeric {
-        field_expr.clone()
-    } else if field_is_display_as_text {
-        // For display_as_text fields, coerced_field_expr already extracts .text,
-        // so we just trim it without wrapping in String.trim again
-        format!("String.trim({coerced_field_expr})")
-    } else {
-        format!("String.trim({coerced_field_expr})")
-    };
-
     let field_is_array = assertion
         .field
         .as_deref()
@@ -345,7 +335,7 @@ pub(super) fn render_assertion(
                 let elixir_val = json_to_elixir(expected);
                 let is_string_expected = expected.is_string();
                 if is_string_expected && !is_numeric {
-                    let _ = writeln!(out, "      assert {trimmed_field_expr} == {elixir_val}");
+                    let _ = writeln!(out, "      assert {coerced_field_expr} == {elixir_val}");
                 } else if field_is_enum {
                     let _ = writeln!(out, "      assert {coerced_field_expr} == {elixir_val}");
                 } else {
@@ -404,13 +394,13 @@ pub(super) fn render_assertion(
             }
         }
         "not_empty" => {
-            let _ = writeln!(out, "      assert {field_expr} != \"\"");
+            let _ = writeln!(out, "      assert {field_expr} not in [nil, \"\", [], %{{}}]");
         }
         "is_empty" => {
             if is_numeric {
                 let _ = writeln!(out, "      assert {field_expr} == 0");
             } else {
-                let _ = writeln!(out, "      assert is_nil({field_expr}) or {trimmed_field_expr} == \"\"");
+                let _ = writeln!(out, "      assert is_nil({field_expr}) or {coerced_field_expr} == \"\"");
             }
         }
         "contains_any" => {
@@ -612,6 +602,164 @@ pub(super) fn build_elixir_method_call(
 mod tests {
     use crate::e2e::field_access::FieldResolver;
     use std::collections::{HashMap, HashSet};
+
+    use super::render_assertion;
+    use crate::e2e::fixture::Assertion;
+
+    fn empty_resolver() -> FieldResolver {
+        FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+    }
+
+    /// Regression test for a one-sided-trim bug: `String.trim/1` wrapped the actual value
+    /// while the fixture `expected` literal was emitted verbatim. Fixture expectations may
+    /// legitimately end in `\n`, so trimming only one side made those assertions impossible
+    /// to satisfy — and trimming both would silently mask real trailing-whitespace
+    /// regressions. Equals is exact: neither side is normalized.
+    #[test]
+    fn render_assertion_equals_string_compares_exactly_without_trim() {
+        let resolver = empty_resolver();
+        let assertion = Assertion {
+            assertion_type: "equals".to_string(),
+            field: None,
+            value: Some(serde_json::Value::String("hello\n".into())),
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            "Sample",
+            &HashSet::new(),
+            &HashMap::new(),
+            true,
+            false,
+        );
+        assert!(
+            !out.contains("String.trim("),
+            "equals must not trim either side; got: {out}"
+        );
+        assert!(out.contains("assert result =="), "got: {out}");
+    }
+
+    /// Control for the trim fix: the tightened contract must still DISCRIMINATE values that
+    /// differ only in trailing whitespace. If either side were normalized, the emitted
+    /// assertion for "hello\n" and for "hello" would be identical and a real trailing-newline
+    /// regression would pass unnoticed.
+    /// Control for the `is_empty` leniency: Elixir used to emit `String.trim(actual) == ""`,
+    /// which accepts a whitespace-only value like "  \n". Every other backend rejects it
+    /// (python emits a falsy check, typescript a `.length` check), so the same fixture
+    /// passed in Elixir and failed elsewhere. The emitted check must compare the real value.
+    #[test]
+    fn render_assertion_is_empty_does_not_trim_actual_value() {
+        let resolver = empty_resolver();
+        let assertion = Assertion {
+            assertion_type: "is_empty".to_string(),
+            field: None,
+            value: None,
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            "Sample",
+            &HashSet::new(),
+            &HashMap::new(),
+            true,
+            false,
+        );
+        assert!(
+            !out.contains("String.trim("),
+            "is_empty must not trim the actual value; got: {out}"
+        );
+        assert_eq!(
+            out, "      assert is_nil(result) or result == \"\"\n",
+            "emitted is_empty check drifted: {out}"
+        );
+    }
+
+    #[test]
+    fn render_assertion_equals_still_discriminates_trailing_whitespace() {
+        let render_for = |value: &str| {
+            let resolver = empty_resolver();
+            let assertion = Assertion {
+                assertion_type: "equals".to_string(),
+                field: None,
+                value: Some(serde_json::Value::String(value.into())),
+                ..Default::default()
+            };
+            let mut out = String::new();
+            render_assertion(
+                &mut out,
+                &assertion,
+                "result",
+                &resolver,
+                "Sample",
+                &HashSet::new(),
+                &HashMap::new(),
+                true,
+                false,
+            );
+            out
+        };
+        let emitted = render_for("hello\n");
+        // The actual side must be the bare expression: any normalizing call (trim/strip/
+        // case-folding) wrapped around it would silently accept a mismatched value.
+        assert_eq!(
+            emitted, "      assert result == \"hello\\n\"\n",
+            "emitted assertion drifted: {emitted}"
+        );
+        // And a value differing only by the trailing newline must still produce a
+        // different expectation, proving trailing whitespace is discriminated.
+        assert_ne!(
+            emitted,
+            render_for("hello"),
+            "trailing newline must still change the emitted assertion"
+        );
+    }
+
+    fn render_not_empty(field: Option<&str>, is_streaming: bool) -> String {
+        let assertion = Assertion {
+            assertion_type: "not_empty".to_string(),
+            field: field.map(str::to_string),
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &empty_resolver(),
+            "Sample",
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            is_streaming,
+        );
+        out
+    }
+
+    #[test]
+    fn not_empty_rejects_every_empty_shape_for_values_and_streams() {
+        assert_eq!(
+            render_not_empty(None, false).trim(),
+            "assert result not in [nil, \"\", [], %{}]"
+        );
+        assert_eq!(
+            render_not_empty(Some("chunks"), true).trim(),
+            "assert result not in [nil, \"\", [], %{}]"
+        );
+    }
 
     #[test]
     fn display_as_text_field_accessor_emits_text_property_access() {

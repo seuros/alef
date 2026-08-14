@@ -1,6 +1,6 @@
 use crate::codegen::conversions::helpers::type_discovery::field_references_excluded_type;
 use crate::codegen::shared::binding_fields;
-use crate::core::ir::{ApiSurface, EnumDef, FieldDef, TypeDef, TypeRef};
+use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, FieldDef, TypeDef, TypeRef};
 use ahash::{AHashMap, AHashSet};
 
 /// Build the set of types that can have core→binding From safely generated.
@@ -189,6 +189,21 @@ pub fn can_generate_conversion(typ: &TypeDef, convertible: &AHashSet<String>) ->
     convertible.contains(&typ.name)
 }
 
+/// Whether the pyo3 backend gives `typ` a `from_json` staticmethod. Requires all three,
+/// independently necessary, conditions: `typ` itself derives `serde::Deserialize`
+/// (`TypeDef::has_serde` — without it there is no `Deserialize` impl to parse into), the
+/// binding crate has `serde` + `serde_json` available (`crate_has_serde` — without it neither
+/// `serde_json::from_str` nor the derive macros compile), and `typ` is in the core<->binding
+/// convertible set (opaque types and types with inconvertible fields are excluded).
+///
+/// This is the single predicate shared by pyo3's raw-text `#[pymethods]` injection, its `.pyi`
+/// stub declaration, and the e2e python snippet emitter's `from_json()` call-site selection —
+/// call it from all three instead of re-checking the conditions separately, so the compiled
+/// extension, its stub, and the doc snippets that call `from_json()` can never drift apart. ~keep
+pub fn pyo3_from_json_eligible(typ: &TypeDef, crate_has_serde: bool, convertible_types: &AHashSet<String>) -> bool {
+    crate_has_serde && typ.has_serde && convertible_types.contains(&typ.name)
+}
+
 pub(crate) fn is_field_convertible(
     ty: &TypeRef,
     convertible_enums: &AHashSet<&str>,
@@ -305,6 +320,20 @@ pub fn is_tuple_variant(fields: &[FieldDef]) -> bool {
             .name
             .strip_prefix('_')
             .is_some_and(|rest: &str| rest.chars().all(|c: char| c.is_ascii_digit()))
+}
+
+/// Returns true if serde represents `variant` in tuple form `Variant(T)` rather than
+/// struct form `Variant { _0: T }`.
+///
+/// Serde uses tuple form for BOTH untagged enums and adjacently-tagged ones (`tag` +
+/// `content`). A backend whose enum body emitter follows serde here must use this same
+/// predicate for its conversion match arms, or the definition and the `From` impls
+/// disagree in shape and rustc rejects them with E0559 / E0769.
+///
+/// Project-agnostic on purpose: the emitter and the conversion layer must not each
+/// carry their own copy of this rule. ~keep
+pub fn variant_emits_tuple_form(enum_def: &EnumDef, variant: &EnumVariant) -> bool {
+    variant.is_tuple && (enum_def.serde_untagged || enum_def.serde_content.is_some())
 }
 
 /// Returns true if a TypeDef represents a newtype struct (single unnamed field `_0`).

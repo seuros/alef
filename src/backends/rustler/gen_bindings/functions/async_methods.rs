@@ -1,5 +1,5 @@
 use super::args::gen_rustler_method_call_args;
-use super::default_deserialization::build_default_deser_preamble;
+use super::default_deserialization::{build_default_deser_preamble, render_json_string_param};
 use super::shared::{render_async_body, render_method_call};
 use crate::backends::rustler::gen_bindings::types::gen_rustler_wrap_return;
 use crate::backends::rustler::template_env;
@@ -37,6 +37,11 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_async_method(
     };
 
     for p in &method.params {
+        if matches!(&p.ty, TypeRef::Vec(inner) if matches!(inner.as_ref(), TypeRef::Named(name) if !opaque_types.contains(name)))
+        {
+            params.push(render_json_string_param(&p.name));
+            continue;
+        }
         if let TypeRef::Named(n) = &p.ty {
             if opaque_types.contains(n) {
                 params.push(format!("{}: rustler::ResourceArc<{}>", p.name, n));
@@ -82,9 +87,10 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_async_method(
 
     let deser_preamble = build_default_deser_preamble(
         &method.params,
+        opaque_types,
         default_types,
         core_import,
-        method.error_type.is_some(),
+        &method_fn_name,
         types_by_name,
     );
 

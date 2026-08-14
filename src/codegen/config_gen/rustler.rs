@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::core::ir::{TypeDef, TypeRef};
 
-use super::shared::{constructor_fields, default_value_for_field, use_unwrap_or_default};
+use super::shared::{constructor_fields, default_value_for_field_in_type, use_unwrap_or_default};
 
 pub fn gen_rustler_kwargs_constructor_with_exclude(
     typ: &TypeDef,
@@ -20,7 +20,7 @@ pub fn gen_rustler_kwargs_constructor_with_exclude(
                     field.name
                 )
             } else {
-                let default_str = default_value_for_field(field, "rust");
+                let default_str = default_value_for_field_in_type(field, "rust", typ);
                 let is_enum_variant_default = default_str.contains("::") || default_str.starts_with("\"");
 
                 if (is_enum_variant_default && matches!(&field.ty, TypeRef::String | TypeRef::Char))
@@ -66,7 +66,7 @@ pub fn gen_rustler_kwargs_constructor(typ: &TypeDef, _type_mapper: &dyn Fn(&Type
                     field.name
                 )
             } else {
-                let default_str = default_value_for_field(field, "rust");
+                let default_str = default_value_for_field_in_type(field, "rust", typ);
                 let is_enum_variant_default = default_str.contains("::") || default_str.starts_with("\"");
 
                 let unwrap_default = (is_enum_variant_default && matches!(&field.ty, TypeRef::String | TypeRef::Char))

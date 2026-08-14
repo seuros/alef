@@ -1,0 +1,11 @@
+    fun {{ method_name }}({{ params }}): {{ host_type }} {
+        val capsulePtr = {{ bridge_call }}
+{% if optional %}
+        return if (capsulePtr == 0L) null else {{ construct_expr }}
+{% else %}
+        if (capsulePtr == 0L) {
+            throw {{ exception_type }}({{ error_message }})
+        }
+        return {{ construct_expr }}
+{% endif %}
+    }

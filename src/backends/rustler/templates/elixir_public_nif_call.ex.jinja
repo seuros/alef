@@ -1,0 +1,13 @@
+{% if unwrap_result %}{% if multiline %}{{ indent }}case {{ native_mod }}.{{ func_name }}(
+{{ indent }}  {{ args }}
+{{ indent }}) do
+{% else %}{{ indent }}case {{ native_mod }}.{{ func_name }}({{ args }}) do
+{% endif %}
+{{ indent }}  {:ok, value} -> value
+{{ indent }}  {:error, error} -> raise ArgumentError, error
+{{ indent }}end
+{% elif multiline %}{{ indent }}{{ native_mod }}.{{ func_name }}(
+{{ indent }}  {{ args }}
+{{ indent }})
+{% else %}{{ indent }}{{ native_mod }}.{{ func_name }}({{ args }})
+{% endif %}

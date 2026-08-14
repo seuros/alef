@@ -162,6 +162,7 @@ fn capsule_forwarder_emits_opaque_pointer_reconstruction() {
         package: String::new(),
         package_version: String::new(),
         construct_expr: "MyLib.Language({ptr})".to_string(),
+        ..Default::default()
     };
     let mut out = String::new();
     emit_capsule_free_function_forwarder(&func, "GetLanguage", &cfg, &mut out);
@@ -183,6 +184,7 @@ fn capsule_forwarder_errors_when_construct_expr_empty() {
         package: String::new(),
         package_version: String::new(),
         construct_expr: String::new(),
+        ..Default::default()
     };
     let mut out = String::new();
     emit_capsule_free_function_forwarder(&func, "GetLanguage", &cfg, &mut out);
@@ -297,6 +299,7 @@ fn capsule_forwarder_errors_when_host_type_empty() {
         package: String::new(),
         package_version: String::new(),
         construct_expr: "MyLib.Language({ptr})".to_string(),
+        ..Default::default()
     };
     let mut out = String::new();
     emit_capsule_free_function_forwarder(&func, "GetLanguage", &cfg, &mut out);

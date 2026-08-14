@@ -765,3 +765,235 @@ fn test_serde_default_bare_placeholder_falls_through_to_type_zero() {
     assert_eq!(default_value_for_field(&field, "rust"), "String::new()");
     assert_eq!(default_value_for_field(&field, "python"), "\"\"");
 }
+
+/// A `#[serde(default = "path")]` function is private to the crate that declares it and
+/// is often `#[cfg(feature = "serde")]`-gated, so a generated binding crate cannot call
+/// it. Emitting `path()` produced Rust that did not compile (E0425). Every language must
+/// fall back to a value it can actually name.
+///
+/// This exercises `default_value_for_field` directly, i.e. the no-owning-type-context
+/// path. Every production "rust"-emitting caller (Magnus, PHP, NAPI, Rustler) instead goes
+/// through `default_value_for_field_in_type`, which recovers the real source-crate value —
+/// see `function_call_default_delegates_to_source_deserialize_when_type_context_is_known`
+/// below.
+#[test]
+fn serde_default_function_is_never_emitted_as_a_callable_in_generated_rust() {
+    let field = FieldDef {
+        version: Default::default(),
+        name: "row_span".to_string(),
+        ty: TypeRef::Primitive(PrimitiveType::U32),
+        optional: false,
+        default: None,
+        doc: String::new(),
+        sanitized: false,
+        is_boxed: false,
+        type_rust_path: None,
+        cfg: None,
+        typed_default: Some(DefaultValue::FunctionCall("default_span".to_string())),
+        core_wrapper: CoreWrapper::None,
+        vec_inner_core_wrapper: CoreWrapper::None,
+        newtype_wrapper: None,
+        serde_rename: None,
+        serde_flatten: false,
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        original_type: None,
+    };
+
+    // A caller with no `TypeDef` cannot recover the real value, so it must FAIL rather than
+    // emit anything: `default_span()` does not compile from a generated crate, and substituting
+    // `Default::default()` compiles while silently shipping `0` where the source crate says `1`.
+    // A wrong-but-compiling default is far harder to find than a generation error. ~keep
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        default_value_for_field(&field, "rust")
+    }))
+    .expect_err("generated Rust must not silently substitute a value for an unresolvable serde default fn");
+
+    let message = failure
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| failure.downcast_ref::<&str>().copied())
+        .unwrap_or_default();
+    assert!(
+        message.contains("default_span") && message.contains("row_span"),
+        "the failure must name the uncallable function and the field so the author can act on it: {message}"
+    );
+
+    for language in ["python", "ruby", "go"] {
+        let rendered = default_value_for_field(&field, language);
+        assert!(
+            !rendered.contains("default_span"),
+            "{language} must not reference the source-crate default fn: {rendered}"
+        );
+    }
+}
+
+/// Shape of `html-to-markdown`'s `GridCell`: no `#[derive(Default)]`, but
+/// `Serialize`/`Deserialize`, with `row_span`/`col_span` behind
+/// `#[serde(default = "default_span")]` (private, `#[cfg(feature = "serde")]`-gated) and
+/// `content`/`row`/`col` genuinely required. `is_header` carries a bare `#[serde(default)]`.
+fn grid_cell_type() -> TypeDef {
+    let content = FieldDef {
+        ..make_field("content", TypeRef::String)
+    };
+    let row = FieldDef {
+        ..make_field("row", TypeRef::Primitive(PrimitiveType::U32))
+    };
+    let col = FieldDef {
+        ..make_field("col", TypeRef::Primitive(PrimitiveType::U32))
+    };
+    let row_span = FieldDef {
+        typed_default: Some(DefaultValue::FunctionCall("default_span".to_string())),
+        ..make_field("row_span", TypeRef::Primitive(PrimitiveType::U32))
+    };
+    let col_span = FieldDef {
+        typed_default: Some(DefaultValue::FunctionCall("default_span".to_string())),
+        ..make_field("col_span", TypeRef::Primitive(PrimitiveType::U32))
+    };
+    let is_header = FieldDef {
+        default: Some("/* serde(default) */".to_string()),
+        ..make_field("is_header", TypeRef::Primitive(PrimitiveType::Bool))
+    };
+
+    TypeDef {
+        name: "GridCell".to_string(),
+        rust_path: "html_to_markdown::types::tables::GridCell".to_string(),
+        original_rust_path: String::new(),
+        fields: vec![content, row, col, row_span, col_span, is_header],
+        methods: vec![],
+        is_opaque: false,
+        is_clone: true,
+        is_copy: false,
+        doc: String::new(),
+        cfg: None,
+        is_trait: false,
+        has_default: false,
+        has_stripped_cfg_fields: false,
+        is_return_type: false,
+        serde_rename_all: None,
+        has_serde: true,
+        super_traits: vec![],
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        is_variant_wrapper: false,
+        has_lifetime_params: false,
+        has_private_fields: false,
+        version: Default::default(),
+    }
+}
+
+/// `default_value_for_field_in_type` is what every "rust"-emitting caller (Magnus, PHP,
+/// NAPI, Rustler) must use. Given the owning `TypeDef`, it must recover `default_span()`'s
+/// real value (1) instead of silently substituting `u32::default()` (0) — the exact
+/// regression the reviewer rejected in the `Default::default()` fallback.
+#[test]
+fn function_call_default_delegates_to_source_deserialize_when_type_context_is_known() {
+    let typ = grid_cell_type();
+    let row_span = typ.fields.iter().find(|f| f.name == "row_span").unwrap();
+
+    let rendered = default_value_for_field_in_type(row_span, "rust", &typ);
+
+    assert_eq!(
+        rendered,
+        "serde_json::from_str::<html_to_markdown::types::tables::GridCell>(r#\"{\"content\":\"\",\"row\":0,\"col\":0}\"#)\
+         .expect(\"alef-generated default JSON for `GridCell` failed to deserialize\").row_span",
+        "must build a JSON stub of only the genuinely-required siblings and project the real field"
+    );
+    assert!(
+        !rendered.contains("default_span"),
+        "the uncallable source function must never leak into generated Rust: {rendered}"
+    );
+    assert!(
+        !rendered.contains("Default::default()"),
+        "a type-context-aware caller must not silently substitute the field type's zero value: {rendered}"
+    );
+}
+
+/// Proves the empty-field-deserialize technique itself is sound, independent of codegen:
+/// omitting a `#[serde(default = "path")]` field from the JSON and deserializing through
+/// the real type's `Deserialize` impl recovers `path()`'s actual result, not the field
+/// type's `Default::default()`. This is the exact discrepancy (`default_span() == 1` vs.
+/// `u32::default() == 0`) that made the rejected commit's substitution wrong.
+#[test]
+fn empty_field_deserialize_recovers_the_real_serde_default_not_the_type_zero_value() {
+    #[derive(serde::Serialize, serde::Deserialize)]
+    struct RealGridCell {
+        content: String,
+        row: u32,
+        col: u32,
+        #[serde(default = "real_default_span")]
+        row_span: u32,
+        #[serde(default = "real_default_span")]
+        col_span: u32,
+        #[serde(default)]
+        is_header: bool,
+    }
+    fn real_default_span() -> u32 {
+        1
+    }
+
+    let recovered: RealGridCell = serde_json::from_str(r#"{"content":"","row":0,"col":0}"#)
+        .expect("the JSON stub built from only the required siblings must deserialize");
+
+    assert_eq!(
+        recovered.row_span, 1,
+        "must recover the source crate's real default, not the field type's zero value"
+    );
+    assert_ne!(
+        recovered.row_span,
+        u32::default(),
+        "u32::default() (0) is exactly the wrong value the rejected commit silently substituted"
+    );
+}
+
+/// When a required sibling field's type has no safe JSON placeholder (a nested named
+/// type here), delegation is not possible, and generation must fail loudly rather than
+/// guess. The message must name the crate, the type, the field being solved for, and the
+/// uncallable source function, so the failure is actionable.
+#[test]
+fn contextual_failure_names_crate_type_field_and_uncallable_function() {
+    let mut typ = grid_cell_type();
+    typ.fields.push(FieldDef {
+        ..make_field("owner", TypeRef::Named("Author".to_string()))
+    });
+    let row_span = typ.fields.iter().find(|f| f.name == "row_span").unwrap().clone();
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        default_value_for_field_in_type(&row_span, "rust", &typ)
+    }));
+
+    let panic_payload = result.expect_err("generation must fail contextually, not substitute a wrong value");
+    let message = panic_payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| panic_payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+        .expect("panic payload must be a string message");
+
+    for needle in ["html_to_markdown", "GridCell", "row_span", "default_span"] {
+        assert!(
+            message.contains(needle),
+            "contextual failure must name `{needle}`: {message}"
+        );
+    }
+}
+
+#[test]
+fn public_associated_default_bypasses_structural_deserialize_placeholders() {
+    let mut typ = grid_cell_type();
+    typ.name = "ClientConfig".to_string();
+    typ.rust_path = "sample_core::ClientConfig".to_string();
+    typ.fields.push(FieldDef {
+        ..make_field("nested", TypeRef::Named("RequiredSettings".to_string()))
+    });
+    let field = FieldDef {
+        typed_default: Some(DefaultValue::PublicFunctionCall(
+            "sample_core::NetworkPolicy::from_environment".to_string(),
+        )),
+        ..make_field("policy", TypeRef::Named("NetworkPolicy".to_string()))
+    };
+
+    assert_eq!(
+        default_value_for_field_in_type(&field, "rust", &typ),
+        "sample_core::NetworkPolicy::from_environment()"
+    );
+}

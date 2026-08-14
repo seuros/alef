@@ -200,7 +200,7 @@ fn gen_service_cs(api: &ApiSurface, service: &ServiceDef, namespace: &str, prefi
             service_snake,
             reg_method.to_snake_case()
         );
-        let arg_lines = handle_aware_arg_lines(&reg.metadata_params, api, "            ");
+        let arg_lines = handle_aware_arg_lines(&reg.metadata_params, api, "                ");
         out.push_str(&render(
             "service_registration_method.jinja",
             minijinja::context! {
@@ -220,7 +220,7 @@ fn gen_service_cs(api: &ApiSurface, service: &ServiceDef, namespace: &str, prefi
                 .unwrap_or_else(|| format!("Register a handler via the {} variant.", variant.name));
             let signature_params = metadata_param_decl_list(&variant.signature_params, api);
             let native_method = format!("{}_{}_{}", prefix.to_lowercase(), service_snake, variant_fn_name);
-            let arg_lines = handle_aware_arg_lines(&variant.signature_params, api, "            ");
+            let arg_lines = handle_aware_arg_lines(&variant.signature_params, api, "                ");
             out.push_str(&render(
                 "service_variant_registration_method.jinja",
                 minijinja::context! {
@@ -250,7 +250,7 @@ fn gen_service_cs(api: &ApiSurface, service: &ServiceDef, namespace: &str, prefi
             service_snake,
             ep_method.to_snake_case()
         );
-        let arg_lines = handle_aware_arg_lines(&ep.params, api, "            ");
+        let arg_lines = handle_aware_arg_lines(&ep.params, api, "                ");
         out.push_str(&render(
             "service_entrypoint_method.jinja",
             minijinja::context! {
@@ -746,6 +746,377 @@ mod tests {
         assert!(
             native.contains("IntPtr owner,") && native.contains("HandlerCallback callback,"),
             "expected variant P/Invoke to have owner and callback parameters"
+        );
+    }
+
+    // ~keep Regression coverage for 2cb44dc09, which reflowed the C# service templates onto
+    // run-together ~118-column lines and, in service_constructor.jinja, split a
+    // `{{ class_name }}` interpolation across three template lines. 647da87ea repaired four of
+    // the six service templates; these checks assert the contract that repair restored, proving
+    // each check fails on the corrupted template text (frozen below, not read via git at test
+    // time) and passes on the repaired one.
+
+    /// Every line that is, or belongs to, an XML doc-comment (`<summary>`/`<param>` tags) must
+    /// keep its leading `///`, and must not carry a second, stray `///` later on the line.
+    fn doc_comment_violations(rendered: &str) -> Vec<String> {
+        let mut violations = Vec::new();
+        let mut in_doc_block = false;
+        for (index, line) in rendered.lines().enumerate() {
+            let trimmed = line.trim();
+            let line_number = index + 1;
+            let is_doc_tag_line = trimmed.contains("<summary>")
+                || trimmed.contains("</summary>")
+                || trimmed.contains("<param")
+                || trimmed.contains("</param>");
+            if trimmed.contains("<summary>") && !trimmed.contains("</summary>") {
+                in_doc_block = true;
+            }
+            if is_doc_tag_line || in_doc_block {
+                if let Some(rest) = trimmed.strip_prefix("///") {
+                    if rest.contains("///") {
+                        violations.push(format!("line {line_number}: stray /// inside doc line: {line:?}"));
+                    }
+                } else {
+                    violations.push(format!(
+                        "line {line_number}: doc-comment line missing /// prefix: {line:?}"
+                    ));
+                }
+            }
+            if trimmed.contains("</summary>") {
+                in_doc_block = false;
+            }
+        }
+        violations
+    }
+
+    /// A statement-terminating `;` must be the last non-brace, non-whitespace content on its
+    /// line — otherwise a second statement has been crammed onto the same rendered line.
+    fn multi_statement_line_violations(rendered: &str) -> Vec<String> {
+        let mut violations = Vec::new();
+        for (index, line) in rendered.lines().enumerate() {
+            let Some(semicolon_position) = line.find(';') else {
+                continue;
+            };
+            let trailing = line[semicolon_position + 1..].trim_start_matches(|c: char| c == '}' || c.is_whitespace());
+            if !trailing.is_empty() {
+                violations.push(format!("line {}: statement continues after ';': {line:?}", index + 1));
+            }
+        }
+        violations
+    }
+
+    /// A `{{ ... }}` interpolation tag's delimiters must both land on the same line of the
+    /// **template source**. This deliberately does not check rendered output: a substituted
+    /// value (like `arg_lines`) legitimately embeds newlines by design, so only a source-level
+    /// split — the actual 2cb44dc09 defect — indicates corruption. ~keep
+    fn split_interpolation_violations(template_source: &str) -> Vec<String> {
+        let mut balance: i32 = 0;
+        let mut violations = Vec::new();
+        for (index, line) in template_source.lines().enumerate() {
+            if balance > 0 {
+                violations.push(format!(
+                    "line {}: continues a `{{{{ }}}}` interpolation opened on an earlier line",
+                    index + 1
+                ));
+            }
+            balance += line.matches("{{").count() as i32 - line.matches("}}").count() as i32;
+        }
+        violations
+    }
+
+    /// A member-access chain must not be broken so that one line ends on an identifier/`)` and
+    /// the next line opens with the `.` that continues it.
+    fn split_member_access_violations(rendered: &str) -> Vec<String> {
+        let lines: Vec<&str> = rendered.lines().collect();
+        let mut violations = Vec::new();
+        for index in 0..lines.len().saturating_sub(1) {
+            let current_ends_identifier = lines[index]
+                .trim_end()
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == ')');
+            let next_starts_dot = lines[index + 1].trim_start().starts_with('.');
+            if current_ends_identifier && next_starts_dot {
+                violations.push(format!(
+                    "line {}: member-access chain broken across lines: {:?} / {:?}",
+                    index + 1,
+                    lines[index],
+                    lines[index + 1]
+                ));
+            }
+        }
+        violations
+    }
+
+    /// Context values mirroring `gen_service_cs`'s own calls to `render`, so each of the six
+    /// service templates is exercised the same way production code exercises it.
+    fn service_template_render_cases() -> Vec<(&'static str, minijinja::Value)> {
+        vec![
+            (
+                "service_constructor.jinja",
+                minijinja::context! {
+                    service_name => "TestService",
+                    class_name => "TestService",
+                    params_decl => "string path",
+                    native_new => "my_lib_test_service_new",
+                },
+            ),
+            (
+                "service_entrypoint_method.jinja",
+                minijinja::context! {
+                    method_name => "run",
+                    return_type => "int",
+                    params_decl => "string addr",
+                    native_method => "my_lib_test_service_ep_run",
+                    arg_lines => ",\n                addr",
+                },
+            ),
+            (
+                "service_registration_method.jinja",
+                minijinja::context! {
+                    method_name => "add_handler",
+                    metadata_params => "string path",
+                    native_method => "my_lib_test_service_register_add_handler",
+                    arg_lines => ",\n                path",
+                },
+            ),
+            (
+                "service_variant_registration_method.jinja",
+                minijinja::context! {
+                    method_name => "Get",
+                    doc => "Register a GET handler.",
+                    signature_params => "string path",
+                    native_method => "my_lib_test_service_get",
+                    arg_lines => ",\n                path",
+                },
+            ),
+            (
+                "service_class_header.jinja",
+                minijinja::context! {
+                    namespace => "MyNamespace",
+                    service_name => "TestService",
+                    class_name => "TestService",
+                    native_free => "my_lib_test_service_free",
+                },
+            ),
+            ("service_dispose_method.jinja", minijinja::context! {}),
+        ]
+    }
+
+    const SERVICE_CONSTRUCTOR_SOURCE: &str = include_str!("../templates/service_constructor.jinja");
+    const SERVICE_ENTRYPOINT_SOURCE: &str = include_str!("../templates/service_entrypoint_method.jinja");
+    const SERVICE_REGISTRATION_SOURCE: &str = include_str!("../templates/service_registration_method.jinja");
+    const SERVICE_VARIANT_REGISTRATION_SOURCE: &str =
+        include_str!("../templates/service_variant_registration_method.jinja");
+    const SERVICE_CLASS_HEADER_SOURCE: &str = include_str!("../templates/service_class_header.jinja");
+    const SERVICE_DISPOSE_SOURCE: &str = include_str!("../templates/service_dispose_method.jinja");
+
+    #[test]
+    fn test_service_templates_retain_triple_slash_doc_comments() {
+        use crate::backends::csharp::template_env::render;
+
+        for (name, context) in service_template_render_cases() {
+            let rendered = render(name, context);
+            let violations = doc_comment_violations(&rendered);
+            assert!(violations.is_empty(), "{name}: {violations:?}\n---\n{rendered}");
+        }
+    }
+
+    #[test]
+    fn test_service_templates_enforce_one_statement_per_line() {
+        use crate::backends::csharp::template_env::render;
+
+        for (name, context) in service_template_render_cases() {
+            let rendered = render(name, context);
+            let violations = multi_statement_line_violations(&rendered);
+            assert!(violations.is_empty(), "{name}: {violations:?}\n---\n{rendered}");
+        }
+    }
+
+    #[test]
+    fn test_service_templates_no_split_member_access_chains() {
+        use crate::backends::csharp::template_env::render;
+
+        for (name, context) in service_template_render_cases() {
+            let rendered = render(name, context);
+            let violations = split_member_access_violations(&rendered);
+            assert!(violations.is_empty(), "{name}: {violations:?}\n---\n{rendered}");
+        }
+    }
+
+    #[test]
+    fn test_service_templates_source_has_no_split_interpolation_tags() {
+        for (name, source) in [
+            ("service_constructor.jinja", SERVICE_CONSTRUCTOR_SOURCE),
+            ("service_entrypoint_method.jinja", SERVICE_ENTRYPOINT_SOURCE),
+            ("service_registration_method.jinja", SERVICE_REGISTRATION_SOURCE),
+            (
+                "service_variant_registration_method.jinja",
+                SERVICE_VARIANT_REGISTRATION_SOURCE,
+            ),
+            ("service_class_header.jinja", SERVICE_CLASS_HEADER_SOURCE),
+            ("service_dispose_method.jinja", SERVICE_DISPOSE_SOURCE),
+        ] {
+            let violations = split_interpolation_violations(source);
+            assert!(violations.is_empty(), "{name}: {violations:?}");
+        }
+    }
+
+    #[test]
+    fn test_split_member_access_violations_detects_a_broken_chain() {
+        // None of the four templates 2cb44dc09 corrupted happened to break a member-access
+        // chain specifically, so this proves the checker itself works against a minimal
+        // fixture shaped like the corruption's style (a call target left dangling at line end).
+        let broken = "_safeHandle\n    .DangerousAddRef(ref handleAdded);";
+        let violations = split_member_access_violations(broken);
+        assert_eq!(violations.len(), 1, "{violations:?}");
+
+        let fine = "_safeHandle.DangerousAddRef(ref handleAdded);";
+        assert!(split_member_access_violations(fine).is_empty());
+    }
+
+    /// Mirrors `template_env::make_env`'s settings so the frozen corrupted-template literals
+    /// below render exactly as the real 2cb44dc09 templates would have.
+    fn render_frozen_template(source: &str, context: minijinja::Value) -> String {
+        let mut env = minijinja::Environment::new();
+        env.set_trim_blocks(true);
+        env.set_lstrip_blocks(true);
+        env.set_keep_trailing_newline(true);
+        env.add_template("frozen", source)
+            .expect("frozen template source is valid jinja");
+        env.get_template("frozen")
+            .expect("frozen template registered")
+            .render(context)
+            .expect("frozen template renders")
+    }
+
+    // Frozen at 2cb44dc09 via `git show 2cb44dc09:src/backends/csharp/templates/<name>.jinja`;
+    // 647da87ea repaired the live templates, so these literals are the only remaining record of
+    // the corruption these tests guard against. ~keep
+    const CORRUPTED_SERVICE_CONSTRUCTOR: &str = "/// <summary>\n  /// Create a new {{ service_name }}. ///\n</summary>\npublic {{ class_name }}({{ params_decl }}) { var handle = NativeMethods.{{ native_new }}(); if (handle == IntPtr.Zero) {\nthrow new InvalidOperationException(\"Native service constructor returned a null handle\"); } _safeHandle = new {{\n  class_name\n}}SafeHandle(handle); }\n";
+
+    const CORRUPTED_SERVICE_ENTRYPOINT: &str = "/// <summary>\n  /// {{ method_name }}. ///\n</summary>\npublic {{ return_type }} {{ method_name }}({{ params_decl }}) { bool handleAdded = false; try {\n_safeHandle.DangerousAddRef(ref handleAdded); return NativeMethods.{{ native_method }}(\n_safeHandle.DangerousGetHandle(){{ arg_lines }}\n); } finally { if (handleAdded) _safeHandle.DangerousRelease(); } }\n";
+
+    const CORRUPTED_SERVICE_REGISTRATION: &str = "/// <summary>\n  /// Register a handler for {{ method_name }}. ///\n</summary>\npublic int {{ method_name }}({% if metadata_params %}{{ metadata_params }},\n{% endif %}Delegate handler) { ArgumentNullException.ThrowIfNull(handler); var handle = GCHandle.Alloc(handler,\nGCHandleType.Normal); IntPtr ctx = GCHandle.ToIntPtr(handle); bool handleAdded = false; int result; try {\n_safeHandle.DangerousAddRef(ref handleAdded); result = NativeMethods.{{ native_method }}(\n_safeHandle.DangerousGetHandle(), _handlerCallback, ctx{{ arg_lines }}\n); } catch { handle.Free(); throw; } finally { if (handleAdded) _safeHandle.DangerousRelease(); } if (result == 0) { //\nKeep the GCHandle alive for the lifetime of the registration lock (_registeredCallbacks) { _registeredCallbacks[ctx] =\nhandle; } } else { handle.Free(); } return result; }\n";
+
+    const CORRUPTED_SERVICE_VARIANT_REGISTRATION: &str = "/// <summary>\n  /// {{ doc }}\n  ///\n</summary>\npublic int {{ method_name }}({% if signature_params %}{{ signature_params }},\n{% endif %}Delegate handler) { ArgumentNullException.ThrowIfNull(handler); var handle = GCHandle.Alloc(handler,\nGCHandleType.Normal); IntPtr ctx = GCHandle.ToIntPtr(handle); bool handleAdded = false; int result; try {\n_safeHandle.DangerousAddRef(ref handleAdded); result = NativeMethods.{{ native_method }}(\n_safeHandle.DangerousGetHandle(), _handlerCallback, ctx{{ arg_lines }}\n); } catch { handle.Free(); throw; } finally { if (handleAdded) _safeHandle.DangerousRelease(); } if (result == 0) {\nlock (_registeredCallbacks) { _registeredCallbacks[ctx] = handle; } } else { handle.Free(); } return result; }\n";
+
+    #[test]
+    fn test_corrupted_service_constructor_fails_all_three_contract_checks() {
+        let rendered = render_frozen_template(
+            CORRUPTED_SERVICE_CONSTRUCTOR,
+            minijinja::context! {
+                service_name => "TestService",
+                class_name => "TestService",
+                params_decl => "string path",
+                native_new => "my_lib_test_service_new",
+            },
+        );
+        assert!(
+            !doc_comment_violations(&rendered).is_empty(),
+            "expected the bare </summary> line to be caught"
+        );
+        assert!(
+            !multi_statement_line_violations(&rendered).is_empty(),
+            "expected the run-together statements to be caught"
+        );
+        assert!(
+            !split_interpolation_violations(CORRUPTED_SERVICE_CONSTRUCTOR).is_empty(),
+            "expected the {{ class_name }} split across three lines to be caught"
+        );
+    }
+
+    #[test]
+    fn test_corrupted_service_entrypoint_fails_contract_checks() {
+        let rendered = render_frozen_template(
+            CORRUPTED_SERVICE_ENTRYPOINT,
+            minijinja::context! {
+                method_name => "run",
+                return_type => "int",
+                params_decl => "string addr",
+                native_method => "my_lib_test_service_ep_run",
+                arg_lines => ",\n                addr",
+            },
+        );
+        assert!(!doc_comment_violations(&rendered).is_empty());
+        assert!(!multi_statement_line_violations(&rendered).is_empty());
+    }
+
+    #[test]
+    fn test_corrupted_service_registration_fails_contract_checks() {
+        let rendered = render_frozen_template(
+            CORRUPTED_SERVICE_REGISTRATION,
+            minijinja::context! {
+                method_name => "add_handler",
+                metadata_params => "string path",
+                native_method => "my_lib_test_service_register_add_handler",
+                arg_lines => ",\n                path",
+            },
+        );
+        assert!(!doc_comment_violations(&rendered).is_empty());
+        assert!(!multi_statement_line_violations(&rendered).is_empty());
+    }
+
+    #[test]
+    fn test_corrupted_service_variant_registration_fails_contract_checks() {
+        let rendered = render_frozen_template(
+            CORRUPTED_SERVICE_VARIANT_REGISTRATION,
+            minijinja::context! {
+                method_name => "Get",
+                doc => "Register a GET handler.",
+                signature_params => "string path",
+                native_method => "my_lib_test_service_get",
+                arg_lines => ",\n                path",
+            },
+        );
+        assert!(!doc_comment_violations(&rendered).is_empty());
+        assert!(!multi_statement_line_violations(&rendered).is_empty());
+    }
+
+    #[test]
+    fn test_service_class_compiles_with_a_real_dotnet_toolchain_when_available() {
+        // Best-effort, matching the toolchain-gated pattern already used by
+        // `snippets::validators::csharp`: only runs when a local `dotnet` SDK is present. When
+        // unavailable this simply returns without asserting anything — it never fakes success.
+        if which::which("dotnet").is_err() {
+            return;
+        }
+
+        let api = make_fixture_surface();
+        let service = &api.services[0];
+        let service_cs = gen_service_cs(&api, service, "MyNamespace", "my_lib");
+        let native_methods_cs = gen_native_methods_cs(&api, "MyNamespace", "my_lib");
+
+        let directory = tempfile::tempdir().expect("temp directory");
+        std::fs::write(directory.path().join("TestService.cs"), &service_cs).expect("write service class");
+        std::fs::write(directory.path().join("ServiceNativeMethods.cs"), &native_methods_cs)
+            .expect("write native methods");
+        std::fs::write(
+            directory.path().join("Service.csproj"),
+            "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <OutputType>Library</OutputType>\n    \
+             <TargetFramework>net8.0</TargetFramework>\n    <Nullable>enable</Nullable>\n  \
+             </PropertyGroup>\n</Project>\n",
+        )
+        .expect("write project file");
+
+        let dotnet_cli_home = directory.path().join(".dotnet");
+        let nuget_packages = directory.path().join(".nuget/packages");
+        std::fs::create_dir_all(&dotnet_cli_home).expect("isolated DOTNET_CLI_HOME");
+        std::fs::create_dir_all(&nuget_packages).expect("isolated NUGET_PACKAGES");
+
+        let output = std::process::Command::new("dotnet")
+            .args(["build", "--nologo", "-v", "quiet"])
+            .current_dir(directory.path())
+            .env("DOTNET_CLI_HOME", &dotnet_cli_home)
+            .env("NUGET_PACKAGES", &nuget_packages)
+            .output()
+            .expect("run dotnet build");
+
+        assert!(
+            output.status.success(),
+            "generated service class failed to compile:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 }

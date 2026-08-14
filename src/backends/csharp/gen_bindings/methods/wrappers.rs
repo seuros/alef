@@ -864,6 +864,7 @@ mod tests {
             package: String::new(),
             package_version: String::new(),
             construct_expr: String::new(),
+            ..Default::default()
         };
 
         let code = gen_capsule_function_wrapper(&func, "TestException", "sample_ffi", &cfg);

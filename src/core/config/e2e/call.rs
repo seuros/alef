@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 
 /// Configuration for the function call in each test.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CallConfig {
     /// Per-call override for `result_fields`.
     ///
@@ -233,6 +234,7 @@ impl StreamingConfig {
 
 /// Structured streaming recipe options.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct StreamingRecipe {
     /// Optional opt-in/out equivalent to the legacy boolean form.
     #[serde(default)]
@@ -244,6 +246,7 @@ pub struct StreamingRecipe {
 
 /// Maps a fixture input field to a function argument.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ArgMapping {
     /// Argument name in the function signature.
     pub name: String,
@@ -288,6 +291,7 @@ pub struct ArgMapping {
 
 /// Per-language override for function call configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CallOverride {
     /// Override the module/import path.
     #[serde(default)]

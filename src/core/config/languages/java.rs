@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use crate::core::config::dto::JavaDtoConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct JavaConfig {
     /// Map of Rust type name -> host-native capsule (Language-passthrough) config.
     /// When set, functions returning the type construct the host runtime's native

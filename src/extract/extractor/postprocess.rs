@@ -1,5 +1,38 @@
-use crate::core::ir::{ApiSurface, TypeRef};
+use crate::core::ir::{ApiSurface, DefaultValue, TypeRef};
 use ahash::AHashMap;
+
+pub(super) fn resolve_public_default_functions(surface: &mut ApiSurface) {
+    let public_methods: AHashMap<(String, String), String> = surface
+        .types
+        .iter()
+        .flat_map(|typ| {
+            typ.methods
+                .iter()
+                .filter(|method| method.is_static && method.params.is_empty() && !method.binding_excluded)
+                .map(|method| {
+                    (
+                        (typ.name.clone(), method.name.clone()),
+                        format!("{}::{}", typ.rust_path.replace('-', "_"), method.name),
+                    )
+                })
+        })
+        .collect();
+
+    for typ in &mut surface.types {
+        for field in &mut typ.fields {
+            let Some(DefaultValue::FunctionCall(path)) = &field.typed_default else {
+                continue;
+            };
+            let segments: Vec<_> = path.split("::").collect();
+            let [.., owner, method] = segments.as_slice() else {
+                continue;
+            };
+            if let Some(resolved_path) = public_methods.get(&(owner.to_string(), method.to_string())) {
+                field.typed_default = Some(DefaultValue::PublicFunctionCall(resolved_path.clone()));
+            }
+        }
+    }
+}
 
 /// Returns `true` if the type is a simple leaf type (primitive, String, Bytes, Path, etc.)
 /// rather than a complex Named, collection, or Optional type.

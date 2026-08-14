@@ -1,12 +1,16 @@
-/// Free a heap-allocated `{{ enum_name }}` returned by a pointer-returning FFI function.
+{% if source_cfg -%}
+#[cfg({{ source_cfg }})]
+{% endif -%}
+/// Free a `{{ enum_name }}` handle.
 /// # Safety
-/// Pointer must have been returned by this library, or be null.
+/// Handle must have been returned by this library, or be zero.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn {{ prefix }}_{{ enum_snake }}_free(ptr: *mut {{ qualified }}) {
+pub unsafe extern "C" fn {{ prefix }}_{{ enum_snake }}_free(handle: AlefHandle) {
     catch_ffi_panic((), || {
-    if !ptr.is_null() {
-        // SAFETY: ptr was allocated by Box::into_raw; caller ensures no aliases.
-        unsafe { drop(Box::from_raw(ptr)); }
+    if handle != 0 {
+        if let Err(error) = remove_handle::<{{ qualified }}>(handle) {
+            set_handle_error(&error);
+        }
     }
     })
 }

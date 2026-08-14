@@ -73,7 +73,16 @@ pub(crate) fn resolve(fixture: &Fixture, e2e_config: &E2eConfig, language: &str)
                         .iter()
                         .map(|field| resolver.accessor(field, language, item))
                         .collect(),
-                    optional: *optional,
+                    // A fixture's own `optional` flag is authored by hand and can
+                    // drift from the field-optionality data already known to the
+                    // resolver (`fields_optional` in the e2e config). When the
+                    // resolver knows the iterated path is optional but the fixture
+                    // wasn't updated to say so, trusting only `*optional` emits a
+                    // bare `for (const x of first?.optionalField)` with no `?? []`
+                    // guard -- a TS18048 in strict mode. OR the two signals so a
+                    // stale fixture flag can't regress a snippet that alef already
+                    // has the type information to render safely.
+                    optional: *optional || resolver.is_optional(path),
                     display: *display,
                     destructure_source,
                     destructure_item,
@@ -272,6 +281,53 @@ mod tests {
         );
         assert!(
             typescript_output.contains("console.log(chunk.content);"),
+            "{typescript_output}"
+        );
+    }
+
+    /// A fixture's own `optional: false` on an `Iterate` operation must not
+    /// override field-optionality the resolver already knows about (from the
+    /// e2e config's `fields_optional`). `config_element_types.json` hit this:
+    /// `results[0].elements` is a genuinely optional field (registered in
+    /// `fields_optional`), but the fixture's `Iterate` operation didn't set
+    /// `"optional": true`, so the generated node/wasm snippet rendered
+    /// `for (const element of first?.elements)` with no `?? []` guard --
+    /// `first?.elements` is `Element[] | undefined`, and iterating it directly
+    /// is a `tsc` TS18048 in strict mode.
+    #[test]
+    fn resolve_iterate_treats_path_optional_when_fixture_flag_is_stale() {
+        let mut stale_fixture = fixture();
+        stale_fixture
+            .docs
+            .as_mut()
+            .and_then(|docs| docs.presentation.as_mut())
+            .expect("presentation")
+            .operations = vec![FixtureDocsOperation::Iterate {
+            path: "results[0].elements".into(),
+            item: "element".into(),
+            fields: vec!["element_type".into()],
+            display: true,
+            optional: false,
+        }];
+        let mut stale_config = config();
+        stale_config.fields_optional = ["results[0].elements".to_string()].into_iter().collect();
+
+        let operations = resolve(&stale_fixture, &stale_config, "node");
+        let iterate = operations.first().expect("one iterate operation");
+        assert!(
+            iterate.optional,
+            "resolver-known optionality for 'results[0].elements' must win over the fixture's stale `optional: false`"
+        );
+
+        let typescript_output = crate::e2e::template_env::render(
+            "typescript/snippet_body.jinja",
+            minijinja::context! { imports => vec!["process"], module => "@example/library",
+            setup_lines => Vec::<String>::new(), client_setup => "", call_expr => "process()",
+            result_var => "result", is_async => false, expects_error => false,
+            presentation => operations },
+        );
+        assert!(
+            typescript_output.contains("for (const element of first?.elements ?? [])"),
             "{typescript_output}"
         );
     }

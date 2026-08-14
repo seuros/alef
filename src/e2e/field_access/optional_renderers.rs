@@ -3,47 +3,88 @@ use super::types::{PathSegment, PhpGetterMap};
 use heck::{ToLowerCamelCase, ToPascalCase, ToSnakeCase};
 use std::collections::HashSet;
 
+/// Appends the bare field/array/map name for `segment` onto `path_so_far`,
+/// with no bracket suffix. The result is the config-lookup key to check for
+/// `segment`'s OWN optionality (e.g. is the array itself an `Option<Vec<T>>`).
+///
+/// This is the single source of truth for how every `_with_optionals`
+/// renderer builds its `optional_fields` / `array_fields` lookup key as it
+/// walks a path segment by segment. Previously each renderer duplicated this
+/// string-building logic and several omitted the index-normalisation step in
+/// [`push_key_index_suffix`], so a renderer's local check silently stopped
+/// matching config entries (like `"results[0].metadata.format"`) as soon as
+/// the path crossed an indexed segment. Route every renderer through this
+/// function (and `push_key_index_suffix`) so the two conventions cannot
+/// drift apart again.
+pub(super) fn push_key_field_name(path_so_far: &mut String, segment: &PathSegment) {
+    let name = match segment {
+        PathSegment::Field(name) | PathSegment::ArrayField { name, .. } => name.as_str(),
+        PathSegment::MapAccess { field, .. } => field.as_str(),
+        PathSegment::Length => return,
+    };
+    if !path_so_far.is_empty() {
+        path_so_far.push('.');
+    }
+    path_so_far.push_str(name);
+}
+
+/// After checking `segment`'s own optionality against `path_so_far` (via
+/// [`push_key_field_name`]), normalises the tracked key for CHILD lookups.
+///
+/// Config entries in `fields_optional` / `fields_array` always record array
+/// indices and numeric map keys as a literal `[0]` suffix — see
+/// `parse::normalize_numeric_indices`, which `FieldResolver::is_optional`
+/// uses to match config entries regardless of the *actual* index requested.
+/// Every renderer must extend its tracked path the same way after an indexed
+/// segment, or nested optional keys like `"results[0].metadata.format"`
+/// never match once the path has crossed `results[0]`.
+///
+/// String-keyed map access (`foo["bar"]`) does not extend the tracked path —
+/// only the field name preceding the bracket is significant, matching the
+/// convention used throughout `fields_optional` / `fields_array` entries.
+pub(super) fn push_key_index_suffix(path_so_far: &mut String, segment: &PathSegment) {
+    match segment {
+        PathSegment::ArrayField { .. } => path_so_far.push_str("[0]"),
+        PathSegment::MapAccess { key, .. } if key.chars().all(|c| c.is_ascii_digit()) => {
+            path_so_far.push_str("[0]");
+        }
+        _ => {}
+    }
+}
+
 pub(super) fn render_typescript_with_optionals(
     segments: &[PathSegment],
     result_var: &str,
     optional_fields: &HashSet<String>,
 ) -> String {
     let mut out = result_var.to_string();
-    let mut path = String::new();
+    let mut path_so_far = String::new();
     let mut previous_optional = false;
     for segment in segments {
         match segment {
             PathSegment::Field(field) => {
-                if !path.is_empty() {
-                    path.push('.');
-                }
-                path.push_str(field);
+                push_key_field_name(&mut path_so_far, segment);
                 out.push_str(if previous_optional { "?." } else { "." });
                 out.push_str(&field.to_lower_camel_case());
-                previous_optional = optional_fields.contains(&path);
+                previous_optional = optional_fields.contains(&path_so_far);
             }
             PathSegment::ArrayField { name, index } => {
-                if !path.is_empty() {
-                    path.push('.');
-                }
-                path.push_str(name);
+                push_key_field_name(&mut path_so_far, segment);
                 out.push_str(if previous_optional { "?." } else { "." });
                 out.push_str(&name.to_lower_camel_case());
-                let optional = optional_fields.contains(&path);
+                let optional = optional_fields.contains(&path_so_far);
                 if optional {
                     out.push_str("?.");
                 }
                 out.push_str(&format!("[{index}]"));
+                push_key_index_suffix(&mut path_so_far, segment);
                 previous_optional = optional;
             }
             PathSegment::MapAccess { field, key } => {
-                if !path.is_empty() {
-                    path.push('.');
-                }
-                path.push_str(field);
+                push_key_field_name(&mut path_so_far, segment);
                 out.push_str(if previous_optional { "?." } else { "." });
                 out.push_str(&field.to_lower_camel_case());
-                let optional = optional_fields.contains(&path);
+                let optional = optional_fields.contains(&path_so_far);
                 if optional {
                     out.push_str("?.");
                 }
@@ -52,6 +93,7 @@ pub(super) fn render_typescript_with_optionals(
                 } else {
                     out.push_str(&format!("[{key:?}]"));
                 }
+                push_key_index_suffix(&mut path_so_far, segment);
                 previous_optional = optional;
             }
             PathSegment::Length => {
@@ -149,10 +191,7 @@ pub(super) fn render_kotlin_with_optionals(
         let nav = if prev_was_nullable { "?." } else { "." };
         match seg {
             PathSegment::Field(f) => {
-                if !path_so_far.is_empty() {
-                    path_so_far.push('.');
-                }
-                path_so_far.push_str(f);
+                push_key_field_name(&mut path_so_far, seg);
                 // After this call, the receiver is nullable if the field is in
                 // optional_fields (the Java @Nullable annotation makes the
                 // return type T? in Kotlin) OR if the incoming receiver was
@@ -164,10 +203,7 @@ pub(super) fn render_kotlin_with_optionals(
                 prev_was_nullable = prev_was_nullable || is_optional;
             }
             PathSegment::ArrayField { name, index } => {
-                if !path_so_far.is_empty() {
-                    path_so_far.push('.');
-                }
-                path_so_far.push_str(name);
+                push_key_field_name(&mut path_so_far, seg);
                 let is_optional = optional_fields.contains(&path_so_far);
                 out.push_str(nav);
                 out.push_str(&kotlin_getter(name));
@@ -180,14 +216,11 @@ pub(super) fn render_kotlin_with_optionals(
                 // Record the "[0]" suffix so subsequent optional-field checks against
                 // paths like "choices[0].message.tool_calls" continue to match when the
                 // optional_fields set uses indexed keys (mirrors the Rust renderer).
-                path_so_far.push_str("[0]");
+                push_key_index_suffix(&mut path_so_far, seg);
                 prev_was_nullable = prev_was_nullable || is_optional;
             }
             PathSegment::MapAccess { field, key } => {
-                if !path_so_far.is_empty() {
-                    path_so_far.push('.');
-                }
-                path_so_far.push_str(field);
+                push_key_field_name(&mut path_so_far, seg);
                 let is_optional = optional_fields.contains(&path_so_far);
                 out.push_str(nav);
                 out.push_str(&kotlin_getter(field));
@@ -203,6 +236,7 @@ pub(super) fn render_kotlin_with_optionals(
                 } else {
                     out.push_str(&format!("().get(\"{key}\")"));
                 }
+                push_key_index_suffix(&mut path_so_far, seg);
                 prev_was_nullable = prev_was_nullable || is_optional;
             }
             PathSegment::Length => {
@@ -239,10 +273,7 @@ pub(super) fn render_kotlin_android_with_optionals(
         let nav = if prev_was_nullable { "?." } else { "." };
         match seg {
             PathSegment::Field(f) => {
-                if !path_so_far.is_empty() {
-                    path_so_far.push('.');
-                }
-                path_so_far.push_str(f);
+                push_key_field_name(&mut path_so_far, seg);
                 let is_optional = optional_fields.contains(&path_so_far);
                 out.push_str(nav);
                 // Property access — no () suffix.
@@ -250,10 +281,7 @@ pub(super) fn render_kotlin_android_with_optionals(
                 prev_was_nullable = prev_was_nullable || is_optional;
             }
             PathSegment::ArrayField { name, index } => {
-                if !path_so_far.is_empty() {
-                    path_so_far.push('.');
-                }
-                path_so_far.push_str(name);
+                push_key_field_name(&mut path_so_far, seg);
                 let is_optional = optional_fields.contains(&path_so_far);
                 out.push_str(nav);
                 // Property access — no () suffix on the collection itself.
@@ -264,14 +292,11 @@ pub(super) fn render_kotlin_android_with_optionals(
                 } else {
                     out.push_str(&format!("{safe}.get({index})"));
                 }
-                path_so_far.push_str("[0]");
+                push_key_index_suffix(&mut path_so_far, seg);
                 prev_was_nullable = prev_was_nullable || is_optional;
             }
             PathSegment::MapAccess { field, key } => {
-                if !path_so_far.is_empty() {
-                    path_so_far.push('.');
-                }
-                path_so_far.push_str(field);
+                push_key_field_name(&mut path_so_far, seg);
                 let is_optional = optional_fields.contains(&path_so_far);
                 out.push_str(nav);
                 // Property access — no () suffix on the map field.
@@ -288,6 +313,7 @@ pub(super) fn render_kotlin_android_with_optionals(
                 } else {
                     out.push_str(&format!(".get(\"{key}\")"));
                 }
+                push_key_index_suffix(&mut path_so_far, seg);
                 prev_was_nullable = prev_was_nullable || is_optional;
             }
             PathSegment::Length => {
@@ -361,10 +387,7 @@ pub(super) fn render_rust_with_optionals(
         let is_leaf = i == segments.len() - 1;
         match seg {
             PathSegment::Field(f) => {
-                if !path_so_far.is_empty() {
-                    path_so_far.push('.');
-                }
-                path_so_far.push_str(f);
+                push_key_field_name(&mut path_so_far, seg);
                 out.push('.');
                 out.push_str(&f.to_snake_case());
                 let is_method = method_calls.contains(&path_so_far) && !result_fields.contains(&path_so_far);
@@ -378,10 +401,7 @@ pub(super) fn render_rust_with_optionals(
                 }
             }
             PathSegment::ArrayField { name, index } => {
-                if !path_so_far.is_empty() {
-                    path_so_far.push('.');
-                }
-                path_so_far.push_str(name);
+                push_key_field_name(&mut path_so_far, seg);
                 out.push('.');
                 out.push_str(&name.to_snake_case());
                 // Option<Vec<T>>: must unwrap the Option before indexing.
@@ -398,13 +418,10 @@ pub(super) fn render_rust_with_optionals(
                 // optional-field keys which include explicit indices (e.g.
                 // "choices[0].message.tool_calls") continue to match when we check
                 // subsequent segments.
-                path_so_far.push_str("[0]");
+                push_key_index_suffix(&mut path_so_far, seg);
             }
             PathSegment::MapAccess { field, key } => {
-                if !path_so_far.is_empty() {
-                    path_so_far.push('.');
-                }
-                path_so_far.push_str(field);
+                push_key_field_name(&mut path_so_far, seg);
                 out.push('.');
                 out.push_str(&field.to_snake_case());
                 if key.chars().all(|c| c.is_ascii_digit()) {
@@ -417,7 +434,7 @@ pub(super) fn render_rust_with_optionals(
                     } else {
                         out.push_str(&format!("[{key}]"));
                     }
-                    path_so_far.push_str("[0]");
+                    push_key_index_suffix(&mut path_so_far, seg);
                 } else {
                     out.push_str(&format!(".get(\"{key}\").map(|s| s.as_str())"));
                 }
@@ -453,10 +470,7 @@ pub(super) fn render_zig_with_optionals(
     for seg in segments {
         match seg {
             PathSegment::Field(f) => {
-                if !path_so_far.is_empty() {
-                    path_so_far.push('.');
-                }
-                path_so_far.push_str(f);
+                push_key_field_name(&mut path_so_far, seg);
                 out.push('.');
                 out.push_str(f);
                 if !method_calls.contains(&path_so_far) && optional_fields.contains(&path_so_far) {
@@ -464,22 +478,17 @@ pub(super) fn render_zig_with_optionals(
                 }
             }
             PathSegment::ArrayField { name, index } => {
-                if !path_so_far.is_empty() {
-                    path_so_far.push('.');
-                }
-                path_so_far.push_str(name);
+                push_key_field_name(&mut path_so_far, seg);
                 out.push('.');
                 out.push_str(name);
                 if !method_calls.contains(&path_so_far) && optional_fields.contains(&path_so_far) {
                     out.push_str(".?");
                 }
                 out.push_str(&format!("[{index}]"));
+                push_key_index_suffix(&mut path_so_far, seg);
             }
             PathSegment::MapAccess { field, key } => {
-                if !path_so_far.is_empty() {
-                    path_so_far.push('.');
-                }
-                path_so_far.push_str(field);
+                push_key_field_name(&mut path_so_far, seg);
                 out.push('.');
                 out.push_str(field);
                 if !method_calls.contains(&path_so_far) && optional_fields.contains(&path_so_far) {
@@ -490,6 +499,7 @@ pub(super) fn render_zig_with_optionals(
                 } else {
                     out.push_str(&format!(".get(\"{key}\")"));
                 }
+                push_key_index_suffix(&mut path_so_far, seg);
             }
             PathSegment::Length => {
                 out.push_str(".len");
@@ -540,10 +550,7 @@ pub(super) fn render_csharp_with_optionals(
         let is_leaf = i == segments.len() - 1;
         match seg {
             PathSegment::Field(f) => {
-                if !path_so_far.is_empty() {
-                    path_so_far.push('.');
-                }
-                path_so_far.push_str(f);
+                push_key_field_name(&mut path_so_far, seg);
                 out.push('.');
                 out.push_str(&f.to_pascal_case());
                 if !is_leaf && optional_fields.contains(&path_so_far) {
@@ -551,19 +558,17 @@ pub(super) fn render_csharp_with_optionals(
                 }
             }
             PathSegment::ArrayField { name, index } => {
-                if !path_so_far.is_empty() {
-                    path_so_far.push('.');
-                }
-                path_so_far.push_str(name);
+                push_key_field_name(&mut path_so_far, seg);
                 out.push('.');
                 out.push_str(&name.to_pascal_case());
                 out.push_str(&format!("[{index}]"));
+                // Normalise the tracked key so a Field segment further down the
+                // chain (e.g. "results[0].metadata.format") still matches
+                // `optional_fields` entries recorded with an indexed prefix.
+                push_key_index_suffix(&mut path_so_far, seg);
             }
             PathSegment::MapAccess { field, key } => {
-                if !path_so_far.is_empty() {
-                    path_so_far.push('.');
-                }
-                path_so_far.push_str(field);
+                push_key_field_name(&mut path_so_far, seg);
                 out.push('.');
                 out.push_str(&field.to_pascal_case());
                 if key.chars().all(|c| c.is_ascii_digit()) {
@@ -571,6 +576,7 @@ pub(super) fn render_csharp_with_optionals(
                 } else {
                     out.push_str(&format!("[\"{key}\"]"));
                 }
+                push_key_index_suffix(&mut path_so_far, seg);
             }
             PathSegment::Length => {
                 out.push_str(".Count");
@@ -805,24 +811,16 @@ pub(super) fn render_dart_with_optionals(
         let nav = if prev_was_nullable { "?." } else { "." };
         match seg {
             PathSegment::Field(f) => {
-                if !path_so_far.is_empty() {
-                    path_so_far.push('.');
-                    path_with_indices.push('.');
-                }
-                path_so_far.push_str(f);
-                path_with_indices.push_str(f);
+                push_key_field_name(&mut path_so_far, seg);
+                push_key_field_name(&mut path_with_indices, seg);
                 let optional = is_optional(&path_so_far, &path_with_indices);
                 out.push_str(nav);
                 out.push_str(&f.to_lower_camel_case());
                 prev_was_nullable = optional;
             }
             PathSegment::ArrayField { name, index } => {
-                if !path_so_far.is_empty() {
-                    path_so_far.push('.');
-                    path_with_indices.push('.');
-                }
-                path_so_far.push_str(name);
-                path_with_indices.push_str(name);
+                push_key_field_name(&mut path_so_far, seg);
+                push_key_field_name(&mut path_with_indices, seg);
                 let optional = is_optional(&path_so_far, &path_with_indices);
                 out.push_str(nav);
                 out.push_str(&name.to_lower_camel_case());
@@ -833,22 +831,22 @@ pub(super) fn render_dart_with_optionals(
                     out.push('!');
                 }
                 out.push_str(&format!("[{index}]"));
-                path_with_indices.push_str(&format!("[{index}]"));
+                // Normalise to a literal "[0]" suffix (matching
+                // `push_key_index_suffix` / `normalize_numeric_indices`) rather than the
+                // actual index — `fields_optional` entries always record indexed
+                // segments as "[0]" regardless of which index a fixture requests.
+                push_key_index_suffix(&mut path_with_indices, seg);
                 prev_was_nullable = false;
             }
             PathSegment::MapAccess { field, key } => {
-                if !path_so_far.is_empty() {
-                    path_so_far.push('.');
-                    path_with_indices.push('.');
-                }
-                path_so_far.push_str(field);
-                path_with_indices.push_str(field);
+                push_key_field_name(&mut path_so_far, seg);
+                push_key_field_name(&mut path_with_indices, seg);
                 let optional = is_optional(&path_so_far, &path_with_indices);
                 out.push_str(nav);
                 out.push_str(&field.to_lower_camel_case());
                 if key.chars().all(|c| c.is_ascii_digit()) {
                     out.push_str(&format!("[{key}]"));
-                    path_with_indices.push_str(&format!("[{key}]"));
+                    push_key_index_suffix(&mut path_with_indices, seg);
                 } else {
                     out.push_str(&format!("[\"{key}\"]"));
                     path_with_indices.push_str(&format!("[\"{key}\"]"));

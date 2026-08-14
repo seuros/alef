@@ -60,6 +60,7 @@ impl std::fmt::Display for Language {
 
 /// A parameter in an adapter function.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AdapterParam {
     pub name: String,
     #[serde(rename = "type")]
@@ -80,6 +81,7 @@ pub enum AdapterPattern {
 
 /// Configuration for a single adapter.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AdapterConfig {
     pub name: String,
     pub pattern: AdapterPattern,

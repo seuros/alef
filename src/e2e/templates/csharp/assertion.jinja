@@ -51,11 +51,17 @@
 {% if field_needs_json_serialize -%}
         Assert.NotEmpty({{ field_expr }});
 {% else -%}
-{% if field_is_nullable -%}
-        Assert.False(string.IsNullOrEmpty({{ field_expr }}?.ToString()));
-{% else -%}
-        Assert.False(string.IsNullOrEmpty({{ field_expr }}.ToString()));
-{% endif %}
+{#- `.ToString()` on anything but a string yields the type name, so the check could never fail on a struct or
+    an undetected collection, and the `?.` form does not compile for a non-nullable value type. Boxing lets one
+    pattern switch cover every shape: only null, an empty string and an empty collection are empty, so a
+    legitimate 0 / 0.0 / false passes. -#}
+        Assert.True(((object?){{ field_expr }}) switch
+        {
+            null => false,
+            string text => text.Length > 0,
+            System.Collections.ICollection items => items.Count > 0,
+            _ => true,
+        }, "expected non-empty value");
 {% endif %}
 {% elif assertion_type == "is_empty" -%}
 {% if field_needs_json_serialize -%}
