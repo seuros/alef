@@ -285,6 +285,10 @@ mod tests {
             }
         }
         let distinct: std::collections::HashSet<String> = Language::ALL.iter().map(ToString::to_string).collect();
-        assert_eq!(distinct.len(), Language::ALL.len(), "Language::ALL must not repeat a variant");
+        assert_eq!(
+            distinct.len(),
+            Language::ALL.len(),
+            "Language::ALL must not repeat a variant"
+        );
     }
 }

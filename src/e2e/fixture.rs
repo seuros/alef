@@ -1348,7 +1348,10 @@ mod tests {
         let valid = vec!["python".to_string(), "node".to_string(), "rust".to_string()];
         let err = validate_skip_languages(&[fixture], &valid).expect_err("typo id must still fail validation");
         let message = err.to_string();
-        assert!(message.contains("typo_skip"), "error should name the fixture: {message}");
+        assert!(
+            message.contains("typo_skip"),
+            "error should name the fixture: {message}"
+        );
         assert!(message.contains("c#"), "error should name the bad id: {message}");
         assert!(
             message.contains("not a known e2e target"),
