@@ -19,6 +19,54 @@ use std::path::PathBuf;
 
 use super::E2eCodegen;
 use super::client;
+
+/// Whether zig has a `client_factory` for this call, which is what makes a streaming
+/// fixture emittable at all.
+///
+/// Resolution order mirrors `test_file.rs:149-154`: the call's own per-language
+/// override first, then the top-level call's. If these two disagree the emitted test
+/// would take a different path than this filter predicted, so they must stay in step.
+/// ~keep
+fn zig_client_factory_configured(
+    call: &crate::core::config::e2e::CallConfig,
+    e2e_config: &E2eConfig,
+    lang: &str,
+) -> bool {
+    call.overrides
+        .get(lang)
+        .and_then(|o| o.client_factory.as_deref())
+        .or_else(|| {
+            e2e_config
+                .call
+                .overrides
+                .get(lang)
+                .and_then(|o| o.client_factory.as_deref())
+        })
+        .is_some()
+}
+
+/// A compiling zig test file that records why a whole category produced nothing.
+///
+/// The point is that the omission leaves an artefact. A category that silently
+/// disappears is indistinguishable from one that was never configured. ~keep
+fn render_zig_excluded_category(category: &str, fixtures: &[Fixture]) -> String {
+    let mut out = String::new();
+    out.push_str("const std = @import(\"std\");\n\n");
+    let _ = writeln!(out, "// category {category:?} produced no zig tests");
+    for fixture in fixtures {
+        let reason = fixture
+            .skip
+            .as_ref()
+            .and_then(|s| s.reason.clone())
+            .unwrap_or_else(|| "excluded for zig e2e generation".to_owned());
+        let _ = writeln!(out, "// skipped: {} — {reason}", fixture.id);
+    }
+    let _ = writeln!(
+        out,
+        "\ntest \"{category} skipped for zig\" {{\n    return error.SkipZigTest;\n}}"
+    );
+    out
+}
 use super::streaming_assertions::{StreamingFieldResolver, is_streaming_virtual_field};
 
 /// Zig e2e code generator.
@@ -325,12 +373,11 @@ impl E2eCodegen for ZigE2eCodegen {
 
         // Generate test files per category and collect their names.
         //
-        // The Zig backend does not yet support streaming free functions (the
-        // generated binding exposes only the unary entry points). Skip any
-        // fixture whose resolved call is marked `streaming = true` so we don't
-        // emit streaming calls that fail to compile
-        // against a binding that lacks them. Streaming support tracked
-        // separately — see streaming-audit notes ("Zig: last-chunk-only").
+        // Streaming fixtures are emitted when a `client_factory` is configured for zig,
+        // which is what routes them through the streaming-virtual path; without one the
+        // call would be emitted as a free function and zig exposes streaming only as a
+        // method on the handle. When they are skipped, the category is reported rather
+        // than silently dropped.
         let mut test_filenames: Vec<String> = Vec::new();
         for group in groups {
             let active: Vec<&Fixture> = group
@@ -366,11 +413,39 @@ impl E2eCodegen for ZigE2eCodegen {
                         &f.tags,
                         &f.input,
                     );
-                    cc.streaming_enabled() != Some(true)
+                    if cc.streaming_enabled() != Some(true) {
+                        return true;
+                    }
+                    // A streaming fixture is emittable only through the streaming-virtual
+                    // path, which `test_file.rs` gates on a resolved `client_factory`
+                    // (:257, :263). Without one, `call_prefix` (:337) would emit the call
+                    // as a *free* function, and zig exposes streaming as a method on the
+                    // handle -- so the suite would not compile. Mirrors the same
+                    // resolution order test_file.rs:149-154 uses. ~keep
+                    zig_client_factory_configured(cc, e2e_config, lang)
                 })
                 .collect();
 
             if active.is_empty() {
+                // Previously a bare `continue`: the whole category vanished with no file,
+                // no log and no gate failure -- invisible to `alef verify`, to the empty-
+                // category check in `e2e/validate.rs`, and to `fixture_inclusion`, all of
+                // which report zig as included. Mirror the wasm path (`wasm.rs:344-381`)
+                // and say so out loud. ~keep
+                if !group.fixtures.is_empty() {
+                    tracing::warn!(
+                        category = %group.category,
+                        excluded_count = group.fixtures.len(),
+                        "zig e2e: entire fixture category excluded for zig — emitting placeholder skip suite instead of silently omitting it"
+                    );
+                    let filename = format!("{}_test.zig", sanitize_filename(&group.category));
+                    test_filenames.push(filename.clone());
+                    files.push(GeneratedFile {
+                        path: output_base.join("src").join(filename),
+                        content: render_zig_excluded_category(&group.category, &group.fixtures),
+                        generated_header: true,
+                    });
+                }
                 continue;
             }
 

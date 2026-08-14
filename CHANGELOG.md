@@ -25,6 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **capsules**: expose `shares_native_runtime` for Kotlin Android and enforce capsule ownership/ABI contracts during
   Go, Swift, Zig, and Kotlin Android generation instead of leaving those backends outside the validation gate.
+- **e2e/zig**: emit streaming e2e tests instead of discarding them, and never drop a fixture category in silence. A
+  hardcoded zig-only filter excluded every fixture whose resolved call declared `streaming = true`, although the zig
+  streaming emitter is fully written; the exclusion is now narrowed to the case it was guarding — a streaming call
+  with no `client_factory`, which zig cannot render because streaming is exposed only as a method on the handle. A
+  category left empty by that filter previously hit a bare `continue`: no file, no log and no gate failure, because
+  `alef verify`, the empty-category check in `e2e/validate.rs` and `fixture_inclusion` all still reported zig as
+  included, so a consumer whose config routed a streaming call to zig received nothing and was never told. Such a
+  category now emits a placeholder suite naming every dropped fixture, plus a warning, so an unemittable category is
+  visible in the output tree instead of vanishing.
 - Make generated parameter-conversion failures use the scalar zero sentinel whenever the exported FFI return type is
   `AlefHandle`, even when the source return metadata has a pointer-shaped fallback.
 - **config generation**: report every Rust-binding field whose serde default function cannot be preserved in one
