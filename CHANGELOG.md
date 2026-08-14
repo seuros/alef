@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **scaffold/poly**: lower configured exclusions separately for discovery gitignore semantics and hook glob matching,
+  preventing nested fixture over-pruning and missed nested build/vendor directories.
 - **docs/zig**: render function and enum-value identifiers in snake_case while retaining PascalCase type names in
   generated reference pages.
 - **e2e**: use one normalized indexed-path convention across optional matching and eight accessor renderers, including

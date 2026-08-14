@@ -20,10 +20,111 @@ use crate::core::backend::GeneratedFile;
 use crate::core::config::{Language, ResolvedCrateConfig};
 use std::path::PathBuf;
 
-/// Gitignore-style globs pruned from every lint/format pass. Emitted into
-/// `[discovery] exclude` (direct `poly lint`/`poly fmt`/CI path) and mirrored
-/// into the `lint`/`fmt`/`file_safety` builtin excludes (the git-hook
-/// path, which filters per-builtin rather than via discovery).
+/// Anchoring behavior for an emitted poly exclude pattern.
+///
+/// `[discovery] exclude` is consumed by `ignore::overrides`, which uses
+/// gitignore semantics: a pattern with no `/` matches at any depth. `[hooks.builtin]`
+/// lint/fmt/file_safety `exclude` is consumed by `globset::Glob::new`, which always
+/// matches the whole repo-relative path — there is no bare-pattern "any depth"
+/// special case there. The same literal pattern (e.g. `target/**`) therefore means
+/// something different to the two consumers, and syntax alone cannot disambiguate
+/// it: alef's own list has bare patterns that need OPPOSITE scopes (`fixtures/**`
+/// must stay root-anchored so it doesn't prune nested `tests/fixtures` trees;
+/// `target/**` must match at any depth so it prunes nested build dirs). Scope is
+/// therefore tagged per entry via [`ExcludeEntry`] rather than inferred from `/`
+/// characters in the pattern.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExcludeScope {
+    /// Matches only at the repository root.
+    RepoRoot,
+    /// Matches at any depth in the tree.
+    AnyDepth,
+}
+
+/// One exclude pattern with its anchoring [`ExcludeScope`] attached. `pattern`
+/// itself carries NO anchor marker (no leading `/`, no `**/` prefix) — that is
+/// added by [`ExcludeEntry::for_discovery`] / [`ExcludeEntry::for_hooks`], which
+/// lower the same entry differently for the two consumers described on
+/// [`ExcludeScope`].
+#[derive(Debug, Clone)]
+struct ExcludeEntry {
+    pattern: String,
+    scope: ExcludeScope,
+}
+
+impl ExcludeEntry {
+    fn root(pattern: impl Into<String>) -> Self {
+        Self {
+            pattern: pattern.into(),
+            scope: ExcludeScope::RepoRoot,
+        }
+    }
+
+    fn any_depth(pattern: impl Into<String>) -> Self {
+        Self {
+            pattern: pattern.into(),
+            scope: ExcludeScope::AnyDepth,
+        }
+    }
+
+    /// Lower for `[discovery] exclude` (gitignore semantics via `ignore::overrides`).
+    fn for_discovery(&self) -> String {
+        match self.scope {
+            ExcludeScope::RepoRoot => format!("/{}", self.pattern),
+            ExcludeScope::AnyDepth => format!("**/{}", self.pattern),
+        }
+    }
+
+    /// Lower for `[hooks.builtin]` lint/fmt/file_safety excludes (whole-path
+    /// matching via `globset`, which needs an explicit `**/` for "any depth" but no
+    /// anchor at all for "root only" — a bare pattern already only matches from the
+    /// start of the repo-relative path).
+    ///
+    /// The load-bearing property, measured against `globset` 0.4 rather than assumed:
+    /// a leading `**/` matches ZERO or more components, so `**/target/**` still matches
+    /// a ROOT-level `target/x` as well as a nested `crates/a/target/x`. If it required
+    /// at least one component, [`ExcludeScope::AnyDepth`] would silently stop excluding
+    /// root-level `target/` and `node_modules/` from the commit hooks — a regression in
+    /// the exact direction this split exists to fix, and one that every string-equality
+    /// test here would still pass. The same probe confirms the defect being fixed: bare
+    /// `target/**` does NOT match `crates/a/target/x`, which is why mirroring the
+    /// discovery list verbatim under-excluded nested build dirs in the hook path. ~keep
+    fn for_hooks(&self) -> String {
+        match self.scope {
+            ExcludeScope::RepoRoot => self.pattern.clone(),
+            ExcludeScope::AnyDepth => format!("**/{}", self.pattern),
+        }
+    }
+}
+
+/// Classify an author-supplied `config.poly.exclude` / `file_safety_exclude`
+/// pattern into a scoped [`ExcludeEntry`], stripping any anchor marker so the
+/// stored pattern carries none (matching [`EXCLUDES`]'s own convention):
+///
+/// * A `**/` prefix is explicit "any depth" intent — strip it, tag [`ExcludeScope::AnyDepth`].
+/// * A leading `/` or `./` is explicit "repo root" intent — strip it, tag [`ExcludeScope::RepoRoot`].
+/// * A bare pattern (no anchor marker) defaults to [`ExcludeScope::RepoRoot`] — the
+///   dominant real intent for a repo-specific exclude and the field's own doc
+///   example (`vendor/generated/**`, a project-specific root path). `**/foo/**`
+///   remains the idiomatic escape hatch for "any depth": both matchers read it
+///   identically either way.
+fn classify_extra(raw: &str) -> ExcludeEntry {
+    if let Some(rest) = raw.strip_prefix("**/") {
+        return ExcludeEntry::any_depth(rest);
+    }
+    if let Some(rest) = raw.strip_prefix("./") {
+        return ExcludeEntry::root(rest);
+    }
+    if let Some(rest) = raw.strip_prefix('/') {
+        return ExcludeEntry::root(rest);
+    }
+    ExcludeEntry::root(raw)
+}
+
+/// Globs pruned from every lint/format pass, tagged with their [`ExcludeScope`].
+/// Lowered into `[discovery] exclude` (direct `poly lint`/`poly fmt`/CI path) and
+/// the `lint`/`fmt`/`file_safety` builtin excludes (the git-hook path, which
+/// filters per-builtin rather than via discovery) — see [`ExcludeEntry`].
 ///
 /// Covers build output + lock files, plus the conventional non-source trees a
 /// polyglot repo keeps under version control that must NOT be linted/reformatted:
@@ -31,42 +132,48 @@ use std::path::PathBuf;
 /// (canonical SVG/image assets), and `docs/snippets/` (compiled separately by the
 /// snippet runner). Generated code under `packages/`, `e2e/`, `test_apps/` is
 /// deliberately NOT excluded — poly owns its formatting.
-const EXCLUDES: &[&str] = &[
-    "**/*.freezed.dart",
-    "**/*.g.dart",
-    "**/*.jinja",
-    "**/*.lock",
-    "**/Cargo.lock",
-    "**/go.sum",
-    "**/package-lock.json",
-    "**/pnpm-lock.yaml",
-    "**/uv.lock",
-    ".alef/**",
-    "artifacts/**",
-    "dist/**",
-    "docs/assets/**",
-    "docs/snippets/**",
-    "fixtures/**",
-    "node_modules/**",
-    "readme_templates/**",
-    "target/**",
-    "templates/readme/**",
-    "test_documents/**",
-    "vendor/**",
+///
+/// `artifacts/**`, `dist/**`, and `vendor/**` are tagged `AnyDepth` on the same
+/// reasoning as `target/**` / `node_modules/**`: in a polyglot monorepo these are
+/// per-package build-output / vendored-dependency directories (a Go module's
+/// `vendor/`, a JS package's `dist/`, a CI job's `artifacts/`) that legitimately
+/// recur under `crates/*` or `packages/*`, not just at the repo root.
+const EXCLUDES: &[(&str, ExcludeScope)] = &[
+    ("*.freezed.dart", ExcludeScope::AnyDepth),
+    ("*.g.dart", ExcludeScope::AnyDepth),
+    ("*.jinja", ExcludeScope::AnyDepth),
+    ("*.lock", ExcludeScope::AnyDepth),
+    ("Cargo.lock", ExcludeScope::AnyDepth),
+    ("go.sum", ExcludeScope::AnyDepth),
+    ("package-lock.json", ExcludeScope::AnyDepth),
+    ("pnpm-lock.yaml", ExcludeScope::AnyDepth),
+    ("uv.lock", ExcludeScope::AnyDepth),
+    (".alef/**", ExcludeScope::RepoRoot),
+    ("artifacts/**", ExcludeScope::AnyDepth),
+    ("dist/**", ExcludeScope::AnyDepth),
+    ("docs/assets/**", ExcludeScope::RepoRoot),
+    ("docs/snippets/**", ExcludeScope::RepoRoot),
+    ("fixtures/**", ExcludeScope::RepoRoot),
+    ("node_modules/**", ExcludeScope::AnyDepth),
+    ("readme_templates/**", ExcludeScope::RepoRoot),
+    ("target/**", ExcludeScope::AnyDepth),
+    ("templates/readme/**", ExcludeScope::RepoRoot),
+    ("test_documents/**", ExcludeScope::RepoRoot),
+    ("vendor/**", ExcludeScope::AnyDepth),
 ];
 
 /// Globs excluded specifically to keep poly's whole-repo format pass from
 /// fighting alef's residual native passes (see `cli::pipeline::format`):
 ///
-/// * `**/Cargo.toml` — poly's taplo and `cargo sort` (run as a residual + by the
+/// * `Cargo.toml` — poly's taplo and `cargo sort` (run as a residual + by the
 ///   `cargo` hook) canonicalize TOML differently; letting both touch Cargo.toml
 ///   produces an infinite format/regen loop on the embedded hash. cargo-sort owns
-///   Cargo.toml.
+///   Cargo.toml. Any depth: a workspace has one per crate, not just at the root.
 ///
 /// Elixir is deliberately NOT excluded here any more: poly ≥0.19.6 lets a declared
 /// `[tools.mix]` displace its generic tree-sitter reindenter, so `mix format` owns
 /// Elixir source through poly rather than around it.
-const POLY_FORMAT_EXCLUDES: &[&str] = &["**/Cargo.toml"];
+const POLY_FORMAT_EXCLUDES: &[(&str, ExcludeScope)] = &[("Cargo.toml", ExcludeScope::AnyDepth)];
 
 /// Canonical clang-format style for cbindgen-generated C FFI headers, shipped so
 /// every repo with an FFI target formats its headers identically (paired with the
@@ -187,13 +294,13 @@ const TEST_IGNORES: &[&str] = &[
 /// prefix, so [`normalize_poly_config`] hands the finished file to poly.
 ///
 /// [`normalize_poly_config`]: crate::cli::pipeline::generate::scaffold
-fn toml_array(entries: &[&str]) -> String {
+fn toml_array<S: AsRef<str>>(entries: &[S]) -> String {
     if entries.is_empty() {
         return "[]".to_string();
     }
     let inner = entries
         .iter()
-        .map(|e| format!("  \"{e}\","))
+        .map(|e| format!("  \"{}\",", e.as_ref()))
         .collect::<Vec<_>>()
         .join("\n");
     format!("[\n{inner}\n]")
@@ -250,27 +357,41 @@ fn snippet_check_hook(config: &ResolvedCrateConfig) -> Option<String> {
 pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[Language]) -> Vec<GeneratedFile> {
     let has = |lang: Language| languages.contains(&lang);
 
-    let extra_excludes: Vec<&str> = config.poly.exclude.iter().map(String::as_str).collect();
-    let all_excludes: Vec<&str> = EXCLUDES
+    // `all_excludes` merges alef's own tagged EXCLUDES/POLY_FORMAT_EXCLUDES with
+    // author-supplied `config.poly.exclude` entries (classified per `classify_extra`).
+    // It backs BOTH [discovery] and the lint/fmt/file_safety hook builtins, but each
+    // lowers it differently — see `ExcludeEntry::for_discovery` / `for_hooks`.
+    let mut all_excludes: Vec<ExcludeEntry> = EXCLUDES
         .iter()
-        .copied()
-        .chain(POLY_FORMAT_EXCLUDES.iter().copied())
-        .chain(extra_excludes)
+        .chain(POLY_FORMAT_EXCLUDES.iter())
+        .map(|(pattern, scope)| ExcludeEntry {
+            pattern: (*pattern).to_string(),
+            scope: *scope,
+        })
         .collect();
-    let excludes = toml_array(&all_excludes);
+    all_excludes.extend(config.poly.exclude.iter().map(|raw| classify_extra(raw)));
+
+    let discovery_excludes: Vec<String> = all_excludes.iter().map(ExcludeEntry::for_discovery).collect();
+    let hooks_excludes: Vec<String> = all_excludes.iter().map(ExcludeEntry::for_hooks).collect();
+    let discovery_excludes_toml = toml_array(&discovery_excludes);
+    let hooks_excludes_toml = toml_array(&hooks_excludes);
 
     // file-safety-only globs (e.g. Rust `#![...]` inner attributes misread as
-    let file_safety_extra: Vec<&str> = config.poly.file_safety_exclude.iter().map(String::as_str).collect();
-    let file_safety_excludes = if file_safety_extra.is_empty() {
-        excludes.clone()
+    // a shebang) are appended ONLY to the file_safety builtin, on top of the same
+    // shared base + author `exclude` list, then lowered with hooks (whole-path)
+    // semantics like every other `[hooks.builtin]` entry.
+    let file_safety_excludes = if config.poly.file_safety_exclude.is_empty() {
+        hooks_excludes_toml.clone()
     } else {
-        let all: Vec<&str> = all_excludes.iter().copied().chain(file_safety_extra).collect();
-        toml_array(&all)
+        let mut entries = all_excludes.clone();
+        entries.extend(config.poly.file_safety_exclude.iter().map(|raw| classify_extra(raw)));
+        let lowered: Vec<String> = entries.iter().map(ExcludeEntry::for_hooks).collect();
+        toml_array(&lowered)
     };
 
     let mut out = String::new();
 
-    out.push_str(&format!("[discovery]\nexclude = {excludes}\n\n"));
+    out.push_str(&format!("[discovery]\nexclude = {discovery_excludes_toml}\n\n"));
 
     // The `[lint]` super-table must precede every `[lint.*]` sub-table below: a super-table
     // defined after its children parses but reads as a redefinition to a human. ~keep
@@ -373,8 +494,8 @@ pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[La
     out.push('\n');
 
     out.push_str("[hooks]\nstages = [\"pre-commit\"]\n\n[hooks.builtin]\n");
-    out.push_str(&format!("lint = {{ exclude = {excludes} }}\n"));
-    out.push_str(&format!("fmt = {{ exclude = {excludes} }}\n"));
+    out.push_str(&format!("lint = {{ exclude = {hooks_excludes_toml} }}\n"));
+    out.push_str(&format!("fmt = {{ exclude = {hooks_excludes_toml} }}\n"));
     out.push_str(&format!("file_safety = {{ exclude = {file_safety_excludes} }}\n"));
     out.push_str("cargo = true\n");
     out.push_str("commit = { stages = [\"commit-msg\"] }\n");
