@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **docs/zig**: render function and enum-value identifiers in snake_case while retaining PascalCase type names in
+  generated reference pages.
 - **e2e**: use one normalized indexed-path convention across optional matching and eight accessor renderers, including
   TypeScript, Node, C#, Zig, Kotlin, Kotlin Android, Swift, and Dart.
 - **e2e/go**: resolve fixture fields through their serde wire names so renamed DTO properties are populated instead

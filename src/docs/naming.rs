@@ -100,18 +100,17 @@ pub(crate) fn type_name(name: &str, lang: Language, ffi_prefix: &str) -> String 
 /// Convert a Rust function name to the idiomatic name for the target language.
 pub(crate) fn func_name(name: &str, lang: Language, ffi_prefix: &str) -> String {
     let base = match lang {
-        Language::Python | Language::Ruby | Language::Elixir | Language::R | Language::Rust => name.to_snake_case(),
+        Language::Python | Language::Ruby | Language::Elixir | Language::R | Language::Rust | Language::Zig => {
+            name.to_snake_case()
+        }
         Language::Node | Language::Wasm | Language::Java | Language::Php => to_camel_case(name),
         Language::Csharp | Language::Go => name.to_pascal_case(),
         Language::Ffi | Language::C | Language::Jni => {
             format!("{}_{}", ffi_prefix.to_snake_case(), name.to_snake_case())
         }
-        Language::Kotlin
-        | Language::KotlinAndroid
-        | Language::Swift
-        | Language::Dart
-        | Language::Gleam
-        | Language::Zig => to_camel_case(name),
+        Language::Kotlin | Language::KotlinAndroid | Language::Swift | Language::Dart | Language::Gleam => {
+            to_camel_case(name)
+        }
     };
     match (lang, base.as_str()) {
         (Language::Java, "default") => "defaultOptions".to_string(),
@@ -130,15 +129,13 @@ pub(crate) fn field_name(name: &str, lang: Language) -> String {
         | Language::Ffi
         | Language::Rust
         | Language::C
-        | Language::Jni => name.to_snake_case(),
+        | Language::Jni
+        | Language::Zig => name.to_snake_case(),
         Language::Go | Language::Csharp => name.to_pascal_case(),
         Language::Node | Language::Wasm | Language::Java | Language::Php => to_camel_case(name),
-        Language::Kotlin
-        | Language::KotlinAndroid
-        | Language::Swift
-        | Language::Dart
-        | Language::Gleam
-        | Language::Zig => to_camel_case(name),
+        Language::Kotlin | Language::KotlinAndroid | Language::Swift | Language::Dart | Language::Gleam => {
+            to_camel_case(name)
+        }
     }
 }
 
@@ -147,7 +144,7 @@ pub(crate) fn enum_variant_name(name: &str, lang: Language, ffi_prefix: &str) ->
     if name == "RDFa" {
         return match lang {
             Language::Python | Language::Java => "RDFA".to_string(),
-            Language::Ruby | Language::Elixir => "rdfa".to_string(),
+            Language::Ruby | Language::Elixir | Language::Zig => "rdfa".to_string(),
             Language::R => "rdfa".to_string(),
             Language::Ffi | Language::C | Language::Jni => format!("{}_{}", ffi_prefix.to_shouty_snake_case(), "RDFA"),
             _ => "RDFa".to_string(),
@@ -156,7 +153,7 @@ pub(crate) fn enum_variant_name(name: &str, lang: Language, ffi_prefix: &str) ->
     match lang {
         Language::Python => name.to_shouty_snake_case(),
         Language::Java => name.to_shouty_snake_case(),
-        Language::Ruby | Language::Elixir => name.to_snake_case(),
+        Language::Ruby | Language::Elixir | Language::Zig => name.to_snake_case(),
         Language::Go
         | Language::Node
         | Language::Wasm
@@ -166,8 +163,7 @@ pub(crate) fn enum_variant_name(name: &str, lang: Language, ffi_prefix: &str) ->
         | Language::KotlinAndroid
         | Language::Swift
         | Language::Dart
-        | Language::Gleam
-        | Language::Zig => name.to_pascal_case(),
+        | Language::Gleam => name.to_pascal_case(),
         Language::R => name.to_snake_case(),
         Language::Rust => name.to_pascal_case(),
         Language::Ffi | Language::C | Language::Jni => {
@@ -278,5 +274,39 @@ mod tests {
     fn test_lang_code_fence_kotlin_android_uses_kotlin() {
         assert_eq!(lang_code_fence(Language::Kotlin), "kotlin");
         assert_eq!(lang_code_fence(Language::KotlinAndroid), "kotlin");
+    }
+
+    #[test]
+    fn test_func_name_zig_uses_snake_case() {
+        assert_eq!(func_name("create_engine", Language::Zig, TEST_PREFIX), "create_engine");
+        assert_eq!(func_name("map_urls", Language::Zig, TEST_PREFIX), "map_urls");
+        assert_eq!(func_name("batch_scrape", Language::Zig, TEST_PREFIX), "batch_scrape");
+    }
+
+    #[test]
+    fn test_field_name_zig_uses_snake_case() {
+        assert_eq!(field_name("max_depth", Language::Zig), "max_depth");
+        assert_eq!(field_name("user_agent", Language::Zig), "user_agent");
+    }
+
+    #[test]
+    fn test_enum_variant_name_zig_uses_snake_case() {
+        assert_eq!(enum_variant_name("Auto", Language::Zig, TEST_PREFIX), "auto");
+        assert_eq!(enum_variant_name("Stealth", Language::Zig, TEST_PREFIX), "stealth");
+        assert_eq!(
+            enum_variant_name("NetworkIdle", Language::Zig, TEST_PREFIX),
+            "network_idle"
+        );
+    }
+
+    #[test]
+    fn test_enum_variant_name_zig_rdfa_special_case_uses_snake_case() {
+        assert_eq!(enum_variant_name("RDFa", Language::Zig, TEST_PREFIX), "rdfa");
+    }
+
+    #[test]
+    fn test_type_name_zig_preserves_pascal_case() {
+        assert_eq!(type_name("BrowserMode", Language::Zig, TEST_PREFIX), "BrowserMode");
+        assert_eq!(type_name("CrawlConfig", Language::Zig, TEST_PREFIX), "CrawlConfig");
     }
 }
