@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   adjacently tagged tuple variants and untagged struct variants emit matching Rust syntax (#232).
 - **ffi/service**: free the C-allocated response pointer before deserializing it in the generated service handler
   bridge, so a malformed response no longer leaks the buffer when parsing fails.
+- **e2e/python**: stop emitting broken generated snippets/tests for `json_object` args configured with
+  `options_via = "from_json"`. Construct via the type's plain kwargs constructor instead, stop importing that type
+  from both the public module and the native bindings module in the same file, and bind the call result whenever
+  the snippet template is going to print it instead of discarding the return value and printing an unbound name.
 - **snippets**: enforce one timeout budget across every snippet in a validation batch and terminate timed-out
   toolchain process groups so descendant processes cannot keep docs generation alive.
 - **cache**: serialize IR maps and sets in canonical order so unchanged inputs retain stable IR and backend cache hashes.

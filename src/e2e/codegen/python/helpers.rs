@@ -60,6 +60,82 @@ pub(super) fn resolve_options_via(e2e_config: &E2eConfig) -> &str {
         .unwrap_or("kwargs")
 }
 
+/// Compute the exact type-name set the pyo3 backend injects a `from_json()` staticmethod for.
+///
+/// pyo3's gate (`src/backends/pyo3/gen_bindings/mod.rs`) is the conjunction
+/// `has_serde && core_to_binding_convertible_types(api, &[]).contains(&typ.name)` — `has_serde`
+/// alone is necessary but not sufficient, since a serde-derived type can still fail the
+/// transitive core→binding convertibility fixpoint (e.g. a field whose type has no matching
+/// binding conversion). Calling the real `core_to_binding_convertible_types` here — rather than
+/// re-deriving convertibility from `type_defs`/`enums` by hand — keeps this in lockstep with
+/// pyo3 even if that algorithm changes; it reads only `surface.types`/`surface.enums`, so the
+/// synthetic surface built from the same two IR slices already threaded through e2e codegen is
+/// faithful to the real one. ~keep
+pub(super) fn core_to_binding_convertible_types(
+    type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+) -> ahash::AHashSet<String> {
+    let surface = crate::core::ir::ApiSurface {
+        types: type_defs.to_vec(),
+        enums: enums.to_vec(),
+        ..Default::default()
+    };
+    crate::codegen::conversions::core_to_binding_convertible_types(&surface, &[])
+}
+
+/// Whether the pyo3 `.pyi` stub generator (`src/backends/pyo3/gen_stubs.rs`) declares the
+/// `from_json()` staticmethod that `gen_bindings/mod.rs` conditionally injects into the
+/// generated Rust `impl` block. It currently never does, for any type: the injection writes
+/// `from_json` as a raw string directly into the impl block text, bypassing the
+/// `TypeDef::methods` IR that `gen_type_stub`/`gen_method_stub` read from, so the stub generator
+/// has no way to learn the method exists.
+///
+/// Verified against liter-llm: `CreateImageRequest` passes pyo3's Rust-codegen gate (`has_serde
+/// == true` and it is in `core_to_binding_convertible_types`), and the compiled
+/// `_internal_bindings.abi3.so` genuinely has a working `from_json` — `hasattr(CreateImageRequest,
+/// "from_json")` is `True` at runtime — yet `grep -c 'def from_json' _internal_bindings.pyi`
+/// across the whole 94-type generated package is `0`. A static type checker reading the shipped
+/// `.pyi` (pyrefly, mypy) therefore always rejects `SomeType.from_json(...)`, regardless of the
+/// Rust-codegen gate. Until `gen_stubs.rs` is taught to mirror that injection, no `from_json()`
+/// construction can type-check against a real generated package, so this stays `false`. ~keep
+const PYO3_STUB_DECLARES_FROM_JSON: bool = false;
+
+/// Mirrors pyo3's own gate for injecting a `from_json()` staticmethod into a type's generated
+/// Rust `impl` block: `has_serde && core_to_binding_convertible_types(api, &[]).contains(name)`
+/// (see `src/backends/pyo3/gen_bindings/mod.rs`). Kept as a standalone predicate — independent
+/// of whether the `.pyi` stub actually declares that method, see
+/// [`PYO3_STUB_DECLARES_FROM_JSON`] — so it stays correct and testable on its own even while the
+/// stub gap keeps it unused by [`effective_options_via_for_type`] below. ~keep
+pub(super) fn pyo3_would_inject_from_json(
+    name: &str,
+    type_defs: &[crate::core::ir::TypeDef],
+    convertible_types: &ahash::AHashSet<String>,
+) -> bool {
+    let has_serde = type_defs.iter().find(|t| t.name == name).is_some_and(|t| t.has_serde);
+    has_serde && convertible_types.contains(name)
+}
+
+/// Downgrade `options_via` from `"from_json"` to `"kwargs"` unless the target type actually
+/// gains a *declared* `from_json()` staticmethod — i.e. it passes pyo3's Rust-codegen gate
+/// ([`pyo3_would_inject_from_json`]) AND the `.pyi` stub generator would actually declare it
+/// (currently never, see [`PYO3_STUB_DECLARES_FROM_JSON`]). Every generated DTO still exposes a
+/// plain kwargs constructor, so falling back there keeps the emitted call — and its
+/// type-checkability against the shipped stub — valid instead of referencing a method the stub
+/// never declares. ~keep
+pub(super) fn effective_options_via_for_type<'a>(
+    options_via: &'a str,
+    options_type: Option<&str>,
+    type_defs: &[crate::core::ir::TypeDef],
+    convertible_types: &ahash::AHashSet<String>,
+) -> &'a str {
+    if options_via != "from_json" {
+        return options_via;
+    }
+    let is_declared = PYO3_STUB_DECLARES_FROM_JSON
+        && options_type.is_some_and(|name| pyo3_would_inject_from_json(name, type_defs, convertible_types));
+    if is_declared { options_via } else { "kwargs" }
+}
+
 /// Resolve enum field mappings from the Python override config.
 pub(super) fn resolve_enum_fields(e2e_config: &E2eConfig) -> &HashMap<String, String> {
     static EMPTY: std::sync::LazyLock<HashMap<String, String>> = std::sync::LazyLock::new(HashMap::new);
@@ -175,6 +251,121 @@ mod tests {
     #[test]
     fn classify_bytes_value_base64_is_base64() {
         matches!(classify_bytes_value("/9j/4AAQSkZJRgABAQEASABIAAD"), BytesKind::Base64);
+    }
+
+    // --- pyo3_would_inject_from_json: the Rust-codegen gate, independent of the stub gap ---
+
+    #[test]
+    fn pyo3_would_inject_from_json_true_when_type_has_serde_and_is_convertible() {
+        let type_defs = vec![crate::core::ir::TypeDef {
+            name: "WidgetRequest".to_string(),
+            has_serde: true,
+            ..Default::default()
+        }];
+        let convertible = core_to_binding_convertible_types(&type_defs, &[]);
+        assert!(
+            convertible.contains("WidgetRequest"),
+            "test setup: a plain fieldless type must be convertible"
+        );
+
+        assert!(pyo3_would_inject_from_json("WidgetRequest", &type_defs, &convertible));
+    }
+
+    #[test]
+    fn pyo3_would_inject_from_json_false_when_type_lacks_serde() {
+        let type_defs = vec![crate::core::ir::TypeDef {
+            name: "WidgetRequest".to_string(),
+            has_serde: false,
+            ..Default::default()
+        }];
+        let convertible = core_to_binding_convertible_types(&type_defs, &[]);
+
+        assert!(!pyo3_would_inject_from_json("WidgetRequest", &type_defs, &convertible));
+    }
+
+    /// Mirrors the measured liter-llm defect: `has_serde` alone is not the pyo3 gate. A
+    /// serde-derived type whose field references a type that never resolves fails the second
+    /// half of pyo3's conjunction (`core_to_binding_convertible_types`), so pyo3 never injects
+    /// `from_json()` for it even though `has_serde` is true.
+    #[test]
+    fn pyo3_would_inject_from_json_false_when_type_has_serde_but_is_not_convertible() {
+        use crate::core::ir::{FieldDef, TypeDef, TypeRef};
+
+        let type_defs = vec![TypeDef {
+            name: "WidgetRequest".to_string(),
+            has_serde: true,
+            fields: vec![FieldDef {
+                name: "extra".to_string(),
+                ty: TypeRef::Named("UnresolvedExternalType".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }];
+        let convertible = core_to_binding_convertible_types(&type_defs, &[]);
+        assert!(
+            !convertible.contains("WidgetRequest"),
+            "test setup: an unresolved field type must fail convertibility"
+        );
+
+        assert!(!pyo3_would_inject_from_json("WidgetRequest", &type_defs, &convertible));
+    }
+
+    // --- effective_options_via_for_type: what the emitter actually does today ---
+
+    /// The pyo3 `.pyi` stub generator never declares `from_json` for any type today (see
+    /// `PYO3_STUB_DECLARES_FROM_JSON`), so even a type that genuinely passes pyo3's Rust-codegen
+    /// gate — and has a working `from_json()` at runtime — must still downgrade to kwargs, or the
+    /// emitted snippet fails type-checking against the shipped stub. This is the exact liter-llm
+    /// `CreateImageRequest` case: has_serde and convertible are both true, yet
+    /// `_internal_bindings.pyi` has zero `def from_json` declarations anywhere in the package.
+    #[test]
+    fn effective_options_via_for_type_downgrades_to_kwargs_even_when_pyo3_would_inject_from_json() {
+        let type_defs = vec![crate::core::ir::TypeDef {
+            name: "WidgetRequest".to_string(),
+            has_serde: true,
+            ..Default::default()
+        }];
+        let convertible = core_to_binding_convertible_types(&type_defs, &[]);
+        assert!(pyo3_would_inject_from_json("WidgetRequest", &type_defs, &convertible));
+
+        assert_eq!(
+            effective_options_via_for_type("from_json", Some("WidgetRequest"), &type_defs, &convertible),
+            "kwargs"
+        );
+    }
+
+    #[test]
+    fn effective_options_via_for_type_downgrades_to_kwargs_when_type_lacks_serde() {
+        let type_defs = vec![crate::core::ir::TypeDef {
+            name: "WidgetRequest".to_string(),
+            has_serde: false,
+            ..Default::default()
+        }];
+        let convertible = core_to_binding_convertible_types(&type_defs, &[]);
+
+        assert_eq!(
+            effective_options_via_for_type("from_json", Some("WidgetRequest"), &type_defs, &convertible),
+            "kwargs"
+        );
+    }
+
+    #[test]
+    fn effective_options_via_for_type_downgrades_to_kwargs_when_type_is_unknown() {
+        let convertible = core_to_binding_convertible_types(&[], &[]);
+        assert_eq!(
+            effective_options_via_for_type("from_json", Some("WidgetRequest"), &[], &convertible),
+            "kwargs"
+        );
+    }
+
+    #[test]
+    fn effective_options_via_for_type_leaves_non_from_json_values_untouched() {
+        let convertible = core_to_binding_convertible_types(&[], &[]);
+        assert_eq!(effective_options_via_for_type("dict", None, &[], &convertible), "dict");
+        assert_eq!(
+            effective_options_via_for_type("kwargs", None, &[], &convertible),
+            "kwargs"
+        );
     }
 
     #[test]

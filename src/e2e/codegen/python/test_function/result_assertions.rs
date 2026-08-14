@@ -21,6 +21,7 @@ pub(super) fn emit_result_and_assertions(
     field_resolver: &FieldResolver,
     result_is_simple: bool,
     is_streaming: bool,
+    force_bind_result: bool,
 ) {
     // For streaming fixtures, streaming virtual fields are always usable
     // (they resolve against the collected `chunks` list, not the result type).
@@ -128,7 +129,8 @@ pub(super) fn emit_result_and_assertions(
             !trimmed.starts_with('#') && trimmed.contains(result_var)
         });
 
-        let result_binding = (result_var_used || fixture.has_docs_presentation()).then_some(result_var);
+        let result_binding =
+            (result_var_used || fixture.has_docs_presentation() || force_bind_result).then_some(result_var);
         out.push_str(&crate::e2e::template_env::render(
             "python/call_statement.py.jinja",
             minijinja::context! { result_binding => result_binding, call_expr => call_expr },
@@ -245,6 +247,32 @@ mod tests {
         }
     }
 
+    fn minimal_fixture() -> Fixture {
+        Fixture {
+            docs: None,
+            requirements: Vec::new(),
+            id: "widget_smoke".to_string(),
+            description: "Create a widget".to_string(),
+            input: serde_json::Value::Null,
+            http: None,
+            asyncapi: None,
+            websocket: None,
+            preserve_input_urls: false,
+            assertions: Vec::new(),
+            call: None,
+            skip: None,
+            env: None,
+            setup: Vec::new(),
+            visitor: None,
+            args: vec![],
+            assertion_recipes: vec![],
+            mock_response: None,
+            source: String::new(),
+            category: None,
+            tags: Vec::new(),
+        }
+    }
+
     #[test]
     fn streaming_virtual_assertion_renders_collected_chunks_access() {
         let mut out = String::new();
@@ -265,5 +293,68 @@ mod tests {
         assert_eq!(rendered, "    await process(value)\n");
         assert!(!rendered.contains("result ="));
         assert!(!rendered.contains("_ ="));
+    }
+
+    #[test]
+    fn should_bind_result_when_force_bind_result_is_set_with_no_assertions() {
+        let fixture = minimal_fixture();
+        let e2e_config = E2eConfig::default();
+        let call_config = crate::e2e::config::CallConfig::default();
+        let field_resolver = FieldResolver::new(
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        );
+        let mut out = String::new();
+
+        emit_result_and_assertions(
+            &mut out,
+            &fixture,
+            &e2e_config,
+            &call_config,
+            "await widget_client.create()",
+            "result",
+            &field_resolver,
+            false,
+            false,
+            true,
+        );
+
+        assert!(
+            out.contains("result = await widget_client.create()"),
+            "expected the call result to be bound so a caller can print it, got: {out}"
+        );
+    }
+
+    #[test]
+    fn should_discard_result_when_force_bind_result_is_unset_and_unused() {
+        let fixture = minimal_fixture();
+        let e2e_config = E2eConfig::default();
+        let call_config = crate::e2e::config::CallConfig::default();
+        let field_resolver = FieldResolver::new(
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        );
+        let mut out = String::new();
+
+        emit_result_and_assertions(
+            &mut out,
+            &fixture,
+            &e2e_config,
+            &call_config,
+            "await widget_client.create()",
+            "result",
+            &field_resolver,
+            false,
+            false,
+            false,
+        );
+
+        assert!(!out.contains("result ="), "unused result must not be bound, got: {out}");
     }
 }

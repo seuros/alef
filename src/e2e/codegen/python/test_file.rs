@@ -11,7 +11,7 @@ use crate::e2e::config::E2eConfig;
 use crate::e2e::fixture::Fixture;
 
 use super::helpers::{
-    BytesKind, classify_bytes_value, is_skipped, python_method_helper_import, resolve_client_factory,
+    self, BytesKind, classify_bytes_value, is_skipped, python_method_helper_import, resolve_client_factory,
     resolve_enum_fields, resolve_function_name, resolve_function_name_for_call, resolve_handle_dict_types,
     resolve_handle_nested_types, resolve_module, resolve_options_type, resolve_options_via,
 };
@@ -19,6 +19,12 @@ use super::http::render_http_test_function;
 use super::test_function::{render_test_function, resolve_field_enum_type};
 
 /// Render a complete Python test file for a single fixture category.
+///
+/// `force_bind_result` overrides the usual assertion-driven heuristic for
+/// binding the call's result to `result_var` — the docs-snippet caller sets
+/// this when it will print the result unconditionally (fixture assertions are
+/// stripped for snippets), so the emitted call must still assign it. ~keep
+#[allow(clippy::too_many_arguments)]
 pub(super) fn render_test_file(
     category: &str,
     fixtures: &[&Fixture],
@@ -26,6 +32,7 @@ pub(super) fn render_test_file(
     config: &crate::core::config::ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
+    force_bind_result: bool,
 ) -> String {
     let module = resolve_module(e2e_config);
     let function_name = resolve_function_name(e2e_config);
@@ -68,6 +75,18 @@ pub(super) fn render_test_file(
             })
             .unwrap_or(options_via)
     };
+    // Only honor "from_json" when the pyo3 backend actually injects a from_json()
+    // staticmethod for this type (gated on has_serde AND core→binding convertibility) — every
+    // DTO still has a plain kwargs constructor, so downgrading keeps the emitted call and its
+    // import valid. Computed once per file/snippet render; `type_defs`/`enums` don't change
+    // across fixtures in the same category. ~keep
+    let convertible_types = helpers::core_to_binding_convertible_types(type_defs, enums);
+    let effective_options_via = helpers::effective_options_via_for_type(
+        effective_options_via,
+        effective_options_type.as_deref(),
+        type_defs,
+        &convertible_types,
+    );
 
     let enum_fields = resolve_enum_fields(e2e_config);
     let handle_nested_types = resolve_handle_nested_types(e2e_config);
@@ -336,6 +355,8 @@ pub(super) fn render_test_file(
             handle_nested_types,
             &used_enum_types,
             &used_config_types,
+            type_defs,
+            &convertible_types,
             &mut thirdparty_from,
         );
     }
@@ -366,6 +387,8 @@ pub(super) fn render_test_file(
                 enum_fields,
                 handle_nested_types,
                 handle_dict_types,
+                force_bind_result,
+                &convertible_types,
             );
         }
         let _ = writeln!(fixtures_body);
@@ -425,6 +448,8 @@ fn build_thirdparty_imports(
     handle_nested_types: &std::collections::HashMap<String, String>,
     used_enum_types: &BTreeSet<String>,
     used_config_types: &BTreeSet<String>,
+    type_defs: &[crate::core::ir::TypeDef],
+    convertible_types: &ahash::AHashSet<String>,
     thirdparty_from: &mut Vec<String>,
 ) {
     let handle_constructors: Vec<String> = e2e_config
@@ -606,8 +631,17 @@ fn build_thirdparty_imports(
     ) {
         if options_via == "from_json" {
             // Import opts_type from the native bindings module (e.g., PyO3 _internal_bindings),
-            // not the public module — it needs the native from_json() staticmethod.
-            thirdparty_from.push(format!("from {module} import {}", import_names.join(", ")));
+            // not the public module — it needs the native from_json() staticmethod. Exclude it
+            // from the public import line so the class isn't imported from both modules (the
+            // second import silently shadows the first). ~keep
+            let public_names: Vec<&str> = import_names
+                .iter()
+                .filter(|name| *name != opts_type)
+                .map(String::as_str)
+                .collect();
+            if !public_names.is_empty() {
+                thirdparty_from.push(format!("from {module} import {}", public_names.join(", ")));
+            }
             let native_mod = from_json_module.unwrap_or(module);
             thirdparty_from.push(format!("from {native_mod} import {opts_type}"));
         } else {
@@ -634,6 +668,12 @@ fn build_thirdparty_imports(
         if let Some(py_override) = cc.overrides.get("python")
             && py_override.options_via.as_deref() == Some("from_json")
             && let Some(opts_type) = &py_override.options_type
+            && helpers::effective_options_via_for_type(
+                "from_json",
+                Some(opts_type.as_str()),
+                type_defs,
+                convertible_types,
+            ) == "from_json"
         {
             let native_mod = py_override.from_json_module.as_deref().unwrap_or(module);
             extra_from_json_types.insert(format!("from {native_mod} import {opts_type}"));
@@ -689,7 +729,58 @@ mod tests {
         let config = crate::core::config::ResolvedCrateConfig::default();
         let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
         let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
-        let out = render_test_file("basic", &fixtures, &e2e_config, &config, &type_defs, &enums);
+        let out = render_test_file("basic", &fixtures, &e2e_config, &config, &type_defs, &enums, false);
         assert!(out.contains("E2e tests for category: basic"), "got: {out}");
+    }
+
+    /// Direct coverage of the import-deduplication fix on `build_thirdparty_imports`'s
+    /// `options_via == "from_json"` branch. This branch is unreachable today through
+    /// `render_test_file`/`render_snippet_body` (see `helpers::PYO3_STUB_DECLARES_FROM_JSON`),
+    /// but must stay correct for when the pyo3 `.pyi` stub gap is eventually closed.
+    #[test]
+    fn build_thirdparty_imports_does_not_duplicate_the_from_json_type_across_modules() {
+        let fixtures: Vec<&crate::e2e::fixture::Fixture> = Vec::new();
+        let e2e_config = crate::e2e::config::E2eConfig::default();
+        let config = crate::core::config::ResolvedCrateConfig::default();
+        let options_type = Some("WidgetRequest".to_string());
+        // Mirrors what `render_test_file`'s scan populates for a json_object arg constructed
+        // via `WidgetRequest(...)` — the type name lands in `used_config_types` regardless of
+        // `options_via`.
+        let used_config_types: BTreeSet<String> = ["WidgetRequest".to_string()].into_iter().collect();
+        let mut thirdparty_from: Vec<String> = Vec::new();
+
+        build_thirdparty_imports(
+            &fixtures,
+            &e2e_config,
+            &config,
+            "my_lib",
+            "create_widget",
+            Some("create_client"),
+            &options_type,
+            "from_json",
+            Some("my_lib._internal_bindings"),
+            true,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+            &BTreeSet::new(),
+            &used_config_types,
+            &[],
+            &ahash::AHashSet::new(),
+            &mut thirdparty_from,
+        );
+
+        let import_lines_with_type: Vec<&String> = thirdparty_from
+            .iter()
+            .filter(|line| line.starts_with("from ") && line.contains("WidgetRequest"))
+            .collect();
+        assert_eq!(
+            import_lines_with_type,
+            vec!["from my_lib._internal_bindings import WidgetRequest"],
+            "WidgetRequest must be imported from exactly one module, got: {thirdparty_from:?}"
+        );
+        assert!(
+            thirdparty_from.contains(&"from my_lib import create_client".to_string()),
+            "the client factory must still be imported from the public module, got: {thirdparty_from:?}"
+        );
     }
 }
