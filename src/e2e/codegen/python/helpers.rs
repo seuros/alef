@@ -83,30 +83,14 @@ pub(super) fn core_to_binding_convertible_types(
     crate::codegen::conversions::core_to_binding_convertible_types(&surface, &[])
 }
 
-/// Whether the pyo3 `.pyi` stub generator (`src/backends/pyo3/gen_stubs.rs`) declares the
-/// `from_json()` staticmethod that `gen_bindings/mod.rs` conditionally injects into the
-/// generated Rust `impl` block. It currently never does, for any type: the injection writes
-/// `from_json` as a raw string directly into the impl block text, bypassing the
-/// `TypeDef::methods` IR that `gen_type_stub`/`gen_method_stub` read from, so the stub generator
-/// has no way to learn the method exists.
-///
-/// Verified against liter-llm: `CreateImageRequest` passes pyo3's Rust-codegen gate (`has_serde
-/// == true` and it is in `core_to_binding_convertible_types`), and the compiled
-/// `_internal_bindings.abi3.so` genuinely has a working `from_json` — `hasattr(CreateImageRequest,
-/// "from_json")` is `True` at runtime — yet `grep -c 'def from_json' _internal_bindings.pyi`
-/// across the whole 94-type generated package is `0`. A static type checker reading the shipped
-/// `.pyi` (pyrefly, mypy) therefore always rejects `SomeType.from_json(...)`, regardless of the
-/// Rust-codegen gate. Until `gen_stubs.rs` is taught to mirror that injection, no `from_json()`
-/// construction can type-check against a real generated package, so this stays `false`. ~keep
-const PYO3_STUB_DECLARES_FROM_JSON: bool = false;
-
 /// Mirrors pyo3's own gate for injecting a `from_json()` staticmethod into a type's generated
 /// Rust `impl` block — the shared [`crate::codegen::conversions::pyo3_from_json_eligible`]
 /// predicate, requiring per-type serde derives, crate-level serde availability, and
-/// core<->binding convertibility (see `src/backends/pyo3/gen_bindings/types.rs`). Kept as a
-/// standalone predicate — independent of whether the `.pyi` stub actually declares that method,
-/// see [`PYO3_STUB_DECLARES_FROM_JSON`] — so it stays correct and testable on its own even while
-/// the stub gap keeps it unused by [`effective_options_via_for_type`] below. ~keep
+/// core<->binding convertibility (see `src/backends/pyo3/gen_bindings/types.rs`). As of
+/// `093c42f31`, `type_has_from_json` is the single predicate shared by both the raw-text
+/// `#[pymethods]` injection and the `.pyi` stub generator, so passing this gate also means the
+/// shipped stub declares the method — verified against liter-llm's `CreateImageRequest`, where
+/// `_internal_bindings.pyi` carries `def from_json`. ~keep
 pub(super) fn pyo3_would_inject_from_json(
     name: &str,
     type_defs: &[crate::core::ir::TypeDef],
@@ -120,12 +104,11 @@ pub(super) fn pyo3_would_inject_from_json(
 }
 
 /// Downgrade `options_via` from `"from_json"` to `"kwargs"` unless the target type actually
-/// gains a *declared* `from_json()` staticmethod — i.e. it passes pyo3's Rust-codegen gate
-/// ([`pyo3_would_inject_from_json`]) AND the `.pyi` stub generator would actually declare it
-/// (currently never, see [`PYO3_STUB_DECLARES_FROM_JSON`]). Every generated DTO still exposes a
-/// plain kwargs constructor, so falling back there keeps the emitted call — and its
-/// type-checkability against the shipped stub — valid instead of referencing a method the stub
-/// never declares. ~keep
+/// passes pyo3's Rust-codegen gate ([`pyo3_would_inject_from_json`]) — the gate that also
+/// controls whether the `.pyi` stub declares the method, so passing it guarantees the emitted
+/// call type-checks against the shipped stub. Every generated DTO still exposes a plain kwargs
+/// constructor, so falling back there keeps the emitted call valid for types that don't clear
+/// the gate. ~keep
 pub(super) fn effective_options_via_for_type<'a>(
     options_via: &'a str,
     options_type: Option<&str>,
@@ -136,9 +119,8 @@ pub(super) fn effective_options_via_for_type<'a>(
     if options_via != "from_json" {
         return options_via;
     }
-    let is_declared = PYO3_STUB_DECLARES_FROM_JSON
-        && options_type
-            .is_some_and(|name| pyo3_would_inject_from_json(name, type_defs, convertible_types, crate_has_serde));
+    let is_declared = options_type
+        .is_some_and(|name| pyo3_would_inject_from_json(name, type_defs, convertible_types, crate_has_serde));
     if is_declared { options_via } else { "kwargs" }
 }
 
@@ -259,9 +241,9 @@ mod tests {
         matches!(classify_bytes_value("/9j/4AAQSkZJRgABAQEASABIAAD"), BytesKind::Base64);
     }
 
-    // --- pyo3_would_inject_from_json: the shared pyo3_from_json_eligible gate, independent of
-    // the stub gap. All three conditions — per-type has_serde, crate-level has_serde, and
-    // convertibility — are independently necessary. ---
+    // --- pyo3_would_inject_from_json: the shared pyo3_from_json_eligible gate. All three
+    // conditions — per-type has_serde, crate-level has_serde, and convertibility — are
+    // independently necessary. ---
 
     #[test]
     fn pyo3_would_inject_from_json_true_when_all_three_conditions_hold() {
@@ -359,14 +341,14 @@ mod tests {
 
     // --- effective_options_via_for_type: what the emitter actually does today ---
 
-    /// The pyo3 `.pyi` stub generator never declares `from_json` for any type today (see
-    /// `PYO3_STUB_DECLARES_FROM_JSON`), so even a type that genuinely passes pyo3's Rust-codegen
-    /// gate — and has a working `from_json()` at runtime — must still downgrade to kwargs, or the
-    /// emitted snippet fails type-checking against the shipped stub. This is the exact liter-llm
-    /// `CreateImageRequest` case: has_serde and convertible are both true, yet
-    /// `_internal_bindings.pyi` has zero `def from_json` declarations anywhere in the package.
+    /// As of `093c42f31`, the pyo3 `.pyi` stub generator declares `from_json` under the exact
+    /// same predicate as pyo3's Rust-codegen gate (`type_has_from_json` in
+    /// `src/backends/pyo3/gen_bindings/types.rs`), so a type that passes the gate keeps
+    /// `options_via = "from_json"` instead of downgrading. This is the exact liter-llm
+    /// `CreateImageRequest` case: has_serde and convertible are both true, and
+    /// `_internal_bindings.pyi` now declares `def from_json` for it.
     #[test]
-    fn effective_options_via_for_type_downgrades_to_kwargs_even_when_pyo3_would_inject_from_json() {
+    fn effective_options_via_for_type_keeps_from_json_when_pyo3_would_inject_it() {
         let type_defs = vec![crate::core::ir::TypeDef {
             name: "WidgetRequest".to_string(),
             has_serde: true,
@@ -382,7 +364,7 @@ mod tests {
 
         assert_eq!(
             effective_options_via_for_type("from_json", Some("WidgetRequest"), &type_defs, &convertible, true),
-            "kwargs"
+            "from_json"
         );
     }
 

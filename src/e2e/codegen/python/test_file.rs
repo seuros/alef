@@ -740,9 +740,9 @@ mod tests {
     }
 
     /// Direct coverage of the import-deduplication fix on `build_thirdparty_imports`'s
-    /// `options_via == "from_json"` branch. This branch is unreachable today through
-    /// `render_test_file`/`render_snippet_body` (see `helpers::PYO3_STUB_DECLARES_FROM_JSON`),
-    /// but must stay correct for when the pyo3 `.pyi` stub gap is eventually closed.
+    /// `options_via == "from_json"` branch — reachable through `render_test_file`/
+    /// `render_snippet_body` for any type that passes pyo3's Rust-codegen gate (see
+    /// `helpers::pyo3_would_inject_from_json`).
     #[test]
     fn build_thirdparty_imports_does_not_duplicate_the_from_json_type_across_modules() {
         let fixtures: Vec<&crate::e2e::fixture::Fixture> = Vec::new();

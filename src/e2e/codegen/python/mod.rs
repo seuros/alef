@@ -596,7 +596,16 @@ from_json_module = "my_lib._internal_bindings"
         )
         .expect("config must parse");
         let e2e = cfg.crates[0].e2e.clone().expect("e2e config");
-        let resolved = cfg.resolve().expect("config resolves").remove(0);
+        let mut resolved = cfg.resolve().expect("config resolves").remove(0);
+        // `crate_has_serde` walks up from this path looking for a Cargo.toml with serde +
+        // serde_json dependencies; point it at this (alef) crate's own `src/` — whose Cargo.toml
+        // declares both — instead of the fictional `my-lib` consumer path, which resolves to a
+        // directory that doesn't exist on disk and would make the crate-level condition always
+        // false regardless of the scenario each test means to exercise. ~keep
+        resolved.output_paths.insert(
+            "python".to_string(),
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src"),
+        );
         (e2e, resolved)
     }
 
@@ -638,14 +647,14 @@ from_json_module = "my_lib._internal_bindings"
         assert!(rendered.contains("print(result)"), "{rendered}");
     }
 
-    /// The pyo3 `.pyi` stub generator never declares `from_json` for any type today (see
-    /// `helpers::PYO3_STUB_DECLARES_FROM_JSON`), so `options_via = "from_json"` must fall back to
-    /// a single kwargs import/construction even for a type that genuinely passes pyo3's
-    /// Rust-codegen gate (`has_serde` and convertible) — otherwise the snippet fails
-    /// type-checking against the shipped stub. See `test_file::tests` for direct coverage of the
-    /// import-deduplication fix on the (currently unreachable) from_json import branch itself.
+    /// As of `093c42f31`, the pyo3 `.pyi` stub generator declares `from_json` under the exact
+    /// same gate pyo3's Rust-codegen uses (`has_serde` and convertible — see
+    /// `helpers::pyo3_would_inject_from_json`), so a type that passes it keeps
+    /// `options_via = "from_json"` end to end and the emitted call type-checks against the
+    /// shipped stub. See `test_file::tests` for direct coverage of the import-deduplication fix
+    /// on this now-reachable from_json import branch. ~keep
     #[test]
-    fn should_use_a_single_kwargs_import_even_when_pyo3_would_inject_from_json() {
+    fn should_use_from_json_when_pyo3_would_inject_it() {
         let (e2e, resolved) = widget_snippet_config();
         let fixture = widget_fixture();
         let type_defs = vec![crate::core::ir::TypeDef {
@@ -659,8 +668,8 @@ from_json_module = "my_lib._internal_bindings"
             .expect("snippet renders");
 
         assert!(
-            !rendered.contains(".from_json("),
-            "the shipped .pyi stub never declares from_json, so the snippet must not call it: {rendered}"
+            rendered.contains("WidgetRequest.from_json("),
+            "expected a from_json() construction now that the stub declares it: {rendered}"
         );
         let import_lines_with_type: Vec<&str> = rendered
             .lines()
@@ -668,8 +677,12 @@ from_json_module = "my_lib._internal_bindings"
             .collect();
         assert_eq!(
             import_lines_with_type,
-            vec!["from my_lib import create_client, WidgetRequest"],
-            "WidgetRequest must be imported exactly once, from the public module: {rendered}"
+            vec!["from my_lib._internal_bindings import WidgetRequest"],
+            "WidgetRequest must be imported exactly once, from the native bindings module: {rendered}"
+        );
+        assert!(
+            rendered.contains("from my_lib import create_client"),
+            "the client factory must still be imported from the public module: {rendered}"
         );
     }
 
