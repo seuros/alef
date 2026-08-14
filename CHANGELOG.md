@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **snippets**: preserve extension-owned fixture descriptions while validating generated documentation language
   identities.
+- **readme**: name the missing `crates.readme.snippets_dir` (or `snippets.<key>`) config again when a README
+  template's `include_snippet` call references an undefined snippet mapping, instead of surfacing serde's generic
+  "did not match any variant of untagged enum" message. Undefined values must be rejected before struct
+  deserialization of the (String | {path, root}) snippet mapping, which fails silently on the underlying cause.
 - **napi**: allow string-enum field literals alongside the nominal TypeScript enum using values derived from the
   canonical enum emitter.
 - **kotlin-android**: treat a DTO as default-constructible only when every emitted constructor parameter has a
