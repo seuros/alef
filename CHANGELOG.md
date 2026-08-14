@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fixture whose expectation legitimately ends in a newline could never be satisfied, and a genuine trailing-whitespace
   regression was silently absorbed. Neither side is normalized now.
 
+- **e2e/rust**: share one field-aware containment predicate across `contains`, `contains_all`, `not_contains`, and
+  `contains_any`, so enum and collection fields no longer emit assertions that fail to compile. Only `contains`
+  handled those field kinds; the other three emitted a plain `.contains()` call that an enum does not have and
+  that compares whole collection elements. `contains`'s own output is byte-for-byte unchanged.
 - **snippets**: preserve extension-owned fixture descriptions while validating generated documentation language
   identities.
 - **readme**: name the missing `crates.readme.snippets_dir` (or `snippets.<key>`) config again when a README

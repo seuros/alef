@@ -31,6 +31,34 @@ fn is_optional_scalar_field(assertion: &Assertion, is_unwrapped: bool, field_res
 }
 
 /// Render a single assertion into the test function body.
+/// The boolean expression deciding whether `field_access` contains `expected`.
+///
+/// ~keep Every containment operator shares this, because a fixture author picks the operator
+/// and the field independently: an enum field has no `contains` method of its own, and a
+/// collection field's `contains` compares whole elements rather than the name a fixture
+/// names. An operator that emits the plain form for those two field kinds emits Rust that
+/// does not compile, which is invisible until the consumer builds its generated tests.
+fn containment_predicate(field_access: &str, expected: &str, field_is_enum: bool, field_is_collection: bool) -> String {
+    if field_is_enum {
+        format!("format!(\"{{:?}}\", {field_access}).to_lowercase().contains(&{expected}.to_lowercase())")
+    } else if field_is_collection {
+        format!(
+            "{field_access}.iter().any(|item| serde_json::to_value(item).ok().is_some_and(|value| match value {{ serde_json::Value::String(text) => text == {expected}, serde_json::Value::Object(fields) => fields.get(\"name\").and_then(serde_json::Value::as_str).is_some_and(|text| text == {expected}), _ => false }}))"
+        )
+    } else {
+        format!("{field_access}.contains({expected})")
+    }
+}
+
+/// The failure text describing what [`containment_predicate`] looked for.
+fn containment_message(field_is_enum: bool, field_is_collection: bool) -> &'static str {
+    if !field_is_enum && field_is_collection {
+        "expected collection item name"
+    } else {
+        "expected to contain"
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn render_assertion(
     out: &mut String,
@@ -404,7 +432,8 @@ pub fn render_assertion_with_streaming(
     let field_is_collection = assertion
         .field
         .as_deref()
-        .is_some_and(|field| field_resolver.is_array(field) || field_resolver.is_collection_root(field));
+        .is_some_and(|field| field_resolver.is_array(field) || field_resolver.is_collection_root(field))
+        || result_is_vec;
 
     match assertion.assertion_type.as_str() {
         "error" => {
@@ -430,40 +459,29 @@ pub fn render_assertion_with_streaming(
         "contains" => {
             if let Some(val) = &assertion.value {
                 let expected = value_to_rust_string(val);
-                let line = if field_is_enum {
-                    format!(
-                        "    assert!(format!(\"{{:?}}\", {field_access}).to_lowercase().contains(&{expected}.to_lowercase()), \"expected to contain: {{}}\", {expected});"
-                    )
-                } else if field_is_collection || result_is_vec {
-                    format!(
-                        "    assert!({field_access}.iter().any(|item| serde_json::to_value(item).ok().is_some_and(|value| match value {{ serde_json::Value::String(text) => text == {expected}, serde_json::Value::Object(fields) => fields.get(\"name\").and_then(serde_json::Value::as_str).is_some_and(|text| text == {expected}), _ => false }})), \"expected collection item name: {{}}\", {expected});"
-                    )
-                } else {
-                    format!(
-                        "    assert!({field_access}.contains({expected}), \"expected to contain: {{}}\", {expected});"
-                    )
-                };
-                let _ = writeln!(out, "{line}");
+                let predicate = containment_predicate(&field_access, &expected, field_is_enum, field_is_collection);
+                let message = containment_message(field_is_enum, field_is_collection);
+                let _ = writeln!(out, "    assert!({predicate}, \"{message}: {{}}\", {expected});");
             }
         }
         "contains_all" => {
             if let Some(values) = &assertion.values {
                 for val in values {
                     let expected = value_to_rust_string(val);
-                    let line = format!(
-                        "    assert!({field_access}.contains({expected}), \"expected to contain: {{}}\", {expected});"
-                    );
-                    let _ = writeln!(out, "{line}");
+                    let predicate = containment_predicate(&field_access, &expected, field_is_enum, field_is_collection);
+                    let message = containment_message(field_is_enum, field_is_collection);
+                    let _ = writeln!(out, "    assert!({predicate}, \"{message}: {{}}\", {expected});");
                 }
             }
         }
         "not_contains" => {
             for val in assertion.expected_values() {
                 let expected = value_to_rust_string(val);
-                let line = format!(
-                    "    assert!(!{field_access}.contains({expected}), \"expected NOT to contain: {{}}\", {expected});"
+                let predicate = containment_predicate(&field_access, &expected, field_is_enum, field_is_collection);
+                let _ = writeln!(
+                    out,
+                    "    assert!(!{predicate}, \"expected NOT to contain: {{}}\", {expected});"
                 );
-                let _ = writeln!(out, "{line}");
             }
         }
         "not_empty" => {
@@ -486,7 +504,7 @@ pub fn render_assertion_with_streaming(
                     .iter()
                     .map(|v| {
                         let expected = value_to_rust_string(v);
-                        format!("{field_access}.contains({expected})")
+                        containment_predicate(&field_access, &expected, field_is_enum, field_is_collection)
                     })
                     .collect();
                 let joined = checks.join(" || ");
@@ -963,6 +981,211 @@ mod tests {
         assert!(vector.contains("result.iter().any"), "got: {vector}");
 
         assert!(!vector.contains("format!(\"{:?}\""), "got: {vector}");
+    }
+
+    /// The four operators that mean "contains".
+    const CONTAINMENT_OPERATORS: [&str; 4] = ["contains", "contains_all", "not_contains", "contains_any"];
+
+    /// Render one containment operator, supplying the value under whichever key it reads.
+    fn render_containment(operator: &str, field: &str, expected: &str, resolver: &FieldResolver) -> String {
+        let assertion = Assertion {
+            assertion_type: operator.to_string(),
+            field: Some(field.to_string()),
+            value: Some(serde_json::json!(expected)),
+            values: Some(vec![serde_json::json!(expected)]),
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            "sample",
+            "sample",
+            false,
+            &[],
+            resolver,
+            false,
+            false,
+            false,
+            false,
+            false,
+            None,
+        );
+        out
+    }
+
+    #[test]
+    fn every_containment_operator_uses_the_enum_predicate_on_an_enum_field() {
+        let resolver = empty_resolver().with_enum_fields(HashSet::from(["link_type".to_string()]));
+
+        for operator in CONTAINMENT_OPERATORS {
+            let rendered = render_containment(operator, "link_type", "anchor", &resolver);
+            assert!(
+                rendered.contains("format!(\"{:?}\", result.link_type).to_lowercase()"),
+                "`{operator}` must compare an enum field through its Debug form, or the generated \
+                 test cannot compile — an enum has no inherent `contains`; got: {rendered}"
+            );
+            assert!(
+                !rendered.contains("result.link_type.contains("),
+                "`{operator}` still calls `contains` directly on an enum field; got: {rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_containment_operator_uses_the_collection_predicate_on_a_collection_field() {
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::from(["cookies".to_string()]),
+            &HashSet::from(["cookies".to_string()]),
+            &HashSet::new(),
+        );
+
+        for operator in CONTAINMENT_OPERATORS {
+            let rendered = render_containment(operator, "cookies", "session", &resolver);
+            assert!(
+                rendered.contains("result.cookies.iter().any("),
+                "`{operator}` must match a collection field element-wise, or it compares a whole \
+                 element against a name; got: {rendered}"
+            );
+            assert!(
+                rendered.contains("fields.get(\"name\")"),
+                "`{operator}` must accept an object element matched by its `name`; got: {rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_containment_operator_emits_parseable_rust() {
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::from(["cookies".to_string()]),
+            &HashSet::from(["cookies".to_string()]),
+            &HashSet::new(),
+        )
+        .with_enum_fields(HashSet::from(["link_type".to_string()]));
+
+        for operator in CONTAINMENT_OPERATORS {
+            for (field, expected) in [("link_type", "anchor"), ("cookies", "session"), ("content", "plain")] {
+                let body = render_containment(operator, field, expected, &resolver);
+                let unit = format!("fn generated() {{\n{body}}}\n");
+                syn::parse_file(&unit).unwrap_or_else(|error| {
+                    panic!("`{operator}` on `{field}` must emit parseable Rust: {error}\n{unit}")
+                });
+            }
+        }
+    }
+
+    /// ~keep Pins `contains`'s emitted bytes, not merely its shape. Sharing one predicate across
+    /// the four operators is only safe if the operator that already worked emits exactly what it
+    /// emitted before — otherwise every consumer regenerates, and reviewers must diff generated
+    /// trees to tell a real fix from formatting churn. These three lines are the pre-refactor
+    /// output verbatim.
+    #[test]
+    fn contains_emits_unchanged_bytes_for_every_field_kind() {
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::from(["content".to_string(), "link_type".to_string(), "cookies".to_string()]),
+            &HashSet::from(["cookies".to_string()]),
+            &HashSet::new(),
+        )
+        .with_enum_fields(HashSet::from(["link_type".to_string()]));
+
+        let expected = [
+            (
+                "content",
+                "needle",
+                "    assert!(result.content.contains(r#\"needle\"#), \"expected to contain: {}\", r#\"needle\"#);\n",
+            ),
+            (
+                "link_type",
+                "anchor",
+                "    assert!(format!(\"{:?}\", result.link_type).to_lowercase().contains(&r#\"anchor\"#.to_lowercase()), \"expected to contain: {}\", r#\"anchor\"#);\n",
+            ),
+            (
+                "cookies",
+                "session",
+                "    assert!(result.cookies.iter().any(|item| serde_json::to_value(item).ok().is_some_and(|value| match value { serde_json::Value::String(text) => text == r#\"session\"#, serde_json::Value::Object(fields) => fields.get(\"name\").and_then(serde_json::Value::as_str).is_some_and(|text| text == r#\"session\"#), _ => false })), \"expected collection item name: {}\", r#\"session\"#);\n",
+            ),
+        ];
+
+        for (field, value, want) in expected {
+            let assertion = make_assertion("contains", Some(field), Some(serde_json::json!(value)));
+            let mut got = String::new();
+            render_assertion(
+                &mut got,
+                &assertion,
+                "result",
+                "sample",
+                "sample",
+                false,
+                &[],
+                &resolver,
+                false,
+                false,
+                false,
+                false,
+                false,
+                None,
+            );
+            assert_eq!(got, want, "`contains` on `{field}` changed its emitted bytes");
+        }
+    }
+
+    /// ~keep The two predicate shapes below are duplicated on purpose: each appears once as a
+    /// string the generator must produce and once as real code rustc type-checks in this test
+    /// binary. A string-only assertion can be updated to match a broken generator and stay
+    /// green — that is how a previous containment fix shipped output that did not compile.
+    /// Keeping a compiled copy means the pair cannot both be edited into agreement without
+    /// rustc also accepting the result.
+    const ENUM_PREDICATE: &str = r#"format!("{:?}", kind).to_lowercase().contains(&"anchor".to_lowercase())"#;
+
+    const COLLECTION_PREDICATE: &str = r#"items.iter().any(|item| serde_json::to_value(item).ok().is_some_and(|value| match value { serde_json::Value::String(text) => text == "needle", serde_json::Value::Object(fields) => fields.get("name").and_then(serde_json::Value::as_str).is_some_and(|text| text == "needle"), _ => false }))"#;
+
+    #[test]
+    fn the_enum_predicate_is_valid_rust_against_a_real_enum() {
+        #[derive(Debug)]
+        enum SampleKind {
+            Anchor,
+        }
+        let kind = SampleKind::Anchor;
+
+        assert!(format!("{:?}", kind).to_lowercase().contains(&"anchor".to_lowercase()));
+
+        assert_eq!(containment_predicate("kind", "\"anchor\"", true, false), ENUM_PREDICATE);
+    }
+
+    #[test]
+    fn the_collection_predicate_is_valid_rust_against_a_real_collection() {
+        #[derive(serde::Serialize)]
+        struct SampleItem {
+            name: String,
+        }
+        let items = vec![SampleItem {
+            name: "needle".to_string(),
+        }];
+
+        assert!(
+            items
+                .iter()
+                .any(|item| serde_json::to_value(item).ok().is_some_and(|value| match value {
+                    serde_json::Value::String(text) => text == "needle",
+                    serde_json::Value::Object(fields) => fields
+                        .get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|text| text == "needle"),
+                    _ => false,
+                }))
+        );
+
+        assert_eq!(
+            containment_predicate("items", "\"needle\"", false, true),
+            COLLECTION_PREDICATE
+        );
     }
 
     #[test]
