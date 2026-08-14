@@ -474,7 +474,14 @@ pub(super) fn render_test_file(
     // at the module level before void main().
     let mut test_stub_classes = String::new();
     for fixture in fixtures {
-        collect_dart_test_stub_classes(&mut test_stub_classes, fixture, e2e_config, config, type_defs, enums);
+        super::stubs::collect_test_stub_classes(
+            &mut test_stub_classes,
+            fixture,
+            e2e_config,
+            config,
+            type_defs,
+            enums,
+        );
     }
     if !test_stub_classes.is_empty() {
         out.push_str(&test_stub_classes);
@@ -726,48 +733,4 @@ fn render_dart_sut_spawn(out: &mut String) {
     );
     let _ = writeln!(out, "      }}");
     let _ = writeln!(out, "    }}");
-}
-
-/// Collect module-level test stub class definitions for Dart.
-/// Dart does not allow class definitions inside functions, so we must emit them
-/// at the module level before void main(). This function checks if the fixture
-/// uses a test_backend argument and if so, emits the class definition.
-fn collect_dart_test_stub_classes(
-    out: &mut String,
-    fixture: &Fixture,
-    e2e_config: &E2eConfig,
-    config: &ResolvedCrateConfig,
-    type_defs: &[crate::core::ir::TypeDef],
-    enums: &[crate::core::ir::EnumDef],
-) {
-    // HTTP fixtures do not use test_backend.
-    if fixture.is_http_test() {
-        return;
-    }
-
-    let call_config = e2e_config.resolve_call_for_fixture(
-        fixture.call.as_deref(),
-        &fixture.id,
-        &fixture.resolved_category(),
-        &fixture.tags,
-        &fixture.input,
-    );
-    for arg_def in fixture.resolved_args(call_config) {
-        if arg_def.arg_type != "test_backend" {
-            continue;
-        }
-        if let Some(trait_name) = &arg_def.trait_name
-            && let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name)
-        {
-            let methods: Vec<&crate::core::ir::MethodDef> = type_defs
-                .iter()
-                .find(|t| t.name == *trait_name)
-                .map(|t| t.methods.iter().collect())
-                .unwrap_or_default();
-            let emission = super::stubs::emit_test_backend(trait_bridge, &methods, fixture, enums);
-            // Emit only the class definition at module-level.
-            let _ = writeln!(out, "{}", emission.setup_block);
-            let _ = writeln!(out);
-        }
-    }
 }

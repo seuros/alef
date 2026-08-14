@@ -168,6 +168,59 @@ pub fn emit_test_backend(
     }
 }
 
+/// Collect module-level test stub class definitions for Dart.
+///
+/// Dart does not allow class definitions inside functions, so callers that emit a
+/// `test_backend` argument (a trait-bridge stub, e.g. for `register_validator`) must
+/// hoist the stub class — and its `_create<Stub>Wrapper()` factory function, which the
+/// call site awaits — to module scope, above `main()`/`void main()`. Both the full e2e
+/// test-file emitter (`test_file.rs`) and the single-fixture doc-snippet emitter
+/// (`snippet.rs`) render a call expression that references the factory function, so both
+/// must call this to actually define it; skipping it here left doc snippets referencing
+/// an undefined `_createTestStub...Wrapper` symbol (never declared) while the full e2e
+/// suite already declared it via its own pass.
+pub(super) fn collect_test_stub_classes(
+    out: &mut String,
+    fixture: &Fixture,
+    e2e_config: &crate::e2e::config::E2eConfig,
+    config: &crate::core::config::ResolvedCrateConfig,
+    type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+) {
+    use std::fmt::Write as _;
+
+    // HTTP fixtures do not use test_backend.
+    if fixture.is_http_test() {
+        return;
+    }
+
+    let call_config = e2e_config.resolve_call_for_fixture(
+        fixture.call.as_deref(),
+        &fixture.id,
+        &fixture.resolved_category(),
+        &fixture.tags,
+        &fixture.input,
+    );
+    for arg_def in fixture.resolved_args(call_config) {
+        if arg_def.arg_type != "test_backend" {
+            continue;
+        }
+        if let Some(trait_name) = &arg_def.trait_name
+            && let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name)
+        {
+            let methods: Vec<&crate::core::ir::MethodDef> = type_defs
+                .iter()
+                .find(|t| t.name == *trait_name)
+                .map(|t| t.methods.iter().collect())
+                .unwrap_or_default();
+            let emission = emit_test_backend(trait_bridge, &methods, fixture, enums);
+            // Emit only the class definition at module-level.
+            let _ = writeln!(out, "{}", emission.setup_block);
+            let _ = writeln!(out);
+        }
+    }
+}
+
 /// Map a Dart type, with an explicit bridge carrier for internal-only types.
 /// Internal named types use a generated `<TypeName>Bridge` carrier so tests preserve
 /// the Rust trait contract instead of substituting a public DTO.

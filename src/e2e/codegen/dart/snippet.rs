@@ -20,6 +20,21 @@ pub(super) fn render_snippet_body(
         .any(|assertion| assertion.assertion_type == "error");
     let mut fixture_without_assertions = fixture.clone();
     fixture_without_assertions.assertions.clear();
+    // Trait-bridge fixtures (e.g. `register_validator: trait bridge`) reference a
+    // `_create<Stub>Wrapper()` factory in the call expression below. Dart forbids class
+    // definitions inside a function, so — mirroring the full e2e test-file emitter — the
+    // stub class and its factory function must be hoisted to module scope, above
+    // `main()`. Without this the snippet calls a factory function that is never defined.
+    let mut stub_classes = String::new();
+    super::stubs::collect_test_stub_classes(
+        &mut stub_classes,
+        &fixture_without_assertions,
+        e2e_config,
+        config,
+        type_defs,
+        enums,
+    );
+    let stub_classes = stub_classes.trim_end().to_string();
     let bridge_class = config.dart_bridge_class_name();
     let first_class_map = super::values::build_dart_first_class_map(type_defs, enums, e2e_config);
     let mut test_case = String::new();
@@ -58,16 +73,22 @@ pub(super) fn render_snippet_body(
         .any(|statement| statement.contains("jsonDecode(") || statement.contains("jsonEncode("));
     let needs_io =
         expects_error || !call.returns_void || statements.iter().any(|statement| statement.contains("File("));
+    // Trait-bridge stubs with `Vec<u8>`/bytes-typed methods (e.g. OcrBackend.processImage)
+    // emit `Uint8List`, which requires `dart:typed_data` — mirrors `has_batch_byte_items` in
+    // the full e2e test-file emitter (test_file.rs).
+    let needs_typed_data = stub_classes.contains("Uint8List");
     Ok(crate::e2e::template_env::render(
         "dart/snippet_body.jinja",
         minijinja::context! {
             package => package, module => module, bridge_module => bridge_module,
             statements => statements, needs_json => needs_json,
             needs_io => needs_io,
+            needs_typed_data => needs_typed_data,
             expects_error => expects_error,
             error_type => crate::e2e::codegen::snippet_error_type_name(config),
             result_var => call.result_var,
             returns_void => call.returns_void,
+            stub_classes => stub_classes,
         },
     ))
 }
@@ -200,5 +221,118 @@ mod tests {
         assert!(body.contains("/fixtures/create_item/items"));
         assert!(body.contains("request.write(jsonEncode(jsonDecode"));
         assert!(!body.contains("expect("));
+    }
+
+    fn make_trait_bridge(trait_name: &str) -> crate::core::config::TraitBridgeConfig {
+        crate::core::config::TraitBridgeConfig {
+            trait_name: trait_name.to_string(),
+            super_trait: Some("Plugin".to_string()),
+            register_fn: Some(format!("register_{}", trait_name.to_lowercase())),
+            ..Default::default()
+        }
+    }
+
+    fn make_method(name: &str) -> crate::core::ir::MethodDef {
+        crate::core::ir::MethodDef {
+            name: name.to_string(),
+            params: vec![],
+            return_type: crate::core::ir::TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool),
+            is_async: true,
+            is_static: false,
+            error_type: None,
+            doc: String::new(),
+            receiver: Some(crate::core::ir::ReceiverKind::Ref),
+            sanitized: false,
+            trait_source: None,
+            returns_ref: false,
+            returns_cow: false,
+            return_newtype_wrapper: None,
+            has_default_impl: false,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }
+    }
+
+    // Regression test for defect #543/1: a trait-bridge snippet (register_validator,
+    // register_ocr_backend, ...) references a `_createTestStub<Fixture>Wrapper()` factory
+    // function in its call expression. The full e2e test-file emitter hoists the stub
+    // class + factory to module scope via a separate pass (`collect_test_stub_classes`);
+    // the doc-snippet emitter must run the same pass, or the emitted snippet calls a
+    // function that is never defined. This fixture's call is void-returning to isolate
+    // the stub-emission defect from the separate void-binding defect (see the sibling
+    // test below) — proving neither test can pass while only the other defect is fixed.
+    #[test]
+    fn snippet_hoists_test_backend_stub_class_and_factory_above_main() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "register_backend", "description": "register: trait bridge", "input": null
+        }))
+        .expect("fixture");
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.call.function = "registerBackend".into();
+        e2e_config.call.returns_void = true;
+        e2e_config.call.args.push(crate::e2e::config::ArgMapping {
+            name: "backend".into(),
+            field: "input.backend".into(),
+            arg_type: "test_backend".into(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: Some("TestTrait".into()),
+        });
+        let mut config = ResolvedCrateConfig::default();
+        config.trait_bridges.push(make_trait_bridge("TestTrait"));
+        let type_defs = [crate::core::ir::TypeDef {
+            name: "TestTrait".into(),
+            methods: vec![make_method("doWork")],
+            ..Default::default()
+        }];
+
+        let body = render_snippet_body(&fixture, &e2e_config, &config, &type_defs, &[]).expect("snippet");
+
+        assert!(
+            body.contains("class TestStubRegisterBackend extends TestTrait"),
+            "stub class must be emitted at module scope:\n{body}"
+        );
+        assert!(
+            body.contains("Future<TestTraitDartImpl> _createTestStubRegisterBackendWrapper()"),
+            "factory function must be defined, not just referenced:\n{body}"
+        );
+        assert!(
+            body.contains("await _createTestStubRegisterBackendWrapper()"),
+            "call site must invoke the now-defined factory:\n{body}"
+        );
+        // The stub class must appear before `main()`; Dart forbids local class declarations.
+        let class_pos = body.find("class TestStubRegisterBackend").expect("class present");
+        let main_pos = body.find("Future<void> main()").expect("main present");
+        assert!(class_pos < main_pos, "stub class must precede main():\n{body}");
+    }
+
+    // Regression test for defect #543/2: binding the result of a `Future<void>`-returning
+    // call (`final result = await voidCall();`) is a Dart compile error even when `result`
+    // is never read — the initializer's void value is what's illegal, not an unused
+    // variable. This fixture uses a plain (non-trait-bridge) void call with no
+    // `test_backend` argument, isolating the void-binding defect from the stub-emission
+    // defect covered above.
+    #[test]
+    fn snippet_does_not_bind_a_void_returning_call_to_a_variable() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "clear_validators", "description": "clear validators", "input": null
+        }))
+        .expect("fixture");
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.call.function = "clear_validators".into();
+        e2e_config.call.returns_void = true;
+
+        let body =
+            render_snippet_body(&fixture, &e2e_config, &ResolvedCrateConfig::default(), &[], &[]).expect("snippet");
+
+        assert!(!body.contains("final result ="), "void call must not be bound:\n{body}");
+        assert!(
+            body.contains(".clearValidators();"),
+            "void call must still be awaited directly without a binding:\n{body}"
+        );
     }
 }

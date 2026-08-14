@@ -341,7 +341,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                         .unwrap_or_default();
                     let emission = emit_test_backend(trait_bridge, &methods, fixture, enums);
                     // Dart class definitions are emitted at module-level (before void main)
-                    // in collect_dart_test_stub_classes, so we only push the instantiation here.
+                    // in stubs::collect_test_stub_classes, so we only push the instantiation here.
                     args.push(emission.arg_expr);
                     continue;
                 }
@@ -995,7 +995,16 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                 let _ = writeln!(out, "    {line}");
             }
         }
-        if is_streaming {
+        // A `Future<void>`-returning call cannot be bound to a variable — `final result =
+        // await voidCall();` is a Dart compile error ("This expression has a type of
+        // 'void' so its value can't be used"), because the initializer's value is used
+        // even though nothing ever reads `result` afterward. Trait-bridge registration
+        // wrappers (registerValidator, registerOcrBackend, ...) are declared `returns_void`
+        // in alef.toml precisely because the generated Dart bridge method returns
+        // `Future<void>`, so honor that flag here instead of always binding a variable.
+        if call_config.returns_void {
+            let _ = writeln!(out, "    await {receiver}.{function_name}({args_str});");
+        } else if is_streaming {
             let _ = writeln!(
                 out,
                 "    final {result_var} = await {receiver}.{function_name}({args_str}).toList();"

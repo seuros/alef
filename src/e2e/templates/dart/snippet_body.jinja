@@ -2,8 +2,13 @@
 {% endif %}
 {% if needs_io %}import 'dart:io';
 {% endif %}
+{% if needs_typed_data %}import 'dart:typed_data';
+{% endif %}
 import 'package:{{ package }}/{{ module }}.dart';
 import 'package:{{ package }}/src/{{ bridge_module }}/frb_generated.dart' show RustLib;
+{% if stub_classes %}
+{{ stub_classes }}
+{% endif %}
 Future<void> main() async {
   await RustLib.init();
   try {
