@@ -7,7 +7,7 @@ use super::constructors::{gen_opaque_factory_method, gen_opaque_static_construct
 use crate::backends::csharp::type_map::csharp_type;
 use crate::codegen::naming::{csharp_type_name, to_csharp_name};
 use crate::core::config::workspace::ClientConstructorConfig;
-use crate::core::ir::{MethodDef, TypeDef, TypeRef};
+use crate::core::ir::{MethodDef, ReceiverKind, TypeDef, TypeRef};
 use heck::ToLowerCamelCase;
 use std::collections::{HashMap, HashSet};
 
@@ -31,6 +31,10 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_opaque_handle(
         .iter()
         .any(|m| streaming_methods.contains(&m.name) && streaming_methods_meta.contains_key(&m.name));
     let has_methods = has_streaming || typ.methods.iter().any(|m| !streaming_methods.contains(&m.name));
+    let has_consuming_methods = typ
+        .methods
+        .iter()
+        .any(|method| method.receiver == Some(ReceiverKind::Owned));
     let uses_list = |tr: &TypeRef| -> bool {
         matches!(tr, TypeRef::Vec(_))
             || matches!(tr, TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Vec(_)))
@@ -64,6 +68,7 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_opaque_handle(
             "needs_list": needs_list,
             "needs_async": needs_async,
             "needs_streaming": has_streaming,
+            "has_consuming_methods": has_consuming_methods,
             "doc": has_doc,
             "doc_lines": doc_lines,
         })),
@@ -226,6 +231,7 @@ pub(super) fn gen_opaque_method(
         method_cs_name.clone()
     };
     let is_static = method.is_static || method.receiver.is_none();
+    let consumes_receiver = method.receiver == Some(ReceiverKind::Owned);
     let static_kw = if is_static { "static " } else { "" };
     out.push_str(
         render(
@@ -307,6 +313,7 @@ pub(super) fn gen_opaque_method(
                 native_method_name => &cs_native_name,
                 args_block => &args_block,
                 exception_name,
+                consumes_receiver,
             },
         ));
         out.push_str("    }\n\n");
@@ -375,6 +382,12 @@ pub(super) fn gen_opaque_method(
             }
         }
         out.push_str("\n            );\n");
+        if consumes_receiver {
+            out.push_str(&render(
+                "consumed_handle_invalidate.jinja",
+                minijinja::context! { indent => "            " },
+            ));
+        }
 
         if method.return_type != TypeRef::Unit && returns_ptr(&method.return_type) {
             if matches!(method.return_type, TypeRef::Optional(_)) {
@@ -458,6 +471,12 @@ pub(super) fn gen_opaque_method(
             }
         }
         out.push_str("\n        );\n");
+        if consumes_receiver {
+            out.push_str(&render(
+                "consumed_handle_invalidate.jinja",
+                minijinja::context! { indent => "        " },
+            ));
+        }
 
         if method.return_type != TypeRef::Unit && returns_ptr(&method.return_type) {
             if matches!(method.return_type, TypeRef::Optional(_)) {

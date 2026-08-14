@@ -389,6 +389,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/opaque_bytes_result_call.jinja"),
     ),
     (
+        "consumed_handle_invalidate.jinja",
+        include_str!("templates/consumed_handle_invalidate.jinja"),
+    ),
+    (
         "opaque_streaming_static_wrapper.jinja",
         include_str!("templates/opaque_streaming_static_wrapper.jinja"),
     ),

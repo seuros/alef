@@ -6,6 +6,9 @@
                 out var outLen,
                 out var outCap
             );
+{% if consumes_receiver %}
+            _safeHandle.Invalidate();
+{% endif %}
             if (rc != 0)
             {
                 var ec = NativeMethods.LastErrorCode();
@@ -24,6 +27,9 @@
             out var outLen,
             out var outCap
         );
+{% if consumes_receiver %}
+        _safeHandle.Invalidate();
+{% endif %}
         if (rc != 0)
         {
             var ec = NativeMethods.LastErrorCode();

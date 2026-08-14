@@ -91,6 +91,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **csharp/zig**: invalidate host wrappers immediately after a consuming native method returns, including error
+  returns, so fluent builders cannot retain a stale owner while wrapping the replacement handle.
 - **ffi/csharp/zig**: return every byte buffer through the owned pointer/length/capacity ABI, including infallible
   borrowed slices, so hosts copy exact binary data and free only the allocation transferred by the FFI layer.
 - **config**: reject unknown keys in closed Alef configuration sections instead of silently discarding misspelled or

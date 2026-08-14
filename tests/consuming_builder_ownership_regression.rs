@@ -1,0 +1,279 @@
+use alef::backends::{csharp::CsharpBackend, zig::ZigBackend};
+use alef::core::backend::{Backend, GeneratedFile};
+use alef::core::config::{NewAlefConfig, ResolvedCrateConfig};
+use alef::core::ir::{ApiSurface, ErrorDef, MethodDef, ReceiverKind, TypeDef, TypeRef};
+
+fn config() -> ResolvedCrateConfig {
+    let source = r#"
+[workspace]
+languages = ["csharp", "zig"]
+
+[[crates]]
+name = "neutral"
+sources = ["src/lib.rs"]
+
+[crates.ffi]
+prefix = "neutral"
+
+[crates.csharp]
+namespace = "Neutral"
+"#;
+    let config: NewAlefConfig = toml::from_str(source).expect("neutral config must parse");
+    config.resolve().expect("neutral config must resolve").remove(0)
+}
+
+fn route_builder_api() -> ApiSurface {
+    ApiSurface {
+        crate_name: "neutral".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![route_builder_type()],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![build_error()],
+        excluded_type_paths: Default::default(),
+        excluded_trait_names: Default::default(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: vec![],
+    }
+}
+
+fn route_builder_type() -> TypeDef {
+    TypeDef {
+        name: "RouteBuilder".to_string(),
+        rust_path: "neutral::RouteBuilder".to_string(),
+        original_rust_path: String::new(),
+        fields: vec![],
+        methods: vec![consuming_method()],
+        is_opaque: true,
+        is_clone: false,
+        is_copy: false,
+        is_trait: false,
+        has_default: false,
+        has_stripped_cfg_fields: false,
+        is_return_type: true,
+        serde_rename_all: None,
+        has_serde: false,
+        super_traits: vec![],
+        doc: String::new(),
+        cfg: None,
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        is_variant_wrapper: false,
+        has_lifetime_params: false,
+        has_private_fields: false,
+        version: Default::default(),
+    }
+}
+
+fn consuming_method() -> MethodDef {
+    MethodDef {
+        name: "with_cors".to_string(),
+        params: vec![],
+        return_type: TypeRef::Named("RouteBuilder".to_string()),
+        is_async: false,
+        is_static: false,
+        error_type: Some("BuildError".to_string()),
+        doc: "Consume this builder and return its configured replacement.".to_string(),
+        receiver: Some(ReceiverKind::Owned),
+        sanitized: false,
+        trait_source: None,
+        returns_ref: false,
+        returns_cow: false,
+        return_newtype_wrapper: None,
+        has_default_impl: false,
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        version: Default::default(),
+    }
+}
+
+fn build_error() -> ErrorDef {
+    ErrorDef {
+        name: "BuildError".to_string(),
+        rust_path: "neutral::BuildError".to_string(),
+        original_rust_path: String::new(),
+        variants: vec![],
+        doc: String::new(),
+        methods: vec![],
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        version: Default::default(),
+    }
+}
+
+fn file_containing<'a>(files: &'a [GeneratedFile], suffix: &str) -> &'a str {
+    &files
+        .iter()
+        .find(|file| file.path.to_string_lossy().ends_with(suffix))
+        .unwrap_or_else(|| panic!("generated output must contain {suffix}"))
+        .content
+}
+
+fn compile_csharp(files: &[GeneratedFile]) {
+    let Some(target_framework) = dotnet_target_framework() else {
+        return;
+    };
+    let directory = tempfile::tempdir().expect("temporary C# directory must be created");
+    let project_directory = directory.path().join("packages/csharp");
+    for file in files {
+        let destination = directory.path().join(&file.path);
+        std::fs::create_dir_all(destination.parent().expect("generated file must have a parent"))
+            .expect("generated C# directory must be created");
+        std::fs::write(destination, &file.content).expect("generated C# file must be written");
+    }
+    let project = project_directory.join("Ownership.csproj");
+    std::fs::write(
+        &project,
+        format!(
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>{target_framework}</TargetFramework>\
+             <OutputType>Exe</OutputType><NuGetAudit>false</NuGetAudit></PropertyGroup></Project>"
+        ),
+    )
+    .expect("C# project must be written");
+    write_runtime_probe(&project_directory);
+    let output = run_runtime_probe(&project_directory);
+    assert!(
+        output.status.success(),
+        "generated consuming wrapper runtime probe must pass\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn dotnet_target_framework() -> Option<String> {
+    let output = std::process::Command::new("dotnet").arg("--version").output().ok()?;
+    let version = String::from_utf8(output.stdout).ok()?;
+    let major = version.trim().split('.').next()?;
+    Some(format!("net{major}.0"))
+}
+
+fn write_runtime_probe(directory: &std::path::Path) {
+    let program = r#"using System;
+using System.Runtime.InteropServices;
+using Neutral;
+internal static class Program {
+    [DllImport("neutral_ffi", EntryPoint = "neutral_test_free_count")]
+    private static extern int FreeCount();
+    private static int Main() {
+        var original = new RouteBuilder(new IntPtr(41));
+        var replacement = original.WithCors();
+        if (original.Handle != IntPtr.Zero) return 1;
+        original.Dispose();
+        if (FreeCount() != 0) return 2;
+        replacement.Dispose();
+        return FreeCount() == 1 ? 0 : 3;
+    }
+}"#;
+    let native = r#"#include <stdint.h>
+static int32_t free_count = 0;
+void *neutral_route_builder_with_cors(void *handle) { return (void *)((uintptr_t)handle + 1); }
+void neutral_route_builder_free(void *handle) { if (handle) free_count += 1; }
+int32_t neutral_last_error_code(void) { return 0; }
+const char *neutral_last_error_context(void) { return ""; }
+void neutral_free_string(char *ptr) { (void)ptr; }
+int32_t neutral_test_free_count(void) { return free_count; }
+"#;
+    std::fs::write(directory.join("Program.cs"), program).expect("runtime probe must be written");
+    std::fs::write(directory.join("ownership.c"), native).expect("native probe must be written");
+}
+
+fn run_runtime_probe(directory: &std::path::Path) -> std::process::Output {
+    let (library, linker_args, library_path) = if cfg!(target_os = "macos") {
+        ("libneutral_ffi.dylib", vec!["-dynamiclib"], "DYLD_LIBRARY_PATH")
+    } else if cfg!(target_os = "linux") {
+        ("libneutral_ffi.so", vec!["-shared", "-fPIC"], "LD_LIBRARY_PATH")
+    } else {
+        return std::process::Command::new("dotnet").arg("--version").output().unwrap();
+    };
+    let mut command = std::process::Command::new("cc");
+    command.args(linker_args).args(["-o", library, "ownership.c"]);
+    let compile = command
+        .current_dir(directory)
+        .output()
+        .expect("native probe compiler must start");
+    assert!(compile.status.success(), "native ownership probe must compile");
+    std::process::Command::new("dotnet")
+        .args(["run", "--nologo", "-v:quiet"])
+        .env(library_path, directory)
+        .current_dir(directory)
+        .output()
+        .expect("runtime ownership probe must start")
+}
+
+#[test]
+fn csharp_invalidates_the_consumed_safe_handle_before_observing_result() {
+    let files = CsharpBackend
+        .generate_bindings(&route_builder_api(), &config())
+        .expect("C# generation must succeed");
+    let wrapper = file_containing(&files, "RouteBuilder.cs");
+    let method = wrapper
+        .split("public RouteBuilder WithCors")
+        .nth(1)
+        .expect("consuming builder method must be generated");
+    let native_call = method
+        .find("NativeMethods.RouteBuilderWithCors")
+        .expect("native call must be emitted");
+    let invalidate = method
+        .find("_safeHandle.Invalidate()")
+        .expect("consumed handle must be invalidated");
+    let error_check = method
+        .find("LastError")
+        .expect("fallible method must check native error state");
+
+    assert!(
+        wrapper.contains("SetHandleAsInvalid"),
+        "SafeHandle must support non-freeing invalidation: {wrapper}"
+    );
+    assert!(
+        wrapper.contains("SetHandle(IntPtr.Zero)"),
+        "the consumed wrapper must not expose its stale native handle: {wrapper}"
+    );
+    assert!(
+        native_call < invalidate,
+        "host ownership transfers only after the native call starts: {method}"
+    );
+    assert!(
+        invalidate < error_check,
+        "an error after native consumption must not retain the old owner: {method}"
+    );
+}
+
+#[test]
+fn csharp_consuming_wrapper_compiles_and_preserves_single_owner() {
+    let files = CsharpBackend
+        .generate_bindings(&route_builder_api(), &config())
+        .expect("C# generation must succeed");
+    compile_csharp(&files);
+}
+
+#[test]
+fn zig_clears_the_consumed_handle_before_observing_result() {
+    let files = ZigBackend
+        .generate_bindings(&route_builder_api(), &config())
+        .expect("Zig generation must succeed");
+    let zig = file_containing(&files, "neutral.zig");
+    let method = zig
+        .split("pub fn with_cors")
+        .nth(1)
+        .and_then(|body| body.split("pub fn free").next())
+        .expect("consuming builder method must be generated");
+    let native_call = method
+        .find("c.neutral_route_builder_with_cors")
+        .expect("native call must be emitted");
+    let invalidate = method
+        .find("self._handle = 0")
+        .expect("consumed handle must be cleared");
+    let error_check = method
+        .find("_last_error_code")
+        .expect("fallible method must check native error state");
+
+    assert!(
+        native_call < invalidate,
+        "host ownership transfers only after the native call starts: {method}"
+    );
+    assert!(
+        invalidate < error_check,
+        "an error after native consumption must not retain the old owner: {method}"
+    );
+}

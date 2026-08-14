@@ -1,7 +1,7 @@
 use crate::backends::zig::gen_bindings::errors::resolve_zig_error_type;
 use crate::backends::zig::gen_bindings::functions::zig_return_type;
 use crate::backends::zig::gen_bindings::helpers::emit_cleaned_zig_doc;
-use crate::core::ir::{MethodDef, ParamDef, TypeDef, TypeRef};
+use crate::core::ir::{MethodDef, ParamDef, ReceiverKind, TypeDef, TypeRef};
 use heck::AsSnakeCase;
 use std::collections::{HashMap, HashSet};
 
@@ -247,6 +247,8 @@ fn emit_fallible_method_body(
         ));
     }
 
+    emit_consumed_receiver_invalidation(method, out);
+
     out.push_str(&render(
         "opaque_method_error_check.jinja",
         minijinja::context! {
@@ -296,6 +298,7 @@ fn emit_infallible_method_body(
                 c_call => c_call,
             },
         ));
+        emit_consumed_receiver_invalidation(method, out);
         out.push_str(&render(
             "opaque_bytes_return.jinja",
             minijinja::context! {
@@ -309,6 +312,7 @@ fn emit_infallible_method_body(
                 c_call => c_call,
             },
         ));
+        emit_consumed_receiver_invalidation(method, out);
     } else {
         out.push_str(&render(
             "opaque_method_call_result.jinja",
@@ -316,12 +320,22 @@ fn emit_infallible_method_body(
                 c_call => c_call,
             },
         ));
+        emit_consumed_receiver_invalidation(method, out);
         let ret_expr = method_unwrap_return_expr("_result", &method.return_type, prefix, struct_names);
         out.push_str(&render(
             "opaque_method_return.jinja",
             minijinja::context! {
                 ret_expr => &ret_expr,
             },
+        ));
+    }
+}
+
+fn emit_consumed_receiver_invalidation(method: &MethodDef, out: &mut String) {
+    if method.receiver == Some(ReceiverKind::Owned) {
+        out.push_str(&render(
+            "opaque_consumed_handle_invalidate.jinja",
+            minijinja::context! {},
         ));
     }
 }
