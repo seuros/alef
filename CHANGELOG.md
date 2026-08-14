@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **snippets**: isolate per-target validation-session preparation failures so healthy language sessions still run
+  while strict validation reports the affected target as an error.
+
 - **fixtures/readme**: separate reader-facing fixture inputs, result presentation, and error intent from test data,
   and allow individual README snippet mappings to migrate between roots without breaking sibling mappings.
 - **e2e/python**: emit unbound calls when a fixture only verifies that the call does not raise, avoiding unused-result

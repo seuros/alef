@@ -1,6 +1,6 @@
 use crate::snippets::cache::ValidationCache;
 use crate::snippets::error::Result;
-use crate::snippets::session::{SessionSpec, prepare_sessions};
+use crate::snippets::session::{SessionSpec, prepare_sessions_isolated};
 use crate::snippets::types::{
     RunSummary, SideEffectClass, Snippet, SnippetAnnotationKind, SnippetStatus, ValidationLevel, ValidationResult,
 };
@@ -48,7 +48,9 @@ fn available_parallelism() -> usize {
 ///
 /// Returns an error when the validation thread pool cannot be created.
 pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config: &RunnerConfig) -> Result<RunSummary> {
-    let sessions = prepare_sessions(&config.sessions, config.timeout_secs)?;
+    let preparation = prepare_sessions_isolated(&config.sessions, config.timeout_secs);
+    let sessions = preparation.sessions;
+    let session_errors = preparation.errors;
     let session_locks = sessions
         .keys()
         .map(|target| (target.clone(), Mutex::new(())))
@@ -63,10 +65,12 @@ pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config
         if fail_fast {
             let mut results = Vec::with_capacity(snippets.len());
             for snippet in snippets {
+                let preparation_error = session_preparation_error(snippet, &sessions, &session_errors);
                 let session = session_for(snippet, &sessions);
                 let lock = session_key(snippet, &sessions).and_then(|key| session_locks.get(key));
-                let result = validate_one(snippet, registry, config, session, lock);
-                let should_stop = matches!(result.status, SnippetStatus::Fail | SnippetStatus::Error);
+                let result = validate_one(snippet, registry, config, session, lock, preparation_error);
+                let should_stop =
+                    preparation_error.is_none() && matches!(result.status, SnippetStatus::Fail | SnippetStatus::Error);
                 results.push(result);
                 if should_stop {
                     break;
@@ -74,7 +78,7 @@ pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config
             }
             results
         } else {
-            let batched = validate_batches(snippets, registry, config, &sessions, &session_locks);
+            let batched = validate_batches(snippets, registry, config, &sessions, &session_errors, &session_locks);
             snippets
                 .par_iter()
                 .enumerate()
@@ -84,7 +88,7 @@ pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config
                     }
                     let session = session_for(snippet, &sessions);
                     let lock = session_key(snippet, &sessions).and_then(|key| session_locks.get(key));
-                    validate_one(snippet, registry, config, session, lock)
+                    validate_one(snippet, registry, config, session, lock, None)
                 })
                 .collect()
         }
@@ -106,11 +110,23 @@ fn validate_batches(
     registry: &ValidatorRegistry,
     config: &RunnerConfig,
     sessions: &HashMap<String, crate::snippets::session::ValidationSession>,
+    session_errors: &HashMap<String, String>,
     session_locks: &HashMap<String, Mutex<()>>,
 ) -> Vec<Option<ValidationResult>> {
     let mut results = vec![None; snippets.len()];
     let mut groups = BTreeMap::<BatchKey, Vec<usize>>::new();
     for (index, snippet) in snippets.iter().enumerate() {
+        if let Some(message) = session_preparation_error(snippet, sessions, session_errors) {
+            results[index] = Some(result(
+                snippet,
+                SnippetStatus::Error,
+                config.level,
+                config.level,
+                Some(message.to_owned()),
+                0,
+            ));
+            continue;
+        }
         let session = session_for(snippet, sessions);
         if let Some(level) = batch_level(snippet, registry, config, session) {
             let key = (
@@ -241,13 +257,45 @@ fn session_key<'a>(
         .map(|(key, _)| key.as_str())
 }
 
+fn session_preparation_error<'a>(
+    snippet: &Snippet,
+    sessions: &HashMap<String, crate::snippets::session::ValidationSession>,
+    errors: &'a HashMap<String, String>,
+) -> Option<&'a str> {
+    let target = snippet
+        .metadata
+        .target
+        .as_ref()
+        .map(|target| crate::snippets::types::Language::normalize_session_target(target));
+    if let Some(target) = target.as_deref() {
+        if let Some(error) = errors.get(target) {
+            return Some(error);
+        }
+        if sessions.contains_key(target) {
+            return None;
+        }
+    }
+    errors.get(&snippet.language.to_string()).map(String::as_str)
+}
+
 fn validate_one(
     snippet: &Snippet,
     registry: &ValidatorRegistry,
     config: &RunnerConfig,
     session: Option<&crate::snippets::session::ValidationSession>,
     session_lock: Option<&Mutex<()>>,
+    session_preparation_error: Option<&str>,
 ) -> ValidationResult {
+    if let Some(message) = session_preparation_error {
+        return result(
+            snippet,
+            SnippetStatus::Error,
+            config.level,
+            config.level,
+            Some(message.to_owned()),
+            0,
+        );
+    }
     if let Some(result) = cached_result(snippet, config, session) {
         return result;
     }
@@ -648,6 +696,59 @@ mod tests {
         let batches = batches.lock().expect("batch records");
         assert_eq!(batches.len(), 3);
         assert!(batches.iter().all(|(_, size, _)| *size == 1));
+    }
+
+    #[test]
+    fn session_preparation_errors_do_not_abort_healthy_targets() {
+        let batches = Arc::new(Mutex::new(Vec::new()));
+        let singles = Arc::new(Mutex::new(0));
+        let mut registry = ValidatorRegistry::new();
+        registry.register(Box::new(RecordingValidator {
+            language: crate::snippets::types::Language::Rust,
+            batches: Arc::clone(&batches),
+            singles,
+        }));
+        let directory = tempfile::tempdir().expect("session directory");
+        let session = |manifest| SessionSpec {
+            language: crate::snippets::types::Language::Rust,
+            working_directory: directory.path().into(),
+            manifest,
+            before: Vec::new(),
+            env: Default::default(),
+            include_paths: Vec::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: Default::default(),
+        };
+        let config = RunnerConfig {
+            level: ValidationLevel::Compile,
+            cache_dir: None,
+            sessions: HashMap::from([
+                ("broken".into(), session(Some(directory.path().join("missing.toml")))),
+                ("healthy".into(), session(None)),
+            ]),
+            ..RunnerConfig::default()
+        };
+        let mut snippets = vec![network_snippet(), network_snippet()];
+        snippets[0].metadata.target = Some("broken".into());
+        snippets[1].metadata.target = Some("healthy".into());
+
+        let summary = run_validation(&snippets, &registry, &config).expect("validation completes");
+
+        assert_eq!(summary.total, 2);
+        assert_eq!(summary.errors, 1);
+        assert_eq!(summary.passed, 1);
+        assert!(summary.has_failures());
+        assert_eq!(summary.results[0].status, SnippetStatus::Error);
+        assert!(
+            summary.results[0].message.as_deref().is_some_and(
+                |message| message.contains("target `broken`") && message.contains("manifest does not exist")
+            )
+        );
+        assert_eq!(summary.results[1].status, SnippetStatus::Pass);
+        assert_eq!(
+            batches.lock().expect("batch records").as_slice(),
+            &[(crate::snippets::types::Language::Rust, 1, true)]
+        );
     }
 
     #[test]

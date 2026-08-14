@@ -27,6 +27,11 @@ pub struct ValidationSession {
     pub rust_dependencies: BTreeMap<String, crate::core::config::output::DocsSnippetRustDependencyConfig>,
 }
 
+pub(crate) struct SessionPreparation {
+    pub sessions: HashMap<String, ValidationSession>,
+    pub errors: HashMap<String, String>,
+}
+
 impl ValidationSession {
     pub fn workspace_directory(&self) -> Result<PathBuf> {
         let directory = self
@@ -83,6 +88,25 @@ pub fn prepare_sessions(
         .iter()
         .map(|(target, spec)| prepare_session(spec, timeout_secs).map(|session| (target.clone(), session)))
         .collect()
+}
+
+pub(crate) fn prepare_sessions_isolated(specs: &HashMap<String, SessionSpec>, timeout_secs: u64) -> SessionPreparation {
+    let mut sessions = HashMap::new();
+    let mut errors = HashMap::new();
+    for (target, spec) in specs {
+        match prepare_session(spec, timeout_secs) {
+            Ok(session) => {
+                sessions.insert(target.clone(), session);
+            }
+            Err(error) => {
+                errors.insert(
+                    target.clone(),
+                    format!("preparing snippet validation target `{target}`: {error}"),
+                );
+            }
+        }
+    }
+    SessionPreparation { sessions, errors }
 }
 
 fn prepare_session(spec: &SessionSpec, timeout_secs: u64) -> Result<ValidationSession> {
