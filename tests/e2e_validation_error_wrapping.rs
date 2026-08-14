@@ -9,8 +9,8 @@
 //! Correct shapes by language:
 //! - Ruby:   `expect { setup_lines; call_expr }.to raise_error`
 //! - PHP:    `try { setup_lines; call_expr; $this->fail(...); } catch (\Exception $e) { assertTrue(...); }`
-//!           (or plain `$this->expectException(...); setup_lines; call_expr;` when the fixture
-//!           declares no specific error value to check)
+//!   (or plain `$this->expectException(...); setup_lines; call_expr;` when the fixture
+//!   declares no specific error value to check)
 //! - C#:     `Assert.ThrowsAnyAsync<Exc>(async () => { setup_lines; await call_expr; })`
 //! - Elixir: `case Module.create_engine(config) do {:error, r} -> assert ...; {:ok, engine} -> assert {:error, r} = Module.scrape(engine, url) end`
 //! - Go:     `engine, createErr := pkg.CreateEngine(&cfg); assert.Error(t, createErr); return`
