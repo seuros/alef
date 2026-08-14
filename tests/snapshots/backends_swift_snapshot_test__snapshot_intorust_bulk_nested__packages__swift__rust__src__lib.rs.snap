@@ -90,6 +90,8 @@ mod ffi {
         fn span_from_json(json: String) -> Result<Span, String>;
         #[swift_bridge(swift_name = "diagnosticFromJson")]
         fn diagnostic_from_json(json: String) -> Result<Diagnostic, String>;
+    }
+    extern "Rust" {
         #[swift_bridge(swift_name = "processResultFromJson")]
         fn process_result_from_json(json: String) -> Result<ProcessResult, String>;
     }

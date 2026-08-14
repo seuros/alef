@@ -26,25 +26,23 @@ pub fn _last_error() ?[]const u8 {
 }
 
 /// Map the last FFI error to a typed error from the given error set.
-/// Coarse fallback: returns the first declared variant. Per-code dispatch
-/// will replace this once the IR exposes per-variant numeric codes.
+/// Generic-code fallback returns the first declared variant.
 inline fn _first_error(comptime E: type) E {
     const fields = @typeInfo(E).error_set orelse unreachable;
     if (fields.len == 0) unreachable;
     return @field(E, fields[0].name);
 }
 
-/// Map the last FFI error to a typed error, logging the error message.
-/// Reads the FFI error context from `_last_error()` and dispatches to a
-/// per-error-set message-prefix matcher emitted alongside each declared error.
-/// Falls back to the first declared variant when no prefix matches or the
-/// FFI layer did not set a context string.
+/// Map the last FFI error to a typed error.
+/// Dispatches exclusively on the stable numeric FFI taxonomy code.
 inline fn _error_with_message(comptime E: type) E {
-    const msg_opt = _last_error();
-    if (msg_opt) |msg| {
-        std.debug.print("FFI error: {s}\n", .{msg});
-    }
-    if (E == DemoError) return _from_ffi_msg_DemoError(msg_opt);
+    _ = _last_error();
+    const code = @as(i32, @intCast(c.demo_last_error_code()));
+    if (E == DemoError) return switch (code) {
+        276631689 => error.InvalidInput,
+        771845653 => error.ProcessingFailed,
+        else => _first_error(E),
+    };
     return _first_error(E);
 }
 
@@ -54,16 +52,6 @@ pub const DemoError = error{
     ProcessingFailed,
     OutOfMemory,
 };
-/// Map an FFI error message string to a `DemoError` variant by prefix-matching
-/// against the upstream `#[error("...")]` templates. Falls back to the
-/// first declared variant when no prefix matches.
-inline fn _from_ffi_msg_DemoError(msg_opt: ?[]const u8) DemoError {
-    if (msg_opt) |msg| {
-        if (std.mem.startsWith(u8, msg, "invalid input provided")) return error.InvalidInput;
-        if (std.mem.startsWith(u8, msg, "processing failed")) return error.ProcessingFailed;
-    }
-    return _first_error(DemoError);
-}
 
 /// A demo configuration struct.
 pub const Config = struct {
@@ -96,8 +84,8 @@ pub fn process(input: []const u8, count: u32) DemoError![]u8 {
     return blk: {
         if (_result == null) return _first_error(DemoError);
         const slice = _result[0.._result_len];
+        defer _free_string(_result);
         const owned = try std.heap.c_allocator.dupe(u8, slice);
-        _free_string(_result);
         break :blk owned;
     }
 ;

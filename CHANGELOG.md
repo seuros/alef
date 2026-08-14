@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **tests**: refresh Kotlin Android, Swift, and Zig snapshots so the checked-in expectations cover the integrated
+  JNI path discovery, serde bridge grouping, numeric error dispatch, and fallible string ownership behavior.
 - **kotlin-android**: emit a handle wrapper class only for opaque types some visible top-level function returns.
   A type that is `is_opaque` but that nothing returns cannot be constructed from Kotlin at all, yet still got a
   `<TypeName>.kt` whose `close()` called `nativeFree<TypeName>` — a symbol the Bridge object never declares and the
