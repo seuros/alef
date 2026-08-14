@@ -589,6 +589,32 @@ fn elixir_test_helper_emits_mock_servers_parsing() {
     );
 }
 
+/// Regression: `test_helper.exs` must carry `generated_header: true`. It used to
+/// be `false`, which meant it never received a durable `alef:hash:` marker even
+/// though alef re-authors it every run — the write path's ownership guard had no
+/// way to distinguish "alef's own unmarked output" from "hand-written foreign
+/// content" for it, and a plain `alef all --clean` run silently deleted a
+/// hand-added `CRAWLBERG_ALLOW_PRIVATE_NETWORK` / `set_env` workaround as a
+/// result. See `scaffold_ownership_guard_tests` in
+/// `src/cli/pipeline/generate/tests.rs` for the write-path half of this fix.
+#[test]
+fn elixir_test_helper_carries_generated_header_for_durable_ownership() {
+    let files = generate_all(
+        &ElixirCodegen,
+        "elixir",
+        vec![make_host_root_fixture("robots_disallow_path")],
+    );
+    let test_helper = files
+        .iter()
+        .find(|f| f.path.ends_with("test_helper.exs"))
+        .expect("test_helper.exs not found");
+    assert!(
+        test_helper.generated_header,
+        "test_helper.exs must set generated_header: true so its ownership is durably \
+         recorded via the alef:hash: marker, not just this run's ephemeral cache"
+    );
+}
+
 #[test]
 fn elixir_typed_object_placeholder_uses_scoped_keyword_arg() {
     let files = generate_typed_url_all(

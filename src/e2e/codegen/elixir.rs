@@ -164,11 +164,20 @@ impl E2eCodegen for ElixirCodegen {
         // app_harness.exs and the server-pattern test_helper.exs are owned by
         // a consumer extension (the e2e extension).
         // alef emits test_helper.exs only for the non-harness cases.
+        //
+        // generated_header MUST be true here (not false like the other seeds above):
+        // this file legitimately needs re-generation as [e2e] config/fixtures change
+        // (see render_test_helper), so it needs the durable alef:hash: marker that
+        // proves ownership across runs -- the write path's ownership guard otherwise
+        // has nothing to check and either has to trust every unmarked file blindly (the
+        // crawlberg incident: a hand-added CRAWLBERG_ALLOW_PRIVATE_NETWORK/set_env
+        // workaround silently deleted by a plain `alef all --clean`) or refuse to ever
+        // update it again. ~keep
         if !uses_harness {
             files.push(GeneratedFile {
                 path: output_base.join("test").join("test_helper.exs"),
                 content: project::render_test_helper(has_http_tests || has_mock_server_tests, e2e_config),
-                generated_header: false,
+                generated_header: true,
             });
         }
 

@@ -59,19 +59,34 @@ pub(crate) fn atomic_write(path: &Path, content: &[u8]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The comment style alef stamps a provenance marker with, or `None` when the
+/// extension has no comment syntax alef knows how to write one in.
+///
+/// `None` is load-bearing beyond formatting: a file alef cannot stamp never carries
+/// an `alef:hash:` marker even when alef authored every byte of it (`.md` READMEs are
+/// the widest instance — none of the generated per-language READMEs has ever had one).
+/// So for those paths a missing marker is NOT evidence the file is foreign, and any
+/// ownership check keyed on the marker must exempt them or it will freeze legitimate
+/// regeneration forever. ~keep
+pub(super) fn marker_comment_style(path: &Path) -> Option<hash::CommentStyle> {
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some("py" | "rb" | "r" | "ex" | "exs" | "toml" | "yaml" | "yml" | "sh") => Some(hash::CommentStyle::Hash),
+        Some("h" | "hpp") => Some(hash::CommentStyle::Block),
+        Some(
+            "c" | "cc" | "cpp" | "cs" | "dart" | "gleam" | "go" | "java" | "js" | "kt" | "kts" | "php" | "rs" | "swift"
+            | "ts" | "tsx" | "zig",
+        ) => Some(hash::CommentStyle::DoubleSlash),
+        _ => None,
+    }
+}
+
 pub(super) fn ensure_generated_header(path: &Path, content: &str) -> String {
     if hash::content_has_alef_marker(content) {
         return content.to_owned();
     }
 
-    let style = match path.extension().and_then(|extension| extension.to_str()) {
-        Some("py" | "rb" | "r" | "ex" | "exs" | "toml" | "yaml" | "yml" | "sh") => hash::CommentStyle::Hash,
-        Some("h" | "hpp") => hash::CommentStyle::Block,
-        Some(
-            "c" | "cc" | "cpp" | "cs" | "dart" | "gleam" | "go" | "java" | "js" | "kt" | "kts" | "php" | "rs" | "swift"
-            | "ts" | "tsx" | "zig",
-        ) => hash::CommentStyle::DoubleSlash,
-        _ => return content.to_owned(),
+    let Some(style) = marker_comment_style(path) else {
+        return content.to_owned();
     };
     let header = hash::header(style);
     if let Some((shebang, body)) = content.split_once('\n').filter(|(line, _)| line.starts_with("#!/")) {

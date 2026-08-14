@@ -27,6 +27,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   renderer. The existing unit test called `render_wasm_excluded_category` directly, so it verified the renderer but
   never that `generate` invoked it — reintroducing the silent-drop regression left all seven wasm unit tests green.
   The new integration test drives `generate` end to end and fails when the category is dropped.
+- **generate**: refuse to write a `generated_header: true` scaffold/e2e file over pre-existing content that
+  carries no `alef:hash:` marker, instead of stamping or overwriting it unconditionally. A plain `alef all
+  --clean` run could silently claim and stamp hand-written files because the write path only ever asked "does this
+  run want to emit here", never "has alef ever recorded owning this exact path". The check is marker-based
+  rather than cache-based (`.alef/`'s manifests are gitignored local scratch space that does not survive a
+  fresh clone or a cache-less CI job), so it holds durably across sessions without narrowing any legitimate
+  regeneration. The check is skipped for paths alef cannot stamp (`.md` above all — no generated README has
+  ever carried a marker), where a missing marker is not evidence of foreign content and enforcing would
+  freeze regeneration permanently.
+- **e2e/elixir**: emit `test/test_helper.exs` with `generated_header: true` instead of `false`. As a
+  `generated_header: false` seed it never carried a marker even though alef legitimately re-authors it on
+  every run, so the write path had no durable way to tell "alef's own unmarked output" apart from
+  "hand-written foreign content" for it.
 - **e2e/kotlin**: honor `fields_json_scalar` for fixture field paths that carry a virtual namespace prefix (e.g.
   `interaction.action_results[0].data`), and accept the same bracket-wildcard/de-indexed spellings already
   interchangeable in `fields_optional`. `field_is_json_scalar` compared the raw fixture path directly against

@@ -825,6 +825,206 @@ file_safety = { exclude = ["target/**"] }
     }
 }
 
+/// Regression coverage for the crawlberg incident: a plain `alef all --clean` run
+/// silently claimed and stamped hand-written `e2e/go/helpers_test.go` /
+/// `e2e/go/main_test.go` (added an `alef:hash:` header they never had), and
+/// separately clobbered `e2e/elixir/test/test_helper.exs` (deleted a hand-written
+/// FFI environment-propagation workaround), because `write_scaffold_files_report`
+/// wrote every `generated_header: true` file unconditionally, without ever
+/// checking whether the pre-existing content on disk had ever been alef's.
+#[cfg(test)]
+mod scaffold_ownership_guard_tests {
+    use super::*;
+    use crate::core::backend::GeneratedFile;
+    use crate::core::hash::{CommentStyle, content_has_alef_marker, extract_hash, header, inject_hash_line};
+    use std::path::PathBuf;
+
+    fn marked_content(body: &str) -> String {
+        let with_header = format!("{}{body}", header(CommentStyle::DoubleSlash));
+        inject_hash_line(&with_header, &"0".repeat(64))
+    }
+
+    /// THE core regression test: a pre-existing, unmarked file at a path alef has
+    /// never emitted before must survive a `generated_header: true` write
+    /// byte-for-byte, and must NOT gain an `alef:hash:` marker. Without the
+    /// ownership guard in `write_scaffold_files_report`, this fails — the write
+    /// path stamps the alef header onto the hand-written body unconditionally
+    /// (reproducing the Go half of the crawlberg incident exactly: alef's
+    /// generated content for `helpers_test.go` happened to be byte-identical to
+    /// the hand-written file, so the only visible change was the new header).
+    #[test]
+    fn pre_existing_unmarked_file_at_unrecorded_path_survives_untouched_and_unstamped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let target_relative = PathBuf::from("e2e/go/helpers_test.go");
+        let target = base.join(&target_relative);
+        std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+
+        let hand_written =
+            "package e2e_test\n\n// jsonString is hand-rolled here.\nfunc jsonString(v any) string { return \"\" }\n";
+        std::fs::write(&target, hand_written).expect("seed hand-written file");
+
+        let generated = GeneratedFile {
+            path: target_relative,
+            content: hand_written.to_owned(),
+            generated_header: true,
+        };
+
+        let report = write_scaffold_files_report(&[generated], base, true).expect("write ok");
+
+        let after = std::fs::read_to_string(&target).expect("read after");
+        assert_eq!(
+            after, hand_written,
+            "a path alef has never recorded as its own output must be left byte-for-byte untouched"
+        );
+        assert!(
+            extract_hash(&after).is_none(),
+            "a file alef never authored must never gain an alef:hash: marker, got:\n{after}"
+        );
+        assert_eq!(report.changed_count(), 0, "a refused write must not count as a change");
+    }
+
+    /// The ownership guard must not fire on a path alef is physically unable to stamp.
+    ///
+    /// `ensure_generated_header` only knows a comment syntax for a fixed extension set;
+    /// everything else (`.md` above all) is returned unchanged, so an alef-authored
+    /// README never carries a marker no matter how many times it is regenerated. Keying
+    /// the guard on the marker alone would therefore read every generated README as
+    /// foreign content and freeze it permanently on the first run after this guard ships.
+    #[test]
+    fn unstampable_generated_file_is_still_regenerated_despite_carrying_no_marker() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let target_relative = PathBuf::from("README.md");
+        let target = base.join(&target_relative);
+        std::fs::write(&target, "# Stale generated README\n").expect("seed previous output");
+
+        let regenerated = "# Regenerated README\n";
+        let generated = GeneratedFile {
+            path: target_relative,
+            content: regenerated.to_owned(),
+            generated_header: true,
+        };
+
+        write_scaffold_files_report(&[generated], base, true).expect("write ok");
+
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("read after"),
+            regenerated,
+            "a markdown file alef cannot stamp must still be regenerated -- a missing marker \
+             there is not evidence the file is foreign"
+        );
+    }
+
+    /// Happy-path counterpart: a file alef legitimately authored on a prior run
+    /// (and therefore already carries the marker on disk) is still updated
+    /// normally when its content changes. This proves the ownership guard does
+    /// not degrade into a blanket "never touch an existing file" rule.
+    #[test]
+    fn file_alef_already_owns_is_updated_normally_on_the_next_run() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let target_relative = PathBuf::from("e2e/go/main_test.go");
+        let target = base.join(&target_relative);
+        std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+
+        let prior_run_content = marked_content("package e2e_test\n\nfunc TestMain(m *testing.M) { m.Run() }\n");
+        std::fs::write(&target, &prior_run_content).expect("seed prior alef output");
+        assert!(content_has_alef_marker(&prior_run_content), "sanity: seed must carry the marker");
+
+        let generated = GeneratedFile {
+            path: target_relative,
+            content: "package e2e_test\n\nfunc TestMain(m *testing.M) { os.Exit(m.Run()) }\n".to_owned(),
+            generated_header: true,
+        };
+
+        let report = write_scaffold_files_report(&[generated], base, true).expect("write ok");
+
+        let after = std::fs::read_to_string(&target).expect("read after");
+        assert!(
+            after.contains("os.Exit(m.Run())"),
+            "a file alef already owns must be updated with this run's content, got:\n{after}"
+        );
+        assert_eq!(report.changed_count(), 1);
+    }
+
+    /// A brand-new path (nothing on disk yet) is written and stamped normally —
+    /// the guard only ever engages when there is pre-existing content to protect.
+    #[test]
+    fn brand_new_managed_file_is_written_and_stamped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+
+        let generated = GeneratedFile {
+            path: PathBuf::from("e2e/go/robots_test.go"),
+            content: "package e2e_test\n\nfunc TestRobots(t *testing.T) {}\n".to_owned(),
+            generated_header: true,
+        };
+
+        write_scaffold_files_report(&[generated], base, true).expect("write ok");
+
+        let after = std::fs::read_to_string(base.join("e2e/go/robots_test.go")).expect("read after");
+        assert!(
+            after.starts_with("// This file is auto-generated by alef"),
+            "a genuinely new path must be stamped normally, got:\n{after}"
+        );
+    }
+
+    /// The specific shape that broke in the incident: a generator target
+    /// directory containing a mix of alef-authored and hand-written files. Only
+    /// the alef-owned file may be touched; the hand-written sibling in the same
+    /// directory must survive completely untouched.
+    #[test]
+    fn mixed_directory_of_owned_and_hand_written_files_touches_only_the_owned_one() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let e2e_go_dir = base.join("e2e/go");
+        std::fs::create_dir_all(&e2e_go_dir).expect("mkdir");
+
+        let hand_written_path = e2e_go_dir.join("helpers_test.go");
+        let hand_written =
+            "package e2e_test\n\n// hand rolled, never alef's\nfunc jsonString(v any) string { return \"\" }\n";
+        std::fs::write(&hand_written_path, hand_written).expect("seed hand-written sibling");
+
+        let owned_path = e2e_go_dir.join("main_test.go");
+        let owned_prior = marked_content("package e2e_test\n\nfunc TestMain(m *testing.M) { m.Run() }\n");
+        std::fs::write(&owned_path, &owned_prior).expect("seed owned sibling");
+
+        let files = vec![
+            GeneratedFile {
+                path: PathBuf::from("e2e/go/helpers_test.go"),
+                content: hand_written.to_owned(),
+                generated_header: true,
+            },
+            GeneratedFile {
+                path: PathBuf::from("e2e/go/main_test.go"),
+                content: "package e2e_test\n\nfunc TestMain(m *testing.M) { os.Exit(m.Run()) }\n".to_owned(),
+                generated_header: true,
+            },
+        ];
+
+        let report = write_scaffold_files_report(&files, base, true).expect("write ok");
+
+        let hand_written_after = std::fs::read_to_string(&hand_written_path).expect("read hand-written after");
+        assert_eq!(
+            hand_written_after, hand_written,
+            "the hand-written sibling in the same directory must survive untouched"
+        );
+        assert!(extract_hash(&hand_written_after).is_none(), "must not gain a marker");
+
+        let owned_after = std::fs::read_to_string(&owned_path).expect("read owned after");
+        assert!(
+            owned_after.contains("os.Exit(m.Run())"),
+            "the alef-owned sibling must still update, got:\n{owned_after}"
+        );
+        assert_eq!(
+            report.changed_count(),
+            1,
+            "only the genuinely-owned sibling counts as changed"
+        );
+    }
+}
+
 #[cfg(test)]
 mod generated_header_tests {
     use super::*;

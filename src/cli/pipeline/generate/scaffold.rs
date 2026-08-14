@@ -6,7 +6,7 @@ use crate::core::ir::ApiSurface;
 use anyhow::Context as _;
 use base64::Engine;
 use std::path::Path;
-use tracing::debug;
+use tracing::{debug, warn};
 
 /// Generate scaffold files for given languages.
 ///
@@ -88,6 +88,40 @@ pub fn write_scaffold_files_with_overwrite(
     Ok(write_scaffold_files_report(files, base_dir, overwrite)?.changed_count())
 }
 
+/// Like [`write_scaffold_files`] but returns the full [`super::write::WriteReport`]
+/// (expected vs. actually-changed paths) instead of a bare count.
+///
+/// NEVER-STAMP / NEVER-OVERWRITE guard: for every file this run is about to write, if a
+/// file already exists on disk at that path *and does not already carry an alef marker*,
+/// alef has no durable evidence it has ever owned that path — the file is left completely
+/// untouched (no header stamp, no content change, `overwrite` notwithstanding), and a
+/// warning is logged instead. This is deliberately evaluated *before* any content is
+/// prepared (including header stamping), so a foreign file is never even considered for a
+/// header it never asked for.
+///
+/// The check is marker-based, not cache-based, on purpose: `.alef/`'s per-run manifests
+/// are gitignored local scratch space (see `cache::read_stage_paths`) that does not survive
+/// a fresh clone or a cache-less CI job, so they cannot serve as durable proof of ownership
+/// across sessions. A `generated_header: true` file that alef legitimately authored always
+/// carries the `alef:hash:` marker in the *committed* file itself from the run that first
+/// wrote it onward, which is what makes the marker durable evidence and the cache not.
+///
+/// This is the fix for the crawlberg incident where a plain `alef all --clean` run (no
+/// special flags, no prior claim on either path) silently claimed and stamped hand-written
+/// `e2e/go/helpers_test.go` / `e2e/go/main_test.go` with an `alef:hash:` header they never
+/// had. `generated_header: false` emits (seeds such as `composer.json`/`package.json`, and
+/// formerly Elixir's `test_helper.exs` — see the `~keep` note on its emit site) never carry
+/// a marker even when alef legitimately re-authors them every run, so this guard cannot by
+/// itself protect *their* hand-edits; the corrected fix for a file in that position is to
+/// change its emit to `generated_header: true`, moving it onto the durable rail this guard
+/// checks, not to widen this function with cache-derived provenance (see the report for why
+/// that path was tried and rejected).
+///
+/// TOML merge targets (`poly.toml`, and any `generated_header: true` `*.toml`) are exempt
+/// from this guard: [`merge_managed_toml`] merges into existing content rather than
+/// replacing it, so there is nothing to protect against there, by construction. Binary
+/// (`.jar`) targets are also exempt: their existing content cannot be read as UTF-8 to check
+/// for a marker, and jar bindings were never a vector for the incident this guard fixes. ~keep
 pub fn write_scaffold_files_report(
     files: &[GeneratedFile],
     base_dir: &Path,
@@ -106,17 +140,45 @@ pub fn write_scaffold_files_report(
     }
     for file in prepared.into_values() {
         let full_path = base_dir.join(&file.path);
-        report.expected_paths.insert(full_path.clone());
         let can_skip = !overwrite && !file.generated_header && full_path.exists();
         if can_skip {
+            report.expected_paths.insert(full_path.clone());
             debug!("  skipped (already exists): {}", full_path.display());
             continue;
         }
+        let is_jar_file = full_path.extension().is_some_and(|ext| ext == "jar");
+        let is_toml_merge_target = (file.path == Path::new(POLY_CONFIG)
+            || file.generated_header && file.path.extension().is_some_and(|extension| extension == "toml"))
+            && full_path.exists();
+        // Scoped to `generated_header: true` only: those files are always overwritten
+        // regardless of `overwrite` (see the doc comment above), so they are the only
+        // ones for which "no marker yet" can mean "never alef's" rather than "an
+        // intentionally create-once seed under an explicit --clean". A `generated_header:
+        // false` seed (composer.json, package.json, ...) force-written under
+        // `overwrite: true` keeps its existing, tested, documented behaviour unchanged.
+        // Further scoped to paths alef can actually stamp: an unstampable extension
+        // (`.md` above all -- no generated README has ever carried a marker) never gets
+        // one even when alef authored every byte, so there a missing marker is not
+        // evidence of foreign content, and enforcing on it would freeze regeneration
+        // permanently. ~keep
+        let is_markable = super::write::marker_comment_style(&full_path).is_some();
+        if file.generated_header && is_markable && !is_jar_file && !is_toml_merge_target && full_path.exists() {
+            let existing = std::fs::read_to_string(&full_path)
+                .with_context(|| format!("failed to read existing {}", full_path.display()))?;
+            if !crate::core::hash::content_has_alef_marker(&existing) {
+                warn!(
+                    "refusing to write {}: pre-existing file carries no alef marker and \
+                     alef has no durable record of ever owning it -- leaving it untouched",
+                    full_path.display()
+                );
+                continue;
+            }
+        }
+        report.expected_paths.insert(full_path.clone());
         if let Some(parent) = full_path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create directory {}", parent.display()))?;
         }
-        let is_jar_file = full_path.extension().is_some_and(|ext| ext == "jar");
         if is_jar_file {
             let binary_content = base64::engine::general_purpose::STANDARD
                 .decode(&file.content)
@@ -132,10 +194,7 @@ pub fn write_scaffold_files_report(
             debug!("  wrote (binary): {}", full_path.display());
             continue;
         }
-        let content = if (file.path == Path::new(POLY_CONFIG)
-            || file.generated_header && file.path.extension().is_some_and(|extension| extension == "toml"))
-            && full_path.exists()
-        {
+        let content = if is_toml_merge_target {
             let existing = std::fs::read_to_string(&full_path)
                 .with_context(|| format!("failed to read existing {}", full_path.display()))?;
             merge_managed_toml(&existing, &file.content)
