@@ -69,7 +69,7 @@ pub(super) fn gen_param_conversion_with_enums(param: &ParamDef, conversion: &Par
     } else if is_void_return(return_type) {
         "return;"
     } else {
-        match ffi_null_return_value(return_type, ffi_return_type) {
+        match ffi_null_return_value(return_type, *ffi_return_type) {
             "()" => "return;",
             v => {
                 let ret = format!("return {};", v);
