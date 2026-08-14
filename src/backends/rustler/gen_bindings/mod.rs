@@ -41,6 +41,7 @@ impl Backend for RustlerBackend {
     }
 
     fn generate_bindings(&self, api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+        crate::codegen::config_gen::validate_rust_default_functions(api)?;
         native::generate_bindings(api, config)
     }
 

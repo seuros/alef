@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Make generated parameter-conversion failures use the scalar zero sentinel whenever the exported FFI return type is
   `AlefHandle`, even when the source return metadata has a pointer-shaped fallback.
+- **config generation**: report every Rust-binding field whose serde default function cannot be preserved in one
+  actionable generation error instead of panicking on the first field. The diagnostic now identifies each owning
+  type, field, and function and explains the public, unconditional static-method or literal-default remedies.
 - **csharp**: only emit the `Register<Trait>` facade when the trait bridge declares a `register_fn`. The facade calls
   `NativeMethods.Register<Trait>`, which is generated solely for bridges that have a native register function, so a
   bridge configured without one produced a call to an undeclared member — `CS0117`, failing the whole package build.

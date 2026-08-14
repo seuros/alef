@@ -804,16 +804,9 @@ fn serde_default_function_is_never_emitted_as_a_callable_in_generated_rust() {
     // emit anything: `default_span()` does not compile from a generated crate, and substituting
     // `Default::default()` compiles while silently shipping `0` where the source crate says `1`.
     // A wrong-but-compiling default is far harder to find than a generation error. ~keep
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| default_value_for_field(&field, "rust")))
-        .expect_err("generated Rust must not silently substitute a value for an unresolvable serde default fn");
-
-    let message = failure
-        .downcast_ref::<String>()
-        .map(String::as_str)
-        .or_else(|| failure.downcast_ref::<&str>().copied())
-        .unwrap_or_default();
+    let message = default_value_for_field(&field, "rust");
     assert!(
-        message.contains("default_span") && message.contains("row_span"),
+        message.starts_with("compile_error!") && message.contains("default_span") && message.contains("row_span"),
         "the failure must name the uncallable function and the field so the author can act on it: {message}"
     );
 
@@ -956,16 +949,9 @@ fn contextual_failure_names_crate_type_field_and_uncallable_function() {
     });
     let row_span = typ.fields.iter().find(|f| f.name == "row_span").unwrap().clone();
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        default_value_for_field_in_type(&row_span, "rust", &typ)
-    }));
+    let message = default_value_for_field_in_type(&row_span, "rust", &typ);
 
-    let panic_payload = result.expect_err("generation must fail contextually, not substitute a wrong value");
-    let message = panic_payload
-        .downcast_ref::<String>()
-        .cloned()
-        .or_else(|| panic_payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
-        .expect("panic payload must be a string message");
+    assert!(message.starts_with("compile_error!"));
 
     for needle in ["html_to_markdown", "GridCell", "row_span", "default_span"] {
         assert!(

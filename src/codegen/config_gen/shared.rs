@@ -1,4 +1,4 @@
-use crate::core::ir::{DefaultValue, FieldDef, PrimitiveType, TypeDef, TypeRef};
+use crate::core::ir::{ApiSurface, DefaultValue, FieldDef, PrimitiveType, TypeDef, TypeRef};
 use heck::{ToPascalCase, ToShoutySnakeCase, ToSnakeCase};
 
 /// Returns true if a field is a tuple struct positional field (e.g., `_0`, `_1`, `0`, `1`).
@@ -20,6 +20,45 @@ pub(super) fn use_unwrap_or_default(field: &FieldDef) -> bool {
 
 pub(super) fn constructor_fields(typ: &TypeDef) -> impl Iterator<Item = &FieldDef> {
     typ.fields.iter().filter(|field| !field.binding_excluded)
+}
+
+pub(crate) fn validate_rust_default_functions(api: &ApiSurface) -> anyhow::Result<()> {
+    let failures: Vec<_> = api
+        .types
+        .iter()
+        .filter(|typ| !typ.binding_excluded)
+        .flat_map(|typ| {
+            typ.fields
+                .iter()
+                .filter(|field| !field.binding_excluded)
+                .filter_map(move |field| {
+                    let DefaultValue::FunctionCall(path) = field.typed_default.as_ref()? else {
+                        return None;
+                    };
+                    rust_default_via_source_deserialize(field, typ).is_none().then(|| {
+                        format!(
+                            "- `{}::{}` uses `#[serde(default = \"{}\")]`",
+                            typ.rust_path, field.name, path
+                        )
+                    })
+                })
+        })
+        .collect();
+
+    if failures.is_empty() {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "cannot preserve {} serde default function(s) in generated Rust bindings:\n{}\n\
+         Alef cannot call private or feature-gated defaults and could not recover these values through the owning \
+         type's Deserialize implementation. For each field, expose a public, unconditional, zero-argument static \
+         method and reference it with its fully qualified owner path (for example, \
+         `Settings::default_retry_limit`; do not use `Self::default_retry_limit`), or replace the function default \
+         with an Alef-visible literal.",
+        failures.len(),
+        failures.join("\n")
+    )
 }
 
 pub fn default_value_for_field(field: &FieldDef, language: &str) -> String {
@@ -203,14 +242,9 @@ pub fn default_value_for_field(field: &FieldDef, language: &str) -> String {
                 "python" => "None".to_string(),
                 "ruby" => "nil".to_string(),
                 "go" => "nil".to_string(),
-                "rust" => panic!(
-                    "cannot preserve `#[serde(default = \"{path}\")]` for field `{field_name}` in a \
-                     generated Rust binding: `{path}` is private to its source crate (and often \
-                     feature-gated), so alef cannot call it, and this call site has no `TypeDef` \
-                     context with which to recover the value by deserializing an empty-field JSON \
-                     stub. Route this call site through `default_value_for_field_in_type` so the \
-                     real default can be recovered, give `{field_name}` an alef-visible literal \
-                     default, or expose a public unconditional constant alef can reference.",
+                "rust" => format!(
+                    "compile_error!(r#\"cannot preserve serde default function `{path}` for field \
+                     `{field_name}` without its owning type context\"#)",
                     field_name = field.name,
                 ),
                 _ => "null".to_string(),
@@ -367,19 +401,12 @@ pub fn default_value_for_field_in_type(field: &FieldDef, language: &str, typ: &T
             return expr;
         }
         let crate_name = typ.rust_path.split("::").next().unwrap_or(typ.rust_path.as_str());
-        panic!(
-            "cannot preserve `#[serde(default = \"{path}\")]` for `{crate_name}::{type_name}.{field_name}` in the \
-             generated Rust binding: `{path}` is private to `{crate_name}` (and often feature-gated), so alef \
-             cannot call it directly, and it could not recover the value by deserializing an empty-field JSON \
-             stub through `{rust_path}`'s own `Deserialize` impl either. That recovery needs `{type_name}` to \
-             derive Serialize+Deserialize with no `#[cfg]`-gated or `#[serde(flatten)]` fields, no tuple-struct \
-             fields, and every other required field's type to have a safe placeholder JSON value (primitives, \
-             strings, bytes/paths, collections, and `serde_json::Value` all qualify; nested named types, \
-             `Duration`, and raw byte buffers do not). Give `{field_name}` an alef-visible literal default, or \
-             expose a public, unconditional constant/function alef can call in place of `{path}`.",
+        return format!(
+            "compile_error!(r#\"cannot preserve serde default function `{path}` for \
+             `{crate_name}::{type_name}.{field_name}`; expose a public unconditional static method with a fully \
+             qualified owner path or use an Alef-visible literal\"#)",
             type_name = typ.name,
             field_name = field.name,
-            rust_path = typ.rust_path,
         );
     }
     default_value_for_field(field, language)

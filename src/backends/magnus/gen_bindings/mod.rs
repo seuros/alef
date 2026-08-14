@@ -77,6 +77,7 @@ impl Backend for MagnusBackend {
     }
 
     fn generate_bindings(&self, api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+        crate::codegen::config_gen::validate_rust_default_functions(api)?;
         // `#[cfg(feature = "X")]`, its `#[cfg(not(...))]` stub, AND an unconditional stub from a
         // separate `#[cfg(not(...))]` parent module whose gate did not propagate into the IR),
         let deduped_api = api.with_deduped_functions();

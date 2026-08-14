@@ -135,4 +135,5 @@ fn simple_type_mapper(tr: &TypeRef) -> String {
 
 mod constructors;
 mod defaults;
+mod diagnostics;
 mod extendr;

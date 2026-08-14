@@ -86,6 +86,7 @@ impl Backend for NapiBackend {
     }
 
     fn generate_bindings(&self, api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+        crate::codegen::config_gen::validate_rust_default_functions(api)?;
         // Collapse same-named cfg-variant functions into one canonical entry. The napi `#[napi]`
         // wrapper delegates to the core crate (which resolves the cfg) and emits no `#[cfg]` gate,
         // so two same-named entries would otherwise produce duplicate `#[napi]` fn definitions.
