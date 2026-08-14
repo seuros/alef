@@ -52,6 +52,7 @@ fn e2e_config_with_exclusions(excluded: &[&str]) -> E2eConfig {
         packages: Default::default(),
         format: Default::default(),
         fields: Default::default(),
+        error_field_aliases: Default::default(),
         fields_optional: HashSet::new(),
         fields_array: HashSet::new(),
         fields_method_calls: HashSet::new(),

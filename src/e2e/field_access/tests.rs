@@ -740,6 +740,24 @@ fn namespace_stripped_path_returns_none_when_result_fields_empty() {
     assert_eq!(r.namespace_stripped_path("anything.deeply.nested.path"), None);
 }
 
+#[test]
+fn error_accessor_uses_configured_alias() {
+    let aliases = HashMap::from([("status".to_string(), "status_code".to_string())]);
+    let resolver = FieldResolver::new_with_error_aliases(
+        &HashMap::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &aliases,
+    );
+
+    assert_eq!(
+        resolver.accessor_for_error("status", "rust", "error"),
+        "error.status_code"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Rust + PHP accessor regression: result_fields and per-type getter lookups
 // must override the global "method_calls" / "any-type" leakage.

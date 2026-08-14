@@ -22,6 +22,26 @@ fn test_documents_dir_explicit_override_wins() {
 }
 
 #[test]
+fn error_field_aliases_deserialize_without_weakening_strict_config() {
+    let cfg: E2eConfig = toml::from_str(
+        r#"
+[call]
+function = "run"
+
+[error_field_aliases]
+status = "status_code"
+"#,
+    )
+    .expect("declared error field aliases must deserialize");
+
+    assert_eq!(
+        cfg.error_field_aliases.get("status").map(String::as_str),
+        Some("status_code")
+    );
+    assert!(toml::from_str::<E2eConfig>("unknown = true\n[call]\nfunction = \"run\"\n").is_err());
+}
+
+#[test]
 fn test_documents_relative_from_at_lang_root_returns_two_dots_up() {
     let cfg = empty_e2e_with_test_documents("test_documents");
     assert_eq!(cfg.test_documents_relative_from(0), "../../test_documents");

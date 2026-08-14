@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ffi/all**: rebuild a missing or stale cbindgen header after all FFI source-writing stages and validate the refreshed
   declarations in the same `alef all --clean` run, instead of failing once and requiring a manual Cargo build before
   an identical second generation could succeed.
+- **e2e/rust**: accept `crates.e2e.error_field_aliases` and apply the configured mapping when generated Rust tests
+  assert fields on an error value.
 - **jni**: honor `crates.jni.exclude_functions` when emitting top-level and instance-method shims, alongside the
   paired Kotlin and Kotlin Android exclusion lists.
 - **scaffold/php**: emit exactly one composer.json per layout. The co-located layout now emits only the
