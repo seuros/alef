@@ -34,6 +34,7 @@ impl SnippetValidator for ZigValidator {
                 command.args(["build-exe", "-fno-emit-bin"]).arg(&file);
             }
         }
+        apply_cache_dirs(&mut command, dir.path());
 
         let (success, output) = run_command(&mut command, timeout_secs)?;
         if success {
@@ -78,6 +79,7 @@ impl SnippetValidator for ZigValidator {
             command.arg(&file);
         }
         apply_include_paths(&mut command, &session.include_paths);
+        apply_cache_dirs(&mut command, dir.path());
         session.apply(&mut command);
         let (success, output) = run_command(&mut command, timeout_secs)?;
         Ok(if success {
@@ -90,6 +92,19 @@ impl SnippetValidator for ZigValidator {
     fn is_dependency_error(&self, output: &str) -> bool {
         output.contains("unable to find") || output.contains("@import")
     }
+}
+
+/// Point zig's caches inside the snippet's own temp directory.
+///
+/// ~keep zig resolves its cache directory from `HOME`/`XDG_CACHE_HOME`, and `run_command`'s
+/// `sanitize_environment` allowlist carries neither. Without these variables zig aborts with
+/// `error: unable to resolve zig cache directory: AppDataDirUnavailable` before it reads a single
+/// line of the snippet, so every zig snippet fails identically at compile level and the failure
+/// looks like a defect in the snippet. Setting them explicitly keeps the run hermetic instead of
+/// widening the allowlist, which would leak the developer's real zig cache into validation.
+fn apply_cache_dirs(command: &mut std::process::Command, dir: &std::path::Path) {
+    command.env("ZIG_GLOBAL_CACHE_DIR", dir.join("zig-global-cache"));
+    command.env("ZIG_LOCAL_CACHE_DIR", dir.join("zig-local-cache"));
 }
 
 fn apply_include_paths(command: &mut std::process::Command, include_paths: &[std::path::PathBuf]) {
@@ -125,6 +140,69 @@ fn zig_package_module(manifest: &std::path::Path) -> Result<(String, std::path::
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::snippets::types::{SnippetMetadata, SnippetStatus, SourceOrigin};
+    use std::path::PathBuf;
+
+    const TOOLCHAIN_TEST_TIMEOUT_SECS: u64 = 120;
+
+    #[test]
+    fn compiles_a_snippet_under_the_sanitized_environment() {
+        if which::which("zig").is_err() {
+            return;
+        }
+        let snippet =
+            zig_snippet("const std = @import(\"std\");\n\npub fn main() void {\n    _ = std.mem.zeroes(u8);\n}\n");
+
+        let (status, output) = ZigValidator
+            .validate(&snippet, ValidationLevel::Compile, TOOLCHAIN_TEST_TIMEOUT_SECS)
+            .expect("validation runs");
+
+        assert_eq!(
+            status,
+            SnippetStatus::Pass,
+            "zig must compile under the sanitized environment; without an explicit cache directory it \
+             fails with AppDataDirUnavailable before reading the snippet: {output:?}"
+        );
+    }
+
+    #[test]
+    fn cache_directories_are_scoped_to_the_snippet_directory() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let mut command = std::process::Command::new("zig");
+        apply_cache_dirs(&mut command, root.path());
+
+        let configured: Vec<_> = command
+            .get_envs()
+            .filter_map(|(key, value)| value.map(|value| (key.to_string_lossy().into_owned(), PathBuf::from(value))))
+            .collect();
+
+        assert_eq!(
+            configured,
+            vec![
+                ("ZIG_GLOBAL_CACHE_DIR".to_string(), root.path().join("zig-global-cache")),
+                ("ZIG_LOCAL_CACHE_DIR".to_string(), root.path().join("zig-local-cache")),
+            ]
+        );
+    }
+
+    fn zig_snippet(code: &str) -> Snippet {
+        Snippet {
+            id: None,
+            path: PathBuf::from("snippet.zig"),
+            language: Language::Zig,
+            title: None,
+            code: code.into(),
+            start_line: 1,
+            block_index: 0,
+            annotation: None,
+            metadata: SnippetMetadata::default(),
+            source_origin: SourceOrigin {
+                path: PathBuf::from("snippet.zig"),
+                line: 1,
+                block_index: 0,
+            },
+        }
+    }
 
     #[test]
     fn resolves_declared_package_module() {
