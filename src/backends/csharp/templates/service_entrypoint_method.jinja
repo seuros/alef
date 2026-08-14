@@ -6,7 +6,7 @@
         try {
             _safeHandle.DangerousAddRef(ref handleAdded);
             return NativeMethods.{{ native_method }}(
-                _safeHandle.DangerousGetHandle(){{ arg_lines }}
+                _safeHandle.AlefHandle{{ arg_lines }}
             );
         } finally {
             if (handleAdded) _safeHandle.DangerousRelease();

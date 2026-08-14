@@ -6,8 +6,8 @@
 //!
 //! Exports:
 //! - For each [`ServiceDef`]: opaque `*mut <service_name>` handle + constructor/destructor.
-//! - For each [`RegistrationDef`]: a registration function accepting a callback + metadata
-//!   (callback is a C function pointer `extern "C" fn(*mut c_void, *const c_char) -> *mut c_char`).
+//! - For each [`RegistrationDef`]: a registration function accepting a callback, its paired
+//!   response deallocator, and metadata.
 //! - For each [`EntrypointDef`]: a run/finalize function that builds the service, registers
 //!   callbacks via a Rust bridge, and invokes the entrypoint.
 //! - A callback typedef shared across all handler contracts.

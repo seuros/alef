@@ -2,11 +2,17 @@ package {{ pkg_name }}
 
 /*
 #include <string.h>
+#include <stdlib.h>
 #include "{{ ffi_header }}"
 extern char* service_handler_callback(void* ctx, char* req);
+extern void service_handler_response_free(char* response);
 typedef char* (*ServiceHandlerCallbackPtr)(void*, const char*);
+typedef void (*ServiceHandlerResponseFreePtr)(char*);
 static inline ServiceHandlerCallbackPtr get_service_handler_callback(void) {
   return (ServiceHandlerCallbackPtr)service_handler_callback;
+}
+static inline ServiceHandlerResponseFreePtr get_service_handler_response_free(void) {
+  return (ServiceHandlerResponseFreePtr)service_handler_response_free;
 }
 */
 import "C"

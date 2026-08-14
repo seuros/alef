@@ -1,5 +1,5 @@
     [DllImport("{{ dll_name }}", CallingConvention = CallingConvention.Cdecl)]
-    public static extern IntPtr {{ new_method }}();
+    public static extern ulong {{ new_method }}();
 
     [DllImport("{{ dll_name }}", CallingConvention = CallingConvention.Cdecl)]
-    public static extern void {{ free_method }}(IntPtr ptr);
+    public static extern void {{ free_method }}(ulong handle);

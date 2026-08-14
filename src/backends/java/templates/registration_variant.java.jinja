@@ -28,6 +28,10 @@
             MethodHandle adapter = MethodHandles.insertArguments(baseMh, 2, handler, arena);
 
             MemorySegment upcallStub = LINKER.upcallStub(adapter, upcallDesc, arena);
+            MethodHandle responseFree = lookup.findStatic({{ class_name }}.class, "freeHandlerResponse",
+                MethodType.methodType(void.class, MemorySegment.class));
+            MemorySegment responseFreeStub = LINKER.upcallStub(responseFree,
+                FunctionDescriptor.ofVoid(ValueLayout.ADDRESS), arena);
 
             // Get variant registration downcall handle
             MemorySegment varAddr = LOOKUP.find("{{ ffi_symbol }}")
@@ -38,6 +42,7 @@
                 ValueLayout.JAVA_INT,  // return: int
                 ValueLayout.JAVA_LONG, // owner: AlefHandle
                 ValueLayout.ADDRESS,   // callback: upcall stub
+                ValueLayout.ADDRESS,   // response deallocator: paired upcall stub
                 ValueLayout.ADDRESS    // context: *mut c_void
 {% for layout in descriptor_layouts %}
                 , {{ layout.0 }}    // {{ layout.1 }} param
@@ -49,6 +54,7 @@
             return (int) varHandle.invokeExact(
                 ownerHandle,
                 upcallStub,
+                responseFreeStub,
                 MemorySegment.NULL
 {% for arg in invoke_args %}
                 , {{ arg }}

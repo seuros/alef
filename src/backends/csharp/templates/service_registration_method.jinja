@@ -10,8 +10,9 @@
         try {
             _safeHandle.DangerousAddRef(ref handleAdded);
             result = NativeMethods.{{ native_method }}(
-                _safeHandle.DangerousGetHandle(),
+                _safeHandle.AlefHandle,
                 _handlerCallback,
+                _handlerResponseFree,
                 ctx{{ arg_lines }}
             );
         } catch {

@@ -1,7 +1,7 @@
     /// Free the {{ service_name }} instance.
     pub fn deinit(self: *{{ service_name }}) void {
-        if (self.owner) |owner_ptr| {
-            c.{{ free_fn }}(@ptrCast(owner_ptr));
-            self.owner = null;
+        if (self.owner != 0) {
+            c.{{ free_fn }}(self.owner);
+            self.owner = 0;
         }
     }

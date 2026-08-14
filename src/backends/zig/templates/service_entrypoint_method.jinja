@@ -1,13 +1,14 @@
     /// Run the service entrypoint '{{ ep_method }}'.
     pub fn {{ method_name }}(self: *{{ service_name }}{{ params_decl }}) {{ return_type }} {
-        const owner_ptr = self.owner orelse return {{ null_return }};
+        const owner_handle = self.owner;
+        if (owner_handle == 0) return {{ null_return }};
 {% if returns_opaque %}
-        return @ptrCast(c.{{ c_fn }}(
-            @ptrCast(owner_ptr){{ args }}
+        return @ptrFromInt(c.{{ c_fn }}(
+            owner_handle{{ args }}
         ));
 {% else %}
         return c.{{ c_fn }}(
-            @ptrCast(owner_ptr){{ args }}
+            owner_handle{{ args }}
         );
 {% endif %}
     }

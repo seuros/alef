@@ -242,7 +242,7 @@ fn gen_service_cs(api: &ApiSurface, service: &ServiceDef, namespace: &str, prefi
 
         let returns_opaque =
             matches!(&ep.return_type, TypeRef::Named(n) if api.types.iter().any(|t| t.name == *n && t.is_opaque));
-        let return_type = if returns_opaque { "IntPtr" } else { "int" };
+        let return_type = if returns_opaque { "ulong" } else { "int" };
         let params_decl = metadata_param_decl_list(&ep.params, api);
         let native_method = format!(
             "{}_{}_ep_{}",
@@ -308,7 +308,7 @@ fn gen_native_methods_cs(api: &ApiSurface, namespace: &str, prefix: &str) -> Str
                     dll_name => format!("{}_ffi", prefix.to_lowercase()),
                     return_type => "int",
                     method_name => format!("{}_{}_register_{}", prefix.to_lowercase(), service_snake, reg_method_snake),
-                    base_params => "        IntPtr owner,\n        HandlerCallback callback,\n        IntPtr ctx",
+                    base_params => "        ulong owner,\n        HandlerCallback callback,\n        HandlerResponseFree responseFree,\n        IntPtr ctx",
                     param_lines => pinvoke_param_lines(&reg.metadata_params),
                 },
             ));
@@ -321,7 +321,7 @@ fn gen_native_methods_cs(api: &ApiSurface, namespace: &str, prefix: &str) -> Str
                         dll_name => format!("{}_ffi", prefix.to_lowercase()),
                         return_type => "int",
                         method_name => format!("{}_{}_{}", prefix.to_lowercase(), service_snake, variant_fn_name),
-                        base_params => "        IntPtr owner,\n        HandlerCallback callback,\n        IntPtr ctx",
+                        base_params => "        ulong owner,\n        HandlerCallback callback,\n        HandlerResponseFree responseFree,\n        IntPtr ctx",
                         param_lines => pinvoke_param_lines(&variant.signature_params),
                     },
                 ));
@@ -336,14 +336,14 @@ fn gen_native_methods_cs(api: &ApiSurface, namespace: &str, prefix: &str) -> Str
             let ep_method_snake = ep.method.to_snake_case();
             let returns_opaque =
                 matches!(&ep.return_type, TypeRef::Named(n) if api.types.iter().any(|t| t.name == *n && t.is_opaque));
-            let return_type = if returns_opaque { "IntPtr" } else { "int" };
+            let return_type = if returns_opaque { "ulong" } else { "int" };
             out.push_str(&render(
                 "service_pinvoke_declaration.jinja",
                 minijinja::context! {
                     dll_name => format!("{}_ffi", prefix.to_lowercase()),
                     return_type,
                     method_name => format!("{}_{}_ep_{}", prefix.to_lowercase(), service_snake, ep_method_snake),
-                    base_params => "        IntPtr owner",
+                    base_params => "        ulong owner",
                     param_lines => pinvoke_param_lines(&ep.params),
                 },
             ));
@@ -558,7 +558,7 @@ mod tests {
         assert!(cs.contains("public class TestService"));
         assert!(cs.contains("internal sealed class TestServiceSafeHandle : SafeHandle"));
         assert!(cs.contains("private readonly TestServiceSafeHandle _safeHandle"));
-        assert!(cs.contains("NativeMethods.test_test_service_free(handle)"));
+        assert!(cs.contains("NativeMethods.test_test_service_free(_nativeHandle)"));
         assert!(cs.contains("public TestService()"));
     }
 
@@ -571,7 +571,7 @@ mod tests {
         assert!(cs.contains("public int add_handler("));
         assert!(cs.contains("GCHandle.Alloc(handler, GCHandleType.Normal)"));
         assert!(cs.contains("ArgumentNullException.ThrowIfNull(handler)"));
-        assert!(cs.contains("_safeHandle.DangerousGetHandle()"));
+        assert!(cs.contains("_safeHandle.AlefHandle"));
         assert!(cs.contains("_safeHandle.DangerousAddRef(ref handleAdded)"));
         assert!(cs.contains("if (handleAdded) _safeHandle.DangerousRelease()"));
         assert!(cs.contains("catch {\n            handle.Free();"));
@@ -601,6 +601,8 @@ mod tests {
         assert!(cs.contains("_handlerCallback = HandlerTrampoline"));
         assert!(cs.contains("GCHandle.FromIntPtr(ctx)"));
         assert!(cs.contains("Marshal.PtrToStringUTF8"));
+        assert!(cs.contains("_handlerResponseFree = FreeHandlerResponse"));
+        assert!(cs.contains("Marshal.FreeCoTaskMem(responsePtr)"));
     }
 
     #[test]
@@ -645,6 +647,7 @@ mod tests {
         let native = gen_native_methods_cs(&api, "MyNamespace", "test");
 
         assert!(native.contains("delegate IntPtr HandlerCallback"));
+        assert!(native.contains("delegate void HandlerResponseFree(IntPtr responsePtr)"));
         assert!(native.contains("[UnmanagedFunctionPointer(CallingConvention.Cdecl)]"));
     }
 
@@ -744,8 +747,10 @@ mod tests {
         );
 
         assert!(
-            native.contains("IntPtr owner,") && native.contains("HandlerCallback callback,"),
-            "expected variant P/Invoke to have owner and callback parameters"
+            native.contains("ulong owner,")
+                && native.contains("HandlerCallback callback,")
+                && native.contains("HandlerResponseFree responseFree,"),
+            "expected variant P/Invoke to carry the callback's matching deallocator"
         );
     }
 
@@ -1073,48 +1078,79 @@ mod tests {
         assert!(!multi_statement_line_violations(&rendered).is_empty());
     }
 
-    #[test]
-    fn test_service_class_compiles_with_a_real_dotnet_toolchain_when_available() {
-        // Best-effort, matching the toolchain-gated pattern already used by
-        // `snippets::validators::csharp`: only runs when a local `dotnet` SDK is present. When
-        // unavailable this simply returns without asserting anything — it never fakes success.
-        if which::which("dotnet").is_err() {
-            return;
-        }
-
+    fn write_dotnet_allocator_fixture(directory: &std::path::Path) {
         let api = make_fixture_surface();
         let service = &api.services[0];
         let service_cs = gen_service_cs(&api, service, "MyNamespace", "my_lib");
         let native_methods_cs = gen_native_methods_cs(&api, "MyNamespace", "my_lib");
-
-        let directory = tempfile::tempdir().expect("temp directory");
-        std::fs::write(directory.path().join("TestService.cs"), &service_cs).expect("write service class");
-        std::fs::write(directory.path().join("ServiceNativeMethods.cs"), &native_methods_cs)
-            .expect("write native methods");
-        std::fs::write(
-            directory.path().join("Service.csproj"),
-            "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <OutputType>Library</OutputType>\n    \
-             <TargetFramework>net8.0</TargetFramework>\n    <Nullable>enable</Nullable>\n  \
+        std::fs::write(directory.join("TestService.cs"), service_cs).expect("write service class");
+        std::fs::write(directory.join("ServiceNativeMethods.cs"), native_methods_cs).expect("write native methods");
+        let project = format!(
+            "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <OutputType>Exe</OutputType>\n    \
+             <TargetFramework>{}</TargetFramework>\n    <Nullable>enable</Nullable>\n  \
              </PropertyGroup>\n</Project>\n",
-        )
-        .expect("write project file");
+            dotnet_target_framework()
+        );
+        std::fs::write(directory.join("Service.csproj"), project).expect("write project file");
+        std::fs::write(directory.join("Program.cs"), DOTNET_ALLOCATOR_HARNESS).expect("write allocator harness");
+    }
 
-        let dotnet_cli_home = directory.path().join(".dotnet");
-        let nuget_packages = directory.path().join(".nuget/packages");
+    fn dotnet_target_framework() -> String {
+        let output = std::process::Command::new("dotnet")
+            .arg("--version")
+            .output()
+            .expect("query dotnet SDK version");
+        let version = String::from_utf8(output.stdout).expect("dotnet version is UTF-8");
+        let major = version.trim().split('.').next().expect("dotnet major version");
+        format!("net{major}.0")
+    }
+
+    fn run_dotnet_allocator_fixture(directory: &std::path::Path) -> std::process::Output {
+        let dotnet_cli_home = directory.join(".dotnet");
+        let nuget_packages = directory.join(".nuget/packages");
         std::fs::create_dir_all(&dotnet_cli_home).expect("isolated DOTNET_CLI_HOME");
         std::fs::create_dir_all(&nuget_packages).expect("isolated NUGET_PACKAGES");
-
-        let output = std::process::Command::new("dotnet")
-            .args(["build", "--nologo", "-v", "quiet"])
-            .current_dir(directory.path())
+        std::process::Command::new("dotnet")
+            .args(["run", "--nologo", "-v", "quiet"])
+            .current_dir(directory)
             .env("DOTNET_CLI_HOME", &dotnet_cli_home)
             .env("NUGET_PACKAGES", &nuget_packages)
             .output()
-            .expect("run dotnet build");
+            .expect("run generated service allocator harness")
+    }
+
+    const DOTNET_ALLOCATOR_HARNESS: &str = r#"namespace MyNamespace;
+using System;
+using System.Runtime.InteropServices;
+public static class Program {
+    public static void Main() {
+        var callback = GCHandle.Alloc(new Func<string, string>(_ => "{}"));
+        IntPtr request = Marshal.StringToCoTaskMemUTF8("{}");
+        IntPtr response = IntPtr.Zero;
+        try {
+            response = TestService.HandlerTrampoline(GCHandle.ToIntPtr(callback), request);
+            if (Marshal.PtrToStringUTF8(response) != "{}") throw new InvalidOperationException();
+        } finally {
+            TestService.FreeHandlerResponse(response);
+            Marshal.FreeCoTaskMem(request);
+            callback.Free();
+        }
+    }
+}
+"#;
+
+    #[test]
+    fn test_service_callback_allocator_compiles_and_runs_when_dotnet_is_available() {
+        if which::which("dotnet").is_err() {
+            return;
+        }
+        let directory = tempfile::tempdir().expect("temp directory");
+        write_dotnet_allocator_fixture(directory.path());
+        let output = run_dotnet_allocator_fixture(directory.path());
 
         assert!(
             output.status.success(),
-            "generated service class failed to compile:\nstdout:\n{}\nstderr:\n{}",
+            "generated service allocator harness failed:\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );

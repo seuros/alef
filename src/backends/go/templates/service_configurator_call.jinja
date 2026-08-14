@@ -7,6 +7,6 @@
 	if new_owner == 0 {
 		return errors.New("configurator failed")
 	}
-	s.owner = unsafe.Pointer(new_owner)
+	s.owner = new_owner
 	return nil
 }

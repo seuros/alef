@@ -127,12 +127,11 @@ fn test_gen_service_rs_produces_valid_rust() {
 
     assert!(rs.contains("#[unsafe(no_mangle)]"));
     assert!(rs.contains("extern \"C\""));
-    // Edition 2024: extern blocks must be `unsafe extern "C"`. Regression: the free() shim
-    // in the handler bridge was emitted as bare `extern "C" {`, breaking downstream
-    // compilation (a downstream `*-ffi` crate failed `extern blocks must be unsafe`). ~keep
+    // The host's matching response deallocator is part of the registration contract, so the
+    // bridge must not emit a process-global `free` shim whose allocator may differ on Windows.
     assert!(
-        rs.contains("unsafe extern \"C\" {"),
-        "extern blocks (e.g. the free() shim) must be `unsafe extern \"C\"` for edition 2024"
+        !rs.contains("fn free(ptr: *mut c_void)"),
+        "service bridge must not emit a C-runtime free shim"
     );
     assert!(rs.contains("TestServiceOpaque"));
     assert!(rs.contains("test_service_new"));
@@ -159,7 +158,7 @@ fn test_handler_bridge_struct_is_generated() {
 #[test]
 fn test_handler_bridge_frees_response_before_deserializing() {
     // Regression: the response pointer from the C callback used to leak on a deserialization
-    // failure. `serde_json::from_str(...)?` ran before free(resp_ptr), so a malformed response
+    // failure. `serde_json::from_str(...)?` ran before releasing resp_ptr, so a malformed response
     // returned early via `?` and the host-allocated buffer was never released. free() must run
     // unconditionally, ahead of the fallible parse, so every path (success or failure) releases
     // ownership of the pointer. ~keep
@@ -172,7 +171,7 @@ fn test_handler_bridge_frees_response_before_deserializing() {
     let rs = gen_service_rs(&api, &config);
 
     let free_pos = rs
-        .find("free(resp_ptr as *mut c_void);")
+        .find("(self.response_free)(resp_ptr);")
         .expect("handler bridge must free the response pointer");
     let parse_pos = rs
         .find("serde_json::from_str(&resp_json)")
@@ -194,8 +193,32 @@ fn test_handler_bridge_frees_response_before_deserializing() {
 
     assert!(
         owned_pos < free_pos,
-        "the response must be copied into an owned String before free(resp_ptr); otherwise \
+        "the response must be copied into an owned String before releasing resp_ptr; otherwise \
          `resp_json` borrows freed memory:\n{rs}"
+    );
+}
+
+#[test]
+fn test_handler_bridge_uses_host_response_deallocator() {
+    let api = make_fixture_surface();
+    let config = ResolvedCrateConfig {
+        name: "test_crate".to_owned(),
+        ..ResolvedCrateConfig::default()
+    };
+
+    let rs = gen_service_rs(&api, &config);
+
+    assert!(
+        rs.contains("response_free: extern \"C\" fn(*mut c_char)"),
+        "service bridge must retain the host allocator's matching deallocator:\n{rs}"
+    );
+    assert!(
+        rs.contains("(self.response_free)(resp_ptr);"),
+        "service bridge must release callback responses through the host deallocator:\n{rs}"
+    );
+    assert!(
+        !rs.contains("fn free(ptr: *mut c_void);"),
+        "service bridge must not assume host responses came from the C allocator:\n{rs}"
     );
 }
 
@@ -225,6 +248,7 @@ fn test_registration_function_exists() {
 
     assert!(rs.contains("test_crate_test_service_register_add_handler"));
     assert!(rs.contains("extern \"C\" fn(*mut c_void, *const c_char) -> *mut c_char"));
+    assert!(rs.contains("response_free: extern \"C\" fn(*mut c_char)"));
 }
 
 #[test]
@@ -307,7 +331,9 @@ fn test_service_header_declares_metadata_and_entrypoint_params() {
     let header = gen_service_h(&api, "test_crate");
 
     assert!(
-        header.contains("handler_callback_t callback,\n    void* context,\n    const char* path\n);"),
+        header.contains(
+            "handler_callback_t callback,\n    handler_response_free_t response_free,\n    void* context,\n    const char* path\n);"
+        ),
         "registration metadata param missing from service header:\n{header}"
     );
     assert!(

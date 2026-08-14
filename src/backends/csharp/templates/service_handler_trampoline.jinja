@@ -10,12 +10,21 @@
                 string requestStr = Marshal.PtrToStringUTF8(requestJson) ?? "{}";
                 // Invoke the handler and get the response
                 string responseStr = handler(requestStr);
-                // Allocate response string in native memory (malloc-backed on Unix; the
-                // native side takes ownership and frees it).
+                // Allocate response string with the COM task allocator. Rust copies it,
+                // then invokes the paired FreeHandlerResponse callback.
                 return Marshal.StringToCoTaskMemUTF8(responseStr);
             }
         } catch {
             // Return null on error
         }
         return IntPtr.Zero;
+    }
+
+    /// <summary>
+    /// Releases a response allocated by <see cref="HandlerTrampoline"/>.
+    /// </summary>
+    public static void FreeHandlerResponse(IntPtr responsePtr) {
+        if (responsePtr != IntPtr.Zero) {
+            Marshal.FreeCoTaskMem(responsePtr);
+        }
     }

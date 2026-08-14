@@ -16,3 +16,9 @@ internal static partial class NativeMethods {
     /// </summary>
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate IntPtr HandlerCallback(IntPtr ctx, IntPtr requestJson);
+
+    /// <summary>
+    /// Releases a handler response with the allocator family that created it.
+    /// </summary>
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void HandlerResponseFree(IntPtr responsePtr);

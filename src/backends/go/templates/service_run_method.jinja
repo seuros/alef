@@ -28,7 +28,7 @@ func (s *{{ service_name }}) Run(config Config) error {
 	defer C.free(unsafe.Pointer(cConfig))
 
 	ret := C.{{ service_lower }}_{{ service_snake }}_run(
-		(*C.{{ upper_prefix }}{{ service_name }}Opaque)(s.owner),
+		s.owner,
 		cAddr,
 		cConfig,
 	)

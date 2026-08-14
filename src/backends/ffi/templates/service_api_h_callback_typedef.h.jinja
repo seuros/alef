@@ -3,9 +3,13 @@
  * The context pointer is opaque to the C side and is passed through
  * to the callback on each invocation for stateful handlers.
  * The request is a JSON string (null-terminated); the callback returns
- * a newly-allocated JSON response string (null-terminated) that must be
- * freed via {crate_prefix}_free_string(). */
+ * a newly-allocated JSON response string (null-terminated) that Rust releases
+ * through the paired handler_response_free_t callback. */
 typedef char* (*handler_callback_t)(
     void* context,
     const char* request_json
 );
+
+/* Release a non-null response returned by handler_callback_t with the allocator
+ * family that created it. */
+typedef void (*handler_response_free_t)(char* response_json);

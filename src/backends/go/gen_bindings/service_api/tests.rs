@@ -164,9 +164,78 @@ fn test_gen_service_go_produces_valid_go() {
     assert!(go.contains("/*\n#include <string.h>"));
     assert!(go.contains("#include \"test_crate.h\""));
     assert!(go.contains("//export service_handler_callback"));
+    assert!(go.contains("//export service_handler_response_free"));
     assert!(go.contains("import \"C\""));
     assert!(go.contains("owner C.uint64_t"));
 }
+
+#[test]
+fn go_service_response_deallocator_compiles_and_runs_when_go_is_available() {
+    let Some(go) = which::which("go").ok() else {
+        return;
+    };
+    let directory = tempfile::tempdir().expect("temporary Go allocator directory");
+    std::fs::write(directory.path().join("test_crate.h"), GO_ALLOCATOR_HEADER).expect("write allocator header");
+    let preamble = crate::backends::go::template_env::render(
+        "service_file_preamble.jinja",
+        minijinja::context! { pkg_name => "binding", ffi_header => "test_crate.h" },
+    );
+    let registry = crate::backends::go::template_env::render("service_handler_registry.jinja", minijinja::context! {});
+    let source = format!("{preamble}\n{registry}\n{GO_ALLOCATOR_CONTROL}");
+    std::fs::write(directory.path().join("service.go"), source).expect("write generated Go allocator control");
+    std::fs::write(directory.path().join("service_test.go"), GO_ALLOCATOR_TEST).expect("write Go allocator test");
+    let output = std::process::Command::new(go)
+        .args(["test", "-vet=off", "./..."])
+        .env("GO111MODULE", "off")
+        .current_dir(directory.path())
+        .output()
+        .expect("run Go allocator control");
+    assert!(
+        output.status.success(),
+        "generated Go allocator control failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+const GO_ALLOCATOR_HEADER: &str = r#"#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+typedef char *(*handler_callback_t)(void *, const char *);
+typedef void (*handler_response_free_t)(char *);
+static inline int allocator_control(
+    handler_callback_t callback,
+    handler_response_free_t response_free,
+    void *context
+) {
+    char *response = callback(context, "{}");
+    int valid = response != NULL && strcmp(response, "{}") == 0;
+    response_free(response);
+    return valid ? 17 : -1;
+}
+"#;
+
+const GO_ALLOCATOR_CONTROL: &str = r#"
+var _ = fmt.Sprintf
+var _ net.IP
+var _ = time.Second
+
+func allocatorControl() int {
+    id := registerHandler(func(_ []byte) ([]byte, error) { return []byte("{}"), nil })
+    defer unregisterHandler(id)
+    return int(C.allocator_control(
+        C.get_service_handler_callback(),
+        C.get_service_handler_response_free(),
+        unsafe.Pointer(id),
+    ))
+}
+"#;
+
+const GO_ALLOCATOR_TEST: &str = r#"package binding
+import "testing"
+func TestAllocatorControl(t *testing.T) {
+    if status := allocatorControl(); status != 17 { t.Fatalf("status = %d", status) }
+}
+"#;
 
 /// `service_c_imports_comment.jinja`'s per-registration and per-entrypoint C param
 /// loops close with `{% for param in ... %}...{{ param.name }}{% endfor +%}` — the
@@ -190,8 +259,9 @@ fn service_c_imports_comment_puts_closing_paren_on_its_own_line() {
     assert!(
         go.contains(concat!(
             "// extern int test_crate_test_service_register_add_handler(\n",
-            "//     TestServiceOpaque* owner,\n",
+            "//     uint64_t owner,\n",
             "//     char* (*callback)(void*, const char*),\n",
+            "//     void (*response_free)(char*),\n",
             "//     void* context,\n",
             "//     const char* method,\n",
             "//     const char* path\n",
@@ -202,7 +272,7 @@ fn service_c_imports_comment_puts_closing_paren_on_its_own_line() {
     assert!(
         go.contains(concat!(
             "// extern void test_crate_test_service_ep_run(\n",
-            "//     TestServiceOpaque* owner,\n",
+            "//     uint64_t owner,\n",
             "//     const char* addr\n",
             "// );\n",
         )),
@@ -254,7 +324,8 @@ fn test_registration_method_exists() {
     assert!(go.contains("handler HandlerFunc"));
     assert!(go.contains("registerHandler(handler)"));
     assert!(go.contains("C.get_service_handler_callback(),"));
-    assert!(go.contains("(*C.TEST_CRATETestServiceOpaque)"));
+    assert!(go.contains("C.get_service_handler_response_free(),"));
+    assert!(!go.contains("(*C.TEST_CRATETestServiceOpaque)"));
 }
 
 #[test]
@@ -269,7 +340,7 @@ fn test_entrypoint_method_exists() {
 
     assert!(go.contains("func (s *TestService) Run("));
     assert!(go.contains("test_crate_test_service_ep_run"));
-    assert!(go.contains("(*C.TEST_CRATETestServiceOpaque)"));
+    assert!(!go.contains("(*C.TEST_CRATETestServiceOpaque)"));
 }
 
 #[test]
@@ -287,6 +358,8 @@ fn test_handler_registry_and_trampoline() {
     assert!(go.contains("invokeHandler"));
     assert!(go.contains("registerHandler"));
     assert!(go.contains("//export service_handler_callback"));
+    assert!(go.contains("//export service_handler_response_free"));
+    assert!(go.contains("C.free(unsafe.Pointer(response))"));
 }
 
 #[test]

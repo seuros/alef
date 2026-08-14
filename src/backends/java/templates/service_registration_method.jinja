@@ -28,6 +28,10 @@
             MethodHandle adapter = MethodHandles.insertArguments(baseMh, 2, handler, arena);
 
             MemorySegment upcallStub = LINKER.upcallStub(adapter, upcallDesc, arena);
+            MethodHandle responseFree = lookup.findStatic({{ class_name }}.class, "freeHandlerResponse",
+                MethodType.methodType(void.class, MemorySegment.class));
+            MemorySegment responseFreeStub = LINKER.upcallStub(responseFree,
+                FunctionDescriptor.ofVoid(ValueLayout.ADDRESS), arena);
 
             // Get register downcall handle
             MemorySegment regAddr = LOOKUP.find("{{ ffi_prefix }}_{{ service_snake }}_register_{{ reg_method_snake }}")
@@ -37,6 +41,7 @@
                 ValueLayout.JAVA_INT,  // return: int
                 ValueLayout.JAVA_LONG, // owner: AlefHandle
                 ValueLayout.ADDRESS,   // callback: upcall stub
+                ValueLayout.ADDRESS,   // response deallocator: paired upcall stub
                 ValueLayout.ADDRESS    // context: *mut c_void (null for now)
 {% for layout in descriptor_layouts %}
                 , {{ layout.0 }}    // {{ layout.1 }} param
@@ -46,6 +51,7 @@
             return (int) regHandle.invokeExact(
                 ownerHandle,     // owner
                 upcallStub,      // callback
+                responseFreeStub, // response deallocator
                 MemorySegment.NULL  // context: null pointer
 {% for arg in invoke_args %}
                 , {{ arg.0 }}    // {{ arg.1 }}

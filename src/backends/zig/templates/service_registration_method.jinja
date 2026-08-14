@@ -1,14 +1,17 @@
     /// {{ doc }}.
     pub fn {{ method_name }}(
         self: *{{ service_name }},
-        callback: *const fn (*anyopaque, [*:0]const u8) callconv(.C) [*:0]u8,
+        callback: *const fn (*anyopaque, [*:0]const u8) callconv(.c) [*:0]u8,
+        response_free: *const fn ([*:0]u8) callconv(.c) void,
         context: *anyopaque{{ params_decl }}
     ) c_int {
-        const owner_ptr = self.owner orelse return 1;
+        const owner_handle = self.owner;
+        if (owner_handle == 0) return 1;
 
         return c.{{ c_fn }}(
-            @ptrCast(owner_ptr),
+            owner_handle,
             @ptrCast(callback),
+            @ptrCast(response_free),
             context{{ args }}
         );
     }

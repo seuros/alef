@@ -4,6 +4,8 @@
 /// - `owner` must be a valid pointer returned by `{{ new_fn_name }}()` and not yet freed.
 /// - `callback` must be a valid function pointer that remains valid for the lifetime
 ///   of this service instance.
+/// - `response_free` must release pointers returned by `callback` with the same
+///   allocator family and remain valid for the lifetime of this service instance.
 /// - `context` is an opaque pointer passed to the callback on each invocation.
 ///   The caller is responsible for keeping it valid.
 /// Returns 0 on success, non-zero error code on failure.
@@ -11,6 +13,7 @@
 pub extern "C" fn {{ fn_name }}(
     owner: AlefHandle,
     callback: extern "C" fn(*mut c_void, *const c_char) -> *mut c_char,
+    response_free: extern "C" fn(*mut c_char),
     context: *mut c_void{{ param_decls }}
 ) -> i32 {
     catch_ffi_panic(1, || {
@@ -19,6 +22,7 @@ pub extern "C" fn {{ fn_name }}(
     }
 {{ pre_bridge_body }}    let bridge = {{ bridge_name }} {
         callback,
+        response_free,
         context,
     };
     let handler: Arc<dyn {{ handler_trait_path }}> = Arc::new(bridge);

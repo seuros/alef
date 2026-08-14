@@ -58,7 +58,12 @@ func service_handler_callback(ctx unsafe.Pointer, reqCStr *C.char) *C.char {
 		respJSON = errJSON
 	}
 
-	// Allocate C string from Go heap (caller responsible for freeing).
+	// Allocate with C.CString; Rust returns ownership through the paired free callback.
 	cResp := C.CString(string(respJSON))
 	return cResp
+}
+
+//export service_handler_response_free
+func service_handler_response_free(response *C.char) {
+	C.free(unsafe.Pointer(response))
 }

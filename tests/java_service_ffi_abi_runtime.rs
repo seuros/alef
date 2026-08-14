@@ -163,6 +163,7 @@ fn write_native_fixture(root: &Path) -> PathBuf {
 #include <string.h>
 
 typedef char *(*handler_callback_t)(void *, const char *);
+typedef void (*handler_response_free_t)(char *);
 
 uint64_t test_test_service_new(void) { return 41; }
 void test_test_service_free(uint64_t owner) { (void)owner; }
@@ -170,12 +171,14 @@ void test_test_service_free(uint64_t owner) { (void)owner; }
 int32_t test_test_service_get(
     uint64_t owner,
     handler_callback_t callback,
+    handler_response_free_t response_free,
     void *context,
     const char *path
 ) {
-    (void)callback;
-    (void)context;
-    return owner == 41 && strcmp(path, "/ok") == 0 ? 17 : -1;
+    char *response = callback(context, "{}");
+    int response_ok = response != NULL && strcmp(response, "{}") == 0;
+    response_free(response);
+    return owner == 41 && response_ok && strcmp(path, "/ok") == 0 ? 17 : -1;
 }
 
 int32_t test_test_service_ep_run(uint64_t owner, const char *address) {

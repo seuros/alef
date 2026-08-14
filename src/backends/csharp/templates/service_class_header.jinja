@@ -12,14 +12,20 @@ using System.Runtime.InteropServices;
 /// Service wrapper for {{ service_name }}.
 /// </summary>
 internal sealed class {{ class_name }}SafeHandle : SafeHandle {
-    internal {{ class_name }}SafeHandle(IntPtr handle) : base(IntPtr.Zero, true) {
-        SetHandle(handle);
+    private ulong _nativeHandle;
+
+    internal {{ class_name }}SafeHandle(ulong handle) : base(IntPtr.Zero, true) {
+        _nativeHandle = handle;
+        SetHandle(handle == 0 ? IntPtr.Zero : new IntPtr(1));
     }
 
-    public override bool IsInvalid => handle == IntPtr.Zero;
+    public override bool IsInvalid => _nativeHandle == 0;
+    internal ulong AlefHandle => _nativeHandle;
 
     protected override bool ReleaseHandle() {
-        NativeMethods.{{ native_free }}(handle);
+        NativeMethods.{{ native_free }}(_nativeHandle);
+        _nativeHandle = 0;
+        SetHandle(IntPtr.Zero);
         return true;
     }
 }
@@ -31,3 +37,4 @@ public class {{ class_name }} : IDisposable {
     // A single static delegate instance bridges the native callback. Held in a static field so the
     // marshalled function pointer outlives every registration (a transient delegate would be collected).
     private static readonly NativeMethods.HandlerCallback _handlerCallback = HandlerTrampoline;
+    private static readonly NativeMethods.HandlerResponseFree _handlerResponseFree = FreeHandlerResponse;

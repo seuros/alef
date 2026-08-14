@@ -628,7 +628,7 @@ fn gen_configurator_method(
     let mut preprocessing = String::new();
 
     cfg_args.push(minijinja::context! {
-        expr => format!("(*C.{upper_prefix}{service_name}Opaque)(s.owner)"),
+        expr => "s.owner",
     });
 
     for cfg_param in &cfg.params {

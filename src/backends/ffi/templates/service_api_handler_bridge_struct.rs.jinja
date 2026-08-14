@@ -4,12 +4,13 @@
 /// The callback receives JSON-serialized request and returns JSON response.
 pub struct {{ bridge_name }} {
     callback: extern "C" fn(*mut c_void, *const c_char) -> *mut c_char,
+    response_free: extern "C" fn(*mut c_char),
     context: *mut c_void,
 }
 
-// SAFETY: The C callback function pointer and context pointer are opaque handles.
+// SAFETY: The C callback/deallocator function pointers and context pointer are opaque handles.
 // The caller is responsible for maintaining the invariant that the context
-// pointer remains valid for the lifetime of the bridge. The callback itself
-// must be safe to call from async Rust code.
+// pointer remains valid for the lifetime of the bridge. Both callbacks must
+// be safe to call from async Rust code.
 unsafe impl Send for {{ bridge_name }} {}
 unsafe impl Sync for {{ bridge_name }} {}

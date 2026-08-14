@@ -93,6 +93,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **ffi/services**: carry an explicit response-deallocator callback beside every service handler callback and invoke
+  it after copying the response but before fallible deserialization. Rust previously called process-global `free()`
+  on host allocations, including C# `Marshal.StringToCoTaskMemUTF8` memory, which crosses allocator families and can
+  corrupt the Windows heap. C#, Java, Go, and Zig service registrations now pass their matching deallocator, and the
+  generated service wrappers use the scalar `AlefHandle` carrier consistently.
 - **csharp/zig**: invalidate host wrappers immediately after a consuming native method returns, including error
   returns, so fluent builders cannot retain a stale owner while wrapping the replacement handle.
 - **ffi/csharp/zig**: return every byte buffer through the owned pointer/length/capacity ABI, including infallible

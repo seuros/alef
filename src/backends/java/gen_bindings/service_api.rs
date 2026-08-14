@@ -646,6 +646,14 @@ mod tests {
             "registration should build upcall stub for handler"
         );
         assert!(java.contains("MethodHandle"), "should use MethodHandle to wrap handler");
+        assert!(
+            java.contains("responseFreeStub"),
+            "registration should pass a paired response deallocator"
+        );
+        assert!(
+            java.contains("freeHandlerResponse"),
+            "service should release responses with Java's allocator"
+        );
     }
 
     #[test]

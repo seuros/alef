@@ -2,4 +2,5 @@
 int {{ prefix_lower }}_{{ service_snake }}_register_{{ reg_method_snake }}(
     uint64_t owner,
     handler_callback_t callback,
+    handler_response_free_t response_free,
     void* context

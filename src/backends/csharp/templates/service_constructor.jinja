@@ -3,7 +3,7 @@
     /// </summary>
     public {{ class_name }}({{ params_decl }}) {
         var handle = NativeMethods.{{ native_new }}();
-        if (handle == IntPtr.Zero) {
+        if (handle == 0) {
             throw new InvalidOperationException("Native service constructor returned a null handle");
         }
         _safeHandle = new {{ class_name }}SafeHandle(handle);

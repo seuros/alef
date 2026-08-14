@@ -458,7 +458,7 @@ mod tests {
         let zig = gen_service_zig(&api, &config);
 
         assert!(zig.contains("pub const TestService = struct"));
-        assert!(zig.contains("owner: ?*anyopaque"));
+        assert!(zig.contains("owner: u64"));
     }
 
     #[test]
@@ -476,7 +476,9 @@ mod tests {
         assert!(zig.contains("c.test_crate_test_service_free("));
         assert!(zig.contains("c.test_crate_test_service_register_add_handler("));
 
-        assert!(zig.contains("fn (*anyopaque, [*:0]const u8) callconv(.C) [*:0]u8"));
+        assert!(zig.contains("fn (*anyopaque, [*:0]const u8) callconv(.c) [*:0]u8"));
+        assert!(zig.contains("response_free: *const fn ([*:0]u8) callconv(.c) void"));
+        assert!(zig.contains("owner_handle,"));
     }
 
     #[test]
@@ -491,7 +493,8 @@ mod tests {
 
         assert!(zig.contains("pub fn add_handler("));
         assert!(zig.contains("self: *TestService"));
-        assert!(zig.contains("callback: *const fn (*anyopaque, [*:0]const u8) callconv(.C) [*:0]u8"));
+        assert!(zig.contains("callback: *const fn (*anyopaque, [*:0]const u8) callconv(.c) [*:0]u8"));
+        assert!(zig.contains("response_free: *const fn ([*:0]u8) callconv(.c) void"));
     }
 
     #[test]
