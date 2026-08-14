@@ -140,9 +140,9 @@ pub struct ApiSurface {
     pub functions: Vec<FunctionDef>,
     pub enums: Vec<EnumDef>,
     pub errors: Vec<ErrorDef>,
-    #[serde(default)]
+    #[serde(default, serialize_with = "super::ordered_serde::serialize_map")]
     pub excluded_type_paths: std::collections::HashMap<String, String>,
-    #[serde(default)]
+    #[serde(default, serialize_with = "super::ordered_serde::serialize_set")]
     pub excluded_trait_names: std::collections::HashSet<String>,
     #[serde(default)]
     pub services: Vec<ServiceDef>,

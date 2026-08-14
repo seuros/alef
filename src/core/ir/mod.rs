@@ -1,5 +1,6 @@
 mod items;
 mod metadata;
+mod ordered_serde;
 mod service;
 mod surface;
 mod type_ref;
