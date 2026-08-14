@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **e2e/snippets**: declare the `serde_json` dependency that generated Rust snippet bodies name. A `json_object`
+  argument makes the Rust recipe emit `serde_json::from_str(…)`/`serde_json::from_value(…)`, but the snippet
+  frontmatter and coverage ledger both reported `requires: []`, so the Rust snippet validator built its check
+  project without the crate and every such snippet failed with `E0433: failed to resolve: use of undeclared crate
+  serde_json`. Rust snippets now carry a `crate:serde_json` requirement, and the Rust validator resolves
+  `crate:<name>` requirements into `[dependencies]` of the check project. Session configuration still wins: a crate
+  declared under `docs.snippets.sessions.<target>.rust_dependencies` keeps its configured version and features, and
+  a requirement Alef has no pinned version for fails with the config key to add instead of resolving silently.
 - **ffi**: verify cbindgen declarations against the FFI source after writing it, so a stale-header failure leaves Cargo
   the new source it must rebuild instead of trapping generation in a rebuild loop; declaration matching also accepts
   formatted line breaks while retaining exact symbol boundaries.

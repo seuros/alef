@@ -33,6 +33,12 @@ pub struct GeneratedSnippet {
 pub const COVERAGE_MANIFEST: &str = ".alef-snippet-coverage.json";
 pub const COVERAGE_MANIFEST_VERSION: u32 = 2;
 
+/// Requirement namespace for a Cargo crate a generated Rust snippet body names directly. ~keep
+/// The Rust snippet validator resolves these into `[dependencies]` of the check project.
+pub const CRATE_REQUIREMENT_PREFIX: &str = "crate:";
+
+const SERDE_JSON_REQUIREMENT: &str = "crate:serde_json";
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SnippetCoverageKey {
     pub fixture_id: String,
@@ -265,7 +271,7 @@ fn generate_snippet_report_with_extensions(
                 }
             };
             let content = render_snippet_markdown(&body, fixture, docs, language, lang);
-            let requirements = snippet_requirements(fixture, language);
+            let requirements = snippet_requirements(fixture, language, &body);
             let file = GeneratedFile {
                 path: path.clone(),
                 content,
@@ -451,7 +457,7 @@ fn render_snippet_markdown(
     language: DocumentationLanguage,
 ) -> String {
     let snippet_id = format!("fixture_{target}_{}", fixture.id);
-    let requirements = snippet_requirements(fixture, target);
+    let requirements = snippet_requirements(fixture, target, body);
     let requires = serde_json::to_string(&requirements).unwrap_or_else(|_| "[]".to_string());
     crate::e2e::template_env::render(
         "snippets/file.md.jinja",
@@ -470,10 +476,16 @@ fn render_snippet_markdown(
     )
 }
 
-fn snippet_requirements(fixture: &Fixture, target: &str) -> Vec<String> {
+fn snippet_requirements(fixture: &Fixture, target: &str, body: &str) -> Vec<String> {
     let mut requirements = fixture.requirements.clone();
     if target == "rust" && fixture.visitor.is_some() && !requirements.iter().any(|value| value == "feature:visitor") {
         requirements.push("feature:visitor".to_string());
+    }
+    if generator_name(target) == "rust"
+        && body.contains("serde_json::")
+        && !requirements.iter().any(|value| value == SERDE_JSON_REQUIREMENT)
+    {
+        requirements.push(SERDE_JSON_REQUIREMENT.to_string());
     }
     requirements
 }
@@ -1343,7 +1355,74 @@ mod tests {
             callbacks: BTreeMap::new(),
         });
 
-        assert_eq!(snippet_requirements(&fixture, "rust"), ["feature:visitor"]);
-        assert!(snippet_requirements(&fixture, "java").is_empty());
+        assert_eq!(snippet_requirements(&fixture, "rust", ""), ["feature:visitor"]);
+        assert!(snippet_requirements(&fixture, "java", "").is_empty());
+    }
+
+    fn json_argument_fixture() -> Fixture {
+        let argument = |name: &str, arg_type: &str| crate::core::config::e2e::ArgMapping {
+            name: name.into(),
+            field: name.into(),
+            arg_type: arg_type.into(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        };
+        Fixture {
+            id: "json_options".into(),
+            input: serde_json::json!({"text": "sample", "options": {"width": 80}}),
+            args: vec![argument("text", "string"), argument("options", "json_object")],
+            ..documented_fixture()
+        }
+    }
+
+    fn rust_snippet_report(fixture: Fixture) -> SnippetGenerationReport {
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "convert".into();
+        let snippet_config = SnippetConfig {
+            output: "docs/snippets".into(),
+            ..SnippetConfig::default()
+        };
+        let crate_config = ResolvedCrateConfig::default();
+        let context = SnippetRenderContext {
+            e2e: &e2e,
+            crate_config: &crate_config,
+            type_defs: &[],
+            enums: &[],
+            functions: &[],
+        };
+        generate_snippet_report_with_extensions(&[fixture], &["rust".into()], &snippet_config, &context, &[])
+            .expect("rust snippet report renders")
+    }
+
+    #[test]
+    fn rust_snippets_declare_the_serde_json_crate_their_body_names() {
+        let report = rust_snippet_report(json_argument_fixture());
+
+        let snippet = &report.snippets[0];
+        assert!(
+            snippet.file.content.contains("serde_json::from_str"),
+            "body must exercise serde_json: {}",
+            snippet.file.content
+        );
+        assert_eq!(snippet.requirements, ["crate:serde_json"]);
+        assert!(
+            snippet.file.content.contains("requires: [\"crate:serde_json\"]"),
+            "frontmatter must declare the dependency: {}",
+            snippet.file.content
+        );
+        assert_eq!(report.coverage.generated_metadata[0].requires, ["crate:serde_json"]);
+    }
+
+    #[test]
+    fn rust_snippets_without_json_arguments_declare_no_crate_requirement() {
+        let report = rust_snippet_report(documented_fixture());
+
+        let snippet = &report.snippets[0];
+        assert!(!snippet.file.content.contains("serde_json"), "{}", snippet.file.content);
+        assert!(snippet.requirements.is_empty());
     }
 }
