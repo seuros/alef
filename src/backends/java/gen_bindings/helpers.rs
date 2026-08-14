@@ -21,6 +21,19 @@ pub(crate) fn is_serde_default_marker(default: Option<&str>) -> bool {
     matches!(default, Some(s) if s == SERDE_DEFAULT_PLACEHOLDER || s.starts_with("serde(default = \""))
 }
 
+/// Whether a non-optional field must be boxed so `null` can mean "not supplied".
+///
+/// Java records have no per-component defaults, so a default is restored in the compact
+/// constructor by testing the incoming value. That test needs a value meaning "nothing was
+/// supplied". `Duration` and `#[serde(default)]` fields already box for exactly this reason;
+/// a field carrying a plain literal default must join them, because on an unboxed primitive
+/// the only available sentinel is `0` — and then a caller passing an explicit `0` is silently
+/// given the default instead. Every other language emits per-field initializers and needs no
+/// sentinel, which is why this is Java-local. ~keep
+pub(crate) fn boxes_to_carry_literal_default(typed_default: Option<&crate::core::ir::DefaultValue>) -> bool {
+    matches!(typed_default, Some(crate::core::ir::DefaultValue::IntLiteral(n)) if *n != 0)
+}
+
 /// Names that conflict with methods on `java.lang.Object` and are therefore
 /// illegal as record component names or method names in generated Java code.
 const JAVA_OBJECT_METHOD_NAMES: &[&str] = &[

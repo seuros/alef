@@ -7,7 +7,7 @@ use ahash::AHashSet;
 
 use super::shared::{is_options_field_bridge, options_field_bridge_trait_name, resolve_field_type};
 use crate::backends::java::gen_bindings::helpers::{
-    format_optional_value, is_serde_default_marker, safe_java_field_name,
+    boxes_to_carry_literal_default, format_optional_value, is_serde_default_marker, safe_java_field_name,
 };
 
 pub(super) const BUILDER_AUTO_THRESHOLD: usize = 8;
@@ -121,8 +121,9 @@ pub(super) fn gen_builder_nested_class(
             java_boxed_type(&resolved_field_ty).to_string()
         } else if matches!(resolved_field_ty, TypeRef::Duration) {
             java_boxed_type(&resolved_field_ty).to_string()
-        } else if has_serde_default {
-            // Non-optional fields with #[serde(default)] use boxed types so null can represent "not set"
+        } else if has_serde_default || boxes_to_carry_literal_default(field.typed_default.as_ref()) {
+            // Non-optional fields with #[serde(default)] or a literal default use boxed types
+            // so null can represent "not set"
             java_boxed_type(&resolved_field_ty).to_string()
         } else {
             java_type(&resolved_field_ty).to_string()
@@ -296,8 +297,12 @@ pub(super) fn gen_builder_nested_class(
             "Map<String, Object>".to_string()
         } else if matches!(resolved_field_ty, TypeRef::Optional(_)) {
             java_boxed_type(&resolved_field_ty).to_string()
-        } else if has_serde_default || matches!(resolved_field_ty, TypeRef::Duration) {
-            // Non-optional fields with #[serde(default)] or Duration must box the parameter type
+        } else if has_serde_default
+            || matches!(resolved_field_ty, TypeRef::Duration)
+            || boxes_to_carry_literal_default(field.typed_default.as_ref())
+        {
+            // Non-optional fields with #[serde(default)], Duration, or a literal default
+            // must box the parameter type
             java_boxed_type(&resolved_field_ty).to_string()
         } else {
             java_type(&resolved_field_ty).to_string()
@@ -331,8 +336,11 @@ pub(super) fn gen_builder_nested_class(
         body.push_str("        public Builder with");
         body.push_str(&field_name_pascal);
         body.push_str("(final ");
-        let needs_nullable_on_param =
-            (field.optional || has_serde_default || matches!(field.ty, TypeRef::Duration)) && !is_visitor_field;
+        let needs_nullable_on_param = (field.optional
+            || has_serde_default
+            || matches!(field.ty, TypeRef::Duration)
+            || boxes_to_carry_literal_default(field.typed_default.as_ref()))
+            && !is_visitor_field;
         if needs_nullable_on_param {
             if let Some(idx) = field_type.rfind('.') {
                 let (pkg, simple) = field_type.split_at(idx);

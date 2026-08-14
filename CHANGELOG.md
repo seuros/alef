@@ -34,6 +34,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   included, so a consumer whose config routed a streaming call to zig received nothing and was never told. Such a
   category now emits a placeholder suite naming every dropped fixture, plus a warning, so an unemittable category is
   visible in the output tree instead of vanishing.
+- **java**: box a config field whose serde default is a non-zero integer literal, so a caller's explicit `0` is no
+  longer overwritten by the default. Java records carry no per-component defaults, so a default is restored in the
+  compact constructor by testing the incoming value, which requires a value meaning "nothing was supplied".
+  `Duration` and `#[serde(default)]` fields already boxed for that reason; a plain literal default did not, leaving
+  `0` as the only available sentinel — `if (maxRedirects == 0) { maxRedirects = 10; }` silently gave 10 redirects to
+  a caller who asked for none. The "must box" predicate now covers a non-zero literal default and is applied at
+  every site that has to agree — record component type, `@Nullable`, the compact constructor's condition, and both
+  the builder field and setter types — through one shared helper, because a disagreement between them emits a record
+  and a builder declaring different types for the same field. Java-local by construction: Python, C# and Kotlin emit
+  per-field initializers and need no sentinel. **Consumer-visible:** affected record components and builder setters
+  change from the primitive type to its boxed form.
 - Make generated parameter-conversion failures use the scalar zero sentinel whenever the exported FFI return type is
   `AlefHandle`, even when the source return metadata has a pointer-shaped fallback.
 - **config generation**: report every Rust-binding field whose serde default function cannot be preserved in one

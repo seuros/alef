@@ -8,7 +8,8 @@ use ahash::AHashSet;
 use super::builders::{gen_builder_nested_class, should_emit_builder};
 use super::shared::{options_field_bridge_trait_name, resolve_field_type};
 use crate::backends::java::gen_bindings::helpers::{
-    RECORD_LINE_WRAP_THRESHOLD, emit_javadoc, is_serde_default_marker, safe_java_field_name,
+    RECORD_LINE_WRAP_THRESHOLD, boxes_to_carry_literal_default, emit_javadoc, is_serde_default_marker,
+    safe_java_field_name,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -55,8 +56,12 @@ pub(crate) fn gen_record_type(
             java_boxed_type(&resolved_ty).to_string()
         } else if f_optional_no_wrapper {
             java_boxed_type(&resolved_ty).to_string()
-        } else if has_serde_default || matches!(resolved_ty, TypeRef::Duration) {
-            // Non-optional fields with #[serde(default)] or Duration use boxed types
+        } else if has_serde_default
+            || matches!(resolved_ty, TypeRef::Duration)
+            || boxes_to_carry_literal_default(f.typed_default.as_ref())
+        {
+            // Non-optional fields with #[serde(default)], Duration, or a literal default
+            // use boxed types so the compact constructor can tell "unset" from a real value
             java_boxed_type(&resolved_ty).to_string()
         } else {
             java_type(&resolved_ty).to_string()
@@ -73,7 +78,10 @@ pub(crate) fn gen_record_type(
         let has_json_property =
             f.serde_rename.is_some() || jname != json_property_name || (needs_builder && !is_visitor_field);
         // Emit @Nullable for optional fields and for non-optional fields with #[serde(default)]
-        let has_nullable = f.optional || has_serde_default || matches!(resolved_ty, TypeRef::Duration);
+        let has_nullable = f.optional
+            || has_serde_default
+            || matches!(resolved_ty, TypeRef::Duration)
+            || boxes_to_carry_literal_default(f.typed_default.as_ref());
 
         let mut decl = String::new();
 
@@ -216,7 +224,9 @@ pub(crate) fn gen_record_type(
             let has_serde_default = is_serde_default_marker(f.default.as_deref());
             match &f.typed_default {
                 Some(DefaultValue::IntLiteral(n)) if *n != 0 => {
-                    let is_boxed = matches!(f.ty, TypeRef::Duration) || has_serde_default;
+                    let is_boxed = matches!(f.ty, TypeRef::Duration)
+                        || has_serde_default
+                        || boxes_to_carry_literal_default(f.typed_default.as_ref());
                     let needs_long_suffix = matches!(f.ty, TypeRef::Duration)
                         || (has_serde_default
                             && matches!(
