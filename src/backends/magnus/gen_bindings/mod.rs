@@ -570,7 +570,21 @@ impl Backend for MagnusBackend {
         api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
-        let deduped_api = api.with_deduped_functions();
+        let mut deduped_api = api.with_deduped_functions();
+        // The RBS stub must describe the surface the binding actually registers. Both
+        // `generate_bindings` and the module-init emitter drop
+        // `[crates.ruby].exclude_functions`, but this stub path read `api.functions`
+        // unfiltered -- so an excluded function was absent from `lib.rs` and still declared
+        // in `sig/types.rbs`, leaving Steep type-checking against a method that does not
+        // exist at runtime.
+        let excluded_functions: std::collections::HashSet<&str> = config
+            .ruby
+            .as_ref()
+            .map(|ruby| ruby.exclude_functions.iter().map(String::as_str).collect())
+            .unwrap_or_default();
+        deduped_api
+            .functions
+            .retain(|func| !excluded_functions.contains(func.name.as_str()));
         let api = &deduped_api;
 
         let stubs_config = match config.ruby.as_ref().and_then(|c| c.stubs.as_ref()) {

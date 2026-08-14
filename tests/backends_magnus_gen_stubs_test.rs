@@ -1219,3 +1219,63 @@ fn test_rbs_plugin_interface_omits_defaulted_methods_and_documents_them() {
         "defaulted method must be documented as optional:\n{content}"
     );
 }
+
+/// Regression: `[crates.ruby].exclude_functions` must hide a function from `sig/types.rbs`,
+/// not just from `lib.rs`.
+///
+/// `generate_bindings` and the module-init emitter both drop excluded functions, but
+/// `generate_type_stubs` read `api.functions` unfiltered — so an excluded function was
+/// absent from the built extension yet still declared in the RBS stub, leaving Steep
+/// type-checking callers against a method that does not exist at runtime. xberg hit this
+/// with `embed_sparse_async`, which was correctly absent from every `.rb` file and present
+/// in `sig/types.rbs`.
+#[test]
+fn excluded_functions_are_absent_from_the_rbs_stub() {
+    let config = resolved_one(
+        r#"
+[workspace]
+languages = ["ruby"]
+
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+
+[crates.ruby]
+gem_name = "test_lib"
+exclude_functions = ["embed_sparse_async"]
+
+[crates.ruby.stubs]
+output = "packages/ruby/sig/"
+"#,
+    );
+
+    let make_fn = |name: &str| FunctionDef {
+        name: name.to_string(),
+        rust_path: format!("test_lib::{name}"),
+        return_type: TypeRef::String,
+        ..Default::default()
+    };
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        functions: vec![make_fn("embed_sparse_async"), make_fn("other_func")],
+        ..Default::default()
+    };
+
+    let files = MagnusBackend.generate_type_stubs(&api, &config).unwrap();
+    let stub = files
+        .iter()
+        .find(|file| file.path.ends_with("types.rbs"))
+        .expect("types.rbs must be emitted");
+
+    assert!(
+        !stub.content.contains("embed_sparse_async"),
+        "an excluded function must not be declared in the RBS stub:\n{}",
+        stub.content
+    );
+    assert!(
+        stub.content.contains("other_func"),
+        "a function not excluded must still be declared in the RBS stub:\n{}",
+        stub.content
+    );
+}
