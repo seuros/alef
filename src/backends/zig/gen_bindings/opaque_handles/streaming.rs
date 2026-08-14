@@ -6,6 +6,15 @@ use std::collections::HashMap;
 
 use super::render;
 
+pub(super) struct StreamingContext<'a> {
+    pub(super) ty: &'a TypeDef,
+    pub(super) prefix: &'a str,
+    pub(super) type_snake: &'a str,
+    pub(super) item_type: &'a str,
+    pub(super) declared_errors: &'a [String],
+    pub(super) streaming_item_types: &'a HashMap<String, String>,
+}
+
 /// Compute the Zig struct name for a streaming method's iterator type.
 ///
 /// Defaults to `{item_type}Stream`. That name is only safe when a single streaming
@@ -46,16 +55,15 @@ pub(super) fn stream_struct_name(
 ///
 /// The struct holds a stream handle and provides `next()` and `deinit()` methods
 /// to incrementally consume chunks without eagerly collecting them all into memory.
-pub(super) fn emit_streaming_struct(
-    method: &MethodDef,
-    ty: &TypeDef,
-    prefix: &str,
-    type_snake: &str,
-    item_type: &str,
-    declared_errors: &[String],
-    streaming_item_types: &HashMap<String, String>,
-    out: &mut String,
-) {
+pub(super) fn emit_streaming_struct(method: &MethodDef, streaming: &StreamingContext<'_>, out: &mut String) {
+    let StreamingContext {
+        ty,
+        prefix,
+        type_snake,
+        item_type,
+        declared_errors,
+        streaming_item_types,
+    } = streaming;
     let method_snake = AsSnakeCase(&method.name).to_string();
     let item_snake = AsSnakeCase(item_type).to_string();
     let struct_name = stream_struct_name(ty, &method_snake, item_type, streaming_item_types);
@@ -86,16 +94,15 @@ pub(super) fn emit_streaming_struct(
 /// and return a struct type that provides `next()` and `deinit()` methods for
 /// incremental, backpressure-aware consumption. Callers can cancel by dropping
 /// the struct early without draining the entire stream.
-pub(super) fn emit_opaque_streaming_method(
-    method: &MethodDef,
-    ty: &TypeDef,
-    prefix: &str,
-    type_snake: &str,
-    item_type: &str,
-    declared_errors: &[String],
-    streaming_item_types: &HashMap<String, String>,
-    out: &mut String,
-) {
+pub(super) fn emit_opaque_streaming_method(method: &MethodDef, streaming: &StreamingContext<'_>, out: &mut String) {
+    let StreamingContext {
+        ty,
+        prefix,
+        type_snake,
+        item_type,
+        declared_errors,
+        streaming_item_types,
+    } = streaming;
     emit_cleaned_zig_doc(out, &method.doc, "    ");
 
     let method_snake = AsSnakeCase(&method.name).to_string();

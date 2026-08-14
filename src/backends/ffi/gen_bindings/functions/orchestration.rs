@@ -7,7 +7,7 @@ use minijinja::context;
 use super::super::helpers::{
     ffi_null_return_value, gen_ffi_unimplemented_body, gen_owned_value_to_c, null_return_value,
 };
-use super::params::gen_param_conversion_with_enums;
+use super::params::{ParamConversionContext, gen_param_conversion_with_enums};
 use super::return_handling::{gen_owned_c_char_to_c_with_len, return_type_needs_non_serde_named, returns_c_char};
 use super::signatures::{c_symbol_component, internal_class_component};
 use super::support::{ffi_doxygen_block, method_sanitized_recoverable, sanitized_recoverable};
@@ -278,16 +278,15 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
         out.push_str(&crate::backends::ffi::template_env::render(
             "emitted_code_block.jinja",
             context! {
-                content => gen_param_conversion_with_enums(
-                    p,
+                content => gen_param_conversion_with_enums(p, &ParamConversionContext {
                     has_error,
                     is_bytes_result,
-                    &method.return_type,
-                    return_type.as_deref(),
+                    return_type: &method.return_type,
+                    ffi_return_type: return_type.as_deref(),
                     core_import,
                     path_map,
                     enum_names,
-                ),
+                }),
             },
         ));
     }
@@ -748,16 +747,15 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
         out.push_str(&crate::backends::ffi::template_env::render(
             "emitted_code_block.jinja",
             context! {
-                content => gen_param_conversion_with_enums(
-                    p,
+                content => gen_param_conversion_with_enums(p, &ParamConversionContext {
                     has_error,
                     is_bytes_result,
-                    &func.return_type,
-                    return_type.as_deref(),
+                    return_type: &func.return_type,
+                    ffi_return_type: return_type.as_deref(),
                     core_import,
                     path_map,
                     enum_names,
-                ),
+                }),
             },
         ));
     }

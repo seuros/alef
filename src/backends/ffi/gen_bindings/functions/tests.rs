@@ -2,7 +2,7 @@ use crate::core::ir::{ParamDef, TypeRef};
 use ahash::{AHashMap, AHashSet};
 
 use super::orchestration::gen_function_wrapper_footer;
-use super::params::gen_param_conversion_with_enums;
+use super::params::{ParamConversionContext, gen_param_conversion_with_enums};
 use super::return_handling::return_type_needs_non_serde_named;
 
 #[test]
@@ -100,13 +100,15 @@ fn enum_param_local_name_uses_param_name_not_type_name() {
 
     let output = gen_param_conversion_with_enums(
         &p,
-        false,
-        false,
-        &TypeRef::Unit,
-        None,
-        "sample_crate",
-        &AHashMap::new(),
-        &enum_names,
+        &ParamConversionContext {
+            has_error: false,
+            is_bytes_result: false,
+            return_type: &TypeRef::Unit,
+            ffi_return_type: None,
+            core_import: "sample_crate",
+            path_map: &AHashMap::new(),
+            enum_names: &enum_names,
+        },
     );
 
     assert!(

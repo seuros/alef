@@ -11,7 +11,7 @@ use super::params::{
 };
 use super::render;
 use super::returns::method_unwrap_return_expr;
-use super::streaming::emit_opaque_streaming_method;
+use super::streaming::{StreamingContext, emit_opaque_streaming_method};
 
 /// Emit a single method on an opaque handle wrapper struct.
 #[allow(clippy::too_many_arguments)]
@@ -29,12 +29,14 @@ pub(super) fn emit_opaque_method(
     if let Some(item_type) = streaming_item_types.get(&method.name) {
         emit_opaque_streaming_method(
             method,
-            ty,
-            prefix,
-            type_snake,
-            item_type,
-            declared_errors,
-            streaming_item_types,
+            &StreamingContext {
+                ty,
+                prefix,
+                type_snake,
+                item_type,
+                declared_errors,
+                streaming_item_types,
+            },
             out,
         );
         return;

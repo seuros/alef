@@ -40,21 +40,31 @@ fn type_ref_to_rust_type(ty: &TypeRef, core_import: &str) -> String {
     }
 }
 
-pub(super) fn gen_param_conversion_with_enums(
-    param: &ParamDef,
-    has_error: bool,
-    is_bytes_result: bool,
-    return_type: &TypeRef,
-    ffi_return_type: Option<&str>,
-    core_import: &str,
-    path_map: &AHashMap<String, String>,
-    enum_names: &AHashSet<String>,
-) -> String {
+pub(super) struct ParamConversionContext<'a> {
+    pub(super) has_error: bool,
+    pub(super) is_bytes_result: bool,
+    pub(super) return_type: &'a TypeRef,
+    pub(super) ffi_return_type: Option<&'a str>,
+    pub(super) core_import: &'a str,
+    pub(super) path_map: &'a AHashMap<String, String>,
+    pub(super) enum_names: &'a AHashSet<String>,
+}
+
+pub(super) fn gen_param_conversion_with_enums(param: &ParamDef, conversion: &ParamConversionContext<'_>) -> String {
+    let ParamConversionContext {
+        has_error,
+        is_bytes_result,
+        return_type,
+        ffi_return_type,
+        core_import,
+        path_map,
+        enum_names,
+    } = conversion;
     let name = &param.name;
     let rs_name = format!("{name}_rs");
     let mut out = String::with_capacity(2048);
 
-    let fail_ret = if is_bytes_result || (has_error && is_void_return(return_type)) {
+    let fail_ret = if *is_bytes_result || (*has_error && is_void_return(return_type)) {
         "return -1;"
     } else if is_void_return(return_type) {
         "return;"

@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use self::constructors::emit_opaque_constructor as emit_constructor_impl;
 use self::instance_methods::{emit_opaque_free, emit_opaque_method};
 use self::static_methods::emit_opaque_static_method;
-use self::streaming::{emit_streaming_struct, stream_struct_name};
+use self::streaming::{StreamingContext, emit_streaming_struct, stream_struct_name};
 use super::helpers::emit_cleaned_zig_doc;
 
 fn render(template_name: &str, ctx: minijinja::Value) -> String {
@@ -98,12 +98,14 @@ fn emit_streaming_structs(
             if !emitted_stream_structs.contains(&struct_name) {
                 emit_streaming_struct(
                     method,
-                    ty,
-                    prefix,
-                    type_snake,
-                    item_type,
-                    declared_errors,
-                    streaming_item_types,
+                    &StreamingContext {
+                        ty,
+                        prefix,
+                        type_snake,
+                        item_type,
+                        declared_errors,
+                        streaming_item_types,
+                    },
                     out,
                 );
                 out.push('\n');
