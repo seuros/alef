@@ -44,3 +44,4 @@ mod headings;
 mod language_pages;
 mod markdown_quality;
 mod shared_docs;
+mod strict_attribution;

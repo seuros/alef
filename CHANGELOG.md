@@ -39,6 +39,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   generational `AlefHandle` ABI used by every ordinary managed value. The special options-field bridge bypass still
   emitted raw pointers after the 0.61 handle migration, while its JSON and visitor constructors returned scalar
   handles; generated C tests and snippets therefore failed strict compilation in both pointer-to-integer directions.
+- **docs/snippets**: make a strict-mode failure actionable. `strict snippet validation failed for crate X: N
+  validation(s) downgraded` reported only a total — no language, no snippet id, and no level transition — and the
+  achieved level is not recorded in the emitted snippet frontmatter, so there was no other way to learn which
+  snippets regressed or from what level. A real run reported 261 downgrades with no entry point to any of them.
+  Strict failures (downgraded, unavailable, and failed/errored) now append a per-language tally with up to three
+  sample ids and their `requested -> effective` transition, and say how many were elided. The validation report
+  configured by `report_output` is also written *before* the strict bails rather than after: a run that fails
+  strict mode is precisely the run whose report is needed, and emitting it afterwards meant the artifact was never
+  produced in that case.
 - **tests**: refresh Kotlin Android, Swift, and Zig snapshots so the checked-in expectations cover the integrated
   JNI path discovery, serde bridge grouping, numeric error dispatch, and fallible string ownership behavior.
 - **ffi/scaffold**: declare every feature named by a `#[cfg(feature = "X")]` gate the codegen emits into the

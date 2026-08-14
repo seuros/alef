@@ -466,18 +466,32 @@ fn validate_snippets(
         }
         let registry = crate::snippets::validators::ValidatorRegistry::default();
         let summary = crate::snippets::runner::run_validation(snippets, &registry, &runner_cfg)?;
+        // Write the report before any strict bail. A run that fails strict mode is precisely the
+        // run whose report a consumer needs, and emitting it afterwards meant the artifact was
+        // never produced in that case. ~keep
+        if let Some(path) = &snippet_cfg.report_output {
+            let report_path = workspace_root.join(path);
+            crate::snippets::output::write_report(&summary, &report_path, false).map_err(|err| {
+                anyhow::anyhow!(
+                    "writing snippet validation report to '{}': {err}",
+                    report_path.display()
+                )
+            })?;
+        }
         if summary.unavailable > 0 && snippet_cfg.strict {
             anyhow::bail!(
-                "strict snippet validation failed for crate `{}`: {} validation(s) unavailable",
+                "strict snippet validation failed for crate `{}`: {} validation(s) unavailable{}",
                 config.name,
-                summary.unavailable
+                summary.unavailable,
+                attribute_results(&summary, crate::snippets::types::SnippetStatus::Unavailable)
             );
         }
         if summary.downgraded > 0 && snippet_cfg.strict {
             anyhow::bail!(
-                "strict snippet validation failed for crate `{}`: {} validation(s) downgraded",
+                "strict snippet validation failed for crate `{}`: {} validation(s) downgraded{}",
                 config.name,
-                summary.downgraded
+                summary.downgraded,
+                attribute_results(&summary, crate::snippets::types::SnippetStatus::Downgraded)
             );
         }
         if summary.capability_capped > 0 {
@@ -496,24 +510,62 @@ fn validate_snippets(
         }
         if summary.has_failures() {
             anyhow::bail!(
-                "snippet validation failed for crate `{}`: {} failed, {} errors",
+                "snippet validation failed for crate `{}`: {} failed, {} errors{}",
                 config.name,
                 summary.failed,
-                summary.errors
+                summary.errors,
+                attribute_results(&summary, crate::snippets::types::SnippetStatus::Fail)
             );
-        }
-        if let Some(path) = &snippet_cfg.report_output {
-            let report_path = workspace_root.join(path);
-            crate::snippets::output::write_report(&summary, &report_path, false).map_err(|err| {
-                anyhow::anyhow!(
-                    "writing snippet validation report to '{}': {err}",
-                    report_path.display()
-                )
-            })?;
         }
     }
 
     Ok(())
+}
+
+/// Name the snippets behind a strict-mode count so the failure is actionable.
+///
+/// A bare total ("261 validation(s) downgraded") gives a consumer no entry point: the achieved
+/// level is not recorded in the emitted snippet frontmatter, so there is no other way to learn
+/// which snippets regressed or from what level. Groups by language and bounds the per-language
+/// sample, so a large run stays readable while still naming concrete ids to start from. ~keep
+fn attribute_results(summary: &crate::snippets::types::RunSummary, status: crate::snippets::types::SnippetStatus) -> String {
+    const SAMPLE_PER_LANGUAGE: usize = 3;
+
+    let mut by_language: std::collections::BTreeMap<String, (usize, Vec<String>)> = std::collections::BTreeMap::new();
+    for result in summary.results.iter().filter(|result| result.status == status) {
+        let entry = by_language
+            .entry(result.snippet.language.to_string())
+            .or_insert_with(|| (0, Vec::new()));
+        entry.0 += 1;
+        if entry.1.len() < SAMPLE_PER_LANGUAGE {
+            let id = result.snippet.id.clone().unwrap_or_else(|| {
+                format!(
+                    "{}:{}",
+                    result.snippet.source_origin.path.display(),
+                    result.snippet.source_origin.line
+                )
+            });
+            entry.1.push(format!(
+                "{id} ({} -> {})",
+                result.requested_level, result.effective_level
+            ));
+        }
+    }
+    if by_language.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::new();
+    for (language, (count, sample)) in by_language {
+        let remainder = count.saturating_sub(sample.len());
+        let suffix = if remainder > 0 {
+            format!(", +{remainder} more")
+        } else {
+            String::new()
+        };
+        out.push_str(&format!("\n  {language}: {count} -- {}{suffix}", sample.join(", ")));
+    }
+    out
 }
 
 fn parse_allowed_side_effects(configured: &[String]) -> anyhow::Result<Vec<crate::snippets::types::SideEffectClass>> {
