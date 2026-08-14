@@ -150,6 +150,10 @@ pub struct FfiTargetDepOverride {
     /// target matches. An empty list means "no features".
     #[serde(default)]
     pub features: Vec<String>,
+    /// When false (default), emit `default-features = false` for this target.
+    /// When true, allow the core dep's default features through.
+    #[serde(default)]
+    pub default_features: bool,
 }
 
 fn default_error_style() -> String {

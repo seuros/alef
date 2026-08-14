@@ -193,6 +193,7 @@ fn render_core_dep_with_overrides_emits_default_and_override_blocks() {
     let overrides = vec![crate::core::config::FfiTargetDepOverride {
         cfg: "all(target_os = \"macos\", target_arch = \"x86_64\")".to_string(),
         features: vec!["macos-intel-target".to_string()],
+        default_features: true,
     }];
     let (line, blocks) =
         render_core_dep_with_overrides("my-lib", "../my-lib", ", features = [\"full\"]", "1.2.3", &overrides);
@@ -213,6 +214,77 @@ fn render_core_dep_with_overrides_emits_default_and_override_blocks() {
         blocks.contains(r#"features = ["macos-intel-target"]"#),
         "override block uses the override features:\n{blocks}"
     );
+    assert!(
+        !blocks.contains("default-features"),
+        "default_features: true must not emit a default-features key:\n{blocks}"
+    );
+}
+
+/// Regression test for the dropped `default_features` config key: an override with
+/// `default_features = false` must emit `default-features = false` in its target block so
+/// consumers can drop the core dep's `default = [...]` set (e.g. `tokio-runtime`,
+/// `simd-utf8`) on a target that cannot support it, while an override that leaves
+/// `default_features` at its default (`false`, matching `DartTargetDepOverride` /
+/// `SwiftTargetDepOverride`) behaves identically — both are the restrictive case.
+#[test]
+fn render_core_dep_with_overrides_emits_default_features_false_when_override_disables_it() {
+    let overrides = vec![crate::core::config::FfiTargetDepOverride {
+        cfg: "target_os = \"windows\"".to_string(),
+        features: vec!["windows-target".to_string()],
+        default_features: false,
+    }];
+    let (line, blocks) =
+        render_core_dep_with_overrides("my-lib", "../my-lib", ", features = [\"full\"]", "1.2.3", &overrides);
+    assert!(line.is_empty(), "with overrides the core dep moves into target blocks");
+    assert!(
+        blocks.contains(r#"[target.'cfg(target_os = "windows")'.dependencies]"#),
+        "expected the windows override block:\n{blocks}"
+    );
+    assert!(
+        blocks.contains("default-features = false"),
+        "default_features: false must emit default-features = false:\n{blocks}"
+    );
+    assert!(
+        blocks.contains(r#"features = ["windows-target"]"#),
+        "override block must still emit its feature list alongside default-features = false:\n{blocks}"
+    );
+}
+
+/// End-to-end regression for `packages/elixir/native/xberg_nif/Cargo.toml`: xberg's
+/// intent was to drop the core dep's own `default = ["tokio-runtime", "simd-utf8"]` on
+/// Windows via `[crates.elixir.target_dep_overrides]` with `default_features = false`, but
+/// `FfiTargetDepOverride` (shared by `[crates.ffi]` and `[crates.elixir]`) previously had
+/// no `default_features` field, so `deny_unknown_fields` rejected the key outright.
+#[test]
+fn elixir_target_dep_override_with_default_features_false_drops_default_features() {
+    let config = test_config_from_toml(
+        r#"
+[[crates.elixir.target_dep_overrides]]
+cfg = 'target_os = "windows"'
+features = ["windows-target"]
+default_features = false
+"#,
+    );
+    let api = test_api();
+    let all_files = scaffold(&api, &config, &[Language::Elixir]).unwrap();
+    let content = language_files(&all_files)
+        .iter()
+        .find(|f| f.path.ends_with("Cargo.toml") && f.content.contains("[target.'cfg"))
+        .map(|f| f.content.clone())
+        .expect("target-gated elixir Cargo.toml emitted");
+
+    assert!(
+        content.contains(r#"[target.'cfg(target_os = "windows")'.dependencies]"#),
+        "expected the windows override block:\n{content}"
+    );
+    assert!(
+        content.contains("default-features = false"),
+        "elixir override must emit default-features = false to drop the core dep's own defaults:\n{content}"
+    );
+    assert!(
+        content.contains(r#"features = ["windows-target"]"#),
+        "elixir override must still request windows-target:\n{content}"
+    );
 }
 
 /// Regression test: `cargo-sort` (and hence `poly lint`) orders
@@ -230,14 +302,17 @@ fn render_core_dep_with_overrides_sorts_all_before_not_before_target_os() {
         crate::core::config::FfiTargetDepOverride {
             cfg: "target_os = \"android\"".to_string(),
             features: vec!["android-target".to_string()],
+            default_features: true,
         },
         crate::core::config::FfiTargetDepOverride {
             cfg: "target_os = \"windows\"".to_string(),
             features: vec!["windows-target".to_string()],
+            default_features: true,
         },
         crate::core::config::FfiTargetDepOverride {
             cfg: "all(target_os = \"macos\", target_arch = \"x86_64\")".to_string(),
             features: vec!["macos-intel-target".to_string()],
+            default_features: true,
         },
     ];
     let (line, blocks) =

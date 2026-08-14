@@ -48,6 +48,11 @@ fn render_core_dep(
         format!("{crate_name} = {{ path = \"../{core_crate_dir}\", version = \"{version}\"{default_features} }}"),
     )];
     for override_ in overrides {
+        let default_block = if override_.default_features {
+            String::new()
+        } else {
+            ", default-features = false".to_string()
+        };
         let features_str = if override_.features.is_empty() {
             String::new()
         } else {
@@ -56,7 +61,9 @@ fn render_core_dep(
         };
         entries.push((
             override_.cfg.clone(),
-            format!("{crate_name} = {{ path = \"../{core_crate_dir}\", version = \"{version}\"{features_str} }}"),
+            format!(
+                "{crate_name} = {{ path = \"../{core_crate_dir}\", version = \"{version}\"{default_block}{features_str} }}"
+            ),
         ));
     }
     // See `crate::scaffold::join_sorted_target_dep_blocks`: cargo-sort orders
@@ -411,6 +418,7 @@ mod tests {
         let overrides = vec![FfiTargetDepOverride {
             cfg: "target_os = \"windows\"".to_string(),
             features: vec!["windows-feature".to_string()],
+            default_features: true,
         }];
         let (core_dep_line, target_blocks) = render_core_dep("my-lib", "my-lib-core", "2.0.0", "", &overrides);
 
@@ -427,6 +435,41 @@ mod tests {
         assert!(
             target_blocks.contains("path = \"../my-lib-core\""),
             "Expected path reference in target_blocks: {}",
+            target_blocks
+        );
+        assert!(
+            !target_blocks.contains("default-features"),
+            "default_features: true must not emit a default-features key: {}",
+            target_blocks
+        );
+    }
+
+    /// Regression test for the dropped `default_features` config key on
+    /// `[crates.ffi].target_dep_overrides` (see `FfiTargetDepOverride::default_features`):
+    /// an override with `default_features = false` must emit `default-features = false`
+    /// in its target block so the FFI crate can drop the core dep's own default feature set
+    /// on a target that cannot support it.
+    #[test]
+    fn test_render_core_dep_emits_default_features_false_when_override_disables_it() {
+        let overrides = vec![FfiTargetDepOverride {
+            cfg: "target_os = \"windows\"".to_string(),
+            features: vec!["windows-target".to_string()],
+            default_features: false,
+        }];
+        let (core_dep_line, target_blocks) = render_core_dep("my-lib", "my-lib-core", "2.0.0", "", &overrides);
+
+        assert!(
+            core_dep_line.is_empty(),
+            "Expected empty core_dep_line when overrides present"
+        );
+        assert!(
+            target_blocks.contains("default-features = false"),
+            "default_features: false must emit default-features = false: {}",
+            target_blocks
+        );
+        assert!(
+            target_blocks.contains(r#"features = ["windows-target"]"#),
+            "override block must still emit its feature list: {}",
             target_blocks
         );
     }

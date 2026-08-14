@@ -73,6 +73,57 @@ exclude_types = ["FfiHidden"]
     assert!(go.content.contains("Interact()"));
 }
 
+/// `[crates.go].exclude_functions` must also hide the function from the generated Go docs
+/// page, unioned with (not replacing) `[crates.ffi].exclude_functions` — mirrors
+/// `test_generate_docs_respects_language_excludes` above, which only covers the FFI-level list.
+#[test]
+fn test_generate_docs_respects_go_language_exclude_functions() {
+    let config = config_from_toml(
+        r#"
+[workspace]
+languages = ["go"]
+
+[[crates]]
+name = "mylib"
+sources = ["src/lib.rs"]
+
+[crates.go]
+exclude_functions = ["go_only"]
+
+[crates.ffi]
+exclude_functions = ["ffi_only"]
+"#,
+    );
+    let mut api = make_minimal_api("1.2.3");
+    api.functions = vec![
+        make_function("go_only", vec![], TypeRef::Unit, false, None),
+        make_function("ffi_only", vec![], TypeRef::Unit, false, None),
+        make_function("scrape", vec![], TypeRef::Unit, false, None),
+    ];
+
+    let files = generate_docs(&api, &config, &[Language::Go], "out").unwrap();
+    let go = files
+        .iter()
+        .find(|f| f.path.to_str().unwrap().contains("api-go"))
+        .unwrap();
+
+    assert!(
+        !go.content.contains("GoOnly()"),
+        "GoConfig::exclude_functions must hide the function from the Go docs page:\n{}",
+        go.content
+    );
+    assert!(
+        !go.content.contains("FfiOnly()"),
+        "the FFI-level list must still apply alongside the Go-level list:\n{}",
+        go.content
+    );
+    assert!(
+        go.content.contains("Scrape()"),
+        "a function excluded in neither list must still appear:\n{}",
+        go.content
+    );
+}
+
 #[test]
 fn test_generate_docs_produces_one_file_per_language_plus_three_shared() {
     let api = make_minimal_api("1.2.3");

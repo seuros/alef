@@ -27,6 +27,16 @@ pub struct GoConfig {
     /// `[crates.ffi].exclude_types` are also excluded automatically by the Go backend.
     #[serde(default)]
     pub exclude_types: Vec<String>,
+    /// Functions to exclude from Go binding generation, unioned with
+    /// `[crates.ffi].exclude_functions`.
+    ///
+    /// Use this for functions that must stay in the C ABI (and therefore in
+    /// `[crates.ffi].exclude_functions`) for other bindings but that this Go binding
+    /// wants to hide from its own public surface — e.g. an async variant with no
+    /// synchronous counterpart worth exposing in Go's idiom. Mirrors
+    /// `CSharpConfig::exclude_functions` / `KotlinAndroidConfig::exclude_functions`.
+    #[serde(default)]
+    pub exclude_functions: Vec<String>,
     /// Override the serde rename_all strategy for JSON field names (e.g. "camelCase", "snake_case").
     /// When set, this takes priority over the IR type-level serde_rename_all.
     #[serde(default)]

@@ -90,6 +90,169 @@ fn test_generate_bindings_produces_binding_go_file() {
     );
 }
 
+/// Regression test for the dropped `exclude_functions` config key on `[crates.go]`: today
+/// the Go backend only honours `[crates.ffi].exclude_functions`, which would also strip the
+/// function's C symbol from every other binding. A per-language `[crates.go].exclude_functions`
+/// must hide a function from Go's generated `binding.go` while leaving the FFI-level list (and
+/// hence the C ABI, and other bindings) untouched — mirrors `CSharpConfig::exclude_functions`.
+#[test]
+fn test_generate_bindings_unions_go_exclude_functions_with_ffi_exclude_functions() {
+    use crate::core::ir::{ApiSurface, FunctionDef, TypeRef};
+
+    let config = resolved_one(
+        r#"
+[workspace]
+languages = ["ffi", "go"]
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+[crates.ffi]
+prefix = "test"
+[crates.go]
+module = "github.com/test/test-lib"
+exclude_functions = ["embed_sparse_async"]
+"#,
+    );
+
+    let make_fn = |name: &str| FunctionDef {
+        name: name.to_string(),
+        rust_path: String::new(),
+        original_rust_path: String::new(),
+        params: vec![],
+        return_type: TypeRef::Unit,
+        is_async: false,
+        error_type: None,
+        doc: String::new(),
+        cfg: None,
+        sanitized: false,
+        return_sanitized: false,
+        returns_ref: false,
+        returns_cow: false,
+        return_newtype_wrapper: None,
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        version: Default::default(),
+    };
+
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![],
+        functions: vec![make_fn("embed_sparse_async"), make_fn("other_func")],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+
+    let backend = GoBackend;
+    let files = backend.generate_bindings(&api, &config).unwrap();
+    let binding = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().ends_with("binding.go"))
+        .expect("binding.go present");
+
+    assert!(
+        !binding.content.contains("EmbedSparseAsync"),
+        "GoConfig::exclude_functions must drop the function from binding.go:\n{}",
+        binding.content
+    );
+    assert!(
+        binding.content.contains("OtherFunc"),
+        "a function not named in exclude_functions must still be generated:\n{}",
+        binding.content
+    );
+}
+
+/// `GoConfig::exclude_functions` must UNION with `[crates.ffi].exclude_functions`, not
+/// replace it: a function named only at the FFI level must still be dropped from Go's
+/// `binding.go`, alongside a function named only at the Go level, while a function named in
+/// neither list survives.
+#[test]
+fn test_generate_bindings_go_exclude_functions_unions_rather_than_replaces_ffi_list() {
+    use crate::core::ir::{ApiSurface, FunctionDef, TypeRef};
+
+    let config = resolved_one(
+        r#"
+[workspace]
+languages = ["ffi", "go"]
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+[crates.ffi]
+prefix = "test"
+exclude_functions = ["ffi_only_excluded"]
+[crates.go]
+module = "github.com/test/test-lib"
+exclude_functions = ["go_only_excluded"]
+"#,
+    );
+
+    let make_fn = |name: &str| FunctionDef {
+        name: name.to_string(),
+        rust_path: String::new(),
+        original_rust_path: String::new(),
+        params: vec![],
+        return_type: TypeRef::Unit,
+        is_async: false,
+        error_type: None,
+        doc: String::new(),
+        cfg: None,
+        sanitized: false,
+        return_sanitized: false,
+        returns_ref: false,
+        returns_cow: false,
+        return_newtype_wrapper: None,
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        version: Default::default(),
+    };
+
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![],
+        functions: vec![
+            make_fn("ffi_only_excluded"),
+            make_fn("go_only_excluded"),
+            make_fn("kept_everywhere"),
+        ],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+
+    let backend = GoBackend;
+    let files = backend.generate_bindings(&api, &config).unwrap();
+    let binding = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().ends_with("binding.go"))
+        .expect("binding.go present");
+
+    assert!(
+        !binding.content.contains("FfiOnlyExcluded"),
+        "a function excluded only at the FFI level must still be dropped from Go:\n{}",
+        binding.content
+    );
+    assert!(
+        !binding.content.contains("GoOnlyExcluded"),
+        "a function excluded only at the Go level must be dropped from Go:\n{}",
+        binding.content
+    );
+    assert!(
+        binding.content.contains("KeptEverywhere"),
+        "a function excluded in neither list must survive:\n{}",
+        binding.content
+    );
+}
+
 #[test]
 fn test_generate_bindings_emits_cmd_setup_and_native_setup_sentinel() {
     use crate::core::ir::ApiSurface;

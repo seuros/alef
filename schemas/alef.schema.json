@@ -2636,6 +2636,11 @@
           "description": "Cargo cfg expression, without the surrounding `cfg(...)`.\nExample: `all(target_os = \"android\", target_arch = \"x86_64\")`.",
           "type": "string"
         },
+        "default_features": {
+          "default": false,
+          "description": "When false (default), emit `default-features = false` for this target.\nWhen true, allow the core dep's default features through.",
+          "type": "boolean"
+        },
         "features": {
           "default": [],
           "description": "Replacement feature set used for the core-crate dependency when this\ntarget matches. An empty list means \"no features\".",
@@ -2895,6 +2900,14 @@
           "default": {},
           "description": "Map of Rust type name -> host-native capsule (Language-passthrough) config.\nWhen set, functions returning the type construct the host runtime's native\n`Language` (e.g. `*tree_sitter.Language`) from the raw C grammar pointer instead\nof an opaque handle. See [`crate::core::config::HostCapsuleTypeConfig`].",
           "type": "object"
+        },
+        "exclude_functions": {
+          "default": [],
+          "description": "Functions to exclude from Go binding generation, unioned with\n`[crates.ffi].exclude_functions`.\n\nUse this for functions that must stay in the C ABI (and therefore in\n`[crates.ffi].exclude_functions`) for other bindings but that this Go binding\nwants to hide from its own public surface — e.g. an async variant with no\nsynchronous counterpart worth exposing in Go's idiom. Mirrors\n`CSharpConfig::exclude_functions` / `KotlinAndroidConfig::exclude_functions`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "exclude_types": {
           "default": [],

@@ -160,6 +160,7 @@ fn test_scaffold_ffi_target_dep_overrides_emit_cfg_blocks() {
         target_dep_overrides: vec![FfiTargetDepOverride {
             cfg: "all(target_os = \"android\", target_arch = \"x86_64\")".to_string(),
             features: vec!["android-target".to_string()],
+            default_features: true,
         }],
     });
 
@@ -191,6 +192,64 @@ fn test_scaffold_ffi_target_dep_overrides_emit_cfg_blocks() {
     assert!(
         !cargo_toml.contains("\n[dependencies]\nmy-lib ="),
         "core-crate dep should have moved out of [dependencies], got:\n{cargo_toml}"
+    );
+}
+
+/// Regression test for the dropped `[crates.ffi.target_dep_overrides].default_features`
+/// key: xberg's `windows-target` / `macos-intel-target` overrides set
+/// `default_features = false` to drop the core crate's own `default = ["tokio-runtime",
+/// "simd-utf8"]` set on those targets, alongside swapping in the reduced feature list.
+/// Before `FfiTargetDepOverride` gained this field the key was silently discarded, so the
+/// override target block always inherited the core dep's default features regardless of
+/// what the config said.
+#[test]
+fn test_scaffold_ffi_target_dep_overrides_default_features_false_drops_defaults() {
+    use crate::core::config::FfiTargetDepOverride;
+    use crate::core::config::languages::FfiConfig;
+
+    let mut config = test_config();
+    config.features = vec!["full".to_string(), "ocr".to_string()];
+    config.ffi = Some(FfiConfig {
+        prefix: None,
+        error_style: "last_error".to_string(),
+        header_name: None,
+        lib_name: None,
+        visitor_callbacks: false,
+        features: None,
+        extra_features: vec![],
+        serde_rename_all: None,
+        exclude_functions: vec![],
+        exclude_types: vec![],
+        capsule_types: Default::default(),
+        rename_fields: Default::default(),
+        plugin_error_constructor: None,
+        target_dep_overrides: vec![FfiTargetDepOverride {
+            cfg: "target_os = \"windows\"".to_string(),
+            features: vec!["windows-target".to_string()],
+            default_features: false,
+        }],
+    });
+
+    let api = test_api();
+    let all_files = scaffold(&api, &config, &[Language::Ffi]).unwrap();
+    let files = language_files(&all_files);
+    let cargo_toml = &files[0].content;
+
+    assert!(
+        cargo_toml.contains("[target.'cfg(target_os = \"windows\")'.dependencies]"),
+        "expected the windows override target table, got:\n{cargo_toml}"
+    );
+    assert!(
+        cargo_toml.contains(
+            "my-lib = { path = \"../my-lib\", version = \"0.1.0\", default-features = false, features = [\"windows-target\"] }"
+        ),
+        "default_features: false must drop the core dep's default features on the override branch, got:\n{cargo_toml}"
+    );
+    assert!(
+        cargo_toml.contains(
+            "[target.'cfg(not(target_os = \"windows\"))'.dependencies]\nmy-lib = { path = \"../my-lib\", version = \"0.1.0\", features = [\"full\", \"ocr\"] }"
+        ),
+        "the default (non-overridden) branch must keep the full default feature set with no default-features key, got:\n{cargo_toml}"
     );
 }
 
@@ -227,14 +286,17 @@ fn test_scaffold_ffi_target_dep_overrides_sort_all_before_not() {
             FfiTargetDepOverride {
                 cfg: "target_os = \"android\"".to_string(),
                 features: vec!["android-target".to_string()],
+                default_features: true,
             },
             FfiTargetDepOverride {
                 cfg: "target_os = \"windows\"".to_string(),
                 features: vec!["windows-target".to_string()],
+                default_features: true,
             },
             FfiTargetDepOverride {
                 cfg: "all(target_os = \"macos\", target_arch = \"x86_64\")".to_string(),
                 features: vec!["macos-intel-target".to_string()],
+                default_features: true,
             },
         ],
     });

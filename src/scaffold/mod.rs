@@ -197,6 +197,11 @@ pub(crate) fn render_core_dep_with_overrides(
         render_core_dep(crate_name, rel_path, default_features, version),
     )];
     for override_ in overrides {
+        let default_block = if override_.default_features {
+            String::new()
+        } else {
+            ", default-features = false".to_string()
+        };
         let feats = if override_.features.is_empty() {
             String::new()
         } else {
@@ -205,7 +210,7 @@ pub(crate) fn render_core_dep_with_overrides(
         };
         entries.push((
             override_.cfg.clone(),
-            render_core_dep(crate_name, rel_path, &feats, version),
+            render_core_dep(crate_name, rel_path, &format!("{default_block}{feats}"), version),
         ));
     }
     (String::new(), join_sorted_target_dep_blocks(entries))

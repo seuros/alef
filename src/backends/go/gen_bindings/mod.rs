@@ -131,11 +131,14 @@ impl Backend for GoBackend {
             })
             .collect();
 
-        let ffi_exclude_functions: HashSet<String> = config
+        let mut ffi_exclude_functions: HashSet<String> = config
             .ffi
             .as_ref()
             .map(|f| f.exclude_functions.iter().cloned().collect())
             .unwrap_or_default();
+        if let Some(go_config) = &config.go {
+            ffi_exclude_functions.extend(go_config.exclude_functions.iter().cloned());
+        }
         let mut exclude_types: HashSet<String> = config
             .ffi
             .as_ref()
