@@ -812,18 +812,16 @@ mod tests {
             let path = snippet_path("docs/snippets", &docs, "example", target_language, language)
                 .expect("snippet path is valid");
 
-            assert!(
-                rendered.contains(&format!("language: {canonical_name}\n")),
-                "{rendered}"
-            );
-            assert!(rendered.contains(&format!("target: {target_language}\n")), "{rendered}");
-            assert!(rendered.contains("Extension-owned example\n\n"), "{rendered}");
-            assert!(
-                rendered.contains(&format!(
-                    "```{canonical_name} title=\"{}\"\nexample()\n```",
+            // ~keep Assert the WHOLE document, not a set of `contains` probes. Substring probes
+            // pin only the fields they name, so `level`, `requires` and `side_effect` become
+            // unguarded: a renderer emitting a bogus value for any of them still passes. See
+            // `frontmatter_fields_are_pinned_by_exact_equality` for the controls.
+            assert_eq!(
+                rendered,
+                format!(
+                    "---\nid: fixture_{target_language}_extension_owned\nlanguage: {canonical_name}\ntarget: {target_language}\nlevel: typecheck\nrequires: []\nside_effect: safe\n---\n\nExtension-owned example\n\n```{canonical_name} title=\"{}\"\nexample()\n```\n",
                     language.display_name()
-                )),
-                "{rendered}"
+                )
             );
             assert_eq!(
                 path,
@@ -834,6 +832,60 @@ mod tests {
                 crate::snippets::types::Language::Unknown
             );
         }
+    }
+
+    /// Controls for `generated_docs_use_validator_canonical_language_identity`.
+    ///
+    /// ~keep Each case varies exactly one frontmatter input and pins the whole rendered
+    /// document. A renderer that emitted a bogus or constant `requires`, `side_effect` or
+    /// `level` would satisfy a `contains`-style probe but fails here, which is the property
+    /// the exact-equality assertion exists to hold.
+    #[test]
+    fn frontmatter_fields_are_pinned_by_exact_equality() {
+        let render = |fixture: &Fixture, side_effects: SideEffectClass, target: &str| {
+            let docs = FixtureDocs {
+                topic: "api".into(),
+                stem: None,
+                paths: BTreeMap::new(),
+                title: None,
+                description: None,
+                input: None,
+                shows: Vec::new(),
+                error: None,
+                presentation: None,
+                side_effects,
+                coverage_exceptions: BTreeMap::new(),
+            };
+            render_snippet_markdown(
+                "example()",
+                fixture,
+                &docs,
+                target,
+                DocumentationLanguage::Binding(Language::Node),
+            )
+        };
+
+        let baseline = documented_fixture();
+
+        // `side_effect` tracks the docs class rather than a hardcoded "safe".
+        assert_eq!(
+            render(&baseline, SideEffectClass::Network, "node"),
+            "---\nid: fixture_node_extension_owned\nlanguage: typescript\ntarget: node\nlevel: typecheck\nrequires: []\nside_effect: network\n---\n\nExtension-owned example\n\n```typescript title=\"TypeScript\"\nexample()\n```\n"
+        );
+        assert_eq!(
+            render(&baseline, SideEffectClass::Install, "node"),
+            "---\nid: fixture_node_extension_owned\nlanguage: typescript\ntarget: node\nlevel: typecheck\nrequires: []\nside_effect: install\n---\n\nExtension-owned example\n\n```typescript title=\"TypeScript\"\nexample()\n```\n"
+        );
+
+        // `requires` tracks the fixture's declared requirements rather than a hardcoded `[]`.
+        let required = Fixture {
+            requirements: vec!["feature:json".into(), "service:api".into()],
+            ..documented_fixture()
+        };
+        assert_eq!(
+            render(&required, SideEffectClass::Safe, "node"),
+            "---\nid: fixture_node_extension_owned\nlanguage: typescript\ntarget: node\nlevel: typecheck\nrequires: [\"feature:json\",\"service:api\"]\nside_effect: safe\n---\n\nExtension-owned example\n\n```typescript title=\"TypeScript\"\nexample()\n```\n"
+        );
     }
 
     #[test]

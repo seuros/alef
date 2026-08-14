@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicit manifest override, and copy host libraries from the Cargo workspace target directory.
 
 ### Fixed
+- **e2e/snippets**: assert the whole rendered snippet document in the canonical-language test instead of a set of
+  substring probes, so `level`, `requires` and `side_effect` are pinned again; a renderer emitting a bogus value for
+  any of them previously satisfied the probes.
 
 - **e2e/snippets**: declare the `serde_json` dependency that generated Rust snippet bodies name. A `json_object`
   argument makes the Rust recipe emit `serde_json::from_str(…)`/`serde_json::from_value(…)`, but the snippet
