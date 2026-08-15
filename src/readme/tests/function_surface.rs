@@ -51,27 +51,27 @@ fn readme_function_names_follow_each_language_public_naming_policy() {
     for (lang, expected) in [
         (
             Language::Python,
-            "parse_html_document|parse_html_document|true|Parse a document.\n",
+            "parse_html_document|parse_html_document|True|Parse a document.\n",
         ),
         (
             Language::Node,
-            "parseHtmlDocument|parse_html_document|true|Parse a document.\n",
+            "parseHtmlDocument|parse_html_document|True|Parse a document.\n",
         ),
         (
             Language::Go,
-            "ParseHTMLDocument|parse_html_document|true|Parse a document.\n",
+            "ParseHTMLDocument|parse_html_document|True|Parse a document.\n",
         ),
         (
             Language::Csharp,
-            "ParseHtmlDocument|parse_html_document|true|Parse a document.\n",
+            "ParseHtmlDocument|parse_html_document|True|Parse a document.\n",
         ),
         (
             Language::Zig,
-            "parse_html_document|parse_html_document|true|Parse a document.\n",
+            "parse_html_document|parse_html_document|True|Parse a document.\n",
         ),
         (
             Language::Ffi,
-            "my_lib_parse_html_document|parse_html_document|true|Parse a document.\n",
+            "my_lib_parse_html_document|parse_html_document|True|Parse a document.\n",
         ),
     ] {
         render_function_names(lang, expected);

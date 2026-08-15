@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **readme tests**: align the structured function-surface template fixture with Minijinja's Boolean rendering.
 - **verify**: reject Alef-owned generated files whose header remains but whose `alef:hash` stamp is missing, so a
   mixed stamped/unstamped generated tree cannot pass freshness verification.
 

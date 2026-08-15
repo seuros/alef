@@ -37,7 +37,7 @@ fn test_api() -> ApiSurface {
     }
 }
 
-mod hardcoded;
 mod function_surface;
+mod hardcoded;
 mod snippet_roots;
 mod template;

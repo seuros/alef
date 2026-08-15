@@ -268,10 +268,7 @@ fn render_template_readme(
     ctx.insert("discord_url", Value::from(discord_url));
     ctx.insert("banner_url", Value::from(banner_url));
     ctx.insert("language", Value::from(language_context.to_string()));
-    ctx.insert(
-        "functions",
-        Value::from_serialize(readme_functions(api, config, lang)),
-    );
+    ctx.insert("functions", Value::from_serialize(readme_functions(api, config, lang)));
 
     ctx.insert(
         "csharp_wrapper_class",
@@ -339,11 +336,7 @@ fn render_template_readme(
     }))
 }
 
-fn readme_functions(
-    api: &ApiSurface,
-    config: &ResolvedCrateConfig,
-    lang: Option<Language>,
-) -> Vec<ReadmeFunction> {
+fn readme_functions(api: &ApiSurface, config: &ResolvedCrateConfig, lang: Option<Language>) -> Vec<ReadmeFunction> {
     let Some(lang) = lang else {
         return Vec::new();
     };
