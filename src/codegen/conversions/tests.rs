@@ -468,7 +468,10 @@ fn adjacent_error_binding_to_core_preserves_variant_shapes() {
         },
     );
 
-    assert!(result.contains("Diagnostic::Custom(_0) => Self::Custom(_0),"), "{result}");
+    assert!(
+        result.contains("Diagnostic::Custom(_0) => Self::Custom(_0),"),
+        "{result}"
+    );
     assert!(!result.contains("Diagnostic::Custom { _0 }"), "{result}");
     assert!(
         result.contains("Diagnostic::Context { message } => Self::Context { message: message },"),
@@ -495,12 +498,13 @@ fn adjacent_error_core_to_binding_preserves_variant_shapes() {
     );
     assert!(!result.contains("Self::Custom { _0:"), "{result}");
     assert!(
-        result.contains(
-            "my_crate::Diagnostic::Context { message } => Self::Context { message: message.to_string() },"
-        ),
+        result.contains("my_crate::Diagnostic::Context { message } => Self::Context { message: message.to_string() },"),
         "{result}"
     );
-    assert!(result.contains("my_crate::Diagnostic::Unknown => Self::Unknown,"), "{result}");
+    assert!(
+        result.contains("my_crate::Diagnostic::Unknown => Self::Unknown,"),
+        "{result}"
+    );
 }
 
 #[test]

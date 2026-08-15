@@ -92,6 +92,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **test formatting**: normalize recently added FFI handle-registry, enum-conversion, and generated-hash regression
+  fixtures with the repository formatter.
+
 - **zig**: give each streaming adapter its own iterator struct type instead of naming it after the item type alone.
   Two streaming methods on the same opaque handle that yield the same item type (e.g. `crawl_stream` and
   `batch_crawl_stream`, both yielding `CrawlEvent`) collapsed into one shared `{ItemType}Stream` struct — whichever

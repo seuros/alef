@@ -26,9 +26,7 @@ fn registry_does_not_reconstruct_boxes_from_host_values() {
 
 #[test]
 fn registry_rejects_stale_forged_and_wrong_type_handles() {
-    let mut source = String::from(
-        "const ALEF_INVALID_HANDLE_ERROR: i32 = 4;\nfn set_last_error(_: i32, _: &str) {}\n",
-    );
+    let mut source = String::from("const ALEF_INVALID_HANDLE_ERROR: i32 = 4;\nfn set_last_error(_: i32, _: &str) {}\n");
     source.push_str(&template_env::render(
         "handle_registry.rs.jinja",
         minijinja::context! {},
