@@ -3874,3 +3874,6 @@ could actually install.
 Early development history (592 releases through 0.28.1) has been trimmed to keep
 this file small. The full per-version changelog is preserved in the git tags and
 GitHub releases: <https://github.com/xberg-io/alef/releases>
+- **dart/flutter_rust_bridge**: reuse a persistent, crate-scoped Cargo target directory for FRB macro expansion.
+  Clean regeneration worktrees now retain Cargo fingerprints, dependencies, proc macros, and build-script artifacts
+  instead of recompiling the full Rust crate for every `cargo expand`; an explicit `CARGO_TARGET_DIR` still wins.
