@@ -547,8 +547,8 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
         if method.returns_cow && !has_error {
             out.push_str("    let result = result.into_owned();\n");
         }
-        let returns_serialized_self = typ.has_lifetime_params
-            && matches!(&method.return_type, TypeRef::Named(name) if name == type_name);
+        let returns_serialized_self =
+            typ.has_lifetime_params && matches!(&method.return_type, TypeRef::Named(name) if name == type_name);
         if has_error {
             if is_void_return(&method.return_type) {
                 out.push_str(&crate::backends::ffi::template_env::render(
