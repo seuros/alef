@@ -215,6 +215,7 @@ pub(crate) fn scaffold_ffi(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
 
     let mut dep_entries: Vec<String> = vec![
         "ahash = \"0.8\"".to_string(),
+        "serde = \"1\"".to_string(),
         "serde_json = \"1\"".to_string(),
         "tokio = { version = \"1\", features = [\"full\"] }".to_string(),
     ];
@@ -235,7 +236,7 @@ pub(crate) fn scaffold_ffi(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
     let content = format!(
         r#"{pkg_header}{repository_line}
 
-# `serde_json`, `ahash`, and `tokio` are emitted unconditionally above so the
+# `serde`, `serde_json`, `ahash`, and `tokio` are emitted unconditionally above so the
 # manifest is stable across regens (and so the C FFI codegen can pull them in
 # when an async / Result-typed function appears in the API surface), but for
 # umbrella crates with no async fns and no JSON-marshalled return types they

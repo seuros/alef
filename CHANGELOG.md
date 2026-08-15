@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **FFI scaffold**: declare `serde` directly in generated FFI crates now that the handle registry requires
+  `serde::Serialize`, rather than relying on the core crate's transitive dependencies.
 - **WASM documentation snippets**: derive direct-call fixture eligibility from the target's exported function
   surface, recording unavailable imports as missing coverage while retaining client-wrapper recipes whose methods
   are reached through the resolved per-call or default factory.
