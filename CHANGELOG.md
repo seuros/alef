@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **go**: compare value receivers returned by `_from_json` against the scalar `AlefHandle` zero sentinel instead of
+  `nil`, allowing generated non-opaque methods to compile under cgo.
 - **CLI**: `alef all` now synchronizes registry package versions before generation and reloads changed configuration,
   allowing stale Zig registry hash version prefixes to self-heal instead of aborting clean canaries.
 - **napi**: omit `..Default::default()` from fully populated adjacent-enum constructors while retaining it for

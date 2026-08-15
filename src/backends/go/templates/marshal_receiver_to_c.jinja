@@ -5,7 +5,7 @@
 	tmpStrRecv := C.CString(string(jsonBytesRecv))
 	cRecv := C.{{ ffi_prefix }}_{{ type_snake }}_from_json(tmpStrRecv)
 	C.free(unsafe.Pointer(tmpStrRecv))
-	if cRecv == nil {
+	if cRecv == 0 {
 		{{ from_json_err_action }}
 	}
 {% if not receiver_is_consumed %}	defer C.{{ ffi_prefix }}_{{ type_snake }}_free(cRecv)

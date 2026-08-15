@@ -89,6 +89,8 @@ fn borrowed_value_receiver_marshalling_is_valid_go() {
         &std::collections::HashSet::new(),
     );
 
+    assert!(generated.contains("if cRecv == 0"));
+    assert!(!generated.contains("cRecv == nil"));
     assert!(generated.contains("defer C.sample_example_free(cRecv)"));
     assert_go_syntax_is_valid(&generated);
 }
