@@ -348,8 +348,8 @@ mod tests {
 
     #[test]
     fn sanitized_environment_preserves_go_dependency_cache_paths() {
-        assert!(SANITIZED_ENVIRONMENT_VARIABLES.contains(&"GOMODCACHE"));
-        assert!(SANITIZED_ENVIRONMENT_VARIABLES.contains(&"GOPATH"));
+        assert!(super::SANITIZED_ENVIRONMENT_VARIABLES.contains(&"GOMODCACHE"));
+        assert!(super::SANITIZED_ENVIRONMENT_VARIABLES.contains(&"GOPATH"));
     }
 
     #[test]
