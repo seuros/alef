@@ -153,9 +153,18 @@ mod tests {
             ElixirValidator.achievable_level(ValidationLevel::TypeCheck),
             ValidationLevel::Syntax
         );
-        assert_eq!(ElixirValidator.achievable_level(ValidationLevel::Compile), ValidationLevel::Run);
-        assert_eq!(ElixirValidator.achievable_level(ValidationLevel::Syntax), ValidationLevel::Run);
-        assert_eq!(ElixirValidator.achievable_level(ValidationLevel::Run), ValidationLevel::Run);
+        assert_eq!(
+            ElixirValidator.achievable_level(ValidationLevel::Compile),
+            ValidationLevel::Run
+        );
+        assert_eq!(
+            ElixirValidator.achievable_level(ValidationLevel::Syntax),
+            ValidationLevel::Run
+        );
+        assert_eq!(
+            ElixirValidator.achievable_level(ValidationLevel::Run),
+            ValidationLevel::Run
+        );
     }
 
     /// Mirrors the php.rs/ruby.rs regressions: `Code.string_to_quoted` accepts this file (Elixir
@@ -175,8 +184,7 @@ mod tests {
             ..RunnerConfig::default()
         };
 
-        let summary =
-            run_validation(&[undefined_symbol_snippet()], &registry, &config).expect("validation completes");
+        let summary = run_validation(&[undefined_symbol_snippet()], &registry, &config).expect("validation completes");
 
         let result = &summary.results[0];
         assert_ne!(

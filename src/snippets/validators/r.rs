@@ -120,9 +120,18 @@ mod tests {
 
     #[test]
     fn achievable_level_caps_typecheck_to_syntax() {
-        assert_eq!(RValidator.achievable_level(ValidationLevel::TypeCheck), ValidationLevel::Syntax);
-        assert_eq!(RValidator.achievable_level(ValidationLevel::Compile), ValidationLevel::Run);
-        assert_eq!(RValidator.achievable_level(ValidationLevel::Syntax), ValidationLevel::Run);
+        assert_eq!(
+            RValidator.achievable_level(ValidationLevel::TypeCheck),
+            ValidationLevel::Syntax
+        );
+        assert_eq!(
+            RValidator.achievable_level(ValidationLevel::Compile),
+            ValidationLevel::Run
+        );
+        assert_eq!(
+            RValidator.achievable_level(ValidationLevel::Syntax),
+            ValidationLevel::Run
+        );
         assert_eq!(RValidator.achievable_level(ValidationLevel::Run), ValidationLevel::Run);
     }
 

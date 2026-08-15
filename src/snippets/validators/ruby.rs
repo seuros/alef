@@ -96,9 +96,18 @@ mod tests {
             RubyValidator.achievable_level(ValidationLevel::TypeCheck),
             ValidationLevel::Syntax
         );
-        assert_eq!(RubyValidator.achievable_level(ValidationLevel::Compile), ValidationLevel::Run);
-        assert_eq!(RubyValidator.achievable_level(ValidationLevel::Syntax), ValidationLevel::Run);
-        assert_eq!(RubyValidator.achievable_level(ValidationLevel::Run), ValidationLevel::Run);
+        assert_eq!(
+            RubyValidator.achievable_level(ValidationLevel::Compile),
+            ValidationLevel::Run
+        );
+        assert_eq!(
+            RubyValidator.achievable_level(ValidationLevel::Syntax),
+            ValidationLevel::Run
+        );
+        assert_eq!(
+            RubyValidator.achievable_level(ValidationLevel::Run),
+            ValidationLevel::Run
+        );
     }
 
     /// Mirrors the php.rs regression: `ruby -c` accepts this file (it never resolves constants),
@@ -117,8 +126,7 @@ mod tests {
             ..RunnerConfig::default()
         };
 
-        let summary =
-            run_validation(&[undefined_symbol_snippet()], &registry, &config).expect("validation completes");
+        let summary = run_validation(&[undefined_symbol_snippet()], &registry, &config).expect("validation completes");
 
         let result = &summary.results[0];
         assert_ne!(

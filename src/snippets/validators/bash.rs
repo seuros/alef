@@ -82,9 +82,18 @@ mod tests {
             BashValidator.achievable_level(ValidationLevel::TypeCheck),
             ValidationLevel::Syntax
         );
-        assert_eq!(BashValidator.achievable_level(ValidationLevel::Compile), ValidationLevel::Run);
-        assert_eq!(BashValidator.achievable_level(ValidationLevel::Syntax), ValidationLevel::Run);
-        assert_eq!(BashValidator.achievable_level(ValidationLevel::Run), ValidationLevel::Run);
+        assert_eq!(
+            BashValidator.achievable_level(ValidationLevel::Compile),
+            ValidationLevel::Run
+        );
+        assert_eq!(
+            BashValidator.achievable_level(ValidationLevel::Syntax),
+            ValidationLevel::Run
+        );
+        assert_eq!(
+            BashValidator.achievable_level(ValidationLevel::Run),
+            ValidationLevel::Run
+        );
     }
 
     /// A snippet that is syntactically valid but references a command that cannot exist must not
@@ -105,8 +114,7 @@ mod tests {
             ..RunnerConfig::default()
         };
 
-        let summary =
-            run_validation(&[undefined_command_snippet()], &registry, &config).expect("validation completes");
+        let summary = run_validation(&[undefined_command_snippet()], &registry, &config).expect("validation completes");
 
         let result = &summary.results[0];
         assert_ne!(
