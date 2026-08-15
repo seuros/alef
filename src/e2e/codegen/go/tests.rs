@@ -43,6 +43,35 @@ fn make_fixture(id: &str) -> Fixture {
     }
 }
 
+// Regression for a bug where the snippet template hardcoded `var typedError *pkg.Error`
+// (a pointer). Alef's Go error emitter generates `Error() string` on a value receiver, so
+// the concrete error is never a `*Error` and `errors.As` against a pointer target silently
+// never matches. Asserting `!body.contains("*pkg.Error")` alone would pass on a body missing
+// `typedError` entirely, so this also pins the exact non-pointer declaration. ~keep
+#[test]
+fn snippet_body_declares_typed_error_by_value_not_by_pointer() {
+    let mut fixture = make_fixture("invalid_input");
+    fixture.assertions = vec![Assertion {
+        assertion_type: "error".to_string(),
+        ..Default::default()
+    }];
+    let e2e_config = E2eConfig {
+        call: CallConfig {
+            function: "parse".to_string(),
+            module: "example.com/sample".to_string(),
+            returns_result: true,
+            ..CallConfig::default()
+        },
+        ..E2eConfig::default()
+    };
+    let config = crate::core::config::ResolvedCrateConfig::default();
+
+    let body = super::snippet::render_snippet_body(&fixture, &e2e_config, &config, &[], &[]);
+
+    assert!(body.contains("var typedError pkg.Error"), "{body}");
+    assert!(!body.contains("var typedError *pkg.Error"), "{body}");
+}
+
 /// snake_case function names in `[e2e.call]` must be routed through `to_go_name`
 /// so the emitted Go call uses the idiomatic CamelCase (e.g. `CleanExtractedText`
 /// instead of `clean_extracted_text`).

@@ -191,58 +191,6 @@ pub(crate) fn mock_url_env_key(fixture_id: &str) -> String {
     format!("MOCK_SERVER_{}", fixture_id.to_uppercase())
 }
 
-/// The error type name to import/catch in a generated snippet, with a crate-name-derived
-/// fallback instead of the bare literal `"Error"` `ResolvedCrateConfig::error_type_name()`
-/// falls back to.
-///
-/// `error_type_name()` feeds Rust-generating backends (pyo3 trait-bridge codegen, extendr,
-/// rustler, wasm, php, magnus, ffi, jni, napi, swift) via `error_constructor_expr()`, so its
-/// default must stay the bare `"Error"` literal — some consumer crates genuinely name their
-/// error type `Error`, and any other default would emit non-compiling Rust for them when
-/// `[crate] error_type` is left unset. Snippet emitters carry no such constraint: they only
-/// need a name a reader can plausibly import, and `"Error"` almost never names a real
-/// generated type. Scoped here, to the four snippet emitters that call it, rather than to the
-/// shared config default. ~keep
-pub(crate) fn snippet_error_type_name(config: &ResolvedCrateConfig) -> String {
-    use heck::ToPascalCase;
-
-    config
-        .error_type
-        .clone()
-        .unwrap_or_else(|| format!("{}Error", config.name.to_pascal_case()))
-}
-
-#[cfg(test)]
-mod snippet_error_type_name_tests {
-    use super::snippet_error_type_name;
-    use crate::core::config::ResolvedCrateConfig;
-
-    #[test]
-    fn defaults_to_pascal_case_crate_name_plus_error() {
-        let config = ResolvedCrateConfig {
-            name: "liter-llm".to_string(),
-            ..Default::default()
-        };
-        assert_eq!(snippet_error_type_name(&config), "LiterLlmError");
-    }
-
-    #[test]
-    fn falls_back_to_bare_error_when_name_is_empty() {
-        let config = ResolvedCrateConfig::default();
-        assert_eq!(snippet_error_type_name(&config), "Error");
-    }
-
-    #[test]
-    fn explicit_error_type_wins() {
-        let config = ResolvedCrateConfig {
-            name: "liter-llm".to_string(),
-            error_type: Some("MyError".to_string()),
-            ..Default::default()
-        };
-        assert_eq!(snippet_error_type_name(&config), "MyError");
-    }
-}
-
 /// The error text an `error` assertion declares, if any.
 ///
 /// ~keep Backends must match this against the rendered message **or** the exception/

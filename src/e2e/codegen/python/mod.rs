@@ -180,7 +180,7 @@ impl super::E2eCodegen for PythonE2eCodegen {
             force_bind_result,
         );
         let (imports, body, is_async) = extract_python_snippet(&test_file)?;
-        let error_type = super::snippet_error_type_name(config);
+        let error_type = config.error_type_name();
         let mut imports = imports.into_iter().map(str::to_string).collect::<Vec<_>>();
         if expects_error {
             imports.push(format!(
@@ -560,6 +560,31 @@ headingStyle = "HeadingStyle"
 
         assert!(rendered.contains("except Error as error:"), "{rendered}");
         assert!(!rendered.contains("AssertionError"), "{rendered}");
+    }
+
+    // Regression for a bug where a crate with no `[crate] error_type` set had its snippet
+    // error name fabricated from the crate name (`TreeSitterLanguagePackError`) instead of
+    // falling back to the bare `"Error"` the generated bindings actually export. Unlike
+    // `snippet_body_renders_expected_error_as_an_executable_example` above, this test sets a
+    // non-empty crate name so a pascal-cased fallback would actually produce a wrong,
+    // non-"Error" name and the assertion would catch it. ~keep
+    #[test]
+    fn snippet_body_falls_back_to_bare_error_for_crate_with_no_error_type_configured() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "invalid_input", "description": "Reject invalid input", "input": null,
+            "assertions": [{"type": "error"}]
+        }))
+        .expect("fixture");
+        let config = ResolvedCrateConfig {
+            name: "tree-sitter-language-pack".to_string(),
+            ..Default::default()
+        };
+        let rendered = PythonE2eCodegen
+            .render_snippet_body(&fixture, &E2eConfig::default(), &config, &[], &[])
+            .expect("snippet");
+
+        assert!(!rendered.contains("TreeSitterLanguagePackError"), "{rendered}");
+        assert!(rendered.contains("except Error as error:"), "{rendered}");
     }
 
     /// Builds a fictional `my-lib` config whose `create_widget` call passes a

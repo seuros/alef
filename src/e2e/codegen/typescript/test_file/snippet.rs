@@ -121,11 +121,10 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
         .assertions
         .iter()
         .any(|assertion| assertion.assertion_type == "error");
-    let error_type_name = if lang == "node" {
-        "Error".to_string()
-    } else {
-        crate::e2e::codegen::snippet_error_type_name(config)
-    };
+    // Both langs this renders for ignore a crate `error_type` name: node throws a plain
+    // global `Error`, and wasm renders `String(error)` via `thrown_value_is_opaque` instead
+    // of an `instanceof` check (see that template flag below), so it is never read. ~keep
+    let error_type_name = "Error".to_string();
     let mut imports = std::collections::BTreeSet::new();
     imports.insert(effective_factory.unwrap_or(&function_name).to_string());
     // No `else` branch imports an error type here: node throws a plain global

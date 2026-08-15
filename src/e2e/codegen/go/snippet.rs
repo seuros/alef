@@ -193,7 +193,7 @@ pub(super) fn render_snippet_body(
             call_expr => call_expr, result_var => call.result_var, returns_error => returns_error,
             returns_void => call.returns_void,
             expects_error => expects_error,
-            error_type => crate::e2e::codegen::snippet_error_type_name(config),
+            error_type => config.error_type_name(),
             import_alias => import_alias,
         },
     )
@@ -294,7 +294,7 @@ mod tests {
         let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[]);
 
         assert!(body.contains("_, err := pkg."), "{body}");
-        assert!(body.contains("var typedError *pkg.Error"), "{body}");
+        assert!(body.contains("var typedError pkg.Error"), "{body}");
         assert!(body.contains("errors.As(err, &typedError)"), "{body}");
         assert!(!body.contains("expected call to fail"), "{body}");
     }
