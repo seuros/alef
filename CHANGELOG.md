@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **WASM documentation snippets**: derive fixture eligibility from the target's exported function surface, recording
+  feature-gated, explicitly excluded, trait-managed, and dropped-crate calls as missing coverage instead of emitting
+  imports that the generated WASM package cannot provide.
 - **java default values**: suffix integer defaults for boxed `Long` record components with `L`, so generated compact
   constructors compile while continuing to distinguish an absent value from an explicitly supplied zero.
 - **FFI borrowed contexts**: restore owned lifecycle, field-accessor, owned-self method, and default-constructor

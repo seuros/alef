@@ -1,10 +1,12 @@
 use super::{
     WasmBackend, cargo::gen_cargo_toml, fix_dropped_payload_enum_option_fields, forward_trait_bridge_builder_fields,
-    types_needing_self_delegation_reverse_impl,
+    function_is_exported, types_needing_self_delegation_reverse_impl,
 };
 use crate::core::backend::Backend;
 use crate::core::config::{BridgeBinding, NewAlefConfig, ResolvedCrateConfig, TraitBridgeConfig};
-use crate::core::ir::{ApiSurface, FieldDef, MethodDef, ParamDef, PrimitiveType, ReceiverKind, TypeDef, TypeRef};
+use crate::core::ir::{
+    ApiSurface, FieldDef, FunctionDef, MethodDef, ParamDef, PrimitiveType, ReceiverKind, TypeDef, TypeRef,
+};
 
 fn empty_api() -> ApiSurface {
     ApiSurface {
@@ -676,4 +678,26 @@ fn fix_dropped_payload_enum_option_fields_is_noop_without_the_pattern() {
     let content = "Self {\n    reason: ChunkingReason::default(),\n    other: Default::default(),\n}\n".to_string();
     let fixed = fix_dropped_payload_enum_option_fields(content.clone());
     assert_eq!(fixed, content, "content without the buggy pattern must be unchanged");
+}
+
+#[test]
+fn wasm_function_reachability_follows_target_features() {
+    let functions = vec![
+        FunctionDef {
+            name: "download".into(),
+            rust_path: "sample::download".into(),
+            cfg: Some(r#"feature = "download""#.into()),
+            ..FunctionDef::default()
+        },
+        FunctionDef {
+            name: "prefetch".into(),
+            rust_path: "sample::prefetch".into(),
+            cfg: Some(r#"not(feature = "download")"#.into()),
+            ..FunctionDef::default()
+        },
+    ];
+    let config = make_config();
+
+    assert!(!function_is_exported("download", &functions, &config));
+    assert!(function_is_exported("prefetch", &functions, &config));
 }

@@ -32,6 +32,54 @@ use types::{
     filter_cfg_fields_for_features, gen_opaque_struct, gen_opaque_struct_methods, gen_struct, gen_struct_methods,
 };
 
+pub(crate) fn function_is_exported(
+    function_name: &str,
+    functions: &[crate::core::ir::FunctionDef],
+    config: &ResolvedCrateConfig,
+) -> bool {
+    if config
+        .wasm
+        .as_ref()
+        .is_some_and(|wasm| wasm.exclude_functions.iter().any(|name| name == function_name))
+    {
+        return false;
+    }
+    if crate::codegen::generators::trait_bridge::is_trait_bridge_managed_fn(function_name, &config.trait_bridges) {
+        return false;
+    }
+    let enabled_features = config.features_for_language(Language::Wasm);
+    let core_import = config.core_import_for_language(Language::Wasm);
+    let source_remaps = config
+        .wasm
+        .as_ref()
+        .map(|wasm| &wasm.source_crate_remaps)
+        .into_iter()
+        .flatten()
+        .map(|name| name.replace('-', "_"))
+        .collect::<AHashSet<_>>();
+    let dropped_crates = config
+        .wasm
+        .as_ref()
+        .map(|wasm| &wasm.exclude_extra_dependencies)
+        .into_iter()
+        .flatten()
+        .map(|name| name.replace('-', "_"))
+        .filter(|name| name != &core_import && !source_remaps.contains(name))
+        .collect::<AHashSet<_>>();
+    functions.iter().any(|function| {
+        function.name == function_name
+            && !is_gated_behind_disabled_feature(&function.cfg, enabled_features)
+            && !dropped_crates.contains(
+                &function
+                    .rust_path
+                    .split("::")
+                    .next()
+                    .unwrap_or("")
+                    .replace('-', "_"),
+            )
+    })
+}
+
 /// Prepend `#[cfg(<pred>)]` to a code item when the source symbol carries a cfg predicate.
 fn prepend_cfg(cfg: Option<&str>, item: String) -> String {
     match cfg {

@@ -23,6 +23,8 @@ use std::path::PathBuf;
 use super::E2eCodegen;
 use super::typescript::config::render_global_setup;
 
+mod snippet;
+
 /// WebAssembly e2e code generator.
 pub struct WasmCodegen;
 
@@ -457,25 +459,19 @@ impl E2eCodegen for WasmCodegen {
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
     ) -> Result<String> {
-        let overrides = e2e_config.call.overrides.get("wasm");
-        let module = e2e_config
-            .resolve_package("wasm")
-            .and_then(|package| package.name)
-            .unwrap_or_else(|| config.wasm_package_name());
-        let wasm_type_prefix = config.wasm_type_prefix();
-        Ok(super::typescript::test_file::render_snippet_body(
-            super::typescript::test_file::SnippetContext {
-                lang: "wasm",
-                fixture,
-                module: &module,
-                client_factory: overrides.and_then(|value| value.client_factory.as_deref()),
-                e2e_config,
-                type_defs,
-                enums,
-                wasm_type_prefix: &wasm_type_prefix,
-                config,
-            },
-        ))
+        snippet::render(fixture, e2e_config, config, type_defs, enums, &[])
+    }
+
+    fn render_snippet_body_with_functions(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+        functions: &[crate::core::ir::FunctionDef],
+    ) -> Result<String> {
+        snippet::render(fixture, e2e_config, config, type_defs, enums, functions)
     }
 
     fn language_name(&self) -> &'static str {
