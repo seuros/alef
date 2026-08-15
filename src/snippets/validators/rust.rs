@@ -194,7 +194,14 @@ impl RustValidator {
                     "Rust snippet requires crate `{name}` with no pinned version; declare it under `[docs.snippets.sessions.<target>.rust_dependencies.{name}]`"
                 ))
             })?;
-            rendered.push_str(&format!("{name} = {version:?}\n"));
+            let features = Self::pinned_dependency_features(name);
+            if features.is_empty() {
+                rendered.push_str(&format!("{name} = {version:?}\n"));
+            } else {
+                rendered.push_str(&format!(
+                    "{name} = {{ version = {version:?}, features = {features:?} }}\n"
+                ));
+            }
         }
         Ok(rendered)
     }
@@ -205,7 +212,18 @@ impl RustValidator {
     fn pinned_dependency_version(name: &str) -> Option<&'static str> {
         match name {
             "serde_json" => Some(crate::core::template_versions::cargo::SERDE_JSON),
+            "tokio" => Some(crate::core::template_versions::cargo::TOKIO),
             _ => None,
+        }
+    }
+
+    /// Cargo features a pinned dependency needs for the code Alef's own recipes emit. ~keep
+    /// `#[tokio::main]` lives behind tokio's `macros` and `rt-multi-thread` features, neither of
+    /// which is on by default, so a bare `tokio = "1"` still fails to compile an async snippet.
+    fn pinned_dependency_features(name: &str) -> &'static [&'static str] {
+        match name {
+            "tokio" => &["full"],
+            _ => &[],
         }
     }
 
@@ -637,6 +655,23 @@ mod tests {
         assert!(!manifest.contains("feature:visitor"), "{manifest}");
     }
 
+    /// `#[tokio::main]` expands to a runtime builder and lives behind tokio's `macros` and
+    /// `rt-multi-thread` features, neither of which is a default. A bare `tokio = "1"` line would
+    /// satisfy the crate resolution and still fail the snippet, so the feature list is part of the
+    /// contract, not a detail.
+    #[test]
+    fn a_declared_tokio_requirement_enters_the_manifest_with_its_features() {
+        let mut declared = snippet("fn main() {}");
+        declared.metadata.requires = vec!["crate:tokio".into()];
+
+        let manifest = RustValidator::cargo_manifest(&[&declared], None).expect("manifest renders");
+
+        assert!(
+            manifest.contains("tokio = { version = \"1\", features = [\"full\"] }"),
+            "tokio must be pinned with the features `#[tokio::main]` needs: {manifest}"
+        );
+    }
+
     #[test]
     fn configured_dependencies_win_over_declared_crate_requirements() {
         let mut declared = snippet("fn main() {}");
@@ -704,6 +739,36 @@ mod tests {
 
         assert_eq!(declared_status, SnippetStatus::Pass, "{declared_output:?}");
         assert_eq!(undeclared_status, SnippetStatus::Fail);
+    }
+
+    /// The undeclared half of the tokio defect, asserted on the compiler's own diagnostic rather
+    /// than on a bare `Fail` — a snippet can fail for any number of reasons, and a status alone
+    /// would not distinguish this defect from an unrelated break.
+    ///
+    /// ~keep The declared half is deliberately not asserted here: every check project is a fresh
+    /// directory, so proving it compiles means building tokio's `full` tree from scratch, which
+    /// overruns the toolchain timeout and would make this a stopwatch rather than a test.
+    #[test]
+    fn an_async_snippet_without_its_tokio_requirement_fails_on_the_missing_crate() {
+        if which::which("cargo").is_err() {
+            return;
+        }
+        let code = "#[tokio::main]\nasync fn main() {\n    let value = 1u8;\n    println!(\"{value:?}\");\n}\n";
+
+        let (status, output) = RustValidator::validate_with_context(
+            &snippet(code),
+            ValidationLevel::TypeCheck,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
+            None,
+        )
+        .expect("undeclared snippet validates");
+
+        assert_eq!(status, SnippetStatus::Fail);
+        let output = output.unwrap_or_default();
+        assert!(
+            output.contains("tokio"),
+            "the failure must name the unresolved tokio crate, not some unrelated break: {output}"
+        );
     }
 
     fn snippet(code: &str) -> Snippet {

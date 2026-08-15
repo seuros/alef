@@ -39,6 +39,12 @@ pub const CRATE_REQUIREMENT_PREFIX: &str = "crate:";
 
 const SERDE_JSON_REQUIREMENT: &str = "crate:serde_json";
 
+/// `rust/snippet_body.rs.jinja` emits `#[tokio::main]` for an async fixture, so the snippet ~keep
+/// carries a tokio dependency the fixture's own config never declares. Without this requirement
+/// the check project has no `tokio` in `[dependencies]` and every async Rust snippet fails to
+/// resolve the attribute macro (E0433) before any of its actual content is checked.
+const TOKIO_REQUIREMENT: &str = "crate:tokio";
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SnippetCoverageKey {
     pub fixture_id: String,
@@ -404,8 +410,7 @@ fn render_snippet_body(
             // a real, extension-owned recipe never reach this branch — the extension loop
             // above already returned their body, and `recipe_policy::extension_owned_recipe_kind`
             // already bailed for fixtures that require one but lack it.
-            let skipped_for_language =
-                fixture.skip.as_ref().is_some_and(|skip| skip.should_skip(language));
+            let skipped_for_language = fixture.skip.as_ref().is_some_and(|skip| skip.should_skip(language));
             (!skipped_for_language && matches!(language, "c" | "c_ffi" | "ffi"))
                 .then(|| crate::e2e::codegen::recipe::trait_bridge_function_identity(context.crate_config, fixture))
                 .flatten()
@@ -501,6 +506,12 @@ fn snippet_requirements(fixture: &Fixture, target: &str, body: &str) -> Vec<Stri
         && !requirements.iter().any(|value| value == SERDE_JSON_REQUIREMENT)
     {
         requirements.push(SERDE_JSON_REQUIREMENT.to_string());
+    }
+    if generator_name(target) == "rust"
+        && body.contains("#[tokio::main]")
+        && !requirements.iter().any(|value| value == TOKIO_REQUIREMENT)
+    {
+        requirements.push(TOKIO_REQUIREMENT.to_string());
     }
     requirements
 }
@@ -1246,9 +1257,8 @@ mod tests {
             functions: &[],
         };
 
-        let report =
-            generate_snippet_report_with_extensions(&[fixture], &["c".into()], &snippet_config, &context, &[])
-                .expect("a skipped fixture with no recipe belongs in the coverage ledger, not an error");
+        let report = generate_snippet_report_with_extensions(&[fixture], &["c".into()], &snippet_config, &context, &[])
+            .expect("a skipped fixture with no recipe belongs in the coverage ledger, not an error");
 
         assert!(report.snippets.is_empty());
         assert!(report.coverage.generated.is_empty());
@@ -1289,14 +1299,9 @@ mod tests {
             functions: &[],
         };
 
-        let report = generate_snippet_report_with_extensions(
-            &[fixture],
-            &["c".into()],
-            &snippet_config,
-            &context,
-            &extensions,
-        )
-        .expect("an extension-owned recipe renders even when the harness skips this language");
+        let report =
+            generate_snippet_report_with_extensions(&[fixture], &["c".into()], &snippet_config, &context, &extensions)
+                .expect("an extension-owned recipe renders even when the harness skips this language");
 
         assert_eq!(report.coverage.generated.len(), 1);
         assert!(report.coverage.missing.is_empty());
@@ -1334,9 +1339,8 @@ mod tests {
             functions: &[],
         };
 
-        let report =
-            generate_snippet_report_with_extensions(&[fixture], &["c".into()], &snippet_config, &context, &[])
-                .expect("an unskipped fixture with a resolvable trait-bridge identity still generates a C snippet");
+        let report = generate_snippet_report_with_extensions(&[fixture], &["c".into()], &snippet_config, &context, &[])
+            .expect("an unskipped fixture with a resolvable trait-bridge identity still generates a C snippet");
 
         assert_eq!(report.coverage.generated.len(), 1);
         assert!(report.coverage.missing.is_empty());
@@ -1348,7 +1352,10 @@ mod tests {
         // argument. Before the derivation fix this emitted `xberg_clear_ocr_backends(NULL)`,
         // naming a symbol the header does not declare.
         assert!(
-            report.snippets[0].file.content.contains("xberg_clear_ocr_backend(NULL);"),
+            report.snippets[0]
+                .file
+                .content
+                .contains("xberg_clear_ocr_backend(NULL);"),
             "expected the derived singular ABI symbol, got:\n{}",
             report.snippets[0].file.content
         );
@@ -1636,5 +1643,30 @@ mod tests {
         let snippet = &report.snippets[0];
         assert!(!snippet.file.content.contains("serde_json"), "{}", snippet.file.content);
         assert!(snippet.requirements.is_empty());
+    }
+
+    /// An async fixture renders through `rust/snippet_body.rs.jinja`, which emits `#[tokio::main]`.
+    /// The snippet must carry the matching crate requirement, or the validator builds a check
+    /// project with no `tokio` in `[dependencies]` and the snippet fails on E0433 rather than on
+    /// anything it actually demonstrates.
+    #[test]
+    fn an_async_rust_snippet_requires_the_tokio_crate() {
+        let body = "#[tokio::main]\nasync fn main() {\n    let value = 1u8;\n    println!(\"{value:?}\");\n}\n";
+
+        let requirements = snippet_requirements(&documented_fixture(), "rust", body);
+
+        assert_eq!(requirements, ["crate:tokio"], "async snippet must declare tokio");
+    }
+
+    #[test]
+    fn a_synchronous_rust_snippet_requires_no_tokio_crate() {
+        let body = "fn main() {\n    let value = 1u8;\n    println!(\"{value:?}\");\n}\n";
+
+        let requirements = snippet_requirements(&documented_fixture(), "rust", body);
+
+        assert!(
+            requirements.is_empty(),
+            "a snippet with no tokio attribute must not pull tokio in: {requirements:?}"
+        );
     }
 }
