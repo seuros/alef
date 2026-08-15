@@ -7,8 +7,8 @@ use crate::snippets::types::{
 use crate::snippets::validators::ValidatorRegistry;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::sync::Mutex;
+use std::time::Instant;
 
 pub struct RunnerConfig {
     pub level: ValidationLevel,
@@ -68,7 +68,7 @@ pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config
                 let preparation_error = session_preparation_error(snippet, &sessions, &session_errors);
                 let session = session_for(snippet, &sessions);
                 let lock = session_key(snippet, &sessions).and_then(|key| session_locks.get(key));
-                let result = validate_one(snippet, registry, config, session, lock, preparation_error, None);
+                let result = validate_one(snippet, registry, config, session, lock, preparation_error);
                 let should_stop =
                     preparation_error.is_none() && matches!(result.status, SnippetStatus::Fail | SnippetStatus::Error);
                 results.push(result);
@@ -79,14 +79,6 @@ pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config
             results
         } else {
             let batched = validate_batches(snippets, registry, config, &sessions, &session_errors, &session_locks);
-            let batch_deadlines = snippets
-                .iter()
-                .enumerate()
-                .filter(|(index, _)| batched[*index].is_none())
-                .filter_map(|(_, snippet)| {
-                    validation_batch_key(snippet, registry, config, &sessions).map(|key| (key, OnceLock::new()))
-                })
-                .collect::<BTreeMap<_, _>>();
             snippets
                 .par_iter()
                 .enumerate()
@@ -96,9 +88,7 @@ pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config
                     }
                     let session = session_for(snippet, &sessions);
                     let lock = session_key(snippet, &sessions).and_then(|key| session_locks.get(key));
-                    let batch_started = validation_batch_key(snippet, registry, config, &sessions)
-                        .and_then(|key| batch_deadlines.get(&key));
-                    validate_one(snippet, registry, config, session, lock, None, batch_started)
+                    validate_one(snippet, registry, config, session, lock, None)
                 })
                 .collect()
         }
@@ -108,35 +98,6 @@ pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config
 }
 
 type BatchKey = (crate::snippets::types::Language, Option<String>, ValidationLevel);
-
-fn validation_batch_key(
-    snippet: &Snippet,
-    registry: &ValidatorRegistry,
-    config: &RunnerConfig,
-    sessions: &HashMap<String, crate::snippets::session::ValidationSession>,
-) -> Option<BatchKey> {
-    let session = session_for(snippet, sessions);
-    batch_level(snippet, registry, config, session).map(|level| {
-        (
-            snippet.language,
-            session_key(snippet, sessions).map(str::to_string),
-            level,
-        )
-    })
-}
-
-fn remaining_batch_timeout(started: &OnceLock<Instant>, timeout_secs: u64) -> u64 {
-    let deadline = *started.get_or_init(Instant::now) + Duration::from_secs(timeout_secs);
-    deadline
-        .checked_duration_since(Instant::now())
-        // Round the remainder up to whole seconds instead of truncating: `Duration::as_secs`
-        // floors, so a budget with only nanoseconds elapsed (the common case for the first
-        // caller right after `get_or_init`) truncates to 0 and starves every validator in the
-        // batch before any of them run. Rounding up keeps the shared deadline meaningful at
-        // whole-second granularity without ever reporting time left as none. ~keep
-        .map(|remaining| remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0))
-        .unwrap_or(0)
-}
 
 struct ValidationOutcome {
     status: SnippetStatus,
@@ -324,7 +285,6 @@ fn validate_one(
     session: Option<&crate::snippets::session::ValidationSession>,
     session_lock: Option<&Mutex<()>>,
     session_preparation_error: Option<&str>,
-    batch_started: Option<&OnceLock<Instant>>,
 ) -> ValidationResult {
     if let Some(message) = session_preparation_error {
         return result(
@@ -388,18 +348,12 @@ fn validate_one(
     }
 
     let start = Instant::now();
-    let validation = || {
-        let timeout_secs = batch_started.map_or(config.timeout_secs, |started| {
-            remaining_batch_timeout(started, config.timeout_secs)
-        });
-        if timeout_secs == 0 {
-            return Err(crate::snippets::error::Error::Timeout {
-                command: format!("{} validation batch", snippet.language),
-                timeout_secs: config.timeout_secs,
-            });
-        }
-        validator.validate_in_session(snippet, effective_level, timeout_secs, session)
-    };
+    // `timeout_secs` is a per-invocation budget here, not a group budget. This path runs one
+    // toolchain process per snippet (every validator except rust's non-`Run` batch), so sharing a
+    // single wall-clock deadline across the language group let the first snippet consume it and
+    // left the rest reported as toolchain timeouts for commands that were never spawned. Group
+    // budgeting belongs to `validate_batches`, where one process really does cover N snippets. ~keep
+    let validation = || validator.validate_in_session(snippet, effective_level, config.timeout_secs, session);
     let validation_result = match session_lock {
         Some(lock) => match lock.lock() {
             Ok(_guard) => validation(),
@@ -564,13 +518,16 @@ mod tests {
         singles: Arc<Mutex<usize>>,
     }
 
+    /// Overruns its timeout on the first call only, then returns immediately. A shared group
+    /// deadline is fully consumed by that first call, so any snippet the runner still executes
+    /// afterwards proves the budget is per-snippet. ~keep
     #[cfg(unix)]
-    struct TimeoutValidator {
-        calls: Arc<Mutex<usize>>,
+    struct ExhaustingValidator {
+        timeouts: Arc<Mutex<Vec<u64>>>,
     }
 
     #[cfg(unix)]
-    impl SnippetValidator for TimeoutValidator {
+    impl SnippetValidator for ExhaustingValidator {
         fn language(&self) -> crate::snippets::types::Language {
             crate::snippets::types::Language::Bash
         }
@@ -585,11 +542,66 @@ mod tests {
             _level: ValidationLevel,
             timeout_secs: u64,
         ) -> Result<(SnippetStatus, Option<String>)> {
-            *self.calls.lock().expect("call count") += 1;
-            let mut command = std::process::Command::new("sh");
-            command.args(["-c", "sleep 30 & wait"]);
-            crate::snippets::validators::run_command(&mut command, timeout_secs)?;
+            let call = {
+                let mut timeouts = self.timeouts.lock().expect("timeouts");
+                timeouts.push(timeout_secs);
+                timeouts.len()
+            };
+            if call == 1 {
+                let mut command = std::process::Command::new("sh");
+                command.args(["-c", "sleep 30 & wait"]);
+                crate::snippets::validators::run_command(&mut command, timeout_secs)?;
+            }
             Ok((SnippetStatus::Pass, None))
+        }
+
+        fn max_level(&self) -> ValidationLevel {
+            ValidationLevel::Run
+        }
+    }
+
+    /// Records the timeout handed to each entry point, and optionally opts in to batching, so a
+    /// test can assert which budget a validator actually receives without consuming wall clock.
+    struct BudgetRecordingValidator {
+        singles: Arc<Mutex<Vec<u64>>>,
+        batched: Arc<Mutex<Vec<(usize, u64)>>>,
+        supports_batching: bool,
+    }
+
+    impl SnippetValidator for BudgetRecordingValidator {
+        fn language(&self) -> crate::snippets::types::Language {
+            crate::snippets::types::Language::Rust
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn validate(
+            &self,
+            _snippet: &Snippet,
+            _level: ValidationLevel,
+            timeout_secs: u64,
+        ) -> Result<(SnippetStatus, Option<String>)> {
+            self.singles.lock().expect("single timeouts").push(timeout_secs);
+            Ok((SnippetStatus::Pass, None))
+        }
+
+        fn validate_batch_in_session(
+            &self,
+            snippets: &[&Snippet],
+            _level: ValidationLevel,
+            timeout_secs: u64,
+            _session: Option<&crate::snippets::session::ValidationSession>,
+        ) -> Option<Result<Vec<(SnippetStatus, Option<String>)>>> {
+            if !self.supports_batching {
+                return None;
+            }
+            self.batched
+                .lock()
+                .expect("batch timeouts")
+                .push((snippets.len(), timeout_secs));
+            Some(Ok(vec![(SnippetStatus::Pass, None); snippets.len()]))
         }
 
         fn max_level(&self) -> ValidationLevel {
@@ -923,13 +935,16 @@ mod tests {
         );
     }
 
+    /// One snippet exhausting its timeout must not consume the budget of the next one. The
+    /// assertions are on call count and status, never on elapsed wall clock, and the overrun is
+    /// 30x the budget so no plausible scheduling delay can flip the outcome. ~keep
     #[cfg(unix)]
     #[test]
-    fn timeout_is_shared_by_all_snippets_in_a_validation_batch() {
-        let calls = Arc::new(Mutex::new(0));
+    fn a_snippet_that_times_out_does_not_consume_the_next_snippets_budget() {
+        let timeouts = Arc::new(Mutex::new(Vec::new()));
         let mut registry = ValidatorRegistry::new();
-        registry.register(Box::new(TimeoutValidator {
-            calls: Arc::clone(&calls),
+        registry.register(Box::new(ExhaustingValidator {
+            timeouts: Arc::clone(&timeouts),
         }));
         let mut snippets = vec![network_snippet(), network_snippet()];
         for snippet in &mut snippets {
@@ -943,46 +958,78 @@ mod tests {
             // network_snippet() carries SideEffectClass::Network; side_effect_rejection()
             // skips unlisted side effects at ValidationLevel::Run before the validator
             // ever runs (see side_effect_policy_only_blocks_execution), so it must be
-            // allow-listed here or the budget-sharing path under test never executes. ~keep
+            // allow-listed here or the path under test never executes. ~keep
             allowed_side_effects: vec![SideEffectClass::Network],
             ..RunnerConfig::default()
         };
 
-        let started = Instant::now();
         let summary = run_validation(&snippets, &registry, &config).expect("validation completes");
 
-        assert!(started.elapsed() < Duration::from_secs(3));
-        assert_eq!(*calls.lock().expect("call count"), 1);
-        assert_eq!(summary.errors, 2);
-        assert!(summary.results.iter().all(|value| {
-            value
-                .message
-                .as_deref()
-                .is_some_and(|message| message.contains("timed out after 1s"))
+        assert_eq!(*timeouts.lock().expect("timeouts"), vec![1, 1]);
+        assert_eq!(summary.errors, 1);
+        assert_eq!(summary.passed, 1);
+        for value in &summary.results {
+            let message = value.message.as_deref().unwrap_or_default();
+            assert!(
+                !message.contains("batch"),
+                "reported against a batch command: {message}"
+            );
+        }
+    }
+
+    /// A validator that runs one process per snippet receives the configured timeout for every
+    /// snippet, and no snippet is reported against a command the runner never spawned.
+    #[test]
+    fn non_batching_validators_receive_the_configured_timeout_per_snippet() {
+        let singles = Arc::new(Mutex::new(Vec::new()));
+        let mut registry = ValidatorRegistry::new();
+        registry.register(Box::new(BudgetRecordingValidator {
+            singles: Arc::clone(&singles),
+            batched: Arc::new(Mutex::new(Vec::new())),
+            supports_batching: false,
         }));
+        let config = RunnerConfig {
+            level: ValidationLevel::Compile,
+            parallelism: 1,
+            timeout_secs: 7,
+            cache_dir: None,
+            ..RunnerConfig::default()
+        };
+        let snippets = vec![network_snippet(), network_snippet(), network_snippet()];
+
+        let summary = run_validation(&snippets, &registry, &config).expect("validation completes");
+
+        assert_eq!(*singles.lock().expect("single timeouts"), vec![7, 7, 7]);
+        assert_eq!(summary.passed, 3);
+        assert_eq!(summary.errors, 0);
     }
 
-    // Timing-safe regression coverage for the truncation bug directly: instead of racing a
-    // real sleep against a wall-clock threshold, an already-elapsed `Instant` is seeded into
-    // the `OnceLock` so the function is exercised deterministically at a fixed, known offset. ~keep
+    /// Group budgeting is retained where it is meaningful: a validator that really does cover N
+    /// snippets with a single process is handed the whole budget once, not a share of it.
     #[test]
-    fn remaining_batch_timeout_rounds_up_a_still_live_budget() {
-        let started = OnceLock::new();
-        started
-            .set(Instant::now() - Duration::from_millis(1))
-            .expect("OnceLock starts empty");
+    fn batching_validators_still_receive_the_group_budget_once() {
+        let singles = Arc::new(Mutex::new(Vec::new()));
+        let batched = Arc::new(Mutex::new(Vec::new()));
+        let mut registry = ValidatorRegistry::new();
+        registry.register(Box::new(BudgetRecordingValidator {
+            singles: Arc::clone(&singles),
+            batched: Arc::clone(&batched),
+            supports_batching: true,
+        }));
+        let config = RunnerConfig {
+            level: ValidationLevel::Compile,
+            parallelism: 1,
+            timeout_secs: 7,
+            cache_dir: None,
+            ..RunnerConfig::default()
+        };
+        let snippets = vec![network_snippet(), network_snippet(), network_snippet()];
 
-        assert_eq!(remaining_batch_timeout(&started, 1), 1);
-    }
+        let summary = run_validation(&snippets, &registry, &config).expect("validation completes");
 
-    #[test]
-    fn remaining_batch_timeout_reports_zero_once_the_deadline_has_passed() {
-        let started = OnceLock::new();
-        started
-            .set(Instant::now() - Duration::from_secs(2))
-            .expect("OnceLock starts empty");
-
-        assert_eq!(remaining_batch_timeout(&started, 1), 0);
+        assert_eq!(*batched.lock().expect("batch timeouts"), vec![(3, 7)]);
+        assert!(singles.lock().expect("single timeouts").is_empty());
+        assert_eq!(summary.passed, 3);
     }
 
     /// A validator whose declared ceiling sits below the requested level has not degraded

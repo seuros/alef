@@ -23,6 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **snippets**: scope the shared validation timeout to validators that genuinely batch. `run_validation` handed a
+  single wall-clock budget, keyed by language/session/level, to the per-snippet path — which is reached only by
+  validators that spawn one toolchain process per snippet (every language except Rust below `Run`). The first
+  snippet in a group could consume the whole budget, after which the runner short-circuited every remaining snippet
+  with a synthetic `Timeout` error naming a `<language> validation batch` command that was never spawned. Docs runs
+  therefore reported timeouts that varied with snippet ordering and machine speed rather than with the snippets.
+  Each snippet on that path now receives the configured `timeout_secs`; group budgeting is retained in
+  `validate_batches`, where one process really does cover N snippets. **Consumer-visible:** a language group's
+  worst-case wall clock is now `snippets × timeout_secs` rather than `timeout_secs`, so a `timeout_secs` tuned
+  against the old shared budget may need lowering.
 - **capsules**: expose `shares_native_runtime` for Kotlin Android and enforce capsule ownership/ABI contracts during
   Go, Swift, Zig, and Kotlin Android generation instead of leaving those backends outside the validation gate.
 - **e2e/zig**: emit streaming e2e tests instead of discarding them, and never drop a fixture category in silence. A
