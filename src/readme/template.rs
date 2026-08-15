@@ -2,9 +2,10 @@ use super::paths::{lang_code, readme_output_path, readme_target_output_path};
 use super::template_env;
 use crate::core::backend::GeneratedFile;
 use crate::core::config::{Language, ResolvedCrateConfig};
-use crate::core::ir::ApiSurface;
+use crate::core::ir::{ApiSurface, FunctionDef};
 use minijinja::{Environment, Value};
 use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,6 +15,14 @@ use std::path::{Path, PathBuf};
 enum SnippetMapping {
     Path(String),
     Detailed { path: String, root: PathBuf },
+}
+
+#[derive(Serialize)]
+struct ReadmeFunction {
+    name: String,
+    rust_name: String,
+    is_async: bool,
+    documentation: String,
 }
 
 impl SnippetMapping {
@@ -73,6 +82,7 @@ pub(super) fn try_template_readme(
         lang_code,
         path,
         false,
+        Some(lang),
     )
 }
 
@@ -98,6 +108,7 @@ pub(super) fn render_target_readme(
         target_name,
         path,
         true,
+        None,
     )?
     .ok_or_else(|| anyhow::anyhow!("README target '{target_name}' could not be rendered"))
 }
@@ -114,6 +125,7 @@ fn render_template_readme(
     language_context: &str,
     path: PathBuf,
     require_template: bool,
+    lang: Option<Language>,
 ) -> anyhow::Result<Option<GeneratedFile>> {
     let discord_url = readme_cfg.discord_url.as_deref().unwrap_or("").to_string();
     let banner_url = readme_cfg.banner_url.as_deref().unwrap_or("").to_string();
@@ -256,6 +268,10 @@ fn render_template_readme(
     ctx.insert("discord_url", Value::from(discord_url));
     ctx.insert("banner_url", Value::from(banner_url));
     ctx.insert("language", Value::from(language_context.to_string()));
+    ctx.insert(
+        "functions",
+        Value::from_serialize(readme_functions(api, config, lang)),
+    );
 
     ctx.insert(
         "csharp_wrapper_class",
@@ -321,6 +337,71 @@ fn render_template_readme(
         content,
         generated_header: true,
     }))
+}
+
+fn readme_functions(
+    api: &ApiSurface,
+    config: &ResolvedCrateConfig,
+    lang: Option<Language>,
+) -> Vec<ReadmeFunction> {
+    let Some(lang) = lang else {
+        return Vec::new();
+    };
+    let features = crate::docs::language_pages::effective_docs_features(api, config, lang);
+    let enabled_features = features.iter().map(String::as_str).collect();
+    let filtered_api = api.with_cfg_filtered_deep(&enabled_features);
+    let (excluded_functions, _) = crate::docs::language_pages::excludes::language_excludes(config, lang);
+
+    filtered_api
+        .functions
+        .iter()
+        .filter(|function| {
+            !excluded_functions.contains(&function.name) && (lang == Language::Rust || !function.binding_excluded)
+        })
+        .map(|function| ReadmeFunction {
+            name: readme_function_name(&filtered_api, config, lang, function),
+            rust_name: function.name.clone(),
+            is_async: function.is_async,
+            documentation: function.doc.clone(),
+        })
+        .collect()
+}
+
+fn readme_function_name(
+    api: &ApiSurface,
+    config: &ResolvedCrateConfig,
+    lang: Language,
+    function: &FunctionDef,
+) -> String {
+    use crate::codegen::naming::{PublicIdentifierKind, public_host_identifier};
+
+    if matches!(lang, Language::Ffi | Language::C | Language::Jni) {
+        return crate::codegen::naming::abi_symbol(&config.ffi_prefix(), &function.name);
+    }
+
+    if lang == Language::Go {
+        let (_, excluded_types) = crate::docs::language_pages::excludes::language_excludes(config, lang);
+        let reserved_type_names = api
+            .types
+            .iter()
+            .filter(|item| !item.is_trait && !excluded_types.contains(&item.name))
+            .map(|item| crate::codegen::naming::go_type_name(&item.name))
+            .chain(
+                api.enums
+                    .iter()
+                    .filter(|item| !excluded_types.contains(&item.name))
+                    .map(|item| crate::codegen::naming::go_type_name(&item.name)),
+            )
+            .collect();
+        return crate::codegen::naming::go_free_function_name(&function.name, &reserved_type_names);
+    }
+
+    let source_name = if lang == Language::Ruby {
+        crate::backends::magnus::ruby_public_function_name(function)
+    } else {
+        &function.name
+    };
+    public_host_identifier(lang, PublicIdentifierKind::Function, source_name)
 }
 
 /// Render a minijinja render error together with its full cause chain.

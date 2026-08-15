@@ -1,6 +1,6 @@
 mod enum_render;
 mod error_render;
-mod excludes;
+pub(crate) mod excludes;
 mod function_render;
 mod streaming;
 mod type_render;
@@ -139,7 +139,11 @@ pub(super) fn generate_lang_doc(
 /// - Every other language uses its configured feature list directly (an
 ///   umbrella feature such as `full`, `wasm-target`, or an explicit list). For
 ///   those, `features_for_language` already reflects what the binding compiles.
-fn effective_docs_features(api: &ApiSurface, config: &ResolvedCrateConfig, lang: Language) -> Vec<String> {
+pub(crate) fn effective_docs_features(
+    api: &ApiSurface,
+    config: &ResolvedCrateConfig,
+    lang: Language,
+) -> Vec<String> {
     let mut features: HashSet<String> = config.features_for_language(lang).iter().cloned().collect();
 
     let excluded_default: Option<&[String]> = match lang {

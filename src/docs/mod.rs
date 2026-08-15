@@ -15,7 +15,7 @@ mod descriptions;
 pub mod doc_cleaning;
 mod examples;
 mod formatting;
-mod language_pages;
+pub(crate) mod language_pages;
 pub(crate) mod naming;
 mod render;
 mod rust_static;

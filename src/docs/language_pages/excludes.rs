@@ -1,7 +1,10 @@
 use crate::core::config::{Language, ResolvedCrateConfig};
 use std::collections::HashSet;
 
-pub(super) fn language_excludes(config: &ResolvedCrateConfig, lang: Language) -> (HashSet<String>, HashSet<String>) {
+pub(crate) fn language_excludes(
+    config: &ResolvedCrateConfig,
+    lang: Language,
+) -> (HashSet<String>, HashSet<String>) {
     let mut functions: HashSet<String> = config.exclude.functions.iter().cloned().collect();
     let mut types: HashSet<String> = config.exclude.types.iter().cloned().collect();
 

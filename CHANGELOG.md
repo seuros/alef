@@ -7,10 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+### Added
 
-- **verify**: reject Alef-owned generated files whose header remains but whose `alef:hash` stamp is missing, so a
-  mixed stamped/unstamped generated tree cannot pass freshness verification.
+- **readme**: expose each language README's generated public functions as structured `functions` template values
+  with `name`, `rust_name`, `is_async`, and `documentation` fields. Names honor language exclusions, feature gates,
+  ABI prefixes, Go type collisions, Ruby re-export names, and the centralized host-language naming policy.
 
 ### Removed
 
@@ -20,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   missing-generation diagnostics.
 
 ### Fixed
+
+- **verify**: reject Alef-owned generated files whose header remains but whose `alef:hash` stamp is missing, so a
+  mixed stamped/unstamped generated tree cannot pass freshness verification.
 
 - **FFI error header**: keep `AlefFfiErrorCode` reachable through generated cbindgen export filters and avoid repeated
   `ErrorError` tokens where an error type and variant meet in public C enum members.
