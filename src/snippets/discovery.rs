@@ -134,13 +134,15 @@ fn extract_snippets_from_file(path: &Path, base_dir: &Path) -> Result<Vec<Snippe
     let mut snippets = Vec::new();
 
     for (index, block) in blocks.into_iter().enumerate() {
-        let language = {
-            let from_fence = Language::from_fence_tag(&block.lang);
-            if from_fence == Language::Unknown {
-                dir_language.unwrap_or(Language::Unknown)
-            } else {
-                from_fence
-            }
+        let metadata = block.metadata;
+        // Precedence: explicit fence tag > front-matter `language` > directory-derived > Unknown.
+        // A fence's own tag is per-block ground truth; front matter and the directory are
+        // both file-level defaults for blocks whose fence is absent or unrecognized. ~keep
+        let from_fence = Language::from_fence_tag(&block.lang);
+        let language = if from_fence != Language::Unknown {
+            from_fence
+        } else {
+            metadata.language.or(dir_language).unwrap_or(Language::Unknown)
         };
 
         if language == Language::Unknown {
@@ -148,8 +150,6 @@ fn extract_snippets_from_file(path: &Path, base_dir: &Path) -> Result<Vec<Snippe
         }
 
         let annotation = block.preceding_comment.as_deref().and_then(parse_annotation);
-        let metadata = block.metadata;
-        let language = metadata.language.unwrap_or(language);
         let title = metadata.title.clone().or(block.title);
         let annotation = if metadata.skip {
             Some(SnippetAnnotation {
@@ -348,6 +348,41 @@ mod tests {
             snippets[0].annotation.as_ref().map(|value| value.kind),
             Some(SnippetAnnotationKind::TypeCheckOnly)
         );
+    }
+
+    #[test]
+    fn explicit_fence_tag_wins_over_frontmatter_language_per_block() {
+        let directory = tempfile::tempdir().expect("temporary snippet directory");
+        let path = directory.path().join("stdio.md");
+        std::fs::write(
+            &path,
+            "---\nlanguage: toml\ntarget: toml\nlevel: syntax\n---\n\n\
+             ```toml title=\"liter-llm-proxy.toml\"\n[mcp]\nstdio_trust_local = true\n```\n\n\
+             ```json title=\"claude_desktop_config.json (stdio)\"\n{\n  \"mcpServers\": {}\n}\n```\n",
+        )
+        .expect("write mixed-language snippet file");
+
+        let snippets = discover_snippets(&[directory.path().to_path_buf()], None).expect("discover snippets");
+
+        assert_eq!(snippets.len(), 2);
+        assert_eq!(snippets[0].language, Language::Toml);
+        assert_eq!(snippets[1].language, Language::Json);
+    }
+
+    #[test]
+    fn fence_without_recognized_tag_falls_back_to_frontmatter_language() {
+        let directory = tempfile::tempdir().expect("temporary snippet directory");
+        let path = directory.path().join("example.md");
+        std::fs::write(
+            &path,
+            "---\nlanguage: python\n---\n\n```output\nsome interpreter output\n```\n",
+        )
+        .expect("write unrecognized-fence snippet file");
+
+        let snippets = discover_snippets(&[directory.path().to_path_buf()], None).expect("discover snippets");
+
+        assert_eq!(snippets.len(), 1);
+        assert_eq!(snippets[0].language, Language::Python);
     }
 
     #[test]

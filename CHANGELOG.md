@@ -50,6 +50,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   artifact naming separate from the public module identifier.
 - **Dart snippets**: import the configured public library entrypoint instead of deriving the filename from the Rust
   crate name, while preserving the separately configured e2e dependency alias.
+- **snippets**: let a fenced code block's own tag win over the file's front-matter `language:` during discovery. A
+  markdown file with multiple fenced blocks in different languages (e.g. a `toml` config block followed by a `json`
+  block) had every block forced onto the front-matter language, so the non-matching blocks were validated with the
+  wrong toolchain and failed for reasons unrelated to their actual content. An unrecognized or absent fence tag still
+  falls back to the front-matter language, then to the directory-derived language.
 - **CLI**: `alef all` now synchronizes registry package versions before generation and reloads changed configuration,
   allowing stale Zig registry hash version prefixes to self-heal instead of aborting clean canaries.
 - **napi**: omit `..Default::default()` from fully populated adjacent-enum constructors while retaining it for
