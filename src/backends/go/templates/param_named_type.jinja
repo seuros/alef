@@ -12,7 +12,7 @@
 	tmpStr{{ c_name }} := C.CString(string(jsonBytes{{ c_name }}))
 	{{ c_name }} := C.{{ ffi_prefix }}_{{ type_snake }}_from_json(tmpStr{{ c_name }})
 	C.free(unsafe.Pointer(tmpStr{{ c_name }}))
-	if {{ c_name }} == nil {
+	if {{ c_name }} == 0 {
 		{{ from_json_err_action }}
 	}
 	defer C.{{ ffi_prefix }}_{{ type_snake }}_free({{ c_name }})

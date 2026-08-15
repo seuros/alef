@@ -211,6 +211,23 @@ fn test_gen_param_to_c_primitive_u64_emits_cgo_cast() {
 }
 
 #[test]
+fn test_gen_param_to_c_named_handle_uses_zero_sentinel() {
+    let param = simple_param("config", TypeRef::Named("Config".to_string()));
+    let out = gen_param_to_c(
+        &param,
+        "nil, ",
+        true,
+        "sample",
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+    );
+
+    assert!(out.contains("if cConfig == 0"));
+    assert!(!out.contains("if cConfig == nil"));
+}
+
+#[test]
 fn test_gen_method_wrapper_non_opaque_static_emisample_package_func() {
     let mut typ = opaque_type("Config");
     typ.is_opaque = false;
@@ -322,4 +339,23 @@ fn test_gen_method_wrapper_bytes_result_emits_out_params() {
     assert!(out.contains("&outPtr"), "missing &outPtr in:\n{out}");
     assert!(out.contains("C.GoBytes"), "missing C.GoBytes in:\n{out}");
     assert!(out.contains("krz_free_bytes"), "missing krz_free_bytes in:\n{out}");
+}
+
+#[test]
+fn test_gen_method_wrapper_infallible_bytes_uses_owned_buffer_abi() {
+    let typ = opaque_type("UploadFile");
+    let method = simple_method("as_bytes", TypeRef::Bytes, false);
+    let out = gen_method_wrapper(
+        &typ,
+        &method,
+        "sample",
+        &["UploadFile"].into(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+    );
+
+    assert!(out.contains("&outPtr, &outLen, &outCap"));
+    assert!(out.contains("C.GoBytes"));
+    assert!(!out.contains("unmarshalBytes"));
 }

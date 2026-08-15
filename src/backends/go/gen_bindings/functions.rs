@@ -44,16 +44,17 @@ pub(super) fn is_bridge_param(
     type_name.is_some_and(|n| bridge_type_aliases.contains(n))
 }
 
-/// Returns true when the function returns `Result<Vec<u8>>` — i.e. has both an
-/// `error_type` and a `TypeRef::Bytes` return.  These functions use the out-param
-/// convention: `(args..., *uint8_t, *uintptr_t, *uintptr_t) -> i32`.
+/// Returns true when the function uses the owned byte-buffer return ABI.
+///
+/// Every `TypeRef::Bytes` return uses the out-param convention:
+/// `(args..., **uint8_t, *uintptr_t, *uintptr_t) -> i32`.
 fn is_bytes_result_func(func: &FunctionDef) -> bool {
-    func.error_type.is_some() && matches!(func.return_type, TypeRef::Bytes)
+    matches!(func.return_type, TypeRef::Bytes)
 }
 
 /// Same check for MethodDef — needed by methods.rs.
 pub(super) fn is_bytes_result_method(method: &MethodDef) -> bool {
-    method.error_type.is_some() && matches!(method.return_type, TypeRef::Bytes)
+    matches!(method.return_type, TypeRef::Bytes)
 }
 
 /// Generate a wrapper function for a free function.
@@ -247,7 +248,7 @@ pub(super) fn gen_function_wrapper(
                 }
                 if let TypeRef::Named(name) = &func.return_type {
                     let type_snake = name.to_snake_case();
-                    out.push_str("\t\tif ptr != nil {\n");
+                    out.push_str("\t\tif ptr != 0 {\n");
                     out.push_str(&crate::backends::go::template_env::render(
                         "free_type_on_error.jinja",
                         minijinja::context! {

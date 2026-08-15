@@ -141,10 +141,32 @@ fn test_is_bytes_result_func_detects_bytes_with_error() {
 }
 
 #[test]
-fn test_is_bytes_result_func_false_for_bytes_without_error() {
+fn test_is_bytes_result_func_detects_bytes_without_error() {
     let mut func = make_bytes_result_func("get_data", false);
     func.error_type = None;
-    assert!(!is_bytes_result_func(&func));
+    assert!(is_bytes_result_func(&func));
+}
+
+#[test]
+fn test_gen_function_wrapper_named_handle_error_path_uses_zero_sentinel() {
+    let mut func = make_bytes_result_func("load_config", true);
+    func.return_type = TypeRef::Named("Config".to_string());
+    let empty_refs = HashSet::new();
+    let empty_strings = HashSet::new();
+    let out = gen_function_wrapper(
+        &func,
+        "sample",
+        &empty_refs,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+    );
+
+    assert!(out.contains("if ptr != 0"));
+    assert!(!out.contains("if ptr != nil"));
 }
 
 #[test]
@@ -207,6 +229,29 @@ fn test_gen_function_wrapper_bytes_result_emits_out_params() {
     assert!(out.contains("&outCap"), "missing &outCap in:\n{out}");
     assert!(out.contains("C.GoBytes"), "missing C.GoBytes in:\n{out}");
     assert!(out.contains("krz_free_bytes"), "missing krz_free_bytes in:\n{out}");
+}
+
+#[test]
+fn test_gen_function_wrapper_infallible_bytes_uses_owned_buffer_abi() {
+    let mut func = make_bytes_result_func("read_file", false);
+    func.error_type = None;
+    let empty_refs = HashSet::new();
+    let empty_strings = HashSet::new();
+    let out = gen_function_wrapper(
+        &func,
+        "sample",
+        &empty_refs,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+    );
+
+    assert!(out.contains("&outPtr, &outLen, &outCap"));
+    assert!(out.contains("C.GoBytes"));
+    assert!(!out.contains("unmarshalBytes"));
 }
 
 fn make_capsule_func(name: &str, fallible: bool) -> FunctionDef {
