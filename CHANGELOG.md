@@ -22,10 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **snippets check**: run the configured audit and gap checks that `--help` already promised, using the same
-  resolved snippet directories as validation. Audit errors and structural gaps (missing include targets, missing
-  required language variants, undocumented skips, unknown fence languages) always fail the gate; unreferenced
-  snippets remain a `strict`-only failure, matching `alef validate`'s existing snippet gate.
+- **snippets check**: run the configured audit and gap checks that `--help` already promised, scoped and gated to
+  agree with `alef validate`'s existing snippet gate. Audit and gap checks see `docs.snippets.dirs` only —
+  `inline_dirs` are prose pages whose fences are validated as snippets, never `--8<--` include targets — and a
+  snippet counts as referenced when a `[crates.readme]` mapping, a generated-snippet coverage ledger, or a queried
+  Astro content collection names it. Audit is skipped without a configured `docs_dirs`, and gaps are skipped
+  without either `docs_dirs` or `required_languages`. Audit errors and structural gaps (missing include targets,
+  missing required language variants, undocumented skips, unknown fence languages) fail the gate; unreferenced
+  snippets remain a `strict`-only failure. A coverage manifest recording missing fixture/language cells stays a
+  warning unless `strict`, as before, instead of failing reference resolution outright.
+  **Newly fails:** an unparseable `docs.snippets.required_languages` entry is now an error rather than being
+  silently dropped, matching `alef validate`.
 - **Java errors**: align last-error dispatch with the shared FFI conversion, core, and panic taxonomy, and safely
   handle missing error context.
 - **generate manifests**: reconcile Alef-owned generated TOML manifests before post-build processing, so newly

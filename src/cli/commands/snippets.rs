@@ -134,31 +134,28 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool) -> ExitCod
         return ExitCode::FAILURE;
     };
     let root = config_path.parent().unwrap_or_else(|| Path::new("."));
-    let mut directories: Vec<PathBuf> = config
-        .dirs
-        .iter()
-        .chain(&config.inline_dirs)
-        .map(|path| root.join(path))
-        .collect();
-    directories.retain(|path| {
-        !config
-            .exclude
-            .iter()
-            .any(|excluded| path.starts_with(root.join(excluded)))
-    });
     let excluded_paths: Vec<PathBuf> = config.exclude.iter().map(|excluded| root.join(excluded)).collect();
+    let snippet_directories = resolved_roots(root, &config.dirs, &excluded_paths);
+    let mut directories = snippet_directories.clone();
+    directories.extend(resolved_roots(root, &config.inline_dirs, &excluded_paths));
     let docs_directories: Vec<PathBuf> = config.docs_dirs.iter().map(|path| root.join(path)).collect();
     let include_base_paths: Vec<PathBuf> = if config.include_base_paths.is_empty() {
         docs_directories.clone()
     } else {
         config.include_base_paths.iter().map(|path| root.join(path)).collect()
     };
-    let required_languages: Vec<Language> = config
+    let required_languages = match config
         .required_languages
         .iter()
-        .map(|language| Language::from_fence_tag(language))
-        .filter(|language| *language != Language::Unknown)
-        .collect();
+        .map(|language| language.parse::<Language>())
+        .collect::<Result<Vec<Language>, _>>()
+    {
+        Ok(languages) => languages,
+        Err(error) => {
+            tracing::error!("invalid docs.snippets.required_languages entry: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let level = config
         .validation_level
         .as_deref()
@@ -229,15 +226,23 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool) -> ExitCod
             missing.reason
         );
     }
-    let (audit_failure, gap_failure) = match run_configured_audit_and_gaps(
-        &directories,
-        &docs_directories,
-        &include_base_paths,
-        &required_languages,
-        &excluded_paths,
-        config.require_frontmatter,
+    let content_collections: std::collections::BTreeMap<String, PathBuf> = config
+        .content_collections
+        .iter()
+        .map(|(name, collection_root)| (name.clone(), root.join(collection_root)))
+        .collect();
+    let (audit_failure, gap_failure) = match run_configured_audit_and_gaps(&ConfiguredCheckInputs {
+        snippet_directories: &snippet_directories,
+        docs_directories: &docs_directories,
+        include_base_paths: &include_base_paths,
+        required_languages: &required_languages,
+        exclude: &excluded_paths,
+        readme: crate_config.readme.as_ref(),
+        content_collections: &content_collections,
+        workspace_root: root,
+        require_frontmatter: config.require_frontmatter,
         strict,
-    ) {
+    }) {
         Ok(result) => result,
         Err(error) => {
             tracing::error!("running configured snippet audit and gap checks: {error}");
@@ -256,59 +261,108 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool) -> ExitCod
     }
 }
 
-/// Run the configured audit and gap checks against the same resolved snippet
-/// directories used for validation, so `check` cannot disagree with itself
-/// about which files are in scope.
+/// Resolve configured snippet roots against `root`, dropping any that fall
+/// under an excluded prefix.
+fn resolved_roots(root: &Path, dirs: &[PathBuf], excluded: &[PathBuf]) -> Vec<PathBuf> {
+    dirs.iter()
+        .map(|path| root.join(path))
+        .filter(|path| !excluded.iter().any(|prefix| path.starts_with(prefix)))
+        .collect()
+}
+
+/// Inputs for `check`'s configured audit and gap pass, grouped into one
+/// struct so the call stays under clippy's argument threshold.
+struct ConfiguredCheckInputs<'a> {
+    /// Snippet roots proper — `docs.snippets.dirs` only. `inline_dirs` are
+    /// deliberately absent: they are prose documentation pages whose fenced
+    /// blocks are validated as snippets, and they are never `--8<--` include
+    /// targets, so gap-checking them would report every documentation page as
+    /// an unreferenced snippet. Mirrors `docs/mod.rs::validate_snippets`,
+    /// which likewise audits and gap-checks only the `dirs`-derived list.
+    snippet_directories: &'a [PathBuf],
+    docs_directories: &'a [PathBuf],
+    include_base_paths: &'a [PathBuf],
+    required_languages: &'a [Language],
+    exclude: &'a [PathBuf],
+    readme: Option<&'a crate::core::config::ReadmeConfig>,
+    /// Astro content collection names mapped to their already-resolved roots.
+    content_collections: &'a std::collections::BTreeMap<String, PathBuf>,
+    workspace_root: &'a Path,
+    require_frontmatter: bool,
+    strict: bool,
+}
+
+/// Run the configured audit and gap checks against the configured snippet
+/// roots, so `check` cannot disagree with `alef validate` about which files
+/// are in scope.
 ///
-/// Audit issues of `AuditSeverity::Error` always fail the gate. Gap findings
-/// split the same way `alef validate`'s snippet gate already treats them
-/// (see `run_check` in `docs/mod.rs::validate_snippets`): unreferenced
-/// snippets are only a failure under `strict` (extra examples can be
-/// intentional), while missing include targets, missing required language
-/// variants, undocumented skips, and unknown fence languages always fail.
-/// Gaps are skipped entirely when neither `docs_dirs` nor
-/// `required_languages` is configured, matching the same precedent —
+/// References a snippet can legitimately have without any `--8<--` include
+/// are collected from the same three sources as
+/// `docs/mod.rs::validate_snippets`: `[crates.readme]` snippet mappings,
+/// generated-snippet coverage ledgers, and Astro content collections queried
+/// by a documentation page.
+///
+/// Audit issues of `AuditSeverity::Error` always fail the gate, and audit is
+/// skipped entirely without a configured docs surface (matching the
+/// precedent) so a snippets-only config is not failed by fence tags no
+/// documentation ever renders. Gap findings split the same way `alef
+/// validate`'s snippet gate already treats them: unreferenced snippets are
+/// only a failure under `strict` (extra examples can be intentional), while
+/// missing include targets, missing required language variants, undocumented
+/// skips, and unknown fence languages always fail. Gaps are skipped entirely
+/// when neither `docs_dirs` nor `required_languages` is configured —
 /// otherwise every discovered snippet would read as "unreferenced" and a
 /// `strict` config with no docs surface configured would flip from green to
 /// red for a check that was never meaningful for it.
 ///
+/// Coverage ledgers are read with missing fixture/language cells tolerated:
+/// `run_check` already reports those through `missing_generated_snippets` and
+/// only fails on them under `strict`, so rejecting them here would both
+/// override that gate and misattribute the failure.
+///
 /// # Errors
 ///
-/// Returns an error when the generated coverage ledger or a documentation
-/// file cannot be read.
-fn run_configured_audit_and_gaps(
-    directories: &[PathBuf],
-    docs_directories: &[PathBuf],
-    include_base_paths: &[PathBuf],
-    required_languages: &[Language],
-    exclude: &[PathBuf],
-    require_frontmatter: bool,
-    strict: bool,
-) -> anyhow::Result<(bool, bool)> {
-    let configured_references = crate::snippets::gaps::coverage_ledger_references(directories)?;
-    let audit_report = audit(&AuditConfig {
-        docs_dirs: docs_directories.to_vec(),
-        snippet_dirs: directories.to_vec(),
-        require_frontmatter,
-        include_base_paths: include_base_paths.to_vec(),
-        configured_references: configured_references.clone(),
-        exclude: exclude.to_vec(),
-    });
-    let audit_failure = report_audit(&audit_report);
+/// Returns an error when a coverage ledger is broken, an Astro collection
+/// root cannot be walked, or a documentation file cannot be read.
+fn run_configured_audit_and_gaps(inputs: &ConfiguredCheckInputs<'_>) -> anyhow::Result<(bool, bool)> {
+    let mut configured_references =
+        crate::snippets::gaps::readme_snippet_references(inputs.workspace_root, inputs.readme);
+    configured_references
+        .extend(crate::snippets::gaps::coverage_ledger_references_allowing_missing_cells(inputs.snippet_directories)?);
+    configured_references.extend(crate::snippets::gaps::astro_collection_references(
+        inputs.docs_directories,
+        inputs.content_collections,
+    )?);
 
-    if docs_directories.is_empty() && required_languages.is_empty() {
+    let audit_failure = if inputs.docs_directories.is_empty() {
+        false
+    } else {
+        report_audit(&audit(&AuditConfig {
+            docs_dirs: inputs.docs_directories.to_vec(),
+            snippet_dirs: inputs.snippet_directories.to_vec(),
+            require_frontmatter: inputs.require_frontmatter,
+            include_base_paths: inputs.include_base_paths.to_vec(),
+            configured_references: configured_references.clone(),
+            exclude: inputs.exclude.to_vec(),
+        }))
+    };
+
+    if inputs.docs_directories.is_empty() && inputs.required_languages.is_empty() {
         return Ok((audit_failure, false));
     }
     let gap_report = detect_gaps(&GapConfig {
-        docs_dirs: docs_directories.to_vec(),
-        snippet_dirs: directories.to_vec(),
-        required_languages: required_languages.to_vec(),
-        include_base_paths: include_base_paths.to_vec(),
+        docs_dirs: inputs.docs_directories.to_vec(),
+        snippet_dirs: inputs.snippet_directories.to_vec(),
+        required_languages: inputs.required_languages.to_vec(),
+        include_base_paths: inputs.include_base_paths.to_vec(),
         configured_references,
-        exclude: exclude.to_vec(),
+        exclude: inputs.exclude.to_vec(),
     })?;
     let (gap_structural_failure, gap_has_unreferenced) = report_gaps(&gap_report);
-    Ok((audit_failure, gap_structural_failure || (strict && gap_has_unreferenced)))
+    Ok((
+        audit_failure,
+        gap_structural_failure || (inputs.strict && gap_has_unreferenced),
+    ))
 }
 
 fn report_audit(report: &crate::snippets::audit::AuditReport) -> bool {
@@ -641,6 +695,120 @@ mod tests {
         assert!(is_incomplete_status(SnippetStatus::Unavailable));
         assert!(is_incomplete_status(SnippetStatus::Downgraded));
         assert!(!is_incomplete_status(SnippetStatus::Pass));
+    }
+
+    #[test]
+    fn configured_audit_is_skipped_without_a_docs_surface() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let snippets = directory.path().join("snippets");
+        std::fs::create_dir_all(&snippets).expect("snippet directory");
+        std::fs::write(snippets.join("weird.md"), "```gibberish\nvalue\n```\n").expect("write snippet");
+        let snippet_directories = [snippets];
+
+        let (audit_failure, gap_failure) = run_configured_audit_and_gaps(&ConfiguredCheckInputs {
+            snippet_directories: &snippet_directories,
+            docs_directories: &[],
+            include_base_paths: &[],
+            required_languages: &[],
+            exclude: &[],
+            readme: None,
+            content_collections: &std::collections::BTreeMap::new(),
+            workspace_root: directory.path(),
+            require_frontmatter: false,
+            strict: true,
+        })
+        .expect("audit and gap pass");
+
+        assert!(
+            !audit_failure,
+            "a snippets-only config has no documentation surface to audit, so an unknown fence tag \
+             must not fail the gate — `docs/mod.rs::validate_snippets` skips audit the same way"
+        );
+        assert!(
+            !gap_failure,
+            "gaps are meaningless without docs dirs or required languages"
+        );
+    }
+
+    #[test]
+    fn readme_snippet_mappings_count_as_references_for_the_strict_gate() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let snippets = directory.path().join("snippets");
+        let docs = directory.path().join("docs");
+        std::fs::create_dir_all(snippets.join("python")).expect("snippet directory");
+        std::fs::create_dir_all(&docs).expect("docs directory");
+        std::fs::write(snippets.join("python/hello.md"), "```python\nvalue = 1\n```\n").expect("write snippet");
+        let snippet_directories = [snippets];
+        let docs_directories = [docs];
+        let content_collections = std::collections::BTreeMap::new();
+        let readme = crate::core::config::ReadmeConfig {
+            template_dir: None,
+            snippets_dir: Some(PathBuf::from("snippets")),
+            config: None,
+            output_pattern: None,
+            discord_url: None,
+            banner_url: None,
+            languages: std::collections::HashMap::from([(
+                "python".to_string(),
+                serde_json::json!({ "snippets": ["hello.md"] }),
+            )]),
+            targets: std::collections::HashMap::new(),
+        };
+
+        let (audit_failure, gap_failure) = run_configured_audit_and_gaps(&ConfiguredCheckInputs {
+            snippet_directories: &snippet_directories,
+            docs_directories: &docs_directories,
+            include_base_paths: &docs_directories,
+            required_languages: &[],
+            exclude: &[],
+            readme: Some(&readme),
+            content_collections: &content_collections,
+            workspace_root: directory.path(),
+            require_frontmatter: false,
+            strict: true,
+        })
+        .expect("audit and gap pass");
+
+        assert!(!audit_failure);
+        assert!(
+            !gap_failure,
+            "a snippet named by [crates.readme.languages.*].snippets is referenced even though no \
+             documentation page `--8<--`-includes it"
+        );
+
+        let (_, gap_failure_without_readme) = run_configured_audit_and_gaps(&ConfiguredCheckInputs {
+            snippet_directories: &snippet_directories,
+            docs_directories: &docs_directories,
+            include_base_paths: &docs_directories,
+            required_languages: &[],
+            exclude: &[],
+            readme: None,
+            content_collections: &content_collections,
+            workspace_root: directory.path(),
+            require_frontmatter: false,
+            strict: true,
+        })
+        .expect("audit and gap pass");
+
+        assert!(
+            gap_failure_without_readme,
+            "without the README source the same snippet reads as unreferenced, so this test would \
+             pass vacuously if the reference sources were dropped"
+        );
+    }
+
+    #[test]
+    fn resolved_roots_drop_excluded_prefixes() {
+        let root = Path::new("/workspace");
+        let excluded = [root.join("snippets/vendored")];
+
+        let resolved = resolved_roots(
+            root,
+            &[PathBuf::from("snippets"), PathBuf::from("snippets/vendored")],
+            &excluded,
+        );
+
+        assert_eq!(resolved, vec![root.join("snippets")]);
     }
 
     #[test]

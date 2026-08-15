@@ -60,15 +60,33 @@ fn check_fails_on_a_dangling_include_target() {
         .args(["snippets", "check", "--config"])
         .arg(dir.path().join("alef.toml"))
         .args(["--cache", "off"])
+        .env("RUST_LOG", "info")
         .output()
         .expect("run the alef binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let context = format!("stdout:\n{stdout}\nstderr:\n{stderr}");
 
     assert!(
         !output.status.success(),
         "`check` must fail when a docs file includes a snippet that does not exist — \
          this is exactly what `alef snippets audit` and `alef snippets gaps` already \
-         detect, and `check`'s own --help text promises it runs both.\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
+         detect, and `check`'s own --help text promises it runs both.\n{context}"
+    );
+    assert!(
+        stderr.contains("snippet audit:") && stderr.contains("included snippet does not exist"),
+        "`check` must fail *because of* the audit finding. `run_check` returns FAILURE from ~8 other \
+         sites (config load, discovery, session resolution, report writing, ...), so asserting on the \
+         exit status alone would keep this test green while testing nothing.\n{context}"
+    );
+    assert!(
+        stderr.contains("snippet gap: missing include target"),
+        "the gap pass must report the same dangling include; the binary installs a stderr `fmt` \
+         subscriber at `info` by default, so its ERROR events are observable here.\n{context}"
+    );
+    assert!(
+        stderr.contains("missing-fixture.md"),
+        "the diagnostic must name the include target that could not be resolved.\n{context}"
     );
 }

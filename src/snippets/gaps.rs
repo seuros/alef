@@ -136,6 +136,15 @@ pub fn readme_snippet_references(
     references
 }
 
+/// Whether a coverage ledger that records missing fixture/language cells is
+/// itself an error, or merely an incomplete ledger whose recorded paths are
+/// still usable as references.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MissingCells {
+    Reject,
+    Tolerate,
+}
+
 /// Resolve generated snippet paths recorded by current coverage ledgers.
 ///
 /// Snippet roots without a ledger are left alone so ordinary documentation files still
@@ -146,6 +155,26 @@ pub fn readme_snippet_references(
 /// Returns an error when a discovered ledger is unreadable, stale, incomplete, or names
 /// an invalid or missing generated file.
 pub fn coverage_ledger_references(snippet_dirs: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    collect_coverage_ledger_references(snippet_dirs, MissingCells::Reject)
+}
+
+/// Resolve generated snippet paths exactly like [`coverage_ledger_references`],
+/// but accept a ledger that records missing fixture/language cells.
+///
+/// Callers that already surface missing cells through their own gate — `alef
+/// snippets check` warns about them and only fails under `strict` — would
+/// otherwise turn every incomplete coverage manifest into an unconditional
+/// failure attributed to reference resolution.
+///
+/// # Errors
+///
+/// Returns an error when a discovered ledger is unreadable, stale, or names an
+/// invalid or missing generated file. Only the missing-cell case is tolerated.
+pub fn coverage_ledger_references_allowing_missing_cells(snippet_dirs: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    collect_coverage_ledger_references(snippet_dirs, MissingCells::Tolerate)
+}
+
+fn collect_coverage_ledger_references(snippet_dirs: &[PathBuf], missing_cells: MissingCells) -> Result<Vec<PathBuf>> {
     let mut references = Vec::new();
     for snippet_root in snippet_dirs {
         let mut manifests = WalkDir::new(snippet_root)
@@ -177,7 +206,7 @@ pub fn coverage_ledger_references(snippet_dirs: &[PathBuf]) -> Result<Vec<PathBu
                     manifest.display()
                 ))
             })?;
-            references.extend(read_coverage_ledger_references(output_root, &manifest)?);
+            references.extend(read_coverage_ledger_references(output_root, &manifest, missing_cells)?);
         }
     }
     references.sort();
@@ -236,12 +265,16 @@ pub fn parse_astro_collection_queries(content: &str) -> BTreeSet<String> {
     collections
 }
 
-fn read_coverage_ledger_references(output_root: &Path, manifest: &Path) -> Result<Vec<PathBuf>> {
+fn read_coverage_ledger_references(
+    output_root: &Path,
+    manifest: &Path,
+    missing_cells: MissingCells,
+) -> Result<Vec<PathBuf>> {
     let content = std::fs::read_to_string(manifest)?;
     let ledger: crate::e2e::snippets::SnippetCoverageLedger = serde_json::from_str(&content)?;
     crate::e2e::snippets::coverage::validate(&ledger)
         .map_err(|error| crate::snippets::error::Error::Other(format!("invalid coverage ledger: {error:#}")))?;
-    if !ledger.missing.is_empty() {
+    if missing_cells == MissingCells::Reject && !ledger.missing.is_empty() {
         return Err(crate::snippets::error::Error::Other(format!(
             "incomplete fixture-snippet coverage manifest at {}",
             manifest.display()
@@ -576,7 +609,7 @@ mod tests {
     use super::*;
     use crate::e2e::fixture::SideEffectClass;
     use crate::e2e::snippets::{
-        COVERAGE_MANIFEST_VERSION, GeneratedSnippetMetadata, SnippetCoverageKey, SnippetCoverageLedger,
+        COVERAGE_MANIFEST_VERSION, GeneratedSnippetMetadata, MissingSnippet, SnippetCoverageKey, SnippetCoverageLedger,
     };
 
     #[test]
@@ -688,6 +721,70 @@ mod tests {
         let error = coverage_ledger_references(&[directory.path().to_path_buf()]).expect_err("stale ledger must fail");
 
         assert!(error.to_string().contains("coverage manifest version 0 is unsupported"));
+    }
+
+    #[test]
+    fn incomplete_ledger_is_rejected_by_default_and_tolerated_on_request() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let generated = directory.path().join("python/topic/generated.md");
+        std::fs::create_dir_all(generated.parent().expect("generated parent")).expect("snippet directory");
+        std::fs::write(&generated, "```python\nvalue = 1\n```\n").expect("generated snippet");
+        let mut ledger = coverage_ledger(COVERAGE_MANIFEST_VERSION);
+        let absent = SnippetCoverageKey {
+            fixture_id: "extension_only".into(),
+            language: "python".into(),
+        };
+        ledger.expected.push(absent.clone());
+        ledger.missing.push(MissingSnippet {
+            key: absent,
+            reason: "no compatible recipe".into(),
+        });
+        std::fs::write(
+            directory.path().join(crate::e2e::snippets::COVERAGE_MANIFEST),
+            serde_json::to_vec_pretty(&ledger).expect("coverage serializes"),
+        )
+        .expect("coverage manifest");
+        let roots = [directory.path().to_path_buf()];
+
+        let error = coverage_ledger_references(&roots).expect_err("incomplete ledger must fail by default");
+        assert!(
+            error
+                .to_string()
+                .contains("incomplete fixture-snippet coverage manifest")
+        );
+
+        let references =
+            coverage_ledger_references_allowing_missing_cells(&roots).expect("missing cells are tolerated on request");
+        assert_eq!(references, vec![generated]);
+    }
+
+    #[test]
+    fn tolerating_missing_cells_still_rejects_an_absent_generated_file() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mut ledger = coverage_ledger(COVERAGE_MANIFEST_VERSION);
+        let absent = SnippetCoverageKey {
+            fixture_id: "extension_only".into(),
+            language: "python".into(),
+        };
+        ledger.expected.push(absent.clone());
+        ledger.missing.push(MissingSnippet {
+            key: absent,
+            reason: "no compatible recipe".into(),
+        });
+        std::fs::write(
+            directory.path().join(crate::e2e::snippets::COVERAGE_MANIFEST),
+            serde_json::to_vec_pretty(&ledger).expect("coverage serializes"),
+        )
+        .expect("coverage manifest");
+
+        let error = coverage_ledger_references_allowing_missing_cells(&[directory.path().to_path_buf()])
+            .expect_err("a recorded generated file that is absent from disk must still fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("fixture snippet recorded by the coverage ledger is missing")
+        );
     }
 
     fn coverage_ledger(format_version: u32) -> SnippetCoverageLedger {
