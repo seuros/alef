@@ -49,6 +49,8 @@ impl Backend for FfiBackend {
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|| format!("crates/{}-ffi/src/", config.name));
 
+        validate_custom_modules_exist(config, &output_dir, config.custom_modules.for_language(Language::Ffi))?;
+
         let parent_dir = PathBuf::from(&output_dir)
             .parent()
             .unwrap_or_else(|| std::path::Path::new("."))
@@ -107,6 +109,44 @@ impl Backend for FfiBackend {
             post_build: vec![],
         })
     }
+}
+
+/// Validate that every `[crates.custom_modules] ffi = [...]` entry resolves to a
+/// hand-written source file that already exists under the FFI crate's `src/`
+/// directory.
+///
+/// `custom_modules.ffi` only *declares* the module (`pub mod <name>;`) in the
+/// generated `lib.rs` (see `lib_rs::gen_lib_rs`) — it never generates the
+/// module's contents, by design: this is the mechanism for compiling a
+/// hand-authored file (e.g. an opaque-handle wrapper around a core type
+/// marked `alef(skip)`) into the generated crate. A configured name with no
+/// matching file compiles to `error[E0583]: file not found for module
+/// <name>`, reported by rustc against the *generated* `lib.rs` with no
+/// pointer back to the config key that caused it. Catching it here, before
+/// that file is even written, turns it into an alef-level error that names
+/// the crate, the module, and the exact paths that were checked.
+fn validate_custom_modules_exist(
+    config: &ResolvedCrateConfig,
+    output_dir: &str,
+    modules: &[String],
+) -> anyhow::Result<()> {
+    let src_dir = std::path::Path::new(output_dir);
+    for module in modules {
+        let flat = src_dir.join(format!("{module}.rs"));
+        let nested = src_dir.join(module).join("mod.rs");
+        if !flat.exists() && !nested.exists() {
+            anyhow::bail!(
+                "crate `{}`: `[crates.custom_modules] ffi` names module `{module}`, but neither `{}` nor `{}` \
+                 exists. `custom_modules.ffi` only declares the module (`pub mod {module};`) in the generated \
+                 lib.rs — it never generates the module's contents, so the hand-written file must exist before \
+                 generation runs.",
+                config.name,
+                flat.display(),
+                nested.display(),
+            );
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

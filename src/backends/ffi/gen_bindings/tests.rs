@@ -2,6 +2,7 @@ mod basics;
 mod capsule;
 mod common;
 mod constructors;
+mod custom_modules;
 mod doxygen;
 mod fields;
 mod handle_registry;

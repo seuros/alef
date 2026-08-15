@@ -20,6 +20,27 @@ pub struct CustomModulesConfig {
     pub elixir: Vec<String>,
     #[serde(default)]
     pub wasm: Vec<String>,
+    /// Hand-written Rust modules to declare in the generated FFI `lib.rs` via
+    /// `pub mod <name>;`. Alef requires `<name>.rs` or `<name>/mod.rs` to already
+    /// exist under the FFI crate's `src/` directory before generation runs, and
+    /// fails with a clear error naming the missing path if neither does — the
+    /// module's *contents* are never generated, only the declaration.
+    ///
+    /// Declarations are emitted at the top of the file, in configured order,
+    /// immediately after the generated imports. Only `pub mod` is emitted (no
+    /// `pub use <name>::*;` re-export): a `#[no_mangle] extern "C" fn` is exported
+    /// into the compiled artifact, and seen by cbindgen's header generation,
+    /// regardless of the enclosing module's path, so flattening the names into
+    /// crate-root scope isn't needed and would risk colliding with a generated
+    /// item of the same name. Contrast with `[crates.wasm].custom_rust_modules`,
+    /// which does add `pub use` because wasm-bindgen's glue needs the re-exported
+    /// names in scope unqualified.
+    ///
+    /// This is the mechanism for compiling a hand-authored opaque-handle wrapper
+    /// (e.g. around a core type marked `alef(skip)`) into the FFI crate: without
+    /// an entry here, a hand-written sibling `.rs` file under the crate's `src/`
+    /// is never reached from the generated crate root, so its `extern "C"`
+    /// functions are silently absent from both the cdylib and the header.
     #[serde(default)]
     pub ffi: Vec<String>,
     #[serde(default)]
