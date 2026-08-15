@@ -80,16 +80,6 @@ impl ValidationSession {
     }
 }
 
-pub fn prepare_sessions(
-    specs: &HashMap<String, SessionSpec>,
-    timeout_secs: u64,
-) -> Result<HashMap<String, ValidationSession>> {
-    specs
-        .iter()
-        .map(|(target, spec)| prepare_session(spec, timeout_secs).map(|session| (target.clone(), session)))
-        .collect()
-}
-
 pub(crate) fn prepare_sessions_isolated(specs: &HashMap<String, SessionSpec>, timeout_secs: u64) -> SessionPreparation {
     let mut sessions = HashMap::new();
     let mut errors = HashMap::new();
@@ -308,10 +298,11 @@ mod tests {
             },
         );
 
-        let sessions = prepare_sessions(&specs, 5).expect("session preparation succeeds");
+        let prepared = prepare_sessions_isolated(&specs, 5);
 
         assert!(marker.exists());
-        assert_eq!(sessions.len(), 1);
+        assert!(prepared.errors.is_empty());
+        assert_eq!(prepared.sessions.len(), 1);
     }
 
     #[test]
@@ -344,9 +335,10 @@ mod tests {
             },
         );
 
-        let error = prepare_sessions(&specs, 5).expect_err("missing manifest is rejected");
+        let prepared = prepare_sessions_isolated(&specs, 5);
+        let error = prepared.errors.get("typescript").expect("missing manifest is rejected");
 
-        assert!(error.to_string().contains("manifest does not exist"));
+        assert!(error.contains("manifest does not exist"));
     }
 
     #[test]
@@ -367,8 +359,9 @@ mod tests {
             },
         );
 
-        let sessions = prepare_sessions(&specs, 5).expect("session preparation succeeds");
-        let session = sessions.get("zig").expect("zig session");
+        let prepared = prepare_sessions_isolated(&specs, 5);
+        assert!(prepared.errors.is_empty());
+        let session = prepared.sessions.get("zig").expect("zig session");
         let mut command = std::process::Command::new("true");
         session.apply(&mut command);
 

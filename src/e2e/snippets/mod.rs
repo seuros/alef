@@ -157,30 +157,6 @@ pub fn generate_snippets(
 }
 
 #[expect(clippy::too_many_arguments, reason = "preserves the public snippet generation API")]
-pub fn generate_snippet_artifacts(
-    fixtures: &[Fixture],
-    languages: &[String],
-    e2e: &E2eConfig,
-    snippets: &SnippetConfig,
-    crate_config: &ResolvedCrateConfig,
-    type_defs: &[TypeDef],
-    enums: &[EnumDef],
-    functions: &[crate::core::ir::FunctionDef],
-) -> Result<Vec<GeneratedSnippet>> {
-    Ok(generate_snippet_report(
-        fixtures,
-        languages,
-        e2e,
-        snippets,
-        crate_config,
-        type_defs,
-        enums,
-        functions,
-    )?
-    .snippets)
-}
-
-#[expect(clippy::too_many_arguments, reason = "preserves the public snippet generation API")]
 pub fn generate_snippet_report(
     fixtures: &[Fixture],
     languages: &[String],

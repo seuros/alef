@@ -23,42 +23,6 @@ pub enum SnippetsAction {
         languages: Option<Vec<String>>,
     },
 
-    /// Validate snippet syntax (and optionally compilation / execution).
-    Validate {
-        #[arg(short, long, required = true, num_args = 1..)]
-        snippets: Vec<PathBuf>,
-
-        #[arg(short = 'L', long, default_value = "syntax")]
-        level: ValidationLevel,
-
-        #[arg(short, long, value_delimiter = ',')]
-        languages: Option<Vec<String>>,
-
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-
-        #[arg(short = 'j', long, default_value = "4")]
-        jobs: usize,
-
-        #[arg(short = 't', long, default_value = "30")]
-        timeout: u64,
-
-        #[arg(long)]
-        fail_fast: bool,
-
-        #[arg(long)]
-        include: Option<String>,
-
-        #[arg(long)]
-        show_code: bool,
-
-        #[arg(long)]
-        strict: bool,
-
-        #[arg(long)]
-        changed_only: bool,
-    },
-
     /// Run the configured snippet discovery, validation, audit, and gap checks.
     Check {
         #[arg(short, long, default_value = "alef.toml")]
@@ -108,31 +72,6 @@ pub enum SnippetsAction {
 pub fn run(action: SnippetsAction) -> ExitCode {
     match action {
         SnippetsAction::List { snippets, languages } => run_list(&snippets, languages.as_ref()),
-        SnippetsAction::Validate {
-            snippets,
-            level,
-            languages,
-            output: output_path,
-            jobs,
-            timeout,
-            fail_fast,
-            include,
-            show_code,
-            strict,
-            changed_only,
-        } => run_validate(
-            &snippets,
-            level,
-            languages.as_ref(),
-            output_path,
-            jobs,
-            timeout,
-            fail_fast,
-            include.as_ref(),
-            show_code,
-            strict,
-            changed_only,
-        ),
         SnippetsAction::Check { config, strict, cache } => run_check(&config, strict, cache != "off"),
         SnippetsAction::Parse { file } => run_parse(&file),
         SnippetsAction::Audit {
@@ -174,78 +113,6 @@ fn run_list(snippets: &[PathBuf], languages: Option<&Vec<String>>) -> ExitCode {
         }
         Err(err) => {
             tracing::error!("discovering snippets: {err}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_validate(
-    snippets: &[PathBuf],
-    level: ValidationLevel,
-    languages: Option<&Vec<String>>,
-    output_path: Option<PathBuf>,
-    jobs: usize,
-    timeout: u64,
-    fail_fast: bool,
-    include: Option<&String>,
-    show_code: bool,
-    strict: bool,
-    changed_only: bool,
-) -> ExitCode {
-    let filter = parse_language_filter(languages.map(Vec::as_slice));
-    let mut found = match discovery::discover_snippets(snippets, filter.as_deref()) {
-        Ok(found) => found,
-        Err(err) => {
-            tracing::error!("discovering snippets: {err}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    if let Some(pattern) = &include {
-        found.retain(|snippet| snippet.path.to_string_lossy().contains(pattern.as_str()));
-    }
-
-    if found.is_empty() {
-        tracing::error!("no snippets found");
-        return ExitCode::FAILURE;
-    }
-
-    tracing::info!("Validating {} snippets at level '{level}'...", found.len());
-    let registry = ValidatorRegistry::new();
-    let config = RunnerConfig {
-        level,
-        parallelism: jobs,
-        timeout_secs: timeout,
-        fail_fast,
-        deny_unclassified: strict,
-        allowed_side_effects: Vec::new(),
-        cache_dir: Some(PathBuf::from(".alef/snippets")),
-        changed_only,
-        sessions: Default::default(),
-    };
-
-    match run_validation(&found, &registry, &config) {
-        Ok(summary) => {
-            output::print_summary(&summary, show_code);
-
-            if let Some(path) = output_path {
-                if let Err(err) = output::write_report(&summary, &path, show_code) {
-                    tracing::error!("writing JSON output: {err}");
-                    return ExitCode::FAILURE;
-                } else {
-                    tracing::info!("Results written to {}", path.display());
-                }
-            }
-
-            if summary.has_failures() || strict && has_incomplete_coverage(&summary) {
-                ExitCode::FAILURE
-            } else {
-                ExitCode::SUCCESS
-            }
-        }
-        Err(err) => {
-            tracing::error!("running validation: {err}");
             ExitCode::FAILURE
         }
     }

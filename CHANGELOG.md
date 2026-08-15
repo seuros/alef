@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **snippet validation**: remove the legacy path-only `alef snippets validate` command, the fail-whole-map session
+  preparation API, and the report-dropping snippet artifact projection. Use configured `alef snippets check`,
+  isolated session preparation, and `generate_snippet_report` so validation retains sessions, coverage, audits, and
+  missing-generation diagnostics.
+
 ### Fixed
 
 - **FFI error header**: keep `AlefFfiErrorCode` reachable through generated cbindgen export filters and avoid repeated
