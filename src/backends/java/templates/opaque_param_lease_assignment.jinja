@@ -1,0 +1,1 @@
+            {% if optional %}if ({{ param_name }} != null) { {{ c_name }}Lease = {{ param_name }}.borrowHandle(); }{% else %}{{ c_name }}Lease = {{ param_name }}.borrowHandle();{% endif %}

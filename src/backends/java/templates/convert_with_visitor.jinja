@@ -8,13 +8,30 @@
                 throw new {{ exception_class }}("Failed to create visitor handle", null);
             }
 
+            Throwable operationFailure = null;
             try {
                 {{ invoke_body }}
             } catch (Throwable e) {
-                throw new {{ exception_class }}("FFI call failed", e);
+                operationFailure = new {{ exception_class }}("FFI call failed", e);
+                throw operationFailure;
             } finally {
-                NativeLib.{{ prefix_upper }}_VISITOR_FREE.invoke(visitorHandle);
-                bridge.rethrowVisitorError();
+                java.util.List<Throwable> cleanupFailures = new java.util.ArrayList<>();
+                try {
+                    NativeLib.{{ prefix_upper }}_VISITOR_FREE.invoke(visitorHandle);
+                } catch (Throwable failure) {
+                    cleanupFailures.add(failure);
+                }
+                try {
+                    bridge.rethrowVisitorError();
+                } catch (Throwable failure) {
+                    cleanupFailures.add(failure);
+                }
+                if (!cleanupFailures.isEmpty()) {
+                    RuntimeException aggregate = new RuntimeException("Visitor cleanup failed");
+                    cleanupFailures.forEach(aggregate::addSuppressed);
+                    if (operationFailure != null) operationFailure.addSuppressed(aggregate);
+                    else throw aggregate;
+                }
             }
         } catch ({{ exception_class }} e) {
             throw e;

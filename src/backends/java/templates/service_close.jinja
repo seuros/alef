@@ -1,18 +1,31 @@
     @Override
     public void close() {
+        synchronized (ownerMutationLock) {
+        long detached = takeOwnerHandleForClose();
+        Throwable failure = null;
         try {
-            MemorySegment freeAddr = LOOKUP.find("{{ ffi_prefix }}_{{ service_snake }}_free")
-                .or(() -> LOOKUP.find("_{{ ffi_prefix }}_{{ service_snake }}_free"))
-                .orElseThrow();
-            FunctionDescriptor freeDesc = FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG);
-            MethodHandle freeHandle = LINKER.downcallHandle(freeAddr, freeDesc);
-            if (ownerHandle != 0) {
-                freeHandle.invokeExact(ownerHandle);
-                ownerHandle = 0;
+            if (detached != 0) {
+                MemorySegment freeAddr = LOOKUP.find("{{ ffi_prefix }}_{{ service_snake }}_free")
+                    .or(() -> LOOKUP.find("_{{ ffi_prefix }}_{{ service_snake }}_free"))
+                    .orElseThrow();
+                FunctionDescriptor freeDesc = FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG);
+                MethodHandle freeHandle = LINKER.downcallHandle(freeAddr, freeDesc);
+                freeHandle.invokeExact(detached);
             }
-            arena.close();
         } catch (Throwable e) {
+            failure = e;
             throw new RuntimeException("Failed to close service", e);
+        } finally {
+            try {
+                if (markServiceArenaClosed()) arena.close();
+            } catch (Throwable cleanupError) {
+                if (failure != null) {
+                    failure.addSuppressed(cleanupError);
+                } else {
+                    throw new RuntimeException("Failed to close service arena", cleanupError);
+                }
+            }
+        }
         }
     }
 }

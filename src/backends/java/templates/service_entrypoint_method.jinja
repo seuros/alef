@@ -3,25 +3,39 @@
      * Invokes C FFI: {{ ffi_prefix }}_{{ service_snake }}_ep_{{ ep_method_snake }}
      */
     public {{ return_type }} {{ ep_method }}({{ params_signature }}) {
-        try {
+        try (var callArena = Arena.ofConfined();
+             var nativeResources = new ServiceResources(){% if lease_resources %}; {{ lease_resources }}{% endif %}) {
+{{ metadata_setup }}
             MemorySegment epAddr = LOOKUP.find("{{ ffi_prefix }}_{{ service_snake }}_ep_{{ ep_method_snake }}")
                 .or(() -> LOOKUP.find("_{{ ffi_prefix }}_{{ service_snake }}_ep_{{ ep_method_snake }}"))
                 .orElseThrow();
             FunctionDescriptor epDesc = FunctionDescriptor.of(
-{{ return_layout }}                ValueLayout.JAVA_LONG      // owner: AlefHandle
+{{ return_layout }}                ValueLayout.JAVA_LONG     // owner: AlefHandle
 {% for layout in descriptor_layouts %}
                 , {{ layout.0 }}    // {{ layout.1 }} param
 {% endfor %}            );
             MethodHandle epHandle = LINKER.downcallHandle(epAddr, epDesc);
-{{ metadata_setup }}
-            {% if returns_opaque %}return (long) epHandle.invokeExact(ownerHandle{% else %}int status = (int) epHandle.invokeExact(ownerHandle{% endif %}
-{% for arg in invoke_args %}
-                , {{ arg }}
-{% endfor %}            );
-{% if not returns_opaque %}            if (status != 0) {
-                throw new RuntimeException("Native entrypoint failed with status " + status);
-            }
+            try (var ownerTransfer = takeOwnerHandle()) {
+{% if returns_opaque %}
+                long result = (long) epHandle.invokeWithArguments(ownerTransfer.handle()
+{% else %}
+                int result = (int) epHandle.invokeWithArguments(ownerTransfer.handle()
 {% endif %}
+{% for arg in invoke_args %}
+                    , {{ arg }}
+{% endfor %}                );
+                ownerTransfer.commit();
+{% if returns_opaque %}
+                if (result == 0) {
+                    throw new IllegalStateException("Service finalizer returned null");
+                }
+                return result;
+{% else %}
+                if (result != 0) {
+                    throw new IllegalStateException("Service entrypoint failed with status " + result);
+                }
+{% endif %}
+            }
         } catch (Throwable e) {
             throw new RuntimeException("Failed to invoke entrypoint", e);
         }

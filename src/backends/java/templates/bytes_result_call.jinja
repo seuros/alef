@@ -21,8 +21,8 @@
                 return null;
 {%- endif %}
             }
+            nativeResources.register(outPtr, handle -> {{ free_bytes_handle }}.invoke(handle, outLen, outCap));
             byte[] result = outPtr.reinterpret(outLen).toArray(ValueLayout.JAVA_BYTE);
-            {{ free_bytes_handle }}.invoke(outPtr, outLen, outCap);
 {%- if optional %}
             return Optional.of(result);
 {%- else %}

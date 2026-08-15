@@ -152,178 +152,156 @@ fn java_class_literal_for(ty: &TypeRef) -> String {
     }
 }
 
+fn render_marshaled_value(out: &mut String, template: &str, name: &str) {
+    let cname = format!("c{name}");
+    out.push_str(&crate::backends::java::template_env::render(
+        template,
+        minijinja::context! { cname, name },
+    ));
+}
+
+fn marshal_named(
+    out: &mut String,
+    name: &str,
+    type_name: &str,
+    opaque: bool,
+    optional: bool,
+    prefix: &str,
+    resources: &str,
+) {
+    if opaque {
+        let template = if optional {
+            "marshal_optional_opaque_handle.jinja"
+        } else {
+            "marshal_opaque_handle.jinja"
+        };
+        render_marshaled_value(out, template, name);
+        return;
+    }
+    let type_upper = type_name.to_snake_case().to_uppercase();
+    let prefix_upper = prefix.to_uppercase();
+    let template = if optional {
+        "marshal_optional_named_type.jinja"
+    } else {
+        "marshal_named_type.jinja"
+    };
+    out.push_str(&crate::backends::java::template_env::render(
+        template,
+        minijinja::context! {
+            cname => format!("c{name}"), name,
+            from_json_handle => format!("NativeLib.{prefix_upper}_{type_upper}_FROM_JSON"),
+            free_handle => format!("NativeLib.{prefix_upper}_{type_upper}_FREE"), resources,
+        },
+    ));
+}
+
+fn optional_primitive_carrier(primitive: &PrimitiveType) -> (&'static str, &'static str) {
+    match primitive {
+        PrimitiveType::U64 | PrimitiveType::Usize => ("long", "-1L"),
+        PrimitiveType::I64 | PrimitiveType::Isize => ("long", "Long.MAX_VALUE"),
+        PrimitiveType::U32 => ("int", "-1"),
+        PrimitiveType::I32 => ("int", "Integer.MAX_VALUE"),
+        PrimitiveType::U16 => ("short", "(short) -1"),
+        PrimitiveType::I16 => ("short", "Short.MAX_VALUE"),
+        PrimitiveType::U8 => ("byte", "(byte) -1"),
+        PrimitiveType::I8 => ("byte", "Byte.MAX_VALUE"),
+        PrimitiveType::F32 => ("float", "Float.NaN"),
+        PrimitiveType::F64 => ("double", "Double.NaN"),
+        PrimitiveType::Bool => ("int", "0"),
+    }
+}
+
+fn marshal_optional_primitive(out: &mut String, name: &str, primitive: &PrimitiveType) {
+    let (prim_kw, none_lit) = optional_primitive_carrier(primitive);
+    let value_expr = if matches!(primitive, PrimitiveType::Bool) {
+        format!("({name} ? 1 : 0)")
+    } else {
+        name.to_string()
+    };
+    out.push_str(&crate::backends::java::template_env::render(
+        "marshal_optional_primitive.jinja",
+        minijinja::context! { cname => format!("c{name}"), name, prim_kw, none_lit, value_expr },
+    ));
+}
+
+fn marshal_optional(
+    out: &mut String,
+    name: &str,
+    inner: &TypeRef,
+    opaque_types: &AHashSet<String>,
+    prefix: &str,
+    resources: &str,
+) {
+    match inner {
+        TypeRef::String | TypeRef::Char => render_marshaled_value(out, "marshal_optional_string.jinja", name),
+        TypeRef::Path => render_marshaled_value(out, "marshal_optional_path.jinja", name),
+        TypeRef::Bytes => render_marshaled_value(out, "marshal_optional_bytes.jinja", name),
+        TypeRef::Named(type_name) => marshal_named(
+            out,
+            name,
+            type_name,
+            opaque_types.contains(type_name),
+            true,
+            prefix,
+            resources,
+        ),
+        TypeRef::Primitive(primitive) => marshal_optional_primitive(out, name, primitive),
+        _ => {}
+    }
+}
+
 pub(crate) fn marshal_param_to_ffi(
     out: &mut String,
     name: &str,
     ty: &TypeRef,
     opaque_types: &AHashSet<String>,
     prefix: &str,
+    resources: &str,
 ) {
     match ty {
-        TypeRef::String | TypeRef::Char => {
-            let cname = "c".to_string() + name;
-            out.push_str(&crate::backends::java::template_env::render(
-                "marshal_string.jinja",
-                minijinja::context! {
-                    cname => &cname,
-                    name => name,
-                },
-            ));
-        }
-        TypeRef::Json => {}
-        TypeRef::Path => {
-            let cname = "c".to_string() + name;
-            out.push_str(&crate::backends::java::template_env::render(
-                "marshal_path.jinja",
-                minijinja::context! {
-                    cname => &cname,
-                    name => name,
-                },
-            ));
-        }
-        TypeRef::Bytes => {
-            let cname = "c".to_string() + name;
-            out.push_str(&crate::backends::java::template_env::render(
-                "marshal_bytes.jinja",
-                minijinja::context! {
-                    cname => &cname,
-                    name => name,
-                },
-            ));
-        }
-        TypeRef::Named(type_name) => {
-            let cname = "c".to_string() + name;
-            if opaque_types.contains(type_name.as_str()) {
-                out.push_str(&crate::backends::java::template_env::render(
-                    "marshal_opaque_handle.jinja",
-                    minijinja::context! {
-                        cname => &cname,
-                        name => name,
-                    },
-                ));
-            } else {
-                let type_snake = type_name.to_snake_case();
-                let from_json_handle = format!(
-                    "NativeLib.{}_{}_FROM_JSON",
-                    prefix.to_uppercase(),
-                    type_snake.to_uppercase()
-                );
-                out.push_str(&crate::backends::java::template_env::render(
-                    "marshal_named_type.jinja",
-                    minijinja::context! {
-                        cname => &cname,
-                        name => name,
-                        from_json_handle => &from_json_handle,
-                    },
-                ));
-            }
-        }
-        TypeRef::Optional(inner) => match inner.as_ref() {
-            TypeRef::String | TypeRef::Char => {
-                let cname = "c".to_string() + name;
-                out.push_str(&crate::backends::java::template_env::render(
-                    "marshal_optional_string.jinja",
-                    minijinja::context! {
-                        cname => &cname,
-                        name => name,
-                    },
-                ));
-            }
-            TypeRef::Json => {}
-            TypeRef::Path => {
-                let cname = "c".to_string() + name;
-                out.push_str(&crate::backends::java::template_env::render(
-                    "marshal_optional_path.jinja",
-                    minijinja::context! {
-                        cname => &cname,
-                        name => name,
-                    },
-                ));
-            }
-            TypeRef::Bytes => {
-                let cname = "c".to_string() + name;
-                out.push_str(&crate::backends::java::template_env::render(
-                    "marshal_optional_bytes.jinja",
-                    minijinja::context! {
-                        cname => &cname,
-                        name => name,
-                    },
-                ));
-            }
-            TypeRef::Named(type_name) => {
-                let cname = "c".to_string() + name;
-                if opaque_types.contains(type_name.as_str()) {
-                    out.push_str(&crate::backends::java::template_env::render(
-                        "marshal_optional_opaque_handle.jinja",
-                        minijinja::context! {
-                            cname => &cname,
-                            name => name,
-                        },
-                    ));
-                } else {
-                    let type_snake = type_name.to_snake_case();
-                    let from_json_handle = format!(
-                        "NativeLib.{}_{}_FROM_JSON",
-                        prefix.to_uppercase(),
-                        type_snake.to_uppercase()
-                    );
-                    out.push_str(&crate::backends::java::template_env::render(
-                        "marshal_optional_named_type.jinja",
-                        minijinja::context! {
-                            cname => &cname,
-                            name => name,
-                            from_json_handle => &from_json_handle,
-                        },
-                    ));
-                }
-            }
-            TypeRef::Primitive(prim) => {
-                use crate::core::ir::PrimitiveType;
-                let cname = "c".to_string() + name;
-                let (prim_kw, none_lit) = match prim {
-                    PrimitiveType::U64 | PrimitiveType::Usize => ("long", "-1L"),
-                    PrimitiveType::I64 | PrimitiveType::Isize => ("long", "Long.MAX_VALUE"),
-                    PrimitiveType::U32 => ("int", "-1"),
-                    PrimitiveType::I32 => ("int", "Integer.MAX_VALUE"),
-                    PrimitiveType::U16 => ("short", "(short) -1"),
-                    PrimitiveType::I16 => ("short", "Short.MAX_VALUE"),
-                    PrimitiveType::U8 => ("byte", "(byte) -1"),
-                    PrimitiveType::I8 => ("byte", "Byte.MAX_VALUE"),
-                    PrimitiveType::F32 => ("float", "Float.NaN"),
-                    PrimitiveType::F64 => ("double", "Double.NaN"),
-                    PrimitiveType::Bool => ("int", "0"),
-                };
-                out.push_str(&crate::backends::java::template_env::render(
-                    "marshal_optional_primitive.jinja",
-                    minijinja::context! {
-                        cname => &cname,
-                        name => name,
-                        prim_kw => prim_kw,
-                        none_lit => none_lit,
-                        value_expr => if matches!(prim, PrimitiveType::Bool) {
-                            format!("({name} ? 1 : 0)")
-                        } else {
-                            name.to_string()
-                        },
-                    },
-                ));
-            }
-            _ => {}
-        },
+        TypeRef::String | TypeRef::Char => render_marshaled_value(out, "marshal_string.jinja", name),
+        TypeRef::Path => render_marshaled_value(out, "marshal_path.jinja", name),
+        TypeRef::Bytes => render_marshaled_value(out, "marshal_bytes.jinja", name),
+        TypeRef::Named(type_name) => marshal_named(
+            out,
+            name,
+            type_name,
+            opaque_types.contains(type_name),
+            false,
+            prefix,
+            resources,
+        ),
+        TypeRef::Optional(inner) => marshal_optional(out, name, inner, opaque_types, prefix, resources),
         TypeRef::Vec(inner) | TypeRef::Map(_, inner) => {
-            let cname = "c".to_string() + name;
             let java_writer = build_collection_writer_for(inner, ty, opaque_types);
             out.push_str(&crate::backends::java::template_env::render(
                 "marshal_vec_map.jinja",
-                minijinja::context! {
-                    cname => &cname,
-                    name => name,
-                    java_writer => &java_writer,
-                },
+                minijinja::context! { cname => format!("c{name}"), name, java_writer },
             ));
         }
         _ => {}
     }
+}
+
+pub(crate) fn opaque_lease_resource(name: &str, ty: &TypeRef, opaque_types: &AHashSet<String>) -> Option<String> {
+    let (type_name, optional) = match ty {
+        TypeRef::Named(type_name) => (type_name, false),
+        TypeRef::Optional(inner) => match inner.as_ref() {
+            TypeRef::Named(type_name) => (type_name, true),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    if !opaque_types.contains(type_name) {
+        return None;
+    }
+    let cname = format!("c{name}");
+    let expression = if optional {
+        format!("{name} != null ? {name}.borrowHandle() : null")
+    } else {
+        format!("{name}.borrowHandle()")
+    };
+    Some(format!("             var {cname}Lease = {expression}"))
 }
 
 /// Generate the FFI argument(s) for a parameter.
@@ -380,19 +358,82 @@ pub(crate) fn gen_function_descriptor(return_layout: &str, param_layouts: &[Stri
     }
 }
 
-pub(crate) fn gen_helper_methods(out: &mut String, prefix: &str, class_name: &str, api: &crate::core::ir::ApiSurface) {
-    let needs_check_last_error = out.contains("checkLastError()");
-    let needs_read_cstring = out.contains("readCString(");
-    let needs_read_bytes = out.contains("readBytes(");
-    let needs_read_json_list = out.contains("readJsonList(");
-    let needs_create_object_mapper = out.contains("MAPPER.") || needs_read_json_list;
+struct HelperNeeds {
+    check_last_error: bool,
+    read_cstring: bool,
+    read_bytes: bool,
+    read_json_list: bool,
+    object_mapper: bool,
+    native_resources: bool,
+}
 
-    if !needs_check_last_error
-        && !needs_read_cstring
-        && !needs_read_bytes
-        && !needs_read_json_list
-        && !needs_create_object_mapper
-    {
+impl HelperNeeds {
+    fn from_output(output: &str) -> Self {
+        let read_json_list = output.contains("readJsonList(");
+        Self {
+            check_last_error: output.contains("checkLastError()"),
+            read_cstring: output.contains("readCString("),
+            read_bytes: output.contains("readBytes("),
+            read_json_list,
+            object_mapper: output.contains("MAPPER.") || read_json_list,
+            native_resources: output.contains("new NativeResources()"),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        !self.check_last_error
+            && !self.read_cstring
+            && !self.read_bytes
+            && !self.read_json_list
+            && !self.object_mapper
+            && !self.native_resources
+    }
+}
+
+fn emit_error_helper(out: &mut String, prefix: &str, class_name: &str, api: &crate::core::ir::ApiSurface) {
+    let taxonomy = api.error_taxonomy();
+    let error_codes: Vec<_> = taxonomy
+        .iter()
+        .map(|entry| {
+            let error = api
+                .errors
+                .iter()
+                .find(|error| error.rust_path == entry.error_type)
+                .unwrap();
+            (entry.code, format!("{}Exception", entry.variant), error.name.clone())
+        })
+        .collect();
+    out.push_str(&crate::backends::java::template_env::render(
+        "helper_check_last_error.jinja",
+        minijinja::context! {
+            prefix_upper => prefix.to_uppercase(),
+            class_name => class_name,
+            error_codes => error_codes,
+        },
+    ));
+}
+
+fn emit_simple_helper(out: &mut String, template: &str) {
+    out.push_str(&crate::backends::java::template_env::render(
+        template,
+        minijinja::context! {},
+    ));
+}
+
+fn emit_read_json_list_helper(out: &mut String, prefix: &str, class_name: &str) {
+    let free_handle = format!("NativeLib.{}_FREE_STRING", prefix.to_uppercase());
+    out.push_str(&crate::backends::java::template_env::render(
+        "helper_read_json_list.jinja",
+        minijinja::context! {
+            class_name => class_name,
+            free_handle => free_handle,
+        },
+    ));
+}
+
+pub(crate) fn gen_helper_methods(out: &mut String, prefix: &str, class_name: &str, api: &crate::core::ir::ApiSurface) {
+    let needs = HelperNeeds::from_output(out);
+    if needs.is_empty() {
         return;
     }
 
@@ -402,59 +443,28 @@ pub(crate) fn gen_helper_methods(out: &mut String, prefix: &str, class_name: &st
     ));
     out.push('\n');
 
-    if needs_check_last_error {
-        let taxonomy = api.error_taxonomy();
-        let error_codes: Vec<_> = taxonomy
-            .iter()
-            .map(|entry| {
-                let error = api
-                    .errors
-                    .iter()
-                    .find(|error| error.rust_path == entry.error_type)
-                    .unwrap();
-                (entry.code, format!("{}Exception", entry.variant), error.name.clone())
-            })
-            .collect();
-        out.push_str(&crate::backends::java::template_env::render(
-            "helper_check_last_error.jinja",
-            minijinja::context! {
-                prefix_upper => prefix.to_uppercase(),
-                class_name => class_name,
-                error_codes => error_codes,
-            },
-        ));
+    if needs.native_resources {
+        emit_simple_helper(out, "helper_native_resources.jinja");
     }
 
-    if needs_create_object_mapper {
-        out.push_str(&crate::backends::java::template_env::render(
-            "helper_object_mapper.jinja",
-            minijinja::context! {},
-        ));
+    if needs.check_last_error {
+        emit_error_helper(out, prefix, class_name, api);
     }
 
-    if needs_read_cstring {
-        out.push_str(&crate::backends::java::template_env::render(
-            "helper_read_cstring.jinja",
-            minijinja::context! {},
-        ));
+    if needs.object_mapper {
+        emit_simple_helper(out, "helper_object_mapper.jinja");
     }
 
-    if needs_read_bytes {
-        out.push_str(&crate::backends::java::template_env::render(
-            "helper_read_bytes.jinja",
-            minijinja::context! {},
-        ));
+    if needs.read_cstring {
+        emit_simple_helper(out, "helper_read_cstring.jinja");
     }
 
-    if needs_read_json_list {
-        let free_handle = format!("NativeLib.{}_FREE_STRING", prefix.to_uppercase());
-        out.push_str(&crate::backends::java::template_env::render(
-            "helper_read_json_list.jinja",
-            minijinja::context! {
-                class_name => class_name,
-                free_handle => free_handle,
-            },
-        ));
+    if needs.read_bytes {
+        emit_simple_helper(out, "helper_read_bytes.jinja");
+    }
+
+    if needs.read_json_list {
+        emit_read_json_list_helper(out, prefix, class_name);
     }
 }
 

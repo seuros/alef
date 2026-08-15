@@ -1,1 +1,3 @@
-        try (var arena = Arena.ofShared()) {
+        try (var arena = Arena.ofShared();
+             var nativeResources = new NativeResources(){% if lease_resources %};
+{{ lease_resources }}{% endif %}) {

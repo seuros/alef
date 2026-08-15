@@ -42,6 +42,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/helper_read_json_list.jinja"),
     ),
     (
+        "helper_native_resources.jinja",
+        include_str!("templates/helper_native_resources.jinja"),
+    ),
+    (
         "native_lib_visitor_handles.jinja",
         include_str!("templates/native_lib_visitor_handles.jinja"),
     ),
@@ -222,16 +226,16 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/gen_helper_methods_header.jinja"),
     ),
     (
-        "ffi_null_check_with_cleanup.jinja",
-        include_str!("templates/ffi_null_check_with_cleanup.jinja"),
-    ),
-    (
         "ffi_invoke_handle_result.jinja",
         include_str!("templates/ffi_invoke_handle_result.jinja"),
     ),
     (
         "ffi_throw_exception.jinja",
         include_str!("templates/ffi_throw_exception.jinja"),
+    ),
+    (
+        "ffi_alef_error_comment.jinja",
+        include_str!("templates/ffi_alef_error_comment.jinja"),
     ),
     (
         "ffi_return_new_instance.jinja",
@@ -293,6 +297,14 @@ static TEMPLATES: &[(&str, &str)] = &[
     (
         "ffi_visitor_free.jinja",
         include_str!("templates/ffi_visitor_free.jinja"),
+    ),
+    (
+        "ffi_visitor_operation_catch.jinja",
+        include_str!("templates/ffi_visitor_operation_catch.jinja"),
+    ),
+    (
+        "ffi_visitor_cleanup.jinja",
+        include_str!("templates/ffi_visitor_cleanup.jinja"),
     ),
     (
         "ffi_catch_exception.jinja",
@@ -475,6 +487,34 @@ static TEMPLATES: &[(&str, &str)] = &[
     (
         "service_metadata_signature_param.jinja",
         include_str!("templates/service_metadata_signature_param.jinja"),
+    ),
+    (
+        "service_metadata_setup_string.jinja",
+        include_str!("templates/service_metadata_setup_string.jinja"),
+    ),
+    (
+        "service_metadata_setup_record.jinja",
+        include_str!("templates/service_metadata_setup_record.jinja"),
+    ),
+    (
+        "opaque_resource_declaration.jinja",
+        include_str!("templates/opaque_resource_declaration.jinja"),
+    ),
+    (
+        "opaque_cleanup_lease.jinja",
+        include_str!("templates/opaque_cleanup_lease.jinja"),
+    ),
+    (
+        "opaque_cleanup_handle.jinja",
+        include_str!("templates/opaque_cleanup_handle.jinja"),
+    ),
+    (
+        "opaque_unsupported_param.jinja",
+        include_str!("templates/opaque_unsupported_param.jinja"),
+    ),
+    (
+        "opaque_param_lease_assignment.jinja",
+        include_str!("templates/opaque_param_lease_assignment.jinja"),
     ),
     (
         "service_bool_arg_expr.jinja",

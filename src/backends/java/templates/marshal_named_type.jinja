@@ -7,3 +7,4 @@
                 checkLastError();
                 throw new IllegalStateException("failed to create {{ name }} from JSON");
             }
+            {{ resources }}.register({{ cname }}, handle -> {{ free_handle }}.invoke(handle));

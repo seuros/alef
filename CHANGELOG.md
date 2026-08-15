@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **C# service bindings**: invoke configurators through the native ABI, marshal named record parameters through
   owned scalar handles for configurators, registrations, and entrypoints, and propagate native conversion failures.
+- **Java owned handles**: keep service and opaque owners closeable when transfer setup fails, contain handler upcall
+  failures at the native boundary, and use the exact C ABI carriers for service metadata.
 - **C# owned handles**: keep service and opaque owners closeable when transfer setup fails, lease service owners
   through registration calls, and defer trait-bridge cleanup until native release and active callbacks complete.
 - **Go bytes**: pass the output pointer, length, and capacity required by every direct owned-byte return instead of

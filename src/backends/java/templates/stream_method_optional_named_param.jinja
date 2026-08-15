@@ -1,4 +1,5 @@
-            MemorySegment {{ c_name }};
+{% if not assignment_only %}            MemorySegment {{ c_name }};
+{% endif %}
             if ({{ param_name }} == null) { {{ c_name }} = MemorySegment.NULL; } else {
                 String {{ c_name }}Json = STREAM_MAPPER.writeValueAsString({{ param_name }});
                 var {{ c_name }}JsonSeg = arena.allocateFrom({{ c_name }}Json);

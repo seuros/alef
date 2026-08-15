@@ -1,14 +1,34 @@
     @Override
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public synchronized void close() {
-        if (handle == null || handle.equals(MemorySegment.NULL)) {
+        if (transferPending) {
+            awaitTransfer();
+        }
+        if (handleUnavailable || handle == null || handle.equals(MemorySegment.NULL)) {
+            handleUnavailable = true;
             return;
         }
+        handleUnavailable = true;
+        awaitBorrowedCalls();
         MemorySegment handleToFree = handle;
         handle = MemorySegment.NULL;
         try {
             NativeLib.{{ free_handle }}.invoke(handleToFree);
         } catch (Throwable e) {
             throw new RuntimeException("Failed to free {{ class_name }}: " + e.getMessage(), e);
+        }
+    }
+
+    private void awaitTransfer() {
+        boolean interrupted = false;
+        while (transferPending) {
+            try {
+                wait();
+            } catch (InterruptedException ignored) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
         }
     }

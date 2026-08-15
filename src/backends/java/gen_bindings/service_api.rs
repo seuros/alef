@@ -59,7 +59,7 @@ fn java_layout_for_metadata(ty: &TypeRef) -> &'static str {
         TypeRef::Primitive(p) => {
             use crate::core::ir::PrimitiveType;
             match p {
-                PrimitiveType::Bool => "ValueLayout.JAVA_BOOLEAN",
+                PrimitiveType::Bool => "ValueLayout.JAVA_BYTE",
                 PrimitiveType::U8 | PrimitiveType::I8 => "ValueLayout.JAVA_BYTE",
                 PrimitiveType::U16 | PrimitiveType::I16 => "ValueLayout.JAVA_SHORT",
                 PrimitiveType::U32 | PrimitiveType::I32 => "ValueLayout.JAVA_INT",
@@ -112,6 +112,8 @@ fn metadata_arg_expr(param: &ParamDef, api: &ApiSurface) -> String {
         format!("{param_name}.handle().address()")
     } else if matches!(param.ty, TypeRef::String | TypeRef::Char | TypeRef::Path) {
         format!("c{param_name}")
+    } else if matches!(param.ty, TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool)) {
+        format!("(byte) ({param_name} ? 1 : 0)")
     } else {
         param_name
     }
@@ -388,7 +390,6 @@ pub fn generate(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Resul
     if api.services.is_empty() {
         return Ok(vec![]);
     }
-
     let package = config.java_package();
     let package_path = package.replace('.', "/");
 

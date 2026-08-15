@@ -3,9 +3,18 @@
                 checkLastFfiError();
                 return null;
             }
+            Throwable conversionFailure = null;
             try {
                 String result = resultPtr.reinterpret(Long.MAX_VALUE).getString(0);
                 return result;
+            } catch (Throwable failure) {
+                conversionFailure = failure;
+                throw failure;
             } finally {
-                NativeLib.{{ prefix_upper }}_FREE_STRING.invoke(resultPtr);
+                try {
+                    NativeLib.{{ prefix_upper }}_FREE_STRING.invoke(resultPtr);
+                } catch (Throwable cleanupFailure) {
+                    if (conversionFailure != null) conversionFailure.addSuppressed(cleanupFailure);
+                    else throw cleanupFailure;
+                }
             }

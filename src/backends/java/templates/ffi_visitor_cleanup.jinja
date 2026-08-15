@@ -1,0 +1,18 @@
+                java.util.List<Throwable> cleanupFailures = new java.util.ArrayList<>();
+                try {
+                    NativeLib.{{ pu }}_VISITOR_FREE.invoke(visitorHandle);
+                } catch (Throwable failure) {
+                    cleanupFailures.add(failure);
+                }
+                try {
+                    bridge.rethrowVisitorError();
+                } catch (Throwable failure) {
+                    cleanupFailures.add(failure);
+                }
+                if (!cleanupFailures.isEmpty()) {
+                    RuntimeException aggregate = new RuntimeException("Visitor cleanup failed");
+                    cleanupFailures.forEach(aggregate::addSuppressed);
+                    if (operationFailure != null) operationFailure.addSuppressed(aggregate);
+                    else throw aggregate;
+                }
+            }

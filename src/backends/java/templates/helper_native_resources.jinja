@@ -1,0 +1,55 @@
+    @FunctionalInterface
+    private interface NativeReleaser {
+        void release(MemorySegment handle) throws Throwable;
+    }
+    static final class NativeResources implements AutoCloseable {
+        private static final class Entry {
+            private final MemorySegment handle;
+            private final NativeReleaser releaser;
+
+            private Entry(MemorySegment handle, NativeReleaser releaser) {
+                this.handle = handle;
+                this.releaser = releaser;
+            }
+        }
+
+        private final java.util.ArrayDeque<Entry> entries = new java.util.ArrayDeque<>();
+
+        MemorySegment register(MemorySegment handle, NativeReleaser releaser) {
+            if (handle != null && !handle.equals(MemorySegment.NULL)) {
+                entries.push(new Entry(handle, releaser));
+            }
+            return handle;
+        }
+
+        MemorySegment transfer(MemorySegment handle) {
+            var iterator = entries.iterator();
+            while (iterator.hasNext()) {
+                if (iterator.next().handle.equals(handle)) {
+                    iterator.remove();
+                    break;
+                }
+            }
+            return handle;
+        }
+
+        @Override
+        public void close() {
+            Throwable failure = null;
+            while (!entries.isEmpty()) {
+                Entry entry = entries.pop();
+                try {
+                    entry.releaser.release(entry.handle);
+                } catch (Throwable cleanupError) {
+                    if (failure == null) {
+                        failure = cleanupError;
+                    } else {
+                        failure.addSuppressed(cleanupError);
+                    }
+                }
+            }
+            if (failure != null) {
+                throw new RuntimeException("Failed to release native resources", failure);
+            }
+        }
+    }

@@ -4,9 +4,21 @@
                 checkLastError();
                 return java.util.List.of();
             }
-            String json = resultPtr.reinterpret(Long.MAX_VALUE).getString(0);
-            {{ free_handle }}.invoke(resultPtr);
-            return MAPPER.readValue(json, typeRef);
+            Throwable conversionFailure = null;
+            try {
+                String json = resultPtr.reinterpret(Long.MAX_VALUE).getString(0);
+                return MAPPER.readValue(json, typeRef);
+            } catch (Throwable failure) {
+                conversionFailure = failure;
+                throw failure;
+            } finally {
+                try {
+                    {{ free_handle }}.invoke(resultPtr);
+                } catch (Throwable cleanupFailure) {
+                    if (conversionFailure != null) conversionFailure.addSuppressed(cleanupFailure);
+                    else throw cleanupFailure;
+                }
+            }
         } catch (Throwable e) {
             throw new {{ class_name }}Exception("FFI call failed", e);
         }

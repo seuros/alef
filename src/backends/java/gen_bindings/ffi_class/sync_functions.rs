@@ -1,7 +1,7 @@
 use crate::backends::java::type_map::{java_boxed_type, java_return_type, java_type};
 use crate::codegen::naming::to_java_name;
 use crate::core::config::HostCapsuleTypeConfig;
-use crate::core::ir::{FunctionDef, TypeRef};
+use crate::core::ir::{FunctionDef, ParamDef, TypeRef};
 use ahash::{AHashMap, AHashSet};
 use heck::ToSnakeCase;
 use std::collections::{HashMap, HashSet};
@@ -9,10 +9,190 @@ use std::collections::{HashMap, HashSet};
 use super::super::helpers::{emit_javadoc_with_throws, is_bridge_param_java, render_nullable_type};
 use super::super::marshal::{
     ffi_param_args, is_bytes_result, is_ffi_string_return, java_ffi_return_cast, java_ffi_return_expr,
-    marshal_param_to_ffi,
+    marshal_param_to_ffi, opaque_lease_resource,
 };
 use super::params_returns::public_arg_names;
 use super::visitor_bridge::VisitorFunctionBridge;
+
+mod returns;
+
+struct SyncInvocation<'a> {
+    func: &'a FunctionDef,
+    prefix: &'a str,
+    class_name: &'a str,
+    opaque_types: &'a AHashSet<String>,
+    ffi_handle: String,
+    call_args: Vec<String>,
+    is_optional_return: bool,
+    dispatch_return_type: TypeRef,
+    is_clear_fn: bool,
+}
+
+impl<'a> SyncInvocation<'a> {
+    fn new(
+        func: &'a FunctionDef,
+        prefix: &'a str,
+        class_name: &'a str,
+        opaque_types: &'a AHashSet<String>,
+        bridge_param_names: &HashSet<String>,
+        bridge_type_aliases: &HashSet<String>,
+        clear_fn_handles: &AHashMap<String, String>,
+    ) -> Self {
+        let (is_optional_return, dispatch_return_type) = match &func.return_type {
+            TypeRef::Optional(inner) => (true, (**inner).clone()),
+            other => (false, other.clone()),
+        };
+        Self {
+            func,
+            prefix,
+            class_name,
+            opaque_types,
+            ffi_handle: ffi_handle(func, prefix, clear_fn_handles),
+            call_args: ffi_call_args(func, opaque_types, bridge_param_names, bridge_type_aliases),
+            is_optional_return,
+            dispatch_return_type,
+            is_clear_fn: clear_fn_handles.contains_key(&func.name),
+        }
+    }
+}
+
+fn effective_param_type(param: &ParamDef) -> TypeRef {
+    if param.optional && !matches!(param.ty, TypeRef::Optional(_)) {
+        TypeRef::Optional(Box::new(param.ty.clone()))
+    } else {
+        param.ty.clone()
+    }
+}
+
+fn public_params(
+    func: &FunctionDef,
+    bridge_param_names: &HashSet<String>,
+    bridge_type_aliases: &HashSet<String>,
+) -> Vec<String> {
+    func.params
+        .iter()
+        .filter(|param| !is_bridge_param_java(param, bridge_param_names, bridge_type_aliases))
+        .map(|param| {
+            let param_type = if param.optional {
+                java_boxed_type(&param.ty)
+            } else {
+                java_type(&param.ty)
+            };
+            let annotated = render_nullable_type(&param_type, param.optional);
+            format!("final {annotated} {}", to_java_name(&param.name))
+        })
+        .collect()
+}
+
+fn emit_method_header(out: &mut String, func: &FunctionDef, class_name: &str, return_type: &str, params: &[String]) {
+    let exception_class_name = format!("{}Exception", class_name);
+    emit_javadoc_with_throws(out, &func.doc, "    ", &exception_class_name);
+    out.push_str(&crate::backends::java::template_env::render(
+        "ffi_method_signature.jinja",
+        minijinja::context! {
+            return_type,
+            method_name => to_java_name(&func.name),
+            params => params.join(", "),
+            exception_class => exception_class_name,
+        },
+    ));
+}
+
+fn emit_visitor_dispatch(
+    out: &mut String,
+    func: &FunctionDef,
+    bridge_param_names: &HashSet<String>,
+    bridge_type_aliases: &HashSet<String>,
+    visitor_bridge: Option<&VisitorFunctionBridge>,
+) {
+    let Some(visitor_bridge) = visitor_bridge else {
+        return;
+    };
+    out.push_str("        if (");
+    out.push_str(&visitor_bridge.options_param_java);
+    out.push_str(" != null && ");
+    out.push_str(&visitor_bridge.options_param_java);
+    out.push('.');
+    out.push_str(&visitor_bridge.options_field_java);
+    out.push_str("() != null) {\n");
+    out.push_str("            return ");
+    out.push_str(&visitor_bridge.internal_method_name);
+    out.push('(');
+    out.push_str(&public_arg_names(func, bridge_param_names, bridge_type_aliases).join(", "));
+    out.push_str(");\n        }\n\n");
+}
+
+fn emit_try_and_marshalling(
+    out: &mut String,
+    func: &FunctionDef,
+    prefix: &str,
+    opaque_types: &AHashSet<String>,
+    bridge_param_names: &HashSet<String>,
+    bridge_type_aliases: &HashSet<String>,
+) {
+    let lease_resources = func
+        .params
+        .iter()
+        .filter(|param| !is_bridge_param_java(param, bridge_param_names, bridge_type_aliases))
+        .filter_map(|param| {
+            opaque_lease_resource(&to_java_name(&param.name), &effective_param_type(param), opaque_types)
+        })
+        .collect::<Vec<_>>()
+        .join(";\n");
+    out.push_str(&crate::backends::java::template_env::render(
+        "ffi_try_finally_block_start.jinja",
+        minijinja::context! { lease_resources },
+    ));
+    emit_param_marshalling(out, func, prefix, opaque_types, bridge_param_names, bridge_type_aliases);
+}
+
+fn emit_param_marshalling(
+    out: &mut String,
+    func: &FunctionDef,
+    prefix: &str,
+    opaque_types: &AHashSet<String>,
+    bridge_param_names: &HashSet<String>,
+    bridge_type_aliases: &HashSet<String>,
+) {
+    for param in &func.params {
+        if is_bridge_param_java(param, bridge_param_names, bridge_type_aliases) {
+            continue;
+        }
+        marshal_param_to_ffi(
+            out,
+            &to_java_name(&param.name),
+            &effective_param_type(param),
+            opaque_types,
+            prefix,
+            "nativeResources",
+        );
+    }
+}
+
+fn ffi_call_args(
+    func: &FunctionDef,
+    opaque_types: &AHashSet<String>,
+    bridge_param_names: &HashSet<String>,
+    bridge_type_aliases: &HashSet<String>,
+) -> Vec<String> {
+    func.params
+        .iter()
+        .flat_map(|param| {
+            if is_bridge_param_java(param, bridge_param_names, bridge_type_aliases) {
+                vec!["MemorySegment.NULL".to_string()]
+            } else {
+                ffi_param_args(&to_java_name(&param.name), &effective_param_type(param), opaque_types)
+            }
+        })
+        .collect()
+}
+
+fn ffi_handle(func: &FunctionDef, prefix: &str, clear_fn_handles: &AHashMap<String, String>) -> String {
+    clear_fn_handles.get(&func.name).map_or_else(
+        || format!("NativeLib.{}_{}", prefix.to_uppercase(), func.name.to_uppercase()),
+        |handle| format!("NativeLib.{}", handle),
+    )
+}
 
 #[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
@@ -57,22 +237,7 @@ pub(super) fn gen_sync_function_method_with_visitor(
     visitor_bridge: Option<&VisitorFunctionBridge>,
     capsule_types: &HashMap<String, HostCapsuleTypeConfig>,
 ) {
-    let params: Vec<String> = func
-        .params
-        .iter()
-        .filter(|p| !is_bridge_param_java(p, bridge_param_names, bridge_type_aliases))
-        .map(|p| {
-            let ptype = if p.optional {
-                java_boxed_type(&p.ty)
-            } else {
-                java_type(&p.ty)
-            };
-            let annotated = render_nullable_type(&ptype, p.optional);
-            format!("final {annotated} {}", to_java_name(&p.name))
-        })
-        .collect();
-
-    if let Some(capsule_cfg) = capsule_return_config(func, capsule_types) {
+    if let Some(capsule_config) = capsule_return_config(func, capsule_types) {
         return gen_capsule_function_method(
             out,
             func,
@@ -81,449 +246,58 @@ pub(super) fn gen_sync_function_method_with_visitor(
             opaque_types,
             bridge_param_names,
             bridge_type_aliases,
-            capsule_cfg,
+            capsule_config,
         );
     }
 
-    let return_type = java_return_type(&func.return_type);
-    let exception_class_name = format!("{}Exception", class_name);
-    emit_javadoc_with_throws(out, &func.doc, "    ", &exception_class_name);
-    let method_sig = crate::backends::java::template_env::render(
-        "ffi_method_signature.jinja",
-        minijinja::context! {
-            return_type => return_type,
-            method_name => to_java_name(&func.name),
-            params => params.join(", "),
-            exception_class => exception_class_name,
-        },
+    emit_regular_sync_method(
+        out,
+        func,
+        prefix,
+        class_name,
+        opaque_types,
+        bridge_param_names,
+        bridge_type_aliases,
+        has_visitor_bridge,
+        clear_fn_handles,
+        visitor_bridge,
     );
-    out.push_str(&method_sig);
+}
 
-    if has_visitor_bridge && let Some(visitor_bridge) = visitor_bridge {
-        out.push_str("        if (");
-        out.push_str(&visitor_bridge.options_param_java);
-        out.push_str(" != null && ");
-        out.push_str(&visitor_bridge.options_param_java);
-        out.push('.');
-        out.push_str(&visitor_bridge.options_field_java);
-        out.push_str("() != null) {\n");
-        out.push_str("            return ");
-        out.push_str(&visitor_bridge.internal_method_name);
-        out.push('(');
-        out.push_str(&public_arg_names(func, bridge_param_names, bridge_type_aliases).join(", "));
-        out.push_str(");\n");
-        out.push_str("        }\n");
-        out.push('\n');
+#[allow(clippy::too_many_arguments)]
+fn emit_regular_sync_method(
+    out: &mut String,
+    func: &FunctionDef,
+    prefix: &str,
+    class_name: &str,
+    opaque_types: &AHashSet<String>,
+    bridge_param_names: &HashSet<String>,
+    bridge_type_aliases: &HashSet<String>,
+    has_visitor_bridge: bool,
+    clear_fn_handles: &AHashMap<String, String>,
+    visitor_bridge: Option<&VisitorFunctionBridge>,
+) {
+    emit_method_header(
+        out,
+        func,
+        class_name,
+        &java_return_type(&func.return_type),
+        &public_params(func, bridge_param_names, bridge_type_aliases),
+    );
+    if has_visitor_bridge {
+        emit_visitor_dispatch(out, func, bridge_param_names, bridge_type_aliases, visitor_bridge);
     }
-
-    out.push_str(&crate::backends::java::template_env::render(
-        "ffi_try_finally_block_start.jinja",
-        minijinja::context! {},
-    ));
-
-    let ffi_ptr_params: Vec<(String, String)> = func
-        .params
-        .iter()
-        .filter(|p| !is_bridge_param_java(p, bridge_param_names, bridge_type_aliases))
-        .filter_map(|p| {
-            let inner_name = match &p.ty {
-                TypeRef::Named(n) if !opaque_types.contains(n.as_str()) => Some(n.clone()),
-                TypeRef::Optional(inner) => {
-                    if let TypeRef::Named(n) = inner.as_ref() {
-                        if !opaque_types.contains(n.as_str()) {
-                            Some(n.clone())
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
-            inner_name.map(|type_name| {
-                let cname = "c".to_string() + &to_java_name(&p.name);
-                let type_snake = type_name.to_snake_case();
-                let free_handle = format!("NativeLib.{}_{}_FREE", prefix.to_uppercase(), type_snake.to_uppercase());
-                (cname, free_handle)
-            })
-        })
-        .collect();
-
-    for param in &func.params {
-        if is_bridge_param_java(param, bridge_param_names, bridge_type_aliases) {
-            continue;
-        }
-        let effective_ty = if param.optional && !matches!(param.ty, TypeRef::Optional(_)) {
-            TypeRef::Optional(Box::new(param.ty.clone()))
-        } else {
-            param.ty.clone()
-        };
-        marshal_param_to_ffi(out, &to_java_name(&param.name), &effective_ty, opaque_types, prefix);
-    }
-
-    let ffi_handle = match clear_fn_handles.get(&func.name) {
-        Some(handle) => format!("NativeLib.{}", handle),
-        None => format!("NativeLib.{}_{}", prefix.to_uppercase(), func.name.to_uppercase()),
-    };
-
-    let call_args: Vec<String> = func
-        .params
-        .iter()
-        .flat_map(|p| {
-            if is_bridge_param_java(p, bridge_param_names, bridge_type_aliases) {
-                vec!["MemorySegment.NULL".to_string()]
-            } else {
-                let effective_ty = if p.optional && !matches!(p.ty, TypeRef::Optional(_)) {
-                    TypeRef::Optional(Box::new(p.ty.clone()))
-                } else {
-                    p.ty.clone()
-                };
-                ffi_param_args(&to_java_name(&p.name), &effective_ty, opaque_types)
-            }
-        })
-        .collect();
-
-    let emit_ffi_ptr_cleanup = |out: &mut String| {
-        for (cname, free_handle) in &ffi_ptr_params {
-            out.push_str(&crate::backends::java::template_env::render(
-                "ffi_null_check_with_cleanup.jinja",
-                minijinja::context! {
-                    var => cname,
-                    free_handle => free_handle,
-                },
-            ));
-        }
-    };
-
-    let (is_optional_return, dispatch_return_type) = match &func.return_type {
-        TypeRef::Optional(inner) => (true, (**inner).clone()),
-        other => (false, other.clone()),
-    };
-
-    let is_clear_fn = clear_fn_handles.contains_key(&func.name);
-
-    if matches!(dispatch_return_type, TypeRef::Unit) && !is_clear_fn {
-        out.push_str(&crate::backends::java::template_env::render(
-            "ffi_invoke_void.jinja",
-            minijinja::context! {
-                ffi_handle => &ffi_handle,
-                args => call_args.join(", "),
-            },
-        ));
-        emit_ffi_ptr_cleanup(out);
-        if func.error_type.is_some() {
-            out.push_str("            checkLastError();\n");
-        }
-        out.push_str("        } catch (Throwable e) {\n");
-        out.push_str(&crate::backends::java::template_env::render(
-            "ffi_throw_exception.jinja",
-            minijinja::context! {
-                exception_class => format!("{}Exception", class_name),
-            },
-        ));
-        out.push_str("        }\n");
-    } else if is_clear_fn {
-        out.push_str("            var outErr = arena.allocate(ValueLayout.ADDRESS);\n");
-        out.push_str(&crate::backends::java::template_env::render(
-            "ffi_invoke_primitive_result.jinja",
-            minijinja::context! {
-                cast_type => "int",
-                ffi_handle => &ffi_handle,
-                call_args => {
-                    let mut args = call_args.clone();
-                    args.push("outErr".to_string());
-                    args.join(", ")
-                },
-            },
-        ));
-        emit_ffi_ptr_cleanup(out);
-        out.push_str("            if (primitiveResult != 0) {\n");
-        out.push_str("                MemorySegment errPtr = outErr.get(ValueLayout.ADDRESS, 0);\n");
-        out.push_str("                String msg = errPtr.equals(MemorySegment.NULL) ? \"clear failed (rc=\" + primitiveResult + \")\" : errPtr.reinterpret(Long.MAX_VALUE).getString(0);\n");
-        out.push_str("                throw new ");
-        out.push_str(&exception_class_name);
-        out.push_str("(primitiveResult, msg);\n");
-        out.push_str("            }\n");
-        out.push_str("        } catch (Throwable e) {\n");
-        out.push_str(&crate::backends::java::template_env::render(
-            "ffi_throw_exception.jinja",
-            minijinja::context! {
-                exception_class => format!("{}Exception", class_name),
-            },
-        ));
-        out.push_str("        }\n");
-    } else if is_ffi_string_return(&dispatch_return_type) {
-        let free_handle = format!("NativeLib.{}_FREE_STRING", prefix.to_uppercase());
-        out.push_str(&crate::backends::java::template_env::render(
-            "ffi_result_ptr_call.jinja",
-            minijinja::context! {
-                ffi_handle => &ffi_handle,
-                args => call_args.join(", "),
-            },
-        ));
-        emit_ffi_ptr_cleanup(out);
-        out.push_str(&crate::backends::java::template_env::render(
-            "ffi_null_check.jinja",
-            minijinja::context! {
-                var => "resultPtr",
-                optional => is_optional_return,
-            },
-        ));
-        let len_handle = format!("NativeLib.{}_{}_LEN", prefix.to_uppercase(), func.name.to_uppercase());
-        out.push_str("            long resultLen = (long) ");
-        out.push_str(&len_handle);
-        out.push_str(".invoke(");
-        out.push_str(&call_args.join(", "));
-        out.push_str(");\n");
-        out.push_str("            String str = readCString(resultPtr, resultLen);\n");
-        out.push_str(&crate::backends::java::template_env::render(
-            "ffi_invoke_free.jinja",
-            minijinja::context! {
-                free_handle => &free_handle,
-                ptr => "resultPtr",
-            },
-        ));
-        let return_expr = if matches!(dispatch_return_type, TypeRef::Path) {
-            "java.nio.file.Path.of(str)"
-        } else {
-            "str"
-        };
-        if is_optional_return {
-            out.push_str(&crate::backends::java::template_env::render(
-                "ffi_return_optional_expr.jinja",
-                minijinja::context! {
-                    expr => return_expr,
-                },
-            ));
-        } else {
-            out.push_str(&crate::backends::java::template_env::render(
-                "ffi_return_expr.jinja",
-                minijinja::context! {
-                    expr => return_expr,
-                },
-            ));
-        }
-        out.push_str("        } catch (Throwable e) {\n");
-        out.push_str(&crate::backends::java::template_env::render(
-            "ffi_throw_exception.jinja",
-            minijinja::context! {
-                exception_class => format!("{}Exception", class_name),
-            },
-        ));
-        out.push_str("        }\n");
-    } else if matches!(dispatch_return_type, TypeRef::Named(_)) {
-        let return_type_name = match &dispatch_return_type {
-            TypeRef::Named(name) => name,
-            _ => unreachable!(),
-        };
-        let is_opaque = opaque_types.contains(return_type_name.as_str());
-
-        out.push_str(&crate::backends::java::template_env::render(
-            "ffi_result_ptr_call.jinja",
-            minijinja::context! {
-                ffi_handle => &ffi_handle,
-                args => call_args.join(", "),
-            },
-        ));
-        emit_ffi_ptr_cleanup(out);
-        out.push_str(&crate::backends::java::template_env::render(
-            "ffi_null_check.jinja",
-            minijinja::context! {
-                var => "resultPtr",
-                optional => is_optional_return,
-            },
-        ));
-
-        if is_opaque {
-            if is_optional_return {
-                out.push_str(&crate::backends::java::template_env::render(
-                    "ffi_return_new_handle.jinja",
-                    minijinja::context! {
-                        class_name => return_type_name,
-                    },
-                ));
-            } else {
-                out.push_str(&crate::backends::java::template_env::render(
-                    "ffi_return_new_instance.jinja",
-                    minijinja::context! {
-                        class_name => return_type_name,
-                    },
-                ));
-            }
-        } else {
-            // NOTE: _content only returns the markdown string field, not a full JSON object.
-            let type_snake = return_type_name.to_snake_case();
-            let free_handle = format!("NativeLib.{}_{}_FREE", prefix.to_uppercase(), type_snake.to_uppercase());
-            let to_json_handle = format!(
-                "NativeLib.{}_{}_TO_JSON",
-                prefix.to_uppercase(),
-                type_snake.to_uppercase()
-            );
-            out.push_str("            // CPD-OFF\n");
-            out.push_str(&crate::backends::java::template_env::render(
-                "ffi_invoke_json_ptr.jinja",
-                minijinja::context! {
-                    to_json_handle => &to_json_handle,
-                },
-            ));
-            out.push_str(&crate::backends::java::template_env::render(
-                "ffi_invoke_free.jinja",
-                minijinja::context! {
-                    free_handle => &free_handle,
-                    ptr => "resultPtr",
-                },
-            ));
-            out.push_str("            if (jsonPtr.equals(MemorySegment.NULL)) {\n");
-            out.push_str("                checkLastError();\n");
-            if is_optional_return {
-                out.push_str("                return Optional.empty();\n");
-            } else {
-                out.push_str("                throw new ");
-                out.push_str(&exception_class_name);
-                out.push_str("(\"");
-                out.push_str(&to_java_name(&func.name));
-                out.push_str(": failed to serialize response\", null);\n");
-            }
-            out.push_str("            }\n");
-            out.push_str("            String json = jsonPtr.reinterpret(Long.MAX_VALUE).getString(0);\n");
-            out.push_str(&crate::backends::java::template_env::render(
-                "ffi_invoke_free_string.jinja",
-                minijinja::context! {
-                    prefix => prefix.to_uppercase(),
-                },
-            ));
-            if is_optional_return {
-                out.push_str(&crate::backends::java::template_env::render(
-                    "ffi_return_mapper_read_optional.jinja",
-                    minijinja::context! {
-                        class_name => return_type_name,
-                    },
-                ));
-            } else {
-                out.push_str(&crate::backends::java::template_env::render(
-                    "ffi_return_mapper_read.jinja",
-                    minijinja::context! {
-                        class_name => return_type_name,
-                    },
-                ));
-            }
-            out.push_str("            // CPD-ON\n");
-        }
-
-        out.push_str("        } catch (Throwable e) {\n");
-        out.push_str(&crate::backends::java::template_env::render(
-            "ffi_throw_exception.jinja",
-            minijinja::context! {
-                exception_class => format!("{}Exception", class_name),
-            },
-        ));
-        out.push_str("        }\n");
-    } else if matches!(dispatch_return_type, TypeRef::Vec(_)) {
-        out.push_str(&crate::backends::java::template_env::render(
-            "ffi_result_ptr_call.jinja",
-            minijinja::context! {
-                ffi_handle => &ffi_handle,
-                args => call_args.join(", "),
-            },
-        ));
-        emit_ffi_ptr_cleanup(out);
-        let element_type = match &dispatch_return_type {
-            TypeRef::Vec(inner) => java_boxed_type(inner),
-            _ => unreachable!(),
-        };
-        let type_ref = format!(
-            "new com.fasterxml.jackson.core.type.TypeReference<java.util.List<{}>>() {{ }}",
-            element_type
-        );
-        if is_optional_return {
-            out.push_str(&crate::backends::java::template_env::render(
-                "ffi_return_read_json_list_optional.jinja",
-                minijinja::context! {
-                    type_ref => &type_ref,
-                },
-            ));
-        } else {
-            out.push_str(&crate::backends::java::template_env::render(
-                "ffi_return_read_json_list_plain.jinja",
-                minijinja::context! {
-                    type_ref => &type_ref,
-                },
-            ));
-        }
-        out.push_str("        } catch (Throwable e) {\n");
-        out.push_str(&crate::backends::java::template_env::render(
-            "ffi_throw_exception.jinja",
-            minijinja::context! {
-                exception_class => format!("{}Exception", class_name),
-            },
-        ));
-        out.push_str("        }\n");
-    } else if matches!(dispatch_return_type, TypeRef::Bytes) && is_bytes_result(func) {
-        let free_bytes_handle = format!("NativeLib.{}_FREE_BYTES", prefix.to_uppercase());
-        let args_with_sep = if call_args.is_empty() {
-            String::new()
-        } else {
-            format!("{}, ", call_args.join(", "))
-        };
-        emit_ffi_ptr_cleanup(out);
-        out.push_str(&crate::backends::java::template_env::render(
-            "bytes_result_call.jinja",
-            minijinja::context! {
-                ffi_handle => &ffi_handle,
-                args => &args_with_sep,
-                free_bytes_handle => &free_bytes_handle,
-                optional => is_optional_return,
-            },
-        ));
-        out.push_str("        } catch (Throwable e) {\n");
-        out.push_str(&crate::backends::java::template_env::render(
-            "ffi_throw_exception.jinja",
-            minijinja::context! {
-                exception_class => format!("{}Exception", class_name),
-            },
-        ));
-        out.push_str("        }\n");
-    } else {
-        out.push_str(&crate::backends::java::template_env::render(
-            "ffi_invoke_primitive_result.jinja",
-            minijinja::context! {
-                cast_type => java_ffi_return_cast(&dispatch_return_type),
-                ffi_handle => &ffi_handle,
-                call_args => call_args.join(", "),
-            },
-        ));
-        emit_ffi_ptr_cleanup(out);
-        if func.error_type.is_some() {
-            out.push_str("            checkLastError();\n");
-        }
-        if is_optional_return {
-            let return_expr = java_ffi_return_expr(&dispatch_return_type, "primitiveResult");
-            out.push_str(&crate::backends::java::template_env::render(
-                "ffi_return_primitive_result.jinja",
-                minijinja::context! {
-                    return_expr => format!("Optional.of({return_expr})"),
-                },
-            ));
-        } else {
-            let return_expr = java_ffi_return_expr(&dispatch_return_type, "primitiveResult");
-            out.push_str(&crate::backends::java::template_env::render(
-                "ffi_return_primitive_result.jinja",
-                minijinja::context! {
-                    return_expr => return_expr,
-                },
-            ));
-        }
-        out.push_str("        } catch (Throwable e) {\n");
-        out.push_str(&crate::backends::java::template_env::render(
-            "ffi_throw_exception.jinja",
-            minijinja::context! {
-                exception_class => format!("{}Exception", class_name),
-            },
-        ));
-        out.push_str("        }\n");
-    }
-
+    emit_try_and_marshalling(out, func, prefix, opaque_types, bridge_param_names, bridge_type_aliases);
+    let invocation = SyncInvocation::new(
+        func,
+        prefix,
+        class_name,
+        opaque_types,
+        bridge_param_names,
+        bridge_type_aliases,
+        clear_fn_handles,
+    );
+    returns::emit_sync_return(out, &invocation);
     out.push_str("    }\n");
 }
 
@@ -554,113 +328,74 @@ pub(super) fn gen_capsule_function_method(
     opaque_types: &AHashSet<String>,
     bridge_param_names: &HashSet<String>,
     bridge_type_aliases: &HashSet<String>,
-    cfg: &HostCapsuleTypeConfig,
+    config: &HostCapsuleTypeConfig,
 ) {
-    let params: Vec<String> = func
-        .params
-        .iter()
-        .filter(|p| !is_bridge_param_java(p, bridge_param_names, bridge_type_aliases))
-        .map(|p| {
-            let ptype = if p.optional {
-                java_boxed_type(&p.ty)
-            } else {
-                java_type(&p.ty)
-            };
-            let annotated = render_nullable_type(&ptype, p.optional);
-            format!("final {annotated} {}", to_java_name(&p.name))
-        })
-        .collect();
-
-    let return_type = match cfg.required_host_type("Language", "java") {
-        Ok(t) => t.to_string(),
-        Err(e) => {
-            out.push_str(&format!("    // ALEF ERROR: {e}\n"));
-            return;
-        }
+    let Some(return_type) = required_capsule_return_type(out, config) else {
+        return;
     };
-
-    let exception_class_name = format!("{}Exception", class_name);
-    emit_javadoc_with_throws(out, &func.doc, "    ", &exception_class_name);
-    let method_sig = crate::backends::java::template_env::render(
-        "ffi_method_signature.jinja",
-        minijinja::context! {
-            return_type => &return_type,
-            method_name => to_java_name(&func.name),
-            params => params.join(", "),
-            exception_class => exception_class_name,
-        },
+    emit_method_header(
+        out,
+        func,
+        class_name,
+        &return_type,
+        &public_params(func, bridge_param_names, bridge_type_aliases),
     );
-    out.push_str(&method_sig);
+    emit_try_and_marshalling(out, func, prefix, opaque_types, bridge_param_names, bridge_type_aliases);
+    let call_args = ffi_call_args(func, opaque_types, bridge_param_names, bridge_type_aliases);
+    emit_capsule_result_call(out, func, prefix, &call_args);
+    emit_capsule_construct(out, config, class_name);
+}
 
-    out.push_str(&crate::backends::java::template_env::render(
-        "ffi_try_finally_block_start.jinja",
-        minijinja::context! {},
-    ));
-
-    for param in &func.params {
-        if is_bridge_param_java(param, bridge_param_names, bridge_type_aliases) {
-            continue;
+fn required_capsule_return_type(out: &mut String, config: &HostCapsuleTypeConfig) -> Option<String> {
+    match config.required_host_type("Language", "java") {
+        Ok(return_type) => Some(return_type.to_string()),
+        Err(error) => {
+            out.push_str(&crate::backends::java::template_env::render(
+                "ffi_alef_error_comment.jinja",
+                minijinja::context! {
+                    indent => "    ",
+                    error => error.to_string(),
+                },
+            ));
+            None
         }
-        let effective_ty = if param.optional && !matches!(param.ty, TypeRef::Optional(_)) {
-            TypeRef::Optional(Box::new(param.ty.clone()))
-        } else {
-            param.ty.clone()
-        };
-        marshal_param_to_ffi(out, &to_java_name(&param.name), &effective_ty, opaque_types, prefix);
     }
+}
 
-    let call_args: Vec<String> = func
-        .params
-        .iter()
-        .flat_map(|p| {
-            if is_bridge_param_java(p, bridge_param_names, bridge_type_aliases) {
-                vec!["MemorySegment.NULL".to_string()]
-            } else {
-                let effective_ty = if p.optional && !matches!(p.ty, TypeRef::Optional(_)) {
-                    TypeRef::Optional(Box::new(p.ty.clone()))
-                } else {
-                    p.ty.clone()
-                };
-                ffi_param_args(&to_java_name(&p.name), &effective_ty, opaque_types)
-            }
-        })
-        .collect();
-
+fn emit_capsule_result_call(out: &mut String, func: &FunctionDef, prefix: &str, call_args: &[String]) {
     let ffi_handle = format!("NativeLib.{}_{}", prefix.to_uppercase(), func.name.to_uppercase());
     out.push_str(&crate::backends::java::template_env::render(
         "ffi_result_ptr_call.jinja",
         minijinja::context! {
-            ffi_handle => &ffi_handle,
+            ffi_handle,
             args => call_args.join(", "),
         },
     ));
+    returns::emit_null_check(out, false);
+}
 
-    out.push_str(&crate::backends::java::template_env::render(
-        "ffi_null_check.jinja",
-        minijinja::context! {
-            var => "resultPtr",
-            optional => false,
-        },
-    ));
-
-    let construct = match cfg.construct_required("resultPtr", "Language", "java") {
-        Ok(c) => c,
-        Err(e) => {
-            out.push_str(&format!("            // ALEF ERROR: {e}\n"));
-            out.push_str("        } catch (Throwable e) {\n");
+fn emit_capsule_construct(out: &mut String, config: &HostCapsuleTypeConfig, class_name: &str) {
+    match config.construct_required("resultPtr", "Language", "java") {
+        Ok(construct) => out.push_str(&crate::backends::java::template_env::render(
+            "ffi_return_expr.jinja",
+            minijinja::context! { expr => construct },
+        )),
+        Err(error) => {
             out.push_str(&crate::backends::java::template_env::render(
-                "ffi_throw_exception.jinja",
+                "ffi_alef_error_comment.jinja",
                 minijinja::context! {
-                    exception_class => format!("{}Exception", class_name),
+                    indent => "            ",
+                    error => error.to_string(),
                 },
             ));
-            out.push_str("        }\n");
-            out.push_str("    }\n");
+            emit_catch_and_close(out, class_name);
             return;
         }
-    };
-    out.push_str(&format!("            return {construct};\n"));
+    }
+    emit_catch_and_close(out, class_name);
+}
 
+fn emit_catch_and_close(out: &mut String, class_name: &str) {
     out.push_str("        } catch (Throwable e) {\n");
     out.push_str(&crate::backends::java::template_env::render(
         "ffi_throw_exception.jinja",
@@ -668,8 +403,7 @@ pub(super) fn gen_capsule_function_method(
             exception_class => format!("{}Exception", class_name),
         },
     ));
-    out.push_str("        }\n");
-    out.push_str("    }\n");
+    out.push_str("        }\n    }\n");
 }
 
 #[cfg(test)]
@@ -803,3 +537,6 @@ mod capsule_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod tests;

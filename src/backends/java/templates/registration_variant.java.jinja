@@ -1,65 +1,46 @@
-
     /**
      * {{ doc | default("Register a handler for " + variant_name_display + ".") }}
      *
      * Invokes C FFI: {{ ffi_symbol }}
      *
-{% for layout in descriptor_layouts %}     * @param {{ layout.1 }} registration metadata
-{% endfor %}
      * @param handler functional interface receiving JSON request, returning JSON response
      * @return 0 on success, non-zero error code on failure
      */
-    public int {{ method_name }}({{ signature_params }}{% if signature_params %}, {% endif %}Callable handler) {
-        try {
-            // Build upcall stub from handler
+    public int {{ method_name }}(Callable handler{{ metadata_signature }}) {
+        try (var ownerLease = borrowOwnerHandle();
+             var callArena = Arena.ofConfined();
+             var nativeResources = new ServiceResources(){% if lease_resources %}; {{ lease_resources }}{% endif %}) {
+{{ metadata_setup }}
             MethodHandles.Lookup lookup = MethodHandles.lookup();
-            // Build C FFI signature: (context: ADDRESS, request: ADDRESS) -> ADDRESS
-            FunctionDescriptor upcallDesc = FunctionDescriptor.of(
-                ValueLayout.ADDRESS,  // return: *mut c_char
-                ValueLayout.ADDRESS,  // param 0: *mut c_void (context)
-                ValueLayout.ADDRESS   // param 1: *const c_char (request JSON)
-            );
-
-            // Create adapter: (context_ptr: ADDRESS, request_ptr: ADDRESS) -> response_ptr: ADDRESS
-            // Marshals C pointers <-> Java strings via Arena
             MethodHandle baseMh = lookup.findStatic({{ class_name }}.class, "invokeHandlerWithMarshal",
                 MethodType.methodType(MemorySegment.class, MemorySegment.class, MemorySegment.class, Callable.class, Arena.class)
             );
             MethodHandle adapter = MethodHandles.insertArguments(baseMh, 2, handler, arena);
-
+            FunctionDescriptor upcallDesc = FunctionDescriptor.of(
+                ValueLayout.JAVA_LONG,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS
+            );
             MemorySegment upcallStub = LINKER.upcallStub(adapter, upcallDesc, arena);
-            MethodHandle responseFree = lookup.findStatic({{ class_name }}.class, "freeHandlerResponse",
-                MethodType.methodType(void.class, MemorySegment.class));
-            MemorySegment responseFreeStub = LINKER.upcallStub(responseFree,
-                FunctionDescriptor.ofVoid(ValueLayout.ADDRESS), arena);
-
-            // Get variant registration downcall handle
             MemorySegment varAddr = LOOKUP.find("{{ ffi_symbol }}")
                 .or(() -> LOOKUP.find("_{{ ffi_symbol }}"))
                 .orElseThrow();
-
             FunctionDescriptor varDesc = FunctionDescriptor.of(
-                ValueLayout.JAVA_INT,  // return: int
-                ValueLayout.JAVA_LONG, // owner: AlefHandle
-                ValueLayout.ADDRESS,   // callback: upcall stub
-                ValueLayout.ADDRESS,   // response deallocator: paired upcall stub
-                ValueLayout.ADDRESS    // context: *mut c_void
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS
 {% for layout in descriptor_layouts %}
                 , {{ layout.0 }}    // {{ layout.1 }} param
-{% endfor %}
-            );
-
+{% endfor %}            );
             MethodHandle varHandle = LINKER.downcallHandle(varAddr, varDesc);
-{{ metadata_setup }}
-            return (int) varHandle.invokeExact(
-                ownerHandle,
+            return (int) varHandle.invokeWithArguments(
+                ownerLease.handle(),
                 upcallStub,
-                responseFreeStub,
                 MemorySegment.NULL
 {% for arg in invoke_args %}
-                , {{ arg }}
-{% endfor %}
-            );
+                , {{ arg.0 }}    // {{ arg.1 }}
+{% endfor %}            );
         } catch (Throwable e) {
             throw new RuntimeException("Failed to register {{ variant_name_display }} handler", e);
         }

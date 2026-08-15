@@ -18,11 +18,178 @@ import java.lang.invoke.MethodType;
 public class {{ class_name }} implements AutoCloseable {
 
     private long ownerHandle;
+    private int activeOwnerBorrows;
+    private boolean ownerUnavailable;
+    private boolean ownerTransferPending;
+    private boolean serviceArenaClosed;
     private final Arena arena = Arena.ofShared();
+    private final Object ownerMutationLock = new Object();
+
+    @FunctionalInterface
+    private interface ServiceReleaser {
+        void release(MemorySegment handle) throws Throwable;
+    }
+
+    private static final class ServiceResources implements AutoCloseable {
+        private record Entry(MemorySegment handle, ServiceReleaser releaser) {}
+        private final java.util.ArrayDeque<Entry> entries = new java.util.ArrayDeque<>();
+
+        private MemorySegment register(MemorySegment handle, ServiceReleaser releaser) {
+            if (handle != null && !handle.equals(MemorySegment.NULL)) entries.push(new Entry(handle, releaser));
+            return handle;
+        }
+
+        @Override
+        public void close() {
+            RuntimeException aggregate = null;
+            while (!entries.isEmpty()) {
+                Entry entry = entries.pop();
+                try {
+                    entry.releaser().release(entry.handle());
+                } catch (Throwable failure) {
+                    if (aggregate == null) aggregate = new RuntimeException("Service resource cleanup failed");
+                    aggregate.addSuppressed(failure);
+                }
+            }
+            if (aggregate != null) throw aggregate;
+        }
+    }
+
+    private final class OwnerHandleLease implements AutoCloseable {
+        private final long borrowedHandle;
+        private boolean released;
+
+        private OwnerHandleLease(long borrowedHandle) {
+            this.borrowedHandle = borrowedHandle;
+        }
+
+        private long handle() {
+            return borrowedHandle;
+        }
+
+        @Override
+        public void close() {
+            synchronized ({{ class_name }}.this) {
+                if (released) return;
+                released = true;
+                activeOwnerBorrows--;
+                if (activeOwnerBorrows == 0) {{ class_name }}.this.notifyAll();
+            }
+        }
+    }
+
+    private final class OwnerHandleTransfer implements AutoCloseable {
+        private long transferredHandle;
+
+        private OwnerHandleTransfer(long transferredHandle) {
+            this.transferredHandle = transferredHandle;
+        }
+
+        private synchronized long handle() {
+            if (transferredHandle == 0) {
+                throw new IllegalStateException("Service owner transfer is no longer active");
+            }
+            return transferredHandle;
+        }
+
+        private synchronized void commit() {
+            handle();
+            transferredHandle = 0;
+            commitOwnerTransfer();
+        }
+
+        @Override
+        public synchronized void close() {
+            if (transferredHandle == 0) return;
+            rollbackOwnerTransfer(transferredHandle);
+            transferredHandle = 0;
+        }
+    }
+
+    private synchronized OwnerHandleLease borrowOwnerHandle() {
+        if (ownerUnavailable || ownerHandle == 0) {
+            throw new IllegalStateException("{{ class_name }} is closed");
+        }
+        activeOwnerBorrows++;
+        return new OwnerHandleLease(ownerHandle);
+    }
+
+    private synchronized long takeOwnerHandleForClose() {
+        if (ownerTransferPending) awaitOwnerTransfer();
+        if (ownerUnavailable) return 0;
+        ownerUnavailable = true;
+        awaitBorrowedCalls();
+        long detached = ownerHandle;
+        ownerHandle = 0;
+        return detached;
+    }
+
+    private void awaitBorrowedCalls() {
+        boolean interrupted = false;
+        while (activeOwnerBorrows != 0) {
+            try {
+                wait();
+            } catch (InterruptedException ignored) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt();
+    }
+
+    private synchronized OwnerHandleTransfer takeOwnerHandle() {
+        if (ownerUnavailable || ownerHandle == 0) {
+            throw new IllegalStateException("{{ class_name }} is closed");
+        }
+        OwnerHandleTransfer transfer = new OwnerHandleTransfer(ownerHandle);
+        ownerUnavailable = true;
+        awaitBorrowedCalls();
+        ownerHandle = 0;
+        ownerTransferPending = true;
+        return transfer;
+    }
+
+    private synchronized void rollbackOwnerTransfer(long transferredHandle) {
+        ownerHandle = transferredHandle;
+        ownerTransferPending = false;
+        ownerUnavailable = false;
+        notifyAll();
+    }
+
+    private synchronized void commitOwnerTransfer() {
+        ownerTransferPending = false;
+        notifyAll();
+    }
+
+    private void awaitOwnerTransfer() {
+        boolean interrupted = false;
+        while (ownerTransferPending) {
+            try {
+                wait();
+            } catch (InterruptedException ignored) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt();
+    }
+
+    private synchronized boolean markServiceArenaClosed() {
+        if (serviceArenaClosed) return false;
+        serviceArenaClosed = true;
+        return true;
+    }
+
+    private synchronized void replaceOwnerHandle(long expected, long replacement) {
+        if (ownerUnavailable || ownerHandle != expected) {
+            throw new IllegalStateException("{{ class_name }} owner changed while configuring");
+        }
+        if (replacement == 0) {
+            throw new IllegalStateException("{{ class_name }} configuration returned null");
+        }
+        ownerHandle = replacement;
+    }
 
     private static final Linker LINKER = Linker.nativeLinker();
     private static final SymbolLookup LOOKUP = SymbolLookup.loaderLookup();
-    private static final MethodHandle FREE;
 
     static {
         // Force NativeLib static initialization to load the native library
@@ -34,10 +201,6 @@ public class {{ class_name }} implements AutoCloseable {
         } catch (ClassNotFoundException ignored) {
             // NativeLib not available; native library may be pre-loaded
         }
-        FREE = LINKER.downcallHandle(
-            LOOKUP.find("free").orElseThrow(),
-            FunctionDescriptor.ofVoid(ValueLayout.ADDRESS)
-        );
     }
 
     // Adapter for handler upcalls: marshals C pointers <-> Java strings
@@ -46,6 +209,7 @@ public class {{ class_name }} implements AutoCloseable {
             MemorySegment requestPtr,
             Callable handler,
             Arena arena) throws Throwable {
+        try {
         // Upcall pointer args arrive as zero-length native segments (the linker has
         // no length for a raw `*const c_char`). Reinterpret to an unbounded segment
         // before reading, otherwise getString() throws and the uncaught exception
@@ -53,7 +217,7 @@ public class {{ class_name }} implements AutoCloseable {
         String requestStr = requestPtr.reinterpret(Long.MAX_VALUE).getString(0);
         String responseStr = handler.handle(requestStr);
         // Allocate response string using malloc (not Arena) so the pointer remains
-        // valid after this upcall returns. Rust invokes freeHandlerResponse for it.
+        // valid after this upcall returns. Rust will free() the returned pointer.
         // Use a confined arena for the temporary scratch allocation: it is
         // closeable (unlike Arena.ofAuto(), whose close() throws
         // "non-closeable session"), and its memory is freed deterministically at
@@ -75,15 +239,7 @@ public class {{ class_name }} implements AutoCloseable {
             MemorySegment.copy(responseSegment, 0, mallocSegment, 0, responseLen);
             return mallocAddr;
         }
-    }
-
-    // Paired deallocator for responses returned by invokeHandlerWithMarshal.
-    private static void freeHandlerResponse(MemorySegment responsePtr) {
-        try {
-            if (responsePtr.address() != 0) {
-                FREE.invokeExact(responsePtr);
-            }
-        } catch (Throwable error) {
-            throw new IllegalStateException("Failed to free handler response", error);
+        } catch (Throwable failure) {
+            return MemorySegment.NULL;
         }
     }

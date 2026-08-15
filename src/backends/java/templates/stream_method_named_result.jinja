@@ -4,16 +4,36 @@
                 checkLastFfiError();
                 return {{ empty_return }};
             }
+            MemorySegment jsonPtr = MemorySegment.NULL;
+            Throwable conversionFailure = null;
             try {
-                MemorySegment jsonPtr = (MemorySegment) {{ to_json }}.invoke(resultPtr);
+                jsonPtr = (MemorySegment) {{ to_json }}.invoke(resultPtr);
                 if (jsonPtr.equals(MemorySegment.NULL)) {
                     checkLastFfiError();
                     throw new {{ exception_class }}("{{ method_name }}: failed to serialize response", (Throwable) null);
                 }
                 String json = jsonPtr.reinterpret(Long.MAX_VALUE).getString(0);
-                NativeLib.{{ prefix_upper }}_FREE_STRING.invoke(jsonPtr);
                 {{ success_return }}
+            } catch (Throwable failure) {
+                conversionFailure = failure;
+                throw failure;
             } finally {
-                {{ ret_free }}.invoke(resultPtr);
+                java.util.List<Throwable> cleanupFailures = new java.util.ArrayList<>();
+                try {
+                    if (!jsonPtr.equals(MemorySegment.NULL)) NativeLib.{{ prefix_upper }}_FREE_STRING.invoke(jsonPtr);
+                } catch (Throwable failure) {
+                    cleanupFailures.add(failure);
+                }
+                try {
+                    {{ ret_free }}.invoke(resultPtr);
+                } catch (Throwable failure) {
+                    cleanupFailures.add(failure);
+                }
+                if (!cleanupFailures.isEmpty()) {
+                    RuntimeException aggregate = new RuntimeException("Native result cleanup failed");
+                    cleanupFailures.forEach(aggregate::addSuppressed);
+                    if (conversionFailure != null) conversionFailure.addSuppressed(aggregate);
+                    else throw aggregate;
+                }
             }
             // CPD-ON

@@ -51,6 +51,12 @@ fn effective_exclude_types(api: &ApiSurface, config: &ResolvedCrateConfig) -> Ha
     }
     exclude_types.extend(api.types.iter().filter(|t| t.binding_excluded).map(|t| t.name.clone()));
     exclude_types.extend(
+        api.types
+            .iter()
+            .filter(|t| t.has_lifetime_params)
+            .map(|t| t.name.clone()),
+    );
+    exclude_types.extend(
         config
             .opaque_types
             .iter()
@@ -75,17 +81,39 @@ fn signature_references_excluded_type(
             .any(|param| references_excluded_type(&param.ty, exclude_types))
 }
 
+fn service_references_excluded_type(service: &crate::core::ir::ServiceDef, excluded: &HashSet<String>) -> bool {
+    excluded.contains(&service.name)
+        || signature_references_excluded_type(&service.constructor.params, &service.constructor.return_type, excluded)
+        || service
+            .configurators
+            .iter()
+            .any(|method| signature_references_excluded_type(&method.params, &method.return_type, excluded))
+        || service.registrations.iter().any(|registration| {
+            signature_references_excluded_type(&registration.metadata_params, &registration.return_type, excluded)
+                || registration.variants.iter().any(|variant| {
+                    variant
+                        .signature_params
+                        .iter()
+                        .any(|param| references_excluded_type(&param.ty, excluded))
+                })
+        })
+        || service
+            .entrypoints
+            .iter()
+            .any(|entrypoint| signature_references_excluded_type(&entrypoint.params, &entrypoint.return_type, excluded))
+}
+
 fn api_without_excluded_types(api: &ApiSurface, exclude_types: &HashSet<String>) -> ApiSurface {
     let mut filtered = api.clone();
+    filtered
+        .services
+        .retain(|service| !service_references_excluded_type(service, exclude_types));
     filtered.types.retain(|typ| !exclude_types.contains(&typ.name));
     for typ in &mut filtered.types {
         typ.fields
             .retain(|field| !references_excluded_type(&field.ty, exclude_types));
-        if !typ.is_trait {
-            typ.methods.retain(|method| {
-                !signature_references_excluded_type(&method.params, &method.return_type, exclude_types)
-            });
-        }
+        typ.methods
+            .retain(|method| !signature_references_excluded_type(&method.params, &method.return_type, exclude_types));
     }
     filtered
         .enums
@@ -607,7 +635,12 @@ impl Backend for JavaBackend {
         api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
-        service_api::generate(api, config)
+        let exclude_types = effective_exclude_types(api, config);
+        if exclude_types.is_empty() {
+            service_api::generate(api, config)
+        } else {
+            service_api::generate(&api_without_excluded_types(api, &exclude_types), config)
+        }
     }
 
     fn build_config(&self) -> Option<BuildConfig> {
@@ -700,6 +733,39 @@ mod tests {
         assert!(output.contains("sample_access_policy_from_json"));
         assert!(output.contains("SAMPLE_ACCESS_POLICY_FREE"));
         assert!(output.contains("sample_access_policy_free"));
+    }
+
+    #[test]
+    fn public_api_omits_functions_that_reference_excluded_types() {
+        let api = ApiSurface {
+            crate_name: "sample".into(),
+            types: vec![TypeDef {
+                name: "BorrowedView".into(),
+                has_lifetime_params: true,
+                ..TypeDef::default()
+            }],
+            functions: vec![FunctionDef {
+                name: "get_borrowed_view".into(),
+                return_type: TypeRef::Named("BorrowedView".into()),
+                ..FunctionDef::default()
+            }],
+            ..ApiSurface::default()
+        };
+        let config = ResolvedCrateConfig::default();
+
+        let binding_files = JavaBackend.generate_bindings(&api, &config).expect("Java bindings");
+        let public_files = JavaBackend.generate_public_api(&api, &config).expect("Java public API");
+
+        assert!(
+            binding_files
+                .iter()
+                .all(|file| !file.content.contains("getBorrowedView"))
+        );
+        assert!(
+            public_files
+                .iter()
+                .all(|file| !file.content.contains("getBorrowedView"))
+        );
     }
 
     #[test]
