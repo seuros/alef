@@ -373,6 +373,7 @@ pub(super) fn gen_extendr_wrappers_r(
     out.push_str("NULL\n\n");
 
     let bridge_fn_names: ahash::AHashSet<&str> = trait_bridge_fns.iter().map(|tb| tb.name.as_str()).collect();
+    let excluded = collect_excluded_class_types(api, bridges);
 
     for func in &api.functions {
         if bridge_fn_names.contains(func.name.as_str()) {
@@ -385,7 +386,7 @@ pub(super) fn gen_extendr_wrappers_r(
             continue;
         }
         let params: Vec<String> = func.params.iter().map(|p| sanitize_r_param_name(&p.name)).collect();
-        let params_sig = r_wrapper_params_signature(&func.params, api);
+        let params_sig = r_wrapper_params_signature(&func.params, api, &excluded);
         let mut call_args = vec![format!("\"wrap__{}\"", func.name)];
         for p in &params {
             call_args.push(p.clone());
@@ -473,7 +474,6 @@ pub(super) fn gen_extendr_wrappers_r(
         map
     };
 
-    let excluded = collect_excluded_class_types(api, bridges);
     for typ in &api.types {
         if typ.is_trait || excluded.contains(&typ.name) {
             continue;
@@ -669,11 +669,15 @@ pub(super) fn sanitize_r_param_name(name: &str) -> String {
     name.trim_start_matches('_').to_string()
 }
 
-pub(super) fn r_wrapper_params_signature(params: &[ParamDef], api: &ApiSurface) -> String {
+pub(super) fn r_wrapper_params_signature(
+    params: &[ParamDef],
+    api: &ApiSurface,
+    excluded_types: &ahash::AHashSet<String>,
+) -> String {
     let default_types: ahash::AHashSet<&str> = api
         .types
         .iter()
-        .filter(|t| t.has_default)
+        .filter(|t| t.has_default && !t.fields.is_empty() && !excluded_types.contains(&t.name))
         .map(|t| t.name.as_str())
         .collect();
     params
