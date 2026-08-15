@@ -510,11 +510,7 @@ impl E2eCodegen for ZigE2eCodegen {
         type_defs: &[crate::core::ir::TypeDef],
         _enums: &[crate::core::ir::EnumDef],
     ) -> Result<String> {
-        let package = e2e_config.resolve_package("zig");
-        let module = package
-            .as_ref()
-            .and_then(|value| value.name.clone())
-            .unwrap_or_else(|| config.name.to_snake_case());
+        let module = config.zig_module_name();
         let ffi_prefix = config
             .ffi
             .as_ref()
@@ -552,6 +548,51 @@ fn capsule_import_name(host_type: &str) -> Option<String> {
         .rsplit(|c: char| !(c.is_alphanumeric() || c == '_'))
         .find(|segment| !segment.is_empty())?;
     Some(name.to_string())
+}
+
+#[cfg(test)]
+mod snippet_module_tests {
+    use super::*;
+
+    #[test]
+    fn snippet_uses_configured_binding_module_not_package_reference_name() {
+        let fixture = Fixture {
+            id: "count".into(),
+            description: "Count".into(),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "count".into();
+        e2e.packages.insert(
+            "zig".into(),
+            crate::core::config::e2e::PackageRef {
+                name: Some("sample_release_asset".into()),
+                ..Default::default()
+            },
+        );
+        let mut config = ResolvedCrateConfig::default();
+        config.name = "sample-core".into();
+        config.zig = Some(crate::core::config::languages::ZigConfig {
+            capsule_types: Default::default(),
+            shares_native_runtime: false,
+            module_name: Some("sample_binding".into()),
+            features: None,
+            serde_rename_all: None,
+            rename_fields: Default::default(),
+            exclude_functions: vec![],
+            exclude_types: vec![],
+            run_wrapper: None,
+            extra_lint_paths: vec![],
+            languages: vec![],
+        });
+
+        let rendered = ZigE2eCodegen
+            .render_snippet_body(&fixture, &e2e, &config, &[], &[])
+            .expect("snippet");
+
+        assert!(rendered.contains("const sample_binding = @import(\"sample_binding\")"));
+        assert!(!rendered.contains("@import(\"sample_release_asset\")"));
+    }
 }
 
 #[cfg(test)]
