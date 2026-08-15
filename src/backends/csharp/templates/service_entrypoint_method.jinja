@@ -2,13 +2,16 @@
     /// {{ method_name }}.
     /// </summary>
     public {{ return_type }} {{ method_name }}({{ params_decl }}) {
+{{ declarations }}
         bool handleAdded = false;
         try {
+{{ setup }}
             _safeHandle.DangerousAddRef(ref handleAdded);
             return NativeMethods.{{ native_method }}(
                 _safeHandle.AlefHandle{{ arg_lines }}
             );
         } finally {
             if (handleAdded) _safeHandle.DangerousRelease();
+{{ teardown }}
         }
     }

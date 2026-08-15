@@ -43,6 +43,14 @@ public class {{ class_name }} : IDisposable {
     private static readonly NativeMethods.HandlerCallback _handlerCallback = HandlerTrampoline;
     private static readonly NativeMethods.HandlerResponseFree _handlerResponseFree = FreeHandlerResponse;
 
+{% if needs_error_resolver %}    private static Exception ResolveLastError() {
+        var code = NativeMethods.LastErrorCode();
+        var context = NativeMethods.LastErrorContext();
+        var message = Marshal.PtrToStringUTF8(context) ?? "Unknown native error";
+        return new {{ exception_name }}(code, message);
+    }
+{% endif %}
+
     private sealed class OwnerHandleLease : IDisposable {
         private {{ class_name }}? _owner;
 

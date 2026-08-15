@@ -2,12 +2,14 @@
     /// {{ doc }}
     /// </summary>
     public int {{ method_name }}({% if signature_params %}{{ signature_params }}, {% endif %}Delegate handler) {
+{{ declarations }}
         ArgumentNullException.ThrowIfNull(handler);
         var handle = GCHandle.Alloc(handler, GCHandleType.Normal);
         IntPtr ctx = GCHandle.ToIntPtr(handle);
         bool handleAdded = false;
         int result;
         try {
+{{ setup }}
             _safeHandle.DangerousAddRef(ref handleAdded);
             result = NativeMethods.{{ native_method }}(
                 _safeHandle.AlefHandle,
@@ -20,6 +22,7 @@
             throw;
         } finally {
             if (handleAdded) _safeHandle.DangerousRelease();
+{{ teardown }}
         }
 
         if (result == 0) {

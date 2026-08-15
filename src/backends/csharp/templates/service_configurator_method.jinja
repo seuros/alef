@@ -2,6 +2,22 @@
     /// Configure {{ method_name }}.
     /// </summary>
     public {{ class_name }} {{ method_name }}({{ params_decl }}) {
-        // Store configuration if needed
+{{ declarations }}
+        ulong configuredHandle;
+        using var ownerLease = BorrowOwnerHandle();
+        try {
+{{ setup }}
+            configuredHandle = NativeMethods.{{ native_method }}(
+                ownerLease.Handle{{ arg_lines }}
+            );
+        } finally {
+{{ teardown }}
+        }
+        if (configuredHandle == 0) {
+            throw ResolveLastError();
+        }
+        if (configuredHandle != ownerLease.Handle) {
+            throw new InvalidOperationException("Native service configurator replaced the stable owner handle");
+        }
         return this;
     }

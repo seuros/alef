@@ -2,12 +2,14 @@
     /// Register a handler for {{ method_name }}.
     /// </summary>
     public int {{ method_name }}({% if metadata_params %}{{ metadata_params }}, {% endif %}Func<string, string> handler) {
+{{ declarations }}
         ArgumentNullException.ThrowIfNull(handler);
         var handle = GCHandle.Alloc(handler, GCHandleType.Normal);
         IntPtr ctx = GCHandle.ToIntPtr(handle);
         int result;
         using var ownerLease = BorrowOwnerHandle();
         try {
+{{ setup }}
             result = NativeMethods.{{ native_method }}(
                 ownerLease.Handle,
                 _handlerCallback,
@@ -17,6 +19,8 @@
         } catch {
             handle.Free();
             throw;
+        } finally {
+{{ teardown }}
         }
 
         if (result == 0) {
