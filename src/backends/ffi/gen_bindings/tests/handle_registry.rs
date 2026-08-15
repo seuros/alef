@@ -327,6 +327,22 @@ fn borrowed_types_keep_owned_lifecycle_and_accessor_exports() {
     );
     assert!(source.contains("my_lib_render_options_default"), "{source}");
     assert!(source.contains("my_lib_preprocess_options_default"), "{source}");
+    assert!(
+        source.contains("SerializedHandle<sample_lib::BorrowedNode<'static>>"),
+        "borrowed contexts must use a Send snapshot wrapper:\n{source}"
+    );
+    assert!(source.contains("insert_serialized_handle(&val)"), "{source}");
+    assert!(source.contains("serde_json::from_str(&snapshot.json)"), "{source}");
+    assert!(
+        source.contains("fn my_lib_borrowed_node_into_owned(")
+            && source.contains("take_handle::<SerializedHandle<sample_lib::BorrowedNode<'static>>>(this)")
+            && source.contains("match insert_serialized_handle(&result)"),
+        "owned methods must consume and replace typed snapshots:\n{source}"
+    );
+    assert!(
+        !source.contains("insert_handle(val)"),
+        "the non-Send borrowed value itself must never enter the registry:\n{source}"
+    );
     assert!(!source.contains("my_lib_document_node"), "{source}");
     assert!(!source.contains("my_lib_inspect"), "{source}");
 }

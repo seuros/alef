@@ -64,6 +64,7 @@ pub(super) fn gen_type_from_json(typ: &TypeDef, prefix: &str, core_import: &str)
             type_snake => type_snake,
             prefix => prefix,
             qualified => return_qualified,
+            serialized_handle => typ.has_lifetime_params,
             source_cfg => typ.cfg.as_deref().unwrap_or(""),
         },
     )
@@ -86,6 +87,7 @@ pub(super) fn gen_type_to_json(typ: &TypeDef, prefix: &str, core_import: &str) -
             type_snake => type_snake,
             prefix => prefix,
             qualified => ptr_qualified,
+            serialized_handle => typ.has_lifetime_params,
             source_cfg => typ.cfg.as_deref().unwrap_or(""),
         },
     )
@@ -108,6 +110,7 @@ pub(super) fn gen_type_free(typ: &TypeDef, prefix: &str, core_import: &str) -> S
             type_snake => type_snake,
             prefix => prefix,
             qualified => ptr_qualified,
+            serialized_handle => typ.has_lifetime_params,
             source_cfg => typ.cfg.as_deref().unwrap_or(""),
         },
     )
@@ -214,6 +217,7 @@ pub(super) fn gen_field_accessor(
             type_snake => type_snake,
             prefix => prefix,
             qualified => qualified,
+            serialized_handle => typ.has_lifetime_params,
             ret_type => ret_type,
             needs_len_out => needs_len_out,
             null_return_value => null_ret,

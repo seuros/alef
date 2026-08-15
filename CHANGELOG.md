@@ -29,7 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   constructors compile while continuing to distinguish an absent value from an explicitly supplied zero.
 - **FFI borrowed contexts**: restore owned lifecycle, field-accessor, owned-self method, and default-constructor
   exports for lifetime-bearing visitor contexts while continuing to reject APIs that pass borrowed handles across
-  the ABI boundary.
+  the ABI boundary. Non-`Send` contexts are stored as type-keyed serialized snapshots, preserving the registry's
+  `Send` invariant and scalar handle ABI without erasing live visitor-context symbols.
 - **e2e/ruby snippets**: bind collected streaming values through the configured result variable, keeping the
   assignment and subsequent `puts ...inspect` reference synchronized instead of binding an unused `chunks` variable.
 - **e2e/elixir snippets**: bind collected streaming values through the configured result variable, keeping the

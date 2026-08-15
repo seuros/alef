@@ -13,12 +13,26 @@ pub unsafe extern "C" fn {{ prefix }}_{{ type_snake }}_{{ field_name }}({% if ne
     if handle == 0 {
         return {{ null_return_value }};
     }
-    let result = with_handle::<{{ qualified }}, _>(handle, |obj| {
+    let result = with_handle::<{% if serialized_handle %}SerializedHandle<{{ qualified }}>{% else %}{{ qualified }}{% endif %}, _>(handle, |{% if serialized_handle %}snapshot{% else %}obj{% endif %}| {
+{% if serialized_handle %}
+        serde_json::from_str::<{{ qualified }}>(&snapshot.json).map(|obj| {
 {{ body }}
+        })
+{% else %}
+{{ body }}
+{% endif %}
     });
+{% if serialized_handle %}
+    match result {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => { set_last_error(2, &error.to_string()); {{ null_return_value }} }
+        Err(error) => { set_handle_error(&error); {{ null_return_value }} }
+    }
+{% else %}
     match result {
         Ok(value) => value,
         Err(error) => { set_handle_error(&error); {{ null_return_value }} }
     }
+{% endif %}
     })
 }

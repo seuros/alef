@@ -101,6 +101,20 @@ fn insert_handle<T: std::any::Any + Send>(value: T) -> Result<AlefHandle, Handle
     Ok(registry.insert(value))
 }
 
+struct SerializedHandle<T: 'static> {
+    json: String,
+    marker: std::marker::PhantomData<fn() -> T>,
+}
+
+fn insert_serialized_handle<T: serde::Serialize + 'static>(value: &T) -> Result<AlefHandle, String> {
+    let json = serde_json::to_string(value).map_err(|error| error.to_string())?;
+    insert_handle(SerializedHandle::<T> {
+        json,
+        marker: std::marker::PhantomData,
+    })
+    .map_err(|error| error.to_string())
+}
+
 fn with_handle<T: std::any::Any + Send, R>(
     handle: AlefHandle,
     operation: impl FnOnce(&T) -> R,

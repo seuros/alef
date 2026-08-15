@@ -13,6 +13,15 @@ pub unsafe extern "C" fn {{ prefix }}_{{ type_snake }}_to_json(handle: AlefHandl
         set_last_error(ALEF_INVALID_HANDLE_ERROR, "zero is not a valid handle");
         return std::ptr::null_mut();
     }
+{% if serialized_handle %}
+    match with_handle::<SerializedHandle<{{ qualified }}>, _>(handle, |snapshot| snapshot.json.clone()) {
+        Err(error) => { set_handle_error(&error); std::ptr::null_mut() }
+        Ok(s) => match CString::new(s) {
+            Ok(cs) => cs.into_raw(),
+            Err(e) => { set_last_error(2, &e.to_string()); std::ptr::null_mut() }
+        }
+    }
+{% else %}
     match with_handle::<{{ qualified }}, _>(handle, serde_json::to_string) {
         Err(error) => { set_handle_error(&error); std::ptr::null_mut() }
         Ok(Err(error)) => { set_last_error(2, &error.to_string()); std::ptr::null_mut() }
@@ -24,5 +33,6 @@ pub unsafe extern "C" fn {{ prefix }}_{{ type_snake }}_to_json(handle: AlefHandl
             }
         }
     }
+{% endif %}
     })
 }

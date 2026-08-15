@@ -8,7 +8,7 @@
 pub unsafe extern "C" fn {{ prefix }}_{{ type_snake }}_free(handle: AlefHandle) {
     catch_ffi_panic((), || {
     if handle != 0 {
-        if let Err(error) = remove_handle::<{{ qualified }}>(handle) {
+        if let Err(error) = remove_handle::<{% if serialized_handle %}SerializedHandle<{{ qualified }}>{% else %}{{ qualified }}{% endif %}>(handle) {
             set_handle_error(&error);
         }
     }

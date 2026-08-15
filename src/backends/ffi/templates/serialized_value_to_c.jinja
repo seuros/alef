@@ -1,0 +1,4 @@
+{{ indent }}match insert_serialized_handle(&{{ value }}) {
+{{ indent }}    Ok(handle) => handle,
+{{ indent }}    Err(error) => { set_last_error(2, &error); 0 }
+{{ indent }}}

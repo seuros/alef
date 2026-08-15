@@ -91,6 +91,16 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
     };
 
     let qualified = core_type_path(typ, core_import);
+    let qualified_with_lifetime = if typ.has_lifetime_params {
+        format!("{qualified}<'static>")
+    } else {
+        qualified.clone()
+    };
+    let handle_qualified = if typ.has_lifetime_params {
+        format!("SerializedHandle<{qualified_with_lifetime}>")
+    } else {
+        qualified.clone()
+    };
 
     let mut ret_type = if is_bytes_result {
         "i32".to_string()
@@ -221,7 +231,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
     let is_owned_receiver = method.receiver.as_ref() == Some(&ReceiverKind::Owned);
     if !method.is_static && !is_owned_receiver {
         handle_requests.push(format!(
-            "    __alef_requests.push(HandleRequest {{ handle: this, expected_type: std::any::TypeId::of::<{qualified}>() }});"
+            "    __alef_requests.push(HandleRequest {{ handle: this, expected_type: std::any::TypeId::of::<{handle_qualified}>() }});"
         ));
     }
     for parameter in &method.params {
@@ -254,19 +264,41 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
     }
 
     if !method.is_static {
-        let null_check = match method.receiver.as_ref().unwrap_or(&ReceiverKind::Ref) {
-            ReceiverKind::Ref => crate::backends::ffi::template_env::render(
-                "null_check_self_ref.jinja",
-                context! { fail_ret => fail_ret, qualified => qualified.clone() },
-            ),
-            ReceiverKind::RefMut => crate::backends::ffi::template_env::render(
-                "null_check_self_mut.jinja",
-                context! { fail_ret => fail_ret, qualified => qualified.clone() },
-            ),
-            ReceiverKind::Owned => crate::backends::ffi::template_env::render(
-                "null_check_self_owned.jinja",
-                context! { fail_ret => fail_ret, qualified => qualified.clone() },
-            ),
+        let receiver_kind = method.receiver.as_ref().unwrap_or(&ReceiverKind::Ref);
+        let null_check = if typ.has_lifetime_params {
+            match receiver_kind {
+                ReceiverKind::Ref | ReceiverKind::RefMut => crate::backends::ffi::template_env::render(
+                    "snapshot_handle_self_ref.jinja",
+                    context! {
+                        fail_ret => fail_ret,
+                        qualified => qualified_with_lifetime.clone(),
+                        handle_qualified => handle_qualified.clone(),
+                    },
+                ),
+                ReceiverKind::Owned => crate::backends::ffi::template_env::render(
+                    "snapshot_handle_self_owned.jinja",
+                    context! {
+                        fail_ret => fail_ret,
+                        qualified => qualified_with_lifetime.clone(),
+                        handle_qualified => handle_qualified.clone(),
+                    },
+                ),
+            }
+        } else {
+            match receiver_kind {
+                ReceiverKind::Ref => crate::backends::ffi::template_env::render(
+                    "null_check_self_ref.jinja",
+                    context! { fail_ret => fail_ret, qualified => qualified.clone() },
+                ),
+                ReceiverKind::RefMut => crate::backends::ffi::template_env::render(
+                    "null_check_self_mut.jinja",
+                    context! { fail_ret => fail_ret, qualified => qualified.clone() },
+                ),
+                ReceiverKind::Owned => crate::backends::ffi::template_env::render(
+                    "null_check_self_owned.jinja",
+                    context! { fail_ret => fail_ret, qualified => qualified.clone() },
+                ),
+            }
         };
         out.push_str(&crate::backends::ffi::template_env::render(
             "code_line.jinja",
@@ -515,6 +547,8 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
         if method.returns_cow && !has_error {
             out.push_str("    let result = result.into_owned();\n");
         }
+        let returns_serialized_self = typ.has_lifetime_params
+            && matches!(&method.return_type, TypeRef::Named(name) if name == type_name);
         if has_error {
             if is_void_return(&method.return_type) {
                 out.push_str(&crate::backends::ffi::template_env::render(
@@ -528,7 +562,14 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
                     } else {
                         "val"
                     };
-                let ok_body = gen_owned_value_to_c(val_expr, &method.return_type, "            ", enum_names);
+                let ok_body = if returns_serialized_self {
+                    crate::backends::ffi::template_env::render(
+                        "serialized_value_to_c.jinja",
+                        context! { value => val_expr, indent => "            " },
+                    )
+                } else {
+                    gen_owned_value_to_c(val_expr, &method.return_type, "            ", enum_names)
+                };
                 out.push_str(&crate::backends::ffi::template_env::render(
                     "error_match_non_void.jinja",
                     context! {
@@ -539,6 +580,11 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
             }
         } else if is_void_return(&method.return_type) {
         } else if can_inline {
+        } else if returns_serialized_self {
+            out.push_str(&crate::backends::ffi::template_env::render(
+                "serialized_value_to_c.jinja",
+                context! { value => result_expr, indent => "    " },
+            ));
         } else {
             out.push_str(&crate::backends::ffi::template_env::render(
                 "emitted_code_block.jinja",

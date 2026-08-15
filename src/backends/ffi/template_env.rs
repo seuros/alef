@@ -167,6 +167,18 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/null_check_self_owned.jinja"),
     ),
     (
+        "snapshot_handle_self_ref.jinja",
+        include_str!("templates/snapshot_handle_self_ref.jinja"),
+    ),
+    (
+        "snapshot_handle_self_owned.jinja",
+        include_str!("templates/snapshot_handle_self_owned.jinja"),
+    ),
+    (
+        "serialized_value_to_c.jinja",
+        include_str!("templates/serialized_value_to_c.jinja"),
+    ),
+    (
         "error_match_void.jinja",
         include_str!("templates/error_match_void.jinja"),
     ),

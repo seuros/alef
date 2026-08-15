@@ -1,0 +1,16 @@
+if this == 0 {
+    set_last_error(ALEF_INVALID_HANDLE_ERROR, "zero is not a valid handle");
+    {{ fail_ret }}
+}
+if __alef_values.iter().any(|(handle, _)| *handle == this) {
+    set_handle_error(&HandleError::AliasedHandle);
+    {{ fail_ret }}
+}
+let snapshot = match take_handle::<{{ handle_qualified }}>(this) {
+    Ok(value) => value,
+    Err(error) => { set_handle_error(&error); {{ fail_ret }} }
+};
+let obj: {{ qualified }} = match serde_json::from_str(&snapshot.json) {
+    Ok(value) => value,
+    Err(error) => { set_last_error(2, &error.to_string()); {{ fail_ret }} }
+};
