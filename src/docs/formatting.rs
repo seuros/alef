@@ -116,6 +116,20 @@ pub(crate) fn format_typed_default(
             let normalized = crate::docs::doc_cleaning::collapse_whitespace(s);
             format!("`\"{normalized}\"`")
         }
+        // Documented in a language-neutral bracket form. Elements route back through this same
+        // function so a Python `True` stays `True` inside the list; the per-element backticks
+        // are stripped because the whole list carries one pair. ~keep
+        DefaultValue::ListLiteral(items) => {
+            let rendered: Vec<String> = items
+                .iter()
+                .map(|item| {
+                    format_typed_default(item, field_ty, lang, api, ffi_prefix, optional)
+                        .trim_matches('`')
+                        .to_string()
+                })
+                .collect();
+            format!("`[{}]`", rendered.join(", "))
+        }
         DefaultValue::IntLiteral(n) => {
             if matches!(field_ty, TypeRef::Duration)
                 || matches!(field_ty, TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Duration))

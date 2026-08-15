@@ -376,6 +376,13 @@ pub(super) fn emit_first_class_struct(
 /// stays parseable — callers handle those by falling back to a type-based default.
 pub(super) fn swift_typed_default_literal(dv: &DefaultValue) -> Option<String> {
     match dv {
+        // Every element must render or the whole collection falls back to a type-based default,
+        // the same all-or-nothing rule the extractor applies when lowering the literal. ~keep
+        DefaultValue::ListLiteral(items) => items
+            .iter()
+            .map(swift_typed_default_literal)
+            .collect::<Option<Vec<String>>>()
+            .map(|values| format!("[{}]", values.join(", "))),
         DefaultValue::BoolLiteral(true) => Some("true".to_string()),
         DefaultValue::BoolLiteral(false) => Some("false".to_string()),
         DefaultValue::IntLiteral(n) => Some(n.to_string()),

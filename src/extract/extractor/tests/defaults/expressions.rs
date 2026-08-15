@@ -427,6 +427,67 @@ fn test_field_with_vec_macro_default() {
     );
 }
 
+/// A non-empty `vec!` literal must carry its elements, not collapse to `Empty`.
+///
+/// Before this, every macro default -- empty or not -- returned `Empty`, so a Rust default of
+/// `vec!["markdown"]` reached the backends indistinguishable from `vec![]` and every binding
+/// emitted an empty collection. The guard that looked like it separated the two cases was dead:
+/// both of its branches returned `Empty`.
+#[test]
+fn non_empty_vec_macro_default_keeps_its_elements() {
+    let source = r#"
+        pub struct Pipeline {
+            pub stages: Vec<String>,
+        }
+
+        impl Default for Pipeline {
+            fn default() -> Self {
+                Pipeline { stages: vec!["markdown".to_owned(), "html".to_owned()] }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let stages_field = &surface.types[0].fields[0];
+
+    assert_eq!(
+        stages_field.typed_default,
+        Some(crate::core::ir::DefaultValue::ListLiteral(vec![
+            crate::core::ir::DefaultValue::StringLiteral("markdown".to_string()),
+            crate::core::ir::DefaultValue::StringLiteral("html".to_string()),
+        ])),
+        "a populated vec! literal must reach the IR with its elements intact"
+    );
+}
+
+/// The all-or-nothing rule: one unrepresentable element makes the whole literal `Empty`.
+///
+/// A partially-lowered list would hand a backend a default that silently differs from the Rust
+/// one, which is strictly worse than the pre-existing loss.
+#[test]
+fn vec_macro_default_with_an_unrepresentable_element_falls_back_to_empty() {
+    let source = r#"
+        pub struct Pipeline {
+            pub stages: Vec<String>,
+        }
+
+        impl Default for Pipeline {
+            fn default() -> Self {
+                Pipeline { stages: vec!["markdown".to_owned(), compute_stage()] }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let stages_field = &surface.types[0].fields[0];
+
+    assert_eq!(
+        stages_field.typed_default,
+        Some(crate::core::ir::DefaultValue::Empty),
+        "a literal containing a non-representable element must not lower to a partial list"
+    );
+}
+
 #[test]
 fn test_field_with_none_default() {
     let source = r#"

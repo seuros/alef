@@ -238,6 +238,18 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_record_type(
                 }
                 Some(DefaultValue::None) => "null".to_string(),
                 Some(DefaultValue::FunctionCall(_) | DefaultValue::PublicFunctionCall(_)) => "null".to_string(),
+                // A C# collection expression, which is exactly what this position already emits
+                // for the empty case (`[]`), so a populated literal is valid here too. A
+                // sanitized field keeps its `null` and an unrenderable element falls back to the
+                // empty collection, matching the extractor's all-or-nothing rule. ~keep
+                Some(DefaultValue::ListLiteral(items)) => {
+                    let rendered: Option<Vec<String>> = items.iter().map(csharp_scalar_default).collect();
+                    match rendered {
+                        _ if field.sanitized => "null".to_string(),
+                        Some(values) => format!("[{}]", values.join(", ")),
+                        None => "[]".to_string(),
+                    }
+                }
                 Some(DefaultValue::Empty) | None => match &field.ty {
                     TypeRef::Vec(_) if field.sanitized => "null".to_string(),
                     TypeRef::Vec(_) => "[]".to_string(),
@@ -672,5 +684,35 @@ pub(super) fn emit_record_methods(
         }
 
         out.push_str("    }\n");
+    }
+}
+
+/// Render one element of a collection-literal default as a C# expression.
+///
+/// Scalar-only: a nested list or a function-call default cannot be expressed in the position
+/// this feeds, so both return `None` and the caller falls back to the empty collection. ~keep
+fn csharp_scalar_default(item: &DefaultValue) -> Option<String> {
+    match item {
+        DefaultValue::BoolLiteral(b) => Some(b.to_string()),
+        DefaultValue::IntLiteral(n) => Some(n.to_string()),
+        DefaultValue::FloatLiteral(f) => {
+            let s = f.to_string();
+            Some(if s.contains('.') { s } else { format!("{s}.0") })
+        }
+        DefaultValue::StringLiteral(s) => {
+            let escaped = s
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+                .replace('\r', "\\r")
+                .replace('\t', "\\t");
+            Some(format!("\"{escaped}\""))
+        }
+        DefaultValue::EnumVariant(v) => Some(format!("\"{}\"", to_csharp_name(v))),
+        DefaultValue::ListLiteral(_)
+        | DefaultValue::Empty
+        | DefaultValue::None
+        | DefaultValue::FunctionCall(_)
+        | DefaultValue::PublicFunctionCall(_) => None,
     }
 }

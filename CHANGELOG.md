@@ -51,6 +51,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drift, and a second `alef all` silently settled it — which is why regenerating twice produced changes the first
   run should have made. The language filter was also wrong for the workspace-wide `cargo sort -n -w` folded into
   that loop, which must cover crates the current run did not generate.
+- **defaults**: carry the elements of a non-empty collection literal through the IR instead of discarding them.
+  Every `vec!`/`hashmap!`/`hashset!` default collapsed to `DefaultValue::Empty`, so a Rust default of
+  `vec!["noscript"]` reached the backends indistinguishable from `vec![]` and every binding emitted an empty
+  collection — a silent cross-language behavioural divergence, not a cosmetic one. The guard that appeared to
+  separate the two cases was dead code: both of its branches returned `Empty`. A new `DefaultValue::ListLiteral`
+  carries the elements, and Rust, Python, Kotlin, Swift, Dart, C#, Elixir and the docs renderer emit them. Go and R
+  deliberately keep falling back to the empty collection, because Go needs the element type spelled out
+  (`[]string{…}`) and R's `c()` carries vector-coercion semantics of its own — guessing either risks a default that
+  differs from the Rust one. A genuinely empty `vec![]` still lowers to `Empty`, and a literal containing any element
+  that cannot be rendered self-containedly — notably a function call — falls back to `Empty` whole rather than
+  lowering a partial list. **Consumer-visible:** a field whose Rust default is a populated collection now generates
+  that collection as its binding default instead of an empty one.
 - **snippets**: scope the shared validation timeout to validators that genuinely batch. `run_validation` handed a
   single wall-clock budget, keyed by language/session/level, to the per-snippet path — which is reached only by
   validators that spawn one toolchain process per snippet (every language except Rust below `Run`). The first

@@ -254,6 +254,15 @@ pub(in crate::backends::rustler::gen_bindings) fn elixir_field_default(
             DefaultValue::IntLiteral(i) => elixir_format_integer(*i),
             DefaultValue::FloatLiteral(f) => format!("{f}"),
             DefaultValue::EnumVariant(v) => format!(":{}", v.to_snake_case()),
+            DefaultValue::ListLiteral(items) => {
+                let rendered: Option<Vec<String>> = items.iter().map(elixir_scalar_default).collect();
+                // A nested or non-scalar element falls back to the empty collection rather than
+                // a partial list, matching the extractor's all-or-nothing rule. ~keep
+                match rendered {
+                    Some(values) => format!("[{}]", values.join(", ")),
+                    None => elixir_zero_value(ty, enum_defaults),
+                }
+            }
             DefaultValue::Empty => elixir_zero_value(ty, enum_defaults),
             DefaultValue::None => "nil".to_string(),
             DefaultValue::FunctionCall(_) | DefaultValue::PublicFunctionCall(_) => "nil".to_string(),
@@ -261,6 +270,27 @@ pub(in crate::backends::rustler::gen_bindings) fn elixir_field_default(
     }
 
     elixir_zero_value(ty, enum_defaults)
+}
+
+/// Render one element of a collection-literal default as Elixir source.
+///
+/// Deliberately scalar-only: a nested list has no element type to resolve against here, and a
+/// function-call default cannot be evaluated at generation time, so both return `None` and let
+/// the caller fall back to the empty collection. ~keep
+fn elixir_scalar_default(item: &crate::core::ir::DefaultValue) -> Option<String> {
+    use crate::core::ir::DefaultValue;
+    match item {
+        DefaultValue::BoolLiteral(b) => Some((if *b { "true" } else { "false" }).to_string()),
+        DefaultValue::StringLiteral(s) => Some(format!("\"{}\"", s.replace('"', "\\\""))),
+        DefaultValue::IntLiteral(i) => Some(elixir_format_integer(*i)),
+        DefaultValue::FloatLiteral(f) => Some(format!("{f}")),
+        DefaultValue::EnumVariant(v) => Some(format!(":{}", v.to_snake_case())),
+        DefaultValue::ListLiteral(_)
+        | DefaultValue::Empty
+        | DefaultValue::None
+        | DefaultValue::FunctionCall(_)
+        | DefaultValue::PublicFunctionCall(_) => None,
+    }
 }
 
 /// Generate a type-appropriate zero/default value for Elixir.

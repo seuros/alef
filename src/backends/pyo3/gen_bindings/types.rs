@@ -621,6 +621,19 @@ fn typed_default_to_python(
             use heck::ToSnakeCase;
             format!("\"{}\"", v.to_snake_case())
         }
+        DefaultValue::ListLiteral(items) => {
+            let element_ty = match ty {
+                TypeRef::Vec(inner) => inner.as_ref(),
+                other => other,
+            };
+            let rendered: Vec<String> = items
+                .iter()
+                .map(|item| typed_default_to_python(item, element_ty, enum_defaults, data_enum_names))
+                .collect();
+            // A dataclass cannot carry a mutable default directly, so even a fully known list
+            // goes through `default_factory` — the same mechanism the empty case already uses. ~keep
+            format!("field(default_factory=lambda: [{}])", rendered.join(", "))
+        }
         DefaultValue::Empty => {
             if let TypeRef::Named(name) = ty
                 && data_enum_names.contains(name.as_str())

@@ -31,6 +31,14 @@ pub enum DefaultValue {
     FunctionCall(String),
     /// A public zero-argument Rust function callable from generated binding crates. ~keep
     PublicFunctionCall(String),
+    /// A non-empty collection literal, holding its elements in source order.
+    ///
+    /// A genuinely empty `vec![]`/`Vec::new()` stays [`DefaultValue::Empty`]: the two are
+    /// distinct because every backend already renders "the empty collection" natively, whereas
+    /// this variant carries elements that have to be rendered individually. Only produced when
+    /// every element is itself representable — anything else falls back to `Empty`, so a
+    /// backend never emits a default that silently differs from the Rust one. ~keep
+    ListLiteral(Vec<DefaultValue>),
     /// Empty collection or Default::default()
     Empty,
     /// None / null

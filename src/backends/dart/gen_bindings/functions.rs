@@ -224,6 +224,22 @@ fn render_default_value(
         DefaultValue::IntLiteral(value) => Some(value.to_string()),
         DefaultValue::FloatLiteral(value) => Some(value.to_string()),
         DefaultValue::EnumVariant(variant) => render_enum_variant_default(ty, variant, enums),
+        DefaultValue::ListLiteral(items) => {
+            let element_ty = match ty {
+                TypeRef::Vec(inner) => inner.as_ref(),
+                other => other,
+            };
+            let rendered: Option<Vec<String>> = items
+                .iter()
+                .map(|item| render_default_value(element_ty, item, type_defs, enums))
+                .collect();
+            // An element this renderer cannot express falls back to the empty collection rather
+            // than a partial list, matching the extractor's all-or-nothing rule. ~keep
+            match rendered {
+                Some(values) => Some(format!("const [{}]", values.join(", "))),
+                None => zero_value_for_type(ty, type_defs, enums),
+            }
+        }
         DefaultValue::Empty => zero_value_for_type(ty, type_defs, enums),
         DefaultValue::None => Some("null".to_string()),
         DefaultValue::FunctionCall(_) | DefaultValue::PublicFunctionCall(_) => None,

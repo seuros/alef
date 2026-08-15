@@ -421,6 +421,33 @@ pub fn function_sig_defaults(params: &[ParamDef]) -> String {
 /// `compile_error!` recovery failure is left unconverted: it never compiles regardless, and
 /// appending `.into()` would only obscure the diagnostic. Every other `DefaultValue` variant
 /// already produces a value in the field's own representation and needs no conversion.
+/// Render one element of a collection-literal default as Rust source.
+///
+/// Scalar-only by design: a nested list, an empty marker and a function-call default all need
+/// context this element position does not carry, so they return `None` and the caller falls back
+/// to `Default::default()` for the collection as a whole. ~keep
+fn rust_scalar_default(item: &DefaultValue) -> Option<String> {
+    match item {
+        DefaultValue::BoolLiteral(b) => Some(format!("{b}")),
+        DefaultValue::StringLiteral(s) => Some(format!("\"{}\".to_string()", s.escape_default())),
+        DefaultValue::IntLiteral(i) => Some(format!("{i}")),
+        DefaultValue::FloatLiteral(f) => {
+            let s = format!("{f}");
+            Some(if s.contains('.') || s.contains('e') || s.contains('E') {
+                s
+            } else {
+                format!("{s}.0")
+            })
+        }
+        DefaultValue::EnumVariant(v) => Some(v.clone()),
+        DefaultValue::ListLiteral(_)
+        | DefaultValue::Empty
+        | DefaultValue::None
+        | DefaultValue::FunctionCall(_)
+        | DefaultValue::PublicFunctionCall(_) => None,
+    }
+}
+
 pub fn format_default_value(field: &FieldDef, typ: &TypeDef) -> String {
     let default = field
         .typed_default
@@ -439,6 +466,15 @@ pub fn format_default_value(field: &FieldDef, typ: &TypeDef) -> String {
             }
         }
         DefaultValue::EnumVariant(v) => v.clone(),
+        DefaultValue::ListLiteral(items) => {
+            let rendered: Option<Vec<String>> = items.iter().map(rust_scalar_default).collect();
+            // A non-scalar element falls back to `Default::default()` rather than a partial
+            // literal, matching the extractor's all-or-nothing rule. ~keep
+            match rendered {
+                Some(values) => format!("vec![{}]", values.join(", ")),
+                None => "Default::default()".to_string(),
+            }
+        }
         DefaultValue::Empty => "Default::default()".to_string(),
         DefaultValue::None => "None".to_string(),
         DefaultValue::FunctionCall(_) | DefaultValue::PublicFunctionCall(_) => {
@@ -771,10 +807,7 @@ mod tests {
             ..Default::default()
         };
         let typ = owning_type("crawlberg::CrawlConfig", "CrawlConfig", vec![field.clone()]);
-        assert_eq!(
-            format_default_value(&field, &typ),
-            "crawlberg::defaults::retry_limit()"
-        );
+        assert_eq!(format_default_value(&field, &typ), "crawlberg::defaults::retry_limit()");
     }
 
     /// The defect this fix addresses: a private (plain `FunctionCall`, not yet resolved to a

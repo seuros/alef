@@ -287,10 +287,46 @@ fn expr_to_default_value(expr: &syn::Expr) -> DefaultValue {
                 .last()
                 .map(|s| s.ident.to_string())
                 .unwrap_or_default();
-            if matches!(macro_name.as_str(), "vec" | "hashmap" | "hashset") && mac.mac.tokens.is_empty() {
+            if !matches!(macro_name.as_str(), "vec" | "hashmap" | "hashset") || mac.mac.tokens.is_empty() {
                 return DefaultValue::Empty;
             }
-            DefaultValue::Empty
+            // Only `vec!` is destructured. `hashmap!`/`hashset!` carry key-value and set
+            // semantics `DefaultValue` cannot represent, so they keep collapsing to `Empty`
+            // rather than being flattened into a list that would render wrongly. ~keep
+            if macro_name != "vec" {
+                return DefaultValue::Empty;
+            }
+            let Ok(elements) = mac
+                .mac
+                .parse_body_with(syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated)
+            else {
+                // `vec![expr; N]` is not a comma list and fails to parse as one. ~keep
+                return DefaultValue::Empty;
+            };
+            if elements.is_empty() {
+                return DefaultValue::Empty;
+            }
+            let mut lowered = Vec::with_capacity(elements.len());
+            for element in &elements {
+                match expr_to_default_value(element) {
+                    // Only self-contained values may sit in an element position. A function-call
+                    // default cannot be evaluated at generation time, and `Empty`/`None` carry no
+                    // element value at all; any of them makes the whole literal non-representable.
+                    // Lowering a partial list would hand a backend a default that silently differs
+                    // from the Rust one, which is worse than collapsing to `Empty`. ~keep
+                    value @ (DefaultValue::BoolLiteral(_)
+                    | DefaultValue::StringLiteral(_)
+                    | DefaultValue::IntLiteral(_)
+                    | DefaultValue::FloatLiteral(_)
+                    | DefaultValue::EnumVariant(_)
+                    | DefaultValue::ListLiteral(_)) => lowered.push(value),
+                    DefaultValue::Empty
+                    | DefaultValue::None
+                    | DefaultValue::FunctionCall(_)
+                    | DefaultValue::PublicFunctionCall(_) => return DefaultValue::Empty,
+                }
+            }
+            DefaultValue::ListLiteral(lowered)
         }
 
         _ => DefaultValue::Empty,

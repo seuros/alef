@@ -158,6 +158,27 @@ pub fn default_value_for_field(field: &FieldDef, language: &str) -> String {
                     _ => v.clone(),
                 }
             }
+            // Rendered per language wherever the syntax is a plain bracketed list. Go needs the
+            // element type spelled out (`[]string{…}`) and R's `c()` carries vector-coercion
+            // semantics of its own, so both fall through to the empty-collection rendering
+            // rather than being guessed at here — a wrong default is worse than a missing one. ~keep
+            DefaultValue::ListLiteral(items) => {
+                let rendered: Option<Vec<String>> =
+                    items.iter().map(|item| config_scalar_default(item, language)).collect();
+                match (rendered, language) {
+                    (Some(values), "python" | "ruby" | "csharp" | "php") => format!("[{}]", values.join(", ")),
+                    (Some(values), "java") => format!("List.of({})", values.join(", ")),
+                    (Some(values), "rust") => format!("vec![{}]", values.join(", ")),
+                    _ => match language {
+                        "python" | "ruby" | "csharp" | "php" => "[]".to_string(),
+                        "go" => "nil".to_string(),
+                        "java" => "List.of()".to_string(),
+                        "r" => "c()".to_string(),
+                        "rust" => "vec![]".to_string(),
+                        _ => "null".to_string(),
+                    },
+                }
+            }
             DefaultValue::Empty => match &field.ty {
                 TypeRef::Vec(_) => match language {
                     "python" | "ruby" | "csharp" => "[]".to_string(),
@@ -509,5 +530,34 @@ impl TypeRefExt for TypeRef {
             TypeRef::Json => "Json".to_string(),
             TypeRef::Duration => "Duration".to_string(),
         }
+    }
+}
+
+/// Render one element of a collection-literal default for `language`.
+///
+/// Scalar-only: a nested list, an empty marker and a function-call default all need context this
+/// element position does not carry, so they return `None` and the caller falls back to the empty
+/// collection for the whole field. ~keep
+fn config_scalar_default(item: &DefaultValue, language: &str) -> Option<String> {
+    match item {
+        DefaultValue::BoolLiteral(b) => Some(match language {
+            "python" => {
+                if *b {
+                    "True".to_string()
+                } else {
+                    "False".to_string()
+                }
+            }
+            _ => b.to_string(),
+        }),
+        DefaultValue::StringLiteral(s) => Some(format!("\"{}\"", s.escape_default())),
+        DefaultValue::IntLiteral(i) => Some(i.to_string()),
+        DefaultValue::FloatLiteral(f) => Some(f.to_string()),
+        DefaultValue::ListLiteral(_)
+        | DefaultValue::EnumVariant(_)
+        | DefaultValue::Empty
+        | DefaultValue::None
+        | DefaultValue::FunctionCall(_)
+        | DefaultValue::PublicFunctionCall(_) => None,
     }
 }

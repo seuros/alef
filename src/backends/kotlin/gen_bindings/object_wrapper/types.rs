@@ -210,6 +210,19 @@ fn render_kotlin_default(
             }
         }
         DefaultValue::StringLiteral(s) => Some(format!("\"{}\"", escape_kotlin_string(s))),
+        // Every element must render or the whole collection falls back to the type-based
+        // default, the same all-or-nothing rule the extractor applies when lowering. ~keep
+        DefaultValue::ListLiteral(items) => {
+            let element_ty = match ty {
+                TypeRef::Vec(inner) => inner.as_ref(),
+                other => other,
+            };
+            items
+                .iter()
+                .map(|item| render_kotlin_default(element_ty, item, enum_defaults, default_constructible_types))
+                .collect::<Option<Vec<String>>>()
+                .map(|values| format!("listOf({})", values.join(", ")))
+        }
         DefaultValue::EnumVariant(variant) => match ty {
             TypeRef::Named(name) => {
                 if enum_defaults.contains_key(name.as_str()) {
