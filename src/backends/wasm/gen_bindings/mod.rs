@@ -69,14 +69,7 @@ pub(crate) fn function_is_exported(
     functions.iter().any(|function| {
         function.name == function_name
             && !is_gated_behind_disabled_feature(&function.cfg, enabled_features)
-            && !dropped_crates.contains(
-                &function
-                    .rust_path
-                    .split("::")
-                    .next()
-                    .unwrap_or("")
-                    .replace('-', "_"),
-            )
+            && !dropped_crates.contains(&function.rust_path.split("::").next().unwrap_or("").replace('-', "_"))
     })
 }
 

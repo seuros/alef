@@ -22,9 +22,7 @@ pub(super) fn render(
         &docs_fixture.input,
     );
     let call = crate::e2e::codegen::select_best_matching_call(call, e2e_config, &docs_fixture);
-    if !functions.is_empty()
-        && !crate::backends::wasm::function_is_exported(&call.function, functions, config)
-    {
+    if !functions.is_empty() && !crate::backends::wasm::function_is_exported(&call.function, functions, config) {
         bail!(
             "WASM target does not export the configured `{}` fixture function",
             call.function
@@ -79,27 +77,13 @@ mod tests {
         let mut e2e = E2eConfig::default();
         e2e.call.function = "download".into();
 
-        let unavailable = render(
-            &fixture,
-            &e2e,
-            &ResolvedCrateConfig::default(),
-            &[],
-            &[],
-            &functions,
-        )
-        .expect_err("disabled function must not produce a WASM snippet");
+        let unavailable = render(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[], &functions)
+            .expect_err("disabled function must not produce a WASM snippet");
         assert!(unavailable.to_string().contains("does not export"));
 
         e2e.call.function = "prefetch".into();
-        let available = render(
-            &fixture,
-            &e2e,
-            &ResolvedCrateConfig::default(),
-            &[],
-            &[],
-            &functions,
-        )
-        .expect("enabled function renders");
+        let available = render(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[], &functions)
+            .expect("enabled function renders");
         assert!(available.contains("import { prefetch }"), "{available}");
     }
 }
