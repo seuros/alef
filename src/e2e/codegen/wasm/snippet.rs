@@ -22,13 +22,25 @@ pub(super) fn render(
         &docs_fixture.input,
     );
     let call = crate::e2e::codegen::select_best_matching_call(call, e2e_config, &docs_fixture);
-    if !functions.is_empty() && !crate::backends::wasm::function_is_exported(&call.function, functions, config) {
+    let default_factory = e2e_config
+        .call
+        .overrides
+        .get("wasm")
+        .and_then(|value| value.client_factory.as_deref());
+    let effective_factory = call
+        .overrides
+        .get("wasm")
+        .and_then(|value| value.client_factory.as_deref())
+        .or(default_factory);
+    if effective_factory.is_none()
+        && !functions.is_empty()
+        && !crate::backends::wasm::function_is_exported(&call.function, functions, config)
+    {
         bail!(
             "WASM target does not export the configured `{}` fixture function",
             call.function
         );
     }
-    let overrides = e2e_config.call.overrides.get("wasm");
     let module = e2e_config
         .resolve_package("wasm")
         .and_then(|package| package.name)
@@ -39,7 +51,7 @@ pub(super) fn render(
             lang: "wasm",
             fixture,
             module: &module,
-            client_factory: overrides.and_then(|value| value.client_factory.as_deref()),
+            client_factory: default_factory,
             e2e_config,
             type_defs,
             enums,
@@ -81,6 +93,19 @@ mod tests {
             .expect_err("disabled function must not produce a WASM snippet");
         assert!(unavailable.to_string().contains("does not export"));
 
+        e2e.call.overrides.insert(
+            "wasm".into(),
+            crate::core::config::e2e::CallOverride {
+                client_factory: Some("createClient".into()),
+                ..Default::default()
+            },
+        );
+        let client_recipe = render(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[], &functions)
+            .expect("client method need not be a direct module export");
+        assert!(client_recipe.contains("import { createClient }"), "{client_recipe}");
+        assert!(client_recipe.contains("client.download("), "{client_recipe}");
+
+        e2e.call.overrides.clear();
         e2e.call.function = "prefetch".into();
         let available = render(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[], &functions)
             .expect("enabled function renders");
