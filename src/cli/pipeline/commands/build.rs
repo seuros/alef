@@ -4,7 +4,8 @@ use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::template_versions as tv;
 use anyhow::Context as _;
 use rayon::prelude::*;
-use std::path::Path;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
 pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool) -> anyhow::Result<()> {
@@ -605,6 +606,58 @@ const RUN_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// finished child, long enough not to burn CPU in a tight loop.
 const RUN_COMMAND_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
 
+const FLUTTER_RUST_BRIDGE_CODEGEN: &str = "flutter_rust_bridge_codegen";
+
+fn fallback_fvm_cache_path(
+    xdg_cache_home: Option<&OsStr>,
+    home: Option<&OsStr>,
+    local_app_data: Option<&OsStr>,
+) -> Option<PathBuf> {
+    xdg_cache_home
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            home.filter(|value| !value.is_empty())
+                .map(|value| PathBuf::from(value).join(".cache"))
+        })
+        .or_else(|| local_app_data.filter(|value| !value.is_empty()).map(PathBuf::from))
+        .map(|root| root.join("alef").join("fvm"))
+}
+
+fn managed_fvm_cache_path(
+    fvm_cache_path: Option<&OsStr>,
+    fvm_home: Option<&OsStr>,
+    xdg_cache_home: Option<&OsStr>,
+    home: Option<&OsStr>,
+    local_app_data: Option<&OsStr>,
+) -> Option<PathBuf> {
+    if fvm_cache_path.is_some() || fvm_home.is_some() {
+        return None;
+    }
+    fallback_fvm_cache_path(xdg_cache_home, home, local_app_data)
+}
+
+fn configure_fvm_cache(command: &mut std::process::Command, cmd: &str) -> anyhow::Result<()> {
+    if cmd != FLUTTER_RUST_BRIDGE_CODEGEN {
+        return Ok(());
+    }
+
+    let Some(cache_path) = managed_fvm_cache_path(
+        std::env::var_os("FVM_CACHE_PATH").as_deref(),
+        std::env::var_os("FVM_HOME").as_deref(),
+        std::env::var_os("XDG_CACHE_HOME").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+        std::env::var_os("LOCALAPPDATA").as_deref(),
+    ) else {
+        return Ok(());
+    };
+
+    std::fs::create_dir_all(&cache_path)
+        .with_context(|| format!("failed to create FVM cache at {}", cache_path.display()))?;
+    command.env("FVM_CACHE_PATH", cache_path);
+    Ok(())
+}
+
 /// Execute a `RunCommand` post-build step.
 ///
 /// Spawns `cmd` with `args` in `base_dir`, streaming stdout/stderr through
@@ -624,13 +677,15 @@ fn run_run_command(cmd: &str, args: &[&str], base_dir: &Path) -> anyhow::Result<
         warn!("[{cmd}] skipped via ALEF_SKIP_COMMANDS env var");
         return Ok(());
     }
-    let mut child = match std::process::Command::new(cmd)
+    let mut command = std::process::Command::new(cmd);
+    command
         .args(args)
         .current_dir(base_dir)
         .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .spawn()
-    {
+        .stderr(std::process::Stdio::inherit());
+    configure_fvm_cache(&mut command, cmd)?;
+
+    let mut child = match command.spawn() {
         Ok(child) => child,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             warn!(
@@ -778,6 +833,52 @@ mod run_command_tests {
         assert!(
             honored.is_err(),
             "unlisted command must still spawn and surface failure"
+        );
+    }
+
+    #[test]
+    fn fvm_cache_is_stable_across_clean_worktrees() {
+        let cache = fallback_fvm_cache_path(Some(OsStr::new("/cache")), None, None);
+        assert_eq!(cache, Some(PathBuf::from("/cache/alef/fvm")));
+
+        let other_worktree = fallback_fvm_cache_path(Some(OsStr::new("/cache")), None, None);
+        assert_eq!(cache, other_worktree);
+    }
+
+    #[test]
+    fn fvm_cache_uses_platform_fallbacks() {
+        assert_eq!(
+            fallback_fvm_cache_path(None, Some(OsStr::new("/users/example")), None),
+            Some(PathBuf::from("/users/example/.cache/alef/fvm"))
+        );
+        assert_eq!(
+            fallback_fvm_cache_path(None, None, Some(OsStr::new("C:/Users/example/AppData/Local"))),
+            Some(PathBuf::from("C:/Users/example/AppData/Local/alef/fvm"))
+        );
+        assert_eq!(fallback_fvm_cache_path(None, None, None), None);
+    }
+
+    #[test]
+    fn explicit_fvm_cache_settings_remain_authoritative() {
+        assert_eq!(
+            managed_fvm_cache_path(
+                Some(OsStr::new("/custom/fvm")),
+                None,
+                Some(OsStr::new("/cache")),
+                None,
+                None
+            ),
+            None
+        );
+        assert_eq!(
+            managed_fvm_cache_path(
+                None,
+                Some(OsStr::new("/legacy/fvm")),
+                Some(OsStr::new("/cache")),
+                None,
+                None
+            ),
+            None
         );
     }
 }
