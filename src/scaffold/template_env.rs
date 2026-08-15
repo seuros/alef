@@ -7,6 +7,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/cargo_env_structured.jinja"),
     ),
     ("java_pom.xml.jinja", include_str!("templates/java_pom.xml.jinja")),
+    (
+        "wasm_package_exports.json.jinja",
+        include_str!("templates/wasm_package_exports.json.jinja"),
+    ),
 ];
 
 pub(crate) fn make_env() -> Environment<'static> {

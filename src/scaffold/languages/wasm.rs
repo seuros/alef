@@ -54,6 +54,14 @@ pub(crate) fn scaffold_wasm(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
     // the first configured target. ~keep
     let node_target = if has("nodejs") { "nodejs" } else { targets[0].as_str() };
     let web_target = if has("web") { "web" } else { targets[0].as_str() };
+    let exports_block = crate::scaffold::template_env::render(
+        "wasm_package_exports.json.jinja",
+        minijinja::context! {
+            node_target => node_target,
+            web_target => web_target,
+            crate_file => core_crate_file,
+        },
+    );
 
     // A single-target package publishes just that target's dir; a multi-target ~keep
     // package keeps the broad glob for backward compatibility. ~keep
@@ -87,7 +95,7 @@ pub(crate) fn scaffold_wasm(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
   "main": "pkg/{node_target}/{core_crate_file}_wasm.js",
   "module": "pkg/{web_target}/{core_crate_file}_wasm.js",
   "types": "pkg/{node_target}/{core_crate_file}_wasm.d.ts",
-  "engines": {{
+  {exports_block}  "engines": {{
     "node": "{node_engine}"
   }},
   "scripts": {{
@@ -110,6 +118,7 @@ pub(crate) fn scaffold_wasm(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
         node_target = node_target,
         web_target = web_target,
         core_crate_file = core_crate_file,
+        exports_block = exports_block,
         node_engine = tv::npm::NODE_ENGINE,
         per_target_scripts = per_target_scripts,
         build_all = build_all,

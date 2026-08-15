@@ -3877,3 +3877,6 @@ GitHub releases: <https://github.com/xberg-io/alef/releases>
 - **dart/flutter_rust_bridge**: reuse a persistent, crate-scoped Cargo target directory for FRB macro expansion.
   Clean regeneration worktrees now retain Cargo fingerprints, dependencies, proc macros, and build-script artifacts
   instead of recompiling the full Rust crate for every `cargo expand`; an explicit `CARGO_TARGET_DIR` still wins.
+- **wasm scaffold**: publish a conditional `exports` map that resolves package self-imports to generated Node entrypoints
+  while keeping the browser condition on the explicitly initialized web build. This lets generated snippets and e2e
+  tests import the package by name after `wasm-pack` builds its target directories.

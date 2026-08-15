@@ -61,6 +61,17 @@ fn wasm_targets_default_to_all_four_wasm_pack_targets() {
     assert_eq!(parsed["main"], "pkg/nodejs/my_lib_wasm.js");
     assert_eq!(parsed["module"], "pkg/web/my_lib_wasm.js");
     assert_eq!(parsed["types"], "pkg/nodejs/my_lib_wasm.d.ts");
+    assert_eq!(
+        parsed["exports"]["."],
+        serde_json::json!({
+            "types": "./pkg/nodejs/my_lib_wasm.d.ts",
+            "browser": "./pkg/web/my_lib_wasm.js",
+            "import": "./pkg/nodejs/my_lib_wasm.js",
+            "require": "./pkg/nodejs/my_lib_wasm.js",
+            "default": "./pkg/nodejs/my_lib_wasm.js",
+        }),
+        "package self-imports must resolve to generated public entrypoints"
+    );
     let scripts = &parsed["scripts"];
     for t in ["web", "bundler", "nodejs", "deno"] {
         assert!(
@@ -81,6 +92,16 @@ fn wasm_targets_web_only_ships_single_target() {
     assert_eq!(parsed["main"], "pkg/web/my_lib_wasm.js");
     assert_eq!(parsed["module"], "pkg/web/my_lib_wasm.js");
     assert_eq!(parsed["types"], "pkg/web/my_lib_wasm.d.ts");
+    assert_eq!(
+        parsed["exports"]["."],
+        serde_json::json!({
+            "types": "./pkg/web/my_lib_wasm.d.ts",
+            "browser": "./pkg/web/my_lib_wasm.js",
+            "import": "./pkg/web/my_lib_wasm.js",
+            "require": "./pkg/web/my_lib_wasm.js",
+            "default": "./pkg/web/my_lib_wasm.js",
+        })
+    );
     let scripts = &parsed["scripts"];
     assert!(scripts.get("build:wasm:web").is_some());
     for t in ["bundler", "nodejs", "deno"] {
