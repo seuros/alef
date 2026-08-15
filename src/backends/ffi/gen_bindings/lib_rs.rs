@@ -205,7 +205,7 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
     for typ in api
         .types
         .iter()
-        .filter(|typ| !typ.is_trait && !typ.has_lifetime_params && !ffi_exclude_types.contains(typ.name.as_str()))
+        .filter(|typ| !typ.is_trait && !ffi_exclude_types.contains(typ.name.as_str()))
     {
         if !typ.is_opaque && typ.has_serde {
             builder.add_item(&gen_type_from_json(typ, prefix, &core_import));
@@ -279,7 +279,9 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
             if ffi_exclude_methods.contains(&method_key) {
                 continue;
             }
-            if crosses_borrowed_handle_boundary(&method.return_type, &borrowed_handle_types)
+            let returns_owned_self = !method.returns_ref
+                && matches!(&method.return_type, crate::core::ir::TypeRef::Named(name) if name == &typ.name);
+            if (!returns_owned_self && crosses_borrowed_handle_boundary(&method.return_type, &borrowed_handle_types))
                 || method
                     .params
                     .iter()

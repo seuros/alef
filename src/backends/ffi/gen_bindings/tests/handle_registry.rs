@@ -234,14 +234,44 @@ fn generated_calls_acquire_all_handles_before_use_or_owned_take() {
 }
 
 #[test]
-fn borrowed_types_do_not_enter_process_global_handle_registry() {
-    use crate::core::ir::{FieldDef, FunctionDef, ParamDef, TypeDef, TypeRef};
+fn borrowed_types_keep_owned_lifecycle_and_accessor_exports() {
+    use crate::core::ir::{FieldDef, FunctionDef, MethodDef, ParamDef, TypeDef, TypeRef};
 
     let borrowed = TypeDef {
         name: "BorrowedNode".into(),
         rust_path: "sample_lib::BorrowedNode".into(),
         has_lifetime_params: true,
         has_serde: true,
+        fields: vec![FieldDef {
+            name: "attributes".into(),
+            ty: TypeRef::String,
+            ..FieldDef::default()
+        }],
+        methods: vec![
+            MethodDef {
+                name: "into_owned".into(),
+                return_type: TypeRef::Named("BorrowedNode".into()),
+                receiver: Some(crate::core::ir::ReceiverKind::Owned),
+                ..MethodDef::default()
+            },
+            MethodDef {
+                name: "with_owned_attributes".into(),
+                return_type: TypeRef::Named("BorrowedNode".into()),
+                is_static: true,
+                ..MethodDef::default()
+            },
+        ],
+        ..TypeDef::default()
+    };
+    let defaultable = |name: &str| TypeDef {
+        name: name.into(),
+        rust_path: format!("sample_lib::{name}"),
+        methods: vec![MethodDef {
+            name: "default".into(),
+            return_type: TypeRef::Named(name.into()),
+            is_static: true,
+            ..MethodDef::default()
+        }],
         ..TypeDef::default()
     };
     let owner = TypeDef {
@@ -267,7 +297,12 @@ fn borrowed_types_do_not_enter_process_global_handle_registry() {
     };
     let api = crate::core::ir::ApiSurface {
         crate_name: "sample".into(),
-        types: vec![borrowed, owner],
+        types: vec![
+            borrowed,
+            owner,
+            defaultable("RenderOptions"),
+            defaultable("PreprocessOptions"),
+        ],
         functions: vec![inspect],
         ..Default::default()
     };
@@ -280,11 +315,17 @@ fn borrowed_types_do_not_enter_process_global_handle_registry() {
         .expect("generated Rust library")
         .content;
 
-    syn::parse_file(source).expect("fail-closed borrowed-type output must parse");
-    assert!(!source.contains("sample_borrowed_node_from_json"), "{source}");
+    syn::parse_file(source).expect("borrowed-type owned exports must parse");
+    assert!(source.contains("sample_borrowed_node_from_json"), "{source}");
+    assert!(source.contains("sample_borrowed_node_to_json"), "{source}");
+    assert!(source.contains("sample_borrowed_node_free"), "{source}");
+    assert!(source.contains("sample_borrowed_node_attributes"), "{source}");
+    assert!(source.contains("sample_borrowed_node_into_owned"), "{source}");
+    assert!(source.contains("sample_borrowed_node_with_owned_attributes"), "{source}");
+    assert!(source.contains("sample_render_options_default"), "{source}");
+    assert!(source.contains("sample_preprocess_options_default"), "{source}");
     assert!(!source.contains("sample_document_node"), "{source}");
     assert!(!source.contains("sample_inspect"), "{source}");
-    assert!(!source.contains("insert_handle(val)"), "{source}");
 }
 
 #[test]
