@@ -137,7 +137,10 @@ pub(super) fn render_streaming_test_function(
         }
     }
 
-    let req_handle = request_var.clone().unwrap_or_else(|| "NULL".to_string());
+    // ~keep This loop only ever considers `json_object` args, which are always materialized
+    // as a scalar `AlefHandle` via `_from_json(...)`; when absent, `0` is the handle's
+    // "none" sentinel, not the pointer sentinel `NULL`.
+    let req_handle = request_var.clone().unwrap_or_else(|| "0".to_string());
     let req_snake = request_var
         .as_ref()
         .and_then(|v| v.strip_suffix("_handle"))

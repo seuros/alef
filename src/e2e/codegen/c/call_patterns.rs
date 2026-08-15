@@ -9,8 +9,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 
 use super::{
-    emit_nested_accessor, infer_opaque_handle_type, is_primitive_c_type, is_skipped_c_field, render_assertion,
-    try_emit_enum_accessor,
+    c_optional_sentinel, emit_nested_accessor, infer_opaque_handle_type, is_primitive_c_type, is_skipped_c_field,
+    render_assertion, try_emit_enum_accessor,
 };
 
 /// Emit a test function using the engine-factory pattern:
@@ -445,6 +445,12 @@ pub(super) fn render_bytes_test_function(
                     None => "NULL".to_string(),
                 };
                 string_arg_exprs.push(expr);
+            }
+            "handle" => {
+                // A pre-built scalar `AlefHandle` arg (not constructed via `_from_json`
+                // here) — not currently exercised by byte-buffer methods, but if one
+                // appears it must use the handle's `0` "none" sentinel, not `NULL`.
+                string_arg_exprs.push(c_optional_sentinel("handle").to_string());
             }
             _ => {
                 // Other arg types are not currently exercised by byte-buffer

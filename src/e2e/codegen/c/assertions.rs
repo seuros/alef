@@ -8,7 +8,7 @@ use heck::{ToPascalCase, ToSnakeCase};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 
-use super::{is_primitive_c_type, is_skipped_c_field, json_to_c, try_emit_enum_accessor};
+use super::{c_optional_sentinel, is_primitive_c_type, is_skipped_c_field, json_to_c, try_emit_enum_accessor};
 
 /// Emit chained FFI accessor calls for a nested resolved field path.
 ///
@@ -350,8 +350,9 @@ pub(super) fn build_args_string_c(
 
         let val = crate::e2e::codegen::resolve_field(input, &arg.field);
         match val {
-            // Explicit null on optional arg → pass NULL.
-            v if v.is_null() && arg.optional => parts.push("NULL".to_string()),
+            // ~keep Explicit null on optional arg → pass the type-appropriate "none"
+            // sentinel: `0` for a scalar `AlefHandle` arg, `NULL` for a real pointer.
+            v if v.is_null() && arg.optional => parts.push(c_optional_sentinel(&arg.arg_type).to_string()),
             // Missing required fields resolve to null; skip them so malformed
             // fixture configuration does not crash generation.
             v if v.is_null() => {}
@@ -537,10 +538,11 @@ pub(super) fn render_assertion(
         }
         "not_empty" => {
             if field_is_opaque_handle {
-                // Opaque struct handle: `strlen` on a struct pointer is UB.
-                // Weaken to a non-null check — strictly weaker than the
-                // original intent but won't false-trigger SIGABRT.
-                let _ = writeln!(out, "    assert({field_expr} != NULL && \"expected non-null handle\");");
+                // ~keep Opaque handle: `strlen` on a scalar `AlefHandle` (uint64_t) is a
+                // type error, not just UB on a struct pointer. Weaken to a
+                // non-zero check — strictly weaker than the original intent but
+                // matches the handle's actual "none" sentinel (`0`, not `NULL`).
+                let _ = writeln!(out, "    assert({field_expr} != 0 && \"expected non-null handle\");");
             } else {
                 let _ = writeln!(
                     out,
@@ -550,7 +552,7 @@ pub(super) fn render_assertion(
         }
         "is_empty" => {
             if field_is_opaque_handle {
-                let _ = writeln!(out, "    assert({field_expr} == NULL && \"expected null handle\");");
+                let _ = writeln!(out, "    assert({field_expr} == 0 && \"expected null handle\");");
             } else if assertion_field_is_optional || !field_is_primitive {
                 // Optional string fields may return NULL — treat NULL as empty.
                 let _ = writeln!(

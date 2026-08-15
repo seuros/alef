@@ -56,6 +56,29 @@ fn is_skipped_c_field(fields_c_types: &HashMap<String, String>, parent_snake: &s
     fields_c_types.get(&key).is_some_and(|t| t == "skip")
 }
 
+/// The C ABI represents every opaque/named type (`TypeRef::Named`) as the
+/// scalar generational handle `AlefHandle` (`typedef uint64_t {PREFIX}AlefHandle`)
+/// — see `src/backends/ffi/type_map.rs::c_param_optional`/`c_return_optional`.
+/// An absent optional argument of that kind must therefore use `0` as its
+/// "none" sentinel, matching the FFI bridge codegen's own convention
+/// (`src/backends/ffi/gen_bindings/helpers.rs::ffi_null_return_value`,
+/// `Some("AlefHandle") => "0"`). Every other arg kind (`string`, `mock_url`,
+/// `bytes`, ...) is a genuine C pointer (`const char *`, `void *`) and keeps
+/// the `NULL` sentinel.
+///
+/// `"json_object"` args are handle-typed here because the C e2e codegen always
+/// materializes them via a `{prefix}_{type}_from_json(...)` call that returns
+/// an `AlefHandle`. `"handle"` args (used by other language codegens for an
+/// argument that is already a pre-built handle) are handle-typed for the same
+/// reason: the parameter they fill is declared `AlefHandle`, never a pointer.
+fn c_optional_sentinel(arg_type: &str) -> &'static str {
+    if matches!(arg_type, "json_object" | "handle") {
+        "0"
+    } else {
+        "NULL"
+    }
+}
+
 /// Infer the opaque-handle PascalCase return type for a bare-field accessor.
 ///
 /// Returns `Some(pascal_type)` when the accessor `{prefix}_{parent}_{field}`

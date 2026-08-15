@@ -11,8 +11,8 @@ use std::fmt::Write as FmtWrite;
 
 use super::docs_input::render_c_docs_json;
 use super::{
-    build_args_string_c, emit_nested_accessor, infer_opaque_handle_type, is_primitive_c_type, is_skipped_c_field,
-    json_to_c, render_assertion, render_bytes_test_function, render_c_diagnostic_skip,
+    build_args_string_c, c_optional_sentinel, emit_nested_accessor, infer_opaque_handle_type, is_primitive_c_type,
+    is_skipped_c_field, json_to_c, render_assertion, render_bytes_test_function, render_c_diagnostic_skip,
     render_engine_factory_test_function, render_streaming_test_function, resolve_c_client_owner_type,
     resolve_c_streaming_adapter, try_emit_enum_accessor,
 };
@@ -414,8 +414,10 @@ pub(super) fn render_test_function(
                     }
                 }
             } else if arg.optional {
-                // Optional non-string, non-json_object arg: pass NULL.
-                inline_method_args.push("NULL".to_string());
+                // ~keep Optional non-string, non-json_object arg: pass the type-appropriate
+                // "none" sentinel — `0` for a scalar `AlefHandle` (`arg_type == "handle"`),
+                // `NULL` for a real pointer.
+                inline_method_args.push(c_optional_sentinel(&arg.arg_type).to_string());
             }
         }
 
@@ -639,9 +641,9 @@ pub(super) fn render_test_function(
                     let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
                     let val = fixture.input.get(field);
                     match val {
-                        None if arg.optional => Some("NULL".to_string()),
+                        None if arg.optional => Some(c_optional_sentinel(&arg.arg_type).to_string()),
                         None => None,
-                        Some(v) if v.is_null() && arg.optional => Some("NULL".to_string()),
+                        Some(v) if v.is_null() && arg.optional => Some(c_optional_sentinel(&arg.arg_type).to_string()),
                         Some(v) => Some(json_to_c(v)),
                     }
                 })
