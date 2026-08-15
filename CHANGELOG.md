@@ -30,7 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   treating an infallible byte function's integer status as a NUL-terminated buffer.
 - **Go handles**: compare named parameter and return handles with the scalar zero sentinel in direct wrappers.
 - **FFI scaffold**: declare `serde` directly in generated FFI crates now that the handle registry requires
-  `serde::Serialize`, rather than relying on the core crate's transitive dependencies.
+  `serde::Serialize`, using the centralized template version and cargo-machete metadata rather than relying on the
+  core crate's transitive dependencies.
 - **FFI borrowed defaults**: restore free default-constructor exports that return owned lifetime-bearing values,
   storing them as serialized handles while continuing to exclude borrowed returns and borrowed-handle parameters.
 - **documentation snippets**: read client credentials from each fixture's configured environment variable, falling
