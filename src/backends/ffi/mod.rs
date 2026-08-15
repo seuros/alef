@@ -3,7 +3,6 @@
 mod gen_bindings;
 pub mod gen_bridge_field;
 mod gen_visitor;
-pub(crate) mod reachability;
 pub(crate) mod template_env;
 pub mod trait_bridge;
 mod type_map;

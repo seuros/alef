@@ -167,6 +167,34 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
     let ffi_capsule_types: std::collections::HashMap<String, crate::core::config::FfiCapsuleTypeConfig> =
         config.ffi.as_ref().map(|c| c.capsule_types.clone()).unwrap_or_default();
 
+    let mut ffi_exclude_types: ahash::AHashSet<&str> = config
+        .ffi
+        .as_ref()
+        .map(|c| c.exclude_types.iter().map(|s| s.as_str()).collect())
+        .unwrap_or_default();
+    ffi_exclude_types.extend(api.types.iter().filter(|t| t.binding_excluded).map(|t| t.name.as_str()));
+    let capsule_used_as_opaque: ahash::AHashSet<&str> = api
+        .types
+        .iter()
+        .flat_map(|t| t.methods.iter())
+        .filter_map(|m| match &m.return_type {
+            crate::core::ir::TypeRef::Named(name) if ffi_capsule_types.contains_key(name) => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    ffi_exclude_types.extend(
+        ffi_capsule_types
+            .keys()
+            .map(|s| s.as_str())
+            .filter(|name| !capsule_used_as_opaque.contains(name)),
+    );
+    let exclude_generic_opaques: ahash::AHashSet<&str> = config
+        .opaque_types
+        .iter()
+        .filter(|(_, path)| path.contains('<'))
+        .map(|(name, _)| name.as_str())
+        .collect();
+    ffi_exclude_types.extend(exclude_generic_opaques);
     let borrowed_handle_types: ahash::AHashSet<String> = api
         .types
         .iter()
@@ -177,7 +205,7 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
     for typ in api
         .types
         .iter()
-        .filter(|typ| crate::backends::ffi::reachability::type_has_generated_exports(api, config, typ))
+        .filter(|typ| !typ.is_trait && !typ.has_lifetime_params && !ffi_exclude_types.contains(typ.name.as_str()))
     {
         if !typ.is_opaque && typ.has_serde {
             builder.add_item(&gen_type_from_json(typ, prefix, &core_import));

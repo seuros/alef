@@ -79,15 +79,6 @@ fn effective_exclude_types(api: &ApiSurface, config: &ResolvedCrateConfig) -> Ha
     }
     exclude_types.extend(api.types.iter().filter(|t| t.binding_excluded).map(|t| t.name.clone()));
     exclude_types.extend(
-        api.types
-            .iter()
-            .filter(|typ| {
-                !typ.is_trait
-                    && !crate::backends::ffi::reachability::type_has_generated_exports(api, config, typ)
-            })
-            .map(|typ| typ.name.clone()),
-    );
-    exclude_types.extend(
         config
             .opaque_types
             .iter()
@@ -573,23 +564,4 @@ impl Backend for CsharpBackend {
 pub(super) fn is_tuple_field(field: &FieldDef) -> bool {
     (field.name.starts_with('_') && field.name[1..].chars().all(|c| c.is_ascii_digit()))
         || field.name.chars().next().is_none_or(|c| c.is_ascii_digit())
-}
-
-#[cfg(test)]
-mod reachability_tests {
-    use super::*;
-
-    #[test]
-    fn borrowed_ffi_types_are_removed_from_csharp_generation() {
-        let api = ApiSurface {
-            types: vec![crate::core::ir::TypeDef {
-                name: "BorrowedNode".into(),
-                has_lifetime_params: true,
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        assert!(effective_exclude_types(&api, &ResolvedCrateConfig::default()).contains("BorrowedNode"));
-    }
 }
