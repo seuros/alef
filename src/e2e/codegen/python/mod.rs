@@ -711,6 +711,47 @@ from_json_module = "my_lib._internal_bindings"
         );
     }
 
+    /// A docs snippet is emitted for every fixture, including ones a language skips in the e2e
+    /// suite. The snippet's import block is lifted out of the generated test file, so any rule
+    /// that suppresses imports for skipped fixtures silently produces a snippet whose body calls
+    /// symbols it never imports. Every symbol an emitter writes must resolve within the emitted
+    /// unit, whatever the fixture's skip status. ~keep
+    #[test]
+    fn should_import_referenced_symbols_when_the_fixture_is_skipped_for_python() {
+        let (e2e, resolved) = widget_snippet_config();
+        let mut fixture = widget_fixture();
+        fixture.skip = Some(crate::e2e::fixture::SkipDirective {
+            languages: vec!["python".to_string()],
+            reason: Some("no python coverage for this fixture".to_string()),
+        });
+        let type_defs = vec![crate::core::ir::TypeDef {
+            name: "WidgetRequest".to_string(),
+            has_serde: true,
+            ..Default::default()
+        }];
+
+        let rendered = PythonE2eCodegen
+            .render_snippet_body(&fixture, &e2e, &resolved, &type_defs, &[])
+            .expect("snippet renders");
+
+        assert!(
+            rendered.contains("create_client("),
+            "precondition: the snippet body must call the client factory: {rendered}"
+        );
+        assert!(
+            rendered.contains("WidgetRequest.from_json("),
+            "precondition: the snippet body must construct the request type: {rendered}"
+        );
+        assert!(
+            rendered.contains("from my_lib import create_client"),
+            "the client factory the body calls must be imported: {rendered}"
+        );
+        assert!(
+            rendered.contains("from my_lib._internal_bindings import WidgetRequest"),
+            "the request type the body constructs must be imported: {rendered}"
+        );
+    }
+
     /// Mirrors the measured liter-llm defect exactly: `has_serde` alone is not the pyo3 gate
     /// for emitting `from_json()`. pyo3 also requires the type to pass
     /// `core_to_binding_convertible_types` — a serde-derived type whose field references a

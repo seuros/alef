@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   snippet emitter, so every snippet constructing a client failed to compile with "The function '_fixtureUrl' isn't
   defined." Snippets now build the client with just the API key, matching the PHP, Ruby, Go, and TypeScript emitters,
   which likewise omit the mock-server `baseUrl` from their doc snippets.
+- **Python snippets**: import every symbol the emitted snippet body references. Import candidates were
+  computed only when a fixture group held at least one fixture *not* skipped for Python, but a docs
+  snippet is emitted for every fixture regardless of skip status and lifts its import block out of that
+  same rendered test file. A Python-skipped fixture therefore produced a snippet whose body called the
+  configured client factory and constructed the request type while importing neither, and snippet
+  validation failed with `unknown-name`. Candidates are now derived for every non-HTTP fixture and then
+  pruned to the identifiers the emitted unit actually references, so nothing referenced goes unimported
+  and nothing imported goes unreferenced.
 - **napi**: declare internally-tagged enums with newtype-of-struct variants as the flat optional-field
   object the napi glue actually emits, instead of a discriminated union keyed by the tuple field's
   synthetic `_0` name. The generated `.d.ts` previously leaked the internal field name as a literal `0:`

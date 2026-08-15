@@ -11,7 +11,7 @@ use crate::e2e::config::E2eConfig;
 use crate::e2e::fixture::Fixture;
 
 use super::helpers::{
-    self, BytesKind, classify_bytes_value, is_skipped, python_method_helper_import, resolve_client_factory,
+    self, BytesKind, classify_bytes_value, python_method_helper_import, resolve_client_factory,
     resolve_enum_fields, resolve_function_name, resolve_function_name_for_call, resolve_handle_dict_types,
     resolve_handle_nested_types, resolve_module, resolve_options_type, resolve_options_via,
 };
@@ -340,7 +340,13 @@ pub(super) fn render_test_file(
         thirdparty_bare.push("import pytest  # noqa: F401".to_string());
     }
 
-    let has_non_http_fixtures = fixtures.iter().any(|f| !f.is_http_test() && !is_skipped(f, "python"));
+    // Import candidates are derived for every non-HTTP fixture, skipped or not. A skipped fixture
+    // still has its full call body emitted (only a `@pytest.mark.skip` decorator is added), and the
+    // docs-snippet emitter lifts this same import block out of the rendered file for a snippet that
+    // is published regardless of skip status — so suppressing imports here emits bodies whose
+    // symbols do not resolve. `prune_unreferenced_from_imports` below removes anything the emitted
+    // unit does not actually reference, so widening the candidate set cannot add a dead import. ~keep
+    let has_non_http_fixtures = fixtures.iter().any(|f| !f.is_http_test());
     if has_non_http_fixtures {
         build_thirdparty_imports(
             fixtures,
@@ -398,6 +404,8 @@ pub(super) fn render_test_file(
         let _ = writeln!(fixtures_body);
     }
 
+    prune_unreferenced_from_imports(&mut thirdparty_from, &[helper_functions.as_str(), fixtures_body.as_str()]);
+
     // Render using template
     let ctx = minijinja::context! {
         header => hash::header(CommentStyle::Hash),
@@ -409,6 +417,55 @@ pub(super) fn render_test_file(
         fixtures_body => fixtures_body,
     };
     crate::e2e::template_env::render("python/test_file.jinja", ctx)
+}
+
+/// True when `name` occurs in `source` as a whole Python identifier rather than as a
+/// substring of a longer one (`Widget` must not match inside `WidgetRequest`).
+fn references_identifier(source: &str, name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let is_ident_char = |c: char| c.is_alphanumeric() || c == '_';
+    let mut offset = 0;
+    while let Some(found) = source[offset..].find(name) {
+        let start = offset + found;
+        let end = start + name.len();
+        let before_ok = source[..start].chars().next_back().is_none_or(|c| !is_ident_char(c));
+        let after_ok = source[end..].chars().next().is_none_or(|c| !is_ident_char(c));
+        if before_ok && after_ok {
+            return true;
+        }
+        offset = start + name.len().max(1);
+    }
+    false
+}
+
+/// Narrow each `from <module> import <names>` line to the names the emitted unit actually
+/// references, dropping any line left with no names.
+///
+/// The import candidates are over-approximated from config (call args, option types, enum and
+/// nested types, trait-bridge teardown functions), so the emitted unit is the authority on which
+/// of them are real references. Pruning against it keeps the two directions of the invariant in
+/// one place: nothing referenced goes unimported, and nothing imported goes unreferenced. ~keep
+fn prune_unreferenced_from_imports(imports: &mut Vec<String>, emitted: &[&str]) {
+    let pruned: Vec<String> = imports
+        .iter()
+        .filter_map(|line| {
+            let Some((prefix, names)) = line.split_once(" import ") else {
+                return Some(line.clone());
+            };
+            let kept: Vec<&str> = names
+                .split(", ")
+                .map(str::trim)
+                .filter(|name| emitted.iter().any(|source| references_identifier(source, name)))
+                .collect();
+            if kept.is_empty() {
+                return None;
+            }
+            Some(format!("{prefix} import {}", kept.join(", ")))
+        })
+        .collect();
+    *imports = pruned;
 }
 
 fn render_item_text_helper(out: &mut String) {
