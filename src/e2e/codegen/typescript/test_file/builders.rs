@@ -60,6 +60,19 @@ fn is_tagged_data_enum(type_name: &str, enums: &[EnumDef], wasm_type_prefix: &st
         .any(|e| e.name == stripped && e.serde_tag.is_some() && e.variants.iter().any(|v| !v.fields.is_empty()))
 }
 
+/// True when `enum_name` (already unprefixed IR name) is a `#[serde(untagged)]`
+/// enum with at least one variant carrying data — mirrors the `is_untagged_data_enum`
+/// gate the napi `.d.ts` dispatcher uses (see `dispatch .d.ts enums on their serde
+/// representation`). On the wire such an enum serializes as the bare payload of
+/// whichever variant matched, not a named member — a string-typed instance is the
+/// raw JS value itself. Treating it as `EnumType.Variant` turned an empty string
+/// into `WasmEmbeddingInput.` (missing member, a syntax error). ~keep
+fn is_untagged_data_enum(enum_name: &str, enums: &[EnumDef]) -> bool {
+    enums
+        .iter()
+        .any(|e| e.name == enum_name && e.serde_untagged && e.variants.iter().any(|v| !v.fields.is_empty()))
+}
+
 /// Pre-process a JSON value so that napi-rs (node) binding can deserialize it.
 ///
 /// The napi-rs backend always emits `#[napi(js_name = "kind")]` for the
@@ -358,6 +371,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
             }
         } else if let Some(crate::core::ir::TypeRef::Named(enum_type)) = field_type
             && enums.iter().any(|definition| definition.name == *enum_type)
+            && !is_untagged_data_enum(enum_type, enums)
             && let serde_json::Value::String(variant) = val
         {
             let enum_type = wasm_prefixed_wrapped_type(lang, enum_type, type_defs, enums, wasm_type_prefix);
@@ -676,6 +690,53 @@ mod tests {
             "enum WasmExtractInputKind {{ Bytes }}\nclass WasmExtractInput {{ static default(): WasmExtractInput {{ return new WasmExtractInput(); }} bytes!: Uint8Array; kind!: WasmExtractInputKind; }}\nconst input: WasmExtractInput = {expression};\nvoid input;\n"
         );
         assert_strict_typescript_compiles(&source);
+    }
+
+    #[test]
+    fn wasm_untagged_data_enum_field_emits_raw_value_not_enum_member() {
+        // `EmbeddingInput` is an untagged data enum: on the wire it is the bare
+        // payload of whichever variant matched (here, a plain string), so the
+        // fixture value "" is real input data, not the name of a `WasmEmbeddingInput`
+        // member.
+        let type_defs = [TypeDef {
+            name: "EmbeddingRequest".into(),
+            fields: vec![crate::core::ir::FieldDef {
+                name: "input".into(),
+                ty: crate::core::ir::TypeRef::Named("EmbeddingInput".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }];
+        let enums = [EnumDef {
+            name: "EmbeddingInput".into(),
+            serde_untagged: true,
+            variants: vec![crate::core::ir::EnumVariant {
+                name: "Text".into(),
+                fields: vec![crate::core::ir::FieldDef {
+                    name: "0".into(),
+                    ty: crate::core::ir::TypeRef::String,
+                    ..Default::default()
+                }],
+                is_tuple: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }];
+        let expression = ts_builder_expression(
+            serde_json::json!({"input": ""}).as_object().expect("object"),
+            "WasmEmbeddingRequest",
+            &Default::default(),
+            "wasm",
+            &Default::default(),
+            &Default::default(),
+            &type_defs,
+            &enums,
+            "Wasm",
+            &[],
+            &mut Default::default(),
+        );
+        assert!(expression.contains("_u0.input = \"\";"), "{expression}");
+        assert!(!expression.contains("WasmEmbeddingInput."), "{expression}");
     }
 
     #[test]

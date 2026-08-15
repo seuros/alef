@@ -29,6 +29,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `call to undeclared function 'ALEF_TEST_SKIP'` error. The snippet-local definition returns `EXIT_SUCCESS`
   from `main` rather than the runner's bare `return`, which is valid only inside its `void test_*(void)`
   functions, and is `#ifndef`-guarded so an enclosing definition still wins.
+- **csharp**: derive the element type of an array-valued field in an object initializer from the owning
+  struct's `Vec<T>` field rather than hardcoding `List<string>`. Genuinely typed collections
+  (`List<Message>`, `List<RerankDocument>`) were emitted as string lists, which does not satisfy the
+  generated property, and scalar fields binding to `JsonElement` were emitted as bare literals. Both now
+  route through the same per-element `JsonSerializer.Deserialize<T>` rendering that top-level array args
+  already use, falling back to `List<string>` only when the element type is genuinely unresolvable.
+- **wasm/typescript**: emit the raw value for a `#[serde(untagged)]` data enum field instead of an enum
+  member reference. Such an enum serializes as the bare payload of whichever variant matched, so a
+  string-typed instance is the JS value itself; treating it as `EnumType.Variant` turned an empty string
+  into `WasmEmbeddingInput.`, a syntax error. Mirrors the representation gate the napi `.d.ts` dispatcher
+  uses.
 - **napi**: declare internally-tagged enums with newtype-of-struct variants as the flat optional-field
   object the napi glue actually emits, instead of a discriminated union keyed by the tuple field's
   synthetic `_0` name. The generated `.d.ts` previously leaked the internal field name as a literal `0:`

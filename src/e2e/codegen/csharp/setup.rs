@@ -665,9 +665,15 @@ fn csharp_object_initializer(
                 let escaped = escape_csharp(&json_str);
                 format!("JsonSerializer.Deserialize<{nested_type}>(\"{escaped}\", ConfigOptions)!")
             } else if let Some(arr) = val.as_array() {
-                // Array: List<string>
-                let items: Vec<String> = arr.iter().map(json_to_csharp).collect();
-                format!("new List<string> {{ {} }}", items.join(", "))
+                // Array: element type comes from the struct's actual field TypeRef
+                // (`Vec<Message>`, `Vec<RerankDocument>`, ...) via
+                // `resolve_csharp_field_element_type_from_struct`, reusing the same
+                // per-element `JsonSerializer.Deserialize<T>` rendering that top-level
+                // array args already get from `json_array_to_csharp_list`. Falls back to
+                // `List<string>` only when the field's element type is unresolvable.
+                let element_type =
+                    resolve_csharp_field_element_type_from_struct(type_name, key, type_defs);
+                json_array_to_csharp_list(arr, element_type.as_deref())
             } else {
                 json_to_csharp(val)
             };
@@ -699,8 +705,40 @@ fn resolve_csharp_field_type_from_struct(
     // Extract type name from TypeRef
     match &field.ty {
         crate::core::ir::TypeRef::Named(name) => Some(name.clone()),
+        crate::core::ir::TypeRef::Json => Some("JsonElement".to_string()),
         crate::core::ir::TypeRef::Optional(inner) => match inner.as_ref() {
             crate::core::ir::TypeRef::Named(name) => Some(name.clone()),
+            crate::core::ir::TypeRef::Json => Some("JsonElement".to_string()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Resolve the C# element type of a collection-typed struct field (`Vec<T>` /
+/// `Option<Vec<T>>`), for array-valued fields inside an object initializer.
+///
+/// `resolve_csharp_field_type_from_struct` only unwraps `Named`/`Json` at the top
+/// level, so it returns `None` for any `Vec<_>` field — which is exactly the field
+/// shape an array-valued JSON property has. Without this, `csharp_object_initializer`
+/// had no way to learn a collection field's real element type and hardcoded
+/// `List<string>` for every array, silently corrupting genuinely-typed collections
+/// (`List<Message>`, `List<RerankDocument>`, ...) into unusable string lists.
+fn resolve_csharp_field_element_type_from_struct(
+    struct_name: &str,
+    field_key: &str,
+    type_defs: &[crate::core::ir::TypeDef],
+) -> Option<String> {
+    let struct_def = type_defs.iter().find(|td| td.name == struct_name)?;
+    let field = struct_def.fields.iter().find(|f| f.name == field_key)?;
+    let ty = match &field.ty {
+        crate::core::ir::TypeRef::Optional(inner) => inner.as_ref(),
+        other => other,
+    };
+    match ty {
+        crate::core::ir::TypeRef::Vec(inner) => match inner.as_ref() {
+            crate::core::ir::TypeRef::Named(name) => Some(name.clone()),
+            crate::core::ir::TypeRef::Json => Some("JsonElement".to_string()),
             _ => None,
         },
         _ => None,
@@ -894,6 +932,121 @@ mod tests {
         );
         assert!(
             rendered.contains("Content = System.IO.File.ReadAllBytes(\"guide.pdf\")"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn object_initializer_uses_struct_element_type_for_object_valued_collections() {
+        let type_defs = [
+            TypeDef {
+                name: "ChatCompletionRequest".into(),
+                fields: vec![FieldDef {
+                    name: "messages".into(),
+                    ty: TypeRef::Vec(Box::new(TypeRef::Named("Message".into()))),
+                    ..FieldDef::default()
+                }],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "Message".into(),
+                fields: vec![],
+                ..TypeDef::default()
+            },
+        ];
+        let rendered = csharp_object_initializer(
+            serde_json::json!({"messages": [{"role": "user", "content": "hi"}]})
+                .as_object()
+                .expect("object"),
+            "ChatCompletionRequest",
+            &HashMap::new(),
+            &HashMap::new(),
+            &type_defs,
+            &[],
+            "",
+        );
+        assert_eq!(
+            rendered,
+            "new ChatCompletionRequest { Messages = new List<Message>() { JsonSerializer.Deserialize<Message>(\"{\\\"content\\\":\\\"hi\\\",\\\"role\\\":\\\"user\\\"}\", ConfigOptions)! } }",
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn object_initializer_uses_struct_element_type_for_string_valued_collections() {
+        // `RerankDocument` wraps a bare string on the wire (a single-field newtype), so
+        // the fixture value is a plain JSON string — not an object — even though the
+        // struct's real element type is `RerankDocument`, not `string`.
+        let type_defs = [TypeDef {
+            name: "RerankRequest".into(),
+            fields: vec![FieldDef {
+                name: "documents".into(),
+                ty: TypeRef::Vec(Box::new(TypeRef::Named("RerankDocument".into()))),
+                ..FieldDef::default()
+            }],
+            ..TypeDef::default()
+        }];
+        let rendered = csharp_object_initializer(
+            serde_json::json!({"documents": ["Artificial intelligence is..."]})
+                .as_object()
+                .expect("object"),
+            "RerankRequest",
+            &HashMap::new(),
+            &HashMap::new(),
+            &type_defs,
+            &[],
+            "",
+        );
+        assert_eq!(
+            rendered,
+            "new RerankRequest { Documents = new List<RerankDocument>() { JsonSerializer.Deserialize<RerankDocument>(\"\\\"Artificial intelligence is...\\\"\", ConfigOptions)! } }",
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn object_initializer_falls_back_to_list_string_for_unresolvable_element_type() {
+        // No type_defs entry for the owning struct: the element type genuinely cannot
+        // be resolved, so the historical `List<string>` fallback is correct here.
+        let rendered = csharp_object_initializer(
+            serde_json::json!({"tags": ["a", "b"]}).as_object().expect("object"),
+            "Unregistered",
+            &HashMap::new(),
+            &HashMap::new(),
+            &[],
+            &[],
+            "",
+        );
+        assert_eq!(rendered, "new Unregistered { Tags = new List<string>() { \"a\", \"b\" } }", "{rendered}");
+    }
+
+    #[test]
+    fn object_initializer_wraps_json_scalar_fields_in_json_element_deserialize() {
+        // `CreateResponseRequest.Input` binds to `JsonElement?` in C# (an untagged
+        // union field represented as arbitrary JSON), but a bare scalar fixture value
+        // used to be emitted as a plain string literal, which doesn't satisfy the
+        // generated `JsonElement?` property.
+        let type_defs = [TypeDef {
+            name: "CreateResponseRequest".into(),
+            fields: vec![FieldDef {
+                name: "input".into(),
+                ty: TypeRef::Optional(Box::new(TypeRef::Json)),
+                ..FieldDef::default()
+            }],
+            ..TypeDef::default()
+        }];
+        let rendered = csharp_object_initializer(
+            serde_json::json!({"input": "Say hello"}).as_object().expect("object"),
+            "CreateResponseRequest",
+            &HashMap::new(),
+            &HashMap::new(),
+            &type_defs,
+            &[],
+            "",
+        );
+        assert_eq!(
+            rendered,
+            "new CreateResponseRequest { Input = JsonSerializer.Deserialize<JsonElement>(\"\\\"Say hello\\\"\", ConfigOptions)! }",
             "{rendered}"
         );
     }
