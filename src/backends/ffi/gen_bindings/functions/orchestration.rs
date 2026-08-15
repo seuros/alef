@@ -631,6 +631,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
     enum_names: &AHashSet<String>,
     serde_names: &AHashSet<String>,
     capsule_cfg: Option<&crate::core::config::FfiCapsuleTypeConfig>,
+    returns_serialized_handle: bool,
 ) -> String {
     let fn_name_snake = c_symbol_component(&func.name);
     let ffi_name = format!("{prefix}_{fn_name_snake}");
@@ -1007,7 +1008,12 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
                     } else {
                         "val"
                     };
-                let ok_body = if let Some(cfg) = capsule_cfg {
+                let ok_body = if returns_serialized_handle {
+                    crate::backends::ffi::template_env::render(
+                        "serialized_value_to_c.jinja",
+                        context! { value => val_expr, indent => "            " },
+                    )
+                } else if let Some(cfg) = capsule_cfg {
                     format!(
                         "            {}",
                         super::super::capsule::capsule_into_raw_expr(val_expr, cfg)
@@ -1033,7 +1039,12 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
         } else if is_void_return(&func.return_type) {
         } else if can_inline_fn {
         } else {
-            let content = if let Some(cfg) = capsule_cfg {
+            let content = if returns_serialized_handle {
+                crate::backends::ffi::template_env::render(
+                    "serialized_value_to_c.jinja",
+                    context! { value => result_expr, indent => "    " },
+                )
+            } else if let Some(cfg) = capsule_cfg {
                 format!("    {}", super::super::capsule::capsule_into_raw_expr(result_expr, cfg))
             } else if returns_c_char(&func.return_type) {
                 gen_owned_c_char_to_c_with_len(result_expr, &func.return_type, "    ", &ffi_name)

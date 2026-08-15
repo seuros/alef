@@ -486,7 +486,10 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
         if ffi_exclude_functions.contains(&func.name) {
             continue;
         }
-        if crosses_borrowed_handle_boundary(&func.return_type, &borrowed_handle_types)
+        let returns_owned_borrowed_handle = !func.returns_ref
+            && matches!(&func.return_type, crate::core::ir::TypeRef::Named(name) if borrowed_handle_types.contains(name));
+        if (!returns_owned_borrowed_handle
+            && crosses_borrowed_handle_boundary(&func.return_type, &borrowed_handle_types))
             || func
                 .params
                 .iter()
@@ -527,6 +530,7 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
             ffi_param_enums,
             serde_names,
             capsule_cfg,
+            returns_owned_borrowed_handle,
         ));
         if returns_c_char(&func.return_type) {
             builder.add_item(&gen_free_function_len_companion(

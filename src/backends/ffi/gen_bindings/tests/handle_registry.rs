@@ -266,6 +266,8 @@ fn borrowed_types_keep_owned_lifecycle_and_accessor_exports() {
     let defaultable = |name: &str| TypeDef {
         name: name.into(),
         rust_path: format!("sample_lib::{name}"),
+        has_lifetime_params: true,
+        has_serde: true,
         methods: vec![MethodDef {
             name: "default".into(),
             return_type: TypeRef::Named(name.into()),
@@ -295,6 +297,19 @@ fn borrowed_types_keep_owned_lifecycle_and_accessor_exports() {
         }],
         ..FunctionDef::default()
     };
+    let owned_default = |name: &str, return_type: &str| FunctionDef {
+        name: name.into(),
+        rust_path: format!("sample_lib::{name}"),
+        return_type: TypeRef::Named(return_type.into()),
+        ..FunctionDef::default()
+    };
+    let borrowed_default = FunctionDef {
+        name: "borrowed_options_default".into(),
+        rust_path: "sample_lib::borrowed_options_default".into(),
+        return_type: TypeRef::Named("RenderOptions".into()),
+        returns_ref: true,
+        ..FunctionDef::default()
+    };
     let api = crate::core::ir::ApiSurface {
         crate_name: "sample".into(),
         types: vec![
@@ -303,7 +318,12 @@ fn borrowed_types_keep_owned_lifecycle_and_accessor_exports() {
             defaultable("RenderOptions"),
             defaultable("PreprocessOptions"),
         ],
-        functions: vec![inspect],
+        functions: vec![
+            inspect,
+            owned_default("conversion_options_default", "RenderOptions"),
+            owned_default("preprocessing_options_default", "PreprocessOptions"),
+            borrowed_default,
+        ],
         ..Default::default()
     };
     let files = super::super::FfiBackend
@@ -327,11 +347,15 @@ fn borrowed_types_keep_owned_lifecycle_and_accessor_exports() {
     );
     assert!(source.contains("my_lib_render_options_default"), "{source}");
     assert!(source.contains("my_lib_preprocess_options_default"), "{source}");
+    assert!(source.contains("my_lib_conversion_options_default"), "{source}");
+    assert!(source.contains("my_lib_preprocessing_options_default"), "{source}");
+    assert!(!source.contains("my_lib_borrowed_options_default"), "{source}");
     assert!(
         source.contains("SerializedHandle<sample_lib::BorrowedNode<'static>>"),
         "borrowed contexts must use a Send snapshot wrapper:\n{source}"
     );
     assert!(source.contains("insert_serialized_handle(&val)"), "{source}");
+    assert!(source.contains("insert_serialized_handle(&result)"), "{source}");
     assert!(source.contains("serde_json::from_str(&snapshot.json)"), "{source}");
     assert!(
         source.contains("fn my_lib_borrowed_node_into_owned(")
