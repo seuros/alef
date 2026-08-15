@@ -501,10 +501,8 @@ fn trait_bridge_dts_return_type(return_type: &TypeRef, is_async: bool, prefix: &
 /// `["/** Description */"]`. For multi-line docs, emits the block form:
 /// `["/**", " * line1", " * line2", " */"]`, each prefixed by `indent`.
 pub(super) fn format_jsdoc(doc: &str, indent: &str) -> Vec<String> {
-    let sanitized = crate::codegen::doc_emission::sanitize_rust_idioms(
-        doc,
-        crate::codegen::doc_emission::DocTarget::TsDoc,
-    );
+    let sanitized =
+        crate::codegen::doc_emission::sanitize_rust_idioms(doc, crate::codegen::doc_emission::DocTarget::TsDoc);
     let doc = sanitized.trim();
     if doc.is_empty() {
         return vec![];

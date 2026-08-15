@@ -7,7 +7,10 @@ fn all_generates_snippets_before_readmes_consume_them() {
     let e2e = source.find("Generating e2e test suites...").expect("e2e stage");
     let readmes = source.find("Generating READMEs...").expect("README stage");
 
-    assert!(e2e < readmes, "README generation must observe snippets produced by the same run");
+    assert!(
+        e2e < readmes,
+        "README generation must observe snippets produced by the same run"
+    );
 }
 
 fn write_neutral_config(root: &std::path::Path, cargo_toml: &str, hash: &str) -> std::path::PathBuf {
