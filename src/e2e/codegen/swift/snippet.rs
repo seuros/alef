@@ -43,6 +43,11 @@ pub(super) fn render(
     let module = package.to_upper_camel_case();
     let first_class_map = values::build_swift_first_class_map(type_defs, enums, e2e_config, call);
     let override_config = call.overrides.get("swift");
+    let result_var = if call.result_var.is_empty() {
+        "result"
+    } else {
+        call.result_var.as_str()
+    };
     let mut call_fixture = fixture.clone();
     if !expects_error {
         call_fixture.assertions.clear();
@@ -65,12 +70,22 @@ pub(super) fn render(
     );
     let body_line_count = method.lines().count().saturating_sub(3);
     let api_key_var = crate::e2e::fixture::FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
-    let body = method
+    let mut body = method
         .lines()
         .skip(2)
         .take(body_line_count)
         .map(|line| line.strip_prefix("        ").unwrap_or(line))
-        .map(|line| line.replacen("let  =", "_ =", 1))
+        .map(|line| {
+            if !expects_error && !call.returns_void {
+                line.replacen("_ =", &format!("let {result_var} ="), 1).replacen(
+                    "let  =",
+                    &format!("let {result_var} ="),
+                    1,
+                )
+            } else {
+                line.replacen("let  =", "_ =", 1)
+            }
+        })
         .filter(|line| !line.trim_start().starts_with("let _baseUrl: String? ="))
         .map(|line| {
             if line.trim_start().starts_with("let _apiKey =") {
@@ -84,6 +99,9 @@ pub(super) fn render(
         .map(|line| line.replace("// success", "print(\"\\(type(of: error)): \\(error)\")"))
         .collect::<Vec<_>>()
         .join("\n");
+    if !expects_error && !call.returns_void {
+        body.push_str(&format!("\nprint({result_var})"));
+    }
     let needs_foundation = ["Data(", "URL(", "JSONDecoder", "JSONEncoder"]
         .iter()
         .any(|symbol| body.contains(symbol));
@@ -113,8 +131,9 @@ mod tests {
         let rendered = render(&fixture, &e2e, &config, &[], &[]).expect("snippet renders");
         assert!(!rendered.contains("import RustBridge"));
         assert!(!rendered.contains("import Foundation"));
-        assert!(rendered.contains("_ = try "));
+        assert!(rendered.contains("let result = try "));
         assert!(rendered.contains(".countItems()"));
+        assert!(rendered.contains("print(result)"));
         assert!(!rendered.contains("XCTest"));
     }
 

@@ -580,6 +580,11 @@ pub(super) fn render_snippet_body(
         &fixture.tags,
         &fixture.input,
     );
+    let result_var = if call.result_var.is_empty() {
+        "result"
+    } else {
+        call.result_var.as_str()
+    };
     let expects_error = fixture
         .assertions
         .iter()
@@ -608,16 +613,37 @@ pub(super) fn render_snippet_body(
     // The test-mode error path captures the failure with a discarded `else |_|` arm
     // (nothing to report inside `test { ... }`). The snippet is a runnable `main`,
     // so swap in a named capture that prints the caught error instead. ~keep
-    let body = test
+    let mut body = test
         .lines()
         .map(|line| {
-            line.replace(
+            let line = line.replace(
                 "else |_| {}",
                 "else |err| { std.debug.print(\"call failed as expected: {s}\\n\", .{@errorName(err)}); }",
-            )
+            );
+            if !expects_error && !call.returns_void {
+                line.replacen("_ = try ", &format!("const {result_var} = try "), 1)
+                    .replacen("_ = ", &format!("const {result_var} = "), 1)
+            } else {
+                line
+            }
         })
         .collect::<Vec<_>>()
         .join("\n");
+    if !expects_error && !call.returns_void {
+        let displayed_result = if body.contains("const _result_json =") {
+            "_result_json"
+        } else {
+            result_var
+        };
+        let format = if displayed_result == "_result_json" {
+            "{s}"
+        } else {
+            "{any}"
+        };
+        body.push_str(&format!(
+            "    std.debug.print(\"{format}\\n\", .{{{displayed_result}}});\n"
+        ));
+    }
     Ok(crate::e2e::template_env::render(
         "zig/snippet_body.jinja",
         minijinja::context! { module => module_name, body => body, body_is_indented => true },
@@ -640,7 +666,8 @@ mod snippet_tests {
         let rendered = render_snippet_body(&fixture, &e2e, "sample", "sample", &ResolvedCrateConfig::default(), &[])
             .expect("snippet renders");
         assert!(rendered.contains("const sample = @import(\"sample\")"));
-        assert!(rendered.contains("_ = try sample.count()"));
+        assert!(rendered.contains("const result = try sample.count()"));
+        assert!(rendered.contains("std.debug.print(\"{any}\\n\", .{result})"));
         assert!(!rendered.contains("test \""));
         assert!(!rendered.contains("defer "));
         assert!(rendered.contains("pub fn main() !void"));
@@ -672,6 +699,7 @@ mod snippet_tests {
             "{rendered}"
         );
         assert!(rendered.contains("free(_result_json)"), "{rendered}");
+        assert!(rendered.contains("std.debug.print(\"{s}\\n\", .{_result_json})"));
     }
 
     #[test]

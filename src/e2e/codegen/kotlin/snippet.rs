@@ -304,6 +304,7 @@ mod tests {
         );
 
         assert!(body.contains("DocumentApi.loadDocument()"));
+        assert!(body.contains("println(document)"), "{body}");
         assert!(body.contains("fun main()"));
         assert!(!body.contains("@Test"));
         assert!(!body.contains("assert"));

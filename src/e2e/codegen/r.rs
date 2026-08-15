@@ -177,6 +177,16 @@ impl E2eCodegen for RCodegen {
             .map(|line| line.strip_prefix("  ").unwrap_or(line))
             .collect::<Vec<_>>()
             .join("\n");
+        let body = if call.returns_void
+            || fixture
+                .assertions
+                .iter()
+                .any(|assertion| assertion.assertion_type == "error")
+        {
+            body
+        } else {
+            format!("{body}\nprint({})", call.result_var)
+        };
         let package = e2e_config
             .resolve_package("r")
             .and_then(|package| package.name)
@@ -218,5 +228,27 @@ mod snippet_tests {
         assert!(rendered.contains("visit_text = function(ctx, text)"));
         assert!(rendered.contains("render_document("));
         assert!(!rendered.contains("test_that("));
+    }
+
+    #[test]
+    fn successful_snippet_displays_the_call_result() {
+        let fixture = Fixture {
+            id: "list_widgets".into(),
+            description: "List widgets".into(),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "list_widgets".into();
+        e2e.call.result_var = "widgets".into();
+
+        let rendered = RCodegen
+            .render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[])
+            .expect("R snippet renders");
+
+        assert!(
+            rendered.contains("widgets <- jsonlite::fromJSON(list_widgets()"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("print(widgets)"), "{rendered}");
     }
 }

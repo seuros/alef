@@ -219,10 +219,29 @@ impl E2eCodegen for RustE2eCodegen {
             })
             .collect::<Vec<_>>();
         let presentation = super::presentation::resolve(&call_fixture, e2e_config, "rust");
+        let call = e2e_config.resolve_call_for_fixture(
+            call_fixture.call.as_deref(),
+            &call_fixture.id,
+            &call_fixture.resolved_category(),
+            &call_fixture.tags,
+            &call_fixture.input,
+        );
+        let display_result = presentation.is_empty() && !call.returns_void;
+        let body = body
+            .into_iter()
+            .map(|line| {
+                if display_result {
+                    line.replacen("let _ =", &format!("let {} =", call.result_var), 1)
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>();
         Ok(crate::e2e::template_env::render(
             "rust/snippet_body.rs.jinja",
             minijinja::context! {
                 imports => imports, body => body, is_async => is_async, presentation => presentation,
+                display_result => display_result, result_var => call.result_var,
             },
         ))
     }
@@ -872,6 +891,24 @@ options_type = "ChatRequest"
         assert!(!rendered.contains("MOCK_SERVER"), "{rendered}");
         assert!(!rendered.contains("E2E_ALLOW_PRIVATE_NETWORK"), "{rendered}");
         assert!(!rendered.contains("$mock_url"), "{rendered}");
+    }
+
+    #[test]
+    fn successful_snippet_binds_and_displays_the_call_result() {
+        use crate::e2e::codegen::E2eCodegen;
+
+        let fixture = make_fixture("list_widgets", serde_json::Value::Null);
+        let mut e2e = crate::e2e::config::E2eConfig::default();
+        e2e.call.function = "list_widgets".into();
+        e2e.call.result_var = "widgets".into();
+
+        let rendered = RustE2eCodegen
+            .render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[])
+            .expect("Rust snippet renders");
+
+        assert!(rendered.contains("let widgets = list_widgets()"), "{rendered}");
+        assert!(rendered.contains("println!(\"{:?}\", widgets)"), "{rendered}");
+        assert!(!rendered.contains("let _ = list_widgets()"), "{rendered}");
     }
 
     #[test]
