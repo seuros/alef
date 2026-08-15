@@ -103,10 +103,11 @@ prefix = "sample"
     let lib = files.iter().find(|file| file.path.ends_with("lib.rs")).unwrap();
 
     assert!(lib.content.contains("pub enum AlefFfiErrorCode"));
-    assert!(lib.content.contains("Conversion = 1"));
-    assert!(lib.content.contains("Unknown = 2"));
-    assert!(lib.content.contains("Panic = 3"));
-    assert!(lib.content.contains("InvalidHandle = 4"));
+    assert!(lib.content.contains("SampleAlefNone = 0"));
+    assert!(lib.content.contains("SampleAlefConversion = 1"));
+    assert!(lib.content.contains("SampleAlefUnknown = 2"));
+    assert!(lib.content.contains("SampleAlefPanic = 3"));
+    assert!(lib.content.contains("SampleAlefInvalidHandle = 4"));
     assert!(lib.content.contains("SampleLibRequestErrorUnavailable = 101"));
     assert!(lib.content.contains("SampleLibStorageErrorUnavailable = 102"));
     assert!(lib.content.contains("sample_lib::RequestError::InvalidInput =>"));
@@ -120,6 +121,85 @@ prefix = "sample"
     for taxonomy in codes {
         assert!(lib.content.contains(&format!("= {}", taxonomy.code)));
     }
+}
+
+/// cbindgen copies enum member identifiers into the C header verbatim, and C enum
+/// members live in the global namespace. A bare member therefore collides with
+/// platform headers — X11 defines `None` as `0L` — and with a second alef-generated
+/// library linked into the same translation unit. ~keep
+#[test]
+fn ffi_error_enum_members_are_namespaced_for_the_c_global_scope() {
+    let config = resolved_one(
+        r#"
+[workspace]
+languages = ["ffi"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+
+[crates.ffi]
+prefix = "sample"
+"#,
+    );
+    let api = ApiSurface {
+        crate_name: "sample-lib".to_string(),
+        version: "1.0.0".to_string(),
+        errors: vec![ErrorDef {
+            name: "Error".to_string(),
+            rust_path: "sample_lib::error::Error".to_string(),
+            variants: vec![ErrorVariant {
+                error_code: Some(100),
+                name: "NotFound".to_string(),
+                is_unit: true,
+                ..ErrorVariant::default()
+            }],
+            original_rust_path: String::new(),
+            doc: String::new(),
+            methods: Vec::new(),
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: VersionAnnotation::default(),
+        }],
+        functions: vec![FunctionDef {
+            name: "execute".to_string(),
+            rust_path: "sample_lib::execute".to_string(),
+            return_type: TypeRef::Unit,
+            error_type: Some("Error".to_string()),
+            ..FunctionDef::default()
+        }],
+        ..ApiSurface::default()
+    };
+
+    let files = FfiBackend.generate_bindings(&api, &config).unwrap();
+    let lib = files.iter().find(|file| file.path.ends_with("lib.rs")).unwrap();
+    let body = lib
+        .content
+        .split_once("pub enum AlefFfiErrorCode {")
+        .expect("the generated crate must declare the error enum")
+        .1
+        .split_once('}')
+        .expect("the error enum must be terminated")
+        .0;
+
+    let members: Vec<&str> = body
+        .lines()
+        .filter_map(|line| line.split_once('=').map(|(member, _)| member.trim()))
+        .collect();
+    assert_eq!(
+        members.len(),
+        6,
+        "expected five built-ins plus one taxonomy member: {members:?}"
+    );
+    for member in &members {
+        assert!(
+            member.starts_with("SampleAlef") || member.starts_with("SampleLib"),
+            "member `{member}` is not namespaced and would collide in C's global scope"
+        );
+    }
+
+    // `sample_lib::error::Error` must not stutter into `SampleLibErrorErrorNotFound`.
+    assert!(members.contains(&"SampleLibErrorNotFound"), "{members:?}");
 }
 
 #[test]

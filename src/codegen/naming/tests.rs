@@ -22,6 +22,61 @@ fn ffi_error_code_variant_names_do_not_repeat_error_at_the_boundary() {
 }
 
 #[test]
+fn ffi_error_code_variant_names_collapse_repeats_inside_the_type_path() {
+    let cases = [
+        // A module named after its error type is the common stutter source.
+        (("sample::error::Error", "NotFound"), "SampleErrorNotFound"),
+        (("sample_lib::error::Error", "NotFound"), "SampleLibErrorNotFound"),
+        // Case differences alone do not make two consecutive words distinct.
+        (("sample::Error::Error", "NotFound"), "SampleErrorNotFound"),
+        // A repeat that is not adjacent carries meaning and is preserved.
+        (("sample::error::Error", "QueryError"), "SampleErrorQueryError"),
+        (("sample::error::codec::Error", "Decode"), "SampleErrorCodecErrorDecode"),
+        // Paths without a repeat are untouched.
+        (("sample::RequestError", "Unavailable"), "SampleRequestErrorUnavailable"),
+    ];
+    for ((error_type, variant), expected) in cases {
+        assert_eq!(
+            ffi_error_code_variant_name(error_type, variant),
+            expected,
+            "{error_type}::{variant}"
+        );
+    }
+}
+
+#[test]
+fn ffi_error_code_variant_names_stay_distinct_across_sibling_error_types() {
+    // Path collapsing must not erase the type that distinguishes two taxonomies.
+    assert_ne!(
+        ffi_error_code_variant_name("sample::error::Error", "NotFound"),
+        ffi_error_code_variant_name("sample::storage::Error", "NotFound")
+    );
+}
+
+#[test]
+fn eliding_error_at_the_boundary_can_alias_two_variants_of_one_type() {
+    // Documented limitation, unchanged from the previous implementation: a type
+    // carrying both `ErrorFoo` and `Foo` folds onto a single name. C rejects the
+    // duplicate enumerator at compile time, so this surfaces loudly rather than
+    // silently mis-mapping a code. Deliberately not "fixed" by dropping the elision,
+    // which would reintroduce the `ErrorError` stutter this pass removes. ~keep
+    assert_eq!(
+        ffi_error_code_variant_name("sample::error::Error", "ErrorFoo"),
+        ffi_error_code_variant_name("sample::error::Error", "Foo")
+    );
+}
+
+#[test]
+fn ffi_builtin_error_code_prefix_namespaces_members_per_project() {
+    assert_eq!(ffi_builtin_error_code_prefix("sample"), "SampleAlef");
+    assert_eq!(ffi_builtin_error_code_prefix("ts_pack"), "TsPackAlef");
+    assert_ne!(
+        ffi_builtin_error_code_prefix("sample"),
+        ffi_builtin_error_code_prefix("other")
+    );
+}
+
+#[test]
 fn serde_wire_name_applies_rename_all_strategies() {
     let cases = [
         ("HttpStatus", Some("lowercase"), "httpstatus"),

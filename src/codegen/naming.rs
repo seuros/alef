@@ -827,24 +827,68 @@ pub fn pascal_to_screaming_snake(name: &str) -> String {
     pascal_to_snake(name).to_ascii_uppercase()
 }
 
+/// Split an identifier or path into its lowercase words, treating every
+/// non-alphanumeric character as a separator and splitting PascalCase runs.
+fn identifier_words(name: &str) -> Vec<String> {
+    name.split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|chunk| !chunk.is_empty())
+        .flat_map(|chunk| {
+            pascal_to_snake(chunk)
+                .split('_')
+                .filter(|word| !word.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// Drop each word that repeats the word immediately before it, ignoring case.
+fn collapse_repeated_words(words: Vec<String>) -> Vec<String> {
+    let mut collapsed: Vec<String> = Vec::with_capacity(words.len());
+    for word in words {
+        if collapsed
+            .last()
+            .is_some_and(|previous| previous.eq_ignore_ascii_case(&word))
+        {
+            continue;
+        }
+        collapsed.push(word);
+    }
+    collapsed
+}
+
+/// The C ABI member-name prefix for alef's own built-in error codes. ~keep
+///
+/// cbindgen applies `[export] prefix` to the enum *type* but emits member names
+/// verbatim, and C enum members are global identifiers. Unprefixed members would
+/// therefore collide both with platform headers (X11 `#define None 0L`) and with
+/// a second alef-generated library linked into the same translation unit, so the
+/// project's ABI prefix is baked into the member name here.
+pub fn ffi_builtin_error_code_prefix(abi_prefix: &str) -> String {
+    format!("{abi_prefix}_alef").to_pascal_case()
+}
+
 /// Produce a project-agnostic C ABI error-enum member from its canonical Rust identity. ~keep
 pub fn ffi_error_code_variant_name(error_type: &str, variant: &str) -> String {
-    let error_name = error_type.rsplit("::").next().unwrap_or(error_type);
-    let variant = if error_name.ends_with("Error") {
-        variant.strip_prefix("Error").unwrap_or(variant)
-    } else {
-        variant
-    };
-    format!("{error_type}_{variant}")
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>()
+    let path_words = collapse_repeated_words(identifier_words(error_type));
+    let mut variant_words = identifier_words(variant);
+    // Collapsing repeats inside the type path is safe because the path is constant
+    // across a type's variants, so distinct variants stay distinct. The boundary
+    // elision below is narrower but not injective: a type owning both `ErrorFoo`
+    // and `Foo` folds onto one name. That is the pre-existing trade-off, and C
+    // rejects the duplicate enumerator at compile time rather than mis-mapping a
+    // code silently, so the readability win is kept. ~keep
+    if path_words.last().is_some_and(|word| word == "error")
+        && variant_words.first().is_some_and(|word| word == "error")
+        && variant_words.len() > 1
+    {
+        variant_words.remove(0);
+    }
+    path_words
+        .into_iter()
+        .chain(variant_words)
+        .collect::<Vec<_>>()
+        .join("_")
         .to_pascal_case()
 }
 

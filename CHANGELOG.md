@@ -32,6 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **FFI error header**: keep `AlefFfiErrorCode` reachable through generated cbindgen export filters and avoid repeated
   `ErrorError` tokens where an error type and variant meet in public C enum members.
+- **FFI error enum members**: collapse consecutive repeated words inside the error type path, so a crate laying its
+  error type out as `my_crate::error::Error` emits `MyCrateErrorNotFound` rather than `MyCrateErrorErrorNotFound`.
+  The previous pass only elided the repeat at the type/variant boundary and left the path-internal stutter intact.
+- **FFI error enum members**: namespace alef's five built-in codes with the project ABI prefix, so `None` is emitted as
+  e.g. `SampleAlefNone`. cbindgen applies `[export] prefix` to the enum type but copies member names into the header
+  verbatim, and C enum members are global identifiers — the bare names collided with platform headers (X11 defines
+  `None` as `0L`) and with any second alef-generated library in the same translation unit.
 - **kotlin errors**: let unnumbered error variants use the runtime fallback instead of panicking while generating
   Kotlin/Native bindings that mix explicitly numbered and fallback variants.
 - **Ruby/Magnus errors**: reconstruct tuple error variants with positional Rust syntax for every binding

@@ -665,6 +665,7 @@ pub(super) fn gen_last_error(api: &ApiSurface, prefix: &str, core_import: &str) 
         "last_error.jinja",
         minijinja::context! {
             prefix => prefix,
+            builtin_prefix => crate::codegen::naming::ffi_builtin_error_code_prefix(prefix),
             error_code_impls => error_code_impls,
             taxonomy => taxonomy.iter().map(|entry| minijinja::context! {
                 code => entry.code,
