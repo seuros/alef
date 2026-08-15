@@ -961,6 +961,111 @@ fn test_scaffold_java_checkstyle_suppressions_use_config_location() {
     );
 }
 
+/// alef writes snippet-validation scratch sources under `.alef/snippets/sessions/<hash>/` inside
+/// the scaffolded Java project (see `ValidationSession::workspace_directory`). Because
+/// `sourceDirectory` is the project basedir, the maven-checkstyle-plugin walks that scratch
+/// directory too unless the plugin config excludes it explicitly.
+#[test]
+fn test_scaffold_java_checkstyle_plugin_excludes_alef_scratch_directory() {
+    let config = test_config();
+    let api = test_api();
+    let all_files = scaffold(&api, &config, &[Language::Java]).unwrap();
+    let files = language_files(&all_files);
+    let pom = files.iter().find(|f| f.path.ends_with("pom.xml")).unwrap();
+    let checkstyle_section = pom
+        .content
+        .split("<artifactId>maven-checkstyle-plugin</artifactId>")
+        .nth(1)
+        .and_then(|section| section.split("</plugin>").next())
+        .expect("pom.xml must configure maven-checkstyle-plugin");
+    assert!(
+        checkstyle_section.contains("<excludes>") && checkstyle_section.contains(".alef"),
+        "checkstyle plugin must exclude the .alef/ snippet-validation scratch directory so \
+         generated snippet scratch sources never fail `mvn compile`; block:\n{checkstyle_section}"
+    );
+}
+
+/// Bite test: builds the scaffolded pom/checkstyle config in a real temp Maven project and
+/// runs `mvn -o validate` (the phase checkstyle is bound to). A genuine violation in a "real"
+/// binding source must still fail the build; the same violation shape planted under
+/// `.alef/snippets/sessions/<hash>/` must not. Skips when `mvn` is unavailable.
+#[test]
+fn test_scaffold_java_checkstyle_ignores_alef_scratch_but_still_catches_real_violations() {
+    if std::process::Command::new("mvn").arg("--version").output().is_err() {
+        eprintln!("skipping: mvn not installed");
+        return;
+    }
+
+    let config = test_config();
+    let api = test_api();
+    let all_files = scaffold(&api, &config, &[Language::Java]).unwrap();
+    let files = language_files(&all_files);
+
+    let project_dir = tempfile::tempdir().expect("temp project directory");
+    for name in [
+        "pom.xml",
+        "checkstyle.xml",
+        "checkstyle.properties",
+        "checkstyle-suppressions.xml",
+    ] {
+        let file = files
+            .iter()
+            .find(|f| f.path.ends_with(name))
+            .unwrap_or_else(|| panic!("scaffold must emit {name}"));
+        std::fs::write(project_dir.path().join(name), &file.content).expect("write scaffolded file");
+    }
+
+    let group_id = config.java_group_id();
+    let source_root = group_id.split('.').next().unwrap_or("dev");
+    let package_dir = project_dir.path().join(source_root).join("scratchcheck");
+    std::fs::create_dir_all(&package_dir).expect("package directory");
+
+    let long_line = "x".repeat(220);
+
+    // A genuine style violation in a real binding source must still fail `mvn validate`.
+    let real_source = package_dir.join("RealSource.java");
+    std::fs::write(
+        &real_source,
+        format!("package scratchcheck;\n\npublic final class RealSource {{\n    // {long_line}\n}}\n"),
+    )
+    .expect("write real source");
+
+    let real_violation_output = std::process::Command::new("mvn")
+        .args(["-o", "-q", "validate"])
+        .current_dir(project_dir.path())
+        .output()
+        .expect("mvn runs");
+    assert!(
+        !real_violation_output.status.success(),
+        "checkstyle must still fail on a genuine violation in a real binding source; stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&real_violation_output.stdout),
+        String::from_utf8_lossy(&real_violation_output.stderr),
+    );
+
+    std::fs::remove_file(&real_source).expect("remove real violation source");
+
+    // The same violation shape, planted as snippet-validation scratch, must be ignored.
+    let scratch_dir = project_dir.path().join(".alef/snippets/sessions/deadbeefcafefeed");
+    std::fs::create_dir_all(&scratch_dir).expect("scratch session directory");
+    std::fs::write(
+        scratch_dir.join("Example.java"),
+        format!("public final class _TestVisitor {{\n    // {long_line}\n}}\n"),
+    )
+    .expect("write scratch source");
+
+    let scratch_output = std::process::Command::new("mvn")
+        .args(["-o", "-q", "validate"])
+        .current_dir(project_dir.path())
+        .output()
+        .expect("mvn runs");
+    assert!(
+        scratch_output.status.success(),
+        "checkstyle must ignore .alef snippet-validation scratch sources; stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&scratch_output.stdout),
+        String::from_utf8_lossy(&scratch_output.stderr),
+    );
+}
+
 #[test]
 fn test_ruby_cargo_machete_rb_sys_only() {
     use crate::core::ir::*;

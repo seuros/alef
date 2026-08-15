@@ -252,6 +252,11 @@
                     <failsOnError>true</failsOnError>
                     <violationSeverity>warning</violationSeverity>
                     <propertyExpansion>config_loc=${project.basedir}</propertyExpansion>
+                    <!-- sourceDirectory is project.basedir (see above), so without this exclude
+                         checkstyle also walks .alef/, where alef writes disposable doc-snippet
+                         validation scratch sources. Those aren't real binding code and shouldn't
+                         gate mvn compile on their style. -->
+                    <excludes>**/.alef/**</excludes>
                 </configuration>
                 <executions>
                     <execution>
