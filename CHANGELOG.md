@@ -102,6 +102,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **cli**: stop `generate`, `scaffold`, and `all` from silently rewriting `alef.toml`'s `alef_version`. The pin never
   gates generation and projects may coordinate it with external installer or workflow pins that generation cannot
   update; release version sync remains explicit.
+- **validate**: stop descending into nested git checkouts that `.gitmodules` does not register. `alef validate
+  versions` walked every directory under the workspace root when collecting `Cargo.toml`/`Cargo.lock` files,
+  including a linked `git worktree` checked out inside the repo (e.g. under `.worktrees/`) — an independent checkout
+  sitting at a different commit. Its manifests reported `[MISMATCH]` noise against the host repo's canonical
+  version, could poison the version map for a package name it happens to share with the live tree, and — for a
+  worktree mid-regeneration — could differ between two runs of the same command. A directory whose root carries a
+  `.git` entry is now skipped, but **only** when `.gitmodules` does not register it as a submodule path: a
+  registered submodule is a declared part of the repo's version surface and is still walked by both the manifest
+  scan and the `Cargo.lock` check, so genuine drift inside a submodule keeps failing.
 - **ffi**: return the scalar `0` sentinel from string-bridge parameter and UTF-8 guard failures when the exported
   ABI returns `AlefHandle`, instead of emitting `null_mut()` and producing uncompilable generated Rust.
 - **zig snippets**: omit the parsed-result binding when generated assertions never reference it, avoiding an

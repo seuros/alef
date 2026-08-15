@@ -1,6 +1,6 @@
 use super::validate_versions::VersionCheck;
 use crate::core::config::{ResolvedCrateConfig, extras::Language};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub(super) fn collect(config: &ResolvedCrateConfig, workspace_root: &Path, canonical: &str) -> Vec<VersionCheck> {
@@ -63,9 +63,10 @@ fn collect_single_manifest_checks(
 }
 
 fn collect_cargo_lock_checks(workspace_root: &Path, canonical: &str, checks: &mut Vec<VersionCheck>) {
-    let manifests = cargo_manifest_versions(workspace_root, canonical);
+    let submodules = registered_submodule_paths(workspace_root);
+    let manifests = cargo_manifest_versions(workspace_root, canonical, &submodules);
     for lock_path in glob_under(workspace_root, "", "**/Cargo.lock") {
-        if ignored_path(workspace_root, &lock_path) {
+        if ignored_path(workspace_root, &lock_path, &submodules) {
             continue;
         }
         let Some(content) = std::fs::read_to_string(&lock_path).ok() else {
@@ -102,10 +103,14 @@ fn collect_cargo_lock_checks(workspace_root: &Path, canonical: &str, checks: &mu
     }
 }
 
-fn cargo_manifest_versions(workspace_root: &Path, canonical: &str) -> HashMap<String, String> {
+fn cargo_manifest_versions(
+    workspace_root: &Path,
+    canonical: &str,
+    submodules: &HashSet<PathBuf>,
+) -> HashMap<String, String> {
     let mut versions = HashMap::new();
     for path in glob_under(workspace_root, "", "**/Cargo.toml") {
-        if ignored_path(workspace_root, &path) {
+        if ignored_path(workspace_root, &path, submodules) {
             continue;
         }
         let Some(content) = std::fs::read_to_string(path).ok() else {
@@ -146,15 +151,70 @@ fn glob_under(workspace_root: &Path, directory: &str, suffix: &str) -> Vec<PathB
 // map by package name alone, so a vendored `liter-llm`/`liter_llm_nif` manifest
 // silently overwrote the live one's entry and poisoned every Cargo.lock comparison
 // for that name repo-wide — not just the vendored copy's own lock.
-fn ignored_path(workspace_root: &Path, path: &Path) -> bool {
-    path.strip_prefix(workspace_root).is_ok_and(|relative| {
-        relative.components().any(|component| {
-            matches!(
-                component.as_os_str().to_str(),
-                Some("target" | ".git" | ".alef-cache" | "vendor" | "deps")
-            )
-        })
-    })
+fn ignored_path(workspace_root: &Path, path: &Path, submodules: &HashSet<PathBuf>) -> bool {
+    let Ok(relative) = path.strip_prefix(workspace_root) else {
+        return false;
+    };
+    relative.components().any(|component| {
+        matches!(
+            component.as_os_str().to_str(),
+            Some("target" | ".git" | ".alef-cache" | "vendor" | "deps")
+        )
+    }) || is_inside_unregistered_checkout(workspace_root, relative, submodules)
+}
+
+// ~keep A linked `git worktree` and a submodule are indistinguishable by their root
+// marker — both carry a `.git` FILE pointing at the owning repository's gitdir (a
+// nested full clone carries a `.git` directory). They are not interchangeable here:
+// `.gitmodules` registers a submodule as a declared part of this repo, so its
+// manifests belong in the version map, while an unregistered checkout under the tree
+// is an independent worktree sitting at its own commit whose manifests are unrelated
+// to this repo's version consistency — and, mid-regeneration, can differ between two
+// runs of the same command. Only the *nearest* enclosing root matters, so this walks
+// ancestors outward from `relative` instead of every path down from the workspace.
+fn is_inside_unregistered_checkout(workspace_root: &Path, relative: &Path, submodules: &HashSet<PathBuf>) -> bool {
+    let mut ancestor = workspace_root.to_path_buf();
+    let mut components = relative.components().peekable();
+    while let Some(component) = components.next() {
+        if components.peek().is_none() {
+            // ~keep The final component is the manifest/lockfile itself, never a checkout root.
+            break;
+        }
+        ancestor.push(component);
+        if !submodules.contains(&ancestor) && ancestor.join(".git").exists() {
+            return true;
+        }
+    }
+    false
+}
+
+fn registered_submodule_paths(workspace_root: &Path) -> HashSet<PathBuf> {
+    let mut registered = HashSet::new();
+    let Ok(content) = std::fs::read_to_string(workspace_root.join(".gitmodules")) else {
+        return registered;
+    };
+    let mut inside_submodule_section = false;
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            inside_submodule_section = line.starts_with("[submodule");
+            continue;
+        }
+        if !inside_submodule_section {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "path" {
+            continue;
+        }
+        let value = value.trim().trim_matches('"');
+        if !value.is_empty() {
+            registered.insert(workspace_root.join(value));
+        }
+    }
+    registered
 }
 
 fn read_xml_element(content: &str, element: &str) -> Option<String> {
@@ -541,5 +601,91 @@ mod tests {
             "genuinely stale lockfile entry must still be reported as a mismatch: {sample:?}"
         );
         assert_eq!(sample.found.as_deref(), Some("3.4.0"));
+    }
+
+    /// Write a `.git` marker of the shape a linked worktree or submodule checkout
+    /// carries: a FILE pointing at the owning repository's gitdir.
+    fn write_git_marker(checkout_root: &Path, gitdir: &str) {
+        std::fs::create_dir_all(checkout_root).expect("checkout root");
+        std::fs::write(checkout_root.join(".git"), format!("gitdir: {gitdir}\n")).expect("git marker file");
+    }
+
+    /// A linked `git worktree` checked out inside the repo (e.g. under `.worktrees/`)
+    /// is a different checkout at a different commit, and nothing in `.gitmodules`
+    /// claims it as part of this repo. Its manifests must not be walked at all —
+    /// neither to raise mismatches of their own nor to overwrite the live entry for a
+    /// package name they happen to share.
+    #[test]
+    fn unregistered_nested_worktree_is_excluded_from_the_version_map() {
+        let temp = workspace("3.4.5");
+        std::fs::write(
+            temp.path().join("Cargo.lock"),
+            "version = 4\n\n[[package]]\nname = \"sample\"\nversion = \"3.4.5\"\n",
+        )
+        .expect("root lock");
+        let worktree_root = temp.path().join(".worktrees/scratch-lane");
+        write_git_marker(&worktree_root, "../../.git/worktrees/scratch-lane");
+        std::fs::write(
+            worktree_root.join("Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"9.0.0\"\n",
+        )
+        .expect("worktree manifest");
+        std::fs::write(
+            worktree_root.join("Cargo.lock"),
+            "version = 4\n\n[[package]]\nname = \"sample\"\nversion = \"3.4.0\"\n",
+        )
+        .expect("worktree lock");
+
+        let checks = collect(&config(temp.path()), temp.path(), "3.4.5");
+        assert!(
+            checks.iter().all(|check| !check.label.contains(".worktrees")),
+            "no check should be produced for anything under the unregistered worktree: {checks:?}"
+        );
+        let sample = checks
+            .iter()
+            .find(|check| check.label == "Cargo.lock#sample")
+            .expect("root sample check present");
+        assert!(
+            sample.matches,
+            "the live root lockfile must not be poisoned by the worktree's stale manifest: {sample:?}"
+        );
+    }
+
+    /// The other half of the same discriminator: a submodule checkout carries the very
+    /// same `.git` marker file as a stray worktree, but `.gitmodules` registers its
+    /// path, making it a declared part of this repo's version surface. Both scans must
+    /// still descend into it — the `#subcrate` check can only exist if the submodule's
+    /// `Cargo.toml` reached the manifest map *and* its `Cargo.lock` was walked.
+    #[test]
+    fn gitmodules_registered_submodule_is_still_validated() {
+        let temp = workspace("3.4.5");
+        std::fs::write(
+            temp.path().join(".gitmodules"),
+            "[submodule \"subcrate\"]\n\tpath = libs/subcrate\n\turl = https://example.invalid/subcrate.git\n",
+        )
+        .expect("gitmodules");
+        let submodule_root = temp.path().join("libs/subcrate");
+        write_git_marker(&submodule_root, "../../.git/modules/subcrate");
+        std::fs::write(
+            submodule_root.join("Cargo.toml"),
+            "[package]\nname = \"subcrate\"\nversion = \"3.4.5\"\n",
+        )
+        .expect("submodule manifest");
+        std::fs::write(
+            submodule_root.join("Cargo.lock"),
+            "version = 4\n\n[[package]]\nname = \"subcrate\"\nversion = \"3.4.0\"\n",
+        )
+        .expect("submodule lock");
+
+        let checks = collect(&config(temp.path()), temp.path(), "3.4.5");
+        let subcrate = checks
+            .iter()
+            .find(|check| check.label == "libs/subcrate/Cargo.lock#subcrate")
+            .expect("registered submodule must still be validated");
+        assert!(
+            !subcrate.matches,
+            "genuine drift inside a registered submodule must still be reported: {subcrate:?}"
+        );
+        assert_eq!(subcrate.found.as_deref(), Some("3.4.0"));
     }
 }
