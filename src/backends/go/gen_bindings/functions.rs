@@ -1,6 +1,6 @@
 use super::methods::gen_param_to_c;
 use super::types::{emit_type_doc, go_return_expr};
-use crate::backends::go::type_map::{go_optional_type, go_type};
+use crate::backends::go::type_map::{alef_handle_c_type, go_optional_type, go_type};
 use crate::codegen::naming::{go_free_function_name, go_param_name, pascal_to_snake, to_go_name};
 use crate::core::config::TraitBridgeConfig;
 use crate::core::ir::{FunctionDef, MethodDef, ParamDef, TypeRef};
@@ -568,7 +568,11 @@ pub(super) fn gen_convert_with_visitor_wrapper(
         .expect("go options-field visitor wrapper currently requires a named return type");
     let return_go_type = go_optional_type(&func.return_type).into_owned();
     let return_type_str = format!(" ({return_go_type}, error)");
-    let options_c_type = format!("{}{}", ffi_prefix.to_uppercase(), options_type);
+    // NOTE: all `TypeRef::Named` values cross the FFI boundary as alef's scalar `AlefHandle`
+    // (see `backends::ffi::type_map::c_return_optional`), never as an opaque pointer to the
+    // options struct — so the local variable declared from `options_json_to_c.jinja` must use
+    // the handle's C type name, not `{PREFIX}{options_type}`.
+    let options_c_type = alef_handle_c_type(ffi_prefix);
     let options_type_snake = pascal_to_snake(options_type);
     let return_type_snake = pascal_to_snake(return_type_name);
 
@@ -675,7 +679,9 @@ pub(super) fn gen_convert_with_visitor_wrapper(
         ));
     }
 
-    out.push_str("\tif ptr == nil {\n");
+    // NOTE: `ptr` here is the return of `{{ ffi_name }}` for a named return type, which is
+    // alef's scalar `AlefHandle`, not a pointer — compare it to the handle's zero value.
+    out.push_str("\tif ptr == 0 {\n");
     out.push_str("\t\tif err := lastError(); err != nil {\n");
     out.push_str("\t\t\treturn nil, err\n");
     out.push_str("\t\t}\n");

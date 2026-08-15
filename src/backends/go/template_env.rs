@@ -426,7 +426,6 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/visitor_field_doc.jinja"),
     ),
     ("visitor_field.jinja", include_str!("templates/visitor_field.jinja")),
-    ("c_options_var.jinja", include_str!("templates/c_options_var.jinja")),
     (
         "c_call_with_json.jinja",
         include_str!("templates/c_call_with_json.jinja"),
@@ -747,32 +746,11 @@ static TEMPLATES: &[(&str, &str)] = &[
         "json_unmarshal_rawdata.jinja",
         include_str!("templates/json_unmarshal_rawdata.jinja"),
     ),
-    (
-        "c_options_var_decl.jinja",
-        include_str!("templates/c_options_var_decl.jinja"),
-    ),
-    (
-        "c_options_from_json.jinja",
-        include_str!("templates/c_options_from_json.jinja"),
-    ),
-    (
-        "c_options_defer_free.jinja",
-        include_str!("templates/c_options_defer_free.jinja"),
-    ),
-    (
-        "c_options_from_value.jinja",
-        include_str!("templates/c_options_from_value.jinja"),
-    ),
     ("c_bridge_new.jinja", include_str!("templates/c_bridge_new.jinja")),
     (
         "c_bridge_defer_free.jinja",
         include_str!("templates/c_bridge_defer_free.jinja"),
     ),
-    (
-        "c_options_set_visitor.jinja",
-        include_str!("templates/c_options_set_visitor.jinja"),
-    ),
-    ("c_convert_call.jinja", include_str!("templates/c_convert_call.jinja")),
     (
         "c_result_defer_free.jinja",
         include_str!("templates/c_result_defer_free.jinja"),
@@ -810,14 +788,6 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/json_unmarshal_error.jinja"),
     ),
     ("var_decl_slice.jinja", include_str!("templates/var_decl_slice.jinja")),
-    (
-        "c_options_from_json_with_name.jinja",
-        include_str!("templates/c_options_from_json_with_name.jinja"),
-    ),
-    (
-        "c_options_defer_free_with_name.jinja",
-        include_str!("templates/c_options_defer_free_with_name.jinja"),
-    ),
     (
         "c_ptr_assign_func.jinja",
         include_str!("templates/c_ptr_assign_func.jinja"),

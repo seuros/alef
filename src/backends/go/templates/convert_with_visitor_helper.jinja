@@ -2,7 +2,7 @@
 func {{ helper_name }}({{ helper_params }}) (*{{ result_type }}, error) {
 {{ helper_setup }}
 
-	var cOptions *C.{{ conversion_options_type }}
+	var cOptions C.{{ conversion_options_type }}
 	if {{ options_var }} != nil {
 		optionsBytes, err := json.Marshal({{ options_var }})
 		if err != nil {
@@ -11,7 +11,7 @@ func {{ helper_name }}({{ helper_params }}) (*{{ result_type }}, error) {
 		optionsJSON := C.CString(string(optionsBytes))
 		defer C.free(unsafe.Pointer(optionsJSON))
 		cOptions = C.{{ fn_options_from_json }}(optionsJSON)
-		if cOptions == nil {
+		if cOptions == 0 {
 			if err := lastError(); err != nil {
 				return nil, err
 			}
@@ -19,11 +19,11 @@ func {{ helper_name }}({{ helper_params }}) (*{{ result_type }}, error) {
 		}
 		defer C.{{ fn_options_free }}(cOptions)
 	}
-	if cOptions == nil {
+	if cOptions == 0 {
 		defaultJSON := C.CString("{}")
 		cOptions = C.{{ fn_options_from_json }}(defaultJSON)
 		C.free(unsafe.Pointer(defaultJSON))
-		if cOptions == nil {
+		if cOptions == 0 {
 			if err := lastError(); err != nil {
 				return nil, err
 			}
@@ -37,13 +37,13 @@ func {{ helper_name }}({{ helper_params }}) (*{{ result_type }}, error) {
 	cb := C.makeVisitorCallbacks(unsafe.Pointer(id))
 
 	visitorHandle := C.{{ fn_visitor_create }}(&cb)
-	if visitorHandle == nil {
+	if visitorHandle == 0 {
 		return nil, fmt.Errorf("failed to create visitor handle")
 	}
 
 	C.{{ fn_options_set_visitor }}(cOptions, visitorHandle)
 	ptr := C.{{ fn_convert }}({{ helper_call_args }})
-	if ptr == nil {
+	if ptr == 0 {
 		if err := lastError(); err != nil {
 			return nil, err
 		}

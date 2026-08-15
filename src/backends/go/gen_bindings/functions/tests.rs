@@ -326,3 +326,76 @@ fn test_capsule_errors_when_host_type_empty() {
         "error must mention the missing field. Got:\n{out}"
     );
 }
+
+/// Regression test for the Go backend emitting opaque-pointer idioms for values that cross
+/// the FFI boundary as alef's scalar generational `AlefHandle`, per
+/// `backends::ffi::type_map::{c_param_optional, c_return_optional}` (both map every
+/// `TypeRef::Named` to `AlefHandle` unconditionally). Every `TypeRef::Named` param or return
+/// value is a `uint64_t` handle in the emitted C header, never a `T*` pointer, so the Go side
+/// must declare locals as the scalar `C.<PREFIX>AlefHandle` type and compare them to `0`, not
+/// `nil`. Prior to the fix, this emitted `var cOptions *C.HTMConversionOptions` and
+/// `cOptions == nil` / `ptr == nil`, which fails to compile under cgo.
+#[test]
+fn gen_convert_with_visitor_wrapper_uses_scalar_handle_not_opaque_pointer() {
+    let func = FunctionDef {
+        name: "convert".to_string(),
+        params: vec![
+            make_param("html", TypeRef::String),
+            make_param("options", TypeRef::Named("ConversionOptions".to_string())),
+        ],
+        return_type: TypeRef::Named("ConversionResult".to_string()),
+        error_type: Some("ConversionError".to_string()),
+        ..Default::default()
+    };
+    let opaque_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let value_only_types: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let bridge_cfg = TraitBridgeConfig {
+        trait_name: "HtmlVisitor".to_string(),
+        type_alias: Some("VisitorHandle".to_string()),
+        param_name: Some("visitor".to_string()),
+        options_type: Some("ConversionOptions".to_string()),
+        ..Default::default()
+    };
+    let reserved_type_names: HashSet<String> = HashSet::new();
+
+    let out = gen_convert_with_visitor_wrapper(
+        &func,
+        "htm",
+        &opaque_names,
+        &value_only_types,
+        &bridge_cfg,
+        &reserved_type_names,
+    );
+
+    // Positive sanity check: prove this slice actually covers the generated function body,
+    // so the negative assertions below are not vacuously true.
+    assert!(
+        out.contains("func Convert(") && out.contains("C.htm_convert("),
+        "expected a full Convert wrapper body with an htm_convert FFI call, got:\n{out}"
+    );
+
+    assert!(
+        out.contains("var cOptions C.HTMAlefHandle"),
+        "cOptions must be declared as the scalar AlefHandle type, got:\n{out}"
+    );
+    assert!(
+        !out.contains("*C.HTMConversionOptions"),
+        "cOptions must not be declared as an opaque pointer to the options struct, got:\n{out}"
+    );
+    assert!(
+        !out.contains("cOptions == nil"),
+        "handle comparisons must use == 0, not nil, got:\n{out}"
+    );
+    assert!(
+        out.contains("cOptions == 0"),
+        "expected a scalar handle nil-check for cOptions, got:\n{out}"
+    );
+    assert!(
+        !out.contains("ptr == nil"),
+        "the convert result handle must not be compared to nil, got:\n{out}"
+    );
+    assert!(
+        out.contains("ptr == 0"),
+        "expected a scalar handle nil-check for the convert result, got:\n{out}"
+    );
+}

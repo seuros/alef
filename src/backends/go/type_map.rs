@@ -81,6 +81,17 @@ impl TypeMapper for GoMapper {
     }
 }
 
+/// Returns the emitted C name of alef's scalar generational handle type, as cbindgen names
+/// it in the generated header (e.g. `HTMAlefHandle`).
+///
+/// `backends::ffi::type_map::c_param_optional`/`c_return_optional` map every
+/// `TypeRef::Named` value to this handle unconditionally — never to an opaque pointer — so
+/// every Go local, parameter, or comparison for a value that started as `TypeRef::Named`
+/// must use this C type name and compare against `0`, not `nil`.
+pub fn alef_handle_c_type(ffi_prefix: &str) -> String {
+    format!("{}AlefHandle", ffi_prefix.to_uppercase())
+}
+
 /// Maps a TypeRef to its Go type representation.
 /// Used for non-optional types in general contexts.
 ///

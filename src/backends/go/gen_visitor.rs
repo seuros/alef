@@ -368,7 +368,6 @@ pub fn gen_visitor_file(
             Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
         }
     };
-    let prefix_upper = ffi_prefix.to_uppercase();
     let _ = vtable_trait_name;
     let visitor_handle_rust_name = format!("{pascal_prefix}Visitor");
     let visitor_handle_c_type = ffi_c_type_name(ffi_prefix, &visitor_handle_rust_name);
@@ -384,7 +383,11 @@ pub fn gen_visitor_file(
     let return_type = named_type_name(&bridge_func.return_type)
         .expect("go options-field visitor bridge currently requires a named return type");
     let return_type_snake = go_visitor_bridge_function_component(return_type);
-    let conversion_options_type = format!("{prefix_upper}{options_type}");
+    // NOTE: `TypeRef::Named` values (the options handle here) cross the FFI boundary as
+    // alef's scalar `AlefHandle` (see `backends::ffi::type_map::c_return_optional`), never
+    // as an opaque pointer to the options struct — so `cOptions` in
+    // `convert_with_visitor_helper.jinja` must be declared with the handle's C type name.
+    let conversion_options_type = crate::backends::go::type_map::alef_handle_c_type(ffi_prefix);
 
     let fn_visitor_create = format!("{ffi_prefix}_visitor_create");
     let fn_visitor_free = format!("{ffi_prefix}_visitor_free");
@@ -930,4 +933,70 @@ fn helper_call_args(func: &FunctionDef, options_type: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test for the visitor helper template emitting opaque-pointer idioms for
+    /// values that cross the FFI boundary as alef's scalar `AlefHandle`. Every
+    /// `TypeRef::Named` value (conversion options, the result, and the visitor handle
+    /// returned by `{prefix}_visitor_create`) is a `uint64_t` handle in the emitted C
+    /// header, never a pointer, so the helper must declare `cOptions` with the scalar
+    /// handle type and compare all three handle locals (`cOptions`, `visitorHandle`,
+    /// `ptr`) to `0`, not `nil`. Renders `convert_with_visitor_helper.jinja` with the same
+    /// context shape `gen_visitor_file` builds, to catch regressions in either the template
+    /// or `ffi_c_type_name` wiring.
+    #[test]
+    fn convert_with_visitor_helper_template_uses_scalar_handle_not_opaque_pointer() {
+        let handle_c_type = ffi_c_type_name("htm", "AlefHandle");
+        let out = crate::backends::go::template_env::render(
+            "convert_with_visitor_helper.jinja",
+            minijinja::context! {
+                helper_name => "convertWithVisitorHelper",
+                helper_params => "html string, visitor Visitor, options *ConversionOptions",
+                helper_setup => "",
+                helper_call_args => "cHTML, cOptions",
+                options_var => "options",
+                options_type => "ConversionOptions",
+                conversion_options_type => &handle_c_type,
+                fn_options_from_json => "htm_conversion_options_from_json",
+                fn_options_free => "htm_conversion_options_free",
+                fn_visitor_create => "htm_visitor_create",
+                fn_visitor_free => "htm_visitor_free",
+                fn_options_set_visitor => "htm_options_set_visitor",
+                visitor_handle_c_type => &handle_c_type,
+                fn_convert => "htm_convert",
+                fn_result_to_json => "htm_conversion_result_to_json",
+                fn_result_free => "htm_conversion_result_free",
+                result_type => "ConversionResult",
+            },
+        );
+
+        // Positive sanity check: prove this slice actually covers the generated function
+        // body, so the negative assertions below are not vacuously true.
+        assert!(
+            out.contains("func convertWithVisitorHelper(") && out.contains("C.htm_convert("),
+            "expected a full helper body with an htm_convert FFI call, got:\n{out}"
+        );
+
+        assert_eq!(handle_c_type, "HTMAlefHandle");
+        assert!(
+            out.contains("var cOptions C.HTMAlefHandle"),
+            "cOptions must be declared as the scalar AlefHandle type, got:\n{out}"
+        );
+        assert!(
+            !out.contains("*C.HTMAlefHandle") && !out.contains("*C.HTMConversionOptions"),
+            "cOptions must not be declared as a pointer, got:\n{out}"
+        );
+        assert!(
+            !out.contains("cOptions == nil") && !out.contains("visitorHandle == nil") && !out.contains("ptr == nil"),
+            "handle comparisons must use == 0, not nil, got:\n{out}"
+        );
+        assert!(
+            out.contains("cOptions == 0") && out.contains("visitorHandle == 0") && out.contains("ptr == 0"),
+            "expected scalar handle nil-checks for cOptions, visitorHandle, and ptr, got:\n{out}"
+        );
+    }
 }
