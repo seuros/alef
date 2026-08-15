@@ -42,6 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **C# e2e**: omit the illegal `private` modifier from file-scope generated visitor classes while preserving the
+  same class shape when the visitor appears inside a nested test container.
 - **go**: compare value receivers returned by `_from_json` against the scalar `AlefHandle` zero sentinel instead of
   `nil`, allowing generated non-opaque methods to compile under cgo.
 - **Zig snippets**: import the configured binding module rather than the e2e release-package alias, keeping registry
