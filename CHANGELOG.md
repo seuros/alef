@@ -37,6 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scaffolded example compiles with the supported Zig toolchain.
 - **e2e/node**: import enum classes referenced as runtime values by generated typed-input builders, including enum
   fields discovered recursively from the IR rather than declared in per-language overrides.
+- **cli**: correct the version-pin warning to state that `alef.toml`'s `alef_version` pin is being updated to match
+  the running CLI, instead of claiming a nonexistent "pinned compatibility contract" gates generation. The pin is
+  cosmetic bookkeeping for `install-alef` and downstream consumers; it never affects generated output.
 - **ffi**: return the scalar `0` sentinel from string-bridge parameter and UTF-8 guard failures when the exported
   ABI returns `AlefHandle`, instead of emitting `null_mut()` and producing uncompilable generated Rust.
 - **zig snippets**: omit the parsed-result binding when generated assertions never reference it, avoiding an
@@ -594,8 +597,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Generated agent skills now include required YAML `name` and `description` frontmatter when templates omit it.
 
-- Alef now warns when the running CLI is newer than `alef.toml`'s pinned version, making compatibility-gated output
-  visible before regeneration.
+- Alef now warns when the running CLI is newer than `alef.toml`'s pinned version, making the pin update visible
+  before regeneration.
 
 - Generated Java E2E assertions now retain statement separators when multiple assertions share a test method.
 

@@ -41,7 +41,7 @@ pub fn check_alef_toml_version(workspace: &WorkspaceConfig) -> Result<()> {
         std::cmp::Ordering::Greater => {
             tracing::warn!(
                 "Running alef {cli} is newer than the pinned alef_version {pin} in alef.toml; \
-                 generation follows the pinned compatibility contract until the pin is updated to {cli}"
+                 the pin will be updated to {cli}"
             );
         }
         std::cmp::Ordering::Less => {
@@ -122,10 +122,10 @@ mod tests {
 
     #[test]
     #[traced_test]
-    fn pin_lower_than_cli_warns_about_compatibility_output() {
+    fn pin_lower_than_cli_warns_that_pin_will_update() {
         let ws = workspace_with_version(Some("0.0.1"));
         assert!(check_alef_toml_version(&ws).is_ok());
-        assert!(logs_contain("generation follows the pinned compatibility contract"));
+        assert!(logs_contain("the pin will be updated to"));
     }
 
     #[test]
