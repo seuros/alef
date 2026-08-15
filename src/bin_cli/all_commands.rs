@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use std::path::PathBuf;
 
 use crate::cli::{cache, dispatch, pipeline, version_pin};
@@ -27,6 +27,31 @@ fn report_deferred_formatting(crate_name: &str, deferred: &[crate::e2e::format::
     }
 }
 
+fn sync_registry_versions_before_all(
+    config_path: &std::path::Path,
+    configs: &[&crate::core::config::ResolvedCrateConfig],
+) -> Result<bool> {
+    let mut versions = std::collections::BTreeSet::new();
+    for config in configs {
+        let version = config.resolved_version().with_context(|| {
+            format!(
+                "could not resolve version for crate `{}` from {}",
+                config.name, config.version_from
+            )
+        })?;
+        versions.insert(version);
+    }
+    anyhow::ensure!(
+        versions.len() <= 1,
+        "alef all cannot synchronize one registry config from multiple crate versions: {}",
+        versions.iter().cloned().collect::<Vec<_>>().join(", ")
+    );
+    let Some(version) = versions.into_iter().next() else {
+        return Ok(false);
+    };
+    pipeline::sync_registry_package_versions(config_path, &version)
+}
+
 pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Option<Commands>> {
     let config_path = &context.config_path;
     match command {
@@ -42,8 +67,16 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 unsafe { std::env::set_var("ALEF_SKIP_COMMANDS", updated) };
             }
             let _ = skip_frb;
-            let (workspace, resolved) = load_config(config_path)?;
+            let (mut workspace, mut resolved) = load_config(config_path)?;
             version_pin::check_alef_toml_version(&workspace)?;
+            let registry_versions_changed = {
+                let selected = dispatch::select_crates(&resolved, &context.crate_filter)?;
+                sync_registry_versions_before_all(config_path, &selected)?
+            };
+            if registry_versions_changed {
+                (workspace, resolved) = load_config(config_path)?;
+                version_pin::check_alef_toml_version(&workspace)?;
+            }
             let crates_to_process = dispatch::select_crates(&resolved, &context.crate_filter)?;
             let multi = dispatch::is_multi_crate(&crates_to_process);
             let base_dir = std::env::current_dir()?;
@@ -513,3 +546,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
         other => Ok(Some(other)),
     }
 }
+
+#[cfg(test)]
+#[path = "all_commands_tests.rs"]
+mod tests;

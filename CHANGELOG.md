@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CLI**: `alef all` now synchronizes registry package versions before generation and reloads changed configuration,
+  allowing stale Zig registry hash version prefixes to self-heal instead of aborting clean canaries.
 - **scaffold**: derive Python, PHP, and FFI `.gitattributes` entries from the source crate directory, matching the
   binding crate paths Alef actually scaffolds when the configured package name differs from its Rust crate path.
 - **zig scaffold**: emit the example with Zig 0.16's `std.Io` API and avoid an unused allocator binding, so the

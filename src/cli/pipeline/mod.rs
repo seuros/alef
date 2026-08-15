@@ -30,4 +30,5 @@ pub use generate::{
 pub use helpers::{init, run_optional};
 pub use version::sync_versions;
 pub use version_core::{set_version, verify_versions};
+pub(crate) use version_registry::sync_registry_package_versions;
 pub use workspace_lints::ensure_workspace_alef_meta_check_cfg;
