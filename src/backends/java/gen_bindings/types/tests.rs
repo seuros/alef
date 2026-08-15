@@ -7,7 +7,7 @@ use ahash::AHashSet;
 use std::collections::HashSet;
 
 /// Builds the primitive literal-default shape that requires null to distinguish absence from zero. ~keep
-fn make_config_type_with_primitive_default(primitive: PrimitiveType, default: i128) -> TypeDef {
+fn make_config_type_with_primitive_default(primitive: PrimitiveType, default: i64) -> TypeDef {
     let mut typ = make_config_type_with_duration_default();
     typ.fields[0].name = "max_redirects".to_string();
     typ.fields[0].ty = TypeRef::Primitive(primitive);
