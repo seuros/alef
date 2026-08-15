@@ -209,7 +209,7 @@ fn batch_level(
         return None;
     }
     let validator = registry.get(snippet.language)?;
-    let level = effective_validation_level(snippet, config.level).min(validator.max_level());
+    let level = capped_level(snippet, config, validator);
     validator.is_available_at(level).then_some(level)
 }
 
@@ -224,6 +224,23 @@ fn effective_validation_level(snippet: &Snippet, requested: ValidationLevel) -> 
             SnippetAnnotationKind::Skip => None,
         });
     limit.map_or(requested, |level| requested.min(level))
+}
+
+/// The level a validator will actually be invoked at: the requested level, narrowed by an
+/// annotation, by the validator's permanent `max_level` ceiling, and by `achievable_level` —
+/// this run's environment-dependent limit (e.g. no real type-checker binary on `PATH`). The
+/// last is deliberately a separate input from `max_level`: `finalize_result`'s
+/// `capability_capped` exemption reads only `max_level`, so an environment-driven reduction
+/// still surfaces as a genuine `Downgraded` result instead of being waved through as a
+/// language ceiling. ~keep
+fn capped_level(
+    snippet: &Snippet,
+    config: &RunnerConfig,
+    validator: &dyn crate::snippets::validators::SnippetValidator,
+) -> ValidationLevel {
+    effective_validation_level(snippet, config.level)
+        .min(validator.max_level())
+        .min(validator.achievable_level(config.level))
 }
 
 fn session_for<'a>(
@@ -335,7 +352,7 @@ fn validate_one(
         );
     };
 
-    let effective_level = effective_validation_level(snippet, config.level).min(validator.max_level());
+    let effective_level = capped_level(snippet, config, validator);
     if !validator.is_available_at(effective_level) {
         return result(
             snippet,
@@ -1086,6 +1103,70 @@ mod tests {
 
         assert_eq!(summary.results[0].status, SnippetStatus::Downgraded);
         assert!(!summary.results[0].capability_capped);
+        assert_eq!(summary.downgraded, 1);
+        assert_eq!(summary.capability_capped, 0);
+    }
+
+    /// A validator whose `max_level` never moves but whose current environment can't back a
+    /// deeper level (no real type-checker installed, say) reports that gap through
+    /// `achievable_level`, not `max_level`. `php`/`ruby`/`elixir` conflated the two: they claimed
+    /// `Run` as their ceiling while their `typecheck`-level check never resolved a symbol, so
+    /// `capability_capped` waved every request through as a language-ceiling Pass instead of a
+    /// downgrade. This pins the two inputs apart at the mechanism level. ~keep
+    struct EnvironmentLimitedValidator {
+        language: crate::snippets::types::Language,
+    }
+
+    impl SnippetValidator for EnvironmentLimitedValidator {
+        fn language(&self) -> crate::snippets::types::Language {
+            self.language
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn validate(
+            &self,
+            _snippet: &Snippet,
+            _level: ValidationLevel,
+            _timeout_secs: u64,
+        ) -> Result<(SnippetStatus, Option<String>)> {
+            Ok((SnippetStatus::Pass, None))
+        }
+
+        fn max_level(&self) -> ValidationLevel {
+            ValidationLevel::Run
+        }
+
+        fn achievable_level(&self, requested: ValidationLevel) -> ValidationLevel {
+            if requested == ValidationLevel::TypeCheck {
+                ValidationLevel::Syntax
+            } else {
+                ValidationLevel::Run
+            }
+        }
+    }
+
+    #[test]
+    fn environment_limited_validator_downgrades_instead_of_capability_capping() {
+        let mut registry = ValidatorRegistry::new();
+        registry.register(Box::new(EnvironmentLimitedValidator {
+            language: crate::snippets::types::Language::Rust,
+        }));
+        let config = RunnerConfig {
+            level: ValidationLevel::TypeCheck,
+            parallelism: 1,
+            cache_dir: None,
+            allowed_side_effects: vec![SideEffectClass::Network],
+            ..RunnerConfig::default()
+        };
+
+        let summary = run_validation(&[network_snippet()], &registry, &config).expect("validation completes");
+
+        assert_eq!(summary.results[0].status, SnippetStatus::Downgraded);
+        assert!(!summary.results[0].capability_capped);
+        assert_eq!(summary.results[0].effective_level, ValidationLevel::Syntax);
         assert_eq!(summary.downgraded, 1);
         assert_eq!(summary.capability_capped, 0);
     }

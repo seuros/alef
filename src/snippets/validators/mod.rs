@@ -73,6 +73,17 @@ pub trait SnippetValidator: Send + Sync {
     }
     fn max_level(&self) -> ValidationLevel;
 
+    /// The highest level this run's environment can actually reach for `requested`, as opposed
+    /// to `max_level`'s fixed per-language ceiling. A validator whose deeper levels depend on a
+    /// tool that may not be installed (a real type-checker, for instance) overrides this to
+    /// report the level it can genuinely back up right now; the runner treats anything below
+    /// `requested` as a real downgrade rather than a capability ceiling, because — unlike
+    /// `max_level` — the limit could lift on a different machine. Default: no environmental
+    /// limit beyond `max_level`. ~keep
+    fn achievable_level(&self, _requested: ValidationLevel) -> ValidationLevel {
+        ValidationLevel::Run
+    }
+
     fn is_dependency_error(&self, _error_output: &str) -> bool {
         false
     }

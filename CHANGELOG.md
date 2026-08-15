@@ -110,6 +110,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of each variant's own shape and was likewise declared as a payload-free string enum, discarding every
   field. Externally tagged data enums remain unhandled and are tracked separately — declaring a shape
   the runtime does not produce would be worse than the current omission.
+- **snippet typecheck validation**: stop reporting `effective_level: typecheck` for PHP, Ruby, and Elixir
+  snippets that were never actually type-checked. Every level below `Run` ran the same syntax-only check
+  (`php -l`, `ruby -c`, `Code.string_to_quoted`) while the validator declared `max_level: Run`, so a
+  snippet referencing an undefined class, constant, or module passed as a `typecheck` result — the entire
+  population of typecheck passes for these three languages was unverified. A validator can now report,
+  through a new `achievable_level` hook, the deepest level its *current environment* actually backs,
+  separately from `max_level`'s fixed per-language ceiling; a `typecheck` request for these three
+  languages now reports `effective_level: syntax` and counts as `downgraded`, which a strict run treats
+  as incomplete coverage instead of a pass. No zero-config real type-checker exists for any of the three
+  that can safely analyze an isolated snippet: PHP's PHPStan/Psalm need the project's composer autoload
+  or every legitimately external symbol reads as unresolvable, Ruby's Sorbet/RBS need project-wide
+  `# typed:` sigils the generated snippets don't carry, and Elixir's Dialyzer needs an out-of-band PLT
+  this harness doesn't build. Wiring one in with the project context it needs is left for a follow-up.
+- **snippet typecheck validation**: apply the same `achievable_level` cap to Bash and R snippets. Both ran a
+  syntax-only check below `Run` (`bash -n`, R's `parse(file = ...)`) while declaring `max_level: Run`, so a
+  snippet referencing an undefined command or function likewise passed as an unverified `typecheck` result. A
+  `typecheck` request for either language now reports `effective_level: syntax` and counts as `downgraded`.
+  ShellCheck and R's `codetools::checkUsage`/lintr exist but aren't wired up here, so `typecheck` must not be
+  claimed until they are.
 
 ### Changed
 

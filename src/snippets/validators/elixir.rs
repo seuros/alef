@@ -69,6 +69,23 @@ end"#,
         ValidationLevel::Run
     }
 
+    // `Code.string_to_quoted` (the only check run at `Syntax`/`Compile`/`TypeCheck`, see the
+    // match above and in `validate_in_session` below) parses the AST and nothing more — Elixir
+    // resolves remote calls like `Mod.fun()` at runtime, not parse time, so a made-up module
+    // parses cleanly. No real check is wired up here: `mix dialyzer` needs an out-of-band PLT
+    // this harness doesn't build (first run can take minutes, easily blowing the per-snippet
+    // timeout), and compiling with `elixirc` can't tell a genuinely undefined module from one
+    // that's legitimately defined elsewhere on a code path this isolated snippet doesn't have —
+    // that would trade the false-pass this fixes for false-fails on correct code. Until a real
+    // checker is wired up with proper project/PLT context, `typecheck` must not be claimed. ~keep
+    fn achievable_level(&self, requested: ValidationLevel) -> ValidationLevel {
+        if requested == ValidationLevel::TypeCheck {
+            ValidationLevel::Syntax
+        } else {
+            ValidationLevel::Run
+        }
+    }
+
     fn validate_in_session(
         &self,
         snippet: &Snippet,
@@ -101,5 +118,74 @@ end"#,
         } else {
             (SnippetStatus::Fail, Some(output))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::snippets::runner::{RunnerConfig, run_validation};
+    use crate::snippets::types::{SnippetMetadata, SourceOrigin};
+    use crate::snippets::validators::ValidatorRegistry;
+
+    fn undefined_symbol_snippet() -> Snippet {
+        Snippet {
+            id: None,
+            path: "example.md".into(),
+            language: Language::Elixir,
+            title: None,
+            code: "ThisModuleDoesNotExistAnywhere12345.call_me()\n".into(),
+            start_line: 1,
+            block_index: 0,
+            annotation: None,
+            metadata: SnippetMetadata::default(),
+            source_origin: SourceOrigin {
+                path: "example.md".into(),
+                line: 1,
+                block_index: 0,
+            },
+        }
+    }
+
+    #[test]
+    fn achievable_level_caps_typecheck_to_syntax() {
+        assert_eq!(
+            ElixirValidator.achievable_level(ValidationLevel::TypeCheck),
+            ValidationLevel::Syntax
+        );
+        assert_eq!(ElixirValidator.achievable_level(ValidationLevel::Compile), ValidationLevel::Run);
+        assert_eq!(ElixirValidator.achievable_level(ValidationLevel::Syntax), ValidationLevel::Run);
+        assert_eq!(ElixirValidator.achievable_level(ValidationLevel::Run), ValidationLevel::Run);
+    }
+
+    /// Mirrors the php.rs/ruby.rs regressions: `Code.string_to_quoted` accepts this file (Elixir
+    /// resolves remote calls at runtime, not parse time), so before `achievable_level` capped the
+    /// level, the runner reported it Pass at `effective_level: typecheck` — the false green this
+    /// test pins shut. ~keep
+    #[test]
+    fn typecheck_request_for_an_undefined_symbol_does_not_pass_as_typecheck() {
+        if !ElixirValidator.is_available() {
+            return;
+        }
+        let registry = ValidatorRegistry::new();
+        let config = RunnerConfig {
+            level: ValidationLevel::TypeCheck,
+            parallelism: 1,
+            cache_dir: None,
+            ..RunnerConfig::default()
+        };
+
+        let summary =
+            run_validation(&[undefined_symbol_snippet()], &registry, &config).expect("validation completes");
+
+        let result = &summary.results[0];
+        assert_ne!(
+            (result.status, result.effective_level),
+            (SnippetStatus::Pass, ValidationLevel::TypeCheck),
+            "undefined-symbol snippet must not pass claiming typecheck: {result:?}"
+        );
+        assert_eq!(result.status, SnippetStatus::Downgraded);
+        assert_eq!(result.effective_level, ValidationLevel::Syntax);
+        assert_eq!(summary.downgraded, 1);
     }
 }
