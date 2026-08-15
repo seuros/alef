@@ -317,15 +317,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     }
                 }
 
-                tracing::info!("Generating READMEs...");
-                let readme_languages = crate::readme::expand_configured_readme_languages(resolved_cfg, &languages);
-                let readme_files = pipeline::readme(&api, resolved_cfg, &readme_languages)?;
-                let readme_count = pipeline::write_scaffold_files_with_overwrite(&readme_files, &base_dir, true)?;
-                for file in readme_files.iter().filter(|file| file.carries_alef_marker()) {
-                    current_gen_paths.insert(base_dir.join(&file.path));
-                }
-                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
-
                 let mut e2e_count = 0;
                 if let Some(e2e_config) = &resolved_cfg.e2e {
                     let all_calls = std::iter::once(("_default", &e2e_config.call))
@@ -468,6 +459,15 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     }
                     pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
                 }
+
+                tracing::info!("Generating READMEs...");
+                let readme_languages = crate::readme::expand_configured_readme_languages(resolved_cfg, &languages);
+                let readme_files = pipeline::readme(&api, resolved_cfg, &readme_languages)?;
+                let readme_count = pipeline::write_scaffold_files_with_overwrite(&readme_files, &base_dir, true)?;
+                for file in readme_files.iter().filter(|file| file.carries_alef_marker()) {
+                    current_gen_paths.insert(base_dir.join(&file.path));
+                }
+                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 tracing::info!("Generating docs...");
                 let docs_api = pipeline::extract(resolved_cfg, config_path, false)?;

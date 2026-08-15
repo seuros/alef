@@ -1,6 +1,15 @@
 use super::sync_registry_versions_before_all;
 use crate::core::config::NewAlefConfig;
 
+#[test]
+fn all_generates_snippets_before_readmes_consume_them() {
+    let source = include_str!("all_commands.rs");
+    let e2e = source.find("Generating e2e test suites...").expect("e2e stage");
+    let readmes = source.find("Generating READMEs...").expect("README stage");
+
+    assert!(e2e < readmes, "README generation must observe snippets produced by the same run");
+}
+
 fn write_neutral_config(root: &std::path::Path, cargo_toml: &str, hash: &str) -> std::path::PathBuf {
     let cargo_path = root.join("Cargo.toml");
     std::fs::write(&cargo_path, cargo_toml).expect("write Cargo.toml");
