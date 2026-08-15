@@ -17,6 +17,34 @@ use super::{
     resolve_c_streaming_adapter, try_emit_enum_accessor,
 };
 
+/// Snippet-local definition of the `ALEF_TEST_SKIP` guard macro.
+///
+/// The generated e2e runner declares this macro in its `test_runner.h`, but a
+/// documentation snippet is a standalone translation unit that includes only the
+/// crate's FFI header, so it must carry the definition itself. The body differs
+/// from the runner's on purpose: a snippet's guard sits in `int main(void)`, where
+/// the runner's bare `return;` — valid in its `void test_*(void)` functions — is
+/// not. The `#ifndef` keeps an enclosing definition authoritative if a snippet is
+/// ever embedded in a unit that already has one.
+const SNIPPET_TEST_SKIP_MACRO: &str = concat!(
+    "#ifndef ALEF_TEST_SKIP\n",
+    "#define ALEF_TEST_SKIP(reason) do { \\\n",
+    "    fprintf(stderr, \"skipped: %s\\n\", (reason)); \\\n",
+    "    return EXIT_SUCCESS; \\\n",
+    "} while (0)\n",
+    "#endif",
+);
+
+/// File-scope declarations the emitted snippet needs so that every symbol its
+/// body references resolves inside the emitted translation unit.
+fn snippet_declarations(body: &str) -> &'static str {
+    if body.contains("ALEF_TEST_SKIP(") {
+        SNIPPET_TEST_SKIP_MACRO
+    } else {
+        ""
+    }
+}
+
 pub(super) struct SnippetContext<'a> {
     pub fixture: &'a Fixture,
     pub e2e_config: &'a crate::e2e::config::E2eConfig,
@@ -146,7 +174,7 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         .join("\n");
     Ok(crate::e2e::template_env::render(
         "c/snippet_body.jinja",
-        minijinja::context! { header => header, declarations => "", body => body },
+        minijinja::context! { header => header, declarations => snippet_declarations(&body), body => body },
     ))
 }
 

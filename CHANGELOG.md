@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validation failed with `unknown-name`. Candidates are now derived for every non-HTTP fixture and then
   pruned to the identifiers the emitted unit actually references, so nothing referenced goes unimported
   and nothing imported goes unreferenced.
+- **C snippets**: define the `ALEF_TEST_SKIP` guard macro inside every emitted snippet that references it.
+  A fixture declaring `[env] api_key_var` without a mock server renders an `ALEF_TEST_SKIP(...)` env guard,
+  but the macro is declared only in the generated e2e runner header, which a standalone documentation
+  snippet never includes — so the emitted translation unit failed to compile with a
+  `call to undeclared function 'ALEF_TEST_SKIP'` error. The snippet-local definition returns `EXIT_SUCCESS`
+  from `main` rather than the runner's bare `return`, which is valid only inside its `void test_*(void)`
+  functions, and is `#ifndef`-guarded so an enclosing definition still wins.
 - **napi**: declare internally-tagged enums with newtype-of-struct variants as the flat optional-field
   object the napi glue actually emits, instead of a discriminated union keyed by the tuple field's
   synthetic `_0` name. The generated `.d.ts` previously leaked the internal field name as a literal `0:`

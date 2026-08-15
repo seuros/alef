@@ -357,3 +357,71 @@ fn list_return_uses_owned_json_string_abi() {
         ),
     );
 }
+
+/// Regression for the emitter contract that every symbol a C snippet writes must
+/// resolve inside the emitted translation unit.
+///
+/// A fixture carrying `[env] api_key_var` and no mock server renders an
+/// `ALEF_TEST_SKIP(...)` guard. That macro is declared only by the generated e2e
+/// *runner* header, which a standalone documentation snippet never includes, so
+/// the snippet has to carry its own definition — without one the emitted unit
+/// fails to compile with an implicit-function-declaration error.
+///
+/// The fixture is deliberately identical to `list_return_uses_owned_json_string_abi`
+/// apart from the `env` block, so the env guard is the only difference between a
+/// snippet that compiles and one that does not.
+#[test]
+fn env_gated_snippet_defines_the_skip_macro_it_uses() {
+    let fixture = Fixture {
+        id: "smoke_list_items".into(),
+        description: "List items against the real API".into(),
+        env: Some(crate::e2e::fixture::FixtureEnv {
+            api_key_var: Some("SAMPLE_API_KEY".into()),
+        }),
+        ..Fixture::default()
+    };
+    let mut e2e = E2eConfig::default();
+    e2e.call.function = "sample_list_items".into();
+    e2e.call.overrides.insert(
+        "c".into(),
+        crate::core::config::e2e::CallOverride {
+            header: Some("sample_ffi.h".into()),
+            ..Default::default()
+        },
+    );
+    let functions = [FunctionDef {
+        name: "sample_list_items".into(),
+        return_type: TypeRef::Vec(Box::new(TypeRef::Named("Item".into()))),
+        ..FunctionDef::default()
+    }];
+    let config = ResolvedCrateConfig {
+        name: "sample".into(),
+        ..ResolvedCrateConfig::default()
+    };
+    let rendered = render_c_snippet(&fixture, &e2e, &config, &[], &functions).expect("env-gated snippet renders");
+
+    let macro_use = "ALEF_TEST_SKIP(\"SAMPLE_API_KEY not set\")";
+    let macro_definition = "#define ALEF_TEST_SKIP(reason)";
+    assert!(
+        rendered.contains(macro_use),
+        "expected the env guard to be emitted:\n{rendered}"
+    );
+    assert!(
+        rendered.contains(macro_definition),
+        "snippet references ALEF_TEST_SKIP without defining it:\n{rendered}"
+    );
+    let define_position = rendered.find(macro_definition).expect("macro definition");
+    let use_position = rendered.find(macro_use).expect("macro use");
+    assert!(
+        define_position < use_position,
+        "the macro definition must precede its use:\n{rendered}"
+    );
+    compile_snippet(
+        &rendered,
+        "sample_ffi.h",
+        concat!(
+            "char *sample_list_items(void);\n",
+            "void sample_free_string(char *value);\n"
+        ),
+    );
+}
