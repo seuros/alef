@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Go snippet validation**: preserve configured `GOMODCACHE` and `GOPATH` paths in the sanitized tool environment,
+  so generated snippets can reuse available modules instead of failing before validation.
 - **C documentation snippets**: keep configured client-method identities separate from prefixed ABI symbols, so
   adapter metadata resolves and real client/streaming examples are emitted; unresolved recipes now enter the
   missing-coverage ledger instead of compiling as successful diagnostic skip stubs.

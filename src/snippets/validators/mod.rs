@@ -290,19 +290,22 @@ fn collect_output(
     Ok(output)
 }
 
+const SANITIZED_ENVIRONMENT_VARIABLES: &[&str] = &[
+    "PATH",
+    "PATHEXT",
+    "SYSTEMROOT",
+    "WINDIR",
+    "TMP",
+    "TEMP",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    "GOMODCACHE",
+    "GOPATH",
+];
+
 fn sanitize_environment(command: &mut std::process::Command) {
-    const ALLOWED_VARIABLES: &[&str] = &[
-        "PATH",
-        "PATHEXT",
-        "SYSTEMROOT",
-        "WINDIR",
-        "TMP",
-        "TEMP",
-        "TMPDIR",
-        "LANG",
-        "LC_ALL",
-    ];
-    let values: Vec<_> = ALLOWED_VARIABLES
+    let values: Vec<_> = SANITIZED_ENVIRONMENT_VARIABLES
         .iter()
         .filter_map(|key| std::env::var_os(key).map(|value| (*key, value)))
         .collect();
@@ -342,6 +345,12 @@ impl WaitTimeout for std::process::Child {
 #[cfg(all(test, unix))]
 mod tests {
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn sanitized_environment_preserves_go_dependency_cache_paths() {
+        assert!(SANITIZED_ENVIRONMENT_VARIABLES.contains(&"GOMODCACHE"));
+        assert!(SANITIZED_ENVIRONMENT_VARIABLES.contains(&"GOPATH"));
+    }
 
     #[test]
     fn drains_output_larger_than_an_os_pipe_buffer() {
