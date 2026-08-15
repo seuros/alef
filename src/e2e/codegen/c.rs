@@ -396,7 +396,11 @@ fn render_c_snippet(
         .and_then(|value| value.prefix.clone())
         .or_else(|| config.ffi.as_ref().and_then(|value| value.prefix.clone()))
         .unwrap_or_else(|| config.ffi_prefix());
-    if !prefix.is_empty() && !info.function_name.starts_with(&format!("{prefix}_")) {
+    if info.client_factory.is_none()
+        && info.c_engine_factory.is_none()
+        && !prefix.is_empty()
+        && !info.function_name.starts_with(&format!("{prefix}_"))
+    {
         info.function_name = crate::codegen::naming::abi_symbol(&prefix, &info.function_name);
     }
     let header = call

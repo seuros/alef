@@ -425,3 +425,76 @@ fn env_gated_snippet_defines_the_skip_macro_it_uses() {
         ),
     );
 }
+
+#[test]
+fn client_snippet_keeps_adapter_identity_bare() {
+    let fixture = Fixture {
+        id: "convert".into(),
+        description: "Convert a document".into(),
+        ..Fixture::default()
+    };
+    let mut e2e = E2eConfig::default();
+    e2e.call.function = "convert".into();
+    e2e.call.overrides.insert(
+        "c".into(),
+        crate::core::config::e2e::CallOverride {
+            client_factory: Some("create_client".into()),
+            ..Default::default()
+        },
+    );
+    let config = ResolvedCrateConfig {
+        name: "sample".into(),
+        adapters: vec![crate::core::config::AdapterConfig {
+            name: "convert".into(),
+            pattern: crate::core::config::AdapterPattern::AsyncMethod,
+            core_path: "sample::convert".into(),
+            params: Vec::new(),
+            returns: None,
+            error_type: None,
+            owner_type: Some("DefaultClient".into()),
+            item_type: None,
+            gil_release: false,
+            trait_name: None,
+            trait_method: None,
+            detect_async: false,
+            request_type: None,
+            skip_languages: Vec::new(),
+        }],
+        ..ResolvedCrateConfig::default()
+    };
+
+    let rendered = render_c_snippet(&fixture, &e2e, &config, &[], &[]).expect("client snippet renders");
+
+    assert!(rendered.contains("sample_default_client_convert(client)"), "{rendered}");
+    assert!(!rendered.contains("sample_default_client_sample_convert"), "{rendered}");
+    assert!(!rendered.contains("skipped:"), "{rendered}");
+}
+
+#[test]
+fn client_snippet_without_owner_metadata_is_rejected() {
+    let fixture = Fixture {
+        id: "convert".into(),
+        description: "Convert a document".into(),
+        ..Fixture::default()
+    };
+    let mut e2e = E2eConfig::default();
+    e2e.call.function = "convert".into();
+    e2e.call.overrides.insert(
+        "c".into(),
+        crate::core::config::e2e::CallOverride {
+            client_factory: Some("create_client".into()),
+            ..Default::default()
+        },
+    );
+    let config = ResolvedCrateConfig {
+        name: "sample".into(),
+        ..ResolvedCrateConfig::default()
+    };
+
+    let error = render_c_snippet(&fixture, &e2e, &config, &[], &[]).expect_err("missing owner must fail");
+
+    assert!(
+        error.to_string().contains("could not resolve the client owner type"),
+        "{error:#}"
+    );
+}

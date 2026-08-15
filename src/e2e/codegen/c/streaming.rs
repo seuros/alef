@@ -66,6 +66,29 @@ pub(super) fn resolve_c_client_owner_type(
         })
 }
 
+pub(super) fn validate_c_snippet_metadata(
+    config: &ResolvedCrateConfig,
+    type_defs: &[crate::core::ir::TypeDef],
+    fixture: &Fixture,
+    function_name: &str,
+    client_factory: Option<&str>,
+    engine_factory: Option<&str>,
+    streaming: Option<bool>,
+) -> anyhow::Result<()> {
+    if engine_factory.is_some() || client_factory.is_none() {
+        return Ok(());
+    }
+    if crate::e2e::codegen::streaming_assertions::resolve_is_streaming(fixture, streaming)
+        && resolve_c_streaming_adapter(config, function_name).is_none()
+    {
+        anyhow::bail!("streaming fixture requires matching [[crates.adapters]] metadata for C snippet generation");
+    }
+    if resolve_c_client_owner_type(config, type_defs, function_name).is_none() {
+        anyhow::bail!("client_factory is configured but C snippet generation could not resolve the client owner type");
+    }
+    Ok(())
+}
+
 pub(super) fn render_c_diagnostic_skip(out: &mut String, reason: &str) {
     let escaped = escape_c(reason);
     let _ = writeln!(out, "    fprintf(stderr, \"skipped: {escaped}\\n\");");

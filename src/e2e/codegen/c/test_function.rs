@@ -14,7 +14,7 @@ use super::{
     build_args_string_c, c_optional_sentinel, emit_nested_accessor, infer_opaque_handle_type, is_primitive_c_type,
     is_skipped_c_field, json_to_c, render_assertion, render_bytes_test_function, render_c_diagnostic_skip,
     render_engine_factory_test_function, render_streaming_test_function, resolve_c_client_owner_type,
-    resolve_c_streaming_adapter, try_emit_enum_accessor,
+    resolve_c_streaming_adapter, try_emit_enum_accessor, validate_c_snippet_metadata,
 };
 
 /// Snippet-local definition of the `ALEF_TEST_SKIP` guard macro.
@@ -114,6 +114,15 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
             minijinja::context! { header => header, declarations => "", body => body.trim_end() },
         ));
     }
+    validate_c_snippet_metadata(
+        config,
+        type_defs,
+        fixture,
+        &info.function_name,
+        info.client_factory.as_deref(),
+        info.c_engine_factory.as_deref(),
+        info.streaming,
+    )?;
     let expects_error = fixture
         .assertions
         .iter()

@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **C documentation snippets**: keep configured client-method identities separate from prefixed ABI symbols, so
+  adapter metadata resolves and real client/streaming examples are emitted; unresolved recipes now enter the
+  missing-coverage ledger instead of compiling as successful diagnostic skip stubs.
 - **readme tests**: align the structured function-surface template fixture with Minijinja's Boolean rendering.
 - **zig visitor tests**: assert scalar-handle serialization through the configured FFI symbol instead of a
   hardcoded placeholder name.
