@@ -149,7 +149,7 @@ fn render_http_snippet(fixture: &Fixture) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::config::StreamingConfig;
+    use crate::e2e::config::StreamingConfig;
     use crate::e2e::config::{ArgMapping, CallOverride};
 
     #[test]
