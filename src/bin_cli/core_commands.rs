@@ -55,9 +55,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             let multi = dispatch::is_multi_crate(&crates_to_process);
             let base_dir = std::env::current_dir()?;
 
-            if let Err(e) = version_pin::write_alef_toml_version(config_path) {
-                tracing::warn!("could not update alef.toml version pin: {e}");
-            }
             let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
 
             let mut grand_total_generated: usize = 0;
@@ -486,10 +483,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             let crates_to_process = dispatch::select_crates(&resolved, &context.crate_filter)?;
             let multi = dispatch::is_multi_crate(&crates_to_process);
             let base_dir = std::env::current_dir()?;
-
-            if let Err(e) = version_pin::write_alef_toml_version(config_path) {
-                tracing::warn!("could not update alef.toml version pin: {e}");
-            }
 
             let config_toml = std::fs::read_to_string(config_path)?;
             let mut grand_total: usize = 0;

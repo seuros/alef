@@ -79,9 +79,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[MISMATCH]`, even though the lockfile agreed with the live source. `vendor` and `deps` directories are now
   excluded from both the `Cargo.toml` manifest scan and the `Cargo.lock` check, the same way `target`/`.git` already
   are. Genuine drift in a real (non-vendored) `Cargo.lock` still fails.
-- **cli**: correct the version-pin warning to state that `alef.toml`'s `alef_version` pin is being updated to match
-  the running CLI, instead of claiming a nonexistent "pinned compatibility contract" gates generation. The pin is
-  cosmetic bookkeeping for `install-alef` and downstream consumers; it never affects generated output.
+- **cli**: stop `generate`, `scaffold`, and `all` from silently rewriting `alef.toml`'s `alef_version`. The pin never
+  gates generation and projects may coordinate it with external installer or workflow pins that generation cannot
+  update; release version sync remains explicit.
 - **ffi**: return the scalar `0` sentinel from string-bridge parameter and UTF-8 guard failures when the exported
   ABI returns `AlefHandle`, instead of emitting `null_mut()` and producing uncompilable generated Rust.
 - **zig snippets**: omit the parsed-result binding when generated assertions never reference it, avoiding an

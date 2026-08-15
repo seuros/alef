@@ -97,10 +97,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 }
             }
 
-            if let Err(e) = version_pin::write_alef_toml_version(config_path) {
-                tracing::warn!("could not update alef.toml version pin: {e}");
-            }
-
             let config_toml = std::fs::read_to_string(config_path)?;
             let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
 
