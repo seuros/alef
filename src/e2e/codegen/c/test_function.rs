@@ -57,11 +57,26 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         return super::trait_bridge_snippet::render(fixture, header, prefix, config, type_defs);
     }
     if info.returns_void {
-        let args = if info.args.is_empty() {
-            String::new()
+        // The shared, language-agnostic `[crates.e2e.calls.*]` args config has no
+        // concept of the C-only trailing `out_error` out-param that trait-bridge
+        // `unregister`/`clear` exports always take; `extra_args` is where the C
+        // codegen appends parameters the shared config can't express (see its
+        // definition in `c.rs`), so it must be joined in after the configured args
+        // rather than dropped on this void-call path.
+        let mut arg_parts: Vec<String> = if info.args.is_empty() {
+            Vec::new()
         } else {
-            build_args_string_c(&fixture.input, &info.args, &HashMap::new(), config, type_defs, fixture)
+            vec![build_args_string_c(
+                &fixture.input,
+                &info.args,
+                &HashMap::new(),
+                config,
+                type_defs,
+                fixture,
+            )]
         };
+        arg_parts.extend(info.extra_args.iter().cloned());
+        let args = arg_parts.join(", ");
         let body = crate::e2e::template_env::render(
             "c/snippet_void_call.jinja",
             minijinja::context! { function_name => info.function_name, args => args },

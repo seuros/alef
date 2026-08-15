@@ -535,10 +535,39 @@ fn resolve_fixture_call_info(
     );
     let mut info = resolve_call_info(call, lang, functions);
 
+    // `trait_bridge_derived_c_identity` derives the C ABI symbol the FFI backend
+    // actually generates for a trait-bridge registry operation, rather than trusting
+    // the raw `fixture.call` config text (`register_fn`/`unregister_fn`/`clear_fn`),
+    // which can diverge from it for `unregister`/`clear` (see that function's doc
+    // comment for the exact derivation rule). A fixture author who set
+    // `skip.languages` for `lang` has already declared that this generator cannot
+    // speak for it, so this fallback must not run for a skipped fixture.
+    // `src/e2e/snippets/mod.rs` applies an equivalent guard before it ever calls into
+    // this generator, but this check must not depend on that upstream filtering having
+    // happened -- a caller that reaches this function directly (as this module's own
+    // unit tests, and the compiled e2e test-file path via `render_test_file`, both do)
+    // must get the same protection on its own terms.
+    let skipped_for_lang = fixture.skip.as_ref().is_some_and(|skip| skip.should_skip(lang));
     if info.function_name.is_empty()
-        && let Some(identity) = crate::e2e::codegen::recipe::trait_bridge_function_identity(config, fixture)
+        && !skipped_for_lang
+        && let Some((operation, derived_name)) =
+            crate::e2e::codegen::recipe::trait_bridge_derived_c_identity(config, fixture)
     {
-        info.function_name = identity.to_string();
+        info.function_name = derived_name;
+        // `unregister`/`clear` C exports always take a trailing `out_error` out-param
+        // that the shared, language-agnostic `[crates.e2e.calls.*]` args config has no
+        // way to express (other bindings surface it via an exception/error-return
+        // mechanism instead). `register` needs no such treatment here: register-shaped
+        // fixtures require vtable/user_data wiring this generic void-call fallback does
+        // not build, so they never reach this branch as a `returns_void` call in
+        // practice. See `unregister_fn.jinja` / `clear_fn.jinja` for the ABI shapes.
+        if matches!(
+            operation,
+            crate::e2e::codegen::recipe::TraitBridgeRegistryOperation::Unregister
+                | crate::e2e::codegen::recipe::TraitBridgeRegistryOperation::Clear
+        ) {
+            info.extra_args.push("NULL".to_string());
+        }
     }
 
     let default_overrides = e2e_config.call.overrides.get(lang);
@@ -757,6 +786,14 @@ mod snippet_tests {
         assert!(rendered.contains("_free(result)"), "{rendered}");
     }
 
+    /// `clear_fn = "clear_sample_backends"` (plural, human-written config text) on a
+    /// trait named `SampleBackend` (singular). `registration.rs` derives the exported
+    /// symbol from the trait name's snake_case form, discarding the config text's
+    /// spelling, so the real ABI symbol is `sample_clear_sample_backend` (singular) --
+    /// and it takes a trailing `out_error` out-param (`clear_fn.jinja`), so the call
+    /// site must pass `NULL`. This fails against the pre-fix code, which trusted
+    /// `fixture.call`'s raw text verbatim and emitted the argument-less, plural,
+    /// nonexistent `sample_clear_sample_backends()`.
     #[test]
     fn trait_bridge_operation_uses_declared_abi_identity() {
         let fixture = Fixture {
@@ -786,8 +823,154 @@ mod snippet_tests {
 
         let rendered = render_c_snippet(&fixture, &e2e, &config, &[], &[]).expect("C snippet renders");
 
-        assert!(rendered.contains("sample_clear_sample_backends()"), "{rendered}");
+        assert!(rendered.contains("sample_clear_sample_backend(NULL)"), "{rendered}");
+        assert!(!rendered.contains("sample_clear_sample_backends("), "{rendered}");
         assert!(!rendered.contains("has no function identity"), "{rendered}");
+    }
+
+    /// `unregister_fn`'s C export always takes a trailing `out_error` out-param
+    /// (`unregister_fn.jinja`) in addition to the configured `name` argument, but the
+    /// shared, language-agnostic call args config (`args = [{ name, field, type }]`)
+    /// has no way to express a C-only out-param. This fails against the pre-fix code:
+    /// the void-call branch built its argument list purely from `info.args` and never
+    /// consulted `info.extra_args`, so it emitted `sample_unregister_sample_backend(name)`
+    /// -- one argument short of the real two-argument ABI signature.
+    #[test]
+    fn trait_bridge_unregister_appends_out_error_out_param() {
+        let fixture = Fixture {
+            id: "unregister_sample_backend".into(),
+            description: "Unregister a sample backend".into(),
+            call: Some("unregister_sample_backend".into()),
+            input: serde_json::json!({ "name": "nonexistent-backend" }),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.calls.insert(
+            "unregister_sample_backend".into(),
+            CallConfig {
+                returns_result: false,
+                returns_void: true,
+                args: vec![crate::core::config::e2e::ArgMapping {
+                    name: "name".into(),
+                    field: "input.name".into(),
+                    arg_type: "string".into(),
+                    optional: false,
+                    owned: false,
+                    element_type: None,
+                    go_type: None,
+                    vec_inner_is_ref: false,
+                    trait_name: None,
+                }],
+                ..CallConfig::default()
+            },
+        );
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            trait_bridges: vec![crate::core::config::TraitBridgeConfig {
+                trait_name: "SampleBackend".into(),
+                unregister_fn: Some("unregister_sample_backend".into()),
+                ..Default::default()
+            }],
+            ..ResolvedCrateConfig::default()
+        };
+
+        let rendered = render_c_snippet(&fixture, &e2e, &config, &[], &[]).expect("C snippet renders");
+
+        assert!(
+            rendered.contains("sample_unregister_sample_backend(\"nonexistent-backend\", NULL)"),
+            "{rendered}"
+        );
+    }
+
+    /// `resolve_fixture_call_info` must not trust `trait_bridge_function_identity`'s
+    /// raw-config-text-derived symbol name for a fixture that declares
+    /// `skip.languages = ["c"]` -- exactly the shape of the 13 fixtures fixed in
+    /// `8ddaa0559` (via `src/e2e/snippets/mod.rs`'s equivalent guard). This exercises
+    /// the resolver directly, independent of the prefixing/template logic that
+    /// `render_c_snippet` layers on top, so a regression here is unambiguous: it can
+    /// only mean the skip check stopped gating the fallback.
+    #[test]
+    fn resolve_fixture_call_info_ignores_naive_identity_when_skipped_for_lang() {
+        let fixture = Fixture {
+            id: "clear_sample_backends".into(),
+            call: Some("clear_sample_backends".into()),
+            skip: Some(crate::e2e::fixture::SkipDirective {
+                languages: vec!["c".into()],
+                reason: None,
+            }),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.calls.insert(
+            "clear_sample_backends".into(),
+            CallConfig {
+                returns_result: false,
+                returns_void: true,
+                ..CallConfig::default()
+            },
+        );
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            trait_bridges: vec![crate::core::config::TraitBridgeConfig {
+                trait_name: "SampleBackend".into(),
+                clear_fn: Some("clear_sample_backends".into()),
+                ..Default::default()
+            }],
+            ..ResolvedCrateConfig::default()
+        };
+
+        let info = resolve_fixture_call_info(&fixture, &e2e, &config, "c", &[]);
+
+        assert_eq!(
+            info.function_name, "",
+            "skip.languages = [\"c\"] must block the naive identity fallback, leaving no function \
+             configured rather than a symbol name that may not exist"
+        );
+    }
+
+    /// End-to-end counterpart of the resolver-level test above: a fixture skipped for
+    /// `c` must not produce a snippet that calls the config-text-derived symbol name.
+    /// `render_c_snippet` is exercised directly (not through
+    /// `src/e2e/snippets/mod.rs`'s gate) so this proves the C generator's own
+    /// invariant, not just the upstream caller's filtering.
+    #[test]
+    fn trait_bridge_operation_skipped_for_c_does_not_trust_naive_identity() {
+        let fixture = Fixture {
+            id: "clear_sample_backends".into(),
+            description: "Clear registered sample backends".into(),
+            call: Some("clear_sample_backends".into()),
+            skip: Some(crate::e2e::fixture::SkipDirective {
+                languages: vec!["c".into()],
+                reason: Some("c FFI export does not match the configured clear_fn text".into()),
+            }),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.calls.insert(
+            "clear_sample_backends".into(),
+            CallConfig {
+                returns_result: false,
+                returns_void: true,
+                ..CallConfig::default()
+            },
+        );
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            trait_bridges: vec![crate::core::config::TraitBridgeConfig {
+                trait_name: "SampleBackend".into(),
+                clear_fn: Some("clear_sample_backends".into()),
+                ..Default::default()
+            }],
+            ..ResolvedCrateConfig::default()
+        };
+
+        let rendered = render_c_snippet(&fixture, &e2e, &config, &[], &[]).expect("C snippet renders");
+
+        assert!(
+            !rendered.contains("sample_clear_sample_backends("),
+            "skipped fixture must not call the naive-identity symbol: {rendered}"
+        );
+        assert!(rendered.contains("sample_();"), "{rendered}");
     }
 
     #[test]

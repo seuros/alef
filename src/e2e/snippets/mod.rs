@@ -1341,13 +1341,15 @@ mod tests {
         assert_eq!(report.coverage.generated.len(), 1);
         assert!(report.coverage.missing.is_empty());
         assert_eq!(report.snippets.len(), 1);
-        // The naive fallback still resolves the identity from the raw `clear_fn` config text,
-        // so the emitted call keeps the (wrong, pluralised) name — that is the pre-existing
-        // behaviour this test pins for the not-skipped case. The trailing `NULL` is the C
-        // out-error argument the void-call builder always appends.
+        // A fixture that is NOT skipped still renders, and now renders the symbol the FFI
+        // backend actually exports: `{prefix}_clear_{trait_snake}` derived from the trait name
+        // (`registration.rs:141`), SINGULAR — not the pluralised `clear_fn` config text, which
+        // only ever matched the fixture to a bridge. The trailing `NULL` is the C out-error
+        // argument. Before the derivation fix this emitted `xberg_clear_ocr_backends(NULL)`,
+        // naming a symbol the header does not declare.
         assert!(
-            report.snippets[0].file.content.contains("xberg_clear_ocr_backends(NULL);"),
-            "expected the unchanged naive-identity call, got:\n{}",
+            report.snippets[0].file.content.contains("xberg_clear_ocr_backend(NULL);"),
+            "expected the derived singular ABI symbol, got:\n{}",
             report.snippets[0].file.content
         );
     }

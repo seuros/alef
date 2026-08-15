@@ -216,6 +216,71 @@ pub(crate) fn trait_bridge_function_identity<'a>(
     })
 }
 
+/// Which trait-bridge registry operation a fixture identifies, per
+/// [`trait_bridge_derived_c_identity`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TraitBridgeRegistryOperation {
+    Register,
+    Unregister,
+    Clear,
+}
+
+/// Resolve the C ABI symbol name the FFI backend actually generates for a fixture that
+/// identifies a trait-bridge registry operation -- as opposed to
+/// [`trait_bridge_function_identity`], which returns the raw `register_fn`/
+/// `unregister_fn`/`clear_fn` config text verbatim.
+///
+/// `src/backends/ffi/trait_bridge/registration.rs:91-92,140-141` computes the exported
+/// symbol two different ways depending on the operation:
+///
+/// - `register`: `format!("{prefix}_{register_fn_name}")` -- built directly from the
+///   `register_fn` config text, which is therefore already the ABI truth.
+/// - `unregister`/`clear`: `format!("{prefix}_unregister_{trait_snake}")` /
+///   `format!("{prefix}_clear_{trait_snake}")`, where `trait_snake` is the bridge's
+///   `trait_name` in `snake_case` (via `heck::ToSnakeCase`, matching
+///   `TraitBridgeSpec::trait_snake` in `src/codegen/generators/trait_bridge/spec.rs:55`).
+///   The `unregister_fn`/`clear_fn` config text is consulted only to decide *whether*
+///   the function exists (i.e. to match the fixture to a bridge); its literal spelling
+///   is discarded. A crate author who names `clear_fn = "clear_ocr_backends"` (plural)
+///   on a trait named `OcrBackend` gets an exported symbol `clear_ocr_backend`
+///   (singular) -- not `clear_ocr_backends`.
+///
+/// Returns the unprefixed, un-language-prefixed function name (e.g.
+/// `"clear_ocr_backend"`) alongside the operation kind, so the caller can apply the
+/// standard `{prefix}_` treatment and, for `Unregister`/`Clear`, append the trailing
+/// `out_error` out-param those two operations always take (see `unregister_fn.jinja`
+/// and `clear_fn.jinja`) but `register` does not need here because register-shaped
+/// fixtures never reach this generic void-call fallback (they require the vtable/
+/// user_data machinery in `trait_bridge_snippet.rs`).
+///
+/// Returns `None` when `fixture.call` does not identify any bridge operation (mirrors
+/// `trait_bridge_function_identity`).
+pub(crate) fn trait_bridge_derived_c_identity(
+    config: &ResolvedCrateConfig,
+    fixture: &Fixture,
+) -> Option<(TraitBridgeRegistryOperation, String)> {
+    use heck::ToSnakeCase;
+
+    let identity = fixture.call.as_deref()?;
+    config.trait_bridges.iter().find_map(|bridge| {
+        if bridge.register_fn.as_deref() == Some(identity) {
+            return Some((TraitBridgeRegistryOperation::Register, identity.to_string()));
+        }
+        if bridge.unregister_fn.as_deref() == Some(identity) {
+            let trait_snake = bridge.trait_name.to_snake_case();
+            return Some((
+                TraitBridgeRegistryOperation::Unregister,
+                format!("unregister_{trait_snake}"),
+            ));
+        }
+        if bridge.clear_fn.as_deref() == Some(identity) {
+            let trait_snake = bridge.trait_name.to_snake_case();
+            return Some((TraitBridgeRegistryOperation::Clear, format!("clear_{trait_snake}")));
+        }
+        None
+    })
+}
+
 /// Resolve the concrete stream item type for an e2e call.
 ///
 /// Explicit call recipe metadata wins. Otherwise infer from matching streaming
@@ -650,5 +715,100 @@ mod tests {
         };
 
         assert_eq!(trait_bridge_function_identity(&config, &fixture), None);
+    }
+
+    /// `clear_fn = "clear_ocr_backends"` (plural) is the config text, but
+    /// `registration.rs` derives the exported symbol from the trait name's snake_case
+    /// form (`OcrBackend` -> `ocr_backend`, singular) and discards the config text's
+    /// spelling entirely. This fails against the pre-fix code because
+    /// `trait_bridge_function_identity` (and the naive fallback in `c.rs` built on it)
+    /// returns the raw config text `"clear_ocr_backends"` verbatim -- the plural,
+    /// nonexistent symbol -- instead of the derived singular one.
+    #[test]
+    fn trait_bridge_derived_c_identity_derives_clear_symbol_from_trait_snake_case_not_config_text() {
+        let config = ResolvedCrateConfig {
+            trait_bridges: vec![TraitBridgeConfig {
+                trait_name: "OcrBackend".to_string(),
+                clear_fn: Some("clear_ocr_backends".to_string()),
+                ..TraitBridgeConfig::default()
+            }],
+            ..ResolvedCrateConfig::default()
+        };
+        let fixture = Fixture {
+            call: Some("clear_ocr_backends".to_string()),
+            ..Fixture::default()
+        };
+
+        assert_eq!(
+            trait_bridge_derived_c_identity(&config, &fixture),
+            Some((TraitBridgeRegistryOperation::Clear, "clear_ocr_backend".to_string()))
+        );
+    }
+
+    /// `unregister_fn = "unregister_ocr_backend"` happens to already match the
+    /// trait-snake derivation (trait names are already singular), so the *name*
+    /// coincides either way. This test pins the operation classification
+    /// (`Unregister`, needed by the caller to know an `out_error` out-param must be
+    /// appended) which the pre-fix `trait_bridge_function_identity` cannot report at
+    /// all -- it returns a bare `&str` with no operation kind. Against code that
+    /// (incorrectly) reused `trait_bridge_function_identity`'s return shape here, this
+    /// would fail to compile/typecheck as a stand-in for "the operation kind is
+    /// unavailable"; expressed as a behavioral assertion, it fails if `Register` or
+    /// `Clear` is misclassified as `Unregister`'s counterpart derivation.
+    #[test]
+    fn trait_bridge_derived_c_identity_classifies_unregister_and_keeps_its_already_matching_name() {
+        let config = ResolvedCrateConfig {
+            trait_bridges: vec![TraitBridgeConfig {
+                trait_name: "OcrBackend".to_string(),
+                unregister_fn: Some("unregister_ocr_backend".to_string()),
+                ..TraitBridgeConfig::default()
+            }],
+            ..ResolvedCrateConfig::default()
+        };
+        let fixture = Fixture {
+            call: Some("unregister_ocr_backend".to_string()),
+            ..Fixture::default()
+        };
+
+        assert_eq!(
+            trait_bridge_derived_c_identity(&config, &fixture),
+            Some((
+                TraitBridgeRegistryOperation::Unregister,
+                "unregister_ocr_backend".to_string()
+            ))
+        );
+    }
+
+    /// `register_fn`'s exported symbol IS `{prefix}_{register_fn_name}` -- the literal
+    /// config text -- per `registration.rs:91`, so the derived path must return the
+    /// raw text unchanged for `register`, not re-derive from `trait_snake`. This
+    /// fails against a naive "always derive from trait_snake" implementation, which
+    /// would wrongly produce `"register_sample_backend"` here too by coincidence on
+    /// this fixture, but would diverge the moment `register_fn`'s text differs from
+    /// `trait_snake` (e.g. a bridge author choosing `register_fn = "register_backend"`
+    /// on a multi-word trait) -- so this test also documents why `register` cannot
+    /// share the `unregister`/`clear` derivation branch.
+    #[test]
+    fn trait_bridge_derived_c_identity_trusts_register_fn_config_text_verbatim() {
+        let config = ResolvedCrateConfig {
+            trait_bridges: vec![TraitBridgeConfig {
+                trait_name: "SampleBackend".to_string(),
+                register_fn: Some("register_sample_backend".to_string()),
+                ..TraitBridgeConfig::default()
+            }],
+            ..ResolvedCrateConfig::default()
+        };
+        let fixture = Fixture {
+            call: Some("register_sample_backend".to_string()),
+            ..Fixture::default()
+        };
+
+        assert_eq!(
+            trait_bridge_derived_c_identity(&config, &fixture),
+            Some((
+                TraitBridgeRegistryOperation::Register,
+                "register_sample_backend".to_string()
+            ))
+        );
     }
 }
