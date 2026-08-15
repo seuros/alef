@@ -462,7 +462,15 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     tracing::info!("Formatting generated files...");
                     let mut files_to_format = bindings.clone();
                     files_to_format.extend(stubs.clone());
-                    pipeline::format_generated(&files_to_format, resolved_cfg, &base_dir, Some(&changed_languages));
+                    // `None` selects the converging whole-tree pass, which is what a full regen needs
+                    // and what `converge_full_regen_formatting` documents itself as serving. Passing
+                    // `Some(&changed_languages)` took the single-pass branch instead, so the loop that
+                    // exists precisely because poly's .cs/.java/.json engines are not single-pass
+                    // idempotent never ran on the one command that regenerates everything: `alef all`
+                    // left drift that a second `alef all` would silently settle, and stamped hashes
+                    // over it. The language filter is wrong for the workspace-wide `cargo sort -n -w`
+                    // folded into that loop too, which must cover crates this run did not generate. ~keep
+                    pipeline::format_generated(&files_to_format, resolved_cfg, &base_dir, None);
                 }
 
                 tracing::info!("Finalising hashes...");

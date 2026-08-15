@@ -31,6 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the empty-category check in `e2e/validate.rs` only fires when *every* configured language skips a category, and
   `fixture_inclusion` never consults an emitter's capability. Both callers now share one predicate so they cannot
   drift apart again, and a category that genuinely renders nothing executable is logged instead of vanishing.
+- **generate**: run the converging formatting pass on `alef all`, so a full regen lands committable. `alef all`
+  called `format_generated` with `Some(&changed_languages)`, which selects the single-pass branch; the convergence
+  loop — written because poly's `.cs`/`.java`/`.json` engines are not single-pass idempotent, and documented as
+  serving "the `alef all` path" — was therefore unreachable from the one command that regenerates everything. A
+  regen left formatting drift that `poly fmt --check` rejected, `finalize_hashes` then stamped provenance over that
+  drift, and a second `alef all` silently settled it — which is why regenerating twice produced changes the first
+  run should have made. The language filter was also wrong for the workspace-wide `cargo sort -n -w` folded into
+  that loop, which must cover crates the current run did not generate.
 - **snippets**: scope the shared validation timeout to validators that genuinely batch. `run_validation` handed a
   single wall-clock budget, keyed by language/session/level, to the per-snippet path — which is reached only by
   validators that spawn one toolchain process per snippet (every language except Rust below `Run`). The first
