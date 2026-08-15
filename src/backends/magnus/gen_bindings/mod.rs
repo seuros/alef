@@ -491,7 +491,7 @@ impl Backend for MagnusBackend {
 
         let magnus_conv_config = crate::codegen::conversions::ConversionConfig {
             binding_enums_have_data: true,
-            binding_tuple_form_for_untagged_variants: true,
+            binding_tuple_form_for_variants: true,
             // Enum data-variant `Map` fields are collapsed to a JSON `String` DTO field by ~keep
             // `classes::gen_enum::field_type_for_serde_inner`, so their conversions must round-trip ~keep
             // via serde_json rather than `HashMap::into_iter`. Struct `Map` fields keep their native ~keep

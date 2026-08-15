@@ -13,9 +13,8 @@ pub fn binding_to_core_match_arm(binding_prefix: &str, variant_name: &str, field
 
 /// Like `binding_to_core_match_arm` but `binding_has_data` controls whether the binding
 /// enum has the variant's fields (true) or is unit-only (false, e.g. Rustler/Elixir).
-/// `enum_serde_untagged` toggles the binding-side variant body shape for tuple variants:
-/// untagged enums emit tuple-form `Variant(T)` in the binding (see Magnus template), so the
-/// destructure pattern must match. Tagged/unit enums keep struct-form `Variant { _0 }`.
+/// `binding_uses_tuple_form` records the binding-side variant body shape for tuple variants,
+/// so the destructure pattern matches the declaration emitted by the backend template.
 /// Generate match arm for binding->core conversion with config (handles type conversions).
 pub fn binding_to_core_match_arm_ext_cfg(
     binding_prefix: &str,
@@ -23,7 +22,7 @@ pub fn binding_to_core_match_arm_ext_cfg(
     fields: &[FieldDef],
     binding_has_data: bool,
     config: &ConversionConfig,
-    enum_serde_untagged: bool,
+    binding_uses_tuple_form: bool,
 ) -> String {
     use crate::codegen::conversions::field_conversion_to_core_cfg;
 
@@ -75,7 +74,7 @@ pub fn binding_to_core_match_arm_ext_cfg(
                 if f.is_boxed { format!("Box::new({expr})") } else { expr }
             })
             .collect();
-        let pattern_syntax = if enum_serde_untagged {
+        let pattern_syntax = if binding_uses_tuple_form {
             format!("{binding_prefix}::{variant_name}({binding_pattern})")
         } else {
             format!("{binding_prefix}::{variant_name} {{ {binding_pattern} }}")
@@ -196,9 +195,8 @@ pub fn core_to_binding_match_arm(core_prefix: &str, variant_name: &str, fields: 
 
 /// Like `core_to_binding_match_arm` but `binding_has_data` controls whether the binding
 /// enum has the variant's fields (true) or is unit-only (false).
-/// `enum_serde_untagged` toggles the binding-side variant body shape for tuple variants:
-/// untagged enums emit tuple-form `Variant(T)` in the binding (see Magnus template), so the
-/// constructor must use tuple form too. Tagged/unit enums keep struct-form `Variant { _0 }`.
+/// `binding_uses_tuple_form` records the binding-side variant body shape for tuple variants,
+/// so the constructor matches the declaration emitted by the backend template.
 /// Generate match arm for core->binding conversion with config (handles type conversions).
 pub fn core_to_binding_match_arm_ext_cfg(
     core_prefix: &str,
@@ -206,7 +204,7 @@ pub fn core_to_binding_match_arm_ext_cfg(
     fields: &[FieldDef],
     binding_has_data: bool,
     config: &ConversionConfig,
-    enum_serde_untagged: bool,
+    binding_uses_tuple_form: bool,
 ) -> String {
     use crate::codegen::conversions::field_conversion_from_core_cfg;
     use ahash::AHashSet;
@@ -232,7 +230,7 @@ pub fn core_to_binding_match_arm_ext_cfg(
                     if f.is_boxed {
                         expr = expr.replace(&format!("{}.into()", f.name), &format!("(*{}).into()", f.name));
                     }
-                    if enum_serde_untagged {
+                    if binding_uses_tuple_form {
                         let string_move = format!("{}.to_string()", f.name);
                         if expr == string_move {
                             expr = f.name.clone();
@@ -246,7 +244,7 @@ pub fn core_to_binding_match_arm_ext_cfg(
                 }
             })
             .collect();
-        if enum_serde_untagged {
+        if binding_uses_tuple_form {
             format!(
                 "{core_prefix}::{variant_name}({core_pattern}) => Self::{variant_name}({}),",
                 binding_fields.join(", ")

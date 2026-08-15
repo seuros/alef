@@ -148,15 +148,14 @@ pub struct ConversionConfig<'a> {
     /// all feature combinations.  PyO3/NAPI/PHP/etc keep cfg-gated fields in the binding
     /// struct (decorated with `#[cfg(...)]`) and want them included in conversions.
     pub strip_cfg_fields_from_binding_struct: bool,
-    /// When true, untagged-enum tuple variants in the binding use Rust tuple-form
+    /// When true, representation-eligible tuple variants in the binding use Rust tuple-form
     /// `Variant(T)` instead of struct-form `Variant { _0: T }`. The conversion match
     /// arms must destructure / construct in the same shape, otherwise rustc rejects
     /// the From impls with E0559 / E0769.
-    /// Set true ONLY for backends whose enum body emitter switches to tuple form for
-    /// `serde_untagged && variant.is_tuple` — currently just Magnus (Ruby) since
-    /// commit a715f378. Other data-bearing backends (Rustler, NAPI, PyO3, …) keep
-    /// struct-form even for untagged enums and so this flag must stay false.
-    pub binding_tuple_form_for_untagged_variants: bool,
+    /// Set true only for backends whose enum body emitter follows the shared serde
+    /// representation predicate — currently Magnus (Ruby). Other data-bearing backends
+    /// (Rustler, NAPI, PyO3, …) keep struct form, so this flag must stay false.
+    pub binding_tuple_form_for_variants: bool,
 }
 
 impl<'a> ConversionConfig<'a> {

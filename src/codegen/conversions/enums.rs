@@ -24,7 +24,7 @@ pub fn gen_enum_from_binding_to_core_cfg(enum_def: &EnumDef, core_import: &str, 
                 config.binding_enums_have_data,
                 config,
                 crate::codegen::conversions::helpers::variant_emits_tuple_form(enum_def, variant)
-                    && config.binding_tuple_form_for_untagged_variants,
+                    && config.binding_tuple_form_for_variants,
             );
             minijinja::context! {
                 arm => arm,
@@ -65,7 +65,7 @@ pub fn gen_enum_from_core_to_binding_cfg(enum_def: &EnumDef, core_import: &str, 
                 config.binding_enums_have_data,
                 config,
                 crate::codegen::conversions::helpers::variant_emits_tuple_form(enum_def, variant)
-                    && config.binding_tuple_form_for_untagged_variants,
+                    && config.binding_tuple_form_for_variants,
             );
             minijinja::context! {
                 arm => arm,

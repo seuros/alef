@@ -421,12 +421,94 @@ fn untagged_tuple_enum() -> EnumDef {
     }
 }
 
+fn adjacent_error_enum() -> EnumDef {
+    let mut enum_def = untagged_tuple_enum();
+    enum_def.name = "Diagnostic".to_string();
+    enum_def.rust_path = "my_crate::Diagnostic".to_string();
+    enum_def.serde_untagged = false;
+    enum_def.serde_tag = Some("kind".to_string());
+    enum_def.serde_content = Some("detail".to_string());
+    enum_def.variants = vec![
+        EnumVariant {
+            name: "Custom".to_string(),
+            fields: vec![FieldDef {
+                name: "_0".to_string(),
+                ty: TypeRef::String,
+                ..FieldDef::default()
+            }],
+            is_tuple: true,
+            ..EnumVariant::default()
+        },
+        EnumVariant {
+            name: "Context".to_string(),
+            fields: vec![FieldDef {
+                name: "message".to_string(),
+                ty: TypeRef::String,
+                ..FieldDef::default()
+            }],
+            ..EnumVariant::default()
+        },
+        EnumVariant {
+            name: "Unknown".to_string(),
+            ..EnumVariant::default()
+        },
+    ];
+    enum_def
+}
+
+#[test]
+fn adjacent_error_binding_to_core_preserves_variant_shapes() {
+    let result = gen_enum_from_binding_to_core_cfg(
+        &adjacent_error_enum(),
+        "my_crate",
+        &ConversionConfig {
+            binding_enums_have_data: true,
+            binding_tuple_form_for_variants: true,
+            ..ConversionConfig::default()
+        },
+    );
+
+    assert!(result.contains("Diagnostic::Custom(_0) => Self::Custom(_0),"), "{result}");
+    assert!(!result.contains("Diagnostic::Custom { _0 }"), "{result}");
+    assert!(
+        result.contains("Diagnostic::Context { message } => Self::Context { message: message },"),
+        "{result}"
+    );
+    assert!(result.contains("Diagnostic::Unknown => Self::Unknown,"), "{result}");
+}
+
+#[test]
+fn adjacent_error_core_to_binding_preserves_variant_shapes() {
+    let result = gen_enum_from_core_to_binding_cfg(
+        &adjacent_error_enum(),
+        "my_crate",
+        &ConversionConfig {
+            binding_enums_have_data: true,
+            binding_tuple_form_for_variants: true,
+            ..ConversionConfig::default()
+        },
+    );
+
+    assert!(
+        result.contains("my_crate::Diagnostic::Custom(_0) => Self::Custom(_0),"),
+        "{result}"
+    );
+    assert!(!result.contains("Self::Custom { _0:"), "{result}");
+    assert!(
+        result.contains(
+            "my_crate::Diagnostic::Context { message } => Self::Context { message: message.to_string() },"
+        ),
+        "{result}"
+    );
+    assert!(result.contains("my_crate::Diagnostic::Unknown => Self::Unknown,"), "{result}");
+}
+
 #[test]
 fn test_enum_from_binding_to_core_untagged_tuple_emits_tuple_pattern() {
     let enum_def = untagged_tuple_enum();
     let config = ConversionConfig {
         binding_enums_have_data: true,
-        binding_tuple_form_for_untagged_variants: true,
+        binding_tuple_form_for_variants: true,
         ..ConversionConfig::default()
     };
     let result = gen_enum_from_binding_to_core_cfg(&enum_def, "my_crate", &config);
@@ -446,7 +528,7 @@ fn test_enum_from_core_to_binding_untagged_tuple_emits_tuple_constructor() {
     let enum_def = untagged_tuple_enum();
     let config = ConversionConfig {
         binding_enums_have_data: true,
-        binding_tuple_form_for_untagged_variants: true,
+        binding_tuple_form_for_variants: true,
         ..ConversionConfig::default()
     };
     let result = gen_enum_from_core_to_binding_cfg(&enum_def, "my_crate", &config);
@@ -467,7 +549,7 @@ fn test_enum_tagged_data_keeps_struct_form_pattern() {
     enum_def.serde_tag = Some("type".to_string());
     let config = ConversionConfig {
         binding_enums_have_data: true,
-        binding_tuple_form_for_untagged_variants: true,
+        binding_tuple_form_for_variants: true,
         ..ConversionConfig::default()
     };
     let result = gen_enum_from_binding_to_core_cfg(&enum_def, "my_crate", &config);
@@ -482,7 +564,7 @@ fn test_enum_untagged_keeps_struct_form_when_backend_does_not_opt_in() {
     let enum_def = untagged_tuple_enum();
     let config = ConversionConfig {
         binding_enums_have_data: true,
-        binding_tuple_form_for_untagged_variants: false,
+        binding_tuple_form_for_variants: false,
         ..ConversionConfig::default()
     };
     let result = gen_enum_from_binding_to_core_cfg(&enum_def, "my_crate", &config);
