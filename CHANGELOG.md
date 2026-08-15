@@ -73,8 +73,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   assignment and subsequent `IO.inspect` reference synchronized instead of binding an unused `chunks` variable.
 - **R default arguments**: only call a generated class's `$default()` wrapper when that class is actually eligible for
   extendr registration, preventing required options from referencing removed wrappers.
-- **Go snippet validation**: preserve configured `GOMODCACHE` and `GOPATH` paths in the sanitized tool environment,
-  so generated snippets can reuse available modules instead of failing before validation.
+- **Go snippet validation**: preserve configured `GOMODCACHE` and `GOPATH` paths in the sanitized tool environment
+  and derive Go's home-based defaults when they are not explicitly exported, so generated snippets can reuse
+  available modules instead of failing before validation.
 - **C documentation snippets**: keep configured client-method identities separate from prefixed ABI symbols, so
   adapter metadata resolves and real client/streaming examples are emitted; unresolved recipes now enter the
   missing-coverage ledger instead of compiling as successful diagnostic skip stubs.

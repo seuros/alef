@@ -47,6 +47,7 @@ impl GoValidator {
             }
         };
         Self::apply_build_cache(&mut command, dir.path());
+        Self::apply_dependency_caches(&mut command);
         match session {
             Some(value) => {
                 command.current_dir(Self::project_directory(value));
@@ -73,6 +74,32 @@ impl GoValidator {
     /// that configures its own `GOCACHE` still wins and keeps its cache warm across snippets.
     fn apply_build_cache(command: &mut std::process::Command, dir: &std::path::Path) {
         command.env("GOCACHE", dir.join("go-build-cache"));
+    }
+
+    fn apply_dependency_caches(command: &mut std::process::Command) {
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+        let (go_path, module_cache) =
+            Self::dependency_cache_paths(std::env::var_os("GOPATH"), std::env::var_os("GOMODCACHE"), home);
+        if let Some(path) = go_path {
+            command.env("GOPATH", path);
+        }
+        if let Some(path) = module_cache {
+            command.env("GOMODCACHE", path);
+        }
+    }
+
+    fn dependency_cache_paths(
+        go_path: Option<std::ffi::OsString>,
+        module_cache: Option<std::ffi::OsString>,
+        home: Option<std::ffi::OsString>,
+    ) -> (Option<std::path::PathBuf>, Option<std::path::PathBuf>) {
+        let go_path = go_path
+            .map(std::path::PathBuf::from)
+            .or_else(|| home.as_deref().map(std::path::Path::new).map(|path| path.join("go")));
+        let module_cache = module_cache
+            .map(std::path::PathBuf::from)
+            .or_else(|| go_path.as_ref().map(|path| path.join("pkg/mod")));
+        (go_path, module_cache)
     }
 
     fn project_directory(session: &ValidationSession) -> &std::path::Path {
@@ -196,6 +223,26 @@ mod tests {
     use std::path::PathBuf;
 
     const TOOLCHAIN_TEST_TIMEOUT_SECS: u64 = 120;
+
+    #[test]
+    fn derives_dependency_caches_when_go_variables_are_not_exported() {
+        let (go_path, module_cache) = GoValidator::dependency_cache_paths(None, None, Some("/home/sample".into()));
+
+        assert_eq!(go_path, Some(PathBuf::from("/home/sample/go")));
+        assert_eq!(module_cache, Some(PathBuf::from("/home/sample/go/pkg/mod")));
+    }
+
+    #[test]
+    fn explicit_dependency_caches_override_home_defaults() {
+        let (go_path, module_cache) = GoValidator::dependency_cache_paths(
+            Some("/cache/go-path".into()),
+            Some("/cache/modules".into()),
+            Some("/home/sample".into()),
+        );
+
+        assert_eq!(go_path, Some(PathBuf::from("/cache/go-path")));
+        assert_eq!(module_cache, Some(PathBuf::from("/cache/modules")));
+    }
 
     #[test]
     fn compiles_a_snippet_under_the_sanitized_environment() {
