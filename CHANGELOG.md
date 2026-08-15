@@ -23,6 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **zig snippets**: omit the parsed-result binding when generated assertions never reference it, avoiding an
+  unused-local compile error while preserving the binding for assertions that consume the result.
+- **java scaffold**: exclude Alef's `.alef` validation scratch directory from Maven Checkstyle scans without
+  suppressing violations in user source files.
+- **go**: represent generated FFI handles consistently as scalar `AlefHandle` values, including visitor and
+  options conversion paths, and compare their failure sentinel against `0` instead of `nil`.
+- **C examples and e2e**: render scalar handle declarations and absent-value sentinels as `AlefHandle`/`0` while
+  retaining `NULL` for pointer-valued strings and other pointer parameters.
+- **ffi**: honor configured extra Clippy allowances and allow `collapsible_if` in generated crates without raising
+  their minimum supported Rust version.
 - **e2e/ruby**: emit a fixture category's spec file whenever its fixtures render executable examples. The
   category-level gate in `ruby.rs` decided whether to emit the file using a predicate that omitted `is_streaming`,
   while the per-fixture branch in `spec_file.rs` decided what to put in it using one that included it. A category
