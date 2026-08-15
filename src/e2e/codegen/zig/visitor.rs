@@ -207,22 +207,197 @@ pub(super) fn emit_visitor_test_body(
         "    var _parsed = try std.json.parseFromSlice(std.json.Value, allocator, _result_json, .{{}});"
     );
     let _ = writeln!(out, "    defer _parsed.deinit();");
-    let _ = writeln!(out, "    const result = &_parsed.value;");
 
+    // ~keep: Zig errors on an unused local constant, and `render_json_assertion` can emit an
+    // assertion as a comment only (e.g. "skipped: ..." / "not implemented for zig"), so an empty
+    // or comment-only assertion list must not bind `result` at all. Render the assertion bodies
+    // first, then only declare `result` if something in them actually reads it.
+    let mut assertions_body = String::new();
     for assertion in assertions {
         if assertion.assertion_type != "error" {
-            render_json_assertion(out, assertion, "result", field_resolver, false);
+            render_json_assertion(&mut assertions_body, assertion, "result", field_resolver, false);
         }
     }
+    if contains_word(&assertions_body, "result") {
+        let _ = writeln!(out, "    const result = &_parsed.value;");
+    }
+    out.push_str(&assertions_body);
+}
+
+/// Return true when `text` contains `word` as a standalone identifier (not as a substring of a
+/// longer identifier such as `_result_json` or `result_free`).
+fn contains_word(text: &str, word: &str) -> bool {
+    let bytes = text.as_bytes();
+    let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut start = 0;
+    while let Some(idx) = text[start..].find(word) {
+        let pos = start + idx;
+        let before_ok = pos == 0 || !is_ident(bytes[pos - 1]);
+        let after_pos = pos + word.len();
+        let after_ok = after_pos == bytes.len() || !is_ident(bytes[after_pos]);
+        if before_ok && after_ok {
+            return true;
+        }
+        start = pos + 1;
+    }
+    false
 }
 
 #[cfg(test)]
 mod zig_visitor_tests {
-    use super::{emit_visitor_test_body, resolve_zig_visitor_call_symbols};
+    use super::{ZigVisitorCallSymbols, emit_visitor_test_body, resolve_zig_visitor_call_symbols};
     use crate::core::config::e2e::{CallConfig, CallOverride};
     use crate::e2e::field_access::FieldResolver;
-    use crate::e2e::fixture::{CallbackAction, VisitorSpec};
+    use crate::e2e::fixture::{Assertion, CallbackAction, VisitorSpec};
     use std::collections::{BTreeMap, HashMap, HashSet};
+
+    /// Build the symbols/visitor-spec/field-resolver trio shared by the visitor-body
+    /// tests below, mirroring the FFI call configuration used elsewhere in this module.
+    fn default_test_fixtures() -> (ZigVisitorCallSymbols, VisitorSpec, FieldResolver) {
+        let call = CallConfig {
+            function: "convert".to_string(),
+            ..Default::default()
+        };
+        let fixture = crate::e2e::fixture::Fixture {
+            docs: None,
+            requirements: Vec::new(),
+            id: "result_binding".to_string(),
+            category: None,
+            description: "result binding".to_string(),
+            tags: vec![],
+            skip: None,
+            env: None,
+            setup: Vec::new(),
+            call: None,
+            input: serde_json::json!({ "html": "<p>Hello</p>" }),
+            mock_response: None,
+            visitor: None,
+            args: vec![],
+            assertion_recipes: vec![],
+            assertions: vec![],
+            source: String::new(),
+            http: None,
+            asyncapi: None,
+            websocket: None,
+            preserve_input_urls: false,
+        };
+        let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve("zig", &fixture, &call, &[]);
+        let symbols = resolve_zig_visitor_call_symbols(&call, &recipe, "htm");
+        let mut callbacks = BTreeMap::new();
+        callbacks.insert("visit_text".to_string(), CallbackAction::Continue);
+        let visitor_spec = VisitorSpec { callbacks };
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        (symbols, visitor_spec, resolver)
+    }
+
+    // Regression test for the generated Zig snippet compile failure: Zig errors on an
+    // unused local constant, and `assertions` is empty for every non-error fixture in
+    // doc-snippet mode (`render_snippet_body` clears them). The `const result = ...`
+    // binding must not be emitted when nothing will read it.
+    #[test]
+    fn emit_visitor_test_body_omits_result_binding_when_no_assertions() {
+        let (symbols, visitor_spec, resolver) = default_test_fixtures();
+        let mut content = String::new();
+        emit_visitor_test_body(
+            &mut content,
+            "result_binding",
+            "<p>Hello</p>",
+            None,
+            &visitor_spec,
+            "sample",
+            &symbols,
+            &[],
+            false,
+            &resolver,
+            true,
+        );
+
+        assert!(
+            !content.contains("const result ="),
+            "expected no `result` binding for an empty assertion list, got:\n{content}"
+        );
+    }
+
+    // A non-empty assertion list is not sufficient on its own: `render_json_assertion`
+    // can render an assertion as a comment only (e.g. the "chunks_have_heading_context"
+    // synthetic field, which is unconditionally unsupported and always emits a
+    // "skipped: ..." comment). That still leaves `result` unused, so the binding must
+    // still be omitted.
+    #[test]
+    fn emit_visitor_test_body_omits_result_binding_when_assertions_render_only_comments() {
+        let (symbols, visitor_spec, resolver) = default_test_fixtures();
+        let assertions = vec![Assertion {
+            assertion_type: "is_true".to_string(),
+            field: Some("chunks_have_heading_context".to_string()),
+            ..Default::default()
+        }];
+        let mut content = String::new();
+        emit_visitor_test_body(
+            &mut content,
+            "result_binding",
+            "<p>Hello</p>",
+            None,
+            &visitor_spec,
+            "sample",
+            &symbols,
+            &assertions,
+            false,
+            &resolver,
+            true,
+        );
+
+        assert!(
+            content.contains("skipped: synthetic field 'chunks_have_heading_context'"),
+            "expected the comment-only assertion to still render, got:\n{content}"
+        );
+        assert!(
+            !content.contains("const result ="),
+            "a comment-only assertion body must not bind an unused `result`, got:\n{content}"
+        );
+    }
+
+    // Companion to the two tests above: when an assertion actually renders a reference
+    // to `result` (the shape used by the real e2e suite, whose assertions are never
+    // cleared), the binding must still be emitted — otherwise this fix would silently
+    // break e2e zig output.
+    #[test]
+    fn emit_visitor_test_body_emits_result_binding_when_assertion_references_it() {
+        let (symbols, visitor_spec, resolver) = default_test_fixtures();
+        let assertions = vec![Assertion {
+            assertion_type: "not_empty".to_string(),
+            field: None,
+            ..Default::default()
+        }];
+        let mut content = String::new();
+        emit_visitor_test_body(
+            &mut content,
+            "result_binding",
+            "<p>Hello</p>",
+            None,
+            &visitor_spec,
+            "sample",
+            &symbols,
+            &assertions,
+            false,
+            &resolver,
+            true,
+        );
+
+        assert!(
+            content.contains("const result ="),
+            "expected the `result` binding when an assertion references it, got:\n{content}"
+        );
+        assert!(
+            content.contains("const _ne = result;"),
+            "expected the rendered assertion to reference `result`, got:\n{content}"
+        );
+    }
 
     #[test]
     fn visitor_body_uses_configured_ffi_call_symbols() {
