@@ -151,7 +151,7 @@ fn magnus_data_enum_with_excluded_variant_no_catch_all_in_binding_to_core() {
 
     let config = ConversionConfig {
         binding_enums_have_data: true,
-        binding_tuple_form_for_untagged_variants: true,
+        binding_tuple_form_for_variants: true,
         ..Default::default()
     };
 
