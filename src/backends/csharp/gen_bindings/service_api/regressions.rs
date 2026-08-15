@@ -85,7 +85,10 @@ fn configurator_calls_ffi_and_preserves_the_stable_owner() {
     let output = gen_service_cs(&api, &api.services[0], "Demo", "demo");
 
     assert!(output.contains("NativeMethods.demo_app_config("), "{output}");
-    assert!(output.contains("using var ownerLease = BorrowOwnerHandle()"), "{output}");
+    assert!(
+        output.contains("using var ownerLease = BorrowOwnerHandle()"),
+        "{output}"
+    );
     assert!(output.contains("configuredHandle != ownerLease.Handle"), "{output}");
     assert!(!output.contains("// Store configuration if needed"), "{output}");
 }

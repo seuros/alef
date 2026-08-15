@@ -27,11 +27,8 @@ fn write_fixture_with_dangling_include(root: &Path) {
     )
     .expect("write snippet fixture");
 
-    std::fs::write(
-        root.join("docs/guide.md"),
-        "# Guide\n\n--8<-- \"missing-fixture.md\"\n",
-    )
-    .expect("write docs fixture");
+    std::fs::write(root.join("docs/guide.md"), "# Guide\n\n--8<-- \"missing-fixture.md\"\n")
+        .expect("write docs fixture");
 
     std::fs::write(
         root.join("alef.toml"),
