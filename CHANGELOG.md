@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **FFI error header**: keep `AlefFfiErrorCode` reachable through generated cbindgen export filters and avoid repeated
+  `ErrorError` tokens where an error type and variant meet in public C enum members.
 - **kotlin errors**: let unnumbered error variants use the runtime fallback instead of panicking while generating
   Kotlin/Native bindings that mix explicitly numbered and fallback variants.
 - **Ruby/Magnus errors**: reconstruct tuple error variants with positional Rust syntax for every binding

@@ -14,6 +14,14 @@ fn ffi_error_code_variant_names_include_the_canonical_error_type() {
 }
 
 #[test]
+fn ffi_error_code_variant_names_do_not_repeat_error_at_the_boundary() {
+    assert_eq!(
+        ffi_error_code_variant_name("sample::ParserError", "ErrorLanguageNotFound"),
+        "SampleParserErrorLanguageNotFound"
+    );
+}
+
+#[test]
 fn serde_wire_name_applies_rename_all_strategies() {
     let cases = [
         ("HttpStatus", Some("lowercase"), "httpstatus"),

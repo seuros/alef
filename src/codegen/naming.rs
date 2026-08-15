@@ -829,6 +829,12 @@ pub fn pascal_to_screaming_snake(name: &str) -> String {
 
 /// Produce a project-agnostic C ABI error-enum member from its canonical Rust identity. ~keep
 pub fn ffi_error_code_variant_name(error_type: &str, variant: &str) -> String {
+    let error_name = error_type.rsplit("::").next().unwrap_or(error_type);
+    let variant = if error_name.ends_with("Error") {
+        variant.strip_prefix("Error").unwrap_or(variant)
+    } else {
+        variant
+    };
     format!("{error_type}_{variant}")
         .chars()
         .map(|character| {

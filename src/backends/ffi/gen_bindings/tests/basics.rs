@@ -186,6 +186,10 @@ fn test_generates_cbindgen_toml() {
     assert!(cbindgen.content.contains("MY_LIB_H"));
     assert!(cbindgen.content.contains("language = \"C\""));
     assert!(cbindgen.content.contains("style = \"both\""));
+    assert!(
+        cbindgen.content.contains("include = [\"AlefFfiErrorCode\"]"),
+        "the public error enum must remain reachable to cbindgen"
+    );
 }
 
 #[test]
