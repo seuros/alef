@@ -1261,6 +1261,7 @@
         },
         "ffi": {
           "default": [],
+          "description": "Hand-written Rust modules to declare in the generated FFI `lib.rs` via\n`pub mod <name>;`. Alef requires `<name>.rs` or `<name>/mod.rs` to already\nexist under the FFI crate's `src/` directory before generation runs, and\nfails with a clear error naming the missing path if neither does — the\nmodule's *contents* are never generated, only the declaration.\n\nDeclarations are emitted at the top of the file, in configured order,\nimmediately after the generated imports. Only `pub mod` is emitted (no\n`pub use <name>::*;` re-export): a `#[no_mangle] extern \"C\" fn` is exported\ninto the compiled artifact, and seen by cbindgen's header generation,\nregardless of the enclosing module's path, so flattening the names into\ncrate-root scope isn't needed and would risk colliding with a generated\nitem of the same name. Contrast with `[crates.wasm].custom_rust_modules`,\nwhich does add `pub use` because wasm-bindgen's glue needs the re-exported\nnames in scope unqualified.\n\nThis is the mechanism for compiling a hand-authored opaque-handle wrapper\n(e.g. around a core type marked `alef(skip)`) into the FFI crate: without\nan entry here, a hand-written sibling `.rs` file under the crate's `src/`\nis never reached from the generated crate root, so its `extern \"C\"`\nfunctions are silently absent from both the cdylib and the header.",
           "items": {
             "type": "string"
           },
@@ -3034,6 +3035,11 @@
             "string",
             "null"
           ]
+        },
+        "shares_native_runtime": {
+          "default": false,
+          "description": "Affirms every configured capsule wrapper uses the exact native runtime instance ~keep\nand ownership contract that produced its pointer. ~keep",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -3749,6 +3755,11 @@
             "string",
             "null"
           ]
+        },
+        "shares_native_runtime": {
+          "default": false,
+          "description": "Affirms every configured capsule wrapper uses the exact native runtime instance ~keep\nand ownership contract that produced its pointer. ~keep",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -6819,6 +6830,11 @@
             "null"
           ]
         },
+        "shares_native_runtime": {
+          "default": false,
+          "description": "Affirms every configured capsule wrapper uses the exact native runtime instance ~keep\nand ownership contract that produced its pointer. ~keep",
+          "type": "boolean"
+        },
         "swift_bridge_version": {
           "default": null,
           "description": "swift-bridge version. Defaults to `template_versions::cargo::SWIFT_BRIDGE` when unset.",
@@ -8055,6 +8071,11 @@
             "string",
             "null"
           ]
+        },
+        "shares_native_runtime": {
+          "default": false,
+          "description": "Affirms every configured capsule wrapper uses the exact native runtime instance ~keep\nand ownership contract that produced its pointer. ~keep",
+          "type": "boolean"
         }
       },
       "type": "object"
