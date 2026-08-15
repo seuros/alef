@@ -51,7 +51,7 @@ pub(super) fn render(
             lang: "wasm",
             fixture,
             module: &module,
-            client_factory: default_factory,
+            client_factory: effective_factory,
             e2e_config,
             type_defs,
             enums,
@@ -67,7 +67,7 @@ mod tests {
 
     #[test]
     fn snippets_follow_the_wasm_function_surface() {
-        let fixture = Fixture {
+        let mut fixture = Fixture {
             id: "download_assets".into(),
             description: "Download assets".into(),
             ..Fixture::default()
@@ -93,19 +93,29 @@ mod tests {
             .expect_err("disabled function must not produce a WASM snippet");
         assert!(unavailable.to_string().contains("does not export"));
 
-        e2e.call.overrides.insert(
-            "wasm".into(),
-            crate::core::config::e2e::CallOverride {
-                client_factory: Some("createClient".into()),
+        e2e.calls.insert(
+            "wrapped_download".into(),
+            crate::e2e::config::CallConfig {
+                function: "download".into(),
+                overrides: std::iter::once((
+                    "wasm".into(),
+                    crate::core::config::e2e::CallOverride {
+                        client_factory: Some("createClient".into()),
+                        ..Default::default()
+                    },
+                ))
+                .collect(),
                 ..Default::default()
             },
         );
+        fixture.call = Some("wrapped_download".into());
         let client_recipe = render(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[], &functions)
             .expect("client method need not be a direct module export");
         assert!(client_recipe.contains("import { createClient }"), "{client_recipe}");
         assert!(client_recipe.contains("client.download("), "{client_recipe}");
+        assert!(!client_recipe.contains("import { download }"), "{client_recipe}");
 
-        e2e.call.overrides.clear();
+        fixture.call = None;
         e2e.call.function = "prefetch".into();
         let available = render(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[], &functions)
             .expect("enabled function renders");
