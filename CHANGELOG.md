@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **generated-file provenance**: align hash extraction with the raw header window used by injection, including a stamp
+  emitted at zero-based line 10 after Markdown frontmatter, and only strip exact generated stamp shapes immediately
+  following an Alef header marker so hash-like body prose remains untouched.
 - **test fixtures**: keep the version-pin fixture aligned with the root-flat config shape and give the Go capsule
   fixture the complete borrowed-static ABI contract required by capsule validation.
 - **dart/flutter_rust_bridge**: give FVM a persistent Alef cache when running

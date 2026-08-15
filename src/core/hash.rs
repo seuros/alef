@@ -389,28 +389,50 @@ pub fn inject_hash_line(content: &str, hash: &str) -> String {
     result
 }
 
-/// Extract the hash from an `alef:hash:<hex>` token in the first 10 lines.
-pub fn extract_hash(content: &str) -> Option<String> {
-    for (i, line) in content.lines().enumerate() {
-        if i >= 10 {
+fn generated_hash_line(content: &str) -> Option<(usize, &str)> {
+    let mut lines = content.lines().enumerate().peekable();
+    while let Some((line_index, line)) = lines.next() {
+        if line_index >= MARKER_SCAN_LINES {
             break;
         }
-        if let Some(pos) = line.find(HASH_PREFIX) {
-            let rest = &line[pos + HASH_PREFIX.len()..];
-            let hex = rest.trim().trim_end_matches("*/").trim_end_matches("-->").trim();
-            if !hex.is_empty() {
-                return Some(hex.to_string());
-            }
+        if !(line.contains(HEADER_MARKER) || line.contains(ALT_HEADER_MARKER)) {
+            continue;
+        }
+
+        let (hash_line_index, hash_line) = lines.peek().copied()?;
+        if let Some(hash) = parse_generated_hash_line(hash_line) {
+            return Some((hash_line_index, hash));
         }
     }
     None
 }
 
-/// Strip the `alef:hash:` line from content (for fallback comparison).
+fn parse_generated_hash_line(line: &str) -> Option<&str> {
+    let hash = line
+        .strip_prefix("// alef:hash:")
+        .or_else(|| line.strip_prefix("# alef:hash:"))
+        .or_else(|| line.strip_prefix(" * alef:hash:"))
+        .or_else(|| {
+            line.strip_prefix("<!-- alef:hash:")
+                .and_then(|value| value.strip_suffix(" -->"))
+        })?;
+    (!hash.is_empty() && hash.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(hash)
+}
+
+/// Extract the hash from the generated stamp following an alef header marker.
+pub fn extract_hash(content: &str) -> Option<String> {
+    generated_hash_line(content).map(|(_, hash)| hash.to_string())
+}
+
+/// Strip the generated hash stamp from content (for fallback comparison).
 pub fn strip_hash_line(content: &str) -> String {
+    let Some((hash_line_index, _)) = generated_hash_line(content) else {
+        return content.to_string();
+    };
+
     let mut result = String::with_capacity(content.len());
-    for line in content.lines() {
-        if line.contains(HASH_PREFIX) {
+    for (line_index, line) in content.lines().enumerate() {
+        if line_index == hash_line_index {
             continue;
         }
         result.push_str(line);
