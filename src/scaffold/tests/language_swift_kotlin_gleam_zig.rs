@@ -533,6 +533,29 @@ fn test_scaffold_zig() {
     );
 }
 
+#[test]
+fn scaffold_zig_example_passes_zig_ast_check() {
+    let files = scaffold(&test_api(), &test_config(), &[Language::Zig]).unwrap();
+    let example = files
+        .iter()
+        .find(|file| file.path == Path::new("packages/zig/examples/example.zig"))
+        .expect("Zig scaffold must emit an example");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("example.zig");
+    std::fs::write(&path, &example.content).unwrap();
+    let output = std::process::Command::new("zig")
+        .arg("ast-check")
+        .arg(path)
+        .output()
+        .expect("Zig must be installed to verify scaffold compatibility");
+
+    assert!(
+        output.status.success(),
+        "zig ast-check failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 // Regression for #555: see `should_not_emit_placeholder_readme_when_readme_module_configures_swift`.
 #[test]
 fn should_not_emit_placeholder_readme_when_readme_module_configures_zig() {

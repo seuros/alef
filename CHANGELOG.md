@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **zig scaffold**: emit the example with Zig 0.16's `std.Io` API and avoid an unused allocator binding, so the
+  scaffolded example compiles with the supported Zig toolchain.
 - **ffi**: return the scalar `0` sentinel from string-bridge parameter and UTF-8 guard failures when the exported
   ABI returns `AlefHandle`, instead of emitting `null_mut()` and producing uncompilable generated Rust.
 - **zig snippets**: omit the parsed-result binding when generated assertions never reference it, avoiding an
