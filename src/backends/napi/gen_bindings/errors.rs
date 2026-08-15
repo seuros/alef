@@ -501,7 +501,11 @@ fn trait_bridge_dts_return_type(return_type: &TypeRef, is_async: bool, prefix: &
 /// `["/** Description */"]`. For multi-line docs, emits the block form:
 /// `["/**", " * line1", " * line2", " */"]`, each prefixed by `indent`.
 pub(super) fn format_jsdoc(doc: &str, indent: &str) -> Vec<String> {
-    let doc = doc.trim();
+    let sanitized = crate::codegen::doc_emission::sanitize_rust_idioms(
+        doc,
+        crate::codegen::doc_emission::DocTarget::TsDoc,
+    );
+    let doc = sanitized.trim();
     if doc.is_empty() {
         return vec![];
     }
@@ -700,6 +704,13 @@ pub(super) fn dts_return_type_capsule(
 mod tests {
     use super::*;
     use crate::core::ir::{EnumVariant, FieldDef, ParamDef, TypeDef, TypeRef};
+
+    #[test]
+    fn format_jsdoc_escapes_embedded_block_comment_closers() {
+        let lines = format_jsdoc("Supports literal `/** example */` syntax.", "  ");
+
+        assert_eq!(lines, vec!["  /** Supports literal `/** example * /` syntax. */"]);
+    }
 
     fn make_param(name: &str, optional: bool) -> ParamDef {
         ParamDef {

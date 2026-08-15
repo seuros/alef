@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Node declarations**: escape block-comment closers in Rust documentation before embedding it in generated
+  TypeScript declaration comments.
 - **snippets check**: run the configured audit and gap checks that `--help` already promised, scoped and gated to
   agree with `alef validate`'s existing snippet gate. Audit and gap checks see `docs.snippets.dirs` only —
   `inline_dirs` are prose pages whose fences are validated as snippets, never `--8<--` include targets — and a
