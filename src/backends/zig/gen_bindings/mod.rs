@@ -158,7 +158,7 @@ impl Backend for ZigBackend {
         ));
         content.push('\n');
 
-        emit_helpers(&prefix, &api.errors, &api.error_taxonomy(), &mut content);
+        emit_helpers(&prefix, &api.errors, &mut content);
         content.push('\n');
 
         for bridge in &config.trait_bridges {

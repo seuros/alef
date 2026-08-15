@@ -4,7 +4,7 @@
 
 use crate::codegen::c_consumer;
 use crate::core::config::Language;
-use crate::core::ir::{ErrorDef, ErrorTaxonomy};
+use crate::core::ir::ErrorDef;
 use crate::docs::clean_doc;
 
 /// Emit the two standard helpers every generated file needs:
@@ -20,7 +20,7 @@ use crate::docs::clean_doc;
 /// dispatch to a per-error message-prefix matcher (`_from_ffi_msg_<name>`)
 /// emitted by `emit_error_set`. Without this, every FFI failure returned the
 /// first declared variant — masking the real error and confusing diagnostics.
-pub(crate) fn emit_helpers(prefix: &str, declared_errors: &[ErrorDef], taxonomy: &[ErrorTaxonomy], out: &mut String) {
+pub(crate) fn emit_helpers(prefix: &str, declared_errors: &[ErrorDef], out: &mut String) {
     let free_symbol = c_consumer::free_string_symbol(prefix);
     let error_code_symbol = c_consumer::last_error_code_symbol(prefix);
     let error_context_symbol = c_consumer::last_error_context_symbol(prefix);
@@ -80,16 +80,15 @@ pub(crate) fn emit_helpers(prefix: &str, declared_errors: &[ErrorDef], taxonomy:
     for error in declared_errors {
         out.push_str(&format!("    if (E == {}) return switch (code) {{\n", error.name));
         for variant in &error.variants {
-            let metadata = taxonomy
-                .iter()
-                .find(|entry| entry.error_type == error.rust_path && entry.variant == variant.name)
-                .unwrap();
+            let Some(error_code) = variant.error_code else {
+                continue;
+            };
             let variant_name = crate::codegen::naming::public_host_identifier(
                 Language::Zig,
                 crate::codegen::naming::PublicIdentifierKind::Type,
                 &variant.name,
             );
-            out.push_str(&format!("        {} => error.{variant_name},\n", metadata.code));
+            out.push_str(&format!("        {error_code} => error.{variant_name},\n"));
         }
         out.push_str("        else => _first_error(E),\n    };\n");
     }
@@ -130,14 +129,11 @@ mod tests {
             binding_exclusion_reason: None,
             version: Default::default(),
         }];
-        let taxonomy = errors[0].variants[0]
-            .taxonomy(&errors[0].rust_path)
-            .expect("explicit test error code");
         let mut out = String::new();
-        emit_helpers("example_pack", &errors, std::slice::from_ref(&taxonomy), &mut out);
+        emit_helpers("example_pack", &errors, &mut out);
 
         assert!(
-            out.contains(&format!("{} => error.InvalidInput", taxonomy.code)),
+            out.contains("100 => error.InvalidInput"),
             "missing numeric taxonomy dispatch:\n{out}"
         );
         assert!(
@@ -151,9 +147,34 @@ mod tests {
     }
 
     #[test]
+    fn unnumbered_error_variants_use_the_unknown_fallback() {
+        let errors = vec![ErrorDef {
+            name: "RequestError".to_string(),
+            rust_path: "sample::RequestError".to_string(),
+            variants: vec![crate::core::ir::ErrorVariant {
+                name: "InvalidInput".to_string(),
+                is_unit: true,
+                ..Default::default()
+            }],
+            original_rust_path: String::new(),
+            doc: String::new(),
+            methods: Vec::new(),
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }];
+        let mut out = String::new();
+
+        emit_helpers("example_pack", &errors, &mut out);
+
+        assert!(!out.contains("=> error.InvalidInput"));
+        assert!(out.contains("else => _first_error(E)"));
+    }
+
+    #[test]
     fn error_with_message_falls_back_to_first_error_when_no_errors_declared() {
         let mut out = String::new();
-        emit_helpers("crate", &[], &[], &mut out);
+        emit_helpers("crate", &[], &mut out);
         assert!(
             out.contains("inline fn _error_with_message(comptime E: type) E {"),
             "missing _error_with_message decl:\n{out}"
