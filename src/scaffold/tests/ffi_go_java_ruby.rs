@@ -28,6 +28,7 @@ fn test_scaffold_ffi_deps_are_pinned() {
         "cbindgen should be pinned to a specific minor for reproducible headers"
     );
     assert!(cargo_toml.contains("serde = \"1\""));
+    assert!(cargo_toml.contains("ignored = [\"ahash\", \"serde\", \"serde_json\", \"tokio\"]"));
     assert!(cargo_toml.contains("serde_json = \"1\""));
     assert!(cargo_toml.contains("tokio = "));
     assert!(cargo_toml.contains("[dev-dependencies]"));

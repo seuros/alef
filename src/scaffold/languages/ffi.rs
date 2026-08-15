@@ -112,7 +112,7 @@ pub(crate) fn scaffold_ffi(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
     }
     extra_dep_lines.sort();
 
-    let mut machete_ignored: Vec<&str> = vec!["ahash", "serde_json", "tokio"];
+    let mut machete_ignored: Vec<&str> = vec!["ahash", "serde", "serde_json", "tokio"];
     if has_trait_bridges {
         machete_ignored.push("async-trait");
         machete_ignored.push("tracing");
@@ -215,7 +215,7 @@ pub(crate) fn scaffold_ffi(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
 
     let mut dep_entries: Vec<String> = vec![
         "ahash = \"0.8\"".to_string(),
-        "serde = \"1\"".to_string(),
+        format!("serde = \"{}\"", tv::cargo::SERDE),
         "serde_json = \"1\"".to_string(),
         "tokio = { version = \"1\", features = [\"full\"] }".to_string(),
     ];
