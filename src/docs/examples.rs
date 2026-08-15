@@ -5,6 +5,13 @@ use crate::docs::template_env;
 use crate::docs::type_mapping::doc_type;
 use heck::ToSnakeCase;
 
+/// ~keep The C ABI's scalar generational-handle type name, mirroring
+/// `backends/ffi/type_map.rs` (`TypeRef::Named(_) => "AlefHandle"`). That module
+/// is private and under concurrent edit for the handle-ABI rollout, so this is a
+/// deliberate literal duplicate rather than an import — keep the two in sync by
+/// hand if the ffi backend ever renames the handle type.
+const FFI_HANDLE_TYPE_NAME: &str = "AlefHandle";
+
 pub(crate) fn render_function_example(func: &FunctionDef, lang: Language, ffi_prefix: &str) -> String {
     if let Some(example) = authored_example_block(&func.doc, lang) {
         return example;
@@ -196,7 +203,22 @@ fn render_args(params: &[ParamDef], lang: Language, ffi_prefix: &str) -> String 
 }
 
 fn sample_param_value(param: &ParamDef, lang: Language, ffi_prefix: &str) -> String {
-    if matches!(lang, Language::Ffi | Language::C | Language::Jni)
+    if matches!(lang, Language::Ffi | Language::C) && matches!(&param.ty, TypeRef::Named(_)) {
+        // ~keep Every Named-type param is a scalar `AlefHandle` (uint64_t) in the C
+        // ABI, whether it's passed by value, by ref, or is optional — there is no
+        // struct left to zero-initialize and no pointer left to null out. `0` is
+        // the only value that both compiles and matches the reserved "no handle"
+        // sentinel used by `ffi_null_return_value` in
+        // backends/ffi/gen_bindings/helpers.rs.
+        return "0".to_string();
+    }
+
+    // Jni is a distinct backend (Rust JNI shim emitter for Kotlin Android, see
+    // backends/jni/) whose handle representation is `jlong`, not `AlefHandle`; it
+    // never reaches this docs pipeline as a real target today (`config.languages`
+    // never includes it — see backends/jni/mod.rs and core/config/extras.rs), so
+    // its pre-existing (already-nonsensical) rendering is left untouched here.
+    if matches!(lang, Language::Jni)
         && let TypeRef::Named(name) = &param.ty
     {
         if param.optional || param.is_ref {
@@ -363,6 +385,13 @@ fn render_call_statement(
 
 fn c_result_declaration(return_type: &TypeRef, lang: Language, ffi_prefix: &str) -> String {
     match return_type {
+        // ~keep Named-type returns are a scalar `AlefHandle`, not a pointer to a
+        // struct named after the Rust type — see FFI_HANDLE_TYPE_NAME. Jni is left
+        // on the old (already-nonsensical) pointer rendering; see the comment in
+        // sample_param_value for why.
+        TypeRef::Named(_) if matches!(lang, Language::Ffi | Language::C) => {
+            format!("{} result", type_name(FFI_HANDLE_TYPE_NAME, lang, ffi_prefix))
+        }
         TypeRef::Named(_) => format!("{} *result", doc_type(return_type, lang, ffi_prefix)),
         TypeRef::String | TypeRef::Char => "const char *result".to_string(),
         TypeRef::Bytes => "const uint8_t *result".to_string(),
@@ -439,7 +468,13 @@ fn sample_named_value(name: &str, lang: Language, ffi_prefix: &str) -> String {
         Language::Elixir | Language::R => "%{}".to_string(),
         Language::Go => format!("{ty}{{}}"),
         Language::Rust => format!("{ty}::default()"),
-        Language::Ffi | Language::C | Language::Jni => "NULL".to_string(),
+        // ~keep Same scalar-handle reasoning as sample_param_value; Jni keeps its
+        // old NULL rendering (see that function's comment for why). In practice
+        // this arm is unreachable for Ffi/C today — sample_param_value intercepts
+        // every Named-type param before falling through to sample_value — but it
+        // is fixed for defense-in-depth and consistency with the sentinel scheme.
+        Language::Ffi | Language::C => "0".to_string(),
+        Language::Jni => "NULL".to_string(),
         Language::Gleam => "todo".to_string(),
         Language::Zig => ".{}".to_string(),
     }
@@ -592,13 +627,43 @@ mod tests {
     }
 
     #[test]
-    fn function_example_uses_c_zeroed_struct_for_by_value_named_param() {
+    fn function_example_uses_c_scalar_handle_zero_for_by_value_named_param() {
         let mut function = function();
         function.params = vec![param("config", TypeRef::Named("ClientConfig".to_string()))];
         function.return_type = TypeRef::Unit;
         let rendered = render_function_example(&function, Language::C, "Demo");
-        assert!(rendered.contains("demo_parse_document((DemoClientConfig){0});"));
+        assert!(rendered.contains("demo_parse_document(0);"));
         assert!(!rendered.contains("demo_parse_document(NULL);"));
+        assert!(!rendered.contains("(DemoClientConfig){0}"));
+    }
+
+    #[test]
+    fn function_example_uses_c_scalar_handle_zero_for_optional_named_param() {
+        let mut function = function();
+        let mut config_param = param("options", TypeRef::Named("ClientConfig".to_string()));
+        config_param.optional = true;
+        function.params = vec![config_param];
+        function.return_type = TypeRef::Unit;
+        let rendered = render_function_example(&function, Language::C, "Demo");
+        assert!(rendered.contains("demo_parse_document(0);"));
+        assert!(!rendered.contains("demo_parse_document(NULL);"));
+    }
+
+    #[test]
+    fn function_example_uses_c_alef_handle_type_for_named_return() {
+        let mut function = function();
+        function.return_type = TypeRef::Named("ConversionResult".to_string());
+        let rendered = render_function_example(&function, Language::C, "Demo");
+        assert!(rendered.contains("DemoAlefHandle result = demo_parse_document(\"value\");"));
+        assert!(!rendered.contains("DemoConversionResult *result"));
+    }
+
+    #[test]
+    fn function_example_c_optional_string_param_still_uses_null() {
+        let mut function = function();
+        function.params = vec![param("note", TypeRef::Optional(Box::new(TypeRef::String)))];
+        let rendered = render_function_example(&function, Language::C, "Demo");
+        assert!(rendered.contains("demo_parse_document(NULL)"));
     }
 
     #[test]
