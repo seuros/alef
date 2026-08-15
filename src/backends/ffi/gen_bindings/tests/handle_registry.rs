@@ -272,6 +272,7 @@ fn borrowed_types_keep_owned_lifecycle_and_accessor_exports() {
             name: "default".into(),
             return_type: TypeRef::Named(name.into()),
             is_static: true,
+            returns_ref: true,
             ..MethodDef::default()
         }],
         ..TypeDef::default()

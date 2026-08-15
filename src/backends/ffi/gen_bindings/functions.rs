@@ -8,7 +8,7 @@ mod support;
 pub(super) use cfg_dedup::dedup_same_name_functions;
 pub(super) use orchestration::{gen_free_function, gen_method_wrapper, gen_streaming_method_wrapper};
 pub(super) use return_handling::returns_c_char;
-pub(super) use signatures::{gen_free_function_len_companion, should_skip_method_wrapper};
+pub(super) use signatures::{gen_free_function_len_companion, is_owned_default_constructor, should_skip_method_wrapper};
 
 #[cfg(test)]
 mod tests;

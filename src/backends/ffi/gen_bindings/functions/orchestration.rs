@@ -9,7 +9,7 @@ use super::super::helpers::{
 };
 use super::params::{ParamConversionContext, gen_param_conversion_with_enums};
 use super::return_handling::{gen_owned_c_char_to_c_with_len, return_type_needs_non_serde_named, returns_c_char};
-use super::signatures::{c_symbol_component, internal_class_component};
+use super::signatures::{c_symbol_component, internal_class_component, is_owned_default_constructor};
 use super::support::{ffi_doxygen_block, method_sanitized_recoverable, sanitized_recoverable};
 
 fn named_handle_type(ty: &TypeRef) -> Option<&str> {
@@ -69,6 +69,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
     enum_names: &AHashSet<String>,
     serde_names: &AHashSet<String>,
 ) -> String {
+    let returns_ref = method.returns_ref && !is_owned_default_constructor(method, typ);
     let type_snake = c_symbol_component(&typ.name);
     let type_name = &typ.name;
     let method_name = &method.name;
@@ -461,7 +462,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
     let can_inline = is_passthrough_return(&method.return_type)
         && !is_bytes_result
         && !has_error
-        && !method.returns_ref
+        && !returns_ref
         && !method.returns_cow
         && method.return_newtype_wrapper.is_none();
 
@@ -514,7 +515,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
             } else {
                 "result"
             };
-        if method.returns_ref && !has_error {
+        if returns_ref && !has_error {
             match &method.return_type {
                 TypeRef::String => {
                     out.push_str("    let result = result.to_owned();\n");

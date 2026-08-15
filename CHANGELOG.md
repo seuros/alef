@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **FFI default constructors**: retain canonical zero-argument `default` exports for lifetime-bearing owned values
+  when conservative reference metadata is present, while continuing to exclude other borrowed returns and parameters.
 - **Java visitor handles**: use the imported `List` type in generated cleanup tracking so strict Java lint does not
   report an unused import.
 - **full generation convergence**: generate documentation snippets before rendering READMEs, so a clean `alef all`

@@ -5,6 +5,13 @@ use minijinja::context;
 
 use super::support::{ffi_doxygen_block, sanitized_recoverable};
 
+pub(in crate::backends::ffi::gen_bindings) fn is_owned_default_constructor(method: &MethodDef, typ: &TypeDef) -> bool {
+    method.is_static
+        && method.name == "default"
+        && method.params.is_empty()
+        && matches!(&method.return_type, TypeRef::Named(name) if name == &typ.name)
+}
+
 /// Returns true if a method should be skipped from C FFI wrapper generation.
 ///
 /// Methods are skipped if they:
@@ -37,6 +44,7 @@ pub(in crate::backends::ffi::gen_bindings) fn should_skip_method_wrapper(
     }
 
     if method.returns_ref
+        && !is_owned_default_constructor(method, typ)
         && let TypeRef::Named(name) = &method.return_type
         && name == &typ.name
     {

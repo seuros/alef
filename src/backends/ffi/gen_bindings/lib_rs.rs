@@ -1,7 +1,7 @@
 use crate::adapters::AdapterBodies;
 use crate::backends::ffi::gen_bindings::functions::{
     gen_free_function, gen_free_function_len_companion, gen_method_wrapper, gen_streaming_method_wrapper,
-    returns_c_char, should_skip_method_wrapper,
+    is_owned_default_constructor, returns_c_char, should_skip_method_wrapper,
 };
 use crate::backends::ffi::gen_bindings::helpers;
 use crate::backends::ffi::gen_bindings::helpers::{
@@ -279,8 +279,9 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
             if ffi_exclude_methods.contains(&method_key) {
                 continue;
             }
-            let returns_owned_self = !method.returns_ref
-                && matches!(&method.return_type, crate::core::ir::TypeRef::Named(name) if name == &typ.name);
+            let returns_owned_self = is_owned_default_constructor(method, typ)
+                || (!method.returns_ref
+                    && matches!(&method.return_type, crate::core::ir::TypeRef::Named(name) if name == &typ.name));
             if (!returns_owned_self && crosses_borrowed_handle_boundary(&method.return_type, &borrowed_handle_types))
                 || method
                     .params
