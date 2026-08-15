@@ -58,7 +58,7 @@ pub(super) fn tagged_enum_binding_field_name(enum_def: &EnumDef, variant: &EnumV
     tagged_enum_field_name(variant, field)
 }
 
-fn tagged_enum_binding_field_js_name(enum_def: &EnumDef, variant: &EnumVariant, field: &FieldDef) -> String {
+pub(super) fn tagged_enum_binding_field_js_name(enum_def: &EnumDef, variant: &EnumVariant, field: &FieldDef) -> String {
     if enum_def.serde_content.is_some() && variant.fields.len() == 1 && tagged_enum_field_is_tuple(field) {
         return enum_def.serde_content.clone().expect("adjacent content is present");
     }

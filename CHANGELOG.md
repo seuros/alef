@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **napi**: declare internally-tagged enums with newtype-of-struct variants as the flat optional-field
+  object the napi glue actually emits, instead of a discriminated union keyed by the tuple field's
+  synthetic `_0` name. The generated `.d.ts` previously leaked the internal field name as a literal `0:`
+  property (e.g. `{ role: 'system'; 0: SystemMessage }`) and wrapped each variant as its own union member,
+  when the compiled `#[napi(object)]` struct is actually one type with every variant's field present as an
+  optional property (e.g. `{ role: 'system' | 'user'; system?: SystemMessage; user?: UserMessage }`).
+
 ### Changed
 
 - **zig**: give each streaming adapter its own iterator struct type instead of naming it after the item type alone.

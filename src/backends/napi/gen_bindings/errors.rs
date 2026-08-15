@@ -1,5 +1,6 @@
 //! TypeScript declaration file (`.d.ts`) generation for NAPI-RS bindings.
 
+use super::enums;
 use crate::codegen::naming::{to_node_name, wire_variant_value};
 use crate::codegen::shared::{binding_fields, substitute_excluded_types};
 use crate::core::config::NodeCapsuleTypeConfig;
@@ -259,7 +260,10 @@ pub(super) fn gen_dts(
             Decl::Enum(e) => {
                 let is_data_enum = e.serde_tag.is_some() && e.variants.iter().any(|v| !v.fields.is_empty());
                 lines.extend(format_jsdoc(&e.doc, ""));
-                if is_data_enum {
+                if is_data_enum && e.serde_content.is_some() {
+                    // Adjacent tagging (`#[serde(tag, content)]`): each variant serializes as its
+                    // own `{ tag: 'value'; content: T }`, so a discriminated union of per-variant
+                    // shapes matches the wire format exactly. (~keep)
                     let tag_field = e.serde_tag.as_deref().unwrap_or("type");
                     let mut member_lines: Vec<String> = Vec::new();
                     for variant in &e.variants {
@@ -270,9 +274,7 @@ pub(super) fn gen_dts(
                         );
                         let mut obj_fields: Vec<String> = vec![format!("{tag_field}: '{tag_value}'")];
                         for field in &variant.fields {
-                            let js_name = if e.serde_content.is_some()
-                                && crate::codegen::conversions::is_tuple_variant(&variant.fields)
-                            {
+                            let js_name = if crate::codegen::conversions::is_tuple_variant(&variant.fields) {
                                 e.serde_content
                                     .as_deref()
                                     .expect("adjacent content is present")
@@ -291,23 +293,72 @@ pub(super) fn gen_dts(
                     }
                     lines.push(format!("export type {} =", e.name));
                     lines.extend(member_lines);
-                    if e.serde_content.is_some() {
-                        lines.push(format!("export declare const {}: {{", e.name));
-                        for variant in &e.variants {
-                            if let Some(field) = variant.fields.first() {
-                                lines.push(format!(
-                                    "  {}({}: {}): {};",
-                                    variant.name,
-                                    e.serde_content.as_deref().expect("adjacent content is present"),
-                                    dts_type(&field.ty, no_prefix),
-                                    e.name
-                                ));
-                            } else {
-                                lines.push(format!("  readonly {}: {};", variant.name, e.name));
+                    lines.push(format!("export declare const {}: {{", e.name));
+                    for variant in &e.variants {
+                        if let Some(field) = variant.fields.first() {
+                            lines.push(format!(
+                                "  {}({}: {}): {};",
+                                variant.name,
+                                e.serde_content.as_deref().expect("adjacent content is present"),
+                                dts_type(&field.ty, no_prefix),
+                                e.name
+                            ));
+                        } else {
+                            lines.push(format!("  readonly {}: {};", variant.name, e.name));
+                        }
+                    }
+                    lines.push("};".to_string());
+                } else if is_data_enum {
+                    // Internal tagging (`#[serde(tag = "...")]`): the napi glue flattens every
+                    // variant onto ONE `#[napi(object)]` struct (tag + one `Option<T>` field per
+                    // distinct variant field), so the `.d.ts` must be a single object type with
+                    // every payload field optional, not a discriminated union. Field naming and
+                    // dedup mirror `gen_tagged_enum_as_object` exactly via the shared helpers.
+                    // (~keep)
+                    let tag_field = e.serde_tag.as_deref().unwrap_or("type");
+                    let tag_values: Vec<String> = e
+                        .variants
+                        .iter()
+                        .map(|v| {
+                            format!(
+                                "'{}'",
+                                wire_variant_value(&v.name, v.serde_rename.as_deref(), e.serde_rename_all.as_deref())
+                            )
+                        })
+                        .collect();
+                    let mut obj_fields: Vec<String> = vec![format!("{tag_field}: {}", tag_values.join(" | "))];
+                    let mut seen_fields: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+                    for variant in &e.variants {
+                        for field in &variant.fields {
+                            if enums::tagged_enum_field_is_tuple(field) && matches!(&field.ty, TypeRef::Named(_)) {
+                                continue;
+                            }
+                            let field_name = enums::tagged_enum_binding_field_name(e, variant, field);
+                            if seen_fields.insert(field_name) {
+                                let js_name = enums::tagged_enum_binding_field_js_name(e, variant, field);
+                                let ts_ty = dts_type(&field.ty, no_prefix);
+                                obj_fields.push(format!("{js_name}?: {ts_ty}"));
                             }
                         }
-                        lines.push("};".to_string());
                     }
+                    for variant in &e.variants {
+                        if variant.fields.len() != 1 {
+                            continue;
+                        }
+                        let field = &variant.fields[0];
+                        if !enums::tagged_enum_field_is_tuple(field) {
+                            continue;
+                        }
+                        if matches!(&field.ty, TypeRef::Named(_)) {
+                            let field_name = enums::tagged_enum_binding_field_name(e, variant, field);
+                            if seen_fields.insert(field_name) {
+                                let js_name = enums::tagged_enum_binding_field_js_name(e, variant, field);
+                                let ts_ty = dts_type(&field.ty, no_prefix);
+                                obj_fields.push(format!("{js_name}?: {ts_ty}"));
+                            }
+                        }
+                    }
+                    lines.push(format!("export type {} = {{ {} }};", e.name, obj_fields.join("; ")));
                 } else {
                     lines.push(format!("export declare enum {} {{", e.name));
                     for variant in &e.variants {
@@ -766,6 +817,68 @@ mod tests {
         assert!(dts.contains("export declare const Action: {"));
         assert!(dts.contains("readonly Skip: Action;"));
         assert!(dts.contains("Custom(output: string): Action;"));
+    }
+
+    /// Internally-tagged enums whose variants are newtype wrappers around struct types must
+    /// declare the same flat object the napi glue actually emits (one `#[napi(object)]` struct
+    /// with the discriminant plus one `Option<T>` per variant) — not a discriminated union keyed
+    /// by the tuple field's synthetic `_0` name. Regression test for the `0:` key bug.
+    #[test]
+    fn internally_tagged_newtype_variants_declare_flat_optional_object() {
+        let api = ApiSurface {
+            enums: vec![EnumDef {
+                name: "InternalNewtype".to_string(),
+                serde_tag: Some("role".to_string()),
+                serde_rename_all: Some("snake_case".to_string()),
+                variants: vec![
+                    EnumVariant {
+                        name: "System".to_string(),
+                        fields: vec![FieldDef {
+                            name: "_0".to_string(),
+                            ty: TypeRef::Named("SystemMessage".to_string()),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    },
+                    EnumVariant {
+                        name: "User".to_string(),
+                        fields: vec![FieldDef {
+                            name: "_0".to_string(),
+                            ty: TypeRef::Named("UserMessage".to_string()),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let dts = gen_dts(
+            &api,
+            "",
+            &Default::default(),
+            &[],
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+        );
+
+        assert!(
+            dts.contains(
+                "export type InternalNewtype = { role: 'system' | 'user'; system?: SystemMessage; user?: UserMessage };"
+            ),
+            "expected a flat optional-field object matching the napi glue struct, got:\n{dts}"
+        );
+        assert!(
+            !dts.contains("0:"),
+            "must not emit the tuple field's synthetic `_0` name as a `0:` key:\n{dts}"
+        );
+        assert!(
+            !dts.contains(" | { role:"),
+            "must not emit a discriminated union of per-variant shapes:\n{dts}"
+        );
     }
 
     #[test]
