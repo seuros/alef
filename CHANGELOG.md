@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Java visitor handles**: use the imported `List` type in generated cleanup tracking so strict Java lint does not
+  report an unused import.
 - **full generation convergence**: generate documentation snippets before rendering READMEs, so a clean `alef all`
   consumes the current run's snippets instead of requiring a second pass to add result-display statements.
 - **Node declarations**: escape block-comment closers in Rust documentation before embedding it in generated

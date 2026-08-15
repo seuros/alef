@@ -364,6 +364,9 @@ fn opaque_handle_close_is_idempotent_and_rejects_post_close_use() {
     );
 
     assert!(out.contains("private MemorySegment handle;"), "{out}");
+    assert!(out.contains("import java.util.List;"), "{out}");
+    assert!(out.contains("private final List<Throwable> failures"), "{out}");
+    assert!(!out.contains("java.util.List<Throwable>"), "{out}");
     assert!(out.contains("synchronized MemorySegment handle()"), "{out}");
     assert!(
         out.contains("throw new IllegalStateException(\"ResourceHandle is closed\")"),

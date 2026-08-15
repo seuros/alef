@@ -11,7 +11,7 @@ public class {{ class_name }} implements AutoCloseable {
     }
 
     private static final class CleanupFailures {
-        private final java.util.List<Throwable> failures = new java.util.ArrayList<>();
+        private final List<Throwable> failures = new java.util.ArrayList<>();
 
         private void release(MemorySegment handle, NativeReleaser releaser) {
             if (handle == null || handle.equals(MemorySegment.NULL)) return;
