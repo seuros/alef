@@ -228,8 +228,13 @@ pub(super) fn render_test_function(
     // When the fixture also has a mock_response/http block, we support an env+mock
     // fallback: if the API key is set, use the real API; otherwise fall back to the
     // mock server. This lets the same fixture exercise both paths.
-    let has_mock = fixture.needs_mock_server();
+    let has_mock = fixture.needs_mock_server() && !documentation_snippet;
     let api_key_var = fixture.env.as_ref().and_then(|e| e.api_key_var.as_deref());
+    if documentation_snippet && client_factory.is_some() {
+        let variable = crate::e2e::fixture::FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
+        let _ = writeln!(out, "    const char* api_key = getenv(\"{variable}\");");
+        let _ = writeln!(out, "    assert(api_key != NULL && \"{variable} must be set\");");
+    }
     if let Some(env) = &fixture.env
         && let Some(var) = &env.api_key_var
     {
@@ -483,6 +488,11 @@ pub(super) fn render_test_function(
             let _ = writeln!(
                 out,
                 "    {prefix_upper}AlefHandle client = {prefix}_{factory}(\"test-key\", base_url, (uint64_t)-1, (uint32_t)-1, NULL);"
+            );
+        } else if documentation_snippet {
+            let _ = writeln!(
+                out,
+                "    {prefix_upper}AlefHandle client = {prefix}_{factory}(api_key, NULL, (uint64_t)-1, (uint32_t)-1, NULL);"
             );
         } else {
             let _ = writeln!(

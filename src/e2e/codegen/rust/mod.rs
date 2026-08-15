@@ -197,6 +197,7 @@ impl E2eCodegen for RustE2eCodegen {
         let dep_name = resolve_crate_name(e2e_config, config).replace('-', "_");
         let mut call_fixture = fixture.docs_call_fixture();
         call_fixture.assertions.clear();
+        call_fixture.mock_response = None;
         let test_file = render_test_file(
             &fixture.resolved_category(),
             &[&call_fixture],
@@ -207,6 +208,16 @@ impl E2eCodegen for RustE2eCodegen {
             call_fixture.needs_mock_server(),
         );
         let (imports, body, is_async) = extract_rust_snippet(&test_file)?;
+        let api_key_var = crate::e2e::fixture::FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
+        let body = body
+            .into_iter()
+            .map(|line| {
+                line.replace(
+                    "\"test-key\".to_string()",
+                    &format!("std::env::var(\"{api_key_var}\").expect(\"{api_key_var} must be set\")"),
+                )
+            })
+            .collect::<Vec<_>>();
         let presentation = super::presentation::resolve(&call_fixture, e2e_config, "rust");
         Ok(crate::e2e::template_env::render(
             "rust/snippet_body.rs.jinja",

@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `serde::Serialize`, rather than relying on the core crate's transitive dependencies.
 - **FFI borrowed defaults**: restore free default-constructor exports that return owned lifetime-bearing values,
   storing them as serialized handles while continuing to exclude borrowed returns and borrowed-handle parameters.
+- **documentation snippets**: read client credentials from each fixture's configured environment variable, falling
+  back to the generic `API_KEY` name instead of publishing mock credentials in C, C#, Dart, Java, Kotlin, Python,
+  Rust, and Swift examples.
 - **WASM documentation snippets**: derive direct-call fixture eligibility from the target's exported function
   surface, recording unavailable imports as missing coverage while retaining client-wrapper recipes whose methods
   are reached through the resolved per-call or default factory.

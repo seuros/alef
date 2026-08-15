@@ -9,8 +9,8 @@ fun main() {% if is_async %}= kotlinx.coroutines.runBlocking {% endif %}{
 {% endif %}
 {% for line in setup_lines %}    {{ line }}
 {% endfor %}
-{% if client_factory %}    val baseUrl = (System.getenv("MOCK_SERVER_URL") ?: "") + "/fixtures/{{ fixture_id }}"
-    val client = {{ class_name }}.{{ client_factory }}(apiKey = "test-key", baseUrl = baseUrl)
+{% if client_factory %}    val apiKey = requireNotNull(System.getenv("{{ api_key_var }}")) { "{{ api_key_var }} must be set" }
+    val client = {{ class_name }}.{{ client_factory }}(apiKey = apiKey)
 {% if returns_void %}    client.{{ function_name }}({{ args }})
 {% else %}    val {{ result_var }} = client.{{ function_name }}({{ args }})
 {% endif %}    client.close()

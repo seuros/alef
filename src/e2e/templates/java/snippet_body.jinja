@@ -10,8 +10,9 @@ public final class Example {
 {% endif %}
 {% for line in setup_lines %}        {{ line }}
 {% endfor %}
-{% if client_factory %}        var baseUrl = System.getenv().getOrDefault("MOCK_SERVER_URL", "") + "/fixtures/{{ fixture_id }}";
-        var client = {{ class_name }}.{{ client_factory }}("test-key", baseUrl, null, null, null);
+{% if client_factory %}        var apiKey = System.getenv("{{ api_key_var }}");
+        if (apiKey == null || apiKey.isEmpty()) throw new IllegalStateException("{{ api_key_var }} must be set");
+        var client = {{ class_name }}.{{ client_factory }}(apiKey, null, null, null, null);
 {% if returns_void %}        client.{{ function_name }}({{ args }});
 {% else %}        var {{ result_var }} = client.{{ function_name }}({{ args }});
 {% endif %}

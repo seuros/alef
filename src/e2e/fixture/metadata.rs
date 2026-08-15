@@ -17,6 +17,12 @@ pub struct FixtureEnv {
     pub api_key_var: Option<String>,
 }
 
+impl FixtureEnv {
+    pub(crate) fn api_key_var_or_default(env: Option<&Self>) -> &str {
+        env.and_then(|value| value.api_key_var.as_deref()).unwrap_or("API_KEY")
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetupCall {
     pub call: String,
@@ -107,7 +113,19 @@ pub enum SideEffectClass {
 
 #[cfg(test)]
 mod tests {
-    use super::{FixtureDocs, FixtureDocsOperation, SideEffectClass};
+    use super::{FixtureDocs, FixtureDocsOperation, FixtureEnv, SideEffectClass};
+
+    #[test]
+    fn snippet_credential_name_prefers_fixture_metadata_with_a_generic_fallback() {
+        let configured = FixtureEnv {
+            api_key_var: Some("SAMPLE_SERVICE_TOKEN".into()),
+        };
+        assert_eq!(
+            FixtureEnv::api_key_var_or_default(Some(&configured)),
+            "SAMPLE_SERVICE_TOKEN"
+        );
+        assert_eq!(FixtureEnv::api_key_var_or_default(None), "API_KEY");
+    }
 
     #[test]
     fn side_effects_round_trip_without_collapsing_classes() {

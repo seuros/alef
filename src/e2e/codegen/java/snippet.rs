@@ -3,7 +3,7 @@ use heck::{ToLowerCamelCase, ToUpperCamelCase};
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::TypeDef;
 use crate::e2e::config::E2eConfig;
-use crate::e2e::fixture::Fixture;
+use crate::e2e::fixture::{Fixture, FixtureEnv};
 
 use super::args::{JavaArgsContext, build_args_and_setup};
 
@@ -82,6 +82,7 @@ pub(super) fn render_snippet_body(
         .iter()
         .any(|assertion| assertion.assertion_type == "error");
     let exception_class = format!("{class_name}Exception");
+    let api_key_var = FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
 
     crate::e2e::template_env::render(
         "java/snippet_body.jinja",
@@ -99,6 +100,7 @@ pub(super) fn render_snippet_body(
             presentation => presentation,
             expects_error => expects_error,
             exception_class => exception_class,
+            api_key_var => api_key_var,
         },
     )
 }

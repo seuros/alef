@@ -13,9 +13,9 @@ using {{ namespace }};
 {% endif %}
 {% for line in setup_lines %}{{ line }}
 {% endfor %}
-{% if client_factory %}var baseUrl = (Environment.GetEnvironmentVariable("MOCK_SERVER_URL") ?? string.Empty) +
-  "/fixtures/{{ fixture_id }}"; var client = {{ class_name }}.{{ client_factory }}("test-key", baseUrl, null, null,
-  null);
+{% if client_factory %}var apiKey = Environment.GetEnvironmentVariable("{{ api_key_var }}") ??
+  throw new InvalidOperationException("{{ api_key_var }} must be set");
+  var client = {{ class_name }}.{{ client_factory }}(apiKey, null, null, null, null);
   {% if returns_void %}{% if is_async %}await {% endif %}client.{{ function_name }}({{ args }});
   {% else %}var {{ result_var }} = {% if is_async %}await {% endif %}client.{{ function_name }}({{ args }});
   {% endif %}

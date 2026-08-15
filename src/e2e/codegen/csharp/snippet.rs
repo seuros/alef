@@ -5,7 +5,7 @@ use heck::ToUpperCamelCase;
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::{EnumDef, TypeDef};
 use crate::e2e::config::E2eConfig;
-use crate::e2e::fixture::Fixture;
+use crate::e2e::fixture::{Fixture, FixtureEnv};
 
 pub(super) fn render_snippet_body(
     fixture: &Fixture,
@@ -106,6 +106,7 @@ pub(super) fn render_snippet_body(
         .assertions
         .iter()
         .any(|assertion| assertion.assertion_type == "error");
+    let api_key_var = FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
     let needs_json = setup_lines.iter().any(|line| line.contains("JsonSerializer")) || args.contains("JsonSerializer");
     let needs_system = expects_error
         || !returns_void
@@ -130,6 +131,7 @@ pub(super) fn render_snippet_body(
             needs_system => needs_system,
             needs_collections => needs_collections,
             fixture_id => fixture.id,
+            api_key_var => api_key_var,
             expects_error => expects_error,
             visitor_declarations => visitor_declarations,
         },

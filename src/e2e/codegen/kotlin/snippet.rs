@@ -3,7 +3,7 @@ use heck::{ToLowerCamelCase, ToUpperCamelCase};
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::TypeDef;
 use crate::e2e::config::E2eConfig;
-use crate::e2e::fixture::Fixture;
+use crate::e2e::fixture::{Fixture, FixtureEnv};
 
 use super::args::{KotlinArgsContext, build_args_and_setup};
 
@@ -132,6 +132,7 @@ pub(crate) fn render_snippet_body(
         .assertions
         .iter()
         .any(|assertion| assertion.assertion_type == "error");
+    let api_key_var = FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
 
     // The template renders the call as `{{ class_name }}.{{ function_name }}(...)`
     // (or, with `client_factory`, constructs a client via
@@ -163,6 +164,7 @@ pub(crate) fn render_snippet_body(
             is_async => is_async,
             fixture_id => fixture.id,
             expects_error => expects_error,
+            api_key_var => api_key_var,
         },
     )
 }

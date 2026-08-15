@@ -917,7 +917,10 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
             // helper (only the full e2e test-file emitter defines one), so the harness
             // is stripped entirely — matching the PHP/Ruby/Go/TypeScript emitters, which
             // all omit baseUrl from their snippet client construction.
-            let create_line = format!("final _client = await {receiver_class}.{factory}('test-key');");
+            let api_key_var = crate::e2e::fixture::FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
+            let create_line = format!(
+                "final apiKey = Platform.environment['{api_key_var}'];\n  if (apiKey == null || apiKey.isEmpty) {{ throw StateError('{api_key_var} must be set'); }}\n  final _client = await {receiver_class}.{factory}(apiKey);"
+            );
             ("_client".to_string(), Some(create_line))
         } else {
             let has_mock_url = fixture

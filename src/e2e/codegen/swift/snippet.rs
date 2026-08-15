@@ -12,6 +12,12 @@ pub(super) fn render(
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
 ) -> Result<String> {
+    let mut snippet_fixture = fixture.clone();
+    if snippet_fixture.env.is_none() {
+        snippet_fixture.env = Some(crate::e2e::fixture::FixtureEnv { api_key_var: None });
+    }
+    snippet_fixture.mock_response = None;
+    let fixture = &snippet_fixture;
     let call = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
         &fixture.id,
@@ -58,12 +64,22 @@ pub(super) fn render(
         enums,
     );
     let body_line_count = method.lines().count().saturating_sub(3);
+    let api_key_var = crate::e2e::fixture::FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
     let body = method
         .lines()
         .skip(2)
         .take(body_line_count)
         .map(|line| line.strip_prefix("        ").unwrap_or(line))
         .map(|line| line.replacen("let  =", "_ =", 1))
+        .filter(|line| !line.trim_start().starts_with("let _baseUrl: String? ="))
+        .map(|line| {
+            if line.trim_start().starts_with("let _apiKey =") {
+                return format!(
+                    "guard let _apiKey = ProcessInfo.processInfo.environment[\"{api_key_var}\"] else {{ fatalError(\"{api_key_var} must be set\") }}"
+                );
+            }
+            line.replace("_apiKey ?? \"test-key\"", "_apiKey").replace("_baseUrl", "nil")
+        })
         .filter(|line| !line.contains("XCTFail(\"expected to throw\")"))
         .map(|line| line.replace("// success", "print(\"\\(type(of: error)): \\(error)\")"))
         .collect::<Vec<_>>()

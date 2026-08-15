@@ -72,8 +72,11 @@ pub(super) fn render_snippet_body(
     let needs_json = statements
         .iter()
         .any(|statement| statement.contains("jsonDecode(") || statement.contains("jsonEncode("));
-    let needs_io =
-        expects_error || !call.returns_void || statements.iter().any(|statement| statement.contains("File("));
+    let needs_io = expects_error
+        || !call.returns_void
+        || statements
+            .iter()
+            .any(|statement| statement.contains("File(") || statement.contains("Platform.environment"));
     // Trait-bridge stubs with `Vec<u8>`/bytes-typed methods (e.g. OcrBackend.processImage)
     // emit `Uint8List`, which requires `dart:typed_data` — mirrors `has_batch_byte_items` in
     // the full e2e test-file emitter (test_file.rs).
@@ -214,8 +217,8 @@ mod tests {
             "snippet must not pass a mock baseUrl override:\n{body}"
         );
         assert!(
-            body.contains(".createClient('test-key');"),
-            "snippet must construct the client with only the api key:\n{body}"
+            body.contains("Platform.environment['API_KEY']"),
+            "snippet must read the generic credential environment variable:\n{body}"
         );
     }
 

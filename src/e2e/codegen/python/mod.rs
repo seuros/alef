@@ -156,6 +156,7 @@ impl super::E2eCodegen for PythonE2eCodegen {
             .iter()
             .any(|assertion| assertion.assertion_type == "error");
         call_fixture.assertions.clear();
+        call_fixture.mock_response = None;
         let presentation = super::presentation::resolve(&call_fixture, e2e_config, "python");
         let call = e2e_config.resolve_call_for_fixture(
             call_fixture.call.as_deref(),
@@ -179,8 +180,21 @@ impl super::E2eCodegen for PythonE2eCodegen {
             force_bind_result,
         );
         let (imports, body, is_async) = extract_python_snippet(&test_file)?;
+        let api_key_var = crate::e2e::fixture::FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
+        let body = body
+            .into_iter()
+            .map(|line| {
+                line.replace(
+                    "api_key=\"test-key\"",
+                    &format!("api_key=os.environ[\"{api_key_var}\"]"),
+                )
+            })
+            .collect::<Vec<_>>();
         let error_type = config.error_type_name();
         let mut imports = imports.into_iter().map(str::to_string).collect::<Vec<_>>();
+        if body.iter().any(|line| line.contains("os.environ")) && !imports.iter().any(|line| line == "import os") {
+            imports.push("import os".to_string());
+        }
         if expects_error {
             imports.push(format!(
                 "from {} import {error_type}",
