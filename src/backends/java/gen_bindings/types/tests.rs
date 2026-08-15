@@ -405,8 +405,14 @@ fn boxed_long_literal_defaults_compile_without_coercing_zero() {
             &HashSet::default(),
         );
 
-        assert!(!out.contains("maxRedirects == 0"), "explicit zero must remain meaningful:\n{out}");
-        assert!(out.contains("maxRedirects == null"), "absence must select the default:\n{out}");
+        assert!(
+            !out.contains("maxRedirects == 0"),
+            "explicit zero must remain meaningful:\n{out}"
+        );
+        assert!(
+            out.contains("maxRedirects == null"),
+            "absence must select the default:\n{out}"
+        );
         assert!(
             out.contains("@Nullable Long maxRedirects"),
             "the default-bearing Java component must be nullable and boxed:\n{out}"

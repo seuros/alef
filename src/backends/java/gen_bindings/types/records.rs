@@ -231,10 +231,7 @@ pub(crate) fn gen_record_type(
                         f.ty,
                         TypeRef::Duration
                             | TypeRef::Primitive(
-                                PrimitiveType::U64
-                                    | PrimitiveType::I64
-                                    | PrimitiveType::Usize
-                                    | PrimitiveType::Isize
+                                PrimitiveType::U64 | PrimitiveType::I64 | PrimitiveType::Usize | PrimitiveType::Isize
                             )
                     );
                     let suffix = if needs_long_suffix { "L" } else { "" };

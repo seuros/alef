@@ -196,7 +196,10 @@ mod tests {
 
         let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[]).unwrap();
 
-        assert!(body.contains("stream_result = Sample.stream_items() |> Enum.to_list()"), "{body}");
+        assert!(
+            body.contains("stream_result = Sample.stream_items() |> Enum.to_list()"),
+            "{body}"
+        );
         assert!(body.contains("IO.inspect(stream_result)"), "{body}");
         assert!(!body.contains("chunks ="), "{body}");
     }

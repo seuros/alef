@@ -321,7 +321,10 @@ fn borrowed_types_keep_owned_lifecycle_and_accessor_exports() {
     assert!(source.contains("my_lib_borrowed_node_free"), "{source}");
     assert!(source.contains("my_lib_borrowed_node_attributes"), "{source}");
     assert!(source.contains("my_lib_borrowed_node_into_owned"), "{source}");
-    assert!(source.contains("my_lib_borrowed_node_with_owned_attributes"), "{source}");
+    assert!(
+        source.contains("my_lib_borrowed_node_with_owned_attributes"),
+        "{source}"
+    );
     assert!(source.contains("my_lib_render_options_default"), "{source}");
     assert!(source.contains("my_lib_preprocess_options_default"), "{source}");
     assert!(!source.contains("my_lib_document_node"), "{source}");
