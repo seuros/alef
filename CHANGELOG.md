@@ -92,6 +92,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   partial variants that still require defaulted fields.
 - **rust snippets**: locate generated test-function boundaries without treating braces inside raw strings, escaped
   strings, or comments as the function terminator.
+- **rust snippets**: declare the `tokio` dependency an async snippet needs. `rust/snippet_body.rs.jinja` emits
+  `#[tokio::main]` for every async fixture, but the snippet carried no matching crate requirement, so the validator
+  built a check project with nothing in `[dependencies]` and every async Rust snippet failed on E0433
+  (`use of unresolved module or unlinked crate tokio`) and E0752 before any of the behaviour it demonstrates was
+  checked. The requirement is pinned with `features = ["full"]`: `#[tokio::main]` lives behind tokio's `macros` and
+  `rt-multi-thread` features, so a bare version line resolves the crate and still fails to compile.
+- **zig snippets**: pass the include directories the build manifest declares to the reconstructed `build-exe`
+  command. The session validator read the manifest for its module name and root source only and discarded the
+  `addIncludePath` the same file declares, so a snippet reaching a `@cInclude` inside the binding failed with
+  `C import failed ... 'header.h' not found` while `zig build` against that identical manifest succeeded — the
+  harness was validating something other than what ships. An include path bound through a
+  `b.option(...) orelse "<default>"`, the shape Alef's own `build_zig.jinja` emits, resolves to its default; any
+  other expression is skipped rather than guessed at, since a wrong `-I` is worse than none.
 - **e2e snippets**: use the configured exported error type instead of fabricating one from the crate name, and emit
   Go error values with the correct non-pointer shape.
 - **scaffold**: derive Python, PHP, and FFI `.gitattributes` entries from the source crate directory, matching the
