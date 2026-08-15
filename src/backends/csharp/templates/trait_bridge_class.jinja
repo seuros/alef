@@ -4,9 +4,10 @@
 public sealed class {{ trait_pascal }}Bridge : IDisposable {
 
     internal readonly I{{ trait_pascal }} _impl;
-    private readonly GCHandle _implHandle;
+    private GCHandle _implHandle;
     internal IntPtr _vtable;
-    private bool _disposed;
+    private bool _nativeReleased;
+    private bool _managedDisposed;
     // Keep all delegates alive for the lifetime of the bridge.
     // Delegates must not be GC'd because Rust holds function pointers obtained via
     // GetFunctionPointerForDelegate; those pointers become invalid if the delegate is collected.
@@ -78,7 +79,8 @@ public sealed class {{ trait_pascal }}Bridge : IDisposable {
         // This avoids trying to pin an object array containing references, which .NET 10 forbids.
         _delegateRoots = new List<object>({{ num_vtable_fields }});
         _vtable = IntPtr.Zero;
-        _disposed = false;
+        _nativeReleased = false;
+        _managedDisposed = false;
         // Allocate unique bridge ID for registry lookup during callbacks
         lock (_registryLock) {
             _bridgeId = new IntPtr(_nextBridgeId++);
@@ -99,14 +101,17 @@ public sealed class {{ trait_pascal }}Bridge : IDisposable {
 
     /// <summary>Called by Rust via FreeUserDataCallback when done with this bridge</summary>
     internal static void FreeUserData(IntPtr bridgeId) {
+        {{ trait_pascal }}Bridge? bridgeToDispose = null;
         lock (_registryLock) {
-            // Mark bridge as disposed but DON'T remove from registry yet.
-            // Callbacks in flight will still be able to look it up and execute safely.
-            // The bridge will stay alive as long as _callbackRefCount > 0.
             if (_bridgeRegistry.TryGetValue(bridgeId, out var bridge)) {
-                bridge._disposed = true;
+                bridge._nativeReleased = true;
+                if (bridge._callbackRefCount == 0) {
+                    _bridgeRegistry.Remove(bridgeId);
+                    bridgeToDispose = bridge;
+                }
             }
         }
+        bridgeToDispose?.ReleaseResources();
     }
 
     private void IncrementCallbackRef() {
@@ -116,22 +121,33 @@ public sealed class {{ trait_pascal }}Bridge : IDisposable {
     }
 
     private void DecrementCallbackRef() {
+        {{ trait_pascal }}Bridge? bridgeToDispose = null;
         lock (_registryLock) {
             if (_callbackRefCount > 0) {
                 _callbackRefCount--;
             }
-            // Once refcount reaches 0 and bridge is disposed, remove from registry
-            if (_callbackRefCount == 0 && _disposed) {
+            if (_callbackRefCount == 0 && _nativeReleased) {
                 _bridgeRegistry.Remove(_bridgeId);
+                bridgeToDispose = this;
             }
         }
+        bridgeToDispose?.ReleaseResources();
     }
 
 {{ callbacks }}
 
     public void Dispose() {
-        if (_disposed) return;
-        _disposed = true;
+        lock (_registryLock) {
+            if (!_nativeReleased && _bridgeRegistry.ContainsKey(_bridgeId)) return;
+        }
+        ReleaseResources();
+    }
+
+    private void ReleaseResources() {
+        lock (_registryLock) {
+            if (_managedDisposed) return;
+            _managedDisposed = true;
+        }
 
         if (_vtable != IntPtr.Zero) {
             global::System.Runtime.InteropServices.Marshal.FreeHGlobal(_vtable);

@@ -82,7 +82,7 @@ public static class {{ trait_pascal }}Registry {
         }
 
         if (_bridges.TryRemove(name, out var bridge)) {
-            bridge.Dispose();
+            {{ trait_pascal }}Bridge.FreeUserData(bridge._bridgeId);
         }
     }
 {% endif %}

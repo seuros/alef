@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **C# owned handles**: keep service and opaque owners closeable when transfer setup fails, lease service owners
+  through registration calls, and defer trait-bridge cleanup until native release and active callbacks complete.
 - **FFI scaffold**: declare `serde` directly in generated FFI crates now that the handle registry requires
   `serde::Serialize`, rather than relying on the core crate's transitive dependencies.
 - **FFI borrowed defaults**: restore free default-constructor exports that return owned lifetime-bearing values,

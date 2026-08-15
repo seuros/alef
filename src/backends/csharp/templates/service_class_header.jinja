@@ -32,9 +32,137 @@ internal sealed class {{ class_name }}SafeHandle : SafeHandle {
 
 public class {{ class_name }} : IDisposable {
 
-    private readonly {{ class_name }}SafeHandle _safeHandle;
-    private static readonly Dictionary<IntPtr, GCHandle> _registeredCallbacks = new();
+    private {{ class_name }}SafeHandle _safeHandle;
+    private readonly object _ownerLock = new();
+    private int _activeOwnerBorrows;
+    private bool _ownerUnavailable;
+    private bool _ownerTransferPending;
+    private readonly Dictionary<IntPtr, GCHandle> _registeredCallbacks = new();
     // A single static delegate instance bridges the native callback. Held in a static field so the
     // marshalled function pointer outlives every registration (a transient delegate would be collected).
     private static readonly NativeMethods.HandlerCallback _handlerCallback = HandlerTrampoline;
     private static readonly NativeMethods.HandlerResponseFree _handlerResponseFree = FreeHandlerResponse;
+
+    private sealed class OwnerHandleLease : IDisposable {
+        private {{ class_name }}? _owner;
+
+        internal OwnerHandleLease({{ class_name }} owner) {
+            _owner = owner;
+            Handle = owner._safeHandle.AlefHandle;
+        }
+
+        internal ulong Handle { get; }
+
+        public void Dispose() {
+            var owner = global::System.Threading.Interlocked.Exchange(ref _owner, null);
+            owner?.ReleaseOwnerBorrow();
+        }
+    }
+
+    private sealed class OwnerHandleTransfer : IDisposable {
+        private {{ class_name }}? _owner;
+        private {{ class_name }}SafeHandle? _transferredHandle;
+
+        internal OwnerHandleTransfer({{ class_name }} owner, ulong handle) {
+            _owner = owner;
+            _transferredHandle = new {{ class_name }}SafeHandle(handle);
+        }
+
+        internal ulong Handle => _transferredHandle?.AlefHandle
+            ?? throw new InvalidOperationException("Service owner transfer is no longer active");
+
+        internal void Commit() {
+            var transferred = _transferredHandle
+                ?? throw new InvalidOperationException("Service owner transfer is no longer active");
+            transferred.SetHandleAsInvalid();
+            _transferredHandle = null;
+            var owner = _owner;
+            _owner = null;
+            owner?.CommitOwnerTransfer();
+        }
+
+        public void Dispose() {
+            var transferred = global::System.Threading.Interlocked.Exchange(ref _transferredHandle, null);
+            var owner = global::System.Threading.Interlocked.Exchange(ref _owner, null);
+            if (transferred is null) return;
+            if (owner is null) {
+                transferred.Dispose();
+                return;
+            }
+            var handle = transferred.AlefHandle;
+            transferred.SetHandleAsInvalid();
+            owner.RollbackOwnerTransfer(handle);
+        }
+    }
+
+    private OwnerHandleLease BorrowOwnerHandle() {
+        lock (_ownerLock) {
+            ThrowIfOwnerUnavailable();
+            var lease = new OwnerHandleLease(this);
+            var added = false;
+            _safeHandle.DangerousAddRef(ref added);
+            if (!added) throw new ObjectDisposedException(nameof({{ class_name }}));
+            _activeOwnerBorrows++;
+            return lease;
+        }
+    }
+
+    private void ReleaseOwnerBorrow() {
+        lock (_ownerLock) {
+            _safeHandle.DangerousRelease();
+            _activeOwnerBorrows--;
+            if (_activeOwnerBorrows == 0) global::System.Threading.Monitor.PulseAll(_ownerLock);
+        }
+    }
+
+    private OwnerHandleTransfer TakeOwnerHandle() {
+        lock (_ownerLock) {
+            ThrowIfOwnerUnavailable();
+            WaitForOwnerBorrows();
+            var transfer = new OwnerHandleTransfer(this, _safeHandle.AlefHandle);
+            _ownerUnavailable = true;
+            _safeHandle.SetHandleAsInvalid();
+            _ownerTransferPending = true;
+            return transfer;
+        }
+    }
+
+    private void RollbackOwnerTransfer(ulong handle) {
+        lock (_ownerLock) {
+            _safeHandle = new {{ class_name }}SafeHandle(handle);
+            _ownerTransferPending = false;
+            _ownerUnavailable = false;
+            global::System.Threading.Monitor.PulseAll(_ownerLock);
+        }
+    }
+
+    private void CommitOwnerTransfer() {
+        lock (_ownerLock) {
+            _ownerTransferPending = false;
+            global::System.Threading.Monitor.PulseAll(_ownerLock);
+        }
+    }
+
+    private void WaitForOwnerBorrows() {
+        var interrupted = false;
+        while (_activeOwnerBorrows != 0) {
+            try { global::System.Threading.Monitor.Wait(_ownerLock); }
+            catch (global::System.Threading.ThreadInterruptedException) { interrupted = true; }
+        }
+        if (interrupted) global::System.Threading.Thread.CurrentThread.Interrupt();
+    }
+
+    private void WaitForOwnerTransfer() {
+        var interrupted = false;
+        while (_ownerTransferPending) {
+            try { global::System.Threading.Monitor.Wait(_ownerLock); }
+            catch (global::System.Threading.ThreadInterruptedException) { interrupted = true; }
+        }
+        if (interrupted) global::System.Threading.Thread.CurrentThread.Interrupt();
+    }
+
+    private void ThrowIfOwnerUnavailable() {
+        if (_ownerUnavailable || _safeHandle.IsClosed || _safeHandle.IsInvalid) {
+            throw new ObjectDisposedException(nameof({{ class_name }}));
+        }
+    }

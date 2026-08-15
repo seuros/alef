@@ -1,16 +1,15 @@
     /// <summary>
     /// Register a handler for {{ method_name }}.
     /// </summary>
-    public int {{ method_name }}({% if metadata_params %}{{ metadata_params }}, {% endif %}Delegate handler) {
+    public int {{ method_name }}({% if metadata_params %}{{ metadata_params }}, {% endif %}Func<string, string> handler) {
         ArgumentNullException.ThrowIfNull(handler);
         var handle = GCHandle.Alloc(handler, GCHandleType.Normal);
         IntPtr ctx = GCHandle.ToIntPtr(handle);
-        bool handleAdded = false;
         int result;
+        using var ownerLease = BorrowOwnerHandle();
         try {
-            _safeHandle.DangerousAddRef(ref handleAdded);
             result = NativeMethods.{{ native_method }}(
-                _safeHandle.AlefHandle,
+                ownerLease.Handle,
                 _handlerCallback,
                 _handlerResponseFree,
                 ctx{{ arg_lines }}
@@ -18,8 +17,6 @@
         } catch {
             handle.Free();
             throw;
-        } finally {
-            if (handleAdded) _safeHandle.DangerousRelease();
         }
 
         if (result == 0) {
