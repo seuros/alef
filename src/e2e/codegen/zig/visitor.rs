@@ -428,12 +428,7 @@ mod zig_visitor_tests {
                 content.contains(expected_check),
                 "expected integer sentinel check `{expected_check}` for the scalar result handle:\n{content}"
             );
-            for invalid_pointer_form in [
-                "_result == null",
-                "_result != null",
-                "_result.?",
-                "if (_result) |",
-            ] {
+            for invalid_pointer_form in ["_result == null", "_result != null", "_result.?", "if (_result) |"] {
                 assert!(
                     !content.contains(invalid_pointer_form),
                     "scalar result handle used pointer form `{invalid_pointer_form}`:\n{content}"
@@ -443,8 +438,9 @@ mod zig_visitor_tests {
                 !expects_error || content.contains("if (_result != 0)"),
                 "expected failed-call cleanup to guard the scalar handle:\n{content}"
             );
+            let expected_result_to_json = format!("{}(_result)", symbols.result_to_json);
             assert!(
-                expects_error || content.contains("result_to_json(_result)"),
+                expects_error || content.contains(&expected_result_to_json),
                 "expected the scalar handle to pass directly into result serialization:\n{content}"
             );
         }

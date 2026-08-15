@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **readme tests**: align the structured function-surface template fixture with Minijinja's Boolean rendering.
+- **zig visitor tests**: assert scalar-handle serialization through the configured FFI symbol instead of a
+  hardcoded placeholder name.
 - **e2e/zig visitors**: treat generated FFI result handles as scalar integers, using the zero sentinel instead of
   optional-pointer comparisons, captures, and unwraps while preserving pointer handling for returned JSON strings.
 - **verify**: reject Alef-owned generated files whose header remains but whose `alef:hash` stamp is missing, so a
