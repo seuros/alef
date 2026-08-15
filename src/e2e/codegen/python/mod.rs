@@ -164,12 +164,11 @@ impl super::E2eCodegen for PythonE2eCodegen {
             &call_fixture.tags,
             &call_fixture.input,
         );
-        // The snippet template falls back to a bare `print(result_var)` whenever there is
-        // no explicit `docs.shows`/`presentation` and the call isn't void. Fixture
-        // assertions are cleared above (snippets don't render assertions), so the usual
-        // assertion-driven binding heuristic never fires here — force the call statement
-        // to bind `result_var` whenever the template is about to print it. ~keep
-        let force_bind_result = !expects_error && presentation.is_empty() && !call.returns_void;
+        // Fixture assertions are cleared above because snippets do not render test
+        // assertions, so the usual assertion-driven binding heuristic cannot see that the
+        // reader-facing presentation consumes `result_var`. Bind every non-void successful
+        // call: the template either prints the result itself or presents fields from it. ~keep
+        let force_bind_result = !expects_error && !call.returns_void;
         let test_file = render_test_file(
             &fixture.resolved_category(),
             &[&call_fixture],
@@ -539,6 +538,37 @@ headingStyle = "HeadingStyle"
         assert!(rendered.contains("def main() -> None:"), "{rendered}");
         assert!(!rendered.contains("pytest"), "{rendered}");
         assert!(!rendered.contains("def test_"), "{rendered}");
+    }
+
+    #[test]
+    fn snippet_presentation_binds_and_consumes_a_non_void_call_result() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "list_widgets",
+            "description": "List widgets",
+            "docs": {
+                "topic": "widgets",
+                "shows": ["items"]
+            },
+            "input": null,
+            "assertions": [{"type": "not_error"}]
+        }))
+        .expect("fixture must parse");
+        let e2e = E2eConfig {
+            call: crate::e2e::config::CallConfig {
+                function: "list_widgets".to_string(),
+                result_var: "result".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let rendered = PythonE2eCodegen
+            .render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[])
+            .expect("snippet renders");
+
+        assert!(rendered.contains("result = list_widgets()"), "{rendered}");
+        assert!(rendered.contains("print(result.items)"), "{rendered}");
+        assert!(!rendered.contains("_ = list_widgets()"), "{rendered}");
     }
 
     #[test]

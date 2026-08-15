@@ -49,7 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   optional-pointer comparisons, captures, and unwraps while preserving pointer handling for returned JSON strings.
 - **verify**: reject Alef-owned generated files whose header remains but whose `alef:hash` stamp is missing, so a
   mixed stamped/unstamped generated tree cannot pass freshness verification.
-
+- **Python snippets**: bind successful non-void call results even when `docs.shows` or a presentation recipe consumes
+  them, so generated examples display useful values instead of discarding the call result.
 - **FFI error header**: keep `AlefFfiErrorCode` reachable through generated cbindgen export filters and avoid repeated
   `ErrorError` tokens where an error type and variant meet in public C enum members.
 - **FFI error enum members**: collapse consecutive repeated words inside the error type path, so a crate laying its
