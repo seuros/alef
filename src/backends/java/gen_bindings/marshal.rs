@@ -409,6 +409,9 @@ fn emit_error_helper(out: &mut String, prefix: &str, class_name: &str, api: &cra
             prefix_upper => prefix.to_uppercase(),
             class_name => class_name,
             error_codes => error_codes,
+            conversion_error_code => crate::core::ir::ApiSurface::FFI_ERROR_CODE_CONVERSION,
+            core_error_code => crate::core::ir::ApiSurface::FFI_ERROR_CODE_UNKNOWN,
+            panic_error_code => crate::core::ir::ApiSurface::FFI_ERROR_CODE_PANIC,
         },
     ));
 }
@@ -500,7 +503,13 @@ mod typed_error_tests {
         gen_helper_methods(&mut output, "sample", "Sample", &api);
 
         assert!(output.contains(&format!("case {code} -> throw new InvalidInputException(msg);")));
-        assert!(output.contains("case 1 -> throw new InvalidInputException(msg);"));
-        assert!(output.contains("case 2 -> throw new ConversionErrorException(msg);"));
+        assert!(output.contains("case 1 -> throw new ConversionErrorException(msg);"));
+        assert!(output.contains("case 2 -> throw new CoreErrorException(msg);"));
+        assert!(output.contains("case 3 -> throw new PanicException(msg);"));
+        let null_guard = output
+            .find("ctxPtr.equals(MemorySegment.NULL)")
+            .expect("null context guard");
+        let reinterpret = output.find("ctxPtr.reinterpret").expect("context read");
+        assert!(null_guard < reinterpret);
     }
 }

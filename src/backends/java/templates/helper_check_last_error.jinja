@@ -2,10 +2,13 @@
         int errCode = (int)(long) NativeLib.{{ prefix_upper }}_LAST_ERROR_CODE.invoke();
         if (errCode != 0) {
             var ctxPtr = (MemorySegment) NativeLib.{{ prefix_upper }}_LAST_ERROR_CONTEXT.invoke();
-            String msg = ctxPtr.reinterpret(Long.MAX_VALUE).getString(0);
+            String msg = ctxPtr.equals(MemorySegment.NULL)
+                ? "Native call failed with error code " + errCode
+                : ctxPtr.reinterpret(Long.MAX_VALUE).getString(0);
             switch (errCode) {
-                case 1 -> throw new InvalidInputException(msg);
-                case 2 -> throw new ConversionErrorException(msg);
+                case {{ conversion_error_code }} -> throw new ConversionErrorException(msg);
+                case {{ core_error_code }} -> throw new CoreErrorException(msg);
+                case {{ panic_error_code }} -> throw new PanicException(msg);
 {% for error_code in error_codes %}
                 case {{ error_code.0 }} -> throw new {{ error_code.1 }}(msg);
 {% endfor %}

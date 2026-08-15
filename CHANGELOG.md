@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Java errors**: align last-error dispatch with the shared FFI conversion, core, and panic taxonomy, and safely
+  handle missing error context.
 - **generate manifests**: reconcile Alef-owned generated TOML manifests before post-build processing, so newly
   generated binding dependencies are available without requiring a prior `alef scaffold` or `alef all` run while
   handwritten manifests remain untouched.
