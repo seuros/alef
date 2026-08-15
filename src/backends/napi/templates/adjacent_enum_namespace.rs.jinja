@@ -5,16 +5,16 @@ pub fn {{ variant.rust_name }}({{ content_field }}: {{ variant.payload_type }}) 
     {{ binding_name }} {
         {{ tag_field }}: "{{ variant.wire_value }}".to_string(),
         {{ content_field }}: Some({{ content_field }}),
-        ..Default::default()
-    }
+        {% if variant.needs_default_spread %}..Default::default()
+        {% endif %}}
 }
 {% else %}
 #[napi(namespace = "{{ enum_name }}", js_name = "{{ variant.variant_name }}")]
 pub fn {{ variant.rust_name }}() -> {{ binding_name }} {
     {{ binding_name }} {
         {{ tag_field }}: "{{ variant.wire_value }}".to_string(),
-        ..Default::default()
-    }
+        {% if variant.needs_default_spread %}..Default::default()
+        {% endif %}}
 }
 {% endif %}
 {% endfor %}

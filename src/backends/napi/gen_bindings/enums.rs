@@ -396,6 +396,11 @@ pub(super) fn gen_tagged_enum_as_object(enum_def: &EnumDef, prefix: &str, has_se
         .collect();
 
     if enum_def.serde_content.is_some() {
+        // Total distinct fields on the binding struct: the tag plus every shared/synthesized
+        // data field. A variant constructor only needs `..Default::default()` when it leaves at
+        // least one of those fields unspecified — otherwise clippy::needless_update fires because
+        // every field was already given a value.
+        let total_field_count = 1 + seen_fields.len() + synth_fields.iter().collect::<ahash::AHashSet<_>>().len();
         let variants: Vec<minijinja::Value> = enum_def
             .variants
             .iter()
@@ -409,17 +414,20 @@ pub(super) fn gen_tagged_enum_as_object(enum_def: &EnumDef, prefix: &str, has_se
                     .fields
                     .first()
                     .map(|field| mapper.map_type(&field.ty).to_string());
+                let has_payload = payload_type.is_some();
                 let rust_name = crate::codegen::naming::internal_rust_identifier(&format!(
                     "{}_{}",
                     crate::codegen::naming::pascal_to_snake(&enum_def.name),
                     crate::codegen::naming::to_python_name(&wire_value),
                 ));
+                let fields_set = if has_payload { 2 } else { 1 };
                 minijinja::context! {
                     variant_name => variant.name.clone(),
                     rust_name,
                     wire_value,
                     payload_type,
-                    has_payload => payload_type.is_some(),
+                    has_payload,
+                    needs_default_spread => fields_set < total_field_count,
                 }
             })
             .collect();
@@ -889,5 +897,63 @@ mod tests {
         assert!(output.contains("#[napi(namespace = \"Action\", js_name = \"Custom\")]"));
         assert!(output.contains("pub fn action_custom(output: String) -> JsAction"));
         assert!(output.contains("output: Some(output)"));
+    }
+
+    /// Regression test for a clippy::needless_update failure: when an adjacently-tagged enum's
+    /// binding struct has exactly the tag field plus the shared content field, a variant that
+    /// sets both (a payload variant) must NOT emit `..Default::default()` — every field is
+    /// already specified, so the spread has no effect and clippy denies it. A variant that
+    /// leaves the content field unset (a unit variant) must still emit the spread, since it is
+    /// the only way to fill that field in.
+    #[test]
+    fn adjacent_tagged_enum_omits_spread_only_when_all_fields_are_set() {
+        let enum_def = EnumDef {
+            name: "VisitResult".to_string(),
+            variants: vec![
+                EnumVariant {
+                    name: "Skip".to_string(),
+                    ..Default::default()
+                },
+                EnumVariant {
+                    name: "Custom".to_string(),
+                    fields: vec![FieldDef {
+                        name: "_0".to_string(),
+                        ty: TypeRef::String,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ],
+            serde_tag: Some("type".to_string()),
+            serde_content: Some("output".to_string()),
+            serde_rename_all: Some("snake_case".to_string()),
+            ..Default::default()
+        };
+
+        let output = gen_enum(&enum_def, "Js", true);
+
+        let skip_fn = output
+            .split("pub fn visit_result_skip() -> JsVisitResult")
+            .nth(1)
+            .expect("Skip constructor must be generated")
+            .split("\n}\n")
+            .next()
+            .expect("Skip constructor body must be terminated");
+        assert!(
+            skip_fn.contains("..Default::default()"),
+            "Skip only sets type_tag, leaving output unset; the spread is required to fill it in:\n{skip_fn}"
+        );
+
+        let custom_fn = output
+            .split("pub fn visit_result_custom(output: String) -> JsVisitResult")
+            .nth(1)
+            .expect("Custom constructor must be generated")
+            .split("\n}\n")
+            .next()
+            .expect("Custom constructor body must be terminated");
+        assert!(
+            !custom_fn.contains("..Default::default()"),
+            "Custom sets both type_tag and output, i.e. every field on JsVisitResult; a spread here is a needless_update clippy denial:\n{custom_fn}"
+        );
     }
 }
