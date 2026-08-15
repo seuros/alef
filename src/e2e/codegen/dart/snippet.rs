@@ -51,6 +51,7 @@ pub(super) fn render_snippet_body(
             type_defs,
             enums,
             native_typed_dtos: true,
+            is_snippet: true,
         },
     );
     let statements = extract_test_statements(&test_case)
@@ -176,6 +177,46 @@ mod tests {
         assert!(body.contains("RustLib.dispose()"));
         assert!(!body.contains("test("));
         assert!(!body.contains("expect("));
+    }
+
+    // Regression test: 188 of 190 Dart doc snippets failed `dart analyze` with
+    // "The function '_fixtureUrl' isn't defined." A `client_factory` call (e.g.
+    // `createClient`) makes `render_test_case` emit `final _mockUrl = _fixtureUrl(...)`
+    // plus a `baseUrl: _mockUrl` argument — `_fixtureUrl` is only ever defined by the
+    // full e2e test-file emitter, never by the standalone snippet emitter. The snippet
+    // must strip the mock-URL harness entirely, matching the PHP/Ruby/Go/TypeScript
+    // emitters, which all construct their client without a baseUrl override.
+    #[test]
+    fn snippet_omits_undefined_fixture_url_helper_from_client_factory_call() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "edge_batch_empty_list", "description": "Empty batch list", "input": null
+        }))
+        .expect("fixture");
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.call.function = "create_client".into();
+        e2e_config.call.overrides.insert(
+            "dart".into(),
+            crate::core::config::e2e::CallOverride {
+                client_factory: Some("createClient".into()),
+                ..Default::default()
+            },
+        );
+
+        let body = render_snippet_body(&fixture, &e2e_config, &ResolvedCrateConfig::default(), &[], &[])
+            .expect("snippet");
+
+        assert!(
+            !body.contains("_fixtureUrl"),
+            "snippet must not reference the undefined _fixtureUrl helper:\n{body}"
+        );
+        assert!(
+            !body.contains("baseUrl:"),
+            "snippet must not pass a mock baseUrl override:\n{body}"
+        );
+        assert!(
+            body.contains(".createClient('test-key');"),
+            "snippet must construct the client with only the api key:\n{body}"
+        );
     }
 
     #[test]

@@ -45,6 +45,11 @@ pub(super) struct DartTestCaseContext<'a> {
     pub(super) type_defs: &'a [crate::core::ir::TypeDef],
     pub(super) enums: &'a [crate::core::ir::EnumDef],
     pub(super) native_typed_dtos: bool,
+    /// ~keep Standalone doc snippets have no mock server behind them, so `_fixtureUrl`
+    /// — a helper only the full e2e test-file emitter defines — must never be
+    /// referenced; the client_factory branch below strips the mock URL/baseUrl
+    /// entirely instead of reusing the full-suite wiring.
+    pub(super) is_snippet: bool,
 }
 
 pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: DartTestCaseContext<'_>) {
@@ -58,6 +63,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
         type_defs,
         enums,
         native_typed_dtos,
+        is_snippet,
     } = context;
     // HTTP fixtures: hit the mock server.
     if let Some(http) = &fixture.http {
@@ -906,35 +912,45 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
     // The mock URL derivation follows the same has_host_root_route / plain-fixture split
     // used by the mock_url arg handler above.
     let (receiver, extra_setup): (String, Option<String>) = if let Some(factory) = &client_factory_camel {
-        let has_mock_url = fixture
-            .resolved_args(call_config)
-            .iter()
-            .any(|a| a.arg_type == "mock_url");
-        let mock_url_setup = if !has_mock_url {
-            // No explicit mock_url arg — derive the URL inline.
-            Some(format!(r#"final _mockUrl = _fixtureUrl("{fixture_id}");"#))
+        if is_snippet {
+            // Doc snippets are standalone: there is no mock server and no `_fixtureUrl`
+            // helper (only the full e2e test-file emitter defines one), so the harness
+            // is stripped entirely — matching the PHP/Ruby/Go/TypeScript emitters, which
+            // all omit baseUrl from their snippet client construction.
+            let create_line = format!("final _client = await {receiver_class}.{factory}('test-key');");
+            ("_client".to_string(), Some(create_line))
         } else {
-            None
-        };
-        let url_expr = if has_mock_url {
-            // A mock_url arg was emitted into setup_lines already — reuse the variable name
-            // from the first mock_url arg definition so we don't duplicate the URL.
-            call_config
-                .args
+            let has_mock_url = fixture
+                .resolved_args(call_config)
                 .iter()
-                .find(|a| a.arg_type == "mock_url")
-                .map(|a| a.name.clone())
-                .unwrap_or_else(|| "_mockUrl".to_string())
-        } else {
-            "_mockUrl".to_string()
-        };
-        let create_line = format!("final _client = await {receiver_class}.{factory}('test-key', baseUrl: {url_expr});");
-        let full_setup = if let Some(url_line) = mock_url_setup {
-            Some(format!("{url_line}\n    {create_line}"))
-        } else {
-            Some(create_line)
-        };
-        ("_client".to_string(), full_setup)
+                .any(|a| a.arg_type == "mock_url");
+            let mock_url_setup = if !has_mock_url {
+                // No explicit mock_url arg — derive the URL inline.
+                Some(format!(r#"final _mockUrl = _fixtureUrl("{fixture_id}");"#))
+            } else {
+                None
+            };
+            let url_expr = if has_mock_url {
+                // A mock_url arg was emitted into setup_lines already — reuse the variable name
+                // from the first mock_url arg definition so we don't duplicate the URL.
+                call_config
+                    .args
+                    .iter()
+                    .find(|a| a.arg_type == "mock_url")
+                    .map(|a| a.name.clone())
+                    .unwrap_or_else(|| "_mockUrl".to_string())
+            } else {
+                "_mockUrl".to_string()
+            };
+            let create_line =
+                format!("final _client = await {receiver_class}.{factory}('test-key', baseUrl: {url_expr});");
+            let full_setup = if let Some(url_line) = mock_url_setup {
+                Some(format!("{url_line}\n    {create_line}"))
+            } else {
+                Some(create_line)
+            };
+            ("_client".to_string(), full_setup)
+        }
     } else {
         (receiver_class.clone(), None)
     };

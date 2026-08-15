@@ -585,6 +585,7 @@ pub(super) fn render_test_file(
                 type_defs,
                 enums,
                 native_typed_dtos: false,
+                is_snippet: false,
             },
         );
     }

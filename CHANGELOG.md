@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **e2e/dart snippets**: stop emitting a call to the undefined `_fixtureUrl` helper in doc snippets for
+  `client_factory` calls. The helper is defined only by the full e2e test-file emitter, never by the standalone
+  snippet emitter, so every snippet constructing a client failed to compile with "The function '_fixtureUrl' isn't
+  defined." Snippets now build the client with just the API key, matching the PHP, Ruby, Go, and TypeScript emitters,
+  which likewise omit the mock-server `baseUrl` from their doc snippets.
 - **napi**: declare internally-tagged enums with newtype-of-struct variants as the flat optional-field
   object the napi glue actually emits, instead of a discriminated union keyed by the tuple field's
   synthetic `_0` name. The generated `.d.ts` previously leaked the internal field name as a literal `0:`
