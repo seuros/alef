@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **FFI-backed type reachability**: make C#, Java, and FFI share the generated type-export predicate, preventing
+  native declarations and callers for borrowed lifetime-bearing types whose C ABI lifecycle family is omitted.
 - **R default arguments**: only call a generated class's `$default()` wrapper when that class is actually eligible for
   extendr registration, preventing required options from referencing removed wrappers.
 - **Go snippet validation**: preserve configured `GOMODCACHE` and `GOPATH` paths in the sanitized tool environment,

@@ -51,6 +51,15 @@ fn effective_exclude_types(api: &ApiSurface, config: &ResolvedCrateConfig) -> Ha
     }
     exclude_types.extend(api.types.iter().filter(|t| t.binding_excluded).map(|t| t.name.clone()));
     exclude_types.extend(
+        api.types
+            .iter()
+            .filter(|typ| {
+                !typ.is_trait
+                    && !crate::backends::ffi::reachability::type_has_generated_exports(api, config, typ)
+            })
+            .map(|typ| typ.name.clone()),
+    );
+    exclude_types.extend(
         config
             .opaque_types
             .iter()
@@ -700,6 +709,20 @@ mod tests {
         assert!(output.contains("sample_access_policy_from_json"));
         assert!(output.contains("SAMPLE_ACCESS_POLICY_FREE"));
         assert!(output.contains("sample_access_policy_free"));
+    }
+
+    #[test]
+    fn borrowed_ffi_types_are_removed_from_java_generation() {
+        let api = ApiSurface {
+            types: vec![TypeDef {
+                name: "BorrowedNode".into(),
+                has_lifetime_params: true,
+                ..TypeDef::default()
+            }],
+            ..ApiSurface::default()
+        };
+
+        assert!(effective_exclude_types(&api, &ResolvedCrateConfig::default()).contains("BorrowedNode"));
     }
 
     #[test]
