@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **verify**: reject Alef-owned generated files whose header remains but whose `alef:hash` stamp is missing, so a
+  mixed stamped/unstamped generated tree cannot pass freshness verification.
+
 ### Removed
 
 - **snippet validation**: remove the legacy path-only `alef snippets validate` command, the fail-whole-map session
