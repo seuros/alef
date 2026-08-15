@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **dart/flutter_rust_bridge**: give FVM a persistent Alef cache when running
   `flutter_rust_bridge_codegen`, so clean regeneration worktrees reuse the installed Flutter SDK instead of
   downloading it again. Explicit `FVM_CACHE_PATH` and legacy `FVM_HOME` settings remain authoritative.
+- **dart/flutter_rust_bridge**: reuse a persistent, crate-scoped Cargo target directory for FRB macro expansion.
+  Clean regeneration worktrees now retain Cargo fingerprints, dependencies, proc macros, and build-script artifacts
+  instead of recompiling the full Rust crate for every `cargo expand`; an explicit `CARGO_TARGET_DIR` still wins.
+- **wasm scaffold**: publish a conditional `exports` map that resolves package self-imports to generated Node entrypoints
+  while keeping the browser condition on the explicitly initialized web build. This lets generated snippets and e2e
+  tests import the package by name after `wasm-pack` builds its target directories.
 - **e2e/dart snippets**: stop emitting a call to the undefined `_fixtureUrl` helper in doc snippets for
   `client_factory` calls. The helper is defined only by the full e2e test-file emitter, never by the standalone
   snippet emitter, so every snippet constructing a client failed to compile with "The function '_fixtureUrl' isn't
@@ -3874,9 +3880,3 @@ could actually install.
 Early development history (592 releases through 0.28.1) has been trimmed to keep
 this file small. The full per-version changelog is preserved in the git tags and
 GitHub releases: <https://github.com/xberg-io/alef/releases>
-- **dart/flutter_rust_bridge**: reuse a persistent, crate-scoped Cargo target directory for FRB macro expansion.
-  Clean regeneration worktrees now retain Cargo fingerprints, dependencies, proc macros, and build-script artifacts
-  instead of recompiling the full Rust crate for every `cargo expand`; an explicit `CARGO_TARGET_DIR` still wins.
-- **wasm scaffold**: publish a conditional `exports` map that resolves package self-imports to generated Node entrypoints
-  while keeping the browser condition on the explicitly initialized web build. This lets generated snippets and e2e
-  tests import the package by name after `wasm-pack` builds its target directories.
