@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **CLI**: `alef all` now synchronizes registry package versions before generation and reloads changed configuration,
   allowing stale Zig registry hash version prefixes to self-heal instead of aborting clean canaries.
+- **napi**: omit `..Default::default()` from fully populated adjacent-enum constructors while retaining it for
+  partial variants that still require defaulted fields.
+- **rust snippets**: locate generated test-function boundaries without treating braces inside raw strings, escaped
+  strings, or comments as the function terminator.
+- **e2e snippets**: use the configured exported error type instead of fabricating one from the crate name, and emit
+  Go error values with the correct non-pointer shape.
 - **scaffold**: derive Python, PHP, and FFI `.gitattributes` entries from the source crate directory, matching the
   binding crate paths Alef actually scaffolds when the configured package name differs from its Rust crate path.
 - **zig scaffold**: emit the example with Zig 0.16's `std.Io` API and avoid an unused allocator binding, so the
