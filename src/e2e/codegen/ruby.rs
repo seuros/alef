@@ -143,10 +143,6 @@ impl E2eCodegen for RubyCodegen {
 
                 // Skip the entire file if no fixture in this category produces output.
                 let has_any_output = active.iter().any(|f| {
-                    // HTTP tests always produce output.
-                    if f.is_http_test() {
-                        return true;
-                    }
                     let cc = e2e_config.resolve_call_for_fixture(
                         f.call.as_deref(),
                         &f.id,
@@ -161,11 +157,15 @@ impl E2eCodegen for RubyCodegen {
                         e2e_config.effective_fields_array(cc),
                         &std::collections::HashSet::new(),
                     );
-                    let expects_error = f.assertions.iter().any(|a| a.assertion_type == "error");
-                    let has_not_error = f.assertions.iter().any(|a| a.assertion_type == "not_error");
-                    expects_error || has_not_error || spec_file::has_usable_assertion(f, &fr, result_is_simple)
+                    spec_file::renders_a_real_example(f, &fr, result_is_simple, cc.streaming_enabled())
                 });
                 if !has_any_output {
+                    tracing::warn!(
+                        category = %group.category,
+                        excluded_count = active.len(),
+                        "ruby e2e: no fixture in this category renders an executable example — emitting no spec file \
+                         for it; nothing downstream reports an absent category, so this line is the only signal"
+                    );
                     continue;
                 }
 

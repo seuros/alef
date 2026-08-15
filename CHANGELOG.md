@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **e2e/ruby**: emit a fixture category's spec file whenever its fixtures render executable examples. The
+  category-level gate in `ruby.rs` decided whether to emit the file using a predicate that omitted `is_streaming`,
+  while the per-fixture branch in `spec_file.rs` decided what to put in it using one that included it. A category
+  whose fixtures were all streaming was therefore dropped whole — no file — even though the ruby streaming emitter
+  renders those fixtures fully. Nothing downstream notices an absent category: `alef verify` walks emitted markers,
+  the empty-category check in `e2e/validate.rs` only fires when *every* configured language skips a category, and
+  `fixture_inclusion` never consults an emitter's capability. Both callers now share one predicate so they cannot
+  drift apart again, and a category that genuinely renders nothing executable is logged instead of vanishing.
 - **snippets**: scope the shared validation timeout to validators that genuinely batch. `run_validation` handed a
   single wall-clock budget, keyed by language/session/level, to the per-snippet path — which is reached only by
   validators that spawn one toolchain process per snippet (every language except Rust below `Run`). The first

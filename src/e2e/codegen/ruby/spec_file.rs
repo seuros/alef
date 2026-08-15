@@ -106,19 +106,17 @@ pub(super) fn render_spec_file(
                 .cloned()
                 .unwrap_or_else(|| fixture_call.function.clone());
 
-            let expects_error = fixture.assertions.iter().any(|a| a.assertion_type == "error");
-            let has_not_error = fixture.assertions.iter().any(|a| a.assertion_type == "not_error");
-            let has_usable = has_usable_assertion(fixture, field_resolver, result_is_simple);
             let is_streaming = crate::e2e::codegen::streaming_assertions::resolve_is_streaming(
                 fixture,
                 fixture_call.streaming_enabled(),
             );
 
-            // Ruby has FFI access to the Rust core, so it can execute non-HTTP
-            // fixtures. Render tests for all fixtures that have error assertions,
-            // not_error assertions, streaming calls, or are explicitly testable.
-            // Fixtures with no assertions remain skipped as genuinely untestable.
-            if !expects_error && !has_usable && !has_not_error && !is_streaming && fixture.assertions.is_empty() {
+            if !renders_a_real_example(
+                fixture,
+                field_resolver,
+                result_is_simple,
+                fixture_call.streaming_enabled(),
+            ) {
                 let test_name = crate::e2e::escape::sanitize_ident(&fixture.id);
                 let description_literal =
                     crate::e2e::escape::ruby_string_literal(&format!("{test_name}: {}", fixture.description));
@@ -226,6 +224,34 @@ pub(super) fn render_spec_file(
             header => header,
         },
     )
+}
+
+/// Whether [`render_spec_file`] emits a real example for this fixture rather than a `skip` stub.
+///
+/// The category-level gate in `ruby.rs` decides whether to emit the spec file at all, and this
+/// decides what goes in it; they must ask the same question. They did not: the category gate
+/// omitted `is_streaming`, so a category whose fixtures were all streaming produced no file —
+/// and nothing reports an absent language, because `alef verify` walks emitted markers, the
+/// empty-category check in `e2e/validate.rs` only fires when *every* language skips a category,
+/// and `fixture_inclusion` never consults an emitter's capability. Keep the two callers on this
+/// one predicate so they cannot drift apart again. ~keep
+pub(super) fn renders_a_real_example(
+    fixture: &Fixture,
+    field_resolver: &FieldResolver,
+    result_is_simple: bool,
+    streaming_enabled: Option<bool>,
+) -> bool {
+    if fixture.is_http_test() {
+        return true;
+    }
+    let expects_error = fixture.assertions.iter().any(|a| a.assertion_type == "error");
+    let has_not_error = fixture.assertions.iter().any(|a| a.assertion_type == "not_error");
+    let is_streaming = crate::e2e::codegen::streaming_assertions::resolve_is_streaming(fixture, streaming_enabled);
+    expects_error
+        || has_not_error
+        || is_streaming
+        || !fixture.assertions.is_empty()
+        || has_usable_assertion(fixture, field_resolver, result_is_simple)
 }
 
 /// Check if a fixture has at least one assertion that will produce an executable
