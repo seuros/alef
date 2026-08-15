@@ -992,7 +992,6 @@ fn test_scaffold_java_checkstyle_plugin_excludes_alef_scratch_directory() {
 #[test]
 fn test_scaffold_java_checkstyle_ignores_alef_scratch_but_still_catches_real_violations() {
     if std::process::Command::new("mvn").arg("--version").output().is_err() {
-        eprintln!("skipping: mvn not installed");
         return;
     }
 

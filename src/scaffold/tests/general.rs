@@ -211,10 +211,12 @@ fn scaffold_gitattributes_uses_scaffolded_binding_crate_directories() {
         .iter()
         .find(|file| file.path == std::path::Path::new(".gitattributes"))
         .expect("scaffold must emit .gitattributes");
-    let binding_crate_dirs = files.iter().filter_map(|file| {
-        (file.path.starts_with("crates/") && file.path.file_name().is_some_and(|name| name == "Cargo.toml"))
-            .then(|| file.path.parent().unwrap())
-    });
+    let binding_crate_dirs = files
+        .iter()
+        .filter(|file| {
+            file.path.starts_with("crates/") && file.path.file_name().is_some_and(|name| name == "Cargo.toml")
+        })
+        .map(|file| file.path.parent().expect("binding manifest must have a parent"));
 
     for directory in binding_crate_dirs {
         assert!(
