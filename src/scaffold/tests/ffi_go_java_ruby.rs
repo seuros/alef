@@ -8,7 +8,7 @@ fn test_scaffold_ffi_with_core_import() {
     let files = language_files(&all_files);
     assert_eq!(files.len(), 2);
     let cargo_toml = &files[0].content;
-    assert!(cargo_toml.contains("serde"));
+    assert!(cargo_toml.contains("serde = \"1\""));
     assert!(cargo_toml.contains("serde_json"));
     assert!(cargo_toml.contains("my-lib ="));
     let cmake = &files[1].content;
