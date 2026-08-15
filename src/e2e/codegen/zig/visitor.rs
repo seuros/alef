@@ -163,37 +163,37 @@ pub(super) fn emit_visitor_test_body(
         if use_test_assertions {
             let _ = writeln!(
                 out,
-                "    try testing.expect(_result == null or {module_name}.c.{last_error_code}() != 0);",
+                "    try testing.expect(_result == 0 or {module_name}.c.{last_error_code}() != 0);",
                 last_error_code = symbols.last_error_code
             );
         } else {
             let _ = writeln!(
                 out,
-                "    if (_result != null and {module_name}.c.{last_error_code}() == 0) return error.ExpectedCallFailure;",
+                "    if (_result != 0 and {module_name}.c.{last_error_code}() == 0) return error.ExpectedCallFailure;",
                 last_error_code = symbols.last_error_code
             );
         }
         let _ = writeln!(
             out,
-            "    if (_result) |r| {module_name}.c.{result_free}(r);",
+            "    if (_result != 0) {module_name}.c.{result_free}(_result);",
             result_free = symbols.result_free
         );
         return;
     }
 
     if use_test_assertions {
-        let _ = writeln!(out, "    try testing.expect(_result != null);");
+        let _ = writeln!(out, "    try testing.expect(_result != 0);");
     } else {
-        let _ = writeln!(out, "    if (_result == null) return error.CallFailed;");
+        let _ = writeln!(out, "    if (_result == 0) return error.CallFailed;");
     }
     let _ = writeln!(
         out,
-        "    defer {module_name}.c.{result_free}(_result.?);",
+        "    defer {module_name}.c.{result_free}(_result);",
         result_free = symbols.result_free
     );
     let _ = writeln!(
         out,
-        "    const _json_ptr = {module_name}.c.{result_to_json}(_result.?);",
+        "    const _json_ptr = {module_name}.c.{result_to_json}(_result);",
         result_to_json = symbols.result_to_json
     );
     let _ = writeln!(
@@ -397,6 +397,57 @@ mod zig_visitor_tests {
             content.contains("const _ne = result;"),
             "expected the rendered assertion to reference `result`, got:\n{content}"
         );
+    }
+
+    #[test]
+    fn visitor_body_treats_scalar_result_handles_as_integers() {
+        let (symbols, visitor_spec, resolver) = default_test_fixtures();
+
+        for expects_error in [false, true] {
+            let mut content = String::new();
+            emit_visitor_test_body(
+                &mut content,
+                "scalar_result_handle",
+                "<p>Hello</p>",
+                None,
+                &visitor_spec,
+                "sample",
+                &symbols,
+                &[],
+                expects_error,
+                &resolver,
+                true,
+            );
+
+            let expected_check = if expects_error {
+                "_result == 0 or"
+            } else {
+                "_result != 0"
+            };
+            assert!(
+                content.contains(expected_check),
+                "expected integer sentinel check `{expected_check}` for the scalar result handle:\n{content}"
+            );
+            for invalid_pointer_form in [
+                "_result == null",
+                "_result != null",
+                "_result.?",
+                "if (_result) |",
+            ] {
+                assert!(
+                    !content.contains(invalid_pointer_form),
+                    "scalar result handle used pointer form `{invalid_pointer_form}`:\n{content}"
+                );
+            }
+            assert!(
+                !expects_error || content.contains("if (_result != 0)"),
+                "expected failed-call cleanup to guard the scalar handle:\n{content}"
+            );
+            assert!(
+                expects_error || content.contains("result_to_json(_result)"),
+                "expected the scalar handle to pass directly into result serialization:\n{content}"
+            );
+        }
     }
 
     #[test]
