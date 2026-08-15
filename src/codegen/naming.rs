@@ -876,7 +876,7 @@ pub fn ffi_error_code_variant_name(error_type: &str, variant: &str) -> String {
     // across a type's variants, so distinct variants stay distinct. The boundary
     // elision below is narrower but not injective: a type owning both `ErrorFoo`
     // and `Foo` folds onto one name. That is the pre-existing trade-off, and C
-    // rejects the duplicate enumerator at compile time rather than mis-mapping a
+    // rejects the duplicate enumerator at compile time rather than mapping a
     // code silently, so the readability win is kept. ~keep
     if path_words.last().is_some_and(|word| word == "error")
         && variant_words.first().is_some_and(|word| word == "error")

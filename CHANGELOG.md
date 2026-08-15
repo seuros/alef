@@ -35,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   missing required language variants, undocumented skips, unknown fence languages) fail the gate; unreferenced
   snippets remain a `strict`-only failure. A coverage manifest recording missing fixture/language cells stays a
   warning unless `strict`, as before, instead of failing reference resolution outright.
-  **Newly fails:** an unparseable `docs.snippets.required_languages` entry is now an error rather than being
+  **Newly fails:** an unparsable `docs.snippets.required_languages` entry is now an error rather than being
   silently dropped, matching `alef validate`.
 - **Java errors**: align last-error dispatch with the shared FFI conversion, core, and panic taxonomy, and safely
   handle missing error context.
@@ -1477,7 +1477,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   generated WASM tests from changing with input order. (`src/e2e/codegen/typescript/test_file`)
 - **PHP bindings now generate working setters for optional named-struct fields.** Setter signatures,
   native conversions, and generated type stubs consistently accept nullable wrapped structs instead
-  of dropping or mis-typing the assignment path. (`src/backends/php/gen_bindings`)
+  of dropping or mistyping the assignment path. (`src/backends/php/gen_bindings`)
 - **PyO3 trait bridges now preserve mutable callback updates and deserialize unit-enum returns correctly.**
   Async callbacks with `&mut` named parameters write an optional host-returned replacement back to
   Rust, protocol stubs expose that contract, and unit-only enums accept natural bare variant names
@@ -1829,7 +1829,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   files marked `"private": true`. Neither is ever published, so the churn was pure noise in every
   release diff. `publish` is now parsed properly by `manifest_is_publishable`: absent, `true` and
   `["some-registry"]` all stay publishable and only the literal `false` is skipped. Both that check
-  and the new `package_json_is_private` fail open — a missing or unparseable manifest counts as
+  and the new `package_json_is_private` fail open — a missing or unparsable manifest counts as
   publishable — so an odd manifest shape cannot silently freeze a real crate's version.
   (`src/publish/workspace.rs`, `src/cli/pipeline/version_workspace.rs`,
   `src/cli/pipeline/version_core.rs`, `src/cli/pipeline/version.rs`)
@@ -2488,7 +2488,7 @@ could actually install.
   type-checker (which poly does not provide) remains.
 - **Python `poly.toml`: `[lint.python.ruff]` now uses an explicit `select` allowlist** instead of
   `select = ["ALL"]` minus an ignore list. Enabling every rule then suppressing the noise meant each
-  ruff release could silently start firing a new deny-by-default rule (e.g. the `CPY` copyright-header
+  ruff release could silently start firing a new deny-by-default copyright-header rule
   family) on generated bindings. The scaffold now selects the rule families we want; families that were
   only ever carried to be fully ignored (`COM`, `FBT`, `FIX`, `TD`, `PD`, `EM`, `TRY`, `BLE`) are no
   longer selected, and `ignore` is trimmed to the in-family sub-rules that remain relevant.
@@ -2829,7 +2829,7 @@ could actually install.
 
 ### Fixed
 
-- **dart native loader emitted unparseable Dart (`\${...}` instead of `${...}`)**: the
+- **dart native loader emitted unparsable Dart (`\${...}` instead of `${...}`)**: the
   `StateError` raised on a full native-library cache miss escaped `${nativeCacheDir() ...}` and
   `${nativeAssetUrlBase()}` as a literal `\$` instead of real Dart string interpolation. The stray
   backslash meant the enclosing single-quoted string terminated early at the nested

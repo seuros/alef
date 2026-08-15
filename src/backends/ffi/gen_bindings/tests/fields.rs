@@ -508,7 +508,7 @@ options_field = "renderer"
     // the real bridge, and the stub body contains no sentinel at all. Anchoring on the first
     // match slices the stub and the check passes no matter what the bridge emits -- verified,
     // that is exactly how the first version of this assertion passed against the bug it was
-    // written to catch. The positive assertions below keep a mis-anchored slice loud.
+    // written to catch. The positive assertions below keep an incorrectly anchored slice loud.
     let definition = "pub unsafe extern \"C\" fn doc_render_document(";
     let start = lib
         .content

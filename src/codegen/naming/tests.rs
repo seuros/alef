@@ -58,7 +58,7 @@ fn eliding_error_at_the_boundary_can_alias_two_variants_of_one_type() {
     // Documented limitation, unchanged from the previous implementation: a type
     // carrying both `ErrorFoo` and `Foo` folds onto a single name. C rejects the
     // duplicate enumerator at compile time, so this surfaces loudly rather than
-    // silently mis-mapping a code. Deliberately not "fixed" by dropping the elision,
+    // silently mapping a code incorrectly. Deliberately not "fixed" by dropping the elision,
     // which would reintroduce the `ErrorError` stutter this pass removes. ~keep
     assert_eq!(
         ffi_error_code_variant_name("sample::error::Error", "ErrorFoo"),
