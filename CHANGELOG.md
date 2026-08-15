@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   binding crate paths Alef actually scaffolds when the configured package name differs from its Rust crate path.
 - **zig scaffold**: emit the example with Zig 0.16's `std.Io` API and avoid an unused allocator binding, so the
   scaffolded example compiles with the supported Zig toolchain.
+- **e2e/node**: import enum classes referenced as runtime values by generated typed-input builders, including enum
+  fields discovered recursively from the IR rather than declared in per-language overrides.
 - **ffi**: return the scalar `0` sentinel from string-bridge parameter and UTF-8 guard failures when the exported
   ABI returns `AlefHandle`, instead of emitting `null_mut()` and producing uncompilable generated Rust.
 - **zig snippets**: omit the parsed-result binding when generated assertions never reference it, avoiding an

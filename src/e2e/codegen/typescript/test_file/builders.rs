@@ -23,6 +23,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression(
     enums: &[EnumDef],
     wasm_type_prefix: &str,
     docs_files: &[crate::e2e::fixture::FixtureDocsFileInput],
+    referenced_enums: &mut std::collections::BTreeSet<String>,
 ) -> String {
     ts_builder_expression_inner(
         obj,
@@ -37,6 +38,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression(
         docs_files,
         "",
         0,
+        referenced_enums,
     )
 }
 
@@ -164,6 +166,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
     docs_files: &[crate::e2e::fixture::FixtureDocsFileInput],
     pointer: &str,
     depth: usize,
+    referenced_enums: &mut std::collections::BTreeSet<String>,
 ) -> String {
     // Use a depth-indexed variable name so nested IFEs don't shadow each other.
     // Without this, `const _u = WasmOptions.default(); _u.preprocessing =
@@ -212,6 +215,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
                 let enum_type = resolve_enum_type(enum_fields, Some(type_name), key, &camel_key);
                 if let Some(enum_type) = enum_type {
                     if let serde_json::Value::String(s) = &preprocessed {
+                        referenced_enums.insert(enum_type.clone());
                         format!("{enum_type}.{}", s.to_upper_camel_case())
                     } else {
                         json_to_js(&preprocessed)
@@ -230,6 +234,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
                         type_defs,
                         enums,
                         Some(type_name),
+                        referenced_enums,
                     )
                 }
             } else {
@@ -307,6 +312,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
                     docs_files,
                     &field_pointer,
                     depth + 1,
+                    referenced_enums,
                 );
                 stmts.push(format!("{var}.{camel_key} = {nested_expr};"));
             } else {
@@ -339,6 +345,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
                                 docs_files,
                                 &json_pointer_child(&field_pointer, &index.to_string()),
                                 depth + 1,
+                                &mut *referenced_enums,
                             )
                         } else {
                             json_to_js(item)
@@ -410,6 +417,7 @@ fn node_value_expression(
     type_defs: &[TypeDef],
     enums: &[EnumDef],
     owner_type: Option<&str>,
+    referenced_enums: &mut std::collections::BTreeSet<String>,
 ) -> String {
     if let Some(file) = docs_files.iter().find(|file| file.field == pointer) {
         return crate::e2e::template_env::render(
@@ -430,12 +438,14 @@ fn node_value_expression(
         && enums.iter().any(|definition| definition.name == *type_name)
         && let Some(variant) = value.as_str()
     {
+        referenced_enums.insert(type_name.clone());
         return format!("{type_name}.{}", variant.to_upper_camel_case());
     }
     let camel_field = snake_to_camel(field);
     if let Some(enum_type) = resolve_enum_type(enum_fields, owner_type, field, &camel_field)
         && let Some(variant) = value.as_str()
     {
+        referenced_enums.insert(enum_type.clone());
         return format!("{enum_type}.{}", variant.to_upper_camel_case());
     }
     match value {
@@ -465,6 +475,7 @@ fn node_value_expression(
                             type_defs,
                             enums,
                             nested_type.map(|definition| definition.name.as_str()),
+                            &mut *referenced_enums,
                         )
                     )
                 })
@@ -494,6 +505,7 @@ fn node_value_expression(
                         type_defs,
                         enums,
                         None,
+                        &mut *referenced_enums,
                     )
                 })
                 .collect::<Vec<_>>();
@@ -549,6 +561,7 @@ mod tests {
             &[],
             "",
             &[],
+            &mut Default::default(),
         );
 
         assert_eq!(expression, "{ kind: InputKind.Uri } as DocumentInput");
@@ -589,6 +602,7 @@ mod tests {
             &enums,
             "",
             &[],
+            &mut Default::default(),
         );
 
         assert_eq!(
@@ -648,6 +662,7 @@ mod tests {
             &enums,
             "Wasm",
             &[],
+            &mut Default::default(),
         );
         assert!(
             expression.contains("_u0.bytes = Uint8Array.from([72, 105])"),
@@ -683,6 +698,7 @@ mod tests {
                 &[],
                 "",
                 &files,
+                &mut Default::default(),
             );
             assert!(
                 expression.contains("readFile(\"document.pdf\")"),

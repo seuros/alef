@@ -91,6 +91,34 @@ pub fn render_test_file(
         .map(|o| o.result_enum_fields.clone())
         .unwrap_or_default();
 
+    let mut referenced_enums = std::collections::BTreeSet::new();
+    let mut fixtures_body = String::new();
+    for (index, fixture) in fixtures.iter().enumerate() {
+        if fixture.is_http_test() {
+            render_http_test_case(&mut fixtures_body, fixture);
+        } else {
+            render_test_case(
+                &mut fixtures_body,
+                fixture,
+                client_factory,
+                options_type,
+                e2e_config,
+                lang,
+                &nested_types,
+                &enum_fields,
+                &result_enum_fields,
+                type_defs,
+                enums,
+                wasm_type_prefix,
+                config,
+                &mut referenced_enums,
+            );
+        }
+        if index + 1 < fixtures.len() {
+            fixtures_body.push('\n');
+        }
+    }
+
     // Per-fixture wasm/node overrides may add their own options_type / nested_types /
     // enum_fields (each call exposes a different request struct in WASM, e.g.
     // `WasmEmbeddingRequest` vs `WasmChatCompletionRequest`). Aggregate every class
@@ -152,6 +180,7 @@ pub fn render_test_file(
                 }
             }
         }
+
         if lang == "wasm"
             && fixture.visitor.is_some()
             && let Some(binding) = wasm_visitor_binding(config, options_type)
@@ -394,6 +423,14 @@ pub fn render_test_file(
             }
         }
 
+        if lang == "node" {
+            for enum_type in &referenced_enums {
+                if !imports.contains(enum_type) {
+                    imports.push(enum_type.clone());
+                }
+            }
+        }
+
         let imports_str = imports.join(", ");
         import_modules = format!("import {{ {imports_str} }} from \"{pkg_name}\";");
 
@@ -462,33 +499,6 @@ pub fn render_test_file(
 
     // Build env var setup
     let env_setup = render_env_setup(&e2e_config.env);
-
-    // Build fixtures body
-    let mut fixtures_body = String::new();
-    for (i, fixture) in fixtures.iter().enumerate() {
-        if fixture.is_http_test() {
-            render_http_test_case(&mut fixtures_body, fixture);
-        } else {
-            render_test_case(
-                &mut fixtures_body,
-                fixture,
-                client_factory,
-                options_type,
-                e2e_config,
-                lang,
-                &nested_types,
-                &enum_fields,
-                &result_enum_fields,
-                type_defs,
-                enums,
-                wasm_type_prefix,
-                config,
-            );
-        }
-        if i + 1 < fixtures.len() {
-            fixtures_body.push('\n');
-        }
-    }
 
     let ctx = minijinja::context! {
         header => hash::header(CommentStyle::DoubleSlash),

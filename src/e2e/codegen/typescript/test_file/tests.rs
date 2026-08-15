@@ -212,6 +212,7 @@ fn ts_builder_uses_default_factory_for_all_wasm_classes_not_just_config() {
         &[],
         "",
         0,
+        &mut Default::default(),
     );
     assert!(
         result.contains("const _u0 = WasmChatCompletionTool.default();"),
@@ -244,6 +245,7 @@ fn ts_builder_uses_new_for_non_wasm_targets() {
         &[],
         "",
         0,
+        &mut Default::default(),
     );
     // Node path returns an object literal cast — no `default()` call.
     assert!(

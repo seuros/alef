@@ -17,6 +17,8 @@ mod builders;
 mod cache;
 mod helpers;
 mod http;
+#[cfg(test)]
+mod node_enum_import_tests;
 mod render;
 mod snippet;
 mod test_case;

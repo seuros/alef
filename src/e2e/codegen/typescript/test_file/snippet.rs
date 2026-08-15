@@ -82,6 +82,7 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
         wasm_type_prefix,
         config,
         true,
+        &mut Default::default(),
     );
     if !recipe.extra_args.is_empty() {
         let extras = recipe.extra_args.join(", ");
@@ -322,6 +323,7 @@ mod tests {
             &enums,
             "",
             &[],
+            &mut Default::default(),
         );
         assert_eq!(llm_expression, "{ model: \"openai/gpt-4o-mini\" } as LlmConfig");
 
@@ -337,6 +339,7 @@ mod tests {
             &enums,
             "",
             &[],
+            &mut Default::default(),
         );
         assert_eq!(
             transcription_expression,

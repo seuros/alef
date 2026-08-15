@@ -38,6 +38,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
     enums: &[EnumDef],
     wasm_type_prefix: &str,
     config: &crate::core::config::ResolvedCrateConfig,
+    referenced_enums: &mut std::collections::BTreeSet<String>,
 ) {
     let mut call_config = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
@@ -141,6 +142,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
         wasm_type_prefix,
         config,
         false,
+        referenced_enums,
     );
 
     if !extra_args.is_empty() {

@@ -16,6 +16,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
     wasm_type_prefix: &str,
     config: &crate::core::config::ResolvedCrateConfig,
     bind_typed_json_objects: bool,
+    referenced_enums: &mut std::collections::BTreeSet<String>,
 ) -> (Vec<String>, String) {
     let fixture_id = &fixture.id;
     if args.is_empty() {
@@ -215,6 +216,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
                                         &[],
                                         "",
                                         0,
+                                        &mut *referenced_enums,
                                     )
                                 } else {
                                     json_to_js_camel(val)
@@ -376,6 +378,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
                                 enums,
                                 wasm_type_prefix,
                                 &fixture.docs_files_for_arg(&arg.field),
+                                &mut *referenced_enums,
                             );
                             if bind_typed_json_objects {
                                 let suffix = format!(" as {opts_type}");
