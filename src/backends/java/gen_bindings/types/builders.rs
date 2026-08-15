@@ -148,7 +148,15 @@ pub(super) fn gen_builder_nested_class(
             if let Some(default) = &field.default
                 && !is_serde_default_marker(Some(default))
             {
-                default.clone()
+                match (&field.ty, &field.typed_default) {
+                    (
+                        TypeRef::Primitive(
+                            PrimitiveType::U64 | PrimitiveType::I64 | PrimitiveType::Usize | PrimitiveType::Isize,
+                        ),
+                        Some(DefaultValue::IntLiteral(value)),
+                    ) => format!("{value}L"),
+                    _ => default.clone(),
+                }
             } else if is_serde_default_marker(field.default.as_deref()) {
                 // Field has #[serde(default)]: special handling per type.
                 if matches!(&field.ty, TypeRef::Named(_)) {
