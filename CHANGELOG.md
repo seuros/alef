@@ -62,6 +62,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scaffolded example compiles with the supported Zig toolchain.
 - **e2e/node**: import enum classes referenced as runtime values by generated typed-input builders, including enum
   fields discovered recursively from the IR rather than declared in per-language overrides.
+- **validate**: stop treating vendored/fetched copies of a crate's `Cargo.toml` as authoritative when checking
+  `Cargo.lock` versions. `alef validate versions` built a single name-to-version map from every `Cargo.toml` under
+  the workspace root, keyed by package name alone. A frozen manifest left behind by dependency vendoring — a
+  Rustler `vendor/` tree carried for offline builds, or a Mix `deps/` fetch of a published package that bundles its
+  own native crate source — declares the same package name at whatever version was current when it was
+  vendored/fetched, silently overwriting the live crate's entry in the map. Every other `Cargo.lock` in the repo
+  that already matched canonical then compared against the stale vendored version and was reported as a
+  `[MISMATCH]`, even though the lockfile agreed with the live source. `vendor` and `deps` directories are now
+  excluded from both the `Cargo.toml` manifest scan and the `Cargo.lock` check, the same way `target`/`.git` already
+  are. Genuine drift in a real (non-vendored) `Cargo.lock` still fails.
 - **cli**: correct the version-pin warning to state that `alef.toml`'s `alef_version` pin is being updated to match
   the running CLI, instead of claiming a nonexistent "pinned compatibility contract" gates generation. The pin is
   cosmetic bookkeeping for `install-alef` and downstream consumers; it never affects generated output.

@@ -140,11 +140,20 @@ fn glob_under(workspace_root: &Path, directory: &str, suffix: &str) -> Vec<PathB
     glob::glob(&pattern).into_iter().flatten().flatten().collect()
 }
 
+// ~keep `vendor` (Cargo/Go-style vendoring) and `deps` (Mix's fetched-dependency
+// cache) hold frozen copies of a crate's Cargo.toml pulled in at whatever version
+// was current when they were vendored/fetched. `cargo_manifest_versions` keys its
+// map by package name alone, so a vendored `liter-llm`/`liter_llm_nif` manifest
+// silently overwrote the live one's entry and poisoned every Cargo.lock comparison
+// for that name repo-wide — not just the vendored copy's own lock.
 fn ignored_path(workspace_root: &Path, path: &Path) -> bool {
     path.strip_prefix(workspace_root).is_ok_and(|relative| {
-        relative
-            .components()
-            .any(|component| matches!(component.as_os_str().to_str(), Some("target" | ".git" | ".alef-cache")))
+        relative.components().any(|component| {
+            matches!(
+                component.as_os_str().to_str(),
+                Some("target" | ".git" | ".alef-cache" | "vendor" | "deps")
+            )
+        })
     })
 }
 
@@ -424,5 +433,113 @@ mod tests {
                 .any(|check| check.label.ends_with("#helper") && check.matches)
         );
         assert!(lock_checks.iter().all(|check| !check.label.contains("//")));
+    }
+
+    /// Reproduces the false-positive MISMATCH seen in `liter-llm`: a vendored/frozen
+    /// copy of a crate's `Cargo.toml` (e.g. under a Rustler `vendor/` tree carried for
+    /// offline builds) declares the same `name` as the live crate but at a stale,
+    /// explicit version. `cargo_manifest_versions` keys its map by name alone, so
+    /// without the `vendor` exclusion the vendored entry silently overwrites the live
+    /// one and every *other* Cargo.lock's genuinely-matching `sample` entry gets
+    /// compared against the wrong expected version.
+    #[test]
+    fn vendored_duplicate_package_name_does_not_poison_manifest_versions() {
+        let temp = workspace("3.4.5");
+        std::fs::create_dir_all(temp.path().join("vendor/sample")).expect("vendor directory");
+        std::fs::write(
+            temp.path().join("vendor/sample/Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"9.9.9\"\n",
+        )
+        .expect("vendored manifest");
+
+        let nested = temp.path().join("packages/elixir/native/consumer");
+        std::fs::create_dir_all(&nested).expect("lock directory");
+        std::fs::write(
+            nested.join("Cargo.lock"),
+            "version = 4\n\n[[package]]\nname = \"sample\"\nversion = \"3.4.5\"\n",
+        )
+        .expect("nested lock");
+
+        let checks = collect(&config(temp.path()), temp.path(), "3.4.5");
+        let sample = checks
+            .iter()
+            .find(|check| check.label.ends_with("consumer/Cargo.lock#sample"))
+            .expect("sample check present");
+        assert!(
+            sample.matches,
+            "live entry matching canonical must not be poisoned by the vendored copy: {sample:?}"
+        );
+        assert!(
+            checks.iter().all(|check| !check.label.contains("vendor/")),
+            "vendored Cargo.lock/Cargo.toml must not be walked at all: {checks:?}"
+        );
+    }
+
+    /// Same mechanism as the vendor case, but for Mix's fetched-dependency cache
+    /// (`deps/`), which is how `liter_llm_nif`'s false positive actually occurred —
+    /// a Hex-fetched copy of the elixir package bundles its own frozen `Cargo.toml`
+    /// at the last-published version.
+    #[test]
+    fn deps_fetched_duplicate_package_name_does_not_poison_manifest_versions() {
+        let temp = workspace("3.4.5");
+        std::fs::create_dir_all(temp.path().join("test_apps/elixir/deps/sample_pkg/native/sample"))
+            .expect("deps directory");
+        std::fs::write(
+            temp.path()
+                .join("test_apps/elixir/deps/sample_pkg/native/sample/Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"1.8.1\"\n",
+        )
+        .expect("deps-fetched manifest");
+
+        let nested = temp.path().join("packages/elixir/native/consumer");
+        std::fs::create_dir_all(&nested).expect("lock directory");
+        std::fs::write(
+            nested.join("Cargo.lock"),
+            "version = 4\n\n[[package]]\nname = \"sample\"\nversion = \"3.4.5\"\n",
+        )
+        .expect("nested lock");
+
+        let checks = collect(&config(temp.path()), temp.path(), "3.4.5");
+        let sample = checks
+            .iter()
+            .find(|check| check.label.ends_with("consumer/Cargo.lock#sample"))
+            .expect("sample check present");
+        assert!(
+            sample.matches,
+            "live entry matching canonical must not be poisoned by the deps-fetched copy: {sample:?}"
+        );
+    }
+
+    /// Guard against the lazy fix: a genuinely stale local Cargo.lock (no vendor/deps
+    /// involvement, a real path dependency that hasn't been `cargo update`d) must keep
+    /// failing even in the presence of an unrelated vendored duplicate name elsewhere.
+    #[test]
+    fn genuine_drift_outside_vendor_still_fails() {
+        let temp = workspace("3.4.5");
+        std::fs::create_dir_all(temp.path().join("vendor/sample")).expect("vendor directory");
+        std::fs::write(
+            temp.path().join("vendor/sample/Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"9.9.9\"\n",
+        )
+        .expect("vendored manifest");
+
+        let nested = temp.path().join("e2e/rust");
+        std::fs::create_dir_all(&nested).expect("lock directory");
+        std::fs::write(
+            nested.join("Cargo.lock"),
+            "version = 4\n\n[[package]]\nname = \"sample\"\nversion = \"3.4.0\"\n",
+        )
+        .expect("stale nested lock");
+
+        let checks = collect(&config(temp.path()), temp.path(), "3.4.5");
+        let sample = checks
+            .iter()
+            .find(|check| check.label.ends_with("e2e/rust/Cargo.lock#sample"))
+            .expect("sample check present");
+        assert!(
+            !sample.matches,
+            "genuinely stale lockfile entry must still be reported as a mismatch: {sample:?}"
+        );
+        assert_eq!(sample.found.as_deref(), Some("3.4.0"));
     }
 }
