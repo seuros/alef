@@ -69,6 +69,35 @@ pub fn write_scaffold_files(files: &[GeneratedFile], base_dir: &Path) -> anyhow:
     write_scaffold_files_with_overwrite(files, base_dir, false)
 }
 
+/// Reconcile generated TOML manifests needed by generated bindings.
+///
+/// Existing files are eligible only when their embedded marker proves Alef owns
+/// them. Missing manifests may be created because the scaffold declaration itself
+/// marks them as generated; handwritten manifests and non-manifest scaffold files
+/// remain outside this generate-stage repair. ~keep
+pub fn reconcile_managed_scaffold_manifests(
+    files: &[GeneratedFile],
+    base_dir: &Path,
+) -> anyhow::Result<super::write::WriteReport> {
+    let mut manifests = Vec::new();
+    for file in files
+        .iter()
+        .filter(|file| file.generated_header && file.path.extension().is_some_and(|extension| extension == "toml"))
+    {
+        let path = base_dir.join(&file.path);
+        if !path.exists() {
+            manifests.push(file.clone());
+            continue;
+        }
+        let content =
+            std::fs::read_to_string(&path).with_context(|| format!("failed to read existing {}", path.display()))?;
+        if crate::core::hash::content_has_alef_marker(&content) {
+            manifests.push(file.clone());
+        }
+    }
+    write_scaffold_files_report(&manifests, base_dir, false)
+}
+
 /// Like [`write_scaffold_files`] but with an explicit `overwrite` flag.
 ///
 /// Files marked `generated_header: true` are always overwritten regardless of the

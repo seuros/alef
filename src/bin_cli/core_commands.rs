@@ -334,6 +334,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                 match pipeline::scaffold(&api, resolved_cfg, &languages, config_path) {
                     Ok(scaffold_files) => {
+                        let report = pipeline::reconcile_managed_scaffold_manifests(&scaffold_files, &base_dir)?;
+                        if report.changed_count() > 0 {
+                            any_written = true;
+                        }
                         for file in &scaffold_files {
                             let path = base_dir.join(&file.path);
                             if file.carries_alef_marker() {

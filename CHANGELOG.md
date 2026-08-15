@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **generate manifests**: reconcile Alef-owned generated TOML manifests before post-build processing, so newly
+  generated binding dependencies are available without requiring a prior `alef scaffold` or `alef all` run while
+  handwritten manifests remain untouched.
 - **C# service bindings**: invoke configurators through the native ABI, marshal named record parameters through
   owned scalar handles for configurators, registrations, and entrypoints, and propagate native conversion failures.
 - **Java owned handles**: keep service and opaque owners closeable when transfer setup fails, contain handler upcall

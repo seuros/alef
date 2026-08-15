@@ -1,6 +1,8 @@
 mod diff;
 mod generation;
 mod header_freshness;
+#[cfg(test)]
+mod manifest_reconciliation_tests;
 mod normalization;
 mod orphans;
 mod scaffold;
@@ -17,7 +19,8 @@ pub use orphans::{
     collect_alef_headered_paths, generate_sweep_roots, sweep_manifest_orphans, sweep_orphans, targeted_e2e_sweep_roots,
 };
 pub use scaffold::{
-    readme, scaffold, write_scaffold_files, write_scaffold_files_report, write_scaffold_files_with_overwrite,
+    readme, reconcile_managed_scaffold_manifests, scaffold, write_scaffold_files, write_scaffold_files_report,
+    write_scaffold_files_with_overwrite,
 };
 pub(crate) use write::apply_shebang_chmod;
 pub use write::{
