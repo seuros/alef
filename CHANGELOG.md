@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **kotlin errors**: let unnumbered error variants use the runtime fallback instead of panicking while generating
+  Kotlin/Native bindings that mix explicitly numbered and fallback variants.
 - **generated-file provenance**: align hash extraction with the raw header window used by injection, including a stamp
   emitted at zero-based line 10 after Markdown frontmatter, and only strip exact generated stamp shapes immediately
   following an Alef header marker so hash-like body prose remains untouched.

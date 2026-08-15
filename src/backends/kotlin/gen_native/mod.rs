@@ -220,10 +220,12 @@ fn emit_native_function(
                 .find(|error| error.name == error_type.rsplit("::").next().unwrap_or(error_type))
         {
             for variant in error.variants.iter().filter(|variant| variant.is_unit) {
-                let metadata = taxonomy
+                let Some(metadata) = taxonomy
                     .iter()
                     .find(|entry| entry.error_type == error.rust_path && entry.variant == variant.name)
-                    .unwrap();
+                else {
+                    continue;
+                };
                 out.push_str(&format!(
                     "                if (_code == {}) throw {}.{}\n",
                     metadata.code, error.name, variant.name
@@ -431,6 +433,38 @@ mod typed_error_tests {
             "if (_code == {}) throw RequestError.InvalidInput",
             taxonomy.code
         )));
+        assert!(output.contains("throw RuntimeException(\"[${_code}] ${_msg}\")"));
+    }
+
+    #[test]
+    fn native_function_uses_generic_fallback_for_unnumbered_variant() {
+        let error = crate::core::ir::ErrorDef {
+            name: "RequestError".to_string(),
+            rust_path: "sample::RequestError".to_string(),
+            variants: vec![crate::core::ir::ErrorVariant {
+                name: "InvalidInput".to_string(),
+                is_unit: true,
+                ..Default::default()
+            }],
+            original_rust_path: String::new(),
+            doc: String::new(),
+            methods: Vec::new(),
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        };
+        let function = FunctionDef {
+            name: "execute".to_string(),
+            rust_path: "sample::execute".to_string(),
+            return_type: TypeRef::Unit,
+            error_type: Some("RequestError".to_string()),
+            ..Default::default()
+        };
+        let mut output = String::new();
+
+        emit_native_function(&function, "sample", std::slice::from_ref(&error), &[], &mut output);
+
+        assert!(!output.contains("throw RequestError.InvalidInput"));
         assert!(output.contains("throw RuntimeException(\"[${_code}] ${_msg}\")"));
     }
 }
