@@ -396,6 +396,9 @@ host_type = "*my_pkg.Language"
 package = "github.com/example/go-my-lib"
 package_version = "v1.0.0"
 construct_expr = "my_pkg.NewLanguage(unsafe.Pointer({ptr}))"
+pointer_ownership = "borrowed_static"
+abi_compatible = true
+host_destructor = "none"
 "#,
     )
 }

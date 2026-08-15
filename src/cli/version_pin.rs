@@ -101,7 +101,7 @@ mod tests {
     fn version_check_does_not_rewrite_external_pin() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("alef.toml");
-        let config = "[workspace]\nlanguages = []\nalef_version = \"0.0.1\"\n";
+        let config = "languages = []\nalef_version = \"0.0.1\"\n";
         std::fs::write(&path, config).expect("write fixture");
         let workspace: WorkspaceConfig = toml::from_str(config).expect("parse fixture");
 

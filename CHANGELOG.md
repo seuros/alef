@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **test fixtures**: keep the version-pin fixture aligned with the root-flat config shape and give the Go capsule
+  fixture the complete borrowed-static ABI contract required by capsule validation.
 - **dart/flutter_rust_bridge**: give FVM a persistent Alef cache when running
   `flutter_rust_bridge_codegen`, so clean regeneration worktrees reuse the installed Flutter SDK instead of
   downloading it again. Explicit `FVM_CACHE_PATH` and legacy `FVM_HOME` settings remain authoritative.
