@@ -96,6 +96,15 @@ impl ResolvedCrateConfig {
             .unwrap_or_else(|| self.name.replace('-', "_"))
     }
 
+    /// Get the Dart public library entrypoint name.
+    pub fn dart_library_name(&self) -> String {
+        self.dart
+            .as_ref()
+            .and_then(|d| d.lib_name.as_ref())
+            .cloned()
+            .unwrap_or_else(|| self.dart_pubspec_name())
+    }
+
     /// Get the Dart FRB bridge class name.
     ///
     /// Converts `[dart] lib_name` (falling back to `dart_pubspec_name()`) to
@@ -273,6 +282,32 @@ package_name = "@scope/explicit-wasm"
     fn dart_pubspec_name_replaces_hyphens() {
         let r = minimal();
         assert_eq!(r.dart_pubspec_name(), "test_lib");
+    }
+
+    #[test]
+    fn dart_library_name_resolves_entrypoint() {
+        for (config, expected) in [
+            (minimal(), "test_lib"),
+            (
+                resolved_one(
+                    r#"
+[workspace]
+languages = ["dart"]
+
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+
+[crates.dart]
+pubspec_name = "sample_package"
+lib_name = "sample_entrypoint"
+"#,
+                ),
+                "sample_entrypoint",
+            ),
+        ] {
+            assert_eq!(config.dart_library_name(), expected);
+        }
     }
 
     #[test]

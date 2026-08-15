@@ -59,8 +59,8 @@ pub(super) fn render_snippet_body(
         .resolve_package("dart")
         .and_then(|value| value.name)
         .unwrap_or_else(|| config.dart_pubspec_name());
-    let module = config.name.replace('-', "_");
-    let bridge_module = format!("{module}_bridge_generated");
+    let module = config.dart_library_name();
+    let bridge_module = format!("{}_bridge_generated", config.name.replace('-', "_"));
     let call = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
         &fixture.id,
@@ -176,6 +176,42 @@ mod tests {
         assert!(body.contains("RustLib.dispose()"));
         assert!(!body.contains("test("));
         assert!(!body.contains("expect("));
+    }
+
+    #[test]
+    fn snippet_uses_package_reference_and_configured_library_entrypoint() {
+        let fixture = Fixture {
+            id: "sample".into(),
+            description: "Sample".into(),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "load_document".into();
+        e2e.packages.insert(
+            "dart".into(),
+            crate::core::config::e2e::PackageRef {
+                name: Some("sample_harness_dep".into()),
+                ..Default::default()
+            },
+        );
+        let mut config = ResolvedCrateConfig::default();
+        config.name = "sample-core".into();
+        config.dart = Some(crate::core::config::languages::DartConfig {
+            lib_name: Some("sample_entrypoint".into()),
+            ..Default::default()
+        });
+
+        let body = render_snippet_body(&fixture, &e2e, &config, &[], &[]).expect("snippet");
+
+        assert!(
+            body.contains("import 'package:sample_harness_dep/sample_entrypoint.dart';"),
+            "{body}"
+        );
+        assert!(
+            body.contains("package:sample_harness_dep/src/sample_core_bridge_generated/frb_generated.dart"),
+            "{body}"
+        );
+        assert!(!body.contains("sample_core.dart"), "{body}");
     }
 
     #[test]
