@@ -332,21 +332,15 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 }
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
-                match pipeline::scaffold(&api, resolved_cfg, &languages, config_path) {
-                    Ok(scaffold_files) => {
-                        let report = pipeline::reconcile_managed_scaffold_manifests(&scaffold_files, &base_dir)?;
-                        if report.changed_count() > 0 {
-                            any_written = true;
-                        }
-                        for file in &scaffold_files {
-                            let path = base_dir.join(&file.path);
-                            if file.carries_alef_marker() {
-                                current_gen_paths.insert(path);
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        tracing::warn!("failed to enumerate scaffold paths for cleanup safety: {err}");
+                let scaffold_files = pipeline::scaffold(&api, resolved_cfg, &languages, config_path)?;
+                let report = pipeline::reconcile_managed_scaffold_manifests(&scaffold_files, &base_dir)?;
+                if report.changed_count() > 0 {
+                    any_written = true;
+                }
+                for file in &scaffold_files {
+                    let path = base_dir.join(&file.path);
+                    if file.carries_alef_marker() {
+                        current_gen_paths.insert(path);
                     }
                 }
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
