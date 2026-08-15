@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **capsules**: expose `shares_native_runtime` for Kotlin Android and enforce capsule ownership/ABI contracts during
+  Go, Swift, Zig, and Kotlin Android generation instead of leaving those backends outside the validation gate.
 - Make generated parameter-conversion failures use the scalar zero sentinel whenever the exported FFI return type is
   `AlefHandle`, even when the source return metadata has a pointer-shaped fallback.
 - **config generation**: report every Rust-binding field whose serde default function cannot be preserved in one
