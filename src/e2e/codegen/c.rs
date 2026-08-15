@@ -654,6 +654,7 @@ use project::{render_download_script, render_gitignore, render_makefile};
 use runner::{render_main_c, render_test_runner_header};
 use streaming::{
     render_c_diagnostic_skip, render_streaming_test_function, resolve_c_client_owner_type, resolve_c_streaming_adapter,
+    validate_c_snippet_metadata,
 };
 use test_function::render_test_function;
 use visitor::render_visitor_test_file;
