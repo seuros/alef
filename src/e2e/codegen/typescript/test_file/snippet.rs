@@ -127,9 +127,10 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
     };
     let mut imports = std::collections::BTreeSet::new();
     imports.insert(effective_factory.unwrap_or(&function_name).to_string());
-    if expects_error && lang != "node" {
-        imports.insert(error_type_name.clone());
-    }
+    // No `else` branch imports an error type here: node throws a plain global
+    // `Error` (nothing to import) and wasm-bindgen throws a bare JS string
+    // (also nothing to import, and no named error export exists to import in
+    // the first place -- see the `thrown_value_is_opaque` template branch).
     imports.extend(visitor_imports);
     let referenced_code = format!("{}\n{args}\n{client_setup}", setup_lines.join("\n"));
     // Every imported type name goes through the same prefixing helper the body
@@ -188,7 +189,8 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
             setup_lines => setup_lines, client_setup => client_setup, call_expr => call_expr,
             result_var => call.result_var, is_async => override_config.and_then(|value| value.r#async).unwrap_or(call.r#async),
             expects_error => expects_error,
-            error_type => error_type_name,
+            error_type => error_type_name.clone(),
+            thrown_value_is_opaque => lang == "wasm",
             returns_void => call.returns_void,
             presentation => crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang),
         },
@@ -563,9 +565,36 @@ mod tests {
             !node_body.contains("import { Error"),
             "Error is a global -- it must not be imported, got: {node_body}"
         );
+    }
 
-        // wasm is unaffected: wasm-bindgen DOES generate a named error export,
-        // so it must keep using the crate's configured error type name.
+    /// `crates/xberg-wasm` throws a bare JS string from every fallible export
+    /// (`.map_err(|e| JsValue::from_str(&e.to_string()))`) -- there is no
+    /// `#[wasm_bindgen]` `XbergError`/`WasmXbergError` export to `instanceof`
+    /// against, and `error.name`/`error.message` are always `undefined` on a
+    /// thrown string. A crate's `error_type` config must not leak into the
+    /// wasm catch block: the only value that reads correctly off a thrown
+    /// wasm error is `String(error)`.
+    ///
+    /// Before this fix, wasm snippets emitted `if (error instanceof
+    /// XbergError) { console.error(...) }` and imported `XbergError` from a
+    /// module that never exports it, so every generated wasm docs snippet
+    /// that expects an error failed at both import resolution and runtime
+    /// (the check is always false, so the catch block is silently a no-op).
+    #[test]
+    fn wasm_error_snippet_reads_the_thrown_value_as_a_string() {
+        let mut fixture = fixture();
+        fixture.assertions.push(crate::e2e::fixture::Assertion {
+            assertion_type: "error".into(),
+            ..Default::default()
+        });
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "parse".into();
+        e2e.call.r#async = true;
+        let config = crate::core::config::ResolvedCrateConfig {
+            error_type: Some("XbergError".into()),
+            ..Default::default()
+        };
+
         let wasm_body = render_snippet_body(SnippetContext {
             lang: "wasm",
             fixture: &fixture,
@@ -578,8 +607,20 @@ mod tests {
             config: &config,
         });
         assert!(
-            wasm_body.contains("error instanceof XbergError"),
-            "wasm must keep using the crate's configured error type, got: {wasm_body}"
+            wasm_body.contains("console.error(String(error));"),
+            "wasm must read the thrown value as a string, got: {wasm_body}"
+        );
+        assert!(
+            !wasm_body.contains("instanceof"),
+            "wasm has no named error class to instanceof-check, got: {wasm_body}"
+        );
+        assert!(
+            !wasm_body.contains("XbergError"),
+            "wasm must never reference the crate error type -- it isn't exported, got: {wasm_body}"
+        );
+        assert!(
+            !wasm_body.contains("import { XbergError"),
+            "wasm has nothing to import for errors, got: {wasm_body}"
         );
     }
 
