@@ -149,6 +149,7 @@ fn render_http_snippet(fixture: &Fixture) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::config::StreamingConfig;
     use crate::e2e::config::{ArgMapping, CallOverride};
 
     #[test]
@@ -178,6 +179,26 @@ mod tests {
         let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[]).unwrap();
         assert!(body.contains("Sample.load_document()"));
         assert!(!body.contains("assert"));
+    }
+
+    #[test]
+    fn streaming_snippet_inspects_the_variable_it_bound() {
+        let fixture = Fixture {
+            id: "sample_stream".into(),
+            description: "Sample stream".into(),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "stream_items".into();
+        e2e.call.module = "sample".into();
+        e2e.call.result_var = "stream_result".into();
+        e2e.call.streaming = Some(StreamingConfig::Enabled(true));
+
+        let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[]).unwrap();
+
+        assert!(body.contains("stream_result = Sample.stream_items() |> Enum.to_list()"), "{body}");
+        assert!(body.contains("IO.inspect(stream_result)"), "{body}");
+        assert!(!body.contains("chunks ="), "{body}");
     }
 
     #[test]
