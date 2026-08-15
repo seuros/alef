@@ -498,6 +498,33 @@ options_field = "renderer"
         !lib.content.contains("ConversionOptions") && !lib.content.contains("ConversionResult"),
         "must not leak conversion-shaped type names in generic wrapper"
     );
+    // ~keep Every failure path of a bridge returning `AlefHandle` must yield the scalar
+    // sentinel 0. `catch_ffi_panic(0, ..)` and the terminal arms were migrated to the scalar
+    // ABI, but the null-parameter guard and the UTF-8 guard still emitted
+    // `std::ptr::null_mut()` -- a `*mut` where a `u64` is expected, so the generated crate did
+    // not compile at all (E0308). It reached h2m's committed ffi crate that way.
+    //
+    // `rfind`, not `find`: the backend emits a "Not implemented" stub for this symbol BEFORE
+    // the real bridge, and the stub body contains no sentinel at all. Anchoring on the first
+    // match slices the stub and the check passes no matter what the bridge emits -- verified,
+    // that is exactly how the first version of this assertion passed against the bug it was
+    // written to catch. The positive assertions below keep a mis-anchored slice loud.
+    let definition = "pub unsafe extern \"C\" fn doc_render_document(";
+    let start = lib
+        .content
+        .rfind(definition)
+        .expect("options-field bridge definition must exist");
+    let after = &lib.content[start..];
+    let bridge_body = after.split_once("\npub ").map_or(after, |(body, _)| body);
+    assert!(
+        bridge_body.contains("is_null()") && bridge_body.contains("catch_ffi_panic(0"),
+        "slice must cover the real bridge body, or the sentinel check below is vacuous: {bridge_body}"
+    );
+    assert!(
+        !bridge_body.contains("null_mut"),
+        "AlefHandle bridge must return the scalar sentinel on every failure path: {bridge_body}"
+    );
+
     syn::parse_file(&lib.content).expect("generic scalar options-field bridge output must parse as Rust");
 }
 

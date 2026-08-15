@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **ffi**: return the scalar `0` sentinel from string-bridge parameter and UTF-8 guard failures when the exported
+  ABI returns `AlefHandle`, instead of emitting `null_mut()` and producing uncompilable generated Rust.
 - **zig snippets**: omit the parsed-result binding when generated assertions never reference it, avoiding an
   unused-local compile error while preserving the binding for assertions that consume the result.
 - **java scaffold**: exclude Alef's `.alef` validation scratch directory from Maven Checkstyle scans without
