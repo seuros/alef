@@ -132,6 +132,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **formatting**: normalize the persistent FRB Cargo-cache helper with the repository Rust formatter.
 - **test formatting**: normalize recently added FFI handle-registry, enum-conversion, and generated-hash regression
   fixtures with the repository formatter.
 

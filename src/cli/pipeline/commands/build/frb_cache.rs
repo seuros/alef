@@ -4,11 +4,7 @@ use std::path::PathBuf;
 
 const FLUTTER_RUST_BRIDGE_CODEGEN: &str = "flutter_rust_bridge_codegen";
 
-pub(super) fn configure(
-    command: &mut std::process::Command,
-    cmd: &str,
-    cache_scope: &str,
-) -> anyhow::Result<()> {
+pub(super) fn configure(command: &mut std::process::Command, cmd: &str, cache_scope: &str) -> anyhow::Result<()> {
     if cmd != FLUTTER_RUST_BRIDGE_CODEGEN {
         return Ok(());
     }
