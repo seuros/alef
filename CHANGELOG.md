@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   property (e.g. `{ role: 'system'; 0: SystemMessage }`) and wrapped each variant as its own union member,
   when the compiled `#[napi(object)]` struct is actually one type with every variant's field present as an
   optional property (e.g. `{ role: 'system' | 'user'; system?: SystemMessage; user?: UserMessage }`).
+- **napi**: dispatch the `.d.ts` enum arm on the enum's actual serde representation rather than on
+  whether any variant carries a payload. `is_data_enum` gated on `serde_tag.is_some()` *and* at least
+  one variant having fields, and was the arm's only switch, so two representations fell through to the
+  plain string-enum branch and silently lost their wire shape. An internally-tagged enum whose variants
+  are all unit variants serializes as `{"kind":"A"}`, not the bare string `"A"`; the glue generator
+  gated on the same condition, so the binding conversion was wrong in the same way and both are
+  corrected together. An untagged (`#[serde(untagged)]`) data-bearing enum serializes as a bare union
+  of each variant's own shape and was likewise declared as a payload-free string enum, discarding every
+  field. Externally tagged data enums remain unhandled and are tracked separately — declaring a shape
+  the runtime does not produce would be worse than the current omission.
 
 ### Changed
 

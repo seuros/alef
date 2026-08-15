@@ -5,7 +5,7 @@ use crate::codegen::naming::{to_node_name, wire_variant_value};
 use crate::codegen::shared::{binding_fields, substitute_excluded_types};
 use crate::core::config::NodeCapsuleTypeConfig;
 use crate::core::hash::{self, CommentStyle};
-use crate::core::ir::{ApiSurface, EnumDef, FunctionDef, ParamDef, TypeDef, TypeRef};
+use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, FunctionDef, ParamDef, TypeDef, TypeRef};
 use std::collections::HashMap;
 
 /// Generate the TypeScript declaration file for NAPI-RS bindings.
@@ -258,7 +258,10 @@ pub(super) fn gen_dts(
                 lines.push("}".to_string());
             }
             Decl::Enum(e) => {
-                let is_data_enum = e.serde_tag.is_some() && e.variants.iter().any(|v| !v.fields.is_empty());
+                // Internal tagging always produces an object at the wire level, even when every
+                // variant is a unit variant (`{"kind":"A"}`), so the gate must not require a
+                // data-bearing variant. (~keep)
+                let is_data_enum = e.serde_tag.is_some();
                 lines.extend(format_jsdoc(&e.doc, ""));
                 if is_data_enum && e.serde_content.is_some() {
                     // Adjacent tagging (`#[serde(tag, content)]`): each variant serializes as its
@@ -359,6 +362,16 @@ pub(super) fn gen_dts(
                         }
                     }
                     lines.push(format!("export type {} = {{ {} }};", e.name, obj_fields.join("; ")));
+                } else if e.serde_untagged && e.variants.iter().any(|v| !v.fields.is_empty()) {
+                    // `#[serde(untagged)]`: each variant serializes as its own bare shape, with no
+                    // discriminant and no wrapper object — the napi glue already reflects this by
+                    // passing the value through as opaque `serde_json::Value`
+                    // (`gen_untagged_data_enum_as_value_wrapper`), so the `.d.ts` union is the only
+                    // place the real per-variant shapes can be expressed. (~keep)
+                    lines.push(format!("export type {} =", e.name));
+                    for variant in &e.variants {
+                        lines.push(format!("  | {}", untagged_variant_dts_type(variant, no_prefix)));
+                    }
                 } else {
                     lines.push(format!("export declare enum {} {{", e.name));
                     for variant in &e.variants {
@@ -546,6 +559,37 @@ pub(super) fn dts_type(ty: &TypeRef, prefix: &str) -> String {
         TypeRef::Map(k, v) => format!("Record<{}, {}>", dts_type(k, prefix), dts_type(v, prefix)),
         TypeRef::Named(name) => format!("{prefix}{name}"),
     }
+}
+
+/// TypeScript shape of one variant of an `untagged` enum, as it actually appears on the wire:
+/// a newtype variant serializes as its inner value, a multi-field tuple variant as a TS tuple,
+/// a struct variant as its own object, and a unit variant as `null`. There is no discriminant —
+/// serde distinguishes untagged variants structurally at deserialize time. (~keep)
+fn untagged_variant_dts_type(variant: &EnumVariant, prefix: &str) -> String {
+    if variant.fields.is_empty() {
+        return "null".to_string();
+    }
+    if variant.is_tuple {
+        if variant.fields.len() == 1 {
+            return dts_type(&variant.fields[0].ty, prefix);
+        }
+        let elems: Vec<String> = variant.fields.iter().map(|f| dts_type(&f.ty, prefix)).collect();
+        return format!("[{}]", elems.join(", "));
+    }
+    let fields: Vec<String> = variant
+        .fields
+        .iter()
+        .map(|field| {
+            let js_name = to_node_name(&field.name);
+            let ts_ty = dts_type(&field.ty, prefix);
+            if matches!(field.ty, TypeRef::Optional(_)) {
+                format!("{js_name}?: {ts_ty}")
+            } else {
+                format!("{js_name}: {ts_ty}")
+            }
+        })
+        .collect();
+    format!("{{ {} }}", fields.join("; "))
 }
 
 /// Render a list of parameters as a TypeScript parameter string for `.d.ts`.
@@ -878,6 +922,114 @@ mod tests {
         assert!(
             !dts.contains(" | { role:"),
             "must not emit a discriminated union of per-variant shapes:\n{dts}"
+        );
+    }
+
+    /// `#[serde(tag = "kind")] enum E { A, B }` serializes as `{"kind":"A"}` — internal tagging is
+    /// always an object, even when every variant is a unit variant. `is_data_enum` must not
+    /// require a data-bearing variant, or an all-unit internally-tagged enum wrongly falls back
+    /// to a plain string enum declaration.
+    #[test]
+    fn internally_tagged_all_unit_variants_declare_object_not_string_enum() {
+        let api = ApiSurface {
+            enums: vec![EnumDef {
+                name: "InternalAllUnit".to_string(),
+                serde_tag: Some("kind".to_string()),
+                variants: vec![
+                    EnumVariant {
+                        name: "A".to_string(),
+                        ..Default::default()
+                    },
+                    EnumVariant {
+                        name: "B".to_string(),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let dts = gen_dts(
+            &api,
+            "",
+            &Default::default(),
+            &[],
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+        );
+
+        assert!(
+            dts.contains("export type InternalAllUnit = { kind: 'A' | 'B' };"),
+            "expected an object type matching the napi glue struct, got:\n{dts}"
+        );
+        assert!(
+            !dts.contains("export declare enum InternalAllUnit"),
+            "must not emit a plain string enum for an internally-tagged enum:\n{dts}"
+        );
+    }
+
+    /// `#[serde(untagged)]` enums serialize each variant as its own bare shape (no wrapper, no
+    /// discriminant) — a newtype variant as its inner value, a struct variant as its own object.
+    /// The napi glue already treats the whole enum as opaque `serde_json::Value`, so this is a
+    /// `.d.ts`-only fix: the union of real per-variant shapes.
+    #[test]
+    fn untagged_enum_declares_bare_union_of_variant_shapes() {
+        let api = ApiSurface {
+            enums: vec![EnumDef {
+                name: "Untagged".to_string(),
+                serde_untagged: true,
+                variants: vec![
+                    EnumVariant {
+                        name: "Single".to_string(),
+                        is_tuple: true,
+                        fields: vec![FieldDef {
+                            name: "_0".to_string(),
+                            ty: TypeRef::String,
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    },
+                    EnumVariant {
+                        name: "Pair".to_string(),
+                        fields: vec![
+                            FieldDef {
+                                name: "x".to_string(),
+                                ty: TypeRef::Primitive(crate::core::ir::PrimitiveType::I32),
+                                ..Default::default()
+                            },
+                            FieldDef {
+                                name: "y".to_string(),
+                                ty: TypeRef::Primitive(crate::core::ir::PrimitiveType::I32),
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let dts = gen_dts(
+            &api,
+            "",
+            &Default::default(),
+            &[],
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+        );
+
+        assert!(
+            dts.contains("export type Untagged =\n  | string\n  | { x: number; y: number }"),
+            "expected a bare union of each variant's own shape, got:\n{dts}"
+        );
+        assert!(
+            !dts.contains("export declare enum Untagged"),
+            "must not emit a plain string enum for an untagged data enum:\n{dts}"
         );
     }
 

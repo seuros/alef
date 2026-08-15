@@ -109,7 +109,12 @@ fn napi_string_enum_case(enum_def: &EnumDef) -> Option<&'static str> {
 /// otherwise napi applies the enum-wide case to the variant name.
 pub(super) fn string_enum_js_values(enum_def: &EnumDef) -> Option<Vec<String>> {
     let has_data_variants = enum_def.variants.iter().any(|v| !v.fields.is_empty());
-    if (enum_def.serde_tag.is_some() || enum_def.serde_untagged) && has_data_variants {
+    // Internal tagging is always an object, even for all-unit variants — mirrors `gen_enum`'s
+    // `is_tagged_data_enum` gate. (~keep)
+    if enum_def.serde_tag.is_some() {
+        return None;
+    }
+    if enum_def.serde_untagged && has_data_variants {
         return None;
     }
     if has_data_variants || enum_def.variants.is_empty() {
@@ -144,7 +149,9 @@ fn apply_napi_case(name: &str, case: Option<&str>) -> String {
 
 pub(super) fn gen_enum(enum_def: &EnumDef, prefix: &str, has_serde: bool) -> String {
     let has_data_variants = enum_def.variants.iter().any(|v| !v.fields.is_empty());
-    let is_tagged_data_enum = enum_def.serde_tag.is_some() && has_data_variants;
+    // Internal tagging always produces an object on the wire (`{"kind":"A"}` for a unit variant),
+    // so it must route to the object emitter even when no variant carries fields. (~keep)
+    let is_tagged_data_enum = enum_def.serde_tag.is_some();
     let is_untagged_data_enum = enum_def.serde_untagged && has_data_variants;
 
     if is_tagged_data_enum {
