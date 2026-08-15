@@ -227,17 +227,16 @@ pub(crate) fn gen_record_type(
                     let is_boxed = matches!(f.ty, TypeRef::Duration)
                         || has_serde_default
                         || boxes_to_carry_literal_default(f.typed_default.as_ref());
-                    let needs_long_suffix = matches!(f.ty, TypeRef::Duration)
-                        || (has_serde_default
-                            && matches!(
-                                f.ty,
-                                TypeRef::Primitive(
-                                    PrimitiveType::U64
-                                        | PrimitiveType::I64
-                                        | PrimitiveType::Usize
-                                        | PrimitiveType::Isize
-                                )
-                            ));
+                    let needs_long_suffix = matches!(
+                        f.ty,
+                        TypeRef::Duration
+                            | TypeRef::Primitive(
+                                PrimitiveType::U64
+                                    | PrimitiveType::I64
+                                    | PrimitiveType::Usize
+                                    | PrimitiveType::Isize
+                            )
+                    );
                     let suffix = if needs_long_suffix { "L" } else { "" };
                     let cond = if is_boxed {
                         format!("{jname} == null")

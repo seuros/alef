@@ -6,14 +6,13 @@ use crate::core::ir::{CoreWrapper, DefaultValue, FieldDef, PrimitiveType, TypeRe
 use ahash::AHashSet;
 use std::collections::HashSet;
 
-/// A plain `usize` field with a literal Rust default and NO `#[serde(default)]` — the
-/// exact shape that took the zero-sentinel path.
-fn make_config_type_with_primitive_default() -> TypeDef {
+/// Builds the primitive literal-default shape that requires null to distinguish absence from zero. ~keep
+fn make_config_type_with_primitive_default(primitive: PrimitiveType, default: i128) -> TypeDef {
     let mut typ = make_config_type_with_duration_default();
     typ.fields[0].name = "max_redirects".to_string();
-    typ.fields[0].ty = TypeRef::Primitive(PrimitiveType::Usize);
-    typ.fields[0].default = Some("10".to_string());
-    typ.fields[0].typed_default = Some(DefaultValue::IntLiteral(10));
+    typ.fields[0].ty = TypeRef::Primitive(primitive);
+    typ.fields[0].default = Some(default.to_string());
+    typ.fields[0].typed_default = Some(DefaultValue::IntLiteral(default));
     typ
 }
 
@@ -384,32 +383,37 @@ fn opaque_handle_close_is_idempotent_and_rejects_post_close_use() {
 /// already states for the boxed half; that test simply never exercised the primitive
 /// path. Boxing the component is what makes `== null` available as the sentinel.
 #[test]
-fn primitive_literal_default_never_coerces_an_explicit_zero() {
-    let typ = make_config_type_with_primitive_default();
-    let out = gen_record_type(
-        "dev.sample_crate",
-        &typ,
-        &AHashSet::default(),
-        &AHashSet::default(),
-        "SNAKE_CASE",
-        &[],
-        "SampleCrawler",
-        JavaBuilderMode::Auto,
-        &ahash::AHashMap::default(),
-        &AHashSet::default(),
-        &HashSet::default(),
-    );
+fn boxed_long_literal_defaults_compile_without_coercing_zero() {
+    for (primitive, default) in [
+        (PrimitiveType::I64, 2),
+        (PrimitiveType::U64, 80),
+        (PrimitiveType::Isize, 1_024),
+        (PrimitiveType::Usize, 5_242_880),
+    ] {
+        let typ = make_config_type_with_primitive_default(primitive, default);
+        let out = gen_record_type(
+            "dev.sample_crate",
+            &typ,
+            &AHashSet::default(),
+            &AHashSet::default(),
+            "SNAKE_CASE",
+            &[],
+            "SampleCrawler",
+            JavaBuilderMode::Auto,
+            &ahash::AHashMap::default(),
+            &AHashSet::default(),
+            &HashSet::default(),
+        );
 
-    assert!(
-        !out.contains("maxRedirects == 0"),
-        "must not coerce explicit 0 — that is a user-intentional value. Emitted:\n{out}"
-    );
-    assert!(
-        out.contains("maxRedirects == null"),
-        "the default must be restored from an absent value, not from 0. Emitted:\n{out}"
-    );
-    assert!(
-        out.contains("Long maxRedirects") || out.contains("Integer maxRedirects"),
-        "the component must be boxed so null can mean \"not supplied\". Emitted:\n{out}"
-    );
+        assert!(!out.contains("maxRedirects == 0"), "explicit zero must remain meaningful:\n{out}");
+        assert!(out.contains("maxRedirects == null"), "absence must select the default:\n{out}");
+        assert!(
+            out.contains("@Nullable Long maxRedirects"),
+            "the default-bearing Java component must be nullable and boxed:\n{out}"
+        );
+        assert!(
+            out.contains(&format!("maxRedirects = {default}L")),
+            "boxed Long defaults require a long literal:\n{out}"
+        );
+    }
 }
