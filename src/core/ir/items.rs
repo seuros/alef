@@ -602,22 +602,22 @@ mod tests {
     fn type_def_field_coverage_witness(value: TypeDef) {
         let TypeDef {
             name: _,                     // identifier; every backend reads it directly
-            rust_path: _,                // import / qualified-path emission
+            rust_path: _,                // import / qualified-path emission ~keep
             original_rust_path: _,       // From-impl target when core_import re-exports
             fields: _,                   // drives the whole struct-field codegen loop
             methods: _,                  // drives the whole method codegen loop
             is_opaque: _,                // opaque-handle vs. value-type binding strategy
-            is_clone: _,                 // gates `.clone()` emission
+            is_clone: _,                 // gates `.clone()` emission ~keep
             is_copy: _,                  // gates Copy-vs-clone (avoids clippy::clone_on_copy)
             doc: _,                      // doc-comment emission
             cfg: _,                      // conditional `#[cfg]` propagation
             is_trait: _,                 // `dyn` keyword for opaque inner types
             has_default: _,              // NAPI-style all-fields-optional-with-defaults
-            has_stripped_cfg_fields: _,  // `..Default::default()` in struct literals
+            has_stripped_cfg_fields: _,  // `..Default::default()` in struct literals ~keep
             is_return_type: _,           // output DTO style (e.g. Python TypedDict)
             serde_rename_all: _,         // Go/Java/C# JSON tag casing
             has_serde: _,                // gates FFI from_json/to_json generation
-            super_traits: _,             // trait bridge super-trait impl selection
+            super_traits: _,             // trait bridge super-trait impl selection ~keep
             binding_excluded: _,         // excludes the type from generated surfaces
             binding_exclusion_reason: _, // diagnostics only; deliberately not codegen input
             is_variant_wrapper: _,       // opts static `new` into host constructor emission
@@ -666,9 +666,9 @@ mod tests {
             doc: _,                      // doc-comment emission
             receiver: _,                 // `&self` / `&mut self` / owned call-site codegen
             sanitized: _,                // methods with sanitized signatures can't auto-delegate
-            trait_source: _,             // trait bridge impl selection
-            returns_ref: _,              // inserts `.clone()` before type conversion
-            returns_cow: _,              // inserts `.into_owned()` before type conversion
+            trait_source: _,             // trait bridge impl selection ~keep
+            returns_ref: _,              // inserts `.clone()` before type conversion ~keep
+            returns_cow: _,              // inserts `.into_owned()` before type conversion ~keep
             return_newtype_wrapper: _,   // unwraps the returned newtype value
             has_default_impl: _,         // optional-impl opt-in in trait bridge codegen
             binding_excluded: _,         // excludes the method from generated surfaces
@@ -692,8 +692,8 @@ mod tests {
             cfg: _,                      // conditional `#[cfg]` propagation
             sanitized: _,                // functions with sanitized signatures can't auto-delegate
             return_sanitized: _,         // widens the binding return type; forces JSON round-trip
-            returns_ref: _,              // inserts `.clone()` before type conversion
-            returns_cow: _,              // inserts `.into_owned()` before type conversion
+            returns_ref: _,              // inserts `.clone()` before type conversion ~keep
+            returns_cow: _,              // inserts `.into_owned()` before type conversion ~keep
             return_newtype_wrapper: _,   // unwraps the returned newtype value
             binding_excluded: _,         // excludes the function from generated surfaces
             binding_exclusion_reason: _, // diagnostics only; deliberately not codegen input
@@ -731,7 +731,7 @@ mod tests {
             rust_path: _,                // qualified path for From/Into codegen
             original_rust_path: _,       // From-impl target when core_import re-exports
             variants: _,                 // drives the whole variant codegen loop
-            methods: _,                  // static factory method codegen
+            methods: _,                  // static factory method codegen ~keep
             doc: _,                      // doc-comment emission
             cfg: _,                      // conditional `#[cfg]` propagation
             is_copy: _,                  // gates Copy-vs-clone (avoids clippy::clone_on_copy)

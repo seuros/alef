@@ -198,7 +198,6 @@ prefix = "sample"
         );
     }
 
-    // `sample_lib::error::Error` must not stutter into `SampleLibErrorErrorNotFound`.
     assert!(members.contains(&"SampleLibErrorNotFound"), "{members:?}");
 }
 
