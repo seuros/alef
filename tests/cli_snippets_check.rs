@@ -1,0 +1,74 @@
+//! Regression test for `alef snippets check`'s documented contract.
+//!
+//! `alef snippets check --help` promises the subcommand runs "the configured
+//! snippet discovery, validation, audit, and gap checks", but `run_check`
+//! used to only run discovery and validation. A crate whose docs reference a
+//! snippet that does not exist on disk — a structural gap that
+//! `alef snippets audit` and `alef snippets gaps` both already catch on their
+//! own — passed `check` silently. This test builds a minimal self-contained
+//! workspace with exactly that dangling reference and drives the real
+//! compiled binary (`std::process::ExitCode` has no public accessor to
+//! compare a library-level `run()` result against, so this exercises the CLI
+//! end to end instead) to assert `check` now fails on it.
+
+use std::path::Path;
+use std::process::Command;
+
+/// Writes a minimal `alef.toml` workspace fixture with one JSON snippet
+/// (validates without any external toolchain) and one docs file that
+/// `--8<--`-includes a snippet path that does not exist.
+fn write_fixture_with_dangling_include(root: &Path) {
+    std::fs::create_dir_all(root.join("snippets")).expect("create snippets dir");
+    std::fs::create_dir_all(root.join("docs")).expect("create docs dir");
+
+    std::fs::write(
+        root.join("snippets/hello.md"),
+        "# Hello\n\n```json\n{\"hello\": \"world\"}\n```\n",
+    )
+    .expect("write snippet fixture");
+
+    std::fs::write(
+        root.join("docs/guide.md"),
+        "# Guide\n\n--8<-- \"missing-fixture.md\"\n",
+    )
+    .expect("write docs fixture");
+
+    std::fs::write(
+        root.join("alef.toml"),
+        r#"
+[workspace]
+languages = ["python"]
+
+[workspace.docs.snippets]
+dirs = ["snippets"]
+docs_dirs = ["docs"]
+
+[[crates]]
+name = "fixture-crate"
+sources = ["src/lib.rs"]
+"#,
+    )
+    .expect("write alef.toml");
+}
+
+#[test]
+fn check_fails_on_a_dangling_include_target() {
+    let dir = tempfile::tempdir().expect("create temp workspace");
+    write_fixture_with_dangling_include(dir.path());
+
+    let output = Command::new(env!("CARGO_BIN_EXE_alef"))
+        .args(["snippets", "check", "--config"])
+        .arg(dir.path().join("alef.toml"))
+        .args(["--cache", "off"])
+        .output()
+        .expect("run the alef binary");
+
+    assert!(
+        !output.status.success(),
+        "`check` must fail when a docs file includes a snippet that does not exist — \
+         this is exactly what `alef snippets audit` and `alef snippets gaps` already \
+         detect, and `check`'s own --help text promises it runs both.\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}

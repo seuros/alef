@@ -146,6 +146,19 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool) -> ExitCod
             .iter()
             .any(|excluded| path.starts_with(root.join(excluded)))
     });
+    let excluded_paths: Vec<PathBuf> = config.exclude.iter().map(|excluded| root.join(excluded)).collect();
+    let docs_directories: Vec<PathBuf> = config.docs_dirs.iter().map(|path| root.join(path)).collect();
+    let include_base_paths: Vec<PathBuf> = if config.include_base_paths.is_empty() {
+        docs_directories.clone()
+    } else {
+        config.include_base_paths.iter().map(|path| root.join(path)).collect()
+    };
+    let required_languages: Vec<Language> = config
+        .required_languages
+        .iter()
+        .map(|language| Language::from_fence_tag(language))
+        .filter(|language| *language != Language::Unknown)
+        .collect();
     let level = config
         .validation_level
         .as_deref()
@@ -216,11 +229,151 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool) -> ExitCod
             missing.reason
         );
     }
-    if summary.has_failures() || strict_failure || strict && !missing_generated.is_empty() {
+    let (audit_failure, gap_failure) = match run_configured_audit_and_gaps(
+        &directories,
+        &docs_directories,
+        &include_base_paths,
+        &required_languages,
+        &excluded_paths,
+        config.require_frontmatter,
+        strict,
+    ) {
+        Ok(result) => result,
+        Err(error) => {
+            tracing::error!("running configured snippet audit and gap checks: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if summary.has_failures()
+        || strict_failure
+        || strict && !missing_generated.is_empty()
+        || audit_failure
+        || gap_failure
+    {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
     }
+}
+
+/// Run the configured audit and gap checks against the same resolved snippet
+/// directories used for validation, so `check` cannot disagree with itself
+/// about which files are in scope.
+///
+/// Audit issues of `AuditSeverity::Error` always fail the gate. Gap findings
+/// split the same way `alef validate`'s snippet gate already treats them
+/// (see `run_check` in `docs/mod.rs::validate_snippets`): unreferenced
+/// snippets are only a failure under `strict` (extra examples can be
+/// intentional), while missing include targets, missing required language
+/// variants, undocumented skips, and unknown fence languages always fail.
+/// Gaps are skipped entirely when neither `docs_dirs` nor
+/// `required_languages` is configured, matching the same precedent —
+/// otherwise every discovered snippet would read as "unreferenced" and a
+/// `strict` config with no docs surface configured would flip from green to
+/// red for a check that was never meaningful for it.
+///
+/// # Errors
+///
+/// Returns an error when the generated coverage ledger or a documentation
+/// file cannot be read.
+fn run_configured_audit_and_gaps(
+    directories: &[PathBuf],
+    docs_directories: &[PathBuf],
+    include_base_paths: &[PathBuf],
+    required_languages: &[Language],
+    exclude: &[PathBuf],
+    require_frontmatter: bool,
+    strict: bool,
+) -> anyhow::Result<(bool, bool)> {
+    let configured_references = crate::snippets::gaps::coverage_ledger_references(directories)?;
+    let audit_report = audit(&AuditConfig {
+        docs_dirs: docs_directories.to_vec(),
+        snippet_dirs: directories.to_vec(),
+        require_frontmatter,
+        include_base_paths: include_base_paths.to_vec(),
+        configured_references: configured_references.clone(),
+        exclude: exclude.to_vec(),
+    });
+    let audit_failure = report_audit(&audit_report);
+
+    if docs_directories.is_empty() && required_languages.is_empty() {
+        return Ok((audit_failure, false));
+    }
+    let gap_report = detect_gaps(&GapConfig {
+        docs_dirs: docs_directories.to_vec(),
+        snippet_dirs: directories.to_vec(),
+        required_languages: required_languages.to_vec(),
+        include_base_paths: include_base_paths.to_vec(),
+        configured_references,
+        exclude: exclude.to_vec(),
+    })?;
+    let (gap_structural_failure, gap_has_unreferenced) = report_gaps(&gap_report);
+    Ok((audit_failure, gap_structural_failure || (strict && gap_has_unreferenced)))
+}
+
+fn report_audit(report: &crate::snippets::audit::AuditReport) -> bool {
+    for issue in &report.issues {
+        let message = format!(
+            "snippet audit: {}:{} ({:?}) {}",
+            issue.path.display(),
+            issue.line,
+            issue.kind,
+            issue.message
+        );
+        match issue.severity {
+            AuditSeverity::Error => tracing::error!("{message}"),
+            AuditSeverity::Warning => tracing::warn!("{message}"),
+        }
+    }
+    report.has_errors()
+}
+
+/// Logs every gap finding and returns `(structural_failure, has_unreferenced_snippets)`.
+///
+/// `structural_failure` covers missing include targets, missing required
+/// language variants, undocumented skips, and unknown fence languages —
+/// findings that are never intentional. Unreferenced snippets are reported
+/// separately because they are only a failure under `strict`.
+fn report_gaps(report: &crate::snippets::gaps::GapReport) -> (bool, bool) {
+    for reference in &report.missing_references {
+        tracing::error!(
+            "snippet gap: missing include target {}:{} -> {}",
+            reference.source.display(),
+            reference.line,
+            reference.target.display()
+        );
+    }
+    for path in &report.unreferenced_snippets {
+        tracing::warn!("snippet gap: unreferenced snippet {}", path.display());
+    }
+    for variant in &report.missing_language_variants {
+        tracing::error!(
+            "snippet gap: missing required language variant `{}` for {}",
+            variant.language,
+            variant.group.display()
+        );
+    }
+    for location in &report.skips_without_reason {
+        tracing::error!(
+            "snippet gap: skip without reason {}:{} (block {})",
+            location.path.display(),
+            location.line,
+            location.block_index
+        );
+    }
+    for unknown in &report.unknown_languages {
+        tracing::error!(
+            "snippet gap: unknown fence language {}:{} tag=`{}`",
+            unknown.path.display(),
+            unknown.line,
+            unknown.tag
+        );
+    }
+    let structural_failure = !report.missing_references.is_empty()
+        || !report.missing_language_variants.is_empty()
+        || !report.skips_without_reason.is_empty()
+        || !report.unknown_languages.is_empty();
+    (structural_failure, !report.unreferenced_snippets.is_empty())
 }
 
 fn configured_sessions(

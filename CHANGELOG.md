@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **snippets check**: run the configured audit and gap checks that `--help` already promised, using the same
+  resolved snippet directories as validation. Audit errors and structural gaps (missing include targets, missing
+  required language variants, undocumented skips, unknown fence languages) always fail the gate; unreferenced
+  snippets remain a `strict`-only failure, matching `alef validate`'s existing snippet gate.
 - **Java errors**: align last-error dispatch with the shared FFI conversion, core, and panic taxonomy, and safely
   handle missing error context.
 - **generate manifests**: reconcile Alef-owned generated TOML manifests before post-build processing, so newly
