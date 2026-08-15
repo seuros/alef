@@ -232,10 +232,7 @@ fn extract_rust_snippet(rendered: &str) -> Result<(Vec<&str>, Vec<&str>, bool)> 
         .copied()
         .filter(|line| line.starts_with("use ") && !line.contains("common::"))
         .collect();
-    let function_end = lines[signature + 1..]
-        .iter()
-        .position(|line| *line == "}")
-        .map(|offset| signature + 1 + offset)
+    let function_end = find_function_end(&lines, signature + 1)
         .ok_or_else(|| anyhow::anyhow!("generated Rust fixture function was not closed"))?;
     let body = lines[signature + 1..function_end]
         .iter()
@@ -243,6 +240,87 @@ fn extract_rust_snippet(rendered: &str) -> Result<(Vec<&str>, Vec<&str>, bool)> 
         .filter(|line| !line.trim_start().starts_with("//"))
         .collect();
     Ok((imports, body, lines[signature].starts_with("async fn ")))
+}
+
+/// Locate the line index of the `}` that closes the function whose body begins at `start`
+/// (the line after the signature line, which itself contributed one unmatched `{`).
+///
+/// Tracks brace depth across `"..."` strings (with backslash escapes) and `r"..."` /
+/// `r#"..."#` / `r##"..."##` raw strings (any number of hashes), and skips `//` line
+/// comments, so a `}` embedded in a fixture's raw-string body — including one sitting alone
+/// on its own line — is never mistaken for the function's closing brace.
+///
+/// ~keep: does not model block comments (`/* */`) or char literals (`'x'`); this codegen
+/// path never emits either, so a full lexer would be unjustified complexity here.
+fn find_function_end(lines: &[&str], start: usize) -> Option<usize> {
+    #[derive(Clone, Copy)]
+    enum State {
+        Code,
+        Str,
+        RawStr(usize),
+    }
+
+    let mut depth: i32 = 1;
+    let mut state = State::Code;
+
+    for (offset, line) in lines[start..].iter().enumerate() {
+        let chars: Vec<char> = line.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            match state {
+                State::Code => {
+                    if chars[i] == '/' && chars.get(i + 1) == Some(&'/') {
+                        break; // rest of the line is a line comment
+                    } else if chars[i] == '"' {
+                        state = State::Str;
+                    } else if let Some(hashes) = raw_string_open(&chars, i) {
+                        state = State::RawStr(hashes);
+                        i += 1 + hashes; // skip `r` and the hashes; loop's `i += 1` covers the opening quote
+                    } else if chars[i] == '{' {
+                        depth += 1;
+                    } else if chars[i] == '}' {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(start + offset);
+                        }
+                    }
+                }
+                State::Str => {
+                    if chars[i] == '\\' {
+                        i += 1; // skip the escaped character
+                    } else if chars[i] == '"' {
+                        state = State::Code;
+                    }
+                }
+                State::RawStr(hashes) => {
+                    if chars[i] == '"' && raw_string_close_matches(&chars, i + 1, hashes) {
+                        i += hashes; // skip the closing hashes; loop's `i += 1` covers the closing quote
+                        state = State::Code;
+                    }
+                }
+            }
+            i += 1;
+        }
+    }
+    None
+}
+
+/// If `chars[i..]` opens a raw string (`r"`, `r#"`, `r##"`, ...), return its hash count.
+fn raw_string_open(chars: &[char], i: usize) -> Option<usize> {
+    if chars.get(i) != Some(&'r') {
+        return None;
+    }
+    let mut hashes = 0;
+    while chars.get(i + 1 + hashes) == Some(&'#') {
+        hashes += 1;
+    }
+    if chars.get(i + 1 + hashes) == Some(&'"') { Some(hashes) } else { None }
+}
+
+/// True when `chars[from..]` has at least `hashes` consecutive `#` characters, i.e. a raw
+/// string opened with `hashes` hashes closes at the `"` immediately preceding `from`.
+fn raw_string_close_matches(chars: &[char], from: usize, hashes: usize) -> bool {
+    (0..hashes).all(|offset| chars.get(from + offset) == Some(&'#'))
 }
 
 // ---------------------------------------------------------------------------
@@ -815,6 +893,28 @@ options_type = "ChatRequest"
         assert!(body.contains("\ndef greet(name):"), "{body}");
         assert!(!body.lines().any(|line| line == "}"), "{body}");
         syn::parse_file(&format!("fn main() {{\n{body}\n}}")).expect("generated snippet body parses");
+    }
+
+    #[test]
+    fn snippet_extraction_survives_a_bare_closing_brace_inside_a_raw_string() {
+        let rendered = concat!(
+            "use sample::process;\n",
+            "\n",
+            "fn test_brace_in_literal() {\n",
+            "    let source = r#\"fn example() {\n",
+            "}\n",
+            "let after = 1;\n",
+            "\"#;\n",
+            "    let _ = process(source);\n",
+            "}\n",
+        );
+
+        let (_, body, _) = extract_rust_snippet(rendered).expect("snippet extracts");
+        let body = body.join("\n");
+
+        assert!(body.contains("fn example() {"), "{body}");
+        assert!(body.contains("let after = 1;"), "{body}");
+        assert!(body.contains("let _ = process(source);"), "{body}");
     }
 
     #[test]
