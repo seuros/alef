@@ -476,6 +476,37 @@ pub(crate) fn extract_error_message_template(attrs: &[syn::Attribute]) -> Option
     None
 }
 
+/// Extract `#[alef(error_code = N)]` or its `cfg_attr` form from an error variant. ~keep
+pub(crate) fn extract_alef_error_code(attrs: &[syn::Attribute]) -> Option<u32> {
+    let mut result = None;
+    let mut visit = |meta: &syn::Meta| {
+        let syn::Meta::List(list) = meta else {
+            return;
+        };
+        if !list.path.is_ident("alef") {
+            return;
+        }
+        let _ = list.parse_nested_meta(|nested| {
+            if nested.path.is_ident("error_code") {
+                result = Some(0);
+                let value: syn::LitInt = nested.value()?.parse()?;
+                if let Ok(code) = value.base10_parse() {
+                    result = Some(code);
+                }
+            }
+            Ok(())
+        });
+    };
+    for attr in attrs {
+        if attr.path().is_ident("cfg_attr") {
+            cfg_attr_walk_inner_metas(attr, &mut visit);
+        } else {
+            visit(&attr.meta);
+        }
+    }
+    result
+}
+
 /// Check if a field has a specific attribute (e.g. `#[source]`, `#[from]`).
 pub(crate) fn has_field_attr(attrs: &[syn::Attribute], name: &str) -> bool {
     attrs.iter().any(|a| a.path().is_ident(name))

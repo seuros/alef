@@ -458,6 +458,7 @@ fn test_exception_stubs() {
             variants: vec![
                 ErrorVariant {
                     name: "Download".to_string(),
+                    error_code: None,
                     message_template: None,
                     fields: vec![],
                     has_source: false,
@@ -468,6 +469,7 @@ fn test_exception_stubs() {
                 },
                 ErrorVariant {
                     name: "ParseFailed".to_string(),
+                    error_code: None,
                     message_template: None,
                     fields: vec![],
                     has_source: false,

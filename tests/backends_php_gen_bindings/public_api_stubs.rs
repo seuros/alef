@@ -11,6 +11,7 @@ fn test_multiple_types_with_shared_error() {
         variants: vec![
             ErrorVariant {
                 name: "IoError".to_string(),
+                error_code: None,
                 fields: vec![],
                 doc: "I/O error".to_string(),
                 message_template: Some("I/O failed".to_string()),
@@ -21,6 +22,7 @@ fn test_multiple_types_with_shared_error() {
             },
             ErrorVariant {
                 name: "ParseError".to_string(),
+                error_code: None,
                 fields: vec![],
                 doc: "Parse error".to_string(),
                 message_template: Some("Parse failed".to_string()),

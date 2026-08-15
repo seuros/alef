@@ -612,7 +612,7 @@ pub(super) fn gen_build_rs(
 #[derive(serde::Serialize)]
 struct FfiErrorVariantCode {
     pattern: String,
-    code: i32,
+    code_expression: String,
 }
 
 #[derive(serde::Serialize)]
@@ -636,10 +636,6 @@ pub(super) fn gen_last_error(api: &ApiSurface, prefix: &str, core_import: &str) 
                 .variants
                 .iter()
                 .map(|variant| {
-                    let metadata = taxonomy
-                        .iter()
-                        .find(|entry| entry.error_type == error.rust_path && entry.variant == variant.name)
-                        .expect("taxonomy covers every extracted error variant");
                     let suffix = if variant.is_unit {
                         String::new()
                     } else if variant.is_tuple {
@@ -649,7 +645,16 @@ pub(super) fn gen_last_error(api: &ApiSurface, prefix: &str, core_import: &str) 
                     };
                     FfiErrorVariantCode {
                         pattern: format!("{error_path}::{}{suffix}", variant.name),
-                        code: metadata.code as i32,
+                        code_expression: variant.error_code.map_or_else(
+                            || "ALEF_FFI_UNKNOWN_ERROR".to_string(),
+                            |_| {
+                                let variant_name = crate::codegen::naming::ffi_error_code_variant_name(
+                                    &error.rust_path,
+                                    &variant.name,
+                                );
+                                format!("AlefFfiErrorCode::{variant_name} as i32")
+                            },
+                        ),
                     }
                 })
                 .collect();
@@ -661,6 +666,15 @@ pub(super) fn gen_last_error(api: &ApiSurface, prefix: &str, core_import: &str) 
         minijinja::context! {
             prefix => prefix,
             error_code_impls => error_code_impls,
+            taxonomy => taxonomy.iter().map(|entry| minijinja::context! {
+                code => entry.code,
+                enum_variant => crate::codegen::naming::ffi_error_code_variant_name(&entry.error_type, &entry.variant),
+            }).collect::<Vec<_>>(),
+            no_error_code => ApiSurface::FFI_ERROR_CODE_NONE,
+            conversion_error_code => ApiSurface::FFI_ERROR_CODE_CONVERSION,
+            unknown_error_code => ApiSurface::FFI_ERROR_CODE_UNKNOWN,
+            panic_error_code => ApiSurface::FFI_ERROR_CODE_PANIC,
+            invalid_handle_error_code => ApiSurface::FFI_ERROR_CODE_INVALID_HANDLE,
         },
     )
 }

@@ -430,6 +430,7 @@ fn result_function_checks_last_error_code() {
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
                 name: "Connection".into(),
+                error_code: None,
                 message_template: None,
                 fields: vec![],
                 has_source: false,
@@ -666,6 +667,7 @@ fn error_set_emits_zig_error_with_pascal_case_tags() {
             variants: vec![
                 ErrorVariant {
                     name: "connection_failed".into(),
+                    error_code: None,
                     message_template: None,
                     fields: vec![],
                     has_source: false,
@@ -676,6 +678,7 @@ fn error_set_emits_zig_error_with_pascal_case_tags() {
                 },
                 ErrorVariant {
                     name: "timeout".into(),
+                    error_code: None,
                     message_template: None,
                     fields: vec![],
                     has_source: false,
@@ -772,6 +775,7 @@ fn opaque_handle_with_no_methods_is_emitted() {
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
                 name: "NotFound".into(),
+                error_code: None,
                 message_template: None,
                 fields: vec![],
                 has_source: false,
@@ -905,6 +909,7 @@ fn bool_return_in_error_union_emits_not_zero_conversion() {
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
                 name: "Unauthorized".into(),
+                error_code: None,
                 message_template: None,
                 fields: vec![],
                 has_source: false,
@@ -1046,6 +1051,7 @@ fn error_set_includes_out_of_memory_and_return_type_is_single_error_set() {
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
                 name: "Extraction".into(),
+                error_code: None,
                 message_template: None,
                 fields: vec![],
                 has_source: false,
@@ -1118,6 +1124,7 @@ fn string_param_fallible_defers_free_after_c_call() {
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
                 name: "NotFound".into(),
+                error_code: None,
                 message_template: None,
                 fields: vec![],
                 has_source: false,
@@ -1524,6 +1531,7 @@ type = "CrawlStreamRequest"
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
                 name: "Network".into(),
+                error_code: None,
                 message_template: None,
                 fields: vec![],
                 has_source: false,
@@ -1708,6 +1716,7 @@ type = "CrawlStreamRequest"
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
                 name: "Network".into(),
+                error_code: None,
                 message_template: None,
                 fields: vec![],
                 has_source: false,
@@ -1885,6 +1894,7 @@ type = "BatchCrawlStreamRequest"
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
                 name: "Network".into(),
+                error_code: None,
                 message_template: None,
                 fields: vec![],
                 has_source: false,

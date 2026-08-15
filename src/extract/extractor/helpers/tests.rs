@@ -1,5 +1,6 @@
 use super::attributes::{
-    extract_alef_since, extract_deprecation, extract_serde_rename_all, has_derive, has_derive_path,
+    extract_alef_error_code, extract_alef_since, extract_deprecation, extract_serde_rename_all, has_derive,
+    has_derive_path,
 };
 use super::normalize_rustdoc;
 
@@ -339,6 +340,17 @@ fn test_extract_alef_since_cfg_attr_alef_since_returns_version() {
 fn test_extract_alef_since_strips_leading_v_prefix() {
     let attrs = parse_attrs(r#"#[alef(since = "v1.2.0")]"#);
     assert_eq!(extract_alef_since(&attrs).as_deref(), Some("1.2.0"));
+}
+
+#[test]
+fn test_extract_alef_error_code_from_direct_and_cfg_attr_forms() {
+    let direct: Vec<syn::Attribute> = vec![syn::parse_quote!(#[alef(error_code = 101)])];
+    let gated: Vec<syn::Attribute> = vec![syn::parse_quote!(#[cfg_attr(alef, alef(error_code = 202))])];
+    let invalid: Vec<syn::Attribute> = vec![syn::parse_quote!(#[alef(error_code = -1)])];
+
+    assert_eq!(extract_alef_error_code(&direct), Some(101));
+    assert_eq!(extract_alef_error_code(&gated), Some(202));
+    assert_eq!(extract_alef_error_code(&invalid), Some(0));
 }
 
 #[test]

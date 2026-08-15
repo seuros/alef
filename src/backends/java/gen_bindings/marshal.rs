@@ -468,6 +468,7 @@ mod typed_error_tests {
             name: "RequestError".to_string(),
             rust_path: "sample::RequestError".to_string(),
             variants: vec![crate::core::ir::ErrorVariant {
+                error_code: Some(100),
                 name: "InvalidInput".to_string(),
                 is_unit: true,
                 ..Default::default()

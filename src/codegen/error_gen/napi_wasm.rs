@@ -6,7 +6,11 @@ pub fn gen_napi_error_types(error: &ErrorDef) -> String {
         variants.push((
             variant_const,
             variant.name.clone(),
-            variant.taxonomy(&error.rust_path).code,
+            variant
+                .taxonomy(&error.rust_path)
+                .map_or(crate::core::ir::ApiSurface::FFI_ERROR_CODE_UNKNOWN, |taxonomy| {
+                    taxonomy.code
+                }),
         ));
     }
 
@@ -31,7 +35,12 @@ pub fn gen_napi_error_converter(error: &ErrorDef, core_import: &str) -> String {
     let mut variants = Vec::new();
     for variant in &error.variants {
         let pattern = error_variant_wildcard_pattern(&rust_path, variant);
-        variants.push((pattern, variant.taxonomy(&error.rust_path).code));
+        let code = variant
+            .taxonomy(&error.rust_path)
+            .map_or(crate::core::ir::ApiSurface::FFI_ERROR_CODE_UNKNOWN, |taxonomy| {
+                taxonomy.code
+            });
+        variants.push((pattern, code));
     }
 
     crate::codegen::template_env::render(

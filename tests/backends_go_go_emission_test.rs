@@ -71,6 +71,7 @@ fn test_error_method_uses_value_receiver() {
             variants: vec![
                 ErrorVariant {
                     name: "ConfigError".to_string(),
+                    error_code: None,
                     fields: vec![],
                     doc: String::new(),
                     is_unit: true,
@@ -81,6 +82,7 @@ fn test_error_method_uses_value_receiver() {
                 },
                 ErrorVariant {
                     name: "ParseError".to_string(),
+                    error_code: None,
                     fields: vec![],
                     doc: String::new(),
                     is_unit: true,

@@ -502,6 +502,9 @@ pub struct ErrorDef {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ErrorVariant {
     pub name: String,
+    /// Explicit stable C ABI error code from `#[alef(error_code = N)]`. ~keep
+    #[serde(default)]
+    pub error_code: Option<u32>,
     /// The `#[error("...")]` message template string, e.g. `"I/O error: {0}"`.
     pub message_template: Option<String>,
     /// Fields on this variant (struct or tuple fields).
@@ -525,8 +528,10 @@ pub struct ErrorVariant {
 }
 
 impl ErrorVariant {
-    pub fn taxonomy(&self, error_type: &str) -> ErrorTaxonomy {
-        ErrorTaxonomy::for_variant(error_type, &self.name)
+    /// Returns taxonomy metadata only when the source explicitly allocated a stable code. ~keep
+    pub fn taxonomy(&self, error_type: &str) -> Option<ErrorTaxonomy> {
+        self.error_code
+            .map(|code| ErrorTaxonomy::for_variant(code, error_type, &self.name))
     }
 }
 
@@ -782,6 +787,7 @@ mod tests {
     fn error_variant_field_coverage_witness(value: ErrorVariant) {
         let ErrorVariant {
             name: _,             // identifier; every backend reads it directly
+            error_code: _,       // explicit stable C ABI error taxonomy allocation
             message_template: _, // `#[error("...")]` message template emission
             fields: _,           // drives struct/tuple field codegen
             has_source: _,       // detects `#[source]`/`#[from]` for chained-error codegen

@@ -2169,6 +2169,7 @@ fn mirror_error_introspection_uses_safe_from_conversion_not_transmute() {
         variants: vec![
             ErrorVariant {
                 name: "Auth".to_string(),
+                error_code: None,
                 message_template: None,
                 fields: vec![
                     make_field("message", TypeRef::String, false),
@@ -2182,6 +2183,7 @@ fn mirror_error_introspection_uses_safe_from_conversion_not_transmute() {
             },
             ErrorVariant {
                 name: "Timeout".to_string(),
+                error_code: None,
                 message_template: None,
                 fields: vec![],
                 has_source: false,
@@ -2303,6 +2305,7 @@ fn mirror_error_from_impl_handles_optional_string_duration_and_sanitized_fields(
         variants: vec![
             ErrorVariant {
                 name: "Budget".to_string(),
+                error_code: None,
                 message_template: None,
                 fields: vec![
                     make_error_field("message", TypeRef::String, false, false),
@@ -2316,6 +2319,7 @@ fn mirror_error_from_impl_handles_optional_string_duration_and_sanitized_fields(
             },
             ErrorVariant {
                 name: "RateLimit".to_string(),
+                error_code: None,
                 message_template: None,
                 fields: vec![
                     make_error_field("message", TypeRef::String, false, false),
@@ -2329,6 +2333,7 @@ fn mirror_error_from_impl_handles_optional_string_duration_and_sanitized_fields(
             },
             ErrorVariant {
                 name: "Serialization".to_string(),
+                error_code: None,
                 message_template: None,
                 fields: vec![make_error_field("field0", TypeRef::String, false, true)],
                 has_source: true,
@@ -2440,6 +2445,7 @@ fn mirror_error_from_impl_uses_tuple_syntax_for_tuple_variants() {
         variants: vec![
             ErrorVariant {
                 name: "ExecutionError".to_string(),
+                error_code: None,
                 message_template: None,
                 fields: vec![make_positional_field(0, TypeRef::String)],
                 has_source: false,
@@ -2450,6 +2456,7 @@ fn mirror_error_from_impl_uses_tuple_syntax_for_tuple_variants() {
             },
             ErrorVariant {
                 name: "NetworkError".to_string(),
+                error_code: None,
                 message_template: None,
                 fields: vec![
                     make_positional_field(0, TypeRef::String),
@@ -2463,6 +2470,7 @@ fn mirror_error_from_impl_uses_tuple_syntax_for_tuple_variants() {
             },
             ErrorVariant {
                 name: "SchemaError".to_string(),
+                error_code: None,
                 message_template: None,
                 fields: vec![make_named_field("message", TypeRef::String)],
                 has_source: false,
@@ -2473,6 +2481,7 @@ fn mirror_error_from_impl_uses_tuple_syntax_for_tuple_variants() {
             },
             ErrorVariant {
                 name: "Unknown".to_string(),
+                error_code: None,
                 message_template: None,
                 fields: vec![],
                 has_source: false,

@@ -530,6 +530,7 @@ fn test_error_types() {
             variants: vec![
                 ErrorVariant {
                     name: "NotFound".to_string(),
+                    error_code: None,
                     fields: vec![],
                     message_template: Some("not found".to_string()),
                     doc: "Item not found".to_string(),
@@ -540,6 +541,7 @@ fn test_error_types() {
                 },
                 ErrorVariant {
                     name: "InvalidInput".to_string(),
+                    error_code: None,
                     fields: vec![],
                     message_template: Some("invalid input".to_string()),
                     doc: "Invalid input provided".to_string(),
@@ -833,6 +835,7 @@ fn test_exceptions_py_reexports_native_classes() {
             variants: vec![
                 ErrorVariant {
                     name: "AuthenticationError".to_string(),
+                    error_code: None,
                     fields: vec![],
                     message_template: None,
                     doc: String::new(),
@@ -843,6 +846,7 @@ fn test_exceptions_py_reexports_native_classes() {
                 },
                 ErrorVariant {
                     name: "RateLimitedError".to_string(),
+                    error_code: None,
                     fields: vec![],
                     message_template: None,
                     doc: String::new(),

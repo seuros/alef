@@ -41,13 +41,21 @@ prefix = "sample"
         rust_path: "sample_lib::RequestError".to_string(),
         variants: vec![
             ErrorVariant {
+                error_code: Some(100),
                 name: "InvalidInput".to_string(),
                 is_unit: true,
                 ..ErrorVariant::default()
             },
             ErrorVariant {
+                error_code: Some(101),
                 name: "Unavailable".to_string(),
                 is_tuple: true,
+                ..ErrorVariant::default()
+            },
+            ErrorVariant {
+                error_code: None,
+                name: "Legacy".to_string(),
+                is_unit: true,
                 ..ErrorVariant::default()
             },
         ],
@@ -61,7 +69,25 @@ prefix = "sample"
     let api = ApiSurface {
         crate_name: "sample-lib".to_string(),
         version: "1.0.0".to_string(),
-        errors: vec![error],
+        errors: vec![
+            error,
+            ErrorDef {
+                name: "StorageError".to_string(),
+                rust_path: "sample_lib::StorageError".to_string(),
+                variants: vec![ErrorVariant {
+                    error_code: Some(102),
+                    name: "Unavailable".to_string(),
+                    is_unit: true,
+                    ..ErrorVariant::default()
+                }],
+                original_rust_path: String::new(),
+                doc: String::new(),
+                methods: Vec::new(),
+                binding_excluded: false,
+                binding_exclusion_reason: None,
+                version: VersionAnnotation::default(),
+            },
+        ],
         functions: vec![FunctionDef {
             name: "execute".to_string(),
             rust_path: "sample_lib::execute".to_string(),
@@ -76,15 +102,77 @@ prefix = "sample"
     let files = FfiBackend.generate_bindings(&api, &config).unwrap();
     let lib = files.iter().find(|file| file.path.ends_with("lib.rs")).unwrap();
 
-    assert!(lib.content.contains("const ALEF_FFI_CONVERSION_ERROR: i32 = 1;"));
-    assert!(lib.content.contains("const ALEF_FFI_PANIC_ERROR: i32 = 3;"));
+    assert!(lib.content.contains("pub enum AlefFfiErrorCode"));
+    assert!(lib.content.contains("Conversion = 1"));
+    assert!(lib.content.contains("Unknown = 2"));
+    assert!(lib.content.contains("Panic = 3"));
+    assert!(lib.content.contains("InvalidHandle = 4"));
+    assert!(lib.content.contains("SampleLibRequestErrorUnavailable = 101"));
+    assert!(lib.content.contains("SampleLibStorageErrorUnavailable = 102"));
     assert!(lib.content.contains("sample_lib::RequestError::InvalidInput =>"));
     assert!(lib.content.contains("sample_lib::RequestError::Unavailable(..) =>"));
-    assert!(lib.content.contains("_ => ALEF_FFI_CORE_ERROR"));
+    assert!(
+        lib.content
+            .contains("sample_lib::RequestError::Legacy => ALEF_FFI_UNKNOWN_ERROR")
+    );
+    assert!(lib.content.contains("_ => ALEF_FFI_UNKNOWN_ERROR"));
     assert!(lib.content.contains("set_last_error(alef_ffi_error_code(&e)"));
     for taxonomy in codes {
-        assert!(lib.content.contains(&format!("=> {}", taxonomy.code)));
+        assert!(lib.content.contains(&format!("= {}", taxonomy.code)));
     }
+}
+
+#[test]
+fn ffi_rejects_duplicate_and_reserved_domain_error_codes() {
+    let config = resolved_one(
+        r#"
+[workspace]
+languages = ["ffi"]
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+[crates.ffi]
+prefix = "sample"
+"#,
+    );
+    let make_api = |codes: [u32; 2]| ApiSurface {
+        errors: vec![ErrorDef {
+            name: "RequestError".to_string(),
+            rust_path: "sample_lib::RequestError".to_string(),
+            variants: codes
+                .into_iter()
+                .enumerate()
+                .map(|(index, code)| ErrorVariant {
+                    error_code: Some(code),
+                    name: format!("Variant{index}"),
+                    is_unit: true,
+                    ..ErrorVariant::default()
+                })
+                .collect(),
+            original_rust_path: String::new(),
+            doc: String::new(),
+            methods: Vec::new(),
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: VersionAnnotation::default(),
+        }],
+        ..ApiSurface::default()
+    };
+
+    let duplicate = FfiBackend
+        .generate_bindings(&make_api([100, 100]), &config)
+        .unwrap_err();
+    assert!(
+        duplicate
+            .to_string()
+            .contains("sample_lib::RequestError::Variant1 duplicates")
+    );
+    let reserved = FfiBackend.generate_bindings(&make_api([2, 100]), &config).unwrap_err();
+    assert!(
+        reserved
+            .to_string()
+            .contains("sample_lib::RequestError::Variant0 is outside the domain range")
+    );
 }
 
 #[test]

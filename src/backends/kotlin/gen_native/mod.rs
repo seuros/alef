@@ -395,6 +395,7 @@ mod typed_error_tests {
             name: "RequestError".to_string(),
             rust_path: "sample::RequestError".to_string(),
             variants: vec![crate::core::ir::ErrorVariant {
+                error_code: Some(100),
                 name: "InvalidInput".to_string(),
                 is_unit: true,
                 ..Default::default()
@@ -413,7 +414,9 @@ mod typed_error_tests {
             error_type: Some("RequestError".to_string()),
             ..Default::default()
         };
-        let taxonomy = error.variants[0].taxonomy(&error.rust_path);
+        let taxonomy = error.variants[0]
+            .taxonomy(&error.rust_path)
+            .expect("explicit test error code");
         let mut output = String::new();
 
         emit_native_function(

@@ -1381,6 +1381,7 @@ fn make_tuple_error_api() -> ApiSurface {
             variants: vec![
                 ErrorVariant {
                     name: "ParseError".to_string(),
+                    error_code: None,
                     message_template: Some("HTML parsing error: {0}".to_string()),
                     fields: vec![FieldDef {
                         version: Default::default(),
@@ -1411,6 +1412,7 @@ fn make_tuple_error_api() -> ApiSurface {
                 },
                 ErrorVariant {
                     name: "Located".to_string(),
+                    error_code: None,
                     message_template: Some("Error at {0}:{1}".to_string()),
                     fields: vec![
                         FieldDef {
@@ -1464,6 +1466,7 @@ fn make_tuple_error_api() -> ApiSurface {
                 },
                 ErrorVariant {
                     name: "Unknown".to_string(),
+                    error_code: None,
                     message_template: Some("unknown error".to_string()),
                     fields: vec![],
                     has_source: false,
@@ -2218,6 +2221,7 @@ fn make_exclude_types_api() -> ApiSurface {
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
                 name: "Generic".into(),
+                error_code: None,
                 message_template: Some("error".into()),
                 fields: vec![FieldDef {
                     version: Default::default(),

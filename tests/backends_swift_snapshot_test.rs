@@ -182,6 +182,7 @@ fn make_basic_api() -> ApiSurface {
             variants: vec![
                 ErrorVariant {
                     name: "InvalidInput".to_string(),
+                    error_code: None,
                     message_template: Some("invalid input provided".to_string()),
                     fields: vec![],
                     has_source: false,
@@ -192,6 +193,7 @@ fn make_basic_api() -> ApiSurface {
                 },
                 ErrorVariant {
                     name: "ProcessingFailed".to_string(),
+                    error_code: None,
                     message_template: Some("processing failed".to_string()),
                     fields: vec![],
                     has_source: false,
@@ -792,6 +794,7 @@ fn snapshot_tuple_field_as_vec() {
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
                 name: "ExtractionFailed".to_string(),
+                error_code: None,
                 message_template: Some("keyword extraction failed".to_string()),
                 fields: vec![],
                 has_source: false,

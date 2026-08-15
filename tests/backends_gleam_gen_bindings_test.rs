@@ -294,6 +294,7 @@ fn error_emits_custom_type() {
             variants: vec![
                 ErrorVariant {
                     name: "NotFound".into(),
+                    error_code: None,
                     message_template: None,
                     fields: vec![],
                     has_source: false,
@@ -304,6 +305,7 @@ fn error_emits_custom_type() {
                 },
                 ErrorVariant {
                     name: "InvalidInput".into(),
+                    error_code: None,
                     message_template: None,
                     fields: vec![make_field("details", TypeRef::String, false)],
                     has_source: false,

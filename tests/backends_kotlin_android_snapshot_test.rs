@@ -177,6 +177,7 @@ fn make_basic_api() -> ApiSurface {
             variants: vec![
                 ErrorVariant {
                     name: "InvalidInput".to_string(),
+                    error_code: None,
                     message_template: Some("invalid input provided".to_string()),
                     fields: vec![],
                     has_source: false,
@@ -187,6 +188,7 @@ fn make_basic_api() -> ApiSurface {
                 },
                 ErrorVariant {
                     name: "ProcessingFailed".to_string(),
+                    error_code: None,
                     message_template: Some("processing failed".to_string()),
                     fields: vec![],
                     has_source: false,

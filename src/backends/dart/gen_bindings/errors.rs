@@ -200,6 +200,7 @@ mod tests {
             rust_path: "demo::ApiError".to_string(),
             original_rust_path: String::new(),
             variants: vec![crate::core::ir::ErrorVariant {
+                error_code: Some(100),
                 name: "NotFound".to_string(),
                 message_template: Some("not found".to_string()),
                 fields: vec![],

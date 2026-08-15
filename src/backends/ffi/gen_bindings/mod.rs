@@ -40,6 +40,7 @@ impl Backend for FfiBackend {
     }
 
     fn generate_bindings(&self, api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+        api.validate_error_taxonomy()?;
         let prefix = config.ffi_prefix();
         let header_name = config.ffi_header_name();
         let lib_name = config.ffi_lib_name();

@@ -382,6 +382,7 @@ fn test_opaque_error_type_uses_value_semantics() {
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
                 name: "ValidationError".to_string(),
+                error_code: None,
                 fields: vec![],
                 doc: "Validation failed".to_string(),
                 message_template: Some("validation failed".to_string()),

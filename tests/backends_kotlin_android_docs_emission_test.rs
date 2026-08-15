@@ -292,6 +292,7 @@ fn error_type_with_methods_emits_abstract_properties() {
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
                 name: "NotFound".into(),
+                error_code: None,
                 message_template: Some("not found".into()),
                 fields: vec![],
                 has_source: false,

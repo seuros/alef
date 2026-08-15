@@ -999,6 +999,7 @@ fn test_error_types() {
             variants: vec![
                 ErrorVariant {
                     name: "NotFound".to_string(),
+                    error_code: None,
                     fields: vec![],
                     doc: "Item not found".to_string(),
                     message_template: Some("not found".to_string()),
@@ -1009,6 +1010,7 @@ fn test_error_types() {
                 },
                 ErrorVariant {
                     name: "InvalidInput".to_string(),
+                    error_code: None,
                     fields: vec![make_field("reason", TypeRef::String, false)],
                     doc: "Invalid input provided".to_string(),
                     message_template: Some("invalid: {0}".to_string()),

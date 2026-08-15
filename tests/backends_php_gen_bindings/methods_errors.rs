@@ -171,6 +171,7 @@ fn test_error_types() {
             variants: vec![
                 ErrorVariant {
                     name: "NotFound".to_string(),
+                    error_code: None,
                     fields: vec![],
                     doc: "Resource not found".to_string(),
                     message_template: Some("resource not found".to_string()),
@@ -181,6 +182,7 @@ fn test_error_types() {
                 },
                 ErrorVariant {
                     name: "InvalidInput".to_string(),
+                    error_code: None,
                     fields: vec![make_field("reason", TypeRef::String, false)],
                     doc: "Invalid input provided".to_string(),
                     message_template: Some("invalid input: {reason}".to_string()),
@@ -277,6 +279,7 @@ fn test_async_function() {
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
                 name: "NetworkError".to_string(),
+                error_code: None,
                 fields: vec![],
                 doc: "Network error".to_string(),
                 message_template: Some("network failure".to_string()),
@@ -383,6 +386,7 @@ fn test_cfg_gated_async_function() {
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
                 name: "NotAvailable".to_string(),
+                error_code: None,
                 fields: vec![],
                 doc: "Feature not available".to_string(),
                 message_template: Some("embeddings not available".to_string()),

@@ -422,6 +422,7 @@ mod tests {
                 rust_path: "sample::Error".to_string(),
                 original_rust_path: String::new(),
                 variants: vec![ErrorVariant {
+                    error_code: None,
                     name: "Invalid".to_string(),
                     message_template: None,
                     fields: vec![sanitized_field("source", "InternalError")],

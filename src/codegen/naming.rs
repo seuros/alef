@@ -827,5 +827,20 @@ pub fn pascal_to_screaming_snake(name: &str) -> String {
     pascal_to_snake(name).to_ascii_uppercase()
 }
 
+/// Produce a project-agnostic C ABI error-enum member from its canonical Rust identity. ~keep
+pub fn ffi_error_code_variant_name(error_type: &str, variant: &str) -> String {
+    format!("{error_type}_{variant}")
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .to_pascal_case()
+}
+
 #[cfg(test)]
 mod tests;

@@ -153,15 +153,67 @@ pub struct ApiSurface {
 }
 
 impl ApiSurface {
-    /// Returns deterministic, collision-free taxonomy metadata for every error variant. ~keep
+    pub(crate) const FFI_ERROR_CODE_NONE: u32 = 0;
+    pub(crate) const FFI_ERROR_CODE_CONVERSION: u32 = 1;
+    pub(crate) const FFI_ERROR_CODE_UNKNOWN: u32 = 2;
+    pub(crate) const FFI_ERROR_CODE_PANIC: u32 = 3;
+    pub(crate) const FFI_ERROR_CODE_INVALID_HANDLE: u32 = 4;
+    pub(crate) const FFI_ERROR_CODE_DOMAIN_MIN: u32 = 100;
+    pub(crate) const FFI_ERROR_CODE_DOMAIN_MAX: u32 = i32::MAX as u32;
+
+    /// Returns checked-in taxonomy metadata for explicitly numbered error variants. ~keep
     pub fn error_taxonomy(&self) -> Vec<ErrorTaxonomy> {
-        let mut taxonomy: Vec<_> = self
-            .errors
+        self.errors
             .iter()
-            .flat_map(|error| error.variants.iter().map(|variant| variant.taxonomy(&error.rust_path)))
-            .collect();
-        ErrorTaxonomy::ensure_unique_codes(&mut taxonomy);
-        taxonomy
+            .flat_map(|error| {
+                error
+                    .variants
+                    .iter()
+                    .filter_map(|variant| variant.taxonomy(&error.rust_path))
+            })
+            .collect()
+    }
+
+    pub(crate) fn validate_error_taxonomy(&self) -> anyhow::Result<()> {
+        let mut allocated: std::collections::HashMap<u32, (String, String)> = std::collections::HashMap::new();
+        let mut member_names = std::collections::HashMap::new();
+        for entry in self.error_taxonomy() {
+            if !(Self::FFI_ERROR_CODE_DOMAIN_MIN..=Self::FFI_ERROR_CODE_DOMAIN_MAX).contains(&entry.code) {
+                anyhow::bail!(
+                    "FFI error code {} for {}::{} is outside the domain range {}..={}",
+                    entry.code,
+                    entry.error_type,
+                    entry.variant,
+                    Self::FFI_ERROR_CODE_DOMAIN_MIN,
+                    Self::FFI_ERROR_CODE_DOMAIN_MAX
+                );
+            }
+            if let Some((error_type, variant)) =
+                allocated.insert(entry.code, (entry.error_type.clone(), entry.variant.clone()))
+            {
+                anyhow::bail!(
+                    "FFI error code {} for {}::{} duplicates {}::{}",
+                    entry.code,
+                    entry.error_type,
+                    entry.variant,
+                    error_type,
+                    variant
+                );
+            }
+            let member_name = crate::codegen::naming::ffi_error_code_variant_name(&entry.error_type, &entry.variant);
+            if let Some((error_type, variant)) =
+                member_names.insert(member_name.clone(), (entry.error_type.clone(), entry.variant.clone()))
+            {
+                anyhow::bail!(
+                    "FFI error enum member {member_name} for {}::{} collides with {}::{}",
+                    entry.error_type,
+                    entry.variant,
+                    error_type,
+                    variant
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Returns a clone of this surface with same-named cfg-variant functions collapsed to one.

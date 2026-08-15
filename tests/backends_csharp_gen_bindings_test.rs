@@ -797,6 +797,7 @@ fn test_error_helper_preserves_base_error_acronym_class_name() {
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
                 name: "InvalidInput".to_string(),
+                error_code: None,
                 message_template: Some("invalid input: {0}".to_string()),
                 fields: vec![],
                 has_source: false,
@@ -1381,6 +1382,7 @@ fn test_duplicate_variant_names_across_error_enums_do_not_corrupt_files() {
 
     let make_variant = |name: &str, doc: &str, is_unit: bool| ErrorVariant {
         name: name.to_string(),
+        error_code: None,
         message_template: Some(format!("{}: {{0}}", name.to_lowercase())),
         fields: vec![],
         has_source: false,

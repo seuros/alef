@@ -41,6 +41,7 @@ fn make_api_with_binding_excluded_error() -> ApiSurface {
             variants: vec![
                 ErrorVariant {
                     name: "UnitVariant".to_string(),
+                    error_code: None,
                     message_template: Some("unit variant".to_string()),
                     fields: vec![],
                     has_source: false,
@@ -51,6 +52,7 @@ fn make_api_with_binding_excluded_error() -> ApiSurface {
                 },
                 ErrorVariant {
                     name: "TupleWithExcludedField".to_string(),
+                    error_code: None,
                     message_template: Some("tuple with excluded field".to_string()),
                     fields: vec![make_binding_excluded_field(
                         "",
@@ -64,6 +66,7 @@ fn make_api_with_binding_excluded_error() -> ApiSurface {
                 },
                 ErrorVariant {
                     name: "StructWithExcludedField".to_string(),
+                    error_code: None,
                     message_template: Some("struct with excluded field".to_string()),
                     fields: vec![make_binding_excluded_field(
                         "error",

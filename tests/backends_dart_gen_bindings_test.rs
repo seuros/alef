@@ -1069,6 +1069,7 @@ fn error_type_emits_sealed_class_hierarchy() {
             variants: vec![
                 ErrorVariant {
                     name: "NotFound".into(),
+                    error_code: None,
                     message_template: Some("Resource not found".into()),
                     fields: vec![],
                     has_source: false,
@@ -1079,6 +1080,7 @@ fn error_type_emits_sealed_class_hierarchy() {
                 },
                 ErrorVariant {
                     name: "InvalidFormat".into(),
+                    error_code: None,
                     message_template: Some("Invalid format at line {0}".into()),
                     fields: vec![make_field("line_number", TypeRef::Primitive(PrimitiveType::I32), false)],
                     has_source: false,
@@ -1977,6 +1979,7 @@ fn error_message_template_strips_placeholders_and_escapes_special_chars() {
             variants: vec![
                 ErrorVariant {
                     name: "Plugin".into(),
+                    error_code: None,
                     message_template: Some("Plugin error in '{plugin_name}': {message}".into()),
                     fields: vec![
                         make_field("plugin_name", TypeRef::String, false),
@@ -1990,6 +1993,7 @@ fn error_message_template_strips_placeholders_and_escapes_special_chars() {
                 },
                 ErrorVariant {
                     name: "WithBackslash".into(),
+                    error_code: None,
                     message_template: Some("Path C:\\Users\\{name}".into()),
                     fields: vec![make_field("name", TypeRef::String, false)],
                     has_source: false,
@@ -2000,6 +2004,7 @@ fn error_message_template_strips_placeholders_and_escapes_special_chars() {
                 },
                 ErrorVariant {
                     name: "WithDollar".into(),
+                    error_code: None,
                     message_template: Some("Cost: ${amount}".into()),
                     fields: vec![make_field("amount", TypeRef::Primitive(PrimitiveType::I32), false)],
                     has_source: false,

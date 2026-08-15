@@ -5,9 +5,22 @@ thread_local! {
         const { RefCell::new(std::collections::BTreeMap::new()) };
 }
 
-const ALEF_FFI_CONVERSION_ERROR: i32 = 1;
-const ALEF_FFI_CORE_ERROR: i32 = 2;
-const ALEF_FFI_PANIC_ERROR: i32 = 3;
+#[repr(i32)]
+pub enum AlefFfiErrorCode {
+    None = {{ no_error_code }},
+    Conversion = {{ conversion_error_code }},
+    Unknown = {{ unknown_error_code }},
+    Panic = {{ panic_error_code }},
+    InvalidHandle = {{ invalid_handle_error_code }},
+{% for entry in taxonomy %}
+    {{ entry.enum_variant }} = {{ entry.code }},
+{% endfor %}
+}
+
+const ALEF_FFI_CONVERSION_ERROR: i32 = AlefFfiErrorCode::Conversion as i32;
+const ALEF_FFI_UNKNOWN_ERROR: i32 = AlefFfiErrorCode::Unknown as i32;
+const ALEF_FFI_PANIC_ERROR: i32 = AlefFfiErrorCode::Panic as i32;
+const ALEF_INVALID_HANDLE_ERROR: i32 = AlefFfiErrorCode::InvalidHandle as i32;
 
 fn alef_ffi_error_code(error: &dyn std::any::Any) -> i32 {
 {% for error_code_impl in error_code_impls %}
@@ -15,13 +28,13 @@ fn alef_ffi_error_code(error: &dyn std::any::Any) -> i32 {
         #[allow(unreachable_patterns)]
         return match error {
 {% for variant in error_code_impl.variants %}
-            {{ variant.pattern }} => {{ variant.code }},
+            {{ variant.pattern }} => {{ variant.code_expression }},
 {% endfor %}
-            _ => ALEF_FFI_CORE_ERROR,
+            _ => ALEF_FFI_UNKNOWN_ERROR,
         };
     }
 {% endfor %}
-    ALEF_FFI_CORE_ERROR
+    ALEF_FFI_UNKNOWN_ERROR
 }
 
 fn set_last_error(code: i32, message: &str) {

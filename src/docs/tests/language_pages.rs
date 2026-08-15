@@ -405,6 +405,7 @@ fn test_generate_docs_with_error_appears_in_lang_page_and_errors_md() {
             original_rust_path: String::new(),
             variants: vec![
                 crate::core::ir::ErrorVariant {
+                    error_code: None,
                     name: "InvalidInput".to_string(),
                     message_template: Some("Invalid input: {0}".to_string()),
                     fields: vec![],
@@ -415,6 +416,7 @@ fn test_generate_docs_with_error_appears_in_lang_page_and_errors_md() {
                     doc: String::new(),
                 },
                 crate::core::ir::ErrorVariant {
+                    error_code: None,
                     name: "IoError".to_string(),
                     message_template: None,
                     fields: vec![],

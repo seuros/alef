@@ -360,6 +360,7 @@ fn native_fallible_function_checks_error_code() {
             doc: String::new(),
             variants: vec![ErrorVariant {
                 name: "ParseFailed".to_string(),
+                error_code: None,
                 is_unit: true,
                 is_tuple: false,
                 fields: vec![],

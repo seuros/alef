@@ -118,6 +118,7 @@ mod tests {
             name: "RequestError".to_string(),
             rust_path: "sample::RequestError".to_string(),
             variants: vec![crate::core::ir::ErrorVariant {
+                error_code: Some(100),
                 name: "InvalidInput".to_string(),
                 is_unit: true,
                 ..Default::default()
@@ -129,7 +130,9 @@ mod tests {
             binding_exclusion_reason: None,
             version: Default::default(),
         }];
-        let taxonomy = errors[0].variants[0].taxonomy(&errors[0].rust_path);
+        let taxonomy = errors[0].variants[0]
+            .taxonomy(&errors[0].rust_path)
+            .expect("explicit test error code");
         let mut out = String::new();
         emit_helpers("example_pack", &errors, std::slice::from_ref(&taxonomy), &mut out);
 

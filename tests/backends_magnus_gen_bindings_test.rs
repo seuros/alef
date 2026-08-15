@@ -743,6 +743,7 @@ fn test_error_types() {
             variants: vec![
                 ErrorVariant {
                     name: "InvalidFormat".to_string(),
+                    error_code: None,
                     fields: vec![],
                     doc: "Invalid format".to_string(),
                     message_template: Some("invalid format provided".to_string()),
@@ -753,6 +754,7 @@ fn test_error_types() {
                 },
                 ErrorVariant {
                     name: "OutOfRange".to_string(),
+                    error_code: None,
                     fields: vec![],
                     doc: "Out of range".to_string(),
                     message_template: Some("value out of range".to_string()),

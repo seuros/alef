@@ -502,6 +502,7 @@ mod tests {
             rust_path: "lib::LibError".to_string(),
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
+                error_code: Some(100),
                 name: "Io".to_string(),
                 message_template: None,
                 fields: vec![],
@@ -588,6 +589,7 @@ mod tests {
         use crate::core::ir::{ErrorDef, ErrorVariant};
 
         let make_variant = |name: &str| ErrorVariant {
+            error_code: Some(100),
             name: name.to_string(),
             message_template: None,
             fields: vec![],

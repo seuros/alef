@@ -527,6 +527,7 @@ fn mpp_error_sealed_class_in_common_main() {
             doc: String::new(),
             variants: vec![ErrorVariant {
                 name: "NotFound".into(),
+                error_code: None,
                 message_template: Some("not found".into()),
                 fields: vec![],
                 has_source: false,

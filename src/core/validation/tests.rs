@@ -579,6 +579,7 @@ fn api_surface_validation_checks_enum_and_error_variant_fields() {
             rust_path: "sample_lib::SampleError".to_string(),
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
+                error_code: None,
                 name: "Invalid".to_string(),
                 fields: vec![field_def("metadata", TypeRef::Named("JsonValue".to_string()))],
                 ..ErrorVariant::default()
@@ -630,6 +631,7 @@ fn api_surface_validation_skips_binding_excluded_variant_fields() {
             rust_path: "sample_lib::SampleError".to_string(),
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
+                error_code: None,
                 name: "Invalid".to_string(),
                 fields: vec![excluded_field],
                 ..ErrorVariant::default()

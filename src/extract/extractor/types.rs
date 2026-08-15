@@ -5,9 +5,10 @@ use super::helpers::extract_binding_exclusion_reason;
 use crate::extract::type_resolver;
 
 use super::helpers::{
-    build_rust_path, extract_cfg_condition, extract_doc_comments, extract_enum_variant, extract_error_message_template,
-    extract_field, extract_field_binding_exclusion_reason, extract_field_type_rust_path, extract_serde_rename_all,
-    extract_version_annotation, has_cfg_attribute, has_derive, has_field_attr, is_pub, syn_type_is_boxed,
+    build_rust_path, extract_alef_error_code, extract_cfg_condition, extract_doc_comments, extract_enum_variant,
+    extract_error_message_template, extract_field, extract_field_binding_exclusion_reason,
+    extract_field_type_rust_path, extract_serde_rename_all, extract_version_annotation, has_cfg_attribute, has_derive,
+    has_field_attr, is_pub, syn_type_is_boxed,
 };
 
 /// Return true when the enum has `#[serde(untagged)]`.
@@ -294,6 +295,7 @@ pub(crate) fn extract_error_enum(item: &syn::ItemEnum, crate_name: &str, module_
 
             ErrorVariant {
                 name: v.ident.to_string(),
+                error_code: extract_alef_error_code(&v.attrs),
                 message_template,
                 fields,
                 has_source,

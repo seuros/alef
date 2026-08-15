@@ -66,6 +66,7 @@ fn sample_error() -> ErrorDef {
         original_rust_path: String::new(),
         variants: vec![
             ErrorVariant {
+                error_code: Some(100),
                 name: "ParseError".to_string(),
                 message_template: Some("HTML parsing error: {0}".to_string()),
                 fields: vec![tuple_field(0)],
@@ -76,6 +77,7 @@ fn sample_error() -> ErrorDef {
                 doc: String::new(),
             },
             ErrorVariant {
+                error_code: Some(101),
                 name: "IoError".to_string(),
                 message_template: Some("I/O error: {0}".to_string()),
                 fields: vec![tuple_field(0)],
@@ -86,6 +88,7 @@ fn sample_error() -> ErrorDef {
                 doc: String::new(),
             },
             ErrorVariant {
+                error_code: Some(102),
                 name: "Other".to_string(),
                 message_template: Some("Conversion error: {0}".to_string()),
                 fields: vec![tuple_field(0)],
@@ -157,7 +160,10 @@ fn test_gen_error_types() {
 #[test]
 fn test_gen_error_converter() {
     let error = sample_error();
-    let parse_code = error.variants[0].taxonomy(&error.rust_path).code;
+    let parse_code = error.variants[0]
+        .taxonomy(&error.rust_path)
+        .expect("explicit test error code")
+        .code;
     let output = gen_pyo3_error_converter(&error, "sample_markup_rs");
     assert!(output.contains("fn conversion_error_to_py_err(e: sample_markup_rs::ConversionError) -> pyo3::PyErr {"));
     assert!(output.contains(&format!(
@@ -181,6 +187,7 @@ fn test_unit_variant_pattern() {
         rust_path: "my_crate::MyError".to_string(),
         original_rust_path: String::new(),
         variants: vec![ErrorVariant {
+            error_code: Some(100),
             name: "NotFound".to_string(),
             message_template: Some("not found".to_string()),
             fields: vec![],
@@ -196,7 +203,10 @@ fn test_unit_variant_pattern() {
         binding_exclusion_reason: None,
         version: Default::default(),
     };
-    let code = error.variants[0].taxonomy(&error.rust_path).code;
+    let code = error.variants[0]
+        .taxonomy(&error.rust_path)
+        .expect("explicit test error code")
+        .code;
     let output = gen_pyo3_error_converter(&error, "my_crate");
     assert!(output.contains(&format!(
         "my_crate::MyError::NotFound => NotFoundError::new_err(format!(\"[{code}] {{}}\", msg)),"
@@ -211,6 +221,7 @@ fn test_struct_variant_pattern() {
         rust_path: "my_crate::MyError".to_string(),
         original_rust_path: String::new(),
         variants: vec![ErrorVariant {
+            error_code: Some(100),
             name: "Parsing".to_string(),
             message_template: Some("parsing error: {message}".to_string()),
             fields: vec![named_field("message")],
@@ -226,7 +237,10 @@ fn test_struct_variant_pattern() {
         binding_exclusion_reason: None,
         version: Default::default(),
     };
-    let code = error.variants[0].taxonomy(&error.rust_path).code;
+    let code = error.variants[0]
+        .taxonomy(&error.rust_path)
+        .expect("explicit test error code")
+        .code;
     let output = gen_pyo3_error_converter(&error, "my_crate");
     assert!(
         output.contains(&format!(
@@ -249,7 +263,10 @@ fn test_gen_napi_error_types() {
 #[test]
 fn test_gen_napi_error_converter() {
     let error = sample_error();
-    let parse_code = error.variants[0].taxonomy(&error.rust_path).code;
+    let parse_code = error.variants[0]
+        .taxonomy(&error.rust_path)
+        .expect("explicit test error code")
+        .code;
     let output = gen_napi_error_converter(&error, "sample_markup_rs");
     assert!(output.contains("fn conversion_error_to_napi_err(e: sample_markup_rs::ConversionError) -> napi::Error {"));
     assert!(output.contains("napi::Error::new(napi::Status::GenericFailure,"));
@@ -264,6 +281,7 @@ fn test_napi_unit_variant() {
         rust_path: "my_crate::MyError".to_string(),
         original_rust_path: String::new(),
         variants: vec![ErrorVariant {
+            error_code: Some(100),
             name: "NotFound".to_string(),
             message_template: None,
             fields: vec![],
@@ -368,6 +386,7 @@ fn test_gen_go_error_struct_no_field_method_collision() {
         original_rust_path: String::new(),
         doc: String::new(),
         variants: vec![ErrorVariant {
+            error_code: Some(100),
             name: "Network".to_string(),
             message_template: None,
             fields: vec![],
@@ -596,6 +615,7 @@ fn test_acronym_aware_snake_phrase_plain_words() {
 #[test]
 fn test_variant_display_message_acronym_first_word() {
     let variant = ErrorVariant {
+        error_code: Some(100),
         name: "Io".to_string(),
         message_template: Some("I/O error: {0}".to_string()),
         fields: vec![tuple_field(0)],
@@ -612,6 +632,7 @@ fn test_variant_display_message_acronym_first_word() {
 #[test]
 fn test_variant_display_message_no_template_uses_acronyms() {
     let variant = ErrorVariant {
+        error_code: Some(100),
         name: "IoError".to_string(),
         message_template: None,
         fields: vec![],
@@ -627,6 +648,7 @@ fn test_variant_display_message_no_template_uses_acronyms() {
 #[test]
 fn test_variant_display_message_struct_template_no_leak() {
     let variant = ErrorVariant {
+        error_code: Some(100),
         name: "Ocr".to_string(),
         message_template: Some("OCR error: {message}".to_string()),
         fields: vec![named_field("message")],
@@ -648,6 +670,7 @@ fn test_go_sentinels_no_placeholder_leak() {
         original_rust_path: String::new(),
         variants: vec![
             ErrorVariant {
+                error_code: Some(100),
                 name: "Io".to_string(),
                 message_template: Some("IO error: {message}".to_string()),
                 fields: vec![named_field("message")],
@@ -658,6 +681,7 @@ fn test_go_sentinels_no_placeholder_leak() {
                 doc: String::new(),
             },
             ErrorVariant {
+                error_code: Some(100),
                 name: "Ocr".to_string(),
                 message_template: Some("OCR error: {message}".to_string()),
                 fields: vec![named_field("message")],
@@ -668,6 +692,7 @@ fn test_go_sentinels_no_placeholder_leak() {
                 doc: String::new(),
             },
             ErrorVariant {
+                error_code: Some(100),
                 name: "Timeout".to_string(),
                 message_template: Some("extraction timed out after {elapsed_ms}ms (limit: {limit_ms}ms)".to_string()),
                 fields: vec![named_field("elapsed_ms"), named_field("limit_ms")],

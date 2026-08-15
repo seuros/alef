@@ -1120,6 +1120,7 @@ fn error_enum_conforms_to_error_protocol() {
             variants: vec![
                 ErrorVariant {
                     name: "NotFound".into(),
+                    error_code: None,
                     message_template: Some("Resource not found".into()),
                     fields: vec![],
                     has_source: false,
@@ -1130,6 +1131,7 @@ fn error_enum_conforms_to_error_protocol() {
                 },
                 ErrorVariant {
                     name: "Timeout".into(),
+                    error_code: None,
                     message_template: Some("Request timed out".into()),
                     fields: vec![],
                     has_source: false,
@@ -1177,6 +1179,7 @@ fn error_enum_named_error_is_renamed_to_module_error() {
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
                 name: "NotFound".into(),
+                error_code: None,
                 message_template: Some("not found".into()),
                 fields: vec![],
                 has_source: false,
@@ -1229,6 +1232,7 @@ fn error_enum_with_methods_emits_extension_properties() {
             variants: vec![
                 ErrorVariant {
                     name: "NotFound".into(),
+                    error_code: None,
                     message_template: Some("not found".into()),
                     fields: vec![],
                     has_source: false,
@@ -1239,6 +1243,7 @@ fn error_enum_with_methods_emits_extension_properties() {
                 },
                 ErrorVariant {
                     name: "ServerError".into(),
+                    error_code: None,
                     message_template: Some("server error".into()),
                     fields: vec![make_field("status", TypeRef::Primitive(PrimitiveType::U16), false)],
                     has_source: false,
@@ -3131,6 +3136,7 @@ fn opaque_type_returned_from_free_function_emits_forwarder() {
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
                 name: "Unknown".to_string(),
+                error_code: None,
                 message_template: Some("Unknown error".to_string()),
                 is_unit: true,
                 fields: vec![],

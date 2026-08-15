@@ -895,6 +895,7 @@ fn test_duplicate_error_variant_exception_classes_are_emitted_once() {
     let config = make_test_config("dev.example");
     let duplicate_variant = ErrorVariant {
         name: "DepthLimitExceeded".to_string(),
+        error_code: None,
         message_template: Some("depth limit exceeded".to_string()),
         fields: vec![],
         has_source: false,

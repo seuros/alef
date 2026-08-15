@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **wasm scaffold**: publish a conditional `exports` map that resolves package self-imports to generated Node entrypoints
   while keeping the browser condition on the explicitly initialized web build. This lets generated snippets and e2e
   tests import the package by name after `wasm-pack` builds its target directories.
+- **FFI errors**: replace unstable hash-derived domain error codes with explicit `#[alef(error_code = N)]` allocations,
+  validate their public range and uniqueness, and emit a cbindgen-visible `AlefFfiErrorCode` enum. Unannotated variants
+  now use the stable `Unknown = 2` fallback instead of accidentally creating a rename-sensitive ABI contract.
 - **e2e/dart snippets**: stop emitting a call to the undefined `_fixtureUrl` helper in doc snippets for
   `client_factory` calls. The helper is defined only by the full e2e test-file emitter, never by the standalone
   snippet emitter, so every snippet constructing a client failed to compile with "The function '_fixtureUrl' isn't

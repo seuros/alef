@@ -1548,6 +1548,7 @@ fn make_error_with_methods() -> ErrorDef {
         original_rust_path: String::new(),
         variants: vec![ErrorVariant {
             name: "NotFound".into(),
+            error_code: None,
             message_template: Some("not found".into()),
             fields: vec![],
             has_source: false,

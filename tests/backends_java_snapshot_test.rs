@@ -338,6 +338,7 @@ fn print_generated_java_code() {
             variants: vec![
                 ErrorVariant {
                     name: "IoError".to_string(),
+                    error_code: None,
                     message_template: Some("I/O error".to_string()),
                     fields: vec![],
                     has_source: false,
@@ -348,6 +349,7 @@ fn print_generated_java_code() {
                 },
                 ErrorVariant {
                     name: "ParseError".to_string(),
+                    error_code: None,
                     message_template: Some("Parsing failed".to_string()),
                     fields: vec![],
                     has_source: false,

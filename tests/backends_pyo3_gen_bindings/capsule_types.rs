@@ -144,6 +144,7 @@ fn test_capsule_types_end_to_end() {
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
                 name: "NotFound".to_string(),
+                error_code: None,
                 message_template: Some("language not found: {0}".to_string()),
                 fields: vec![make_field("msg", TypeRef::String, false)],
                 has_source: false,

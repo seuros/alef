@@ -65,6 +65,7 @@ mod tests {
 
     fn variant(name: &str, template: Option<&str>) -> ErrorVariant {
         ErrorVariant {
+            error_code: None,
             name: name.to_string(),
             message_template: template.map(str::to_string),
             ..ErrorVariant::default()

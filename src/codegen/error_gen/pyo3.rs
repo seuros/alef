@@ -48,7 +48,12 @@ pub fn gen_pyo3_error_converter(error: &ErrorDef, core_import: &str) -> String {
     for variant in &error.variants {
         let pattern = error_variant_wildcard_pattern(&rust_path, variant);
         let variant_exc_name = python_exception_name(&variant.name, &error.name);
-        variants.push((pattern, variant_exc_name, variant.taxonomy(&error.rust_path).code));
+        let code = variant
+            .taxonomy(&error.rust_path)
+            .map_or(crate::core::ir::ApiSurface::FFI_ERROR_CODE_UNKNOWN, |taxonomy| {
+                taxonomy.code
+            });
+        variants.push((pattern, variant_exc_name, code));
     }
 
     crate::codegen::template_env::render(

@@ -2,6 +2,18 @@ use super::*;
 use crate::core::config::Language;
 
 #[test]
+fn ffi_error_code_variant_names_include_the_canonical_error_type() {
+    assert_eq!(
+        ffi_error_code_variant_name("sample::RequestError", "Unavailable"),
+        "SampleRequestErrorUnavailable"
+    );
+    assert_ne!(
+        ffi_error_code_variant_name("sample::RequestError", "Unavailable"),
+        ffi_error_code_variant_name("sample::StorageError", "Unavailable")
+    );
+}
+
+#[test]
 fn serde_wire_name_applies_rename_all_strategies() {
     let cases = [
         ("HttpStatus", Some("lowercase"), "httpstatus"),

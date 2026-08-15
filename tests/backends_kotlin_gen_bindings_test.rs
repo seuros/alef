@@ -369,6 +369,7 @@ fn unit_error_variant_emits_sealed_class() {
             variants: vec![
                 ErrorVariant {
                     name: "NotFound".into(),
+                    error_code: None,
                     message_template: Some("Resource not found".into()),
                     fields: vec![],
                     has_source: false,
@@ -379,6 +380,7 @@ fn unit_error_variant_emits_sealed_class() {
                 },
                 ErrorVariant {
                     name: "Timeout".into(),
+                    error_code: None,
                     message_template: Some("Request timed out".into()),
                     fields: vec![],
                     has_source: false,
@@ -423,6 +425,7 @@ fn error_variant_with_fields_emits_data_class() {
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
                 name: "InvalidFormat".into(),
+                error_code: None,
                 message_template: Some("Invalid format at line {0}".into()),
                 fields: vec![make_field("line_number", TypeRef::Primitive(PrimitiveType::I32), false)],
                 has_source: false,
@@ -468,6 +471,7 @@ fn error_sealed_class_with_methods_emits_abstract_properties() {
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
                 name: "NotFound".into(),
+                error_code: None,
                 message_template: Some("not found".into()),
                 fields: vec![],
                 has_source: false,
@@ -1323,6 +1327,7 @@ fn make_enum_variant(name: &str, fields: Vec<FieldDef>) -> EnumVariant {
 fn make_error_variant(name: &str, fields: Vec<FieldDef>, message: &str) -> ErrorVariant {
     ErrorVariant {
         name: name.to_string(),
+        error_code: None,
         message_template: Some(message.to_string()),
         fields,
         has_source: false,

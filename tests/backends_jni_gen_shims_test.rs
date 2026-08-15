@@ -218,6 +218,7 @@ fn make_demo_api() -> ApiSurface {
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
                 name: "ApiError".to_string(),
+                error_code: None,
                 message_template: Some("api error".to_string()),
                 fields: vec![],
                 has_source: false,
@@ -810,6 +811,7 @@ fn real_ir_shape_optional_ref_result_async() {
             original_rust_path: String::new(),
             variants: vec![ErrorVariant {
                 name: "Fail".to_string(),
+                error_code: None,
                 message_template: Some("fail".to_string()),
                 fields: vec![],
                 has_source: false,
