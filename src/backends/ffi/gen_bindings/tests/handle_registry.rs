@@ -316,16 +316,16 @@ fn borrowed_types_keep_owned_lifecycle_and_accessor_exports() {
         .content;
 
     syn::parse_file(source).expect("borrowed-type owned exports must parse");
-    assert!(source.contains("sample_borrowed_node_from_json"), "{source}");
-    assert!(source.contains("sample_borrowed_node_to_json"), "{source}");
-    assert!(source.contains("sample_borrowed_node_free"), "{source}");
-    assert!(source.contains("sample_borrowed_node_attributes"), "{source}");
-    assert!(source.contains("sample_borrowed_node_into_owned"), "{source}");
-    assert!(source.contains("sample_borrowed_node_with_owned_attributes"), "{source}");
-    assert!(source.contains("sample_render_options_default"), "{source}");
-    assert!(source.contains("sample_preprocess_options_default"), "{source}");
-    assert!(!source.contains("sample_document_node"), "{source}");
-    assert!(!source.contains("sample_inspect"), "{source}");
+    assert!(source.contains("my_lib_borrowed_node_from_json"), "{source}");
+    assert!(source.contains("my_lib_borrowed_node_to_json"), "{source}");
+    assert!(source.contains("my_lib_borrowed_node_free"), "{source}");
+    assert!(source.contains("my_lib_borrowed_node_attributes"), "{source}");
+    assert!(source.contains("my_lib_borrowed_node_into_owned"), "{source}");
+    assert!(source.contains("my_lib_borrowed_node_with_owned_attributes"), "{source}");
+    assert!(source.contains("my_lib_render_options_default"), "{source}");
+    assert!(source.contains("my_lib_preprocess_options_default"), "{source}");
+    assert!(!source.contains("my_lib_document_node"), "{source}");
+    assert!(!source.contains("my_lib_inspect"), "{source}");
 }
 
 #[test]
