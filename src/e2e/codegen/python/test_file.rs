@@ -11,9 +11,9 @@ use crate::e2e::config::E2eConfig;
 use crate::e2e::fixture::Fixture;
 
 use super::helpers::{
-    self, BytesKind, classify_bytes_value, python_method_helper_import, resolve_client_factory,
-    resolve_enum_fields, resolve_function_name, resolve_function_name_for_call, resolve_handle_dict_types,
-    resolve_handle_nested_types, resolve_module, resolve_options_type, resolve_options_via,
+    self, BytesKind, classify_bytes_value, python_method_helper_import, resolve_client_factory, resolve_enum_fields,
+    resolve_function_name, resolve_function_name_for_call, resolve_handle_dict_types, resolve_handle_nested_types,
+    resolve_module, resolve_options_type, resolve_options_via,
 };
 use super::http::render_http_test_function;
 use super::test_function::{render_test_function, resolve_field_enum_type};
@@ -404,7 +404,10 @@ pub(super) fn render_test_file(
         let _ = writeln!(fixtures_body);
     }
 
-    prune_unreferenced_from_imports(&mut thirdparty_from, &[helper_functions.as_str(), fixtures_body.as_str()]);
+    prune_unreferenced_from_imports(
+        &mut thirdparty_from,
+        &[helper_functions.as_str(), fixtures_body.as_str()],
+    );
 
     // Render using template
     let ctx = minijinja::context! {

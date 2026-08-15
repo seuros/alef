@@ -671,8 +671,7 @@ fn csharp_object_initializer(
                 // per-element `JsonSerializer.Deserialize<T>` rendering that top-level
                 // array args already get from `json_array_to_csharp_list`. Falls back to
                 // `List<string>` only when the field's element type is unresolvable.
-                let element_type =
-                    resolve_csharp_field_element_type_from_struct(type_name, key, type_defs);
+                let element_type = resolve_csharp_field_element_type_from_struct(type_name, key, type_defs);
                 json_array_to_csharp_list(arr, element_type.as_deref())
             } else {
                 json_to_csharp(val)
@@ -1017,7 +1016,10 @@ mod tests {
             &[],
             "",
         );
-        assert_eq!(rendered, "new Unregistered { Tags = new List<string>() { \"a\", \"b\" } }", "{rendered}");
+        assert_eq!(
+            rendered, "new Unregistered { Tags = new List<string>() { \"a\", \"b\" } }",
+            "{rendered}"
+        );
     }
 
     #[test]

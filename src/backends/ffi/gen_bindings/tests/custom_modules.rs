@@ -13,7 +13,11 @@ fn write_module_file(src_dir: &std::path::Path, module: &str) {
 }
 
 fn config_with_custom_modules(src_dir: &std::path::Path, modules: &[&str]) -> crate::core::config::ResolvedCrateConfig {
-    let module_list = modules.iter().map(|m| format!("\"{m}\"")).collect::<Vec<_>>().join(", ");
+    let module_list = modules
+        .iter()
+        .map(|m| format!("\"{m}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
     resolved_one(&format!(
         r#"
 [workspace]
@@ -44,12 +48,20 @@ ffi = [{module_list}]
 #[test]
 fn no_custom_modules_configured_leaves_lib_rs_byte_identical() {
     let api = sample_api();
-    let baseline_files = FfiBackend.generate_bindings(&api, &sample_config()).expect("baseline generation");
-    let baseline_lib = &baseline_files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap().content;
+    let baseline_files = FfiBackend
+        .generate_bindings(&api, &sample_config())
+        .expect("baseline generation");
+    let baseline_lib = &baseline_files
+        .iter()
+        .find(|f| f.path.ends_with("lib.rs"))
+        .unwrap()
+        .content;
 
     let directory = tempfile::tempdir().expect("temporary directory");
     let explicit_empty = config_with_custom_modules(directory.path(), &[]);
-    let files = FfiBackend.generate_bindings(&api, &explicit_empty).expect("explicit-empty generation");
+    let files = FfiBackend
+        .generate_bindings(&api, &explicit_empty)
+        .expect("explicit-empty generation");
     let lib = &files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap().content;
 
     assert_eq!(lib, baseline_lib);
@@ -72,7 +84,9 @@ fn one_custom_module_declares_pub_mod_before_generated_items() {
     let config = config_with_custom_modules(directory.path(), &["cancellation"]);
 
     let api = sample_api();
-    let files = FfiBackend.generate_bindings(&api, &config).expect("generation with one custom module");
+    let files = FfiBackend
+        .generate_bindings(&api, &config)
+        .expect("generation with one custom module");
     let lib = &files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap().content;
 
     assert!(lib.contains("pub mod cancellation;"), "missing declaration:\n{lib}");
@@ -108,7 +122,9 @@ fn multiple_custom_modules_declare_pub_mod_in_configured_order() {
     let config = config_with_custom_modules(directory.path(), &["config_builder", "cancellation", "config"]);
 
     let api = sample_api();
-    let files = FfiBackend.generate_bindings(&api, &config).expect("generation with three custom modules");
+    let files = FfiBackend
+        .generate_bindings(&api, &config)
+        .expect("generation with three custom modules");
     let lib = &files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap().content;
 
     let config_builder_pos = lib.find("pub mod config_builder;").expect("config_builder declared");
@@ -144,7 +160,10 @@ fn custom_module_missing_file_fails_generation_with_checked_paths() {
     let message = error.to_string();
 
     assert!(message.contains("my-lib"), "error must name the crate: {message}");
-    assert!(message.contains("cancellation"), "error must name the module: {message}");
+    assert!(
+        message.contains("cancellation"),
+        "error must name the module: {message}"
+    );
     let flat = directory.path().join("cancellation.rs");
     let nested = directory.path().join("cancellation").join("mod.rs");
     assert!(

@@ -34,10 +34,9 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
     for attribute in crate::codegen::shared::format_crate_attributes(&config.crate_attributes) {
         builder.add_inner_attribute(&attribute);
     }
-    if let Some(extra_attribute) = crate::codegen::shared::format_extra_clippy_allows(
-        &config.extra_clippy_allows,
-        builder.inner_attributes_text(),
-    ) {
+    if let Some(extra_attribute) =
+        crate::codegen::shared::format_extra_clippy_allows(&config.extra_clippy_allows, builder.inner_attributes_text())
+    {
         builder.add_inner_attribute(&extra_attribute);
     }
 

@@ -899,9 +899,9 @@ result_var = "result"
         let emission = emit_test_backend(&bridge, &methods, &fixture, &enums);
 
         assert!(
-            emission
-                .setup_block
-                .contains("processingStage(): ProcessingStage { return \"\\\"Early\\\"\" as unknown as ProcessingStage; }"),
+            emission.setup_block.contains(
+                "processingStage(): ProcessingStage { return \"\\\"Early\\\"\" as unknown as ProcessingStage; }"
+            ),
             "Named enum return must be annotated with the real enum type and return a \
              JSON-quoted first variant cast to that type, got: {}",
             emission.setup_block

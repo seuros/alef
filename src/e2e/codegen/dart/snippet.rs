@@ -202,8 +202,8 @@ mod tests {
             },
         );
 
-        let body = render_snippet_body(&fixture, &e2e_config, &ResolvedCrateConfig::default(), &[], &[])
-            .expect("snippet");
+        let body =
+            render_snippet_body(&fixture, &e2e_config, &ResolvedCrateConfig::default(), &[], &[]).expect("snippet");
 
         assert!(
             !body.contains("_fixtureUrl"),

@@ -314,7 +314,11 @@ fn raw_string_open(chars: &[char], i: usize) -> Option<usize> {
     while chars.get(i + 1 + hashes) == Some(&'#') {
         hashes += 1;
     }
-    if chars.get(i + 1 + hashes) == Some(&'"') { Some(hashes) } else { None }
+    if chars.get(i + 1 + hashes) == Some(&'"') {
+        Some(hashes)
+    } else {
+        None
+    }
 }
 
 /// True when `chars[from..]` has at least `hashes` consecutive `#` characters, i.e. a raw
