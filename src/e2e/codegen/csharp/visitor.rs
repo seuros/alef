@@ -39,8 +39,12 @@ pub(super) fn build_csharp_visitor(
             "    #error C# visitor fixtures require trait_bridge context_type, result_type, and IR method metadata; add it to alef.toml or skip visitor fixtures for C#\n",
         );
     }
+    // No explicit accessibility modifier: nested types default to `private`
+    // (matching the previous behavior inside the e2e test class), while types
+    // declared at file/namespace scope after top-level statements default to
+    // `internal` — an explicit `private` there is illegal (CS1527).
     decl.push_str(&format!(
-        "    private sealed class {class_name} : I{}\n",
+        "    sealed class {class_name} : I{}\n",
         visitor_config.trait_name
     ));
     decl.push_str("    {\n");
@@ -264,4 +268,52 @@ fn snake_case_template_to_camel(template: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::e2e::fixture::VisitorSpec;
+    use std::collections::BTreeMap;
+
+    /// Regression test for CS1527: a visitor class declared with an explicit
+    /// `private` modifier is illegal when emitted at file/namespace scope
+    /// after top-level statements (the docs-snippet context). Omitting the
+    /// modifier is legal in both the snippet context (defaults to `internal`)
+    /// and the e2e test-class context (nested types default to `private`).
+    #[test]
+    fn visitor_class_declaration_has_no_explicit_accessibility_modifier() {
+        let mut setup_lines = Vec::new();
+        let mut class_decls = Vec::new();
+        let visitor_spec = VisitorSpec {
+            callbacks: BTreeMap::new(),
+        };
+        let visitor_config = CsharpVisitorConfig {
+            trait_name: "HtmlVisitor".to_string(),
+            context_type: "NodeContext".to_string(),
+            result_type: "VisitResult".to_string(),
+            methods: Vec::new(),
+            has_missing_metadata: false,
+        };
+
+        build_csharp_visitor(
+            &mut setup_lines,
+            &mut class_decls,
+            "visitor_video_skip",
+            &visitor_spec,
+            &visitor_config,
+        );
+
+        assert_eq!(class_decls.len(), 1);
+        let decl = &class_decls[0];
+        assert!(
+            !decl.contains("private"),
+            "visitor class declaration must not carry an explicit accessibility \
+             modifier (CS1527 at file scope): {decl}"
+        );
+        assert!(
+            decl.contains("sealed class VisitorVideoSkipVisitor : IHtmlVisitor"),
+            "expected an unqualified sealed class declaration: {decl}"
+        );
+    }
 }
