@@ -832,18 +832,18 @@ fn scaffold_gitattributes(config: &ResolvedCrateConfig, languages: &[Language]) 
         match lang {
             Language::Rust | Language::C => {}
             Language::Ffi => {
-                dirs.insert(format!("crates/{}-ffi", config.name));
+                dirs.insert(format!("crates/{}-ffi", config.core_crate_dir()));
             }
             Language::Jni => {
                 dirs.insert(format!("crates/{}-jni", config.name));
             }
             Language::Python => {
                 dirs.insert(config.package_dir(lang));
-                dirs.insert(format!("crates/{}-py", config.name));
+                dirs.insert(format!("crates/{}-py", config.core_crate_dir()));
             }
             Language::Php => {
                 dirs.insert(config.package_dir(lang));
-                dirs.insert(format!("crates/{}-php", config.name));
+                dirs.insert(format!("crates/{}-php", config.core_crate_dir()));
             }
             Language::Kotlin => {
                 let dir = if let Some(k) = config.kotlin.as_ref() {

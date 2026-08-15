@@ -202,6 +202,33 @@ fn test_scaffold_gitattributes_ffi_and_jni_use_crate_dirs() {
 }
 
 #[test]
+fn scaffold_gitattributes_uses_scaffolded_binding_crate_directories() {
+    let mut config = test_config();
+    config.sources = vec![std::path::PathBuf::from("crates/sample-core/src/lib.rs")];
+    let languages = [Language::Ffi, Language::Python, Language::Php];
+    let files = scaffold(&test_api(), &config, &languages).unwrap();
+    let attributes = files
+        .iter()
+        .find(|file| file.path == std::path::Path::new(".gitattributes"))
+        .expect("scaffold must emit .gitattributes");
+    let binding_crate_dirs = files.iter().filter_map(|file| {
+        (file.path.starts_with("crates/") && file.path.file_name().is_some_and(|name| name == "Cargo.toml"))
+            .then(|| file.path.parent().unwrap())
+    });
+
+    for directory in binding_crate_dirs {
+        assert!(
+            attributes
+                .content
+                .contains(&format!("{}/** linguist-generated=true", directory.display())),
+            "missing generated binding crate directory {}:\n{}",
+            directory.display(),
+            attributes.content
+        );
+    }
+}
+
+#[test]
 fn test_scaffold_gitattributes_kotlin_native_uses_kotlin_native_dir() {
     use crate::core::config::NewAlefConfig;
 

@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **scaffold**: derive Python, PHP, and FFI `.gitattributes` entries from the source crate directory, matching the
+  binding crate paths Alef actually scaffolds when the configured package name differs from its Rust crate path.
 - **zig scaffold**: emit the example with Zig 0.16's `std.Io` API and avoid an unused allocator binding, so the
   scaffolded example compiles with the supported Zig toolchain.
 - **ffi**: return the scalar `0` sentinel from string-bridge parameter and UTF-8 guard failures when the exported
