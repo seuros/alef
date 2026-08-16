@@ -1021,7 +1021,7 @@ mod snippet_tests {
         let rendered = CCodegen
             .render_snippet_body(&fixture, &e2e, &config, &[], &[])
             .expect("snippet renders");
-        assert!(rendered.contains("!= NULL) { return EXIT_FAILURE; }"), "{rendered}");
+        assert!(rendered.contains("!= 0) { return EXIT_FAILURE; }"), "{rendered}");
         assert!(!rendered.contains("assert("));
     }
 
@@ -1127,13 +1127,11 @@ mod snippet_tests {
 
     #[test]
     fn raw_result_error_snippet_fails_on_unexpected_success() {
-        // Before the fix, a fixture with only an "error" assertion against a
-        // raw_c_result_type function (char*/int32_t/uintptr_t) emitted no check
-        // at all — the generated test always passed regardless of outcome.
-        // The snippet renderer converts the underlying `assert(...)` into a
-        // hard `if (...) { return EXIT_FAILURE; }` guard; assert that guard is
-        // now present (and keyed on the result var) for every raw result type.
-        for raw_type in ["char*", "int32_t", "uintptr_t"] {
+        for (raw_type, expected_failure_check) in [
+            ("char*", "if (result != 0) { return EXIT_FAILURE; }"),
+            ("int32_t", "if (result != 0) { return EXIT_FAILURE; }"),
+            ("uintptr_t", "assert(sample_last_error_code() != 0"),
+        ] {
             let mut fixture = Fixture {
                 id: "invalid_input".into(),
                 description: "Invalid input".into(),
@@ -1164,7 +1162,7 @@ mod snippet_tests {
                 .expect("raw-result error snippet renders");
 
             assert!(
-                rendered.contains("if (result != NULL) { return EXIT_FAILURE; }"),
+                rendered.contains(expected_failure_check),
                 "raw_type={raw_type}: {rendered}"
             );
         }

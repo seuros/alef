@@ -200,30 +200,6 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
     ))
 }
 
-#[cfg(test)]
-mod snippet_tests {
-    use super::{is_expected_result_assertion, snippet_declarations};
-
-    #[test]
-    fn standalone_snippet_declares_success_guard() {
-        let declarations = snippet_declarations("if (request == 0) { ALEF_TEST_PASS(); }");
-
-        assert!(declarations.contains("return EXIT_SUCCESS"));
-    }
-
-    #[test]
-    fn error_rewrite_only_matches_declared_call_result_assertion() {
-        assert!(!is_expected_result_assertion(
-            "assert(client != 0 && \"failed to create client\");",
-            "result",
-        ));
-        assert!(is_expected_result_assertion(
-            "assert(result == 0 && \"expected call to fail\");",
-            "result",
-        ));
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_test_function(
     out: &mut String,
@@ -1175,6 +1151,30 @@ fn render_typed_arg_cleanup(out: &mut String, prefix: &str, handles: &[(String, 
         out.push_str(&crate::e2e::template_env::render(
             "c/typed_handle_free.jinja",
             minijinja::context! { prefix => prefix, type_snake => type_snake, handle => handle },
+        ));
+    }
+}
+
+#[cfg(test)]
+mod snippet_tests {
+    use super::{is_expected_result_assertion, snippet_declarations};
+
+    #[test]
+    fn standalone_snippet_declares_success_guard() {
+        let declarations = snippet_declarations("if (request == 0) { ALEF_TEST_PASS(); }");
+
+        assert!(declarations.contains("return EXIT_SUCCESS"));
+    }
+
+    #[test]
+    fn error_rewrite_only_matches_declared_call_result_assertion() {
+        assert!(!is_expected_result_assertion(
+            "assert(client != 0 && \"failed to create client\");",
+            "result",
+        ));
+        assert!(is_expected_result_assertion(
+            "assert(result == 0 && \"expected call to fail\");",
+            "result",
         ));
     }
 }
