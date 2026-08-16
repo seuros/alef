@@ -624,7 +624,7 @@ fn adapter_bridge_implements_hand_authored_interface_for_text_processor() {
     let trait_def = make_trait("TextProcessor", vec![]);
     let visible = all_named_visible(&trait_def.methods);
     let excluded = HashSet::new();
-    let content = gen_trait_adapter_bridge_file(&trait_def, "dev.sample_crate", &visible, &excluded, &[]);
+    let content = gen_trait_adapter_bridge_file(&trait_def, "dev.sample_crate", true, &visible, &excluded, &[]);
 
     assert!(
         content.contains("public final class TextProcessorAdapter implements ITextProcessor"),
@@ -637,12 +637,25 @@ fn adapter_bridge_implements_hand_authored_interface_for_asset_loader() {
     let trait_def = make_trait("AssetLoader", vec![]);
     let visible = all_named_visible(&trait_def.methods);
     let excluded = HashSet::new();
-    let content = gen_trait_adapter_bridge_file(&trait_def, "dev.sample_crate", &visible, &excluded, &[]);
+    let content = gen_trait_adapter_bridge_file(&trait_def, "dev.sample_crate", true, &visible, &excluded, &[]);
 
     assert!(
         content.contains("public final class AssetLoaderAdapter implements IAssetLoader"),
         "adapter must declare `implements IAssetLoader`;\nactual:\n{content}"
     );
+}
+
+#[test]
+fn adapter_without_super_trait_omits_lifecycle_overrides() {
+    let trait_def = make_trait("Renderer", vec![]);
+    let visible = all_named_visible(&trait_def.methods);
+    let excluded = HashSet::new();
+    let content = gen_trait_adapter_bridge_file(&trait_def, "dev.sample_crate", false, &visible, &excluded, &[]);
+
+    assert!(!content.contains("public String name()"));
+    assert!(!content.contains("public String version()"));
+    assert!(!content.contains("public void initialize()"));
+    assert!(!content.contains("public void shutdown()"));
 }
 
 /// `String -> String` method must NOT pull in `java.util.List` or `java.util.Map`.

@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the native class is imported exactly once and cannot shadow or be shadowed by the public type.
 - **C snippets**: define standalone success guards and only rewrite the expected-result assertion, preventing error
   snippets from testing a result before its declaration or comparing scalar handles with pointer sentinels.
+- **Java trait adapters**: omit lifecycle overrides when a bridge has no configured super-trait, keeping generated
+  adapters consistent with their managed interfaces.
 - **Default constructor extraction**: preserve manually implemented `Default::default` as a generated static constructor
   across FFI, Python, PHP, R, and other method-based binding surfaces.
 - **FFI default constructors**: retain canonical zero-argument `default` exports for lifetime-bearing owned values

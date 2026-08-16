@@ -146,6 +146,7 @@ pub fn gen_trait_bridge_files(
 pub fn gen_trait_adapter_bridge_file(
     trait_def: &TypeDef,
     package: &str,
+    has_super_trait: bool,
     visible_type_names: &HashSet<&str>,
     excluded_types: &HashSet<String>,
     ffi_skip_methods: &[String],
@@ -163,25 +164,27 @@ pub fn gen_trait_adapter_bridge_file(
 
     let mut methods_code = String::new();
 
-    methods_code.push_str("    @Override\n");
-    methods_code.push_str("    public String name() {\n");
-    methods_code.push_str("        return impl.name();\n");
-    methods_code.push_str("    }\n\n");
+    if has_super_trait {
+        methods_code.push_str("    @Override\n");
+        methods_code.push_str("    public String name() {\n");
+        methods_code.push_str("        return impl.name();\n");
+        methods_code.push_str("    }\n\n");
 
-    methods_code.push_str("    @Override\n");
-    methods_code.push_str("    public String version() {\n");
-    methods_code.push_str("        return impl.version();\n");
-    methods_code.push_str("    }\n\n");
+        methods_code.push_str("    @Override\n");
+        methods_code.push_str("    public String version() {\n");
+        methods_code.push_str("        return impl.version();\n");
+        methods_code.push_str("    }\n\n");
 
-    methods_code.push_str("    @Override\n");
-    methods_code.push_str("    public void initialize() throws Exception {\n");
-    methods_code.push_str("        impl.initialize();\n");
-    methods_code.push_str("    }\n\n");
+        methods_code.push_str("    @Override\n");
+        methods_code.push_str("    public void initialize() throws Exception {\n");
+        methods_code.push_str("        impl.initialize();\n");
+        methods_code.push_str("    }\n\n");
 
-    methods_code.push_str("    @Override\n");
-    methods_code.push_str("    public void shutdown() throws Exception {\n");
-    methods_code.push_str("        impl.shutdown();\n");
-    methods_code.push_str("    }\n\n");
+        methods_code.push_str("    @Override\n");
+        methods_code.push_str("    public void shutdown() throws Exception {\n");
+        methods_code.push_str("        impl.shutdown();\n");
+        methods_code.push_str("    }\n\n");
+    }
 
     for method in &bridge_methods {
         let method_name = &method.name;

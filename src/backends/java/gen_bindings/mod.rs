@@ -524,6 +524,7 @@ impl Backend for JavaBackend {
                 let adapter_content = trait_bridge::gen_trait_adapter_bridge_file(
                     trait_def,
                     &package,
+                    has_super_trait,
                     &visible_type_names,
                     &exclude_types,
                     &bridge_cfg.ffi_skip_methods,
