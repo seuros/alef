@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 
-pub(crate) fn run_required_post_builds(
+fn run_required_post_builds(
     languages: &[crate::core::config::Language],
     config: &crate::core::config::ResolvedCrateConfig,
     base_dir: &std::path::Path,
@@ -21,6 +21,25 @@ pub(crate) fn run_required_post_builds(
         tracing::info!("  [{language}] post-build processing complete");
     }
     Ok(())
+}
+
+/// Complete every generated artifact that depends on a backend build and then
+/// enforce FFI source/header parity. Keeping these operations together prevents
+/// commands from validating a cbindgen header before its producer runs or from
+/// omitting the final parity gate. ~keep
+pub(crate) fn complete_generated_artifacts(
+    languages: &[crate::core::config::Language],
+    config: &crate::core::config::ResolvedCrateConfig,
+    base_dir: &std::path::Path,
+) -> Result<()> {
+    run_required_post_builds(languages, config, base_dir)?;
+    if !languages.contains(&crate::core::config::Language::Ffi) {
+        return Ok(());
+    }
+
+    crate::cli::pipeline::ensure_ffi_header_freshness(config, base_dir, || {
+        crate::cli::pipeline::build(config, &[crate::core::config::Language::Ffi], false)
+    })
 }
 
 /// Returns true when every freshly generated file already matches the file on disk,

@@ -449,4 +449,35 @@ void sample_options_default_suffix(void);
 
         assert!(refreshed, "a stale header must trigger the build callback");
     }
+
+    #[test]
+    fn should_refresh_header_after_generation_adds_an_export() {
+        let directory = tempfile::tempdir().expect("temporary project");
+        let config = ResolvedCrateConfig {
+            name: "sample".to_owned(),
+            ..ResolvedCrateConfig::default()
+        };
+        let crate_root = directory.path().join("crates/sample-ffi");
+        std::fs::create_dir_all(crate_root.join("src")).expect("create FFI source directory");
+        std::fs::create_dir_all(crate_root.join("include")).expect("create FFI include directory");
+        std::fs::write(
+            crate_root.join("src/lib.rs"),
+            "#[unsafe(no_mangle)]\npub unsafe extern \"C\" fn sample_create() {}\n\
+             #[unsafe(no_mangle)]\npub unsafe extern \"C\" fn sample_options_default() {}\n",
+        )
+        .expect("write regenerated FFI source");
+        std::fs::write(crate_root.join("include/sample.h"), "void sample_create(void);\n")
+            .expect("write header from the preceding generation");
+
+        ensure_ffi_header_freshness(&config, directory.path(), || {
+            std::fs::write(
+                crate_root.join("include/sample.h"),
+                "void sample_create(void);\nvoid sample_options_default(void);\n",
+            )?;
+            Ok(())
+        })
+        .expect("generation should refresh a header made stale by its new export");
+
+        check_ffi_header_freshness(&config, directory.path()).expect("refreshed header must match generated source");
+    }
 }

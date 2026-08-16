@@ -216,12 +216,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 tracing::info!("Running post-build processing...");
-                run_required_post_builds(&languages, resolved_cfg, &base_dir)?;
-                if languages.contains(&crate::core::config::Language::Ffi) {
-                    pipeline::ensure_ffi_header_freshness(resolved_cfg, &base_dir, || {
-                        pipeline::build(resolved_cfg, &[crate::core::config::Language::Ffi], false)
-                    })?;
-                }
+                complete_generated_artifacts(&languages, resolved_cfg, &base_dir)?;
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 tracing::info!("Generating type stubs...");
