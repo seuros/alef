@@ -68,7 +68,11 @@ pub(crate) fn atomic_write(path: &Path, content: &[u8]) -> anyhow::Result<()> {
 /// So for those paths a missing marker is NOT evidence the file is foreign, and any
 /// ownership check keyed on the marker must exempt them or it will freeze legitimate
 /// regeneration forever. ~keep
-pub(super) fn marker_comment_style(path: &Path) -> Option<hash::CommentStyle> {
+///
+/// Shared with version-sync's catch-all guard, which keys on exactly this
+/// distinction — duplicating the extension table there would let the two drift and
+/// silently change which files a rewrite is willing to touch. ~keep
+pub(crate) fn marker_comment_style(path: &Path) -> Option<hash::CommentStyle> {
     match path.extension().and_then(|extension| extension.to_str()) {
         Some("py" | "rb" | "r" | "ex" | "exs" | "toml" | "yaml" | "yml" | "sh") => Some(hash::CommentStyle::Hash),
         Some("h" | "hpp") => Some(hash::CommentStyle::Block),

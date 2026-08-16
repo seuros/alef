@@ -23,6 +23,7 @@ pub use scaffold::{
     write_scaffold_files_with_overwrite,
 };
 pub(crate) use write::apply_shebang_chmod;
+pub(crate) use write::marker_comment_style;
 pub use write::{
     finalize_hashes, finalize_hashes_sweeping, managed_generated_files, managed_output_paths, write_files,
     write_files_report,
