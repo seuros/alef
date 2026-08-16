@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **generation pipeline**: refresh cbindgen headers after generated FFI sources and backend post-build steps in both
   `generate` and `all`, then enforce source/header symbol parity before either command succeeds.
 
+- **generated documentation**: remove poly's internal `~keep` token while preserving the surrounding public prose
+  across every binding backend.
 - **FFI linting**: preallocate generated handle-request vectors so single-handle entrypoints pass crate-denied Clippy lints.
 
 - **Zig snippets**: compile against the generated package's exported module so transitive imports declared by its

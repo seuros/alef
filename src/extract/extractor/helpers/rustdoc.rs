@@ -63,7 +63,7 @@ pub fn normalize_rustdoc(raw: &str) -> String {
                 continue;
             }
         }
-        filtered.push_str(line);
+        filtered.push_str(&strip_internal_doc_markers(line));
         filtered.push('\n');
     }
 
@@ -115,4 +115,55 @@ pub fn normalize_rustdoc(raw: &str) -> String {
         out.pop();
     }
     out
+}
+
+fn strip_internal_doc_markers(line: &str) -> String {
+    const MARKER: &str = "~keep";
+    let mut output = line.to_string();
+    while let Some(marker_start) = output.find(MARKER) {
+        let marker_end = marker_start + MARKER.len();
+        let preceding_whitespace = output[..marker_start]
+            .chars()
+            .next_back()
+            .is_some_and(char::is_whitespace);
+        let following_whitespace = output[marker_end..].chars().next().is_some_and(char::is_whitespace);
+
+        let remove_start = if preceding_whitespace && !following_whitespace {
+            output[..marker_start]
+                .char_indices()
+                .next_back()
+                .map_or(marker_start, |(index, _)| index)
+        } else {
+            marker_start
+        };
+        let remove_end = if following_whitespace {
+            marker_end
+                + output[marker_end..]
+                    .char_indices()
+                    .find(|(_, character)| !character.is_whitespace())
+                    .map_or(output.len() - marker_end, |(index, _)| index)
+        } else {
+            marker_end
+        };
+        output.replace_range(remove_start..remove_end, "");
+    }
+    output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_rustdoc;
+
+    #[test]
+    fn normalize_rustdoc_removes_internal_keep_tokens_without_dropping_prose() {
+        let normalized = normalize_rustdoc(
+            "~keep No deny-unknown-fields because this type is shared.\nThe field remains optional. ~keep",
+        );
+
+        assert_eq!(
+            normalized,
+            "No deny-unknown-fields because this type is shared.\nThe field remains optional."
+        );
+        assert!(!normalized.contains("~keep"));
+    }
 }
