@@ -287,7 +287,12 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
     // of any kind for that case — mirror python/php's `apply_vacuous_assertion_fallback`.
     // A fixture with genuinely zero declared assertions is left untouched, matching
     // every other backend's deliberate "just call it" smoke-test contract. ~keep
-    apply_vacuous_assertion_fallback(&mut assertions_body, !fixture.assertions.is_empty(), is_streaming, result_var);
+    apply_vacuous_assertion_fallback(
+        &mut assertions_body,
+        !fixture.assertions.is_empty(),
+        is_streaming,
+        result_var,
+    );
 
     // Whether the call's result is worth binding to `const result = ...` rather
     // than discarding with a bare `await callExpr();`. Derived from what

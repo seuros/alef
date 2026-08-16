@@ -797,9 +797,9 @@ fn rewrite_target_for(toml_src: &str) -> std::path::PathBuf {
         .post_build
         .iter()
         .find_map(|step| match step {
-            crate::core::backend::PostBuildStep::RewriteWasmPackageName {
-                package_json_path, ..
-            } => Some(package_json_path.clone()),
+            crate::core::backend::PostBuildStep::RewriteWasmPackageName { package_json_path, .. } => {
+                Some(package_json_path.clone())
+            }
             _ => None,
         })
         .expect("build_config_with_config must attach a RewriteWasmPackageName post-build step")

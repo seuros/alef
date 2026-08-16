@@ -910,7 +910,10 @@ mod tests {
             ..Default::default()
         };
         let typ = owning_type("crawlberg::CrawlConfig", "CrawlConfig", vec![field.clone()]);
-        assert_eq!(format_default_value(&field, &typ, ""), "crawlberg::defaults::retry_limit()");
+        assert_eq!(
+            format_default_value(&field, &typ, ""),
+            "crawlberg::defaults::retry_limit()"
+        );
     }
 
     /// The defect this fix addresses: a private (plain `FunctionCall`, not yet resolved to a

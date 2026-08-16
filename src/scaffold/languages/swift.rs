@@ -1662,7 +1662,9 @@ final class ErrorHandlingTests: XCTestCase {
     fn vacuity_signature_matches_real_consumer_trees() {
         assert!(is_vacuous_swift_placeholder(h2m_historical_placeholder()));
         assert!(!is_vacuous_swift_placeholder(liter_llm_hand_written_suite()));
-        assert!(!is_vacuous_swift_placeholder(tree_sitter_language_pack_hand_written_suite()));
+        assert!(!is_vacuous_swift_placeholder(
+            tree_sitter_language_pack_hand_written_suite()
+        ));
     }
 
     /// Requirement (a): the *current* generator's own placeholder output -- regenerated
@@ -1685,9 +1687,12 @@ final class ErrorHandlingTests: XCTestCase {
             }],
         );
         let relative_path = std::path::Path::new("packages/swift/Tests/MyLibTests/MyLibTests.swift");
-        let changed = migrate_swift_placeholder_test(dir.path(), relative_path, &replacement)
-            .expect("migration must not error");
-        assert!(changed, "the current generator's own placeholder must be reported as changed");
+        let changed =
+            migrate_swift_placeholder_test(dir.path(), relative_path, &replacement).expect("migration must not error");
+        assert!(
+            changed,
+            "the current generator's own placeholder must be reported as changed"
+        );
 
         let on_disk = std::fs::read_to_string(test_dir.join("MyLibTests.swift")).expect("read migrated file");
         assert_eq!(on_disk, replacement);
@@ -1702,11 +1707,8 @@ final class ErrorHandlingTests: XCTestCase {
         let dir = tempfile::tempdir().expect("tempdir");
         let test_dir = dir.path().join("packages/swift/Tests/HtmlToMarkdownTests");
         std::fs::create_dir_all(&test_dir).expect("create Tests/HtmlToMarkdownTests");
-        std::fs::write(
-            test_dir.join("HtmlToMarkdownTests.swift"),
-            h2m_historical_placeholder(),
-        )
-        .expect("write h2m historical placeholder");
+        std::fs::write(test_dir.join("HtmlToMarkdownTests.swift"), h2m_historical_placeholder())
+            .expect("write h2m historical placeholder");
 
         let replacement = codable_round_trip_test(
             "HtmlToMarkdown",
@@ -1716,19 +1718,23 @@ final class ErrorHandlingTests: XCTestCase {
                 literal: "1".to_string(),
             }],
         );
-        let relative_path =
-            std::path::Path::new("packages/swift/Tests/HtmlToMarkdownTests/HtmlToMarkdownTests.swift");
-        let changed = migrate_swift_placeholder_test(dir.path(), relative_path, &replacement)
-            .expect("migration must not error");
-        assert!(changed, "h2m's real on-disk placeholder shape must be reported as changed");
+        let relative_path = std::path::Path::new("packages/swift/Tests/HtmlToMarkdownTests/HtmlToMarkdownTests.swift");
+        let changed =
+            migrate_swift_placeholder_test(dir.path(), relative_path, &replacement).expect("migration must not error");
+        assert!(
+            changed,
+            "h2m's real on-disk placeholder shape must be reported as changed"
+        );
 
-        let on_disk =
-            std::fs::read_to_string(test_dir.join("HtmlToMarkdownTests.swift")).expect("read migrated file");
+        let on_disk = std::fs::read_to_string(test_dir.join("HtmlToMarkdownTests.swift")).expect("read migrated file");
         assert_eq!(on_disk, replacement);
 
         let changed_again = migrate_swift_placeholder_test(dir.path(), relative_path, &replacement)
             .expect("second pass must not error");
-        assert!(!changed_again, "second pass over an already-migrated file must be a no-op");
+        assert!(
+            !changed_again,
+            "second pass over an already-migrated file must be a no-op"
+        );
     }
 
     /// Requirement (c), the hard case: liter-llm's real suite has exactly the same 1/1
@@ -1779,8 +1785,7 @@ final class ErrorHandlingTests: XCTestCase {
     fn migrate_swift_placeholder_is_a_no_op_when_file_does_not_exist() {
         let dir = tempfile::tempdir().expect("tempdir");
         let relative_path = std::path::Path::new("packages/swift/Tests/MyLibTests/MyLibTests.swift");
-        let changed =
-            migrate_swift_placeholder_test(dir.path(), relative_path, "new content").expect("must not error");
+        let changed = migrate_swift_placeholder_test(dir.path(), relative_path, "new content").expect("must not error");
         assert!(!changed);
         assert!(!dir.path().join(relative_path).exists());
     }

@@ -502,7 +502,11 @@ mod tests {
     #[test]
     fn streaming_fixture_whose_only_assertion_is_non_virtual_gets_a_vacuous_fallback() {
         let mut fixture = minimal_fixture();
-        fixture.assertions = vec![assertion("equals", Some("not_a_streaming_field"), Some(serde_json::json!("x")))];
+        fixture.assertions = vec![assertion(
+            "equals",
+            Some("not_a_streaming_field"),
+            Some(serde_json::json!("x")),
+        )];
         let e2e_config = E2eConfig::default();
         let call_config = crate::e2e::config::CallConfig::default();
         let field_resolver = FieldResolver::new(
@@ -570,7 +574,10 @@ mod tests {
         );
 
         assert!(out.contains("assert len(chunks) >= 1"), "got: {out}");
-        assert!(!out.contains("not available"), "a real assertion must not trigger the fallback, got: {out}");
+        assert!(
+            !out.contains("not available"),
+            "a real assertion must not trigger the fallback, got: {out}"
+        );
     }
 
     /// Regression test for alef task #81: the non-streaming branch's "skipped: field
@@ -584,7 +591,11 @@ mod tests {
     #[test]
     fn non_streaming_skip_comment_carries_the_marker_the_strict_mode_matches_on() {
         let mut fixture = minimal_fixture();
-        fixture.assertions = vec![assertion("equals", Some("nonexistent_field"), Some(serde_json::json!("x")))];
+        fixture.assertions = vec![assertion(
+            "equals",
+            Some("nonexistent_field"),
+            Some(serde_json::json!("x")),
+        )];
         let e2e_config = E2eConfig::default();
         let call_config = crate::e2e::config::CallConfig::default();
         let result_fields: std::collections::HashSet<String> = ["content".to_string()].into_iter().collect();

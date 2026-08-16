@@ -13,6 +13,8 @@ static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[path = "version_tests/basic.rs"]
 mod basic;
+#[path = "version_tests/catch_all_ownership.rs"]
+mod catch_all_ownership;
 #[path = "version_tests/e2e_manifests.rs"]
 mod e2e_manifests;
 #[path = "version_tests/manifests.rs"]

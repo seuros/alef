@@ -266,7 +266,10 @@ mod body_file_tests {
             out.contains(r#"{"greeting":"hello"}"#),
             "expected the real body_file content embedded, got:\n{out}"
         );
-        assert!(!out.contains("body: r#\"{}\"#"), "must not fall back to the `{{}}` placeholder, got:\n{out}");
+        assert!(
+            !out.contains("body: r#\"{}\"#"),
+            "must not fall back to the `{{}}` placeholder, got:\n{out}"
+        );
     }
 
     /// The `responses/` subdirectory takes precedence over the fixtures root,

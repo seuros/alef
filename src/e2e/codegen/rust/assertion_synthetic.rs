@@ -26,7 +26,9 @@ pub(super) fn render_chunks_have_content(out: &mut String, result_var: &str, ass
             );
         }
         _ => {
-            panic!("Rust e2e generator: unsupported assertion type '{assertion_type}' on synthetic field 'chunks_have_content'");
+            panic!(
+                "Rust e2e generator: unsupported assertion type '{assertion_type}' on synthetic field 'chunks_have_content'"
+            );
         }
     }
 }
@@ -46,7 +48,9 @@ pub(super) fn render_chunks_have_embeddings(out: &mut String, result_var: &str, 
             );
         }
         _ => {
-            panic!("Rust e2e generator: unsupported assertion type '{assertion_type}' on synthetic field 'chunks_have_embeddings'");
+            panic!(
+                "Rust e2e generator: unsupported assertion type '{assertion_type}' on synthetic field 'chunks_have_embeddings'"
+            );
         }
     }
 }
@@ -179,7 +183,9 @@ pub(super) fn render_chunks_have_heading_context(out: &mut String, result_var: &
             );
         }
         _ => {
-            panic!("Rust e2e generator: unsupported assertion type '{assertion_type}' on synthetic field 'chunks_have_heading_context'");
+            panic!(
+                "Rust e2e generator: unsupported assertion type '{assertion_type}' on synthetic field 'chunks_have_heading_context'"
+            );
         }
     }
 }
@@ -202,7 +208,9 @@ pub(super) fn render_first_chunk_starts_with_heading(out: &mut String, result_va
             );
         }
         _ => {
-            panic!("Rust e2e generator: unsupported assertion type '{assertion_type}' on synthetic field 'first_chunk_starts_with_heading'");
+            panic!(
+                "Rust e2e generator: unsupported assertion type '{assertion_type}' on synthetic field 'first_chunk_starts_with_heading'"
+            );
         }
     }
 }

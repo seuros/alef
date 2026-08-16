@@ -523,9 +523,7 @@ mod collapsed_doc_comment_tests {
         content.lines().enumerate().find_map(|(index, line)| {
             let trimmed = line.trim_start();
             let after_marker = trimmed.strip_prefix("///")?;
-            after_marker
-                .contains("///")
-                .then(|| (index + 1, line.to_string()))
+            after_marker.contains("///").then(|| (index + 1, line.to_string()))
         })
     }
 

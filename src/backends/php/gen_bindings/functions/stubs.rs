@@ -38,7 +38,10 @@ mod gen_stub_return_tests {
     fn gen_stub_return_string_return_fails_loudly() {
         let stub = gen_stub_return(&TypeRef::String, false, "process");
         assert!(stub.contains("compile_error!"), "expected compile_error!, got: {stub}");
-        assert!(!stub.contains("String::new()"), "fabricated value leaked through: {stub}");
+        assert!(
+            !stub.contains("String::new()"),
+            "fabricated value leaked through: {stub}"
+        );
     }
 
     #[test]
@@ -50,7 +53,13 @@ mod gen_stub_return_tests {
     #[test]
     fn gen_stub_return_with_error_type_raises_runtime_error() {
         let stub = gen_stub_return(&TypeRef::String, true, "process");
-        assert!(!stub.contains("compile_error!"), "error branch must not emit compile_error!: {stub}");
-        assert!(stub.contains("PhpException"), "expected PHP exception raise, got: {stub}");
+        assert!(
+            !stub.contains("compile_error!"),
+            "error branch must not emit compile_error!: {stub}"
+        );
+        assert!(
+            stub.contains("PhpException"),
+            "expected PHP exception raise, got: {stub}"
+        );
     }
 }

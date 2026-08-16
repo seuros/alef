@@ -696,10 +696,7 @@ mod tests {
         };
         let mut out = String::new();
         render_assertion(&mut out, &assertion, "result", &context);
-        assert!(
-            out.contains("field 'nonexistent_field' not available"),
-            "got: {out}"
-        );
+        assert!(out.contains("field 'nonexistent_field' not available"), "got: {out}");
     }
 
     #[test]

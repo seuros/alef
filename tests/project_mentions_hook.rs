@@ -607,7 +607,10 @@ fn reports_project_mentions_in_scaffold_outside_cfg_test_modules() {
 
     let output = run_hook(&[&file]);
 
-    assert!(!output.status.success(), "hook should still reject production special-casing");
+    assert!(
+        !output.status.success(),
+        "hook should still reject production special-casing"
+    );
     let stderr = String::from_utf8(output.stderr).expect("stderr must be utf8");
     assert!(stderr.contains("forbidden project mention"), "stderr: {stderr}");
 }

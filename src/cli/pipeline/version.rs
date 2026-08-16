@@ -26,6 +26,36 @@ use crate::core::version::{to_r_version, to_rubygems_prerelease};
 static SEMVER_RE: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"\d+\.\d+\.\d+(-[a-zA-Z0-9._]+)*").expect("valid regex"));
 
+/// Whether version-sync's *catch-all* rewrites may touch this file.
+///
+/// The named-filename branches above (`package.json`, `Cargo.toml`, `pyproject.toml`,
+/// `version.rb`, `.gemspec`, `gleam.toml`) are a declared contract: a consumer listing
+/// one is asking for that specific field to be rewritten, and they stay unguarded. The
+/// two catch-alls are different — a blanket `SEMVER_RE.replace_all` and a user-supplied
+/// regex will rewrite *whatever the glob happens to match*, so a slightly wide pattern
+/// silently edits hand-written files.
+///
+/// Only marker-bearing extensions can be judged. Per `marker_comment_style`, a file alef
+/// cannot stamp never carries a marker even when alef wrote every byte, so for those
+/// (`.md`, `.json`, `.lock`, `Makefile`, …) absence proves nothing and they stay
+/// permitted — refusing there would freeze legitimate regeneration, and it is why
+/// `--regen` still replaces a generated README. ~keep
+fn catch_all_rewrite_is_permitted(path: &std::path::Path, content: &str) -> bool {
+    if super::generate::marker_comment_style(path).is_none() {
+        return true;
+    }
+    if crate::core::hash::content_has_alef_marker(content) {
+        return true;
+    }
+    warn!(
+        path = %path.display(),
+        "version-sync: skipping a catch-all rewrite of a stampable file that carries no alef marker — \
+         it reads as hand-written. Nothing else reports a skipped path, so this line is the only signal; \
+         if alef does own it, give it a provenance marker or move it to a named-filename branch"
+    );
+    false
+}
+
 /// Sync version from Cargo.toml to all package manifest files.
 ///
 /// When `no_regen` is `false` (the default for direct CLI invocations), this
@@ -523,7 +553,7 @@ pub fn sync_versions(
                                                 updated.push(path.to_string_lossy().to_string());
                                             }
                                         }
-                                    } else {
+                                    } else if catch_all_rewrite_is_permitted(&path, &content) {
                                         let new_content = SEMVER_RE.replace_all(&content, version.as_str()).to_string();
                                         if new_content != content {
                                             if let Err(e) = std::fs::write(&path, &new_content) {
@@ -554,7 +584,9 @@ pub fn sync_versions(
                         match entry {
                             Ok(path) => {
                                 text_replacement_paths.insert(path.clone());
-                                if let Ok(content) = std::fs::read_to_string(&path) {
+                                if let Ok(content) = std::fs::read_to_string(&path)
+                                    && catch_all_rewrite_is_permitted(&path, &content)
+                                {
                                     let pep440 = to_pep440(&version);
                                     let rubygems = to_rubygems_prerelease(&version);
                                     let r_ver = to_r_version(&version);

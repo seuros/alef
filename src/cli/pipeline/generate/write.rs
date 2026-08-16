@@ -42,7 +42,6 @@ impl WriteReport {
     pub fn refused_count(&self) -> usize {
         self.refused_paths.len()
     }
-
 }
 
 /// Surface every write the ownership guard declined, naming the remedy.
@@ -123,10 +122,17 @@ pub(crate) fn atomic_write(path: &Path, content: &[u8]) -> anyhow::Result<()> {
 /// they stay `None` and prove ownership through
 /// [`crate::cli::cache::is_scaffold_owned_path`] as before.
 ///
-/// `None` is load-bearing beyond formatting: for these paths a missing marker is
-/// NOT evidence the file is foreign, and any ownership check keyed on the marker
-/// must exempt them or it will freeze legitimate regeneration forever. ~keep
-pub(super) fn marker_comment_style(path: &Path) -> Option<hash::CommentStyle> {
+/// `None` is load-bearing beyond formatting: a file alef cannot stamp never carries
+/// an `alef:hash:` marker even when alef authored every byte of it (`.md` READMEs are
+/// the widest instance — none of the generated per-language READMEs has ever had one).
+/// So for those paths a missing marker is NOT evidence the file is foreign, and any
+/// ownership check keyed on the marker must exempt them or it will freeze legitimate
+/// regeneration forever. ~keep
+///
+/// Shared with version-sync's catch-all guard, which keys on exactly this
+/// distinction — duplicating the extension table there would let the two drift and
+/// silently change which files a rewrite is willing to touch. ~keep
+pub(crate) fn marker_comment_style(path: &Path) -> Option<hash::CommentStyle> {
     match path.extension().and_then(|extension| extension.to_str()) {
         Some("py" | "rb" | "r" | "ex" | "exs" | "toml" | "yaml" | "yml" | "sh") => Some(hash::CommentStyle::Hash),
         Some("h" | "hpp") => Some(hash::CommentStyle::Block),

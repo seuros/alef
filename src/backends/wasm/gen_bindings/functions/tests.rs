@@ -516,14 +516,20 @@ fn gen_wasm_unimplemented_body_string_return_fails_loudly() {
 #[test]
 fn gen_wasm_unimplemented_body_vec_return_fails_loudly() {
     let body = gen_wasm_unimplemented_body(&TypeRef::Vec(Box::new(TypeRef::String)), "list_entries", false);
-    assert!(body.contains("compile_error!"), "non-fallible Vec return must fail the build: {body}");
+    assert!(
+        body.contains("compile_error!"),
+        "non-fallible Vec return must fail the build: {body}"
+    );
     assert!(!body.contains("Vec::new()"), "must not fabricate an empty Vec: {body}");
 }
 
 #[test]
 fn gen_wasm_unimplemented_body_optional_return_fails_loudly() {
     let body = gen_wasm_unimplemented_body(&TypeRef::Optional(Box::new(TypeRef::String)), "find_entry", false);
-    assert!(body.contains("compile_error!"), "non-fallible Optional return must fail the build: {body}");
+    assert!(
+        body.contains("compile_error!"),
+        "non-fallible Optional return must fail the build: {body}"
+    );
     assert!(!body.contains("\"None\""), "must not fabricate a None literal: {body}");
 }
 
@@ -534,7 +540,10 @@ fn gen_wasm_unimplemented_body_primitive_return_fails_loudly() {
         "count_entries",
         false,
     );
-    assert!(body.contains("compile_error!"), "non-fallible primitive return must fail the build: {body}");
+    assert!(
+        body.contains("compile_error!"),
+        "non-fallible primitive return must fail the build: {body}"
+    );
 }
 
 #[test]
@@ -547,11 +556,13 @@ fn gen_wasm_unimplemented_body_unit_return_stays_void() {
 fn gen_wasm_unimplemented_body_with_error_type_raises_runtime_error() {
     let body = gen_wasm_unimplemented_body(&TypeRef::String, "extract_text", true);
     assert_eq!(
-        body,
-        "Err(JsValue::from_str(\"Not implemented: extract_text\"))",
+        body, "Err(JsValue::from_str(\"Not implemented: extract_text\"))",
         "fallible functions must keep raising a real runtime error: {body}"
     );
-    assert!(!body.contains("compile_error!"), "fallible path must not also emit compile_error!: {body}");
+    assert!(
+        !body.contains("compile_error!"),
+        "fallible path must not also emit compile_error!: {body}"
+    );
 }
 
 /// Fixture for the return-conversion tests below: an async free function whose return type is a

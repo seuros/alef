@@ -661,10 +661,15 @@ mod strict_field_availability_marker_tests {
             ..Assertion::default()
         };
         let mut out = String::new();
-        render_assertion(&mut out, &assertion, "r", &resolver, &HashSet::new(), false, "sample_pkg");
-        assert!(
-            out.contains("field 'nonexistent_field' not available"),
-            "got: {out}"
+        render_assertion(
+            &mut out,
+            &assertion,
+            "r",
+            &resolver,
+            &HashSet::new(),
+            false,
+            "sample_pkg",
         );
+        assert!(out.contains("field 'nonexistent_field' not available"), "got: {out}");
     }
 }

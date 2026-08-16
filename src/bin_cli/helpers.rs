@@ -320,9 +320,47 @@ const VERIFY_SKIP_DIRS: &[&str] = &[
 /// while missing here, which made their freshness claim unverifiable rather than merely
 /// unverified — a stamped file nothing ever checks. ~keep
 const VERIFY_SCAN_EXTENSIONS: &[&str] = &[
-    "rs", "py", "pyi", "ts", "tsx", "js", "mjs", "cjs", "rb", "rbs", "php", "phpstub", "go", "java", "cs", "ex", "exs",
-    "R", "r", "toml", "json", "md", "h", "c", "yaml", "yml", "zig", "dart", "kt", "kts", "swift", "gleam",
-    "properties", "pro", "sh", "props", "xml", "csproj", "zon", "cmake", "gemspec",
+    "rs",
+    "py",
+    "pyi",
+    "ts",
+    "tsx",
+    "js",
+    "mjs",
+    "cjs",
+    "rb",
+    "rbs",
+    "php",
+    "phpstub",
+    "go",
+    "java",
+    "cs",
+    "ex",
+    "exs",
+    "R",
+    "r",
+    "toml",
+    "json",
+    "md",
+    "h",
+    "c",
+    "yaml",
+    "yml",
+    "zig",
+    "dart",
+    "kt",
+    "kts",
+    "swift",
+    "gleam",
+    "properties",
+    "pro",
+    "sh",
+    "props",
+    "xml",
+    "csproj",
+    "zon",
+    "cmake",
+    "gemspec",
 ];
 
 /// Dotfiles alef stamps that [`VERIFY_SCAN_EXTENSIONS`] structurally cannot reach: `Path::extension`
@@ -849,7 +887,11 @@ e2e = "cargo test"
         write_stamped(dir.path(), "header.h", "handle-abi", "1");
 
         let collected = collect_alef_hashes(dir.path());
-        assert_eq!(collected.len(), 1, "the stamped fixture must be visible to the hash walk");
+        assert_eq!(
+            collected.len(),
+            1,
+            "the stamped fixture must be visible to the hash walk"
+        );
         assert_eq!(
             crate::core::hash::extract_stamp(&collected[0].2, "handle-abi").as_deref(),
             Some("1"),

@@ -344,7 +344,13 @@ mod tests {
     #[test]
     fn test_phantom_default_method_is_suppressed_outside_rust() {
         let ty = opaque_type_with_default_and_real_method("LanguageRegistry");
-        let rendered = render_type(&ty, Language::Java, &ResolvedCrateConfig::default(), &ApiSurface::default(), "Htm");
+        let rendered = render_type(
+            &ty,
+            Language::Java,
+            &ResolvedCrateConfig::default(),
+            &ApiSurface::default(),
+            "Htm",
+        );
         assert!(
             !rendered.contains("default()") && !rendered.contains("defaultOptions()"),
             "Default::default() never crosses into any binding -- go's binding_file.rs even \
@@ -360,7 +366,13 @@ mod tests {
     #[test]
     fn test_phantom_default_method_still_documented_on_rust_page() {
         let ty = opaque_type_with_default_and_real_method("LanguageRegistry");
-        let rendered = render_type(&ty, Language::Rust, &ResolvedCrateConfig::default(), &ApiSurface::default(), "Htm");
+        let rendered = render_type(
+            &ty,
+            Language::Rust,
+            &ResolvedCrateConfig::default(),
+            &ApiSurface::default(),
+            "Htm",
+        );
         assert!(
             rendered.contains("default()"),
             "the Rust page documents the actual crate, where Default::default() genuinely \
@@ -378,11 +390,7 @@ mod tests {
                 name: "default".to_string(),
                 is_static: true,
                 receiver: None,
-                params: vec![crate::docs::test_helpers::make_param(
-                    "region",
-                    TypeRef::String,
-                    false,
-                )],
+                params: vec![crate::docs::test_helpers::make_param("region", TypeRef::String, false)],
                 return_type: TypeRef::Named("Config".to_string()),
                 ..Default::default()
             }],
@@ -391,7 +399,13 @@ mod tests {
         // Go, not Java: naming.rs unconditionally renames every Java method literally named
         // `default` to `defaultInstance` regardless of shape, which would make this assertion
         // about the *gate* (not about naming.rs's rename table) give a false failure.
-        let rendered = render_type(&ty, Language::Go, &ResolvedCrateConfig::default(), &ApiSurface::default(), "Htm");
+        let rendered = render_type(
+            &ty,
+            Language::Go,
+            &ResolvedCrateConfig::default(),
+            &ApiSurface::default(),
+            "Htm",
+        );
         assert!(
             rendered.contains("Default("),
             "a `default`-named method that does not match the exact zero-arg, static, \
@@ -418,7 +432,13 @@ mod tests {
     #[test]
     fn test_non_opaque_type_methods_are_suppressed_outside_rust() {
         let ty = non_opaque_type_with_builder_method("ProcessConfig", false);
-        let rendered = render_type(&ty, Language::Java, &ResolvedCrateConfig::default(), &ApiSurface::default(), "Htm");
+        let rendered = render_type(
+            &ty,
+            Language::Java,
+            &ResolvedCrateConfig::default(),
+            &ApiSurface::default(),
+            "Htm",
+        );
         assert!(
             !rendered.contains("Methods"),
             "Java binds a non-opaque type as a record with no methods -- a builder method \
@@ -429,7 +449,13 @@ mod tests {
     #[test]
     fn test_non_opaque_type_methods_still_documented_on_rust_page() {
         let ty = non_opaque_type_with_builder_method("ProcessConfig", false);
-        let rendered = render_type(&ty, Language::Rust, &ResolvedCrateConfig::default(), &ApiSurface::default(), "Htm");
+        let rendered = render_type(
+            &ty,
+            Language::Rust,
+            &ResolvedCrateConfig::default(),
+            &ApiSurface::default(),
+            "Htm",
+        );
         assert!(
             rendered.contains("with_chunking()"),
             "positive control: the Rust page documents the real Rust builder method; got:\n{rendered}"
@@ -439,14 +465,26 @@ mod tests {
     #[test]
     fn test_go_serde_non_opaque_type_still_binds_methods() {
         let ty = non_opaque_type_with_builder_method("ProcessConfig", true);
-        let go = render_type(&ty, Language::Go, &ResolvedCrateConfig::default(), &ApiSurface::default(), "Htm");
+        let go = render_type(
+            &ty,
+            Language::Go,
+            &ResolvedCrateConfig::default(),
+            &ApiSurface::default(),
+            "Htm",
+        );
         assert!(
             go.contains("Methods"),
             "Go's binding_file.rs binds methods on a non-opaque type when it round-trips \
              through JSON (`has_serde`); got:\n{go}"
         );
 
-        let java = render_type(&ty, Language::Java, &ResolvedCrateConfig::default(), &ApiSurface::default(), "Htm");
+        let java = render_type(
+            &ty,
+            Language::Java,
+            &ResolvedCrateConfig::default(),
+            &ApiSurface::default(),
+            "Htm",
+        );
         assert!(
             !java.contains("Methods"),
             "the has_serde carve-out is Go-specific, confirmed only against binding_file.rs -- \
@@ -461,7 +499,13 @@ mod tests {
             is_opaque: true,
             ..Default::default()
         };
-        let rendered = render_type(&ty, Language::Java, &ResolvedCrateConfig::default(), &ApiSurface::default(), "Htm");
+        let rendered = render_type(
+            &ty,
+            Language::Java,
+            &ResolvedCrateConfig::default(),
+            &ApiSurface::default(),
+            "Htm",
+        );
         assert!(
             rendered.contains("close()"),
             "opaque.rs's `render_opaque_class_body` appends `opaque_handle_close.jinja`'s \
@@ -476,13 +520,25 @@ mod tests {
             is_opaque: true,
             ..Default::default()
         };
-        let python = render_type(&ty, Language::Python, &ResolvedCrateConfig::default(), &ApiSurface::default(), "Htm");
+        let python = render_type(
+            &ty,
+            Language::Python,
+            &ResolvedCrateConfig::default(),
+            &ApiSurface::default(),
+            "Htm",
+        );
         assert!(
             !python.contains("Methods"),
             "close() is a Java `AutoCloseable` template artifact, not part of the Rust surface \
              -- it must not leak into other languages' pages; got:\n{python}"
         );
-        let rust = render_type(&ty, Language::Rust, &ResolvedCrateConfig::default(), &ApiSurface::default(), "Htm");
+        let rust = render_type(
+            &ty,
+            Language::Rust,
+            &ResolvedCrateConfig::default(),
+            &ApiSurface::default(),
+            "Htm",
+        );
         assert!(
             !rust.contains("Methods"),
             "the Rust struct itself has no close() method; got:\n{rust}"

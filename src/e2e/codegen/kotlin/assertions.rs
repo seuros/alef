@@ -791,9 +791,6 @@ mod strict_field_availability_marker_tests {
             false,
             false,
         );
-        assert!(
-            out.contains("field 'nonexistent_field' not available"),
-            "got: {out}"
-        );
+        assert!(out.contains("field 'nonexistent_field' not available"), "got: {out}");
     }
 }

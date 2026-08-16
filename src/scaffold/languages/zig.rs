@@ -387,8 +387,7 @@ fn repair_build_zig_test_target(content: &str) -> Option<String> {
     let stmt_indent = &lines[block_end][..lines[block_end].len() - lines[block_end].trim_start().len()];
 
     let mut repaired: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
-    repaired[bad_line_index] =
-        format!("{field_indent}.root_source_file = b.path(\"test/{module_name}_test.zig\"),");
+    repaired[bad_line_index] = format!("{field_indent}.root_source_file = b.path(\"test/{module_name}_test.zig\"),");
 
     let import_call = format!("test_module.addImport(\"{module_name}\", module);");
     if !repaired.iter().any(|line| line.contains(import_call.as_str())) {
@@ -1068,7 +1067,9 @@ pub fn build(b: *std.Build) void {
         );
         // The library module's own identical-looking line must be untouched.
         assert!(
-            repaired.contains("const module = b.addModule(\"my_lib\", .{\n        .root_source_file = b.path(\"src/my_lib.zig\"),"),
+            repaired.contains(
+                "const module = b.addModule(\"my_lib\", .{\n        .root_source_file = b.path(\"src/my_lib.zig\"),"
+            ),
             "library module's root_source_file must not be touched, got:\n{repaired}"
         );
         // The hand-fixed ffi_include_path default must survive byte-for-byte.
@@ -1079,10 +1080,7 @@ pub fn build(b: *std.Build) void {
         // Only one line changed in the test_module block itself, plus one inserted line —
         // every other line of the 50-odd-line file is byte-identical.
         let original_lines: std::collections::HashSet<&str> = original.lines().collect();
-        let unexpected_new_lines: Vec<&str> = repaired
-            .lines()
-            .filter(|line| !original_lines.contains(line))
-            .collect();
+        let unexpected_new_lines: Vec<&str> = repaired.lines().filter(|line| !original_lines.contains(line)).collect();
         assert_eq!(
             unexpected_new_lines,
             vec![
@@ -1148,7 +1146,10 @@ pub fn build(b: *std.Build) void {
 
         // Running it again against the now-repaired file must be a no-op.
         let changed_again = migrate_build_zig_test_target(dir.path()).expect("second pass must not error");
-        assert!(!changed_again, "second pass over an already-repaired file must be a no-op");
+        assert!(
+            !changed_again,
+            "second pass over an already-repaired file must be a no-op"
+        );
     }
 
     /// A `build.zig` that does not exist yet (nothing scaffolded so far) must not be
