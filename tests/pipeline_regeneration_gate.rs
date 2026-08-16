@@ -245,18 +245,27 @@ enum Sabotage {
     None,
     /// Point the e2e call at a function the crate does not export.
     ///
-    /// Two other sabotages were tried first and BOTH proved vacuous, which is the reason
-    /// this control is worth its lines. Blanking the `fields_c_types` hops changes
-    /// nothing, because those are an override the walk skips whenever the field chain
-    /// resolves from the IR. Blanking the `[crates.e2e.fields]` alias changes nothing
-    /// either: the assertion is dropped somewhere ahead of the C nested-accessor walk
-    /// rather than failing it — which is itself worth chasing, since a silently dropped
-    /// assertion is the defect class this whole gate exists for.
+    /// One other sabotage was tried first and proved vacuous, which is the reason this
+    /// control is worth its lines. Blanking the `fields_c_types` hops changes nothing,
+    /// because those are an override the walk skips whenever the field chain resolves
+    /// from the IR.
     ///
     /// An unexported call name fails at a stage this gate provably reaches, so it pins
     /// that the ledger really does classify a stage failure rather than reporting a
     /// broken run as healthy. ~keep
     UnknownCallFunction,
+    /// Remove the `[crates.e2e.fields]` alias, leaving the fixture asserting
+    /// `metadata.title` — a path whose leaf names no field of `Metadata`.
+    ///
+    /// This used to change nothing at all: the C nested-accessor walk validated every
+    /// intermediate hop against the IR but let the leaf fall through to a `char*`
+    /// default, emitting `gatelib_metadata_title()` — a symbol no binding generates —
+    /// and reporting the stage complete. The availability oracle upstream
+    /// (`FieldResolver::is_valid_for_result`) only inspects a path's FIRST segment, and
+    /// `metadata` is real, so it waved the path through; no skip comment was written, so
+    /// `ALEF_E2E_STRICT_FIELD_AVAILABILITY` had nothing to scan. A silently lost
+    /// assertion is the defect class this whole gate exists for. ~keep
+    MissingFieldAlias,
 }
 
 fn write_fixture_workspace(root: &Path, sabotage: Sabotage) {
@@ -267,11 +276,15 @@ fn write_fixture_workspace(root: &Path, sabotage: Sabotage) {
     std::fs::write(root.join("fixtures/complete_basic.json"), FIXTURE_COMPLETE_JSON).expect("write completion fixture");
     std::fs::write(root.join("fixtures/clear_validators.json"), FIXTURE_CLEAR_JSON).expect("write teardown fixture");
 
+    let aliases = match sabotage {
+        Sabotage::MissingFieldAlias => "",
+        _ => FIELD_ALIASES,
+    };
     let config = FIXTURE_ALEF_TOML
         .replace("__FIELDS_C_TYPES__", NESTED_C_TYPES)
-        .replace("__FIELD_ALIASES__", FIELD_ALIASES);
+        .replace("__FIELD_ALIASES__", aliases);
     let config = match sabotage {
-        Sabotage::None => config,
+        Sabotage::None | Sabotage::MissingFieldAlias => config,
         Sabotage::UnknownCallFunction => config.replace("function = \"complete\"", "function = \"no_such_export\""),
     };
     std::fs::write(root.join("alef.toml"), config).expect("write fixture alef.toml");
@@ -1024,5 +1037,34 @@ fn gate_condemns_a_run_whose_call_names_an_unexported_function() {
         message.contains("PIPELINE PANIC") || message.contains("PIPELINE ERROR") || message.contains("DID NO WORK"),
         "the sabotaged run was condemned, but not under a diagnosis a reader can act on: {message}\n{}",
         run.ledger.summary()
+    );
+}
+
+/// A fixture assertion whose field path does not resolve must produce a visible outcome.
+/// Removing the alias leaves `metadata.title` naming a field `Metadata` does not have; the
+/// e2e-codegen stage must fail, and its message must name the type, the field, and the
+/// alias that fixes it — not merely condemn the run.
+#[test]
+fn gate_condemns_a_run_whose_assertion_field_path_does_not_resolve() {
+    let (run, _error_events, _workspace) = run_gate(Sabotage::MissingFieldAlias);
+
+    let outcome = run
+        .ledger
+        .outcome_of("e2e-codegen")
+        .expect("the gate drives an e2e-codegen stage");
+    let StageOutcome::Failed(message) = outcome else {
+        panic!(
+            "an assertion on an unresolvable field path did not fail e2e codegen; it was silently \
+             dropped or rendered against a phantom accessor. Got {outcome:?}\n{}",
+            run.ledger.summary()
+        );
+    };
+    assert!(
+        message.contains("IR type `Metadata` has no field `title`"),
+        "the failure must name the type and the field it lacks: {message}"
+    );
+    assert!(
+        message.contains("\"metadata.title\" = \"metadata.document.title\""),
+        "the failure must spell the alias that fixes it: {message}"
     );
 }

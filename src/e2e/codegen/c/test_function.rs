@@ -11,10 +11,11 @@ use std::fmt::Write as FmtWrite;
 
 use super::docs_input::render_c_docs_json;
 use super::{
-    build_args_string_c, c_optional_sentinel, emit_nested_accessor, infer_opaque_handle_type, is_primitive_c_type,
-    is_skipped_c_field, json_to_c, render_assertion, render_bytes_test_function, render_c_diagnostic_skip,
-    render_engine_factory_test_function, render_streaming_test_function, resolve_c_client_owner_type,
-    resolve_c_streaming_adapter, try_emit_enum_accessor, validate_c_snippet_metadata,
+    LeafFieldCheck, build_args_string_c, c_optional_sentinel, emit_nested_accessor, ensure_leaf_field_exists,
+    infer_opaque_handle_type, is_primitive_c_type, is_skipped_c_field, json_to_c, render_assertion,
+    render_bytes_test_function, render_c_diagnostic_skip, render_engine_factory_test_function,
+    render_streaming_test_function, resolve_c_client_owner_type, resolve_c_streaming_adapter, try_emit_enum_accessor,
+    validate_c_snippet_metadata,
 };
 
 /// Snippet-local definition of the `ALEF_TEST_SKIP` guard macro.
@@ -281,7 +282,10 @@ pub(super) fn render_test_function(
         }
     }
 
-    let prefix_upper = prefix.to_uppercase();
+    // `{prefix_upper}AlefHandle` must be spelled the way the header declares it, and cbindgen's
+    // `[export] prefix` is shouty-snake rather than a bare uppercase (they differ for any prefix
+    // with an internal word boundary). Route through the helper the header producer uses. ~keep
+    let prefix_upper = crate::codegen::c_consumer::export_type_prefix(prefix);
 
     // Engine-factory pattern: used when c_engine_factory is configured.
     // Creates a config handle from JSON, builds an engine, calls {prefix}_{function}(engine, url),
@@ -328,6 +332,7 @@ pub(super) fn render_test_function(
             &streaming,
             expects_error,
             api_key_var,
+            documentation_snippet,
         );
         return Ok(());
     }
@@ -361,6 +366,7 @@ pub(super) fn render_test_function(
             factory,
             &client_owner_type,
             expects_error,
+            documentation_snippet,
         );
         return Ok(());
     }
@@ -632,6 +638,23 @@ pub(super) fn render_test_function(
                         );
                         opaque_handle_locals.insert(local_var.clone(), handle_pascal.to_snake_case());
                     } else {
+                        // A single-segment `resolved` is not proof the field is flat: it is
+                        // also what namespace stripping produces from `data.kind` when `data`
+                        // is absent from `result_fields`. That guess must be checked, or the
+                        // walk emits `{prefix}_{result_type}_kind()` — an accessor that only
+                        // exists on the *nested* type — and generation reports success. ~keep
+                        ensure_leaf_field_exists(LeafFieldCheck {
+                            prefix,
+                            accessor_fn: &accessor_fn,
+                            resolved,
+                            raw_field: f,
+                            segment: resolved,
+                            parent_snake_type: &result_type_snake,
+                            parent_is_ir_type: type_defs.iter().any(|type_def| type_def.name == result_type_name),
+                            declared_in_fields_c_types: fields_c_types.contains_key(&lookup_key),
+                            result_type_name,
+                            type_defs,
+                        })?;
                         let _ = writeln!(out, "    char* {local_var} = {accessor_fn}({result_var});");
                     }
                 }
@@ -952,7 +975,7 @@ pub(super) fn render_test_function(
                 out.push_str(&crate::e2e::template_env::render(
                     "c/typed_handle.jinja",
                     minijinja::context! {
-                        prefix_upper => prefix.to_uppercase(),
+                        prefix_upper => &prefix_upper,
                         type_name => type_name,
                         handle => handle,
                         prefix => prefix,
@@ -1106,6 +1129,20 @@ pub(super) fn render_test_function(
                     );
                     opaque_handle_locals.insert(local_var.clone(), handle_pascal.to_snake_case());
                 } else {
+                    // See the identical guard in the client-call path above: a single-segment
+                    // `resolved` may be the residue of namespace stripping, not a flat field. ~keep
+                    ensure_leaf_field_exists(LeafFieldCheck {
+                        prefix,
+                        accessor_fn: &accessor_fn,
+                        resolved,
+                        raw_field: f,
+                        segment: resolved,
+                        parent_snake_type: &result_type_snake,
+                        parent_is_ir_type: type_defs.iter().any(|type_def| type_def.name == result_type_name),
+                        declared_in_fields_c_types: fields_c_types.contains_key(&lookup_key),
+                        result_type_name,
+                        type_defs,
+                    })?;
                     let _ = writeln!(out, "    char* {local_var} = {accessor_fn}({result_var});");
                 }
             }

@@ -38,11 +38,20 @@ pub(super) fn emit_nested_accessor(
     type_defs: &[crate::core::ir::TypeDef],
 ) -> anyhow::Result<Option<String>> {
     let segments: Vec<&str> = resolved.split('.').collect();
-    let prefix_upper = prefix.to_uppercase();
+    // cbindgen's `[export] prefix` is shouty-snake, not uppercase; re-deriving it here as
+    // `to_uppercase` names types the generated header never declares for any prefix carrying an
+    // internal word boundary (`SampleCore` -> `SAMPLECORE` vs the header's `SAMPLE_CORE`). ~keep
+    let prefix_upper = crate::codegen::c_consumer::export_type_prefix(prefix);
 
     // Walk the path, starting from the root result type.
     let mut current_snake_type = result_type_name.to_snake_case();
     let mut current_handle = result_var.to_string();
+    // True only while `current_snake_type` names a type the IR actually declares, which
+    // is the precondition for using the IR as an oracle for the next segment. The `char*`
+    // hop below sets `current_snake_type` from a *field* name rather than a type name, and
+    // a `fields_c_types` value may name a C type with no IR counterpart at all; in either
+    // case an IR type that happens to share the name is a coincidence, not the parent. ~keep
+    let mut current_type_from_ir = type_defs.iter().any(|type_def| type_def.name == result_type_name);
     // Set to true when we've traversed a `[]` array element accessor and subsequent
     // fields must be extracted via alef_json_get_string rather than FFI function calls.
     let mut json_extract_mode = false;
@@ -217,6 +226,29 @@ pub(super) fn emit_nested_accessor(
             ) {
                 return Ok(None);
             }
+            // Every branch above proved the leaf exists — an explicit `fields_c_types`
+            // declaration, or an enum registration. This default proves nothing: it emits
+            // `{accessor_fn}()` on faith. When the IR knows the type the walk is standing
+            // on and that type has no such field, cbindgen never generated that symbol, so
+            // the assertion is rendered against a function that does not exist and the
+            // failure surfaces at `cc` time inside a consumer — or, if the generated suite
+            // is never compiled, not at all. Nothing upstream catches it either:
+            // `FieldResolver::is_valid_for_result` only inspects a path's FIRST segment, so
+            // `metadata.<anything>` passes as long as `metadata` is a real field, and the
+            // `fail_on_unavailable_field_markers` scan only sees skip comments that this
+            // path never writes. Fail here, matching the intermediate arm below. ~keep
+            ensure_leaf_field_exists(LeafFieldCheck {
+                prefix,
+                accessor_fn: &accessor_fn,
+                resolved,
+                raw_field,
+                segment,
+                parent_snake_type: &current_snake_type,
+                parent_is_ir_type: current_type_from_ir,
+                declared_in_fields_c_types: fields_c_types.contains_key(&lookup_key),
+                result_type_name,
+                type_defs,
+            })?;
             let _ = writeln!(out, "    char* {local_var} = {accessor_fn}({current_handle});");
         } else {
             // Intermediate field — check if it's a char* (JSON string/array) or an opaque handle.
@@ -243,7 +275,7 @@ pub(super) fn emit_nested_accessor(
                             accessor_fn: &accessor_fn,
                             resolved,
                             raw_field,
-                            segment: *segment,
+                            segment,
                             seg_snake: &seg_snake,
                             segments_walked: &segments[..=i],
                             current_snake_type: &current_snake_type,
@@ -268,6 +300,7 @@ pub(super) fn emit_nested_accessor(
                     return Ok(Some("int".to_string()));
                 }
                 current_snake_type = seg_snake.clone();
+                current_type_from_ir = false;
                 current_handle = json_var;
                 continue;
             }
@@ -287,6 +320,7 @@ pub(super) fn emit_nested_accessor(
                 intermediate_handles.push((handle_var.clone(), return_snake.clone()));
             }
 
+            current_type_from_ir = type_defs.iter().any(|type_def| type_def.name == return_type_pascal);
             current_snake_type = return_snake;
             current_handle = handle_var;
         }
@@ -313,7 +347,7 @@ fn resolve_intermediate_type(
 ///
 /// The bound exists to terminate on a self-referential IR, not to trade off cost -- this
 /// only ever runs on the way to returning an error. Six comfortably clears the chains that
-/// motivated it (crawlberg's `ScrapeResult.metadata.article.tags` is three hops); a chain
+/// motivated it (a real consumer's `ScrapeResult.metadata.article.tags` is three hops); a chain
 /// deeper than this just loses the "here is where the field really lives" hint, it does not
 /// change the error.
 const MAX_FIELD_PATH_SEARCH_DEPTH: usize = 6;
@@ -524,6 +558,171 @@ fn missing_intermediate_type_diagnostic(context: MissingIntermediateType<'_>) ->
                 " No type reachable from `{result_type_name}` has a field named `{seg_snake}` either, so the \
                  fixture's field path is the thing to check first -- declaring \"{lookup_key}\" cannot make \
                  `{accessor_fn}()` exist."
+            );
+        }
+    }
+
+    message
+}
+
+/// Inputs for [`ensure_leaf_field_exists`]. A struct, not a handful of positional
+/// `&str`s, for the same reason [`MissingIntermediateType`] is one.
+pub(super) struct LeafFieldCheck<'a> {
+    /// The crate's FFI symbol prefix, for naming the accessor that really exists.
+    pub prefix: &'a str,
+    /// The C symbol the caller is about to emit for this leaf.
+    pub accessor_fn: &'a str,
+    /// The (alias-resolved, already namespace-stripped) path being walked.
+    pub resolved: &'a str,
+    /// The fixture's own field path, before alias resolution and namespace stripping.
+    pub raw_field: &'a str,
+    /// The leaf segment itself, in its fixture spelling.
+    pub segment: &'a str,
+    /// The snake_case name of the type the accessor will be called on.
+    pub parent_snake_type: &'a str,
+    /// Whether `parent_snake_type` really names an IR type. False after a `char*` hop,
+    /// where it holds a *field* name, and for a result type the IR does not model — in
+    /// both cases an IR type sharing the name is a coincidence, not the parent.
+    pub parent_is_ir_type: bool,
+    /// Whether the operator declared this exact leaf in `[crates.e2e.fields_c_types]`.
+    /// An explicit declaration is a claim that the accessor exists, and stays authoritative.
+    pub declared_in_fields_c_types: bool,
+    /// The type the walk started from.
+    pub result_type_name: &'a str,
+    pub type_defs: &'a [crate::core::ir::TypeDef],
+}
+
+/// Reject a leaf field the IR positively says the parent type does not have.
+///
+/// The C accessor for a leaf is `{prefix}_{parent_snake}_{leaf_snake}`, built from a name
+/// rather than looked up, so nothing but the IR can tell a real accessor from a fabricated
+/// one. Default-allow everywhere the IR cannot answer: silence is not evidence of absence,
+/// and this is a hard generation failure. ~keep
+pub(super) fn ensure_leaf_field_exists(check: LeafFieldCheck<'_>) -> anyhow::Result<()> {
+    if !check.parent_is_ir_type || check.declared_in_fields_c_types || check.resolved.contains('[') {
+        return Ok(());
+    }
+    let seg_snake = check.segment.to_snake_case();
+    let Some(parent) = check
+        .type_defs
+        .iter()
+        .find(|type_def| type_def.name.to_snake_case() == check.parent_snake_type)
+    else {
+        return Ok(());
+    };
+    if parent
+        .fields
+        .iter()
+        .any(|field| field.name.to_snake_case() == seg_snake)
+    {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "{}",
+        unknown_leaf_field_diagnostic(UnknownLeafField {
+            prefix: check.prefix,
+            accessor_fn: check.accessor_fn,
+            resolved: check.resolved,
+            raw_field: check.raw_field,
+            segment: check.segment,
+            seg_snake: &seg_snake,
+            parent_type: &parent.name,
+            result_type_name: check.result_type_name,
+            type_defs: check.type_defs,
+        })
+    )
+}
+
+/// Inputs for [`unknown_leaf_field_diagnostic`], resolved from a [`LeafFieldCheck`].
+struct UnknownLeafField<'a> {
+    prefix: &'a str,
+    accessor_fn: &'a str,
+    resolved: &'a str,
+    raw_field: &'a str,
+    segment: &'a str,
+    seg_snake: &'a str,
+    /// The IR type the walk is standing on, in its declared PascalCase spelling.
+    parent_type: &'a str,
+    result_type_name: &'a str,
+    type_defs: &'a [crate::core::ir::TypeDef],
+}
+
+/// Explain a leaf segment that names no field of the type the walk arrived at.
+///
+/// The intermediate arm can at least offer "declare the C type"; a leaf cannot, because the
+/// leaf accessor is emitted from the parent type and the field name alone. So the only
+/// honest remedies are the alias that reconnects the fixture path to the real chain, or
+/// fixing the fixture path — and the message has to say which, by looking up where the field
+/// really lives. Same three facts as [`missing_intermediate_type_diagnostic`], same
+/// resolution machinery, different remedy. ~keep
+fn unknown_leaf_field_diagnostic(context: UnknownLeafField<'_>) -> String {
+    let UnknownLeafField {
+        prefix,
+        accessor_fn,
+        resolved,
+        raw_field,
+        segment,
+        seg_snake,
+        parent_type,
+        result_type_name,
+        type_defs,
+    } = context;
+
+    let mut message = format!(
+        "e2e c codegen: fixture field \"{raw_field}\" (path \"{resolved}\") ends at segment \"{segment}\", but IR \
+         type `{parent_type}` has no field `{seg_snake}`. The walk was about to emit `{accessor_fn}()`, a C symbol \
+         no binding generates, so this assertion would have been rendered against a function that does not exist. \
+         Nothing upstream rejects it: the field-availability oracle (`FieldResolver::is_valid_for_result`) only \
+         inspects a path's FIRST segment, which is a real field here."
+    );
+
+    let namespace = stripped_namespace_prefix(raw_field, resolved);
+    if let Some(namespace) = namespace {
+        let _ = write!(
+            message,
+            " alef stripped the leading \"{namespace}\" from \"{raw_field}\" as a virtual namespace, because no \
+             `[crates.e2e.fields]` alias maps it onto a real path and its first segment is not a `result_fields` \
+             entry -- which is why the walk started at `{result_type_name}` instead of inside `{namespace}`."
+        );
+    }
+
+    let Some(chain) = find_field_path(result_type_name, seg_snake, type_defs) else {
+        let _ = write!(
+            message,
+            " No type reachable from `{result_type_name}` has a field named `{seg_snake}` either, so the fixture's \
+             field path is the thing to fix -- there is no config entry that can spell a chain which does not exist."
+        );
+        return message;
+    };
+
+    let real_path = &chain.path;
+    let real_symbol = format!("{prefix}_{}_{seg_snake}", chain.owner_type.to_snake_case());
+    let _ = write!(
+        message,
+        " Field `{seg_snake}` does exist below `{result_type_name}`, at \"{real_path}\" -- it is declared on \
+         `{owner}`, so the accessor that really exists is `{real_symbol}()`.",
+        owner = chain.owner_type,
+    );
+
+    // Two different config bugs produce this, and they take opposite fixes. When the real
+    // chain starts with the prefix that was stripped, the fixture path was right all along
+    // and the stripping was the mistake -- an alias would be an identity mapping and change
+    // nothing, because `namespace_stripped_path` consults only `result_fields`. Otherwise the
+    // fixture path genuinely names a chain that does not exist and needs an alias. ~keep
+    match namespace.filter(|namespace| real_path.starts_with(&format!("{namespace}."))) {
+        Some(namespace) => {
+            let _ = write!(
+                message,
+                " Fix: add \"{namespace}\" to `[crates.e2e].result_fields` so alef stops treating it as a virtual \
+                 namespace prefix and walks it as the real field it is. An alias here would be an identity mapping \
+                 and would not stop the stripping."
+            );
+        }
+        None => {
+            let _ = write!(
+                message,
+                " Fix: add \"{raw_field}\" = \"{real_path}\" under `[crates.e2e.fields]` so the fixture path \
+                 resolves to the real chain."
             );
         }
     }
@@ -1490,6 +1689,291 @@ mod tests {
         assert_eq!(metadata.owner_type, "ScrapeResult");
 
         assert!(find_field_path("ScrapeResult", "nowhere", &types).is_none());
+    }
+
+    /// The `pipeline_regeneration_gate` shape: `CompletionResponse.metadata -> Metadata`,
+    /// `Metadata.document -> Document`, `Document.title`. `Metadata` deliberately has NO
+    /// `title` field, so `metadata.title` only resolves through the
+    /// `"metadata.title" = "metadata.document.title"` alias. ~keep
+    fn completion_response_types() -> Vec<TypeDef> {
+        vec![
+            TypeDef {
+                name: "CompletionResponse".into(),
+                fields: vec![
+                    FieldDef {
+                        name: "id".into(),
+                        ty: TypeRef::String,
+                        ..FieldDef::default()
+                    },
+                    FieldDef {
+                        name: "metadata".into(),
+                        ty: TypeRef::Named("Metadata".into()),
+                        ..FieldDef::default()
+                    },
+                ],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "Metadata".into(),
+                fields: vec![FieldDef {
+                    name: "document".into(),
+                    ty: TypeRef::Named("Document".into()),
+                    ..FieldDef::default()
+                }],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "Document".into(),
+                fields: vec![FieldDef {
+                    name: "title".into(),
+                    ty: TypeRef::String,
+                    ..FieldDef::default()
+                }],
+                ..TypeDef::default()
+            },
+        ]
+    }
+
+    fn completion_response_c_types() -> HashMap<String, String> {
+        HashMap::from([
+            ("completion_response.metadata".to_string(), "Metadata".to_string()),
+            ("metadata.document".to_string(), "Document".to_string()),
+        ])
+    }
+
+    fn walk_completion_response(
+        resolved: &str,
+        raw_field: &str,
+        fields_c_types: &HashMap<String, String>,
+    ) -> anyhow::Result<(String, Option<String>)> {
+        let mut output = String::new();
+        let mut handles = Vec::new();
+        let leaf = emit_nested_accessor(
+            &mut output,
+            "gatelib",
+            resolved,
+            "metadata_title",
+            "result",
+            fields_c_types,
+            &HashSet::new(),
+            &mut handles,
+            "CompletionResponse",
+            raw_field,
+            &completion_response_types(),
+        )?;
+        Ok((output, leaf))
+    }
+
+    /// The decisive case. Dropping the `[crates.e2e.fields]` alias leaves the fixture
+    /// asserting `metadata.title`, whose leaf names no field of `Metadata`. Before this
+    /// check the walk emitted `gatelib_metadata_title(metadata_handle)` — a symbol cbindgen
+    /// never generates — and generation reported success, so the assertion was lost with no
+    /// error, no warning and no skip comment for the
+    /// `ALEF_E2E_STRICT_FIELD_AVAILABILITY` scan to find. ~keep
+    #[test]
+    fn unknown_leaf_field_is_an_error_not_a_phantom_accessor() {
+        let error = walk_completion_response("metadata.title", "metadata.title", &completion_response_c_types())
+            .expect_err("`title` is not a field of `Metadata`");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("IR type `Metadata` has no field `title`"),
+            "must name the type and the field it lacks: {message}"
+        );
+        assert!(
+            message.contains("gatelib_metadata_title()"),
+            "must name the phantom symbol it refused to emit: {message}"
+        );
+        assert!(
+            message.contains("only inspects a path's FIRST segment"),
+            "must say why nothing upstream caught it: {message}"
+        );
+    }
+
+    /// The remedy has to be spelled out, not implied: the fix for this shape is the alias,
+    /// and the message must carry both sides of it.
+    #[test]
+    fn unknown_leaf_field_diagnostic_spells_the_alias_that_fixes_it() {
+        let message = walk_completion_response("metadata.title", "metadata.title", &completion_response_c_types())
+            .expect_err("`title` is not a field of `Metadata`")
+            .to_string();
+
+        assert!(
+            message.contains("\"metadata.title\" = \"metadata.document.title\""),
+            "must spell the alias that reconnects the fixture path: {message}"
+        );
+        assert!(
+            message.contains("`[crates.e2e.fields]`"),
+            "must name the table the alias goes in: {message}"
+        );
+        assert!(
+            message.contains("gatelib_document_title()"),
+            "must name the accessor that really exists: {message}"
+        );
+    }
+
+    /// Positive control: with the alias in place the very same fixture field resolves, and
+    /// the leaf still renders its accessor. The fix must not turn every nested assertion
+    /// into a failure.
+    #[test]
+    fn resolvable_leaf_still_renders_its_accessor() {
+        let (output, leaf) = walk_completion_response(
+            "metadata.document.title",
+            "metadata.title",
+            &completion_response_c_types(),
+        )
+        .expect("every hop and the leaf resolve");
+
+        assert_eq!(
+            leaf, None,
+            "a plain string leaf is a char*, not a primitive or a handle"
+        );
+        assert!(
+            output.contains("char* metadata_title = gatelib_document_title(document_handle);"),
+            "{output}"
+        );
+    }
+
+    /// A leaf the operator declared in `[crates.e2e.fields_c_types]` is an explicit claim
+    /// that the accessor exists, and stays authoritative — the IR check only governs the
+    /// undeclared default. Without this escape hatch a field reached through a C type the
+    /// IR does not model would become ungeneratable.
+    #[test]
+    fn explicitly_declared_leaf_type_overrides_the_ir_check() {
+        let mut fields_c_types = completion_response_c_types();
+        fields_c_types.insert("metadata.title".to_string(), "char*".to_string());
+
+        let (output, _) = walk_completion_response("metadata.title", "metadata.title", &fields_c_types)
+            .expect("an explicit fields_c_types declaration is authoritative");
+
+        assert!(
+            output.contains("char* metadata_title = gatelib_metadata_title(metadata_handle);"),
+            "{output}"
+        );
+    }
+
+    /// Default-allow guard: when the walk is standing on a type the IR does not declare,
+    /// the IR cannot say whether the leaf exists, and silence must not be read as absence.
+    #[test]
+    fn leaf_on_a_type_the_ir_does_not_declare_is_not_rejected() {
+        let mut output = String::new();
+        let mut handles = Vec::new();
+        emit_nested_accessor(
+            &mut output,
+            "gatelib",
+            "metadata.title",
+            "metadata_title",
+            "result",
+            &HashMap::from([("unmodelled_result.metadata".to_string(), "AlsoUnmodelled".to_string())]),
+            &HashSet::new(),
+            &mut handles,
+            "UnmodelledResult",
+            "metadata.title",
+            &completion_response_types(),
+        )
+        .expect("an unmodelled parent type must not be treated as proof the leaf is absent");
+
+        assert!(
+            output.contains("char* metadata_title = gatelib_also_unmodelled_title(metadata_handle);"),
+            "{output}"
+        );
+    }
+
+    /// The shape found shipped in `tree-sitter-language-pack/e2e/c/test_data_extraction.c`:
+    /// `ProcessResult.data -> DataNode.kind`, asserted as `data.kind`, with `data` absent
+    /// from `result_fields`. Stripping reduces the path to the bare leaf `kind`, which the
+    /// availability oracle accepts because `kind` is IR-reachable on *some* type, and the
+    /// flat branch then emits `ts_pack_process_result_kind()` — a symbol the generated
+    /// header does not declare. ~keep
+    fn ts_pack_types() -> Vec<TypeDef> {
+        vec![
+            TypeDef {
+                name: "ProcessResult".into(),
+                fields: vec![
+                    FieldDef {
+                        name: "language".into(),
+                        ty: TypeRef::String,
+                        ..FieldDef::default()
+                    },
+                    FieldDef {
+                        name: "data".into(),
+                        ty: TypeRef::Named("DataNode".into()),
+                        ..FieldDef::default()
+                    },
+                ],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "DataNode".into(),
+                fields: vec![FieldDef {
+                    name: "kind".into(),
+                    ty: TypeRef::String,
+                    ..FieldDef::default()
+                }],
+                ..TypeDef::default()
+            },
+        ]
+    }
+
+    fn check_ts_pack_stripped_leaf(declared_in_fields_c_types: bool) -> anyhow::Result<()> {
+        let types = ts_pack_types();
+        ensure_leaf_field_exists(LeafFieldCheck {
+            prefix: "ts_pack",
+            accessor_fn: "ts_pack_process_result_kind",
+            resolved: "kind",
+            raw_field: "data.kind",
+            segment: "kind",
+            parent_snake_type: "process_result",
+            parent_is_ir_type: true,
+            declared_in_fields_c_types,
+            result_type_name: "ProcessResult",
+            type_defs: &types,
+        })
+    }
+
+    #[test]
+    fn namespace_stripped_leaf_that_is_not_a_result_type_field_is_rejected() {
+        let message = check_ts_pack_stripped_leaf(false)
+            .expect_err("`kind` is a field of `DataNode`, not of `ProcessResult`")
+            .to_string();
+
+        assert!(
+            message.contains("IR type `ProcessResult` has no field `kind`"),
+            "must name the type the accessor would have been called on: {message}"
+        );
+        assert!(
+            message.contains("stripped the leading \"data\""),
+            "must name the stripping that produced the bare leaf: {message}"
+        );
+        assert!(
+            message.contains("ts_pack_data_node_kind()"),
+            "must name the accessor that really exists: {message}"
+        );
+    }
+
+    /// The remedy differs from the aliasable case and the message must not confuse them: an
+    /// alias here would be `"data.kind" = "data.kind"`, an identity mapping that leaves
+    /// `namespace_stripped_path` (which reads `result_fields`, not the alias table) stripping
+    /// exactly as before.
+    #[test]
+    fn stripped_leaf_diagnostic_names_result_fields_not_an_identity_alias() {
+        let message = check_ts_pack_stripped_leaf(false)
+            .expect_err("`kind` is a field of `DataNode`, not of `ProcessResult`")
+            .to_string();
+
+        assert!(
+            message.contains("add \"data\" to `[crates.e2e].result_fields`"),
+            "must name the config entry that stops the stripping: {message}"
+        );
+        assert!(
+            !message.contains("\"data.kind\" = \"data.kind\""),
+            "must not suggest an identity alias that changes nothing: {message}"
+        );
+    }
+
+    #[test]
+    fn explicitly_declared_flat_leaf_type_overrides_the_ir_check() {
+        check_ts_pack_stripped_leaf(true).expect("an explicit fields_c_types declaration is authoritative");
     }
 
     fn test_backend_arg(trait_name: &str) -> crate::e2e::config::ArgMapping {

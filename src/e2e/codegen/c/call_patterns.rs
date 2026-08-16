@@ -9,8 +9,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 
 use super::{
-    c_optional_sentinel, emit_nested_accessor, infer_opaque_handle_type, is_primitive_c_type, is_skipped_c_field,
-    render_assertion, try_emit_enum_accessor,
+    LeafFieldCheck, c_optional_sentinel, emit_nested_accessor, ensure_leaf_field_exists, infer_opaque_handle_type,
+    is_primitive_c_type, is_skipped_c_field, render_assertion, try_emit_enum_accessor,
 };
 
 /// Emit a test function using the engine-factory pattern:
@@ -37,7 +37,9 @@ pub(super) fn render_engine_factory_test_function(
     raw_c_result_type: Option<&str>,
     type_defs: &[crate::core::ir::TypeDef],
 ) -> anyhow::Result<()> {
-    let prefix_upper = prefix.to_uppercase();
+    // cbindgen's `[export] prefix` (shouty-snake), not a bare uppercase — see
+    // `c_consumer::export_type_prefix`. ~keep
+    let prefix_upper = crate::codegen::c_consumer::export_type_prefix(prefix);
     let config_snake = config_type.to_snake_case();
 
     // Build config JSON from fixture input (snake_case keys).
@@ -295,6 +297,21 @@ pub(super) fn render_engine_factory_test_function(
                     );
                     opaque_handle_locals.insert(local_var.clone(), handle_pascal.to_snake_case());
                 } else {
+                    // See `test_function.rs`: a single-segment `resolved` may be the residue
+                    // of namespace stripping rather than a flat field, and the accessor name
+                    // built from it is a guess until the IR confirms it. ~keep
+                    ensure_leaf_field_exists(LeafFieldCheck {
+                        prefix,
+                        accessor_fn: &accessor_fn,
+                        resolved,
+                        raw_field: f,
+                        segment: resolved,
+                        parent_snake_type: &result_type_snake,
+                        parent_is_ir_type: type_defs.iter().any(|type_def| type_def.name == result_type_name),
+                        declared_in_fields_c_types: fields_c_types.contains_key(&lookup_key),
+                        result_type_name,
+                        type_defs,
+                    })?;
                     let _ = writeln!(out, "    char* {local_var} = {accessor_fn}({result_var});");
                 }
             }
@@ -382,8 +399,11 @@ pub(super) fn render_bytes_test_function(
     factory: &str,
     _client_owner_type: &str,
     expects_error: bool,
+    documentation_snippet: bool,
 ) {
-    let prefix_upper = prefix.to_uppercase();
+    // cbindgen's `[export] prefix` (shouty-snake), not a bare uppercase — see
+    // `c_consumer::export_type_prefix`. ~keep
+    let prefix_upper = crate::codegen::c_consumer::export_type_prefix(prefix);
     let mut request_handle_vars: Vec<(String, String)> = Vec::new();
     let mut string_arg_exprs: Vec<String> = Vec::new();
 
@@ -462,7 +482,12 @@ pub(super) fn render_bytes_test_function(
     }
 
     let fixture_id = &fixture.id;
-    if fixture.needs_mock_server() {
+    // ~keep A documentation snippet is published verbatim to readers, so the mock-server
+    // wiring below must not reach it — mirrors `test_function::render_test_function`'s
+    // `has_mock` and the `api_key` local it declares for the docs path before dispatching
+    // here. Test mode passes `false` and keeps the mock branches byte-for-byte.
+    let has_mock = fixture.needs_mock_server() && !documentation_snippet;
+    if has_mock {
         let _ = writeln!(out, "    const char* mock_base = getenv(\"MOCK_SERVER_URL\");");
         let _ = writeln!(out, "    assert(mock_base != NULL && \"MOCK_SERVER_URL must be set\");");
         let _ = writeln!(out, "    char base_url[1024];");
@@ -477,6 +502,11 @@ pub(super) fn render_bytes_test_function(
         let _ = writeln!(
             out,
             "    {prefix_upper}AlefHandle client = {prefix}_{factory}(\"test-key\", base_url, (uint64_t)-1, (uint32_t)-1, NULL);"
+        );
+    } else if documentation_snippet {
+        let _ = writeln!(
+            out,
+            "    {prefix_upper}AlefHandle client = {prefix}_{factory}(api_key, NULL, (uint64_t)-1, (uint32_t)-1, NULL);"
         );
     } else {
         let _ = writeln!(

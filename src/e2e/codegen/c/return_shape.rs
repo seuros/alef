@@ -1,8 +1,11 @@
 use crate::core::ir::{FunctionDef, TypeRef};
 use crate::e2e::config::CallConfig;
 
-pub(super) fn resolve_raw_c_result_type(call: &CallConfig, functions: &[FunctionDef]) -> Option<String> {
-    let function = functions.iter().find(|function| function.name == call.function)?;
+pub(super) fn resolve_raw_c_result_type(call: &CallConfig, lang: &str, functions: &[FunctionDef]) -> Option<String> {
+    // Keyed on the Rust identity, not the C export: `functions` is the core crate's IR, and
+    // `overrides.c.function` names a prefixed C symbol that never appears in it. ~keep
+    let lookup_name = call.core_lookup_name(lang)?;
+    let function = functions.iter().find(|function| function.name == *lookup_name)?;
     c_string_return(&function.return_type).then(|| "char*".to_string())
 }
 
