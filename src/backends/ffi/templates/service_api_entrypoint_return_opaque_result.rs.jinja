@@ -3,5 +3,5 @@
             Ok(handle) => handle,
             Err(error) => { set_handle_error(&error); 0 }
         },
-        Err(_) => 0,
+        Err(error) => { set_last_error(2, &error.to_string()); 0 }
     }

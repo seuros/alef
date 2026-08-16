@@ -2,7 +2,13 @@
     })) {
         Ok(value) => value,
         Err(_) => {
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(set_panic_error));
+            // A panic can unwind past code that already reported a more specific error via
+            // set_last_error/set_handle_error (e.g. a conversion failure right before an
+            // unrelated panic deeper in the same call); only stamp the generic panic marker
+            // when nothing more specific is already recorded, so that context survives. ~keep
+            if LAST_ERROR_CODE.with_borrow(|c| *c == 0) {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(set_panic_error));
+            }
             {{ panic_return }}
         }
     }

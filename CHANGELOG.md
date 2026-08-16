@@ -20,6 +20,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **e2e/codegen, backends**: fail at generation time instead of emitting placeholder values that let a generated
+  suite pass while testing nothing. Ten sites across eight backends silently fabricated output: the Ruby extension
+  returned the literal `"[unimplemented: <fn>]"` (and `0`/`false`) for non-delegable functions, PHP, wasm-bindgen
+  and the Elixir NIF did the same, `dart:ffi` mode dropped async functions from the API surface behind a comment,
+  and the Rust e2e streaming path emitted nothing at all through unguarded `if let` arms. Two were worse than
+  vacuous: the pyo3 capsule spliced `unreachable!()` into a value position, which compiles and then uncatchably
+  panics the interpreter on first call, and the JNI `nativeRegister<Trait>` shim accepted a registration without
+  ever calling `register_fn`, reporting success for a backend it never registered. Each now fails loudly —
+  `compile_error!` where the backend already had that escape hatch, an explicit panic naming the crate, fixture
+  and symbol elsewhere — and the pyo3 case raises a catchable `PyRuntimeError`.
+
+- **e2e/fields**: derive field availability from the IR rather than from the hand-maintained `result_fields` TOML
+  list, across fourteen backends. The list was wrong in both directions simultaneously in a real consumer repo —
+  omitting a field that is exposed and listing one that a getter also exposes — so assertions were silently
+  replaced by `skipped: field not available` comments. `FieldDef.binding_excluded` is now consulted first; it is
+  not a proxy, being the same predicate `binding_fields()` uses to decide which fields the pyo3 backend gives a
+  getter. Config and its sibling maps remain a fallback for names the IR has never seen. Note `#[serde(skip)]`
+  never implies binding exclusion — only `#[doc(hidden)]`, `#[cfg_attr(alef, alef(skip))]` and `dyn Trait` fields
+  do — and a control test now pins that, since a field can be absent from the wire format and still be exposed.
+
+- **backends/rustler**: bound the visitor bridge's reply wait. `visitor_send_and_wait` blocked on `rx.recv()` with
+  no timeout, so a host process that exited before replying held the NIF scheduler thread indefinitely; the
+  trait-call path already had a watchdog and it was simply never retrofitted. The visitor channel carries no error
+  slot, so the watchdog drops the sender and the existing disconnect path returns the method's default result,
+  matching what the trait path already does on a closed channel.
+
+- **backends/java**: resolve the libc `free` symbol lazily inside `freeHandlerResponse` instead of eagerly in the
+  service class's static initializer. `SymbolLookup.loaderLookup()` only sees symbols reachable through libraries
+  the classloader has loaded, and `free` is not emitted by alef's own FFI, so a service that never frees a handler
+  response could fail to load at all. The sibling `malloc` lookup was already lazy; the asymmetry was the defect.
+
+- **backends/zig**: emit the unwrap expression for a method or function returning `Option<OpaqueHandle>`. The match
+  had arms for every other shape, so `Optional(Named)` fell through to a catch-all that returned the raw C value
+  while the signature declared `?TypeName` — type-incorrect code that the vacuous generated test target concealed.
+
+- **cli/generate**: skip languages with no binding backend instead of panicking. The build path already guarded
+  this for docs-only targets (Rust, C); the generate path called `get_backend` unguarded on the same input.
+
+- **scaffold/swift**: seed the generated test file with a real assertion. It emitted `XCTAssertTrue(true)`, which
+  compiles and proves nothing; it now round-trips a serde DTO through `JSONEncoder`/`JSONDecoder` where the API
+  surface allows, falls back to a type-resolution check, and keeps the bare placeholder only for an empty surface.
+
+- **snippets/java**: write the validation scratch session outside the Maven source root. The generated `pom.xml`
+  sets `sourceDirectory` to the project basedir, so the compiler plugin's `**/*.java` glob swept scratch snippet
+  sources into the consumer's own build. `target/` is not a safe alternative for the same reason.
+
+- **docs**: read signature contracts from the emitted binding instead of recomputing them per language. Java
+  signatures stated the wrong `throws` contract on every method, so every rendered example failed to compile;
+  Dart dropped the `Future<>` wrapper that its whole binding carries, and rendered optional parameters in
+  positional rather than named syntax; Elixir dropped the receiver an instance function actually takes. Rust
+  `Default`/`Clone` derives were documented as public API in languages that emit neither, error sections listed
+  Rust enum variants rather than the generated exception classes, and integer and `Option` types were computed by
+  a per-language formula that no two backends agreed on. An explicitly overridden return type is now authoritative
+  and is no longer re-wrapped, which had turned a streaming `Stream<T>` into `Future<Stream<T>>`.
+
 - **Java service bindings**: retain paired callback response deallocators and registration variant metadata while
   leasing service owners, and omit public functions whose signatures reference excluded types.
 

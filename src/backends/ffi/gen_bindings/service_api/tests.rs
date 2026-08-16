@@ -265,6 +265,11 @@ fn registration_dispatch_preserves_domain_error_type_and_compiles() {
         r#"
 #[derive(Debug)]
 struct DomainError;
+impl std::fmt::Display for DomainError {{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{
+        write!(f, "domain error")
+    }}
+}}
 #[derive(Debug)]
 struct HandleError;
 struct Application;
@@ -277,6 +282,10 @@ impl Owner {{
 struct ServiceOpaque {{ inner: Option<Owner> }}
 struct Handler;
 fn set_handle_error(_: &HandleError) {{}}
+static LAST_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+fn set_last_error(_: i32, message: &str) {{
+    *LAST_ERROR.lock().unwrap() = Some(message.to_owned());
+}}
 fn with_handle_mut<T, R>(_: u64, body: impl FnOnce(&mut T) -> R) -> Result<R, HandleError> {{
     let mut value = ServiceOpaque {{ inner: Some(Owner) }};
     let erased = (&mut value as *mut ServiceOpaque).cast::<T>();
@@ -286,7 +295,10 @@ fn with_handle_mut<T, R>(_: u64, body: impl FnOnce(&mut T) -> R) -> Result<R, Ha
 fn register(owner: u64, handler: Handler) -> i32 {{
 {dispatch}
 }}
-fn main() {{ assert_eq!(register(1, Handler), 1); }}
+fn main() {{
+    assert_eq!(register(1, Handler), 1);
+    assert_eq!(LAST_ERROR.lock().unwrap().as_deref(), Some("domain error"));
+}}
 "#
     );
     let directory = tempfile::tempdir().expect("temporary directory");
@@ -300,6 +312,114 @@ fn main() {{ assert_eq!(register(1, Handler), 1); }}
         .output()
         .expect("run rustc");
     assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+}
+
+/// Regression: a fallible entrypoint returning a plain status code used to discard the
+/// domain error entirely (`Err(_) => 1`), so the caller's `_last_error_code`/`_message`
+/// channel never learned why the call failed. The error must now reach `set_last_error`. ~keep
+#[test]
+fn entrypoint_result_status_reports_domain_error_and_compiles() {
+    let return_body = render(
+        "service_api_entrypoint_return_result_status.rs.jinja",
+        minijinja::context! { call => "call()" },
+    );
+    let source = format!(
+        r#"
+#[derive(Debug)]
+struct DomainError;
+impl std::fmt::Display for DomainError {{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{
+        write!(f, "domain error")
+    }}
+}}
+fn call() -> Result<(), DomainError> {{
+    Err(DomainError)
+}}
+static LAST_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+fn set_last_error(_: i32, message: &str) {{
+    *LAST_ERROR.lock().unwrap() = Some(message.to_owned());
+}}
+fn run() -> i32 {{
+{return_body}
+}}
+fn main() {{
+    assert_eq!(run(), 1);
+    assert_eq!(LAST_ERROR.lock().unwrap().as_deref(), Some("domain error"));
+}}
+"#
+    );
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let source_path = directory.path().join("entrypoint_result_status.rs");
+    let binary_path = directory.path().join("entrypoint-result-status-test");
+    std::fs::write(&source_path, source).expect("write compile harness");
+    let compile = std::process::Command::new("rustc")
+        .args(["--edition=2024", "-o"])
+        .arg(&binary_path)
+        .arg(&source_path)
+        .output()
+        .expect("run rustc");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = std::process::Command::new(&binary_path)
+        .output()
+        .expect("run compiled harness");
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+}
+
+/// Companion regression, opaque-handle-returning shape: a fallible entrypoint that returns
+/// an owned handle used to discard the domain error the same way (`Err(_) => 0`). ~keep
+#[test]
+fn entrypoint_opaque_result_reports_domain_error_and_compiles() {
+    let return_body = render(
+        "service_api_entrypoint_return_opaque_result.rs.jinja",
+        minijinja::context! { call => "call()" },
+    );
+    let source = format!(
+        r#"
+#[derive(Debug)]
+struct DomainError;
+impl std::fmt::Display for DomainError {{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{
+        write!(f, "domain error")
+    }}
+}}
+#[derive(Debug)]
+struct HandleError;
+struct Application;
+fn call() -> Result<Application, DomainError> {{
+    Err(DomainError)
+}}
+fn insert_handle<T>(_value: T) -> Result<u64, HandleError> {{
+    Ok(1)
+}}
+fn set_handle_error(_: &HandleError) {{}}
+static LAST_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+fn set_last_error(_: i32, message: &str) {{
+    *LAST_ERROR.lock().unwrap() = Some(message.to_owned());
+}}
+fn run() -> u64 {{
+{return_body}
+}}
+fn main() {{
+    assert_eq!(run(), 0);
+    assert_eq!(LAST_ERROR.lock().unwrap().as_deref(), Some("domain error"));
+}}
+"#
+    );
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let source_path = directory.path().join("entrypoint_opaque_result.rs");
+    let binary_path = directory.path().join("entrypoint-opaque-result-test");
+    std::fs::write(&source_path, source).expect("write compile harness");
+    let compile = std::process::Command::new("rustc")
+        .args(["--edition=2024", "-o"])
+        .arg(&binary_path)
+        .arg(&source_path)
+        .output()
+        .expect("run rustc");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = std::process::Command::new(&binary_path)
+        .output()
+        .expect("run compiled harness");
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
 }
 
 #[test]
