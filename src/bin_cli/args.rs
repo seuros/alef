@@ -212,6 +212,10 @@ pub(crate) enum Commands {
     /// Run all: generate + stubs + scaffold + readme + docs + sync + e2e.
     All {
         /// Ignore cache.
+        ///
+        /// Bypasses cached results; it deletes nothing. Snippet validation session scratch under
+        /// `<cwd>/.alef/snippets/sessions/` is not cache and is not this flag's business — stale
+        /// sessions there are swept on every run, with or without `--clean`.
         #[arg(long)]
         clean: bool,
         /// Fail the run when a configured formatter's executable is not installed.

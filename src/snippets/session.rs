@@ -1,7 +1,7 @@
 use crate::snippets::error::{Error, Result};
 use crate::snippets::types::Language;
 use crate::snippets::validators::run_command;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
@@ -32,12 +32,28 @@ pub(crate) struct SessionPreparation {
     pub errors: HashMap<String, String>,
 }
 
+/// The in-tree root every fingerprint-keyed session scratch directory is nested under, relative to
+/// a session's `working_directory`.
+const SESSION_SCRATCH_ROOT: &str = ".alef/snippets/sessions";
+
 /// The stable, persistent, cross-run scratch directory for a session's fingerprint, nested under
 /// its `working_directory`. Shared between `ValidationSession::workspace_directory` (which
-/// creates it) and `purge_stale_workspace_scratch_files` (which needs the identical path before a
+/// creates it) and `purge_session_scratch_root` (which needs the identical path before a
 /// `ValidationSession` exists to compute it from). ~keep
 fn workspace_scratch_directory(working_directory: &Path, fingerprint: &str) -> PathBuf {
-    working_directory.join(".alef/snippets/sessions").join(fingerprint)
+    working_directory.join(SESSION_SCRATCH_ROOT).join(fingerprint)
+}
+
+/// Whether a language's per-session scratch lives outside `working_directory` entirely, which is
+/// the same question as "does this language have a live in-tree scratch directory at all".
+///
+/// Java is the only such language: alef's own Java backend points Maven's `<sourceDirectory>` at
+/// `${project.basedir}`, so `JavaValidator` resolves its scratch through
+/// [`ValidationSession::external_workspace_directory`] instead. That pairing is held in place by
+/// `JavaValidator`'s `session_scratch_is_never_written_under_the_working_directory` regression
+/// test, which fails if the validator ever writes under `working_directory` again.
+const fn keeps_scratch_outside_working_directory(language: Language) -> bool {
+    matches!(language, Language::Java)
 }
 
 impl ValidationSession {
@@ -104,35 +120,55 @@ impl ValidationSession {
     }
 }
 
+/// Prepares every configured session in three phases, because the middle one is not per-session.
+///
+/// Phase one resolves each spec far enough to know its fingerprint, without running any `before`
+/// hook. Phase two then purges the in-tree session scratch root of every working directory, using
+/// the *complete* set of live fingerprints for that directory — which is why it cannot be folded
+/// back into a per-session step: two targets can legitimately share one `working_directory`, and a
+/// per-session purge would delete its sibling's live scratch. Phase three runs the `before` hooks
+/// against the already-purged tree.
 pub(crate) fn prepare_sessions_isolated(specs: &HashMap<String, SessionSpec>, timeout_secs: u64) -> SessionPreparation {
     let mut sessions = HashMap::new();
     let mut errors = HashMap::new();
+    let mut resolved = Vec::new();
     for (target, spec) in specs {
-        match prepare_session(spec, timeout_secs) {
-            Ok(session) => {
+        match resolve_session(spec, timeout_secs) {
+            Ok(session) => resolved.push((target, spec, session)),
+            Err(error) => record_preparation_error(&mut errors, target, spec, &error),
+        }
+    }
+    purge_stale_session_scratch(&resolved);
+    for (target, spec, session) in resolved {
+        match activate_session(spec, &session, timeout_secs) {
+            Ok(()) => {
                 sessions.insert(target.clone(), session);
             }
-            Err(error) => {
-                let message = format!("preparing snippet validation target `{target}`: {error}");
-                // Every snippet targeting this session ends up `SnippetStatus::Error` (see
-                // `runner::session_preparation_error`) with no other signal that the *target*,
-                // not the individual snippets, is what broke — this had zero `tracing::` calls
-                // before, so a whole language's worth of results going Error was silent beyond
-                // the final summary counts. ~keep
-                tracing::error!(
-                    target = %target,
-                    language = %spec.language,
-                    error = %error,
-                    "snippet validation session preparation failed"
-                );
-                errors.insert(target.clone(), message);
-            }
+            Err(error) => record_preparation_error(&mut errors, target, spec, &error),
         }
     }
     SessionPreparation { sessions, errors }
 }
 
-fn prepare_session(spec: &SessionSpec, timeout_secs: u64) -> Result<ValidationSession> {
+fn record_preparation_error(errors: &mut HashMap<String, String>, target: &str, spec: &SessionSpec, error: &Error) {
+    let message = format!("preparing snippet validation target `{target}`: {error}");
+    // Every snippet targeting this session ends up `SnippetStatus::Error` (see
+    // `runner::session_preparation_error`) with no other signal that the *target*, not the
+    // individual snippets, is what broke — this had zero `tracing::` calls before, so a whole
+    // language's worth of results going Error was silent beyond the final summary counts. ~keep
+    tracing::error!(
+        target = %target,
+        language = %spec.language,
+        error = %error,
+        "snippet validation session preparation failed"
+    );
+    errors.insert(target.to_owned(), message);
+}
+
+/// Validates a spec and derives its fingerprint. Deliberately runs no `before` hook: the hook must
+/// not see a scratch root that `purge_stale_session_scratch` has not swept yet, and that sweep
+/// needs every session's fingerprint first.
+fn resolve_session(spec: &SessionSpec, timeout_secs: u64) -> Result<ValidationSession> {
     let language = spec.language;
     ensure_directory(&spec.working_directory, language)?;
     cleanup_legacy_scratch_directories(&spec.working_directory, timeout_secs)?;
@@ -144,35 +180,23 @@ fn prepare_session(spec: &SessionSpec, timeout_secs: u64) -> Result<ValidationSe
             manifest.display()
         )));
     }
-    let fingerprint = session_fingerprint(spec)?;
-    // `workspace_directory` (csharp, typescript — java moved to `external_workspace_directory`,
-    // outside `working_directory`, because alef's own Java backend makes the whole project
-    // directory a live Maven source root; see `external_workspace_directory`'s doc comment) is a
-    // stable directory reused across every snippet in this session *and* across every future run
-    // with an unchanged fingerprint — deliberately, so compiled-artifact caches in its
-    // subdirectories survive between runs. But the scratch source file each snippet's validate
-    // call writes at its top level (`Program.cs`, `snippet.ts`, ...) is never removed, so it
-    // accumulates one leftover file per distinct snippet ever validated under this fingerprint. A
-    // consumer-configured `before` command that builds the whole module from `working_directory`
-    // runs once for the whole session, before any of *this* run's snippets are written — so it
-    // can only ever trip over a leftover from a *previous* run, and one bad leftover then blacks
-    // out every snippet in the session. Purging stale top-level files before `before` runs breaks
-    // that cycle without touching cache subdirectories (`target/`, `.nuget/`, ...), which is why
-    // this only removes direct children that are files, never recursing. ~keep
-    purge_stale_workspace_scratch_files(&spec.working_directory, &fingerprint)?;
-    for command in &spec.before {
-        run_before(command, &spec.working_directory, &spec.env, timeout_secs)
-            .map_err(|error| Error::Other(format!("preparing {language} snippet validation session: {error}")))?;
-    }
-    let session = ValidationSession {
+    Ok(ValidationSession {
         working_directory: spec.working_directory.clone(),
         manifest: spec.manifest.clone(),
-        fingerprint,
+        fingerprint: session_fingerprint(spec)?,
         env: spec.env.clone(),
         include_paths: spec.include_paths.clone(),
         rust_features: spec.rust_features.clone(),
         rust_dependencies: spec.rust_dependencies.clone(),
-    };
+    })
+}
+
+fn activate_session(spec: &SessionSpec, session: &ValidationSession, timeout_secs: u64) -> Result<()> {
+    let language = spec.language;
+    for command in &spec.before {
+        run_before(command, &spec.working_directory, &spec.env, timeout_secs)
+            .map_err(|error| Error::Other(format!("preparing {language} snippet validation session: {error}")))?;
+    }
     for directory in [session.cache_directories().0, session.cache_directories().1] {
         std::fs::create_dir_all(&directory).map_err(|error| {
             Error::Other(format!(
@@ -181,16 +205,103 @@ fn prepare_session(spec: &SessionSpec, timeout_secs: u64) -> Result<ValidationSe
             ))
         })?;
     }
-    Ok(session)
+    Ok(())
 }
 
-/// Removes stray top-level files (never directories, never recursing) left in a session's
-/// persistent `workspace_directory` by a previous run's per-snippet validate calls. See the
-/// `~keep` comment in `prepare_session` for why this must run before `before` hooks. A directory
-/// that does not exist yet (the common case: first run for this fingerprint) is not an error. ~keep
-fn purge_stale_workspace_scratch_files(working_directory: &Path, fingerprint: &str) -> Result<()> {
-    let directory = workspace_scratch_directory(working_directory, fingerprint);
-    let entries = match std::fs::read_dir(&directory) {
+/// Sweeps the in-tree session scratch root of every working directory this run touches, keeping
+/// only the fingerprints this run is actually about to use.
+///
+/// Two distinct leftovers accumulate there and both black out a whole language:
+///
+/// - A *stale fingerprint's whole directory*. The fingerprint changes whenever the working tree
+///   does, so every day's run mints a new directory and nothing ever removed the previous ones. In
+///   a Java package this is fatal rather than untidy: alef's Java backend points Maven's
+///   `<sourceDirectory>` at `${project.basedir}`, so a `before` hook of `mvn package` compiles
+///   every `.java` under it — four days' worth of leftover `Example.java` at once, which `javac`
+///   rejects with `duplicate class: Example`, failing session preparation and stamping every
+///   snippet of that language `SnippetStatus::Error`. `JavaValidator` has written its scratch
+///   outside `working_directory` since the `external_workspace_directory` fix, so java's live set
+///   here is empty and every directory it finds is a pre-fix leftover — but the accumulation is
+///   not java-specific, so neither is the sweep.
+/// - A *stray top-level file inside a live fingerprint's directory*, left by a previous run's
+///   per-snippet validate call (`Program.cs`, `snippet.ts`, ...). That directory is deliberately
+///   reused across runs so compiled-artifact caches in its subdirectories survive, so it is kept
+///   and only its direct file children are removed — never a subdirectory (`target/`, `.nuget/`,
+///   `dist/`, ...), never recursing.
+///
+/// A sweep failure is logged and tolerated rather than propagated: losing the sweep costs
+/// cleanliness, while failing preparation over it would black out exactly the language the sweep
+/// exists to keep running. ~keep
+fn purge_stale_session_scratch(resolved: &[(&String, &SessionSpec, ValidationSession)]) {
+    let mut live: BTreeMap<&Path, BTreeSet<&str>> = BTreeMap::new();
+    for (_, spec, session) in resolved {
+        let fingerprints = live.entry(spec.working_directory.as_path()).or_default();
+        if !keeps_scratch_outside_working_directory(spec.language) {
+            fingerprints.insert(session.fingerprint.as_str());
+        }
+    }
+    for (working_directory, fingerprints) in live {
+        if let Err(error) = purge_session_scratch_root(working_directory, &fingerprints) {
+            tracing::warn!(
+                working_directory = %working_directory.display(),
+                error = %error,
+                "could not purge stale snippet session scratch"
+            );
+        }
+    }
+}
+
+fn purge_session_scratch_root(working_directory: &Path, live_fingerprints: &BTreeSet<&str>) -> Result<()> {
+    let root = working_directory.join(SESSION_SCRATCH_ROOT);
+    let entries = match std::fs::read_dir(&root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(Error::Other(format!(
+                "reading snippet session scratch root {}: {error}",
+                root.display()
+            )));
+        }
+    };
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            Error::Other(format!(
+                "reading an entry in snippet session scratch root {}: {error}",
+                root.display()
+            ))
+        })?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let is_directory = entry.file_type().is_ok_and(|file_type| file_type.is_dir());
+        let is_live = name.to_str().is_some_and(|name| live_fingerprints.contains(name));
+        if !is_directory {
+            remove_scratch(std::fs::remove_file(&path), &path)?;
+        } else if is_live {
+            purge_stale_workspace_scratch_files(&path)?;
+        } else {
+            remove_scratch(std::fs::remove_dir_all(&path), &path)?;
+        }
+    }
+    Ok(())
+}
+
+fn remove_scratch(outcome: std::io::Result<()>, path: &Path) -> Result<()> {
+    match outcome {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(Error::Other(format!(
+            "removing stale snippet session scratch {}: {error}",
+            path.display()
+        ))),
+    }
+}
+
+/// Removes stray top-level files (never directories, never recursing) left in a live session
+/// scratch `directory` by a previous run's per-snippet validate calls. See
+/// [`purge_stale_session_scratch`] for why this must run before `before` hooks. A directory that
+/// does not exist yet (the common case: first run for this fingerprint) is not an error.
+fn purge_stale_workspace_scratch_files(directory: &Path) -> Result<()> {
+    let entries = match std::fs::read_dir(directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => {
@@ -491,6 +602,139 @@ mod tests {
             cache_subdir.join("snippet.js").exists(),
             "cache subdirectories must survive the purge"
         );
+    }
+
+    /// The java incident this closes: `packages/java/.alef/snippets/sessions/` had accumulated
+    /// four fingerprint-keyed directories dated across three separate days. alef's Java backend
+    /// points Maven's `<sourceDirectory>` at `${project.basedir}`, so the session's own
+    /// `mvn package` `before` hook compiled all four leftovers together and `javac` rejected them
+    /// with `duplicate class: Example` — session preparation failed and all 283 java snippets were
+    /// skipped. `JavaValidator` has written its scratch outside `working_directory` since the
+    /// `external_workspace_directory` fix, so those directories were pre-fix leftovers that
+    /// nothing swept: `--clean` only bypasses caches, and the per-fingerprint purge only ever
+    /// looked inside the *current* fingerprint's directory. The `before` hook below globs the way
+    /// Maven does rather than asserting a literal path, because a real consumer's hook does not
+    /// know the fingerprint either. ~keep
+    #[test]
+    fn a_stale_session_directory_from_a_previous_run_cannot_break_the_current_one() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let stale = workspace_scratch_directory(directory.path(), "fingerprint-from-a-previous-run");
+        std::fs::create_dir_all(&stale).expect("stale session directory");
+        std::fs::write(stale.join("Example.java"), "public class Example {}").expect("stale source");
+        std::fs::write(stale.join("Example.class"), b"stale").expect("stale class file");
+
+        let mut specs = HashMap::new();
+        specs.insert(
+            "java".to_string(),
+            SessionSpec {
+                language: Language::Java,
+                working_directory: directory.path().to_path_buf(),
+                manifest: None,
+                before: vec!["! find . -name 'Example.java' | grep -q .".into()],
+                env: BTreeMap::new(),
+                include_paths: Vec::new(),
+                rust_features: Vec::new(),
+                rust_dependencies: BTreeMap::new(),
+            },
+        );
+
+        let prepared = prepare_sessions_isolated(&specs, 5);
+
+        assert!(
+            prepared.errors.is_empty(),
+            "a previous run's leftovers must not reach this run's `before` hook: {:?}",
+            prepared.errors
+        );
+        assert!(
+            !stale.exists(),
+            "a stale session directory must not survive into the next run"
+        );
+    }
+
+    /// A stale fingerprint's directory is removed outright while the live fingerprint's is kept
+    /// and only swept of stray top-level files — the compiled-artifact caches in its
+    /// subdirectories are deliberately reused across runs and must survive. ~keep
+    #[test]
+    fn a_stale_fingerprint_is_removed_while_the_live_one_keeps_its_caches() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let spec = SessionSpec {
+            language: Language::TypeScript,
+            working_directory: directory.path().to_path_buf(),
+            manifest: None,
+            before: Vec::new(),
+            env: BTreeMap::new(),
+            include_paths: Vec::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: BTreeMap::new(),
+        };
+        let live = workspace_scratch_directory(directory.path(), &session_fingerprint(&spec).expect("fingerprint"));
+        std::fs::create_dir_all(live.join("dist")).expect("live cache directory");
+        std::fs::write(live.join("dist/cached.js"), b"cached").expect("cached artifact");
+        std::fs::write(live.join("snippet.ts"), "this does not compile: :::").expect("stale scratch file");
+        let stale = workspace_scratch_directory(directory.path(), "fingerprint-from-a-previous-run");
+        std::fs::create_dir_all(&stale).expect("stale session directory");
+        std::fs::write(stale.join("snippet.ts"), "this does not compile: :::").expect("stale scratch file");
+
+        let mut specs = HashMap::new();
+        specs.insert("typescript".to_string(), spec);
+        let prepared = prepare_sessions_isolated(&specs, 5);
+
+        assert!(prepared.errors.is_empty(), "{:?}", prepared.errors);
+        assert!(!stale.exists(), "a stale fingerprint's directory must be removed");
+        assert!(
+            live.join("dist/cached.js").exists(),
+            "the live fingerprint's caches must survive"
+        );
+        assert!(
+            !live.join("snippet.ts").exists(),
+            "the live fingerprint's stray scratch files must still be swept"
+        );
+    }
+
+    /// Two targets can legitimately share one `working_directory` while differing in a way that
+    /// changes the fingerprint. The purge therefore has to be computed over *all* of a directory's
+    /// live fingerprints at once: a per-session purge would let whichever target ran second delete
+    /// the first one's live scratch, turning the stale-session fix into a fresh collision. ~keep
+    #[test]
+    fn sibling_sessions_sharing_a_working_directory_keep_each_others_scratch() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let base = SessionSpec {
+            language: Language::TypeScript,
+            working_directory: directory.path().to_path_buf(),
+            manifest: None,
+            before: Vec::new(),
+            env: BTreeMap::new(),
+            include_paths: Vec::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: BTreeMap::new(),
+        };
+        let mut node = base.clone();
+        node.env = BTreeMap::from([("ALEF_SESSION".into(), "node".into())]);
+        let mut wasm = base;
+        wasm.env = BTreeMap::from([("ALEF_SESSION".into(), "wasm".into())]);
+        let fingerprints = [
+            session_fingerprint(&node).expect("node fingerprint"),
+            session_fingerprint(&wasm).expect("wasm fingerprint"),
+        ];
+        assert_ne!(fingerprints[0], fingerprints[1]);
+        for fingerprint in &fingerprints {
+            let workspace = workspace_scratch_directory(directory.path(), fingerprint);
+            std::fs::create_dir_all(workspace.join("dist")).expect("cache directory");
+            std::fs::write(workspace.join("dist/cached.js"), b"cached").expect("cached artifact");
+        }
+
+        let specs = HashMap::from([("node".to_string(), node), ("wasm".to_string(), wasm)]);
+        let prepared = prepare_sessions_isolated(&specs, 5);
+
+        assert!(prepared.errors.is_empty(), "{:?}", prepared.errors);
+        for fingerprint in &fingerprints {
+            let cached = workspace_scratch_directory(directory.path(), fingerprint).join("dist/cached.js");
+            assert!(
+                cached.exists(),
+                "a sibling session's live scratch must survive: {}",
+                cached.display()
+            );
+        }
     }
 
     #[test]

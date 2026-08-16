@@ -94,12 +94,14 @@ fn fail_fast_results(
         "Starting fail-fast snippet validation"
     );
     let started = Instant::now();
+    let reporter = FailureReporter::new(snippets);
     let mut results = Vec::with_capacity(snippets.len());
     for snippet in snippets {
         let preparation_error = session_preparation_error(snippet, sessions, session_errors);
         let session = session_for(snippet, sessions);
         let lock = session_key(snippet, sessions).and_then(|key| session_locks.get(key));
         let result = validate_one(snippet, registry, config, session, lock, preparation_error);
+        reporter.record(&result);
         let should_stop =
             preparation_error.is_none() && matches!(result.status, SnippetStatus::Fail | SnippetStatus::Error);
         results.push(result);
@@ -133,7 +135,16 @@ fn parallel_results(
     session_errors: &HashMap<String, String>,
     session_locks: &HashMap<String, Mutex<()>>,
 ) -> Vec<ValidationResult> {
-    let batched = validate_batches(snippets, registry, config, sessions, session_errors, session_locks);
+    let reporter = FailureReporter::new(snippets);
+    let batched = validate_batches(
+        snippets,
+        registry,
+        config,
+        sessions,
+        session_errors,
+        session_locks,
+        &reporter,
+    );
     let fallback_counts = fallback_counts_by_language(snippets, &batched);
     for (language, count) in &fallback_counts {
         tracing::info!(
@@ -153,7 +164,9 @@ fn parallel_results(
             }
             let session = session_for(snippet, sessions);
             let lock = session_key(snippet, sessions).and_then(|key| session_locks.get(key));
-            validate_one(snippet, registry, config, session, lock, None)
+            let result = validate_one(snippet, registry, config, session, lock, None);
+            reporter.record(&result);
+            result
         })
         .collect();
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -186,6 +199,136 @@ fn fallback_counts_by_language(
     counts
 }
 
+/// A language emits one `WARN` for its first failure, then one more every this many failures.
+/// Sized so a pathological run (1,753 failures spread over six languages) produces on the order of
+/// seventy lines rather than one per failure, while a language that fails a handful of times still
+/// gets its first-failure line immediately.
+const FAILURE_PROGRESS_STRIDE: usize = 25;
+
+/// How much of a validator's own error output the first-failure event carries. Long enough for a
+/// `javac`/`tsc` diagnostic's first lines (the part that names the actual problem), short enough
+/// that a log line stays a log line.
+const FAILURE_MESSAGE_PREVIEW_CHARS: usize = 400;
+
+#[derive(Clone, Copy, Default)]
+struct LanguageTally {
+    completed: usize,
+    failed: usize,
+}
+
+/// Emits snippet failures *while* a validation pass is running.
+///
+/// Everything reported here was already known at the moment each `ValidationResult` was built —
+/// `validate_one`/`validate_batches` hold the status and the validator's message, and
+/// `finalize_result` writes both to the result cache. None of it reached the log: a run that
+/// produced 1,753 failures across six languages failing at 100% was indistinguishable from a
+/// healthy run until the stage ended and the summary printed.
+///
+/// One event per failure would be as unreadable as silence, so the budget is bounded per language:
+/// the first failure carries the validator's own message (the only part that says *what* broke),
+/// subsequent failures are counted and surfaced every [`FAILURE_PROGRESS_STRIDE`], and each
+/// language emits exactly one terminal event once its last snippet lands — which is mid-run for
+/// every language but the slowest, because `parallel_results` interleaves all languages.
+struct FailureReporter {
+    totals: BTreeMap<crate::snippets::types::Language, usize>,
+    tallies: Mutex<BTreeMap<crate::snippets::types::Language, LanguageTally>>,
+    span: tracing::Span,
+}
+
+impl FailureReporter {
+    fn new(snippets: &[Snippet]) -> Self {
+        let mut totals = BTreeMap::new();
+        for snippet in snippets {
+            *totals.entry(snippet.language).or_insert(0_usize) += 1;
+        }
+        Self {
+            totals,
+            tallies: Mutex::new(BTreeMap::new()),
+            // Recorded from the constructing thread, which `run_validation` has already put in the
+            // caller's span, and re-entered on every emission. Most `record` calls happen on a
+            // rayon worker that `pool.install`'s one-off `Span::enter` never reached, so without
+            // this the events a consumer most needs to correlate would be the span-less ones. ~keep
+            span: tracing::Span::current(),
+        }
+    }
+
+    fn record(&self, result: &ValidationResult) {
+        let language = result.snippet.language;
+        let failed = matches!(result.status, SnippetStatus::Fail | SnippetStatus::Error);
+        // A poisoned tally lock costs reporting only. Unwrapping here would let a panic in some
+        // other worker's reporting turn a reportable run into an aborted one, which is exactly the
+        // failure mode this reporter exists to prevent. ~keep
+        let Ok(mut tallies) = self.tallies.lock() else {
+            return;
+        };
+        let tally = tallies.entry(language).or_default();
+        tally.completed += 1;
+        if failed {
+            tally.failed += 1;
+        }
+        let tally = *tally;
+        drop(tallies);
+
+        let snippet_count = self.totals.get(&language).copied().unwrap_or(tally.completed);
+        self.span.in_scope(|| {
+            if failed && tally.failed == 1 {
+                tracing::warn!(
+                    language = %language,
+                    path = %result.snippet.source_origin.path.display(),
+                    line = result.snippet.source_origin.line,
+                    snippet_count = snippet_count,
+                    error = %failure_preview(result.message.as_deref()),
+                    "First snippet validation failure for this language"
+                );
+            } else if failed && tally.failed % FAILURE_PROGRESS_STRIDE == 0 {
+                tracing::warn!(
+                    language = %language,
+                    failed = tally.failed,
+                    completed = tally.completed,
+                    snippet_count = snippet_count,
+                    "Snippet validation failures accumulating"
+                );
+            }
+            if tally.completed < snippet_count {
+                return;
+            }
+            if tally.failed > 0 {
+                tracing::warn!(
+                    language = %language,
+                    failed = tally.failed,
+                    snippet_count = snippet_count,
+                    "Finished snippet validation for this language with failures"
+                );
+            } else {
+                tracing::debug!(
+                    language = %language,
+                    snippet_count = snippet_count,
+                    "Finished snippet validation for this language"
+                );
+            }
+        });
+    }
+}
+
+/// Flattens a validator's multi-line diagnostic onto one bounded log line. Truncation is by
+/// character, not byte, so a diagnostic quoting non-ASCII source cannot panic on a split boundary.
+fn failure_preview(message: Option<&str>) -> String {
+    let joined = message
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    if joined.is_empty() {
+        return "<no validator output>".to_string();
+    }
+    match joined.char_indices().nth(FAILURE_MESSAGE_PREVIEW_CHARS) {
+        Some((index, _)) => format!("{}...", &joined[..index]),
+        None => joined,
+    }
+}
+
 type BatchKey = (crate::snippets::types::Language, Option<String>, ValidationLevel);
 
 struct ValidationOutcome {
@@ -201,19 +344,22 @@ fn validate_batches(
     sessions: &HashMap<String, crate::snippets::session::ValidationSession>,
     session_errors: &HashMap<String, String>,
     session_locks: &HashMap<String, Mutex<()>>,
+    reporter: &FailureReporter,
 ) -> Vec<Option<ValidationResult>> {
     let mut results = vec![None; snippets.len()];
     let mut groups = BTreeMap::<BatchKey, Vec<usize>>::new();
     for (index, snippet) in snippets.iter().enumerate() {
         if let Some(message) = session_preparation_error(snippet, sessions, session_errors) {
-            results[index] = Some(result(
+            let failure = result(
                 snippet,
                 SnippetStatus::Error,
                 config.level,
                 config.level,
                 Some(message.to_owned()),
                 0,
-            ));
+            );
+            reporter.record(&failure);
+            results[index] = Some(failure);
             continue;
         }
         let session = session_for(snippet, sessions);
@@ -276,7 +422,7 @@ fn validate_batches(
             "Finished batched snippet validation"
         );
         for ((index, snippet), (status, message)) in indices.into_iter().zip(batch_snippets).zip(values) {
-            results[index] = Some(finalize_result(
+            let finalized = finalize_result(
                 snippet,
                 validator,
                 config,
@@ -287,7 +433,9 @@ fn validate_batches(
                     message,
                     duration_ms,
                 },
-            ));
+            );
+            reporter.record(&finalized);
+            results[index] = Some(finalized);
         }
     }
     results
@@ -1643,5 +1791,138 @@ mod tests {
             "Batch validation declined for this group; falling back to per-snippet validation"
         ));
         assert!(logs_contain("Starting per-snippet validation"));
+    }
+
+    /// Always reports the same failure, standing in for a language failing at 100% — the shape of
+    /// the run that produced 1,753 failures with no log output until the stage ended.
+    struct FailingValidator;
+
+    impl SnippetValidator for FailingValidator {
+        fn language(&self) -> crate::snippets::types::Language {
+            crate::snippets::types::Language::Java
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn validate(
+            &self,
+            _snippet: &Snippet,
+            _level: ValidationLevel,
+            _timeout_secs: u64,
+        ) -> Result<(SnippetStatus, Option<String>)> {
+            Ok((
+                SnippetStatus::Fail,
+                Some("Example.java:1: error: duplicate class: Example\n  1 error".into()),
+            ))
+        }
+
+        fn max_level(&self) -> ValidationLevel {
+            ValidationLevel::Run
+        }
+    }
+
+    fn failing_snippet(language: crate::snippets::types::Language) -> Snippet {
+        let mut snippet = network_snippet();
+        snippet.language = language;
+        snippet
+    }
+
+    fn failure_result(snippet: &Snippet, message: &str) -> ValidationResult {
+        result(
+            snippet,
+            SnippetStatus::Fail,
+            ValidationLevel::Compile,
+            ValidationLevel::Compile,
+            Some(message.to_string()),
+            1,
+        )
+    }
+
+    /// The defect: 1,753 snippet failures went straight to the result cache and the final summary,
+    /// so six languages failing at 100% were indistinguishable from a healthy run for the entire
+    /// stage. What makes "before the stage ends" checkable here is the *absence* of the terminal
+    /// per-language event: two of this language's three snippets are still outstanding, so the
+    /// summary cannot have run, yet the first failure and its validator message are already out. ~keep
+    #[traced_test]
+    #[test]
+    fn a_languages_first_failure_is_reported_before_its_stage_ends() {
+        let snippets = vec![
+            failing_snippet(crate::snippets::types::Language::Java),
+            failing_snippet(crate::snippets::types::Language::Java),
+            failing_snippet(crate::snippets::types::Language::Java),
+        ];
+        let reporter = FailureReporter::new(&snippets);
+
+        reporter.record(&failure_result(
+            &snippets[0],
+            "error: cannot find symbol\n  symbol: class Missing",
+        ));
+
+        assert!(logs_contain("First snippet validation failure for this language"));
+        assert!(logs_contain("cannot find symbol | symbol: class Missing"));
+        assert!(!logs_contain("Finished snippet validation for this language"));
+    }
+
+    /// The other half of the requirement: visible, but not a firehose. Failure two emits nothing
+    /// at all, and a running count only appears once the stride is reached — so a 1,753-failure
+    /// run costs tens of lines, not 1,753. ~keep
+    #[traced_test]
+    #[test]
+    fn failures_after_the_first_are_counted_rather_than_logged_one_line_each() {
+        let snippets = vec![failing_snippet(crate::snippets::types::Language::Java); FAILURE_PROGRESS_STRIDE + 1];
+        let reporter = FailureReporter::new(&snippets);
+
+        for snippet in snippets.iter().take(2) {
+            reporter.record(&failure_result(snippet, "compilation failed"));
+        }
+        assert!(logs_contain("First snippet validation failure for this language"));
+        assert!(!logs_contain("Snippet validation failures accumulating"));
+
+        for snippet in snippets.iter().take(FAILURE_PROGRESS_STRIDE).skip(2) {
+            reporter.record(&failure_result(snippet, "compilation failed"));
+        }
+        assert!(logs_contain("Snippet validation failures accumulating"));
+        assert!(!logs_contain("Finished snippet validation for this language"));
+    }
+
+    /// The reporter must be wired into the real per-snippet dispatch path, not just constructible:
+    /// `parallel_results` is where all 1,753 failures were produced and dropped on the floor.
+    #[traced_test]
+    #[test]
+    fn a_failing_language_is_reported_through_the_real_validation_run() {
+        let mut registry = ValidatorRegistry::new();
+        registry.register(Box::new(FailingValidator));
+        let config = RunnerConfig {
+            level: ValidationLevel::Compile,
+            parallelism: 1,
+            cache_dir: None,
+            ..RunnerConfig::default()
+        };
+        let snippets = vec![
+            failing_snippet(crate::snippets::types::Language::Java),
+            failing_snippet(crate::snippets::types::Language::Java),
+        ];
+
+        let summary = run_validation(&snippets, &registry, &config).expect("validation completes");
+
+        assert_eq!(summary.failed, 2);
+        assert!(logs_contain("First snippet validation failure for this language"));
+        assert!(logs_contain("duplicate class: Example"));
+        assert!(logs_contain(
+            "Finished snippet validation for this language with failures"
+        ));
+    }
+
+    #[test]
+    fn a_failure_preview_is_a_single_bounded_line() {
+        let long = "x".repeat(FAILURE_MESSAGE_PREVIEW_CHARS + 50);
+        let preview = failure_preview(Some(long.as_str()));
+        assert_eq!(preview.len(), FAILURE_MESSAGE_PREVIEW_CHARS + 3);
+        assert!(preview.ends_with("..."));
+        assert_eq!(failure_preview(Some("  \n\n ")), "<no validator output>");
+        assert_eq!(failure_preview(None), "<no validator output>");
+        assert_eq!(failure_preview(Some("first\n\nsecond")), "first | second");
     }
 }
