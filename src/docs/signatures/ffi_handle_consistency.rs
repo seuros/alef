@@ -117,39 +117,35 @@ fn test_c_signature_and_example_agree_on_named_return_handle_type() {
 // until `render_c_fn_sig` reads the emitted binding (cbindgen header) or the same
 // param-shaping logic `orchestration.rs` uses, instead of the bare IR.
 //
-// Two qualifications, established while auditing task #67:
+// One qualification remains open, established while auditing task #67:
 //
-// 1. "Read the cbindgen header" is only conditionally available. alef never runs cbindgen --
-//    it emits `cbindgen.toml` plus a `build.rs` calling `cbindgen::generate`
-//    (backends/ffi/templates/build_rs.jinja), so the header is produced by the *consumer's*
-//    `cargo build`. `alef all` does build the FFI crate before the docs stage
-//    (bin_cli/all_commands.rs:265 precedes :513, via `complete_generated_artifacts` ->
-//    `ensure_ffi_header_freshness`), so a fresh header exists there. A bare `alef docs`
-//    (bin_cli/core_commands.rs:584-622) never calls it, so in a fresh tree there is no header
-//    at all. Any header-reading fix must therefore also decide what `alef docs` does when the
-//    header is missing -- emitting a fabricated signature is the current, wrong answer;
-//    omitting the signature is the honest one.
+// "Read the cbindgen header" is only conditionally available. alef never runs cbindgen --
+// it emits `cbindgen.toml` plus a `build.rs` calling `cbindgen::generate`
+// (backends/ffi/templates/build_rs.jinja), so the header is produced by the *consumer's*
+// `cargo build`. `alef all` does build the FFI crate before the docs stage
+// (bin_cli/all_commands.rs:269 precedes :526, via `complete_generated_artifacts` ->
+// `ensure_ffi_header_freshness` at bin_cli/helpers.rs:40), so a fresh header exists there. A
+// bare `alef docs` (bin_cli/core_commands.rs:584-622) never calls it, so there is no header
+// at all. Any header-reading fix must therefore also decide what `alef docs` does when the
+// header is missing -- emitting a fabricated signature is the current, wrong answer;
+// omitting the signature is the honest one.
 //
-// 2. Not every gap needs the header. Two of the largest mismatches are plain IR and fixable
-//    here: the C arm of `render_method_signature_with_override` (the
-//    `Language::Ffi | Language::C | Language::Jni` arm of signatures.rs) omits the leading
-//    `this` receiver that `orchestration.rs`'s `gen_method_wrapper` always emits for a
-//    non-static method (`params.push(format!("    {param_name}: {receiver_ty}"))`, with
-//    `param_name = "this"` and `receiver_ty = "AlefHandle"`), and it names the symbol
-//    `{prefix}_{method}` via `func_name` while the backend emits
-//    `{prefix}_{type_snake}_{method}` (`let fn_name = format!("{prefix}_{type_snake}_{method_name}")`,
-//    in both `gen_method_wrapper` and `gen_streaming_method_wrapper`) -- it already receives
-//    `type_name_str` and simply does not use it. Both are deferred with the rest of #67, but
-//    they are not blocked on the header.
-//
-//    Re-verified while working task #105: both backend sites still read as described, and both
-//    `alef all` / bare `alef docs` behave as qualification 1 says. Fixing the symbol name in
-//    the signature alone would introduce a *new* contradiction, because two neighbouring
-//    surfaces derive the same C symbol independently and would still say `{prefix}_{method}`:
-//    `render_method`'s heading (`language_pages/streaming.rs`, `func_name(&method.name, ...)`)
-//    and `method_call_expression`'s C arm (`examples.rs`, which already passes a `receiver`
-//    argument the signature does not declare). A coherent fix routes all three through one
-//    helper; that is the smallest honest unit of work here, not a one-line edit.
+// The other mismatch this comment used to describe -- the C arm of
+// `render_method_signature_with_override` naming the symbol `{prefix}_{method}` via `func_name`
+// instead of `{prefix}_{type_snake}_{method}`, and omitting the leading `this` receiver
+// `gen_method_wrapper` always emits for a non-static method -- is fixed: that arm now names the
+// method through `naming::method_name`, which folds the owning type through the shared
+// `codegen::c_consumer::method_symbol` helper the FFI backend's symbol shape is documented
+// against, and prepends a `{receiver_ty} this` parameter whenever `!method.is_static`. The two
+// neighbouring surfaces that used to independently re-derive the same C symbol --
+// `render_method`'s heading (`language_pages/streaming.rs`) and `method_call_expression`'s C arm
+// (`examples.rs`) -- were routed through the same helper in the same change, so the symbol name
+// cannot drift between signature, heading and example again without all three failing together.
+// See `method_signatures.rs`'s `test_c_signature_and_example_agree_on_method_symbol`,
+// `test_render_method_signature_c_non_static_declares_this_receiver` and
+// `test_render_method_signature_c_static_method_has_no_this_receiver`, plus
+// `language_pages::streaming::tests::test_render_method_heading_uses_the_same_c_symbol_as_signature_and_example`,
+// for the regression coverage.
 // ---------------------------------------------------------------------------
 
 #[test]

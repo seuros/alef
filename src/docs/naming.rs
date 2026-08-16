@@ -97,17 +97,14 @@ pub(crate) fn type_name(name: &str, lang: Language, ffi_prefix: &str) -> String 
         // liter-llm's `literllm` the header really does say `LITERLLMDefaultClient`, and
         // emitting `LiterllmDefaultClient` names a symbol that occurs zero times in it.
         //
-        // Note the two sides do not use the same conversion. `gen_cbindgen_toml`
-        // (backends/ffi/gen_bindings/helpers.rs:385) computes the real `[export] prefix` with
-        // plain `.to_uppercase()` on the raw config value, while this arm uses
-        // `to_shouty_snake_case`. They agree for every prefix any tree configures today --
-        // `literllm`, `ts_pack`, `htm`, `cberg`, `xberg` are all lowercase, single-word or
-        // already underscored -- and diverge only for an explicit prefix carrying an internal
-        // capital with no separator, where `SampleCore` yields `SAMPLE_CORE` here but
-        // `SAMPLECORE` in the header. Shouty-snake is the idiomatic C symbol prefix and is the
-        // intended behaviour, so the divergence is tracked as an implementation defect against
-        // `gen_cbindgen_toml`, not against this arm; do not "fix" it by reverting to
-        // `to_uppercase`. Matches the `enum_variant_name` arm below. ~keep
+        // Both sides now use the same conversion: `gen_cbindgen_toml`
+        // (backends/ffi/gen_bindings/helpers.rs:392) computes the real `[export] prefix` as
+        // `prefix.to_shouty_snake_case()`, which is what this arm applies too. An earlier
+        // version of this note recorded a divergence -- `gen_cbindgen_toml` using plain
+        // `.to_uppercase()`, so `SampleCore` became `SAMPLECORE` in the header but
+        // `SAMPLE_CORE` here -- and instructed readers not to "fix" it. That divergence is
+        // gone; the instruction would now reintroduce it. Matches the `enum_variant_name`
+        // arm below. ~keep
         Language::Ffi | Language::C | Language::Jni => {
             format!("{}{}", ffi_prefix.to_shouty_snake_case(), short.to_pascal_case())
         }
@@ -122,8 +119,14 @@ pub(crate) fn func_name(name: &str, lang: Language, ffi_prefix: &str) -> String 
         }
         Language::Node | Language::Wasm | Language::Java | Language::Php => to_camel_case(name),
         Language::Csharp | Language::Go => name.to_pascal_case(),
+        // `func_name` is fed Rust `fn` names, which arrive already snake_case, so routing
+        // through `c_consumer::free_function_symbol` (which applies `pascal_to_snake` rather
+        // than heck's `to_snake_case`) is a no-op rename here -- both conversions are the
+        // identity on an already-snake_case input. Kept as the single source of the free-
+        // function symbol shape so this and `render_c_fn_sig` cannot re-derive it
+        // independently. ~keep
         Language::Ffi | Language::C | Language::Jni => {
-            format!("{}_{}", ffi_prefix.to_snake_case(), name.to_snake_case())
+            crate::codegen::c_consumer::free_function_symbol(&ffi_prefix.to_snake_case(), name)
         }
         Language::Kotlin | Language::KotlinAndroid | Language::Swift | Language::Dart | Language::Gleam => {
             to_camel_case(name)
@@ -157,6 +160,23 @@ pub(crate) fn func_name(name: &str, lang: Language, ffi_prefix: &str) -> String 
         (Language::Java, other) if crate::core::keywords::JAVA_KEYWORDS.contains(&other) => format!("{other}_"),
         (Language::Csharp, "Default") => "CreateDefault".to_string(),
         _ => base,
+    }
+}
+
+/// Convert a Rust method name to the idiomatic name for the target language, folding in the
+/// owning type for C.
+///
+/// A C symbol has no namespace, so the backend folds the owning type into the name
+/// (`gen_method_wrapper` / `gen_streaming_method_wrapper` emit `{prefix}_{type_snake}_{method}`).
+/// Every other language documents a method as a member of its owning type already -- the type
+/// is spelled once, in the signature's receiver or class heading -- so `func_name`'s per-language
+/// rules (including the Java keyword renames) keep applying unchanged there.
+pub(crate) fn method_name(owner_type: &str, name: &str, lang: Language, ffi_prefix: &str) -> String {
+    match lang {
+        Language::Ffi | Language::C | Language::Jni => {
+            crate::codegen::c_consumer::method_symbol(&ffi_prefix.to_snake_case(), owner_type, name)
+        }
+        _ => func_name(name, lang, ffi_prefix),
     }
 }
 
@@ -266,19 +286,20 @@ mod tests {
     /// `LITERLLMDefaultClient` -- a name that occurs zero times in the header, so every C
     /// snippet on the same site contradicted the reference page.
     ///
-    /// These cases do not discriminate between the two prefix conversions in play: for a
-    /// lowercase, single-word or already-underscored prefix, `to_shouty_snake_case` (used by
-    /// `type_name`) and `.to_uppercase()` (used by `gen_cbindgen_toml` to write the real
-    /// `[export] prefix`) return the same string. This test therefore pins the header spelling
-    /// for every prefix currently configured across the repos, but it does not prove the two
-    /// derivations cannot drift -- they already do, for an explicit prefix with an internal
-    /// capital and no separator. See the note on `type_name`'s Ffi/C arm. ~keep
+    /// The lowercase, single-word and already-underscored prefixes below do not discriminate
+    /// between conversions -- `to_shouty_snake_case` and a plain `.to_uppercase()` return the
+    /// same string for all of them, so pinning only those would pass no matter which one
+    /// `gen_cbindgen_toml` used. `SampleCore` is the discriminating case: it is the one shape
+    /// where the two disagree (`SAMPLE_CORE` vs `SAMPLECORE`), so it is the only row here that
+    /// can actually fail if the header side stops using `to_shouty_snake_case`
+    /// (backends/ffi/gen_bindings/helpers.rs:392). ~keep
     #[test]
     fn type_name_ffi_matches_cbindgen_export_prefix() {
         for (ffi_prefix, expected_export_prefix) in [
             ("literllm", "LITERLLM"),
             ("Literllm", "LITERLLM"),
             ("liter_llm", "LITER_LLM"),
+            ("SampleCore", "SAMPLE_CORE"),
         ] {
             assert_eq!(
                 type_name("DefaultClient", Language::C, ffi_prefix),
@@ -299,6 +320,50 @@ mod tests {
             func_name("convert", Language::Ffi, "SampleCrate"),
             "sample_crate_convert"
         );
+    }
+
+    /// The whole point of `method_name`: a C symbol has no namespace, so the owning type must
+    /// be folded into the name, or the docs publish a symbol that occurs zero times in the
+    /// emitted header (the backend always emits `{prefix}_{type_snake}_{method}`, never
+    /// `{prefix}_{method}`). Regresses if a call site falls back to `func_name` for C.
+    #[test]
+    fn test_method_name_ffi_folds_in_owning_type() {
+        assert_eq!(
+            method_name("Converter", "convert", Language::Ffi, TEST_PREFIX),
+            "htm_converter_convert"
+        );
+        assert_ne!(
+            method_name("Converter", "convert", Language::Ffi, TEST_PREFIX),
+            func_name("convert", Language::Ffi, TEST_PREFIX),
+            "a method symbol must not collide with the free-function symbol of the same name"
+        );
+    }
+
+    /// For every non-C language, `method_name` must be an exact passthrough to `func_name` --
+    /// including its Java keyword renames -- since the owning type is already spelled
+    /// elsewhere in those languages' method docs (receiver, class heading). Regresses if
+    /// `method_name` grows a second, divergent per-language table instead of delegating.
+    #[test]
+    fn test_method_name_non_c_delegates_to_func_name() {
+        assert_eq!(method_name("Type", "new", Language::Java, TEST_PREFIX), "create");
+        assert_eq!(
+            method_name("Type", "new", Language::Java, TEST_PREFIX),
+            func_name("new", Language::Java, TEST_PREFIX)
+        );
+        for lang in [
+            Language::Python,
+            Language::Node,
+            Language::Go,
+            Language::Csharp,
+            Language::Ruby,
+            Language::Zig,
+        ] {
+            assert_eq!(
+                method_name("Document", "parse_document", lang, TEST_PREFIX),
+                func_name("parse_document", lang, TEST_PREFIX),
+                "{lang} must delegate to func_name unchanged"
+            );
+        }
     }
 
     #[test]

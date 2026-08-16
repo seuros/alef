@@ -299,3 +299,211 @@ fn test_field_and_same_named_method_do_not_emit_duplicate_symbol() {
         lib.content
     );
 }
+
+/// The FFI backend (`gen_method_wrapper`) and the docs renderers (`docs::naming::method_name`)
+/// used to derive a method's C symbol independently, so a rename could land on one side only
+/// and the docs would publish a symbol that occurs zero times in the emitted header. Both now
+/// route through `codegen::c_consumer::method_symbol`, but that shared helper is unreachable
+/// from a docs-only or backend-only test: the docs side can't reach `gen_lib_rs` (it is
+/// `pub(super)` inside `crate::backends::ffi::gen_bindings`), so the true end-to-end
+/// cross-check belongs here, where both the generated source and the public docs helper are
+/// reachable in the same test.
+///
+/// This also exercises the prefix-casing seam honestly instead of masking it: the real docs
+/// pipeline holds `ffi_prefix` PascalCased (`docs::generate_docs`, `src/docs/mod.rs`) and
+/// `method_name` snake-cases it back internally, while the backend passes `config.ffi_prefix()`
+/// raw. Feeding both sides the same pre-cased string would hide a casing-seam regression that
+/// this test exists to catch.
+///
+/// Catches: either side going back to deriving `{prefix}_{type}_{method}` (or any shape of it)
+/// on its own instead of routing through `c_consumer::method_symbol`.
+#[test]
+fn test_ffi_method_symbol_matches_the_symbol_docs_would_publish() {
+    use heck::ToPascalCase;
+
+    let mut api = sample_api();
+    api.types.push(TypeDef {
+        name: "DefaultClient".to_string(),
+        rust_path: "my_lib::DefaultClient".to_string(),
+        methods: vec![MethodDef {
+            name: "chat".to_string(),
+            return_type: TypeRef::String,
+            error_type: Some("MyError".to_string()),
+            doc: "Send a chat message.".to_string(),
+            receiver: Some(ReceiverKind::Ref),
+            ..MethodDef::default()
+        }],
+        is_opaque: true,
+        ..TypeDef::default()
+    });
+
+    let config = sample_config();
+    let backend = FfiBackend;
+
+    let files = backend.generate_bindings(&api, &config).unwrap();
+    let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+    let pascal_prefix = config.ffi_prefix().to_pascal_case();
+    let documented_symbol = crate::docs::naming::method_name(
+        "DefaultClient",
+        "chat",
+        crate::core::config::Language::C,
+        &pascal_prefix,
+    );
+
+    assert!(
+        lib.content.contains(&format!("fn {documented_symbol}(")),
+        "expected the docs-published symbol `{documented_symbol}` to appear as an extern \"C\" \
+         item in the generated FFI source, got:\n{}",
+        lib.content
+    );
+
+    let old_wrong_shape = format!("fn {}_chat(", config.ffi_prefix());
+    assert!(
+        !lib.content.contains(&old_wrong_shape),
+        "the old, wrong shape `{{prefix}}_{{method}}` with no type component must not appear \
+         (it names a symbol that occurs zero times in the real header)"
+    );
+}
+
+/// Narrow pin for the `gen_method_wrapper` rewire onto `c_consumer::method_symbol`
+/// (`functions/orchestration.rs`). Uses a type name with an internal acronym, where the
+/// backend's `pascal_to_snake` and a naive lowercase would diverge (`HTMLParser` ->
+/// `html_parser`, not `htmlparser`) -- this is the shape of type name a re-diverged,
+/// independently hand-rolled derivation would get wrong without a purely alphabetic fixture
+/// like the other method tests in this file noticing.
+#[test]
+fn test_method_wrapper_symbol_matches_c_consumer_method_symbol() {
+    let api = ApiSurface {
+        crate_name: "my-lib".to_string(),
+        version: "1.0.0".to_string(),
+        types: vec![TypeDef {
+            name: "HTMLParser".to_string(),
+            rust_path: "my_lib::HTMLParser".to_string(),
+            methods: vec![MethodDef {
+                name: "parse".to_string(),
+                return_type: TypeRef::String,
+                error_type: Some("MyError".to_string()),
+                doc: "Parse the document.".to_string(),
+                receiver: Some(ReceiverKind::Ref),
+                ..MethodDef::default()
+            }],
+            is_opaque: true,
+            ..TypeDef::default()
+        }],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+    let config = sample_config();
+    let backend = FfiBackend;
+
+    let files = backend.generate_bindings(&api, &config).unwrap();
+    let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+    let expected = crate::codegen::c_consumer::method_symbol(&config.ffi_prefix(), "HTMLParser", "parse");
+    assert_eq!(expected, "my_lib_html_parser_parse");
+    assert!(
+        lib.content.contains(&format!("fn {expected}(")),
+        "expected `{expected}` to appear as an extern \"C\" item, got:\n{}",
+        lib.content
+    );
+}
+
+/// Narrow pin for the `gen_opaque_static_constructor` rewire onto `c_consumer::method_symbol`
+/// (`types.rs`) -- a site the original rewire brief for this task did not name explicitly, but
+/// which builds the exact same `{prefix}_{type}_{method}` shape from `typ.methods`, so it is
+/// documented via the same `docs::naming::method_name` path as any other method. Uses an
+/// acronym type name for the same reason as the sibling instance-method pin above.
+#[test]
+fn test_static_constructor_symbol_matches_c_consumer_method_symbol() {
+    let api = ApiSurface {
+        crate_name: "my-lib".to_string(),
+        version: "1.0.0".to_string(),
+        types: vec![TypeDef {
+            name: "JSONParser".to_string(),
+            rust_path: "my_lib::JSONParser".to_string(),
+            methods: vec![MethodDef {
+                name: "compile".to_string(),
+                return_type: TypeRef::Named("JSONParser".to_string()),
+                error_type: Some("MyError".to_string()),
+                doc: "Compile a parser from a schema.".to_string(),
+                is_static: true,
+                receiver: None,
+                ..MethodDef::default()
+            }],
+            is_opaque: true,
+            ..TypeDef::default()
+        }],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+    let config = sample_config();
+    let backend = FfiBackend;
+
+    let files = backend.generate_bindings(&api, &config).unwrap();
+    let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+    let expected = crate::codegen::c_consumer::method_symbol(&config.ffi_prefix(), "JSONParser", "compile");
+    assert_eq!(expected, "my_lib_json_parser_compile");
+    assert!(
+        lib.content.contains(&format!("fn {expected}(")),
+        "expected `{expected}` to appear as an extern \"C\" item, got:\n{}",
+        lib.content
+    );
+}
+
+/// Narrow pin for the `gen_free_function_len_companion` rewire (`functions/signatures.rs`):
+/// the companion's name must be derived FROM `free_function_symbol`, not computed in parallel,
+/// so it cannot drift from the primary free function's own symbol. Calls the generator
+/// directly rather than through a full `String`-returning function fixture, to pin the
+/// companion/primary pairing in isolation from unrelated FFI wrapper machinery.
+#[test]
+fn test_free_function_len_companion_name_is_derived_from_the_primary_symbol() {
+    let func = FunctionDef {
+        name: "extract_html_title".to_string(),
+        rust_path: "my_lib::extract_html_title".to_string(),
+        original_rust_path: String::new(),
+        params: vec![],
+        return_type: TypeRef::String,
+        is_async: false,
+        error_type: None,
+        doc: String::new(),
+        cfg: None,
+        sanitized: false,
+        return_sanitized: false,
+        returns_ref: false,
+        returns_cow: false,
+        return_newtype_wrapper: None,
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        version: Default::default(),
+    };
+    let path_map = ahash::AHashMap::default();
+    let enum_names = ahash::AHashSet::default();
+
+    let primary = crate::codegen::c_consumer::free_function_symbol("my_lib", "extract_html_title");
+    let companion =
+        super::super::functions::gen_free_function_len_companion(&func, "my_lib", "my_lib", &path_map, &enum_names);
+
+    assert!(
+        companion.contains(&format!("fn {primary}_len(")),
+        "expected companion symbol `{primary}_len`, got:\n{companion}"
+    );
+    assert!(
+        companion.contains(&format!("last_return_len(\"{primary}\")")),
+        "companion must look up the return length under the exact primary symbol `{primary}`, not a \
+         parallel computation of it, got:\n{companion}"
+    );
+}

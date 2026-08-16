@@ -3,7 +3,7 @@ use crate::core::ir::{MethodDef, TypeRef};
 use crate::docs::doc_cleaning::{demote_headings, extract_param_docs};
 use crate::docs::examples::MethodExampleOverride;
 use crate::docs::examples::render_method_example_with_override;
-use crate::docs::naming::{func_name, lang_code_fence, type_name};
+use crate::docs::naming::{func_name, lang_code_fence, method_name, type_name};
 use crate::docs::signatures::{MethodSignatureOverride, render_method_signature_with_override};
 use crate::docs::{clean_doc, doc_type, template_env};
 use heck::{ToPascalCase, ToShoutySnakeCase, ToSnakeCase};
@@ -242,11 +242,11 @@ fn streaming_zig_return_type(method: &MethodDef, item_type: &str, ffi_prefix: &s
 
 fn streaming_c_start_name(adapter: &AdapterConfig, method: &MethodDef, ffi_prefix: &str) -> String {
     let _ = method;
-    format!(
-        "{}_{}_{}_start",
-        ffi_prefix.to_snake_case(),
-        adapter.owner_type.as_deref().unwrap_or_default().to_snake_case(),
-        adapter.name.to_snake_case()
+    crate::codegen::c_consumer::stream_adapter_symbol(
+        &ffi_prefix.to_snake_case(),
+        adapter.owner_type.as_deref().unwrap_or_default(),
+        &adapter.name,
+        "start",
     )
 }
 
@@ -392,12 +392,22 @@ fn streaming_c_example(
     let start_name = streaming_c_start_name(adapter, method, ffi_prefix);
     let handle_type = streaming_c_handle_type(adapter, type_name_str, ffi_prefix);
     let prefix = ffi_prefix.to_snake_case();
-    let owner = type_name_str.to_snake_case();
-    let method_name = adapter.name.to_snake_case();
+    // Spelled exactly as `streaming_c_start_name` spells it, so `_start`, `_next` and `_free`
+    // on one page cannot name three different owners. The fallback is unreachable rather than
+    // merely unlikely: `streaming_method_docs_override` only selects an adapter whose
+    // `owner_type` is `Some(type_name_str)`, and the FFI backend skips an adapter without one
+    // entirely (`lib_rs.rs` `continue`s past it), so an ownerless adapter has no C streaming
+    // symbols for either side to name. ~keep
+    let owner_type = adapter.owner_type.as_deref().unwrap_or_default();
+    let next_name = crate::codegen::c_consumer::stream_adapter_symbol(&prefix, owner_type, &adapter.name, "next");
+    let free_name = crate::codegen::c_consumer::stream_adapter_symbol(&prefix, owner_type, &adapter.name, "free");
     let item_c = type_name(item_type, Language::Ffi, ffi_prefix);
+    // `item_free` is a different symbol family (the item type's own destructor), not a
+    // streaming-adapter operation -- it stays a hand-built `{prefix}_{item_type}_free`
+    // name. ~keep
     let item_free = format!("{}_{}_free", prefix, item_type.to_snake_case());
     format!(
-        "{handle_type} stream = {start_name}(instance, req);\nwhile (stream != NULL) {{\n    {item_c} *chunk = {prefix}_{owner}_{method_name}_next(stream);\n    if (chunk == NULL) {{\n        break;\n    }}\n    {item_free}(chunk);\n}}\n{prefix}_{owner}_{method_name}_free(stream);"
+        "{handle_type} stream = {start_name}(instance, req);\nwhile (stream != NULL) {{\n    {item_c} *chunk = {next_name}(stream);\n    if (chunk == NULL) {{\n        break;\n    }}\n    {item_free}(chunk);\n}}\n{free_name}(stream);"
     )
 }
 
@@ -413,7 +423,7 @@ pub(super) fn render_method(
     let mname = docs_override
         .as_ref()
         .map(|override_| override_.heading_name.clone())
-        .unwrap_or_else(|| func_name(&method.name, lang, ffi_prefix));
+        .unwrap_or_else(|| method_name(type_name_str, &method.name, lang, ffi_prefix));
 
     out.push_str(&template_env::render(
         "heading.jinja",
@@ -466,4 +476,94 @@ pub(super) fn render_method(
     push_errors(&mut out, method.error_type.as_deref(), &method.return_type, lang);
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::config::AdapterParam;
+    use crate::docs::test_helpers::{TEST_PREFIX, make_method, make_param};
+
+    fn make_adapter(name: &str, owner: &str, item_type: &str) -> AdapterConfig {
+        AdapterConfig {
+            name: name.to_string(),
+            pattern: AdapterPattern::Streaming,
+            core_path: format!("sample_crate::{name}"),
+            params: vec![AdapterParam {
+                name: "req".to_string(),
+                ty: "sample_crate::StreamRequest".to_string(),
+                optional: false,
+            }],
+            returns: None,
+            error_type: Some("String".to_string()),
+            owner_type: Some(owner.to_string()),
+            item_type: Some(item_type.to_string()),
+            gil_release: false,
+            trait_name: None,
+            trait_method: None,
+            detect_async: false,
+            request_type: Some("sample_crate::StreamRequest".to_string()),
+            skip_languages: vec![],
+        }
+    }
+
+    /// ~keep Regression pin for the `stream_adapter_symbol` rewire in task #67: the old
+    /// hand-rolled `format!("{prefix}_{owner}_{name}_start", ...)` and the shared
+    /// `codegen::c_consumer::stream_adapter_symbol` produce the identical string for every
+    /// owner/adapter-name shape configured today (see naming.rs's
+    /// `type_component_agrees_with_the_streaming_backends_heck_conversion`), so this pins that
+    /// the rewire really is a no-op rename, not a silent respelling.
+    #[test]
+    fn test_streaming_c_start_name_unchanged_by_the_stream_adapter_symbol_rewire() {
+        let adapter = make_adapter("chat_stream", "DefaultClient", "ChatChunk");
+        let method = make_method("chat_stream", vec![], TypeRef::Unit, false, false, None);
+        let name = streaming_c_start_name(&adapter, &method, TEST_PREFIX);
+        assert_eq!(name, "htm_default_client_chat_stream_start");
+    }
+
+    /// Same pin, for the `next`/`free` symbols `streaming_c_example` now derives through
+    /// `stream_adapter_symbol` instead of an inline `format!`. `item_free` is deliberately
+    /// left out of the rewire (a different symbol family, the item type's own destructor) and
+    /// is asserted here unchanged too, so a future edit cannot "fix" it by accident.
+    #[test]
+    fn test_streaming_c_example_unchanged_by_the_stream_adapter_symbol_rewire() {
+        let adapter = make_adapter("chat_stream", "DefaultClient", "ChatChunk");
+        let method = make_method("chat_stream", vec![], TypeRef::Unit, false, false, None);
+        let example = streaming_c_example(&adapter, &method, "DefaultClient", "ChatChunk", TEST_PREFIX);
+        let expected = "struct HTMHtmDefaultClientChatStreamStreamHandle * stream = \
+                         htm_default_client_chat_stream_start(instance, req);\n\
+                         while (stream != NULL) {\n    \
+                         HTMChatChunk *chunk = htm_default_client_chat_stream_next(stream);\n    \
+                         if (chunk == NULL) {\n        break;\n    }\n    \
+                         htm_chat_chunk_free(chunk);\n\
+                         }\n\
+                         htm_default_client_chat_stream_free(stream);";
+        assert_eq!(example, expected);
+    }
+
+    /// The third surface in the "one symbol, three renderers" agreement -- the heading
+    /// `render_method` prints for a C method must be the same `method_name` the signature
+    /// (`signatures.rs`) and example (`examples.rs`) use. Pinned here rather than alongside
+    /// the other two in `signatures/method_signatures.rs` because `render_method` is
+    /// `pub(super)` to `language_pages` and is not reachable from that test module.
+    #[test]
+    fn test_render_method_heading_uses_the_same_c_symbol_as_signature_and_example() {
+        let method = make_method(
+            "convert",
+            vec![make_param("options", TypeRef::Named("ParseOptions".to_string()), false)],
+            TypeRef::Named("ConversionResult".to_string()),
+            false,
+            false,
+            None,
+        );
+        let config = ResolvedCrateConfig::default();
+        let doc = render_method(&method, "Converter", Language::C, &config, TEST_PREFIX);
+        let expected_symbol = method_name("Converter", &method.name, Language::C, TEST_PREFIX);
+        assert_eq!(expected_symbol, "htm_converter_convert");
+        assert!(
+            doc.contains(&format!("###### {expected_symbol}()")),
+            "heading must title the method with the same C symbol the signature and example \
+             use: {doc}"
+        );
+    }
 }

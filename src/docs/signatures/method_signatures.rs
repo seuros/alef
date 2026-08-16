@@ -1,4 +1,5 @@
 use super::*;
+use crate::docs::naming::func_name;
 
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
@@ -773,4 +774,130 @@ fn test_render_method_signature_wasm_static() {
     );
     let sig = render_method_signature(&method, "Document", Language::Wasm, TEST_PREFIX);
     assert_eq!(sig, "static create(): Document");
+}
+
+// ---------------------------------------------------------------------------
+// ~keep Regression coverage for task #67: C method symbols must fold in the owning type
+// (`{prefix}_{type_snake}_{method}`, matching `gen_method_wrapper` /
+// `gen_streaming_method_wrapper` in backends/ffi/gen_bindings/functions/orchestration.rs),
+// and a non-static method's C signature must declare the leading `this: AlefHandle`
+// receiver the backend always emits. Before this fix, the docs published `{prefix}_{method}`
+// with no receiver parameter -- a symbol that occurs zero times in the emitted header, and
+// even if it did, one the caller could not invoke without an extra argument.
+// ---------------------------------------------------------------------------
+
+/// The full C method signature for a non-static method, derived from source rather than a
+/// hand-picked literal: `HTMAlefHandle` is `type_name(FFI_HANDLE_TYPE_NAME, C, TEST_PREFIX)`
+/// and `htm_converter_convert` is `method_name("Converter", "convert", C, TEST_PREFIX)`.
+#[test]
+fn test_render_method_signature_c_non_static_declares_this_receiver() {
+    let method = make_method(
+        "convert",
+        vec![make_param("options", TypeRef::Named("ParseOptions".to_string()), false)],
+        TypeRef::Named("ConversionResult".to_string()),
+        false,
+        false,
+        None,
+    );
+    let sig = render_method_signature(&method, "Converter", Language::C, TEST_PREFIX);
+    assert_eq!(
+        sig,
+        "HTMAlefHandle htm_converter_convert(HTMAlefHandle this, HTMAlefHandle options);"
+    );
+}
+
+/// The mirror image: a static method has no receiver at all -- `gen_method_wrapper` only
+/// pushes the `this` parameter `if !method.is_static`.
+#[test]
+fn test_render_method_signature_c_static_method_has_no_this_receiver() {
+    let method = make_method(
+        "create",
+        vec![make_param("name", TypeRef::String, false)],
+        TypeRef::Named("Document".to_string()),
+        false,
+        true,
+        None,
+    );
+    let sig = render_method_signature(&method, "Document", Language::C, TEST_PREFIX);
+    assert_eq!(sig, "HTMAlefHandle htm_document_create(const char* name);");
+    assert!(
+        !sig.contains("this"),
+        "a static method has no instance to receive, so it must not declare `this`: {sig}"
+    );
+}
+
+/// Neither surface may re-derive the C method symbol independently -- both must equal
+/// `naming::method_name`'s output, not merely equal each other (two independently wrong
+/// formulas could still agree with one another while both being wrong).
+#[test]
+fn test_c_signature_and_example_agree_on_method_symbol() {
+    let method = make_method(
+        "convert",
+        vec![make_param("options", TypeRef::Named("ParseOptions".to_string()), false)],
+        TypeRef::Named("ConversionResult".to_string()),
+        false,
+        false,
+        None,
+    );
+    let expected_symbol = method_name("Converter", &method.name, Language::C, TEST_PREFIX);
+    assert_eq!(expected_symbol, "htm_converter_convert");
+
+    let signature = render_method_signature(&method, "Converter", Language::C, TEST_PREFIX);
+    assert!(
+        signature.starts_with(&format!("HTMAlefHandle {expected_symbol}(")),
+        "signature: {signature}"
+    );
+
+    let example = crate::docs::examples::render_method_example(&method, "Converter", Language::C, TEST_PREFIX);
+    assert!(
+        example.contains(&format!("{expected_symbol}(instance")),
+        "example must call the same symbol the signature declares: {example}"
+    );
+}
+
+/// This is the assertion that would have caught the pre-existing bug on its own: the example
+/// passed a receiver (`instance`) as the first call argument, but the signature declared no
+/// `this` parameter to receive it -- one argument more than the documented function takes.
+/// Extracts each surface's parameter/argument list independently and compares arity, not text.
+#[test]
+fn test_c_signature_and_example_agree_on_arity_for_non_static_method() {
+    let method = make_method(
+        "convert",
+        vec![make_param("options", TypeRef::Named("ParseOptions".to_string()), false)],
+        TypeRef::Named("ConversionResult".to_string()),
+        false,
+        false,
+        None,
+    );
+    let name = method_name("Converter", &method.name, Language::C, TEST_PREFIX);
+
+    let signature = render_method_signature(&method, "Converter", Language::C, TEST_PREFIX);
+    let example = crate::docs::examples::render_method_example(&method, "Converter", Language::C, TEST_PREFIX);
+
+    let sig_arity = c_paren_items(&signature, &format!("{name}("));
+    let call_arity = c_paren_items(&example, &format!("{name}("));
+
+    assert_eq!(sig_arity, 2, "expected `this` plus one declared param: {signature}");
+    assert_eq!(
+        sig_arity, call_arity,
+        "signature declares {sig_arity} param(s) but the example passes {call_arity} arg(s) -- \
+         signature: {signature}\nexample: {example}"
+    );
+}
+
+/// Extract the comma-separated item count inside the first `marker(...)` occurrence in `text`.
+/// Local to this module: the fixtures used here never nest parentheses inside a param type or
+/// argument, so a plain first-`)`-wins scan is sufficient and keeps the parsing honest rather
+/// than reusing a general-purpose parser the production code doesn't have either.
+fn c_paren_items(text: &str, marker: &str) -> usize {
+    let start = text
+        .find(marker)
+        .unwrap_or_else(|| panic!("`{marker}` not found in: {text}"))
+        + marker.len();
+    let rest = &text[start..];
+    let end = rest
+        .find(')')
+        .unwrap_or_else(|| panic!("no closing `)` after `{marker}` in: {text}"));
+    let items = rest[..end].trim();
+    if items.is_empty() { 0 } else { items.split(',').count() }
 }

@@ -60,14 +60,17 @@ fn test_render_method_signature_ffi_fallible_void_return_is_int32_t() {
         Some("AttachError"),
     );
     let sig = render_method_signature(&method, "Client", Language::Ffi, TEST_PREFIX);
-    assert_eq!(sig, "int32_t htm_attach(HTMAlefHandle config);");
+    assert_eq!(
+        sig,
+        "int32_t htm_client_attach(HTMAlefHandle this, HTMAlefHandle config);"
+    );
 }
 
 #[test]
 fn test_render_method_signature_ffi_infallible_void_return_stays_void() {
     let method = make_method("reset", vec![], TypeRef::Unit, false, false, None);
     let sig = render_method_signature(&method, "Client", Language::Ffi, TEST_PREFIX);
-    assert_eq!(sig, "void htm_reset();");
+    assert_eq!(sig, "void htm_client_reset(HTMAlefHandle this);");
 }
 
 #[test]

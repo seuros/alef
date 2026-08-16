@@ -1,4 +1,5 @@
 use crate::backends::ffi::type_map::is_void_return;
+use crate::codegen::c_consumer;
 use crate::codegen::doc_emission::emit_c_doxygen;
 use crate::core::ir::{ApiSurface, TypeRef};
 use ahash::AHashSet;
@@ -758,9 +759,9 @@ pub(super) fn gen_stream_handle_functions(
     let owner_snake = owner_type.to_snake_case();
 
     let handle_name = format!("{pascal_prefix}{pascal_owner}{pascal_name}StreamHandle");
-    let fn_start = format!("{prefix}_{owner_snake}_{adapter_name}_start");
-    let fn_next = format!("{prefix}_{owner_snake}_{adapter_name}_next");
-    let fn_free = format!("{prefix}_{owner_snake}_{adapter_name}_free");
+    let fn_start = c_consumer::stream_adapter_symbol(prefix, owner_type, adapter_name, "start");
+    let fn_next = c_consumer::stream_adapter_symbol(prefix, owner_type, adapter_name, "next");
+    let fn_free = c_consumer::stream_adapter_symbol(prefix, owner_type, adapter_name, "free");
 
     let core_item = format!("{core_import}::{item_type}");
     let boxed_err = "Box<dyn std::error::Error + Send + Sync + 'static>";

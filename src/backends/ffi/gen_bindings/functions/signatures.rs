@@ -1,3 +1,4 @@
+use crate::codegen::c_consumer;
 use crate::codegen::naming::{pascal_to_snake, to_class_name};
 use crate::core::ir::{FunctionDef, MethodDef, TypeDef, TypeRef};
 use ahash::{AHashMap, AHashSet};
@@ -84,8 +85,10 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function_len_companion(
     path_map: &AHashMap<String, String>,
     enum_names: &AHashSet<String>,
 ) -> String {
-    let fn_name_snake = c_symbol_component(&func.name);
-    let ffi_name = format!("{prefix}_{fn_name_snake}_len");
+    // The companion's name is derived FROM the primary free function's symbol, not
+    // computed in parallel, so it cannot drift from `gen_free_function`'s `ffi_name`. ~keep
+    let primary_symbol = c_consumer::free_function_symbol(prefix, &func.name);
+    let ffi_name = format!("{primary_symbol}_len");
 
     let ffi_param_count = func.params.len() + func.params.iter().filter(|p| matches!(p.ty, TypeRef::Bytes)).count();
     let allow_clippy = if ffi_param_count > 7 {
@@ -115,11 +118,11 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function_len_companion(
     }
 
     let synthetic_doc = format!(
-        "Return the byte length of the C string most recently returned by `{prefix}_{fn_name_snake}` \
+        "Return the byte length of the C string most recently returned by `{primary_symbol}` \
          on this thread. Returns 0 when the primary call returned null or failed before producing a \
          string. Enables safe slice construction in Zig and Java FFM Panama without a NUL-scan.\n\n\
          # Safety\n\nPointer arguments are ignored and are present only to keep the companion ABI \
-         aligned with `{prefix}_{fn_name_snake}`.",
+         aligned with `{primary_symbol}`.",
     );
     let doc_comment = ffi_doxygen_block(&synthetic_doc);
 
@@ -154,7 +157,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function_len_companion(
 
     out.push_str(&crate::backends::ffi::template_env::render(
         "return_len_companion_body.jinja",
-        context! { return_len_key => format!("{prefix}_{fn_name_snake}") },
+        context! { return_len_key => primary_symbol.as_str() },
     ));
     out.push_str("\n}");
     out

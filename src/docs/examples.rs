@@ -1,6 +1,6 @@
 use crate::core::config::Language;
 use crate::core::ir::{FunctionDef, MethodDef, ParamDef, PrimitiveType, TypeRef};
-use crate::docs::naming::{func_name, lang_code_fence, type_name};
+use crate::docs::naming::{func_name, lang_code_fence, method_name, type_name};
 use crate::docs::template_env;
 use crate::docs::type_mapping::doc_type;
 use heck::ToSnakeCase;
@@ -152,7 +152,7 @@ fn function_call_expression(func: &FunctionDef, lang: Language, ffi_prefix: &str
 }
 
 fn method_call_expression(method: &MethodDef, owner_type: &str, lang: Language, ffi_prefix: &str) -> String {
-    let name = func_name(&method.name, lang, ffi_prefix);
+    let name = method_name(owner_type, &method.name, lang, ffi_prefix);
     let args = render_args(&method.params, lang, ffi_prefix);
     if method.is_static {
         return static_method_call(method, owner_type, &name, &args, lang, ffi_prefix);

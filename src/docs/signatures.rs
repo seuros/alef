@@ -1,7 +1,7 @@
 use crate::core::config::Language;
 use crate::core::ir::{FunctionDef, MethodDef, TypeRef};
-use crate::docs::naming::{field_name, func_name, to_camel_case, type_name};
-use crate::docs::type_mapping::doc_type;
+use crate::docs::naming::{field_name, method_name, to_camel_case, type_name};
+use crate::docs::type_mapping::{FFI_HANDLE_TYPE_NAME, doc_type};
 use heck::{ToPascalCase, ToSnakeCase};
 
 pub(crate) fn render_function_signature(func: &FunctionDef, lang: Language, ffi_prefix: &str) -> String {
@@ -154,8 +154,7 @@ pub(crate) fn render_ruby_fn_sig(func: &FunctionDef) -> String {
 }
 
 pub(crate) fn render_c_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
-    let prefix = ffi_prefix.to_snake_case();
-    let name = format!("{}_{}", prefix, func.name.to_snake_case());
+    let name = crate::codegen::c_consumer::free_function_symbol(&ffi_prefix.to_snake_case(), &func.name);
     let ret = doc_type(&func.return_type, Language::Ffi, ffi_prefix);
     let params: Vec<String> = func
         .params
@@ -499,7 +498,7 @@ pub(crate) fn render_method_signature_with_override(
     let name = signature_override
         .and_then(|override_| override_.name.as_deref())
         .map(str::to_string)
-        .unwrap_or_else(|| func_name(&method.name, lang, ffi_prefix));
+        .unwrap_or_else(|| method_name(type_name_str, &method.name, lang, ffi_prefix));
     // ~keep Every documented method name must be a legal identifier in `lang` -- reject a
     // reserved-word collision (Java/Dart's `new`, etc.) rather than silently document code
     // that would not compile. See formatting.rs's `assert_valid_identifier`.
@@ -731,7 +730,7 @@ pub(crate) fn render_method_signature_with_override(
             format!("{}({})", name, params.join(", "))
         }
         Language::Ffi | Language::C | Language::Jni => {
-            let params: Vec<String> = method
+            let mut params: Vec<String> = method
                 .params
                 .iter()
                 .map(|p| {
@@ -740,6 +739,16 @@ pub(crate) fn render_method_signature_with_override(
                     format!("{pty} {pname}")
                 })
                 .collect();
+            // ~keep The backend always emits a leading scalar-handle receiver for a non-static
+            // method (`gen_method_wrapper`, backends/ffi/gen_bindings/functions/orchestration.rs:
+            // `params.push(format!("    {param_name}: {receiver_ty}"))` with `param_name = "this"`
+            // and `receiver_ty = "AlefHandle"`). Omitting it here published a signature the
+            // caller cannot actually call -- the real symbol takes one more argument than the
+            // documented one.
+            if !method.is_static {
+                let receiver_ty = type_name(FFI_HANDLE_TYPE_NAME, lang, ffi_prefix);
+                params.insert(0, format!("{receiver_ty} this"));
+            }
             // ~keep Same status-code convention as render_c_fn_sig: a fallible method
             // whose logical return is `()` reports failure through the return itself, so
             // the ABI is `int32_t`, not `void`. Skipped when a curated override already

@@ -590,7 +590,6 @@ pub(super) fn gen_opaque_static_constructor(
 ) -> String {
     use crate::core::ir::TypeRef;
 
-    let type_snake = c_symbol_component(&typ.name);
     let type_name = &typ.name;
     let qualified = core_type_path(typ, core_import);
     let return_qualified = if typ.has_lifetime_params {
@@ -598,8 +597,7 @@ pub(super) fn gen_opaque_static_constructor(
     } else {
         qualified.clone()
     };
-    let method_snake = c_symbol_component(&method.name);
-    let ffi_fn_name = format!("{prefix}_{type_snake}_{method_snake}");
+    let ffi_fn_name = crate::codegen::c_consumer::method_symbol(prefix, &typ.name, &method.name);
     let will_be_unimplemented = method.sanitized;
 
     let mut out = String::with_capacity(4096);
