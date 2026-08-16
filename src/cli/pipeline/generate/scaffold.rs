@@ -146,11 +146,10 @@ pub fn write_scaffold_files_with_overwrite(
 /// checks, not to widen this function with cache-derived provenance (see the report for why
 /// that path was tried and rejected).
 ///
-/// TOML merge targets (`poly.toml`, and any `generated_header: true` `*.toml`) are exempt
-/// from this guard: [`merge_managed_toml`] merges into existing content rather than
-/// replacing it, so there is nothing to protect against there, by construction. Binary
-/// (`.jar`) targets are also exempt: their existing content cannot be read as UTF-8 to check
-/// for a marker, and jar bindings were never a vector for the incident this guard fixes. ~keep
+/// `poly.toml` is exempt from this guard because [`merge_managed_toml`] intentionally merges
+/// project lint configuration. Alef-owned generated TOML manifests are not merge targets: a
+/// marker authorizes exact regeneration, while an unmarked manifest is refused. Binary (`.jar`)
+/// targets are also exempt because their content cannot be checked for a text marker. ~keep
 pub fn write_scaffold_files_report(
     files: &[GeneratedFile],
     base_dir: &Path,
@@ -176,9 +175,7 @@ pub fn write_scaffold_files_report(
             continue;
         }
         let is_jar_file = full_path.extension().is_some_and(|ext| ext == "jar");
-        let is_toml_merge_target = (file.path == Path::new(POLY_CONFIG)
-            || file.generated_header && file.path.extension().is_some_and(|extension| extension == "toml"))
-            && full_path.exists();
+        let is_poly_merge_target = file.path == Path::new(POLY_CONFIG) && full_path.exists();
         // Scoped to `generated_header: true` only: those files are always overwritten
         // regardless of `overwrite` (see the doc comment above), so they are the only
         // ones for which "no marker yet" can mean "never alef's" rather than "an
@@ -191,7 +188,7 @@ pub fn write_scaffold_files_report(
         // evidence of foreign content, and enforcing on it would freeze regeneration
         // permanently. ~keep
         let is_markable = super::write::marker_comment_style(&full_path).is_some();
-        if file.generated_header && is_markable && !is_jar_file && !is_toml_merge_target && full_path.exists() {
+        if file.generated_header && is_markable && !is_jar_file && !is_poly_merge_target && full_path.exists() {
             let existing = std::fs::read_to_string(&full_path)
                 .with_context(|| format!("failed to read existing {}", full_path.display()))?;
             if !crate::core::hash::content_has_alef_marker(&existing) {
@@ -223,7 +220,7 @@ pub fn write_scaffold_files_report(
             debug!("  wrote (binary): {}", full_path.display());
             continue;
         }
-        let content = if is_toml_merge_target {
+        let content = if is_poly_merge_target {
             let existing = std::fs::read_to_string(&full_path)
                 .with_context(|| format!("failed to read existing {}", full_path.display()))?;
             merge_managed_toml(&existing, &file.content)

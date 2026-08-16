@@ -11,7 +11,7 @@ fn generated(path: &str, content: &str) -> GeneratedFile {
 }
 
 #[test]
-fn reconciliation_updates_only_alef_owned_generated_manifests() {
+fn reconciliation_replaces_only_alef_owned_generated_manifests() {
     let directory = tempfile::tempdir().expect("create temp directory");
     let managed_path = directory.path().join("crates/sample-ffi/Cargo.toml");
     let handwritten_path = directory.path().join("crates/manual/Cargo.toml");
@@ -49,8 +49,8 @@ fn reconciliation_updates_only_alef_owned_generated_manifests() {
         "a pristine-clone manifest with Alef's standard header must receive generated dependencies"
     );
     assert!(
-        managed.contains("custom"),
-        "managed manifest merge must preserve user additions"
+        !managed.contains("custom"),
+        "managed manifest must match generated content"
     );
     assert_eq!(
         std::fs::read_to_string(&handwritten_path).expect("read handwritten manifest"),

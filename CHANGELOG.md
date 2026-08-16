@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **generated documentation**: remove poly's internal `~keep` token while preserving the surrounding public prose
   across every binding backend.
+- **generated manifests**: replace hash-stamped Alef-owned TOML manifests with the current generated definition so
+  stale dependencies and feature declarations cannot survive regeneration; continue refusing unmarked manifests.
 - **FFI linting**: preallocate generated handle-request vectors so single-handle entrypoints pass crate-denied Clippy lints.
 
 - **Zig snippets**: compile against the generated package's exported module so transitive imports declared by its
