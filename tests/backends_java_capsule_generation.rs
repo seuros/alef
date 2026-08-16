@@ -94,6 +94,9 @@ host_type = "io.github.treesitter.jtreesitter.Language"
 package = "io.github.tree-sitter:jtreesitter"
 package_version = "0.26.0"
 construct_expr = "new io.github.treesitter.jtreesitter.Language({ptr})"
+pointer_ownership = "borrowed_static"
+abi_compatible = true
+host_destructor = "none"
 "#,
     );
 

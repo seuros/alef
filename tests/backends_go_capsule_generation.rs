@@ -25,6 +25,9 @@ host_type = "*tree_sitter.Language"
 package = "github.com/tree-sitter/go-tree-sitter"
 package_version = "v0.24.0"
 construct_expr = "tree_sitter.NewLanguage(unsafe.Pointer({ptr}))"
+pointer_ownership = "borrowed_static"
+abi_compatible = true
+host_destructor = "none"
 "#;
     let cfg: NewAlefConfig = toml::from_str(toml_str).unwrap();
     cfg.resolve().unwrap().remove(0)
@@ -89,7 +92,7 @@ fn make_api() -> ApiSurface {
 fn go_capsule_wrapper_constructs_host_type() {
     let files = GoBackend
         .generate_bindings(&make_api(), &make_go_config_with_capsule())
-        .unwrap();
+        .expect("Go capsule binding generation should succeed");
     let binding = files
         .iter()
         .find(|f| f.path.to_string_lossy().ends_with("binding.go"))
@@ -113,7 +116,7 @@ fn go_capsule_wrapper_constructs_host_type() {
 fn go_capsule_wrapper_emits_host_package_import() {
     let files = GoBackend
         .generate_bindings(&make_api(), &make_go_config_with_capsule())
-        .unwrap();
+        .expect("Go capsule binding generation should succeed");
     let binding = files
         .iter()
         .find(|f| f.path.to_string_lossy().ends_with("binding.go"))
