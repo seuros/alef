@@ -336,6 +336,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/pyo3_capsule_missing_dependency.jinja"),
     ),
     (
+        "pyo3_capsule_no_dependency_param.jinja",
+        include_str!("templates/pyo3_capsule_no_dependency_param.jinja"),
+    ),
+    (
         "pyo3_capsule_call_result_err_inline.jinja",
         include_str!("templates/pyo3_capsule_call_result_err_inline.jinja"),
     ),

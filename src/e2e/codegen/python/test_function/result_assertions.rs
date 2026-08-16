@@ -77,7 +77,12 @@ pub(super) fn emit_result_and_assertions(
         ) {
             let _ = writeln!(out, "    {collect}");
         }
-        // Render streaming assertions using the collected chunks
+        // Render streaming assertions into a buffer first (not directly into `out`) so
+        // the vacuous-fallback and strict-availability checks below see the whole body,
+        // mirroring the non-streaming branch. Before this, a streaming fixture whose only
+        // assertions were non-streaming-virtual field checks rendered NO output at all —
+        // not even a skip comment — leaving a vacuously-passing test with no fallback. ~keep
+        let mut streaming_assertions = String::new();
         for assertion in &fixture.assertions {
             if assertion.assertion_type == "not_error" || assertion.assertion_type == "error" {
                 continue;
@@ -85,12 +90,21 @@ pub(super) fn emit_result_and_assertions(
             if let Some(f) = &assertion.field
                 && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(f)
             {
-                emit_streaming_virtual_assertion(out, assertion, f, chunks_var);
+                emit_streaming_virtual_assertion(&mut streaming_assertions, assertion, f, chunks_var);
                 continue;
             }
             // Non-streaming-virtual assertions on streaming fixtures are skipped
             // (the result type doesn't have these fields during iteration).
+            if let Some(f) = assertion.field.as_deref().filter(|f| !f.is_empty()) {
+                let _ = writeln!(
+                    streaming_assertions,
+                    "    # skipped: field '{f}' not available on streaming result type"
+                );
+            }
         }
+        apply_vacuous_assertion_fallback(&mut streaming_assertions, !fixture.assertions.is_empty(), chunks_var);
+        crate::e2e::codegen::fail_on_unavailable_field_markers(&streaming_assertions, "python", &fixture.id);
+        out.push_str(&streaming_assertions);
     } else {
         // For non-streaming: render assertions to a temporary buffer first,
         // then check if result_var is referenced. Only emit the assignment if it is.
@@ -114,6 +128,7 @@ pub(super) fn emit_result_and_assertions(
         }
 
         apply_vacuous_assertion_fallback(&mut temp_assertions, !fixture.assertions.is_empty(), result_var);
+        crate::e2e::codegen::fail_on_unavailable_field_markers(&temp_assertions, "python", &fixture.id);
 
         // Check if result_var appears in actual code (not in comments).
         // Only count lines that start with "assert" or contain actual code tokens.
@@ -220,12 +235,8 @@ fn emit_streaming_virtual_assertion(out: &mut String, assertion: &Assertion, fie
                 let _ = writeln!(out, "    assert {expected} in {expr}  # noqa: S101");
             }
         }
-        _ => {
-            let _ = writeln!(
-                out,
-                "    # skipped: streaming field '{field}': assertion type '{}' not rendered",
-                assertion.assertion_type
-            );
+        other => {
+            panic!("Python e2e generator: unsupported assertion type '{other}' on synthetic field '{field}'");
         }
     }
 }
@@ -463,6 +474,145 @@ mod tests {
         assert!(
             out.contains("assert result is not None"),
             "a not_error-only fixture must emit a real assertion instead of a vacuous body, got: {out}"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "unsupported assertion type 'bogus_type' on synthetic field 'chunks'")]
+    fn python_streaming_virtual_unsupported_type_fails_loudly() {
+        let mut out = String::new();
+        let assertion = assertion("bogus_type", Some("chunks"), None);
+        emit_streaming_virtual_assertion(&mut out, &assertion, "chunks", "chunks");
+    }
+
+    #[test]
+    fn python_streaming_virtual_supported_type_renders_assertion() {
+        let mut out = String::new();
+        let assertion = assertion("greater_than", Some("chunks"), Some(serde_json::Value::from(2)));
+        emit_streaming_virtual_assertion(&mut out, &assertion, "chunks", "chunks");
+        assert_eq!(out.trim(), "assert chunks > 2  # noqa: S101");
+    }
+
+    /// Regression test for alef task #81, hole 3: the streaming branch of
+    /// `emit_result_and_assertions` used to render nothing at all — not even a
+    /// skip comment — for a fixture whose only declared assertion was a
+    /// non-streaming-virtual field. That left a vacuously-passing streaming test
+    /// with an entirely empty body. It must now get the same real fallback
+    /// assertion the non-streaming branch has always gotten.
+    #[test]
+    fn streaming_fixture_whose_only_assertion_is_non_virtual_gets_a_vacuous_fallback() {
+        let mut fixture = minimal_fixture();
+        fixture.assertions = vec![assertion("equals", Some("not_a_streaming_field"), Some(serde_json::json!("x")))];
+        let e2e_config = E2eConfig::default();
+        let call_config = crate::e2e::config::CallConfig::default();
+        let field_resolver = FieldResolver::new(
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        );
+        let mut out = String::new();
+
+        emit_result_and_assertions(
+            &mut out,
+            &fixture,
+            &e2e_config,
+            &call_config,
+            "chat_stream(request)",
+            "result",
+            &field_resolver,
+            false,
+            true,
+            false,
+        );
+
+        assert!(
+            out.contains("not_a_streaming_field' not available on streaming result type"),
+            "the dropped field must still be named in a skip comment, got: {out}"
+        );
+        assert!(
+            out.contains("assert chunks is not None"),
+            "a streaming fixture with a declared but unusable assertion must still get a real \
+             fallback assertion instead of an entirely empty body, got: {out}"
+        );
+    }
+
+    /// Positive control for the same fix: a streaming fixture whose assertion IS a
+    /// real streaming-virtual field must render only the real assertion — no skip
+    /// comment, and the vacuous-fallback must not fire (a real assertion is present).
+    #[test]
+    fn streaming_fixture_with_a_real_streaming_assertion_is_not_touched_by_the_fallback() {
+        let mut fixture = minimal_fixture();
+        fixture.assertions = vec![assertion("count_min", Some("chunks"), Some(serde_json::json!(1)))];
+        let e2e_config = E2eConfig::default();
+        let call_config = crate::e2e::config::CallConfig::default();
+        let field_resolver = FieldResolver::new(
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        );
+        let mut out = String::new();
+
+        emit_result_and_assertions(
+            &mut out,
+            &fixture,
+            &e2e_config,
+            &call_config,
+            "chat_stream(request)",
+            "result",
+            &field_resolver,
+            false,
+            true,
+            false,
+        );
+
+        assert!(out.contains("assert len(chunks) >= 1"), "got: {out}");
+        assert!(!out.contains("not available"), "a real assertion must not trigger the fallback, got: {out}");
+    }
+
+    /// Regression test for alef task #81: the non-streaming branch's "skipped: field
+    /// not available" comment must survive as the exact marker text the shared
+    /// `fail_on_unavailable_field_markers` mechanism (src/e2e/codegen/mod.rs) matches
+    /// on, so that arming `ALEF_E2E_STRICT_FIELD_AVAILABILITY` turns it into a
+    /// generation-time failure instead of a silently-passing comment. This test does
+    /// not set the env var (tests must stay independent of shared process state); the
+    /// arming behaviour itself is proven in `mod.rs`'s
+    /// `unavailable_field_marker_tests` against the same marker text asserted here.
+    #[test]
+    fn non_streaming_skip_comment_carries_the_marker_the_strict_mode_matches_on() {
+        let mut fixture = minimal_fixture();
+        fixture.assertions = vec![assertion("equals", Some("nonexistent_field"), Some(serde_json::json!("x")))];
+        let e2e_config = E2eConfig::default();
+        let call_config = crate::e2e::config::CallConfig::default();
+        let result_fields: std::collections::HashSet<String> = ["content".to_string()].into_iter().collect();
+        let field_resolver = FieldResolver::new(
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
+            &result_fields,
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        );
+        let mut out = String::new();
+
+        emit_result_and_assertions(
+            &mut out,
+            &fixture,
+            &e2e_config,
+            &call_config,
+            "widget_client.create()",
+            "result",
+            &field_resolver,
+            false,
+            false,
+            false,
+        );
+
+        assert!(
+            out.contains("field 'nonexistent_field' not available on result type"),
+            "got: {out}"
         );
     }
 }

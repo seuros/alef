@@ -1,11 +1,11 @@
 /// Emit JNI Rust shims for every configured `[[crates.trait_bridges]]` entry.
 ///
 /// For each bridge whose `exclude_languages` does not contain `kotlin_android`,
-/// emits:
-/// - Trait adapter struct `Jni{Trait}Adapter` that wraps a global JNI reference
-/// - Up to three `Java_*` symbols:
-///   - `nativeRegister<Trait>(impl: I<Trait>)` — creates a global JNI reference,
-///     wraps it in an adapter, and calls the host crate's `register_fn`.
+/// emits up to three `Java_*` symbols:
+///   - `nativeRegister<Trait>(impl: I<Trait>)` — only emitted when the configured
+///     trait resolves in the API surface with a non-empty method set, via
+///     `gen_plugin_trait_bridge`. Otherwise generation panics rather than emitting
+///     a shim that accepts the JNI call without ever invoking `register_fn`.
 ///   - `nativeUnregister<Trait>(name: String)` — calls the host crate's
 ///     `unregister_fn(&name)` and surfaces any `Err(_)` as a thrown JNI exception.
 ///   - `nativeClear<Trait>s()` — calls the host crate's `clear_fn()` similarly.
@@ -33,7 +33,7 @@ fn emit_trait_bridge_shims(
 
         let trait_def = api.types.iter().find(|t| t.is_trait && t.name == bridge_cfg.trait_name);
 
-        if let Some(register_fn) = bridge_cfg.register_fn.as_deref() {
+        if bridge_cfg.register_fn.is_some() {
             let native_name = format!("nativeRegister{trait_pascal}");
             let symbol = jni_symbol(package, bridge, &native_name);
             match trait_def {
@@ -51,8 +51,10 @@ fn emit_trait_bridge_shims(
                     out.push_str("\n\n");
                 }
                 _ => {
-                    let has_super_trait = bridge_cfg.super_trait.is_some();
-                    emit_trait_register_shim(out, &symbol, &trait_pascal, register_fn, trait_def, has_super_trait);
+                    panic!(
+                        "JNI trait-bridge generator: crate `{}`, bridge `{bridge}` configures `register_fn` for trait `{}`, but the trait is either not resolvable in the API surface or has no own methods, so `gen_plugin_trait_bridge` cannot bridge it; configure `register_fn` only for traits that resolve to a non-empty method set",
+                        config.name, bridge_cfg.trait_name,
+                    );
                 }
             }
         }
@@ -67,33 +69,6 @@ fn emit_trait_bridge_shims(
             emit_trait_clear_shim(out, &symbol, clear_fn);
         }
     }
-}
-
-/// Emit `Java_*_nativeRegister<Trait>(impl: I<Trait>)` or
-/// `Java_*_nativeRegister<Trait>(impl: I<Trait>, name: JString)` shim that creates a
-/// global JNI reference, calls the host crate's configured `register_fn`, and manages
-/// bridge lifetime.
-///
-/// When `has_super_trait` is true, the impl object's `name()` method is called.
-/// When false, the name is passed as an explicit JString parameter (matching the Kotlin
-/// no-super-trait register(impl, name) signature).
-fn emit_trait_register_shim(
-    out: &mut String,
-    symbol: &str,
-    trait_pascal: &str,
-    register_fn: &str,
-    _trait_def: Option<&TypeDef>,
-    has_super_trait: bool,
-) {
-    out.push_str(&template_env::render(
-        "trait_register_shim.rs.jinja",
-        context! {
-            symbol => symbol,
-            pascal_trait => trait_pascal,
-            register_fn => register_fn,
-            has_super_trait => has_super_trait,
-        },
-    ));
 }
 
 /// Emit `Java_*_nativeUnregister<Trait>(name: String)` shim that calls the

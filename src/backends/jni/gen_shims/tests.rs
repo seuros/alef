@@ -853,4 +853,91 @@ c_return_type = "TSLanguage"
             "zero check must precede reference construction: {method_body}"
         );
     }
+
+    fn config_with_trait_bridge(trait_name: &str) -> crate::core::config::ResolvedCrateConfig {
+        use crate::core::config::NewAlefConfig;
+        let source = format!(
+            r#"
+[workspace]
+languages = ["kotlin_android", "jni"]
+
+[[crates]]
+name = "demo"
+sources = ["src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.sample_crate"
+namespace = "dev.sample_crate"
+
+[[crates.trait_bridges]]
+trait_name = "{trait_name}"
+register_fn = "register_backend"
+"#
+        );
+        let raw: NewAlefConfig = toml::from_str(&source).unwrap();
+        raw.resolve().unwrap().remove(0)
+    }
+
+    fn api_with_types(types: Vec<crate::core::ir::TypeDef>) -> crate::core::ir::ApiSurface {
+        crate::core::ir::ApiSurface {
+            crate_name: "demo".into(),
+            version: "0.1.0".into(),
+            types,
+            functions: vec![],
+            enums: vec![],
+            errors: vec![],
+            excluded_type_paths: Default::default(),
+            excluded_trait_names: ::std::collections::HashSet::new(),
+            services: vec![],
+            handler_contracts: vec![],
+            unsupported_public_items: Vec::new(),
+        }
+    }
+
+    /// Regression pin for the trait-registration no-op shim: when `register_fn` is
+    /// configured but the trait cannot be resolved in the API surface (or resolves
+    /// with no own methods), generation must fail loudly rather than emit a
+    /// `nativeRegister*` shim that accepts the JNI call and silently never invokes
+    /// `register_fn`. No shim text is produced because the call never returns a value.
+    #[test]
+    #[should_panic(expected = "cannot bridge it")]
+    fn jni_trait_register_shim_panics_when_trait_not_resolvable() {
+        let config = config_with_trait_bridge("OcrBackend");
+        let api = api_with_types(vec![]);
+        emit_lib_rs(&api, &config);
+    }
+
+    /// Sibling positive control: when the configured trait IS resolvable with a
+    /// non-empty method set, generation succeeds and routes through the real
+    /// `gen_plugin_trait_bridge` generator, which actually calls `register_fn`.
+    #[test]
+    fn jni_trait_register_shim_uses_real_bridge_when_trait_resolvable() {
+        let method = crate::core::ir::MethodDef {
+            name: "process".into(),
+            params: vec![],
+            return_type: TypeRef::Unit,
+            receiver: Some(crate::core::ir::ReceiverKind::Ref),
+            ..Default::default()
+        };
+        let trait_def = crate::core::ir::TypeDef {
+            name: "OcrBackend".into(),
+            rust_path: "demo::OcrBackend".into(),
+            is_trait: true,
+            methods: vec![method],
+            ..Default::default()
+        };
+        let config = config_with_trait_bridge("OcrBackend");
+        let api = api_with_types(vec![trait_def]);
+
+        let content = emit_lib_rs(&api, &config);
+
+        assert!(
+            content.contains("nativeRegisterOcrBackend"),
+            "expected a real nativeRegister shim symbol: {content}"
+        );
+        assert!(
+            content.contains("core_crate::register_backend(backend"),
+            "expected the real bridge to actually call register_fn: {content}"
+        );
+    }
 }

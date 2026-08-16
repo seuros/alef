@@ -308,10 +308,14 @@ pub(super) fn build_args_and_setup(
                 parts.push(emission.arg_expr);
                 continue;
             }
-            let emission = crate::e2e::codegen::TestBackendEmission::unimplemented("go");
-            setup_lines.push(format!("// {}", emission.arg_expr));
-            parts.push("nil".to_string());
-            continue;
+            // A `test_backend` arg fills a required Go stub parameter — there is no
+            // compilable value to fall back to when the trait isn't configured. Fail
+            // generation loudly instead of silently splicing a `nil` argument with a
+            // comment where the real stub belongs. ~keep
+            panic!(
+                "Go e2e generator: fixture `{}` declares a `test_backend` arg `{}` with trait `{:?}`, but either it has no `trait_name` configured or no `[[crates.trait_bridges]]` entry matches it; cannot generate a Go stub without a resolvable trait bridge",
+                fixture.id, arg.name, arg.trait_name
+            );
         }
 
         if arg.arg_type == "handle" {
@@ -735,6 +739,107 @@ mod file_dto_tests {
         assert!(
             !rendered.contains("MaxChars:"),
             "must not PascalCase the serde wire name into an unknown field identifier: {rendered}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod test_backend_fallback_tests {
+    use super::build_args_and_setup;
+    use crate::core::config::ResolvedCrateConfig;
+    use crate::e2e::config::ArgMapping;
+    use crate::e2e::fixture::Fixture;
+
+    fn test_backend_arg(trait_name: Option<&str>) -> ArgMapping {
+        ArgMapping {
+            name: "backend".into(),
+            field: "backend".into(),
+            arg_type: "test_backend".into(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: trait_name.map(str::to_string),
+        }
+    }
+
+    /// A `test_backend` arg whose trait has no matching `[[crates.trait_bridges]]`
+    /// entry (or no `trait_name` at all) has no compilable value to fall back to.
+    /// This used to silently splice a `nil` argument plus a `// test_backend
+    /// unimplemented for go` comment into the generated call; it must now fail
+    /// generation loudly instead. Regression guard for the `TestBackendEmission`
+    /// unimplemented-sentinel removal. ~keep
+    #[test]
+    fn unregistered_trait_panics_instead_of_falling_back_to_nil() {
+        let config = ResolvedCrateConfig::default();
+        let fixture = Fixture {
+            id: "register_sample_backend".into(),
+            ..Fixture::default()
+        };
+        let args = vec![test_backend_arg(Some("SampleBackend"))];
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            build_args_and_setup(
+                &fixture.input,
+                &args,
+                "sample",
+                None,
+                &fixture,
+                false,
+                false,
+                &std::collections::HashSet::new(),
+                &config,
+                &[],
+                &[],
+                false,
+            )
+        }));
+
+        let error = result.expect_err("an unregistered trait must panic, not return generated Go code");
+        let message = error
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| error.downcast_ref::<&str>().map(|s| (*s).to_string()))
+            .unwrap_or_default();
+        assert!(
+            message.contains("cannot generate a Go stub"),
+            "panic message should explain the unresolved trait bridge, got: {message}"
+        );
+    }
+
+    /// A `test_backend` arg with no `trait_name` at all must fail the same way —
+    /// this is the other half of the fallback condition (missing `trait_name` vs.
+    /// an unresolved one), both of which used to reach the same silent `nil` path.
+    #[test]
+    fn missing_trait_name_panics_instead_of_falling_back_to_nil() {
+        let config = ResolvedCrateConfig::default();
+        let fixture = Fixture {
+            id: "register_sample_backend".into(),
+            ..Fixture::default()
+        };
+        let args = vec![test_backend_arg(None)];
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            build_args_and_setup(
+                &fixture.input,
+                &args,
+                "sample",
+                None,
+                &fixture,
+                false,
+                false,
+                &std::collections::HashSet::new(),
+                &config,
+                &[],
+                &[],
+                false,
+            )
+        }));
+
+        assert!(
+            result.is_err(),
+            "a `test_backend` arg with no `trait_name` must panic, not return generated Go code"
         );
     }
 }

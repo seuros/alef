@@ -200,17 +200,10 @@ pub(super) fn build_args_and_setup(
                 }
             }
 
+            // `emit_test_backend` panics rather than return a placeholder when a
+            // language has no real `test_backend` stub generator (e.g. Kotlin JVM
+            // today) — see `TestBackendEmission`'s doc comment. ~keep
             let emission = crate::e2e::codegen::emit_test_backend(lang, trait_bridge, &methods, fixture, &[]);
-            // `TestBackendEmission::unimplemented(...)`'s `arg_expr` is a bare
-            // `/* ... */` comment, never an expression. Splicing it into `parts`
-            // (the positional argument list) would emit Kotlin that cannot compile —
-            // refuse instead of emitting code we know is broken. ~keep
-            if emission.is_unimplemented() {
-                anyhow::bail!(
-                    "e2e fixture `{fixture_id}` requires a `{lang}` test_backend stub for trait `{trait_name}` (arg `{}`), but the `{lang}` test-backend emitter is unimplemented; refusing to emit a call with a comment where the argument belongs",
-                    arg.name
-                );
-            }
             setup_lines.push(emission.setup_block);
             parts.push(emission.arg_expr);
             continue;

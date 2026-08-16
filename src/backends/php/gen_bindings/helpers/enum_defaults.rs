@@ -66,8 +66,13 @@ pub(crate) fn gen_enum_tainted_from_binding_to_core(
     let core_path = crate::codegen::conversions::core_type_path(typ, core_import);
 
     if typ.has_lifetime_params
-        && let Some(code) =
-            crate::codegen::conversions::gen_from_lifetime_type_constructor(typ, &core_path, &typ.name, config)
+        && let Some(code) = crate::codegen::conversions::gen_from_lifetime_type_constructor(
+            typ,
+            &core_path,
+            &typ.name,
+            core_import,
+            config,
+        )
     {
         return code;
     }

@@ -295,6 +295,11 @@ pub(super) fn emit_java_visitor_method(
     setup_lines.extend(super::snippet::split_rendered_lines(&rendered));
 }
 
+/// Convert snake_case method names to Java camelCase.
+pub(super) fn method_to_camel(snake: &str) -> String {
+    snake.to_lower_camel_case()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,9 +375,4 @@ mod tests {
             "{setup:?}"
         );
     }
-}
-
-/// Convert snake_case method names to Java camelCase.
-pub(super) fn method_to_camel(snake: &str) -> String {
-    snake.to_lower_camel_case()
 }

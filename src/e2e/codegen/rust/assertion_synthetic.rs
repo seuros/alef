@@ -26,10 +26,7 @@ pub(super) fn render_chunks_have_content(out: &mut String, result_var: &str, ass
             );
         }
         _ => {
-            let _ = writeln!(
-                out,
-                "    // unsupported assertion type on synthetic field chunks_have_content"
-            );
+            panic!("Rust e2e generator: unsupported assertion type '{assertion_type}' on synthetic field 'chunks_have_content'");
         }
     }
 }
@@ -49,10 +46,7 @@ pub(super) fn render_chunks_have_embeddings(out: &mut String, result_var: &str, 
             );
         }
         _ => {
-            let _ = writeln!(
-                out,
-                "    // unsupported assertion type on synthetic field chunks_have_embeddings"
-            );
+            panic!("Rust e2e generator: unsupported assertion type '{assertion_type}' on synthetic field 'chunks_have_embeddings'");
         }
     }
 }
@@ -99,9 +93,9 @@ pub(super) fn render_embeddings_assertion(out: &mut String, result_var: &str, as
             );
         }
         _ => {
-            let _ = writeln!(
-                out,
-                "    // skipped: unsupported assertion type on synthetic field 'embeddings'"
+            panic!(
+                "Rust e2e generator: unsupported assertion type '{}' on synthetic field 'embeddings'",
+                assertion.assertion_type
             );
         }
     }
@@ -127,9 +121,9 @@ pub(super) fn render_embedding_dimensions(out: &mut String, result_var: &str, as
             }
         }
         _ => {
-            let _ = writeln!(
-                out,
-                "    // skipped: unsupported assertion type on synthetic field 'embedding_dimensions'"
+            panic!(
+                "Rust e2e generator: unsupported assertion type '{}' on synthetic field 'embedding_dimensions'",
+                assertion.assertion_type
             );
         }
     }
@@ -162,10 +156,7 @@ pub(super) fn render_embedding_quality(out: &mut String, result_var: &str, field
             let _ = writeln!(out, "    assert!(!({pred}), \"expected false\");");
         }
         _ => {
-            let _ = writeln!(
-                out,
-                "    // skipped: unsupported assertion type on synthetic field '{field}'"
-            );
+            panic!("Rust e2e generator: unsupported assertion type '{assertion_type}' on synthetic field '{field}'");
         }
     }
 }
@@ -188,10 +179,7 @@ pub(super) fn render_chunks_have_heading_context(out: &mut String, result_var: &
             );
         }
         _ => {
-            let _ = writeln!(
-                out,
-                "    // unsupported assertion type on synthetic field chunks_have_heading_context"
-            );
+            panic!("Rust e2e generator: unsupported assertion type '{assertion_type}' on synthetic field 'chunks_have_heading_context'");
         }
     }
 }
@@ -214,10 +202,7 @@ pub(super) fn render_first_chunk_starts_with_heading(out: &mut String, result_va
             );
         }
         _ => {
-            let _ = writeln!(
-                out,
-                "    // unsupported assertion type on synthetic field first_chunk_starts_with_heading"
-            );
+            panic!("Rust e2e generator: unsupported assertion type '{assertion_type}' on synthetic field 'first_chunk_starts_with_heading'");
         }
     }
 }
@@ -265,9 +250,9 @@ pub(super) fn render_keywords_assertion(out: &mut String, result_var: &str, asse
             }
         }
         _ => {
-            let _ = writeln!(
-                out,
-                "    // skipped: unsupported assertion type on synthetic field 'keywords'"
+            panic!(
+                "Rust e2e generator: unsupported assertion type '{}' on synthetic field 'keywords'",
+                assertion.assertion_type
             );
         }
     }
@@ -310,9 +295,9 @@ pub(super) fn render_keywords_count_assertion(out: &mut String, result_var: &str
             }
         }
         _ => {
-            let _ = writeln!(
-                out,
-                "    // skipped: unsupported assertion type on synthetic field 'keywords_count'"
+            panic!(
+                "Rust e2e generator: unsupported assertion type '{}' on synthetic field 'keywords_count'",
+                assertion.assertion_type
             );
         }
     }
@@ -474,5 +459,48 @@ mod tests {
     fn is_tree_numeric_method_recognizes_child_count() {
         assert!(is_tree_numeric_method("root_child_count"));
         assert!(!is_tree_numeric_method("has_error_nodes"));
+    }
+
+    fn make_assertion(assertion_type: &str, value: Option<serde_json::Value>) -> Assertion {
+        Assertion {
+            assertion_type: assertion_type.to_string(),
+            value,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "unsupported assertion type 'bogus_type' on synthetic field 'keywords'")]
+    fn render_keywords_assertion_unknown_type_fails_loudly() {
+        let assertion = make_assertion("bogus_type", None);
+        let mut out = String::new();
+        render_keywords_assertion(&mut out, "result", &assertion);
+    }
+
+    #[test]
+    fn render_keywords_assertion_not_empty_still_renders_real_assertion() {
+        let assertion = make_assertion("not_empty", None);
+        let mut out = String::new();
+        render_keywords_assertion(&mut out, "result", &assertion);
+        assert!(out.contains("assert!"), "got: {out}");
+        assert!(
+            out.contains("expected keywords to be present and non-empty"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "unsupported assertion type 'bogus_type' on synthetic field 'chunks_have_content'")]
+    fn render_chunks_have_content_unknown_type_fails_loudly() {
+        let mut out = String::new();
+        render_chunks_have_content(&mut out, "result", "bogus_type");
+    }
+
+    #[test]
+    fn render_chunks_have_content_is_true_still_renders_real_assertion() {
+        let mut out = String::new();
+        render_chunks_have_content(&mut out, "result", "is_true");
+        assert!(out.contains("assert!"), "got: {out}");
+        assert!(out.contains("expected all chunks to have content"), "got: {out}");
     }
 }

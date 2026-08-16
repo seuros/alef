@@ -117,6 +117,83 @@ fn test_go_method_name_uses_go_casing() {
     );
 }
 
+/// Regression test for alef task #81: go had no fallback at all for a dropped
+/// field assertion — `is_valid_for_result` rejects the field, `render_assertion`
+/// emits a skip comment, and (until this fix) nothing else ever consulted that
+/// comment. This pins that the skip comment carries the exact marker text the
+/// shared `fail_on_unavailable_field_markers` mechanism (src/e2e/codegen/mod.rs)
+/// matches on, and — because `out` accumulates every fixture's function in the
+/// same buffer (see `test_file.rs`) — that a PRECEDING fixture with no issues does
+/// not get misattributed the following fixture's dropped field.
+#[test]
+fn dropped_field_assertion_carries_the_marker_and_is_correctly_attributed_per_fixture() {
+    let e2e_config = E2eConfig {
+        result_fields: std::collections::HashSet::from(["content".to_string()]),
+        call: CallConfig {
+            function: "process".to_string(),
+            module: "github.com/example/mylib".to_string(),
+            result_var: "result".to_string(),
+            returns_result: true,
+            ..CallConfig::default()
+        },
+        ..E2eConfig::default()
+    };
+    let config = crate::core::config::ResolvedCrateConfig::default();
+    let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
+    let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
+    let mut out = String::new();
+
+    // First fixture: no field assertions at all — must not pick up anything
+    // appended by the second fixture's render.
+    render_test_function(
+        &mut out,
+        &make_fixture("clean_smoke"),
+        GoTestFunctionContext {
+            import_alias: "sample_crate",
+            e2e_config: &e2e_config,
+            adapters: &[],
+            data_enum_names: &std::collections::HashSet::new(),
+            config: &config,
+            type_defs: &type_defs,
+            enums: &enums,
+        },
+    );
+    let clean_len = out.len();
+
+    // Second fixture: asserts on a field absent from `result_fields`.
+    let mut dirty_fixture = make_fixture("dirty_smoke");
+    dirty_fixture.assertions = vec![Assertion {
+        assertion_type: "equals".to_string(),
+        field: Some("nonexistent_field".to_string()),
+        value: Some(serde_json::json!("x")),
+        ..Default::default()
+    }];
+    render_test_function(
+        &mut out,
+        &dirty_fixture,
+        GoTestFunctionContext {
+            import_alias: "sample_crate",
+            e2e_config: &e2e_config,
+            adapters: &[],
+            data_enum_names: &std::collections::HashSet::new(),
+            config: &config,
+            type_defs: &type_defs,
+            enums: &enums,
+        },
+    );
+
+    assert!(
+        !out[..clean_len].contains("not available"),
+        "the first fixture's own render must carry no skip marker, got:\n{}",
+        &out[..clean_len]
+    );
+    assert!(
+        out[clean_len..].contains("field 'nonexistent_field' not available on result type"),
+        "the second fixture's own render must carry the skip marker, got:\n{}",
+        &out[clean_len..]
+    );
+}
+
 #[test]
 fn handle_config_deserialization_uses_resolved_options_type() {
     let args = vec![ArgMapping {

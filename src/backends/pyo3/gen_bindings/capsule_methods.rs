@@ -183,15 +183,12 @@ pub(super) fn rewrite_capsule_methods(
                 } => {
                     let dep_snake = construct_from.to_snake_case();
                     let first_str_param = method.params.iter().find(|p| matches!(p.ty, TypeRef::String));
-                    let dep_expr = if let Some(sp) = first_str_param {
-                        format!("get_{dep_snake}(py, {}.clone())?.bind(py).clone()", sp.name)
-                    } else {
-                        format!("/* Unsupported: obtain {construct_from} capsule */ unreachable!()")
-                    };
 
-                    if let Some((module_path, class_name)) = python_type.rsplit_once('.') {
-                        format!(
-                            r#"    {sig_attr}    #[allow(clippy::missing_errors_doc)]
+                    if let Some(sp) = first_str_param {
+                        let dep_expr = format!("get_{dep_snake}(py, {}.clone())?.bind(py).clone()", sp.name);
+                        if let Some((module_path, class_name)) = python_type.rsplit_once('.') {
+                            format!(
+                                r#"    {sig_attr}    #[allow(clippy::missing_errors_doc)]
     pub fn {method_name}({params_str}) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {{
         // Construct {python_type} via Python-side factory.
         let _dep = {dep_expr};
@@ -199,15 +196,24 @@ pub(super) fn rewrite_capsule_methods(
         let _cls = _ts_mod.getattr("{class_name}")?;
         Ok(_cls.call1((_dep,))?.unbind())
     }}"#,
-                        )
-                    } else {
-                        format!(
-                            r#"    {sig_attr}    #[allow(clippy::missing_errors_doc)]
+                            )
+                        } else {
+                            format!(
+                                r#"    {sig_attr}    #[allow(clippy::missing_errors_doc)]
     pub fn {method_name}({params_str}) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {{
         // Construct {python_type} via Python-side factory.
         let _dep = {dep_expr};
         let _cls = py.eval(c"{python_type}", None, None)?;
         Ok(_cls.call1((_dep,))?.unbind())
+    }}"#,
+                            )
+                        }
+                    } else {
+                        format!(
+                            r#"    {sig_attr}    #[allow(clippy::missing_errors_doc)]
+    pub fn {method_name}({params_str}) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {{
+        // Unsupported: no parameter found to obtain the {construct_from} capsule.
+        Err(pyo3::exceptions::PyRuntimeError::new_err("capsule_types construct_from: no parameter available to obtain {construct_from} capsule"))
     }}"#,
                         )
                     }
@@ -296,6 +302,104 @@ fn find_method_attrs_start(code: &str, fn_idx: usize) -> usize {
         }
     }
     attr_start_byte
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::config::CapsuleTypeConfig;
+    use crate::core::ir::{MethodDef, ParamDef, TypeDef, TypeRef};
+    use std::collections::HashMap;
+
+    fn capsule_map(entries: &[(&str, CapsuleTypeConfig)]) -> HashMap<String, CapsuleTypeConfig> {
+        entries.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+    }
+
+    const IMPL_BLOCK: &str = r#"impl PyParser {
+    pub fn make_parser(&self, py: pyo3::Python<'_>) -> PyResult<Parser> {
+        todo!()
+    }
+}
+"#;
+
+    /// When a `ConstructFrom` capsule method has no `TypeRef::String` parameter to look its
+    /// dependency up through, `rewrite_capsule_methods` must emit a catchable `PyRuntimeError`
+    /// rather than splicing an `unreachable!()` into the generated Python-extension source.
+    #[test]
+    fn rewrite_capsule_methods_construct_from_no_dependency_param_avoids_unreachable() {
+        let method = MethodDef {
+            name: "make_parser".to_string(),
+            params: vec![],
+            return_type: TypeRef::Named("Parser".to_string()),
+            ..Default::default()
+        };
+        let typ = TypeDef {
+            name: "Parser".to_string(),
+            methods: vec![method],
+            ..Default::default()
+        };
+        let capsules = capsule_map(&[(
+            "Parser",
+            CapsuleTypeConfig::ConstructFrom {
+                python_type: "tree_sitter.Parser".to_string(),
+                construct_from: "Language".to_string(),
+            },
+        )]);
+
+        let out = rewrite_capsule_methods(IMPL_BLOCK.to_string(), &typ, &capsules, &[]);
+
+        assert!(
+            !out.contains("unreachable!()"),
+            "generated source must not contain unreachable!(): {out}"
+        );
+        assert!(
+            out.contains("no parameter available to obtain Language capsule"),
+            "expected loud-failure marker in output: {out}"
+        );
+    }
+
+    /// Sibling positive control: when a `TypeRef::String` parameter IS present, codegen still
+    /// emits the real `get_{dep_snake}(py, ...)` lookup call, unchanged by the fix above.
+    #[test]
+    fn rewrite_capsule_methods_construct_from_uses_string_param_dependency_lookup() {
+        let method = MethodDef {
+            name: "make_parser".to_string(),
+            params: vec![ParamDef {
+                name: "source".to_string(),
+                ty: TypeRef::String,
+                ..Default::default()
+            }],
+            return_type: TypeRef::Named("Parser".to_string()),
+            ..Default::default()
+        };
+        let typ = TypeDef {
+            name: "Parser".to_string(),
+            methods: vec![method],
+            ..Default::default()
+        };
+        let capsules = capsule_map(&[(
+            "Parser",
+            CapsuleTypeConfig::ConstructFrom {
+                python_type: "tree_sitter.Parser".to_string(),
+                construct_from: "Language".to_string(),
+            },
+        )]);
+
+        let out = rewrite_capsule_methods(IMPL_BLOCK.to_string(), &typ, &capsules, &[]);
+
+        assert!(
+            !out.contains("unreachable!()"),
+            "generated source must not contain unreachable!(): {out}"
+        );
+        assert!(
+            out.contains("get_language(py, source.clone())?.bind(py).clone()"),
+            "expected real dependency lookup call in output: {out}"
+        );
+        assert!(
+            out.contains("py.import(\"tree_sitter\")?"),
+            "expected python-side factory import in output: {out}"
+        );
+    }
 }
 
 /// Find the byte index just after the closing `}` of a Rust method block whose `pub fn`

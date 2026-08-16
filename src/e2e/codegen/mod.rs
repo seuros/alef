@@ -237,28 +237,213 @@ pub(crate) fn preserved_url_list(preserve: bool, value: &serde_json::Value) -> O
     value.as_array()?.iter().map(serde_json::Value::as_str).collect()
 }
 
+/// Environment variable that arms the loud-failure path for e2e assertions whose
+/// field the availability oracle (`FieldResolver::is_valid_for_result`) rejects.
+///
+/// ~keep Every backend's `render_assertion` downgrades a rejected field to a
+/// `// skipped: field '<name>' not available ...`-shaped comment and returns —
+/// the generated test still compiles and still passes, because nothing asserted
+/// anything. That is the defect this module addresses: unset (or any value other
+/// than `"1"`/`"true"`), [`fail_on_unavailable_field_markers`] is a pure no-op and
+/// every backend's generated output is byte-identical to before this file changed.
+/// Set, it turns the same skip comment into a generation-time panic naming the
+/// fixture and field, matching how this codebase already fails loudly elsewhere at
+/// generation time (`TestBackendEmission`'s removed `unimplemented()` constructor,
+/// the Python synthetic-field panics in `python/assertions.rs`).
+///
+/// Two backends do not have IR-derived field data threaded into their
+/// `FieldResolver` (`gleam`, `brew` — see their `assertions.rs`/`test_case.rs`
+/// construction sites): for those, arming this still consults only the
+/// hand-maintained `result_fields` TOML list, which is known to drift in both
+/// directions. Their generators still call [`fail_on_unavailable_field_markers`]
+/// (the mechanism itself does not special-case a backend), but the oracle behind
+/// `is_valid_for_result` is coarser there, so arming this globally will very
+/// likely fire *more* false positives on gleam/brew fixtures than on the other 14
+/// backends until they get the same IR wiring. `homebrew` never constructs a
+/// `FieldResolver` at all (it generates a Brewfile + shell smoke script, not
+/// fixture-driven assertions) and cannot hit this path.
+pub(crate) const STRICT_FIELD_AVAILABILITY_ENV: &str = "ALEF_E2E_STRICT_FIELD_AVAILABILITY";
+
+/// True when [`STRICT_FIELD_AVAILABILITY_ENV`] is set to an arming value.
+///
+/// Reads the process environment directly; call sites that need a unit-testable
+/// (env-independent) core should exercise [`fail_on_unavailable_field_markers_if`]
+/// with an explicit `armed` bool instead of mutating process env in a test —
+/// mutating shared process env from parallel `#[test]` runs is not independent.
+pub(crate) fn strict_field_availability_enabled() -> bool {
+    std::env::var(STRICT_FIELD_AVAILABILITY_ENV)
+        .ok()
+        .is_some_and(|raw| is_truthy_flag(&raw))
+}
+
+fn is_truthy_flag(raw: &str) -> bool {
+    raw == "1" || raw.eq_ignore_ascii_case("true")
+}
+
+/// The diagnostic panic message for an assertion whose field the availability
+/// oracle rejects, naming both the fixture and the field so a consumer can find
+/// the offending fixture without re-deriving it from the generated file.
+pub(crate) fn unavailable_field_diagnostic(language: &str, fixture_id: &str, field: &str) -> String {
+    format!(
+        "e2e codegen [{language}] fixture `{fixture_id}`: assertion references field `{field}`, \
+         which the field-availability oracle says is not reachable on the result type. A \
+         generated test must never silently downgrade a dropped assertion to a comment and keep \
+         passing — fix the fixture's field path, or the field-availability config, so this \
+         assertion asserts something real."
+    )
+}
+
+/// Pull the field name out of a single rendered line carrying one of this
+/// codebase's two "field unavailable" comment shapes:
+/// `field '<name>' not available ...` (the common case, every backend's
+/// `is_valid_for_result` skip branch) or `unsupported field '<name>'` (csharp's
+/// separate streaming skip path, `csharp/streaming.rs`). Returns `None` for any
+/// other line, including the unrelated "unsupported assertion type on synthetic
+/// field '<name>'" comments — a fixture using an assertion type a synthetic
+/// handler doesn't support is a different defect (bad assertion shape, not a
+/// missing field) and must not be conflated with this one.
+fn extract_unavailable_field_name(line: &str) -> Option<&str> {
+    if let Some((name, after_quote)) = extract_quoted_after(line, "field '")
+        && after_quote.contains("not available")
+    {
+        return Some(name);
+    }
+    extract_quoted_after(line, "unsupported field '").map(|(name, _)| name)
+}
+
+/// Find `marker` in `line`, then split the text after it at the closing `'`.
+/// Returns `(quoted_name, text_after_the_closing_quote)`, or `None` if `marker`
+/// is absent or its quote is never closed.
+fn extract_quoted_after<'a>(line: &'a str, marker: &str) -> Option<(&'a str, &'a str)> {
+    let start = line.find(marker)? + marker.len();
+    let rest = &line[start..];
+    let end = rest.find('\'')?;
+    Some((&rest[..end], &rest[end..]))
+}
+
+/// Env-independent core of the loud-failure path: scans every line of a
+/// fully-rendered assertions body for the unavailable-field comment shape and, if
+/// `armed`, panics naming the fixture and the first offending field. A no-op
+/// (including on a body containing the marker) when `armed` is false.
+///
+/// Called once per fixture, after every assertion has been rendered into `body` —
+/// the same point every backend's existing vacuous-assertion-body fallback (where
+/// one exists, e.g. python's `apply_vacuous_assertion_fallback`) already inspects
+/// the finished text, so wiring this in adds no new call-site shape to any
+/// backend. ~keep
+pub(crate) fn fail_on_unavailable_field_markers_if(armed: bool, body: &str, language: &str, fixture_id: &str) {
+    if !armed {
+        return;
+    }
+    for line in body.lines() {
+        if let Some(field) = extract_unavailable_field_name(line) {
+            panic!("{}", unavailable_field_diagnostic(language, fixture_id, field));
+        }
+    }
+}
+
+/// Convenience wrapper over [`fail_on_unavailable_field_markers_if`] that reads
+/// [`strict_field_availability_enabled`]. This is the function every backend's
+/// assertion-assembly site calls; see [`STRICT_FIELD_AVAILABILITY_ENV`] for the
+/// full contract.
+pub(crate) fn fail_on_unavailable_field_markers(body: &str, language: &str, fixture_id: &str) {
+    fail_on_unavailable_field_markers_if(strict_field_availability_enabled(), body, language, fixture_id);
+}
+
 #[cfg(test)]
-mod preserved_url_tests {
-    use super::{preserved_url_list, preserved_url_literal};
+mod unavailable_field_marker_tests {
+    use super::{fail_on_unavailable_field_markers_if, is_truthy_flag, unavailable_field_diagnostic};
 
     #[test]
-    fn scalar_url_is_preserved_only_when_requested() {
-        let value = serde_json::json!("http://127.0.0.1/private");
-        assert_eq!(preserved_url_literal(true, &value), Some("http://127.0.0.1/private"));
-        assert_eq!(preserved_url_literal(false, &value), None);
+    fn disarmed_is_a_noop_even_on_a_marker_body() {
+        // Must never panic: this is the default (env var unset) path every
+        // backend runs through today, and it must stay byte-identical.
+        fail_on_unavailable_field_markers_if(
+            false,
+            "    # skipped: field 'chunks' not available on result type\n",
+            "python",
+            "widget_smoke",
+        );
     }
 
     #[test]
-    fn url_list_is_preserved_atomically() {
-        let value = serde_json::json!(["http://host-a.test/", "file:///tmp/example"]);
-        assert_eq!(
-            preserved_url_list(true, &value),
-            Some(vec!["http://host-a.test/", "file:///tmp/example"])
+    #[should_panic(expected = "e2e codegen [python] fixture `widget_smoke`: assertion references field `chunks`")]
+    fn armed_fails_loudly_naming_fixture_and_field() {
+        fail_on_unavailable_field_markers_if(
+            true,
+            "    # skipped: field 'chunks' not available on result type\n",
+            "python",
+            "widget_smoke",
         );
-        assert_eq!(
-            preserved_url_list(true, &serde_json::json!(["https://host.test", 7])),
-            None
+    }
+
+    #[test]
+    fn armed_is_a_noop_on_a_body_with_no_marker() {
+        fail_on_unavailable_field_markers_if(
+            true,
+            "    assert result.count == 1  # noqa: S101\n",
+            "python",
+            "widget_smoke",
         );
+    }
+
+    /// Regression control: a synthetic field's "unsupported assertion type" comment
+    /// is a different defect (bad assertion shape) and must not trip this check.
+    #[test]
+    fn armed_does_not_fire_on_unsupported_assertion_type_comments() {
+        fail_on_unavailable_field_markers_if(
+            true,
+            "    // skipped: unsupported assertion type on synthetic field 'embeddings'\n",
+            "go",
+            "embed_smoke",
+        );
+    }
+
+    /// The language-suffixed variants (`not available on Python ProcessingResult`,
+    /// `not available on PHP result type`, `not available in C FFI`, ...) must all
+    /// still match — only the `field '<name>' ... not available` shape matters, not
+    /// what follows it.
+    #[test]
+    #[should_panic(expected = "fixture `smoke`: assertion references field `keywords`")]
+    fn armed_matches_language_suffixed_not_available_comments() {
+        fail_on_unavailable_field_markers_if(
+            true,
+            "\t// skipped: field 'keywords' not available on Go ProcessingResult\n",
+            "go",
+            "smoke",
+        );
+    }
+
+    /// csharp's separate streaming skip path (`csharp/streaming.rs`) uses a
+    /// differently-worded comment; the extractor must still find the field name.
+    #[test]
+    #[should_panic(expected = "fixture `stream_smoke`: assertion references field `has_page_event`")]
+    fn armed_matches_the_unsupported_field_streaming_variant() {
+        fail_on_unavailable_field_markers_if(
+            true,
+            "    // streaming assertion on unsupported field 'has_page_event'\n",
+            "csharp",
+            "stream_smoke",
+        );
+    }
+
+    #[test]
+    fn is_truthy_flag_accepts_one_and_case_insensitive_true_only() {
+        assert!(is_truthy_flag("1"));
+        assert!(is_truthy_flag("true"));
+        assert!(is_truthy_flag("TRUE"));
+        assert!(!is_truthy_flag("0"));
+        assert!(!is_truthy_flag("false"));
+        assert!(!is_truthy_flag(""));
+        assert!(!is_truthy_flag("yes"));
+    }
+
+    #[test]
+    fn diagnostic_names_language_fixture_and_field() {
+        let message = unavailable_field_diagnostic("ruby", "batch_smoke", "usage");
+        assert!(message.contains("[ruby]"), "got: {message}");
+        assert!(message.contains("`batch_smoke`"), "got: {message}");
+        assert!(message.contains("`usage`"), "got: {message}");
     }
 }
 
@@ -470,7 +655,13 @@ pub(crate) fn resolve_urls_field<'a>(input: &'a serde_json::Value, field_path: &
 }
 
 /// Emission result for a test backend stub.
-#[derive(Debug, Clone, Default)]
+///
+/// There is deliberately no "nothing emitted" constructor and no `Default` impl:
+/// every `TestBackendEmission` a caller obtains must carry a real, compilable stub.
+/// A language or configuration that cannot produce one panics before a value is
+/// ever returned (see [`emit_test_backend`] and each per-language emitter) rather
+/// than handing back a placeholder callers must remember to check. ~keep
+#[derive(Debug, Clone)]
 pub struct TestBackendEmission {
     /// Code emitted at the top of the test function: stub class/struct definition.
     pub setup_block: String,
@@ -499,40 +690,12 @@ pub struct TestBackendEmission {
     pub teardown_block: String,
 }
 
-/// Sentinel prefix identifying a [`TestBackendEmission::unimplemented`] placeholder.
-/// Shared by the constructor and [`TestBackendEmission::is_unimplemented`] so the two
-/// can never drift out of sync — the marker is the ONLY thing that makes the sentinel
-/// distinguishable from a real emission. ~keep
-const UNIMPLEMENTED_MARKER: &str = "/* test_backend unimplemented for ";
-
-impl TestBackendEmission {
-    /// Placeholder for unimplemented backends.
-    pub fn unimplemented(language: &str) -> Self {
-        Self {
-            setup_block: String::new(),
-            arg_expr: format!("{UNIMPLEMENTED_MARKER}{language} */"),
-            type_imports: Vec::new(),
-            teardown_block: String::new(),
-        }
-    }
-
-    /// True when this emission is the [`Self::unimplemented`] placeholder rather than a
-    /// real stub. `arg_expr` is meant to be spliced verbatim into a call's positional
-    /// argument list; the placeholder's `arg_expr` is a bare `/* ... */` comment, so a
-    /// caller that skips this check and uses it anyway emits code that cannot compile.
-    /// Every `test_backend` call site MUST check this before using `arg_expr` as an
-    /// argument, and fail generation loudly instead of splicing the comment in. ~keep
-    pub fn is_unimplemented(&self) -> bool {
-        self.arg_expr.starts_with(UNIMPLEMENTED_MARKER)
-    }
-}
-
 /// Dispatch test backend emission to per-language implementations.
 ///
 /// When a fixture argument has `arg_type = "test_backend"`, this dispatcher
 /// resolves the trait bridge config and calls the language-specific emitter.
-/// Backends that haven't implemented test backend emission yet return
-/// `TestBackendEmission::unimplemented(...)`.
+/// Backends that haven't implemented test backend emission yet panic rather
+/// than return a placeholder — see [`TestBackendEmission`]'s doc comment.
 pub fn emit_test_backend(
     language: &str,
     trait_bridge: &crate::core::config::TraitBridgeConfig,
@@ -562,6 +725,79 @@ pub fn emit_test_backend(
         "brew" => brew::emit_test_backend(trait_bridge, methods, fixture),
         "php_ext" => php_ext::emit_test_backend(trait_bridge, methods, fixture),
         "homebrew" => homebrew::emit_test_backend(trait_bridge, methods, fixture),
-        _ => TestBackendEmission::unimplemented(language),
+        _ => panic!(
+            "e2e codegen: no test_backend emitter registered for language `{language}`; \
+             cannot generate a test_backend stub for this target"
+        ),
+    }
+}
+
+#[cfg(test)]
+mod preserved_url_tests {
+    use super::{preserved_url_list, preserved_url_literal};
+
+    #[test]
+    fn scalar_url_is_preserved_only_when_requested() {
+        let value = serde_json::json!("http://127.0.0.1/private");
+        assert_eq!(preserved_url_literal(true, &value), Some("http://127.0.0.1/private"));
+        assert_eq!(preserved_url_literal(false, &value), None);
+    }
+
+    #[test]
+    fn url_list_is_preserved_atomically() {
+        let value = serde_json::json!(["http://host-a.test/", "file:///tmp/example"]);
+        assert_eq!(
+            preserved_url_list(true, &value),
+            Some(vec!["http://host-a.test/", "file:///tmp/example"])
+        );
+        assert_eq!(
+            preserved_url_list(true, &serde_json::json!(["https://host.test", 7])),
+            None
+        );
+    }
+}
+
+#[cfg(test)]
+mod unimplemented_test_backend_tests {
+    use super::emit_test_backend;
+    use crate::core::config::TraitBridgeConfig;
+    use crate::e2e::fixture::Fixture;
+
+    fn registered_bridge() -> TraitBridgeConfig {
+        TraitBridgeConfig {
+            trait_name: "SampleBackend".into(),
+            ..TraitBridgeConfig::default()
+        }
+    }
+
+    fn sample_fixture() -> Fixture {
+        Fixture {
+            id: "register_sample_backend".into(),
+            ..Fixture::default()
+        }
+    }
+
+    /// Every language with no real `test_backend` stub generator (including a
+    /// language string the dispatch `match` doesn't even recognize) must panic
+    /// through the public dispatcher rather than hand back a placeholder
+    /// `TestBackendEmission`. There is no sentinel value left to construct — the
+    /// `unimplemented()` constructor and `UNIMPLEMENTED_MARKER` were removed —
+    /// so this is the structural proof that a caller can never receive a
+    /// stand-in emission for these targets, whether or not the trait is
+    /// registered: a language with no real generator fails the same way
+    /// regardless of `trait_bridges` config.
+    #[test]
+    fn languages_without_a_real_emitter_panic_through_the_dispatcher() {
+        for language in ["gleam", "brew", "php_ext", "homebrew", "kotlin", "not-a-real-language"] {
+            let bridge = registered_bridge();
+            let fixture = sample_fixture();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                emit_test_backend(language, &bridge, &[], &fixture, &[])
+            }));
+            assert!(
+                result.is_err(),
+                "expected `{language}` to panic instead of returning a TestBackendEmission, but it returned a value"
+            );
+        }
     }
 }

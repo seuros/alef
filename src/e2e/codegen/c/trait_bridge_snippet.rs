@@ -231,14 +231,27 @@ fn default_return(ty: &TypeRef, return_type: &str, fallible: bool) -> String {
 /// analogous to `render_snippet_body`'s early return to [`render`], so a
 /// `test_backend` arg on that path always reaches here.
 ///
-/// Return the sentinel so `build_args_string_c` (`assertions.rs`) refuses to splice
-/// a comment where the argument belongs, rather than emit C that cannot compile. ~keep
+/// [`render`]'s output is also not a drop-in substitute even where a file-scope
+/// channel existed: its vtable type and callback function names are derived only
+/// from `prefix`/`trait_name`/method name, not the fixture id, which is safe for
+/// the doc-snippet's one-fixture-per-translation-unit model but would collide if
+/// spliced verbatim alongside sibling fixtures aggregated into one shared
+/// `test_<category>.c` file. Wiring this up is a real architecture change, not a
+/// routing fix — see task history for the analysis.
+///
+/// Panic instead of returning a placeholder, so `build_args_string_c`
+/// (`assertions.rs`) can never receive a comment to splice where the argument
+/// belongs — the sentinel-checking indirection is gone; failure happens here,
+/// before any value is returned. ~keep
 pub(super) fn emit_test_backend(
-    _bridge: &TraitBridgeConfig,
+    bridge: &TraitBridgeConfig,
     _methods: &[&MethodDef],
-    _fixture: &Fixture,
+    fixture: &Fixture,
 ) -> super::super::TestBackendEmission {
-    super::super::TestBackendEmission::unimplemented("c")
+    panic!(
+        "C e2e generator: fixture `{}` requires a C test_backend stub for trait `{}`, but the C test-backend emitter is unimplemented; refusing to emit a call with a comment where the argument belongs",
+        fixture.id, bridge.trait_name
+    );
 }
 
 #[cfg(test)]
@@ -247,15 +260,16 @@ mod tests {
     use crate::core::ir::{ParamDef, ReceiverKind, TypeDef};
     use std::process::Command;
 
-    /// Pin: `emit_test_backend` is still the `TestBackendEmission::unimplemented(...)`
-    /// sentinel — see its doc comment for why a real single-expression C stub isn't
-    /// buildable within this file's scope today. This test exists to be broken: the
-    /// day someone wires a file-scope declarations channel through
+    /// Pin: `emit_test_backend` still panics rather than emit a real stub — see
+    /// its doc comment for why a real single-expression C stub isn't buildable
+    /// within this file's scope today. This test exists to be broken: the day
+    /// someone wires a file-scope declarations channel through
     /// `render_test_file`/`render_test_function` and gives this a real vtable-pointer
     /// `arg_expr`, replace this with a positive pin (mirroring
     /// `kotlin_android::stubs::emit_test_backend`'s tests) instead of deleting it.
     #[test]
-    fn emit_test_backend_is_still_the_unimplemented_sentinel() {
+    #[should_panic(expected = "test-backend emitter is unimplemented")]
+    fn emit_test_backend_is_still_unimplemented() {
         let bridge = TraitBridgeConfig {
             trait_name: "SampleBackend".into(),
             ..TraitBridgeConfig::default()
@@ -264,11 +278,7 @@ mod tests {
             id: "register_sample_backend".into(),
             ..Fixture::default()
         };
-        let emission = emit_test_backend(&bridge, &[], &fixture);
-        assert!(
-            emission.is_unimplemented(),
-            "C emit_test_backend now returns a real stub — replace this test with a positive pin"
-        );
+        emit_test_backend(&bridge, &[], &fixture);
     }
 
     #[test]

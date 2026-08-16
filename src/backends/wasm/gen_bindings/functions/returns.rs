@@ -26,17 +26,7 @@ pub(in crate::backends::wasm::gen_bindings) fn gen_wasm_unimplemented_body(
     } else {
         match return_type {
             TypeRef::Unit => "()".to_string(),
-            TypeRef::String | TypeRef::Char | TypeRef::Path => format!("String::from(\"[unimplemented: {fn_name}]\")"),
-            TypeRef::Bytes => "Vec::new()".to_string(),
-            TypeRef::Primitive(p) => match p {
-                crate::core::ir::PrimitiveType::Bool => "false".to_string(),
-                _ => "0".to_string(),
-            },
-            TypeRef::Optional(_) => "None".to_string(),
-            TypeRef::Vec(_) => "Vec::new()".to_string(),
-            TypeRef::Map(_, _) => "Default::default()".to_string(),
-            TypeRef::Duration => "0u64".to_string(),
-            TypeRef::Named(_) | TypeRef::Json => format!(
+            _ => format!(
                 "compile_error!(\"alef cannot generate WASM binding for {fn_name}; \
                  configure wasm.exclude_functions or make the return type fallible\")"
             ),

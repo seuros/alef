@@ -21,7 +21,7 @@ use crate::codegen::shared::binding_fields;
 use crate::core::backend::GeneratedFile;
 use crate::core::config::{Language, ResolvedCrateConfig, detect_serde_available, resolve_output_dir};
 use crate::core::ir::{ApiSurface, TypeRef};
-use ahash::AHashSet;
+use ahash::{AHashMap, AHashSet};
 use heck::{ToLowerCamelCase, ToPascalCase};
 use minijinja::context;
 use std::collections::HashMap;
@@ -539,9 +539,28 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
             conv_opaque_types.insert(alias.clone());
         }
     }
+    // First unit (fieldless) variant name per `enum_string_names` entry: the sole safe
+    // fallback a non-optional binding->core conversion can construct when a PHP-assigned
+    // string fails to parse back into the enum, since `From` cannot bail out early to
+    // report the error itself (see `ConversionConfig::enum_string_fallback_variant`).
+    // `enum_string_names` also has a `json_string_enum_names` subset with data-carrying
+    // variants, so this only fires for the first variant that genuinely takes no fields --
+    // a data variant's name alone would not be a constructible expression. ~keep
+    let enum_string_fallback_variant_map: AHashMap<String, String> = api
+        .enums
+        .iter()
+        .filter(|e| enum_names_ref.contains(&e.name))
+        .filter_map(|e| {
+            e.variants
+                .iter()
+                .find(|v| v.fields.is_empty())
+                .map(|v| (e.name.clone(), v.name.clone()))
+        })
+        .collect();
     let php_conv_config = ConversionConfig {
         cast_large_ints_to_i64: true,
         enum_string_names: Some(enum_names_ref),
+        enum_string_fallback_variant: Some(&enum_string_fallback_variant_map),
         untagged_data_enum_names: Some(&mapper.untagged_data_enum_names),
         json_as_value: true,
         include_cfg_metadata: false,

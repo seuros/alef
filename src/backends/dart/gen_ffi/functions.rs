@@ -24,13 +24,12 @@ pub(super) fn emit_function(
     }
 
     if f.is_async {
-        out.push_str(&template_env::render(
-            "ffi_async_todo.jinja",
-            minijinja::context! {
-                name => f.name.as_str(),
-            },
-        ));
-        return;
+        panic!(
+            "dart:ffi backend: function `{}` is async, but dart:ffi mode does not support async \
+             functions; exclude it via `dart.exclude_functions` in alef.toml, or switch `dart.style` \
+             to the default `frb` (flutter_rust_bridge) mode, which supports async functions",
+            f.name
+        );
     }
 
     if !f.doc.is_empty() {
@@ -371,6 +370,53 @@ mod tests {
         assert!(
             out.contains("if (_result == null || _result.address == 0) return null;"),
             "capsule fn must guard null pointer. Got:\n{out}"
+        );
+    }
+
+    fn get_async_fn() -> FunctionDef {
+        FunctionDef {
+            is_async: true,
+            ..get_language_fn()
+        }
+    }
+
+    #[test]
+    fn emit_function_async_in_ffi_mode_fails_loudly() {
+        let f = get_async_fn();
+        let capsule_types: HashMap<String, HostCapsuleTypeConfig> = HashMap::new();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut out = String::new();
+            emit_function(&f, "tsp", "", "", &capsule_types, &mut out);
+        }));
+        let err = result.expect_err("emit_function must panic for an async function in dart:ffi mode");
+        let message = err
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| err.downcast_ref::<&str>().map(ToString::to_string))
+            .expect("panic payload must be a string");
+        assert!(
+            message.contains("get_language"),
+            "panic message must name the offending function. Got:\n{message}"
+        );
+    }
+
+    #[test]
+    fn emit_function_sync_function_still_emits_real_wrapper() {
+        let f = get_language_fn();
+        let capsule_types: HashMap<String, HostCapsuleTypeConfig> = HashMap::new();
+        let mut out = String::new();
+        emit_function(&f, "tsp", "", "", &capsule_types, &mut out);
+        assert!(
+            out.contains("tsp_get_language"),
+            "sync fn must still emit a real FFI wrapper referencing the C symbol. Got:\n{out}"
+        );
+        assert!(
+            !out.contains("Unsupported"),
+            "sync fn output must not contain the removed async placeholder text. Got:\n{out}"
+        );
+        assert!(
+            !out.contains("panic"),
+            "sync fn output must not contain panic text. Got:\n{out}"
         );
     }
 

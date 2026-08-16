@@ -86,10 +86,14 @@ pub(super) fn build_args_and_setup(
                 parts.push(arg_expr);
                 continue;
             }
-            let emission = crate::e2e::codegen::TestBackendEmission::unimplemented("zig");
-            setup_lines.push(format!("// {}", emission.arg_expr));
-            parts.push("null".to_string());
-            continue;
+            // A `test_backend` arg fills a required Zig stub parameter — there is no
+            // compilable value to fall back to when the trait isn't configured. Fail
+            // generation loudly instead of silently splicing a `null` argument with a
+            // comment where the real stub belongs. ~keep
+            panic!(
+                "Zig e2e generator: fixture `{}` declares a `test_backend` arg `{}` with trait `{:?}`, but either it has no `trait_name` configured or no `[[crates.trait_bridges]]` entry matches it; cannot generate a Zig stub without a resolvable trait bridge",
+                fixture.id, arg.name, arg.trait_name
+            );
         }
 
         // The Zig wrapper accepts struct parameters

@@ -109,6 +109,80 @@ fn fields_array_binding_emitted_before_count_min_assertion_for_non_streaming_fix
     );
 }
 
+/// Regression test for alef task #81: rust had no fallback at all for a dropped
+/// field assertion — `is_valid_for_result` rejects the field, `render_assertion`
+/// emits a skip comment, and (until this fix) nothing else ever consulted it. This
+/// pins that `finalize_test_body` sees the skip comment with the exact marker text
+/// the shared `fail_on_unavailable_field_markers` mechanism (src/e2e/codegen/mod.rs)
+/// matches on. `body_buf` is a fresh buffer per `render_test_function` call (see
+/// `let mut body_buf = String::new();` at the top of this file), so per-fixture
+/// attribution is correct by construction — no offset bookkeeping needed here,
+/// unlike Go's shared-buffer caller.
+#[test]
+fn dropped_field_assertion_carries_the_marker_that_arms_the_strict_mode() {
+    use crate::e2e::config::CallConfig;
+    use crate::e2e::fixture::{Assertion, Fixture};
+    use std::collections::HashSet;
+
+    let call = CallConfig {
+        function: "process".to_string(),
+        module: "my_crate".to_string(),
+        result_var: "result".to_string(),
+        result_fields: HashSet::from(["content".to_string()]),
+        returns_result: true,
+        ..Default::default()
+    };
+    let e2e_config = crate::e2e::config::E2eConfig {
+        call,
+        ..Default::default()
+    };
+    let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
+        id: "process_smoke".to_string(),
+        description: "Process produces a result".to_string(),
+        tags: Vec::new(),
+        skip: None,
+        env: None,
+        setup: Vec::new(),
+        call: None,
+        input: serde_json::Value::Null,
+        mock_response: None,
+        visitor: None,
+        args: vec![],
+        assertion_recipes: vec![],
+        assertions: vec![Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("nonexistent_field".to_string()),
+            value: Some(serde_json::Value::String("x".to_string())),
+            values: None,
+            method: None,
+            check: None,
+            args: None,
+            return_type: None,
+        }],
+        source: String::new(),
+        http: None,
+        asyncapi: None,
+        websocket: None,
+        preserve_input_urls: false,
+        category: None,
+    };
+
+    let mut out = String::new();
+    let cfg: crate::core::config::NewAlefConfig = toml::from_str(
+        "[workspace]\nlanguages = [\"rust\"]\n[[crates]]\nname = \"my_crate\"\nsources = [\"src/lib.rs\"]\n",
+    )
+    .unwrap();
+    let test_config = cfg.resolve().unwrap().remove(0);
+    render_test_function(&mut out, &fixture, &e2e_config, &test_config, &[], "my_crate", None);
+
+    assert!(
+        out.contains("field 'nonexistent_field' not available on result type"),
+        "got:\n{out}"
+    );
+}
+
 /// Regression test: a `result_is_simple` call with a `count_equals` assertion whose
 /// `field` is NOT a real field on the (plain Vec) result type must still bind the
 /// call to the result variable.  The assertion renderer emits `result.len()` for

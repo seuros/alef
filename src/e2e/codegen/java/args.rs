@@ -237,10 +237,14 @@ pub(super) fn build_args_and_setup(
                 teardown_block.push_str(&emission.teardown_block);
                 continue;
             }
-            let emission = crate::e2e::codegen::TestBackendEmission::unimplemented("java");
-            setup_lines.push(format!("// {}", emission.arg_expr));
-            parts.push("null".to_string());
-            continue;
+            // A `test_backend` arg fills a non-null Java stub parameter — there is no
+            // compilable value to fall back to when the trait isn't configured. Fail
+            // generation loudly instead of silently splicing a `null` argument with a
+            // comment where the real stub belongs. ~keep
+            panic!(
+                "Java e2e generator: fixture `{}` declares a `test_backend` arg `{}` with trait `{:?}`, but either it has no `trait_name` configured or no `[[crates.trait_bridges]]` entry matches it; cannot generate a Java stub without a resolvable trait bridge",
+                fixture.id, arg.name, arg.trait_name
+            );
         }
 
         let resolved = super::super::resolve_field(input, &arg.field);

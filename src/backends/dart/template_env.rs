@@ -788,7 +788,6 @@ static TEMPLATES: &[(&str, &str)] = &[
         "ffi_lib_path_linux_return.jinja",
         include_str!("templates/ffi_lib_path_linux_return.jinja"),
     ),
-    ("ffi_async_todo.jinja", include_str!("templates/ffi_async_todo.jinja")),
     (
         "ffi_error_throws_doc.jinja",
         include_str!("templates/ffi_error_throws_doc.jinja"),

@@ -281,27 +281,41 @@ pub(in crate::backends::magnus::gen_bindings) fn gen_magnus_unimplemented_body(
     } else {
         match return_type {
             TypeRef::Unit => "()".to_string(),
-            TypeRef::String | TypeRef::Char | TypeRef::Path => crate::backends::magnus::template_env::render(
-                "function_unimplemented_string.rs.jinja",
-                minijinja::context! {
-                    name => fn_name,
-                },
-            ),
-            TypeRef::Bytes => "Vec::new()".to_string(),
-            TypeRef::Primitive(p) => match p {
-                crate::core::ir::PrimitiveType::Bool => "false".to_string(),
-                _ => "0".to_string(),
-            },
-            TypeRef::Optional(_) => "None".to_string(),
-            TypeRef::Vec(_) => "Vec::new()".to_string(),
-            TypeRef::Map(_, _) => "Default::default()".to_string(),
-            TypeRef::Duration => "0u64".to_string(),
-            TypeRef::Named(_) | TypeRef::Json => crate::backends::magnus::template_env::render(
+            _ => crate::backends::magnus::template_env::render(
                 "function_unimplemented_panic.rs.jinja",
                 minijinja::context! {
                     name => fn_name,
                 },
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod gen_magnus_unimplemented_body_tests {
+    use super::gen_magnus_unimplemented_body;
+    use crate::core::ir::TypeRef;
+
+    #[test]
+    fn gen_magnus_unimplemented_body_string_return_fails_loudly() {
+        let body = gen_magnus_unimplemented_body(&TypeRef::String, "process", false);
+        assert!(body.contains("compile_error!"), "expected compile_error!, got: {body}");
+        assert!(!body.contains("[unimplemented:"), "fabricated string literal leaked through: {body}");
+    }
+
+    #[test]
+    fn gen_magnus_unimplemented_body_unit_return_stays_void() {
+        let body = gen_magnus_unimplemented_body(&TypeRef::Unit, "process", false);
+        assert_eq!(body, "()");
+    }
+
+    #[test]
+    fn gen_magnus_unimplemented_body_with_error_type_raises_runtime_error() {
+        let body = gen_magnus_unimplemented_body(&TypeRef::String, "process", true);
+        assert!(!body.contains("compile_error!"), "error branch must not emit compile_error!: {body}");
+        assert!(
+            body.contains("exception_runtime_error"),
+            "expected runtime error raise, got: {body}"
+        );
     }
 }

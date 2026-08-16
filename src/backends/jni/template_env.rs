@@ -11,10 +11,6 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/runtime_helpers.rs.jinja"),
     ),
     (
-        "trait_register_shim.rs.jinja",
-        include_str!("templates/trait_register_shim.rs.jinja"),
-    ),
-    (
         "trait_bridge_constructor.rs.jinja",
         include_str!("templates/trait_bridge_constructor.rs.jinja"),
     ),

@@ -177,11 +177,8 @@ fn emit_bool_assertion(out: &mut String, pred: &str, assertion_type: &str, field
         "is_false" => {
             let _ = writeln!(out, "    assert not ({pred})  # noqa: S101");
         }
-        _ => {
-            let _ = writeln!(
-                out,
-                "    # skipped: unsupported assertion type on synthetic field '{field}'"
-            );
+        other => {
+            panic!("Python e2e generator: unsupported assertion type '{other}' on synthetic field '{field}'");
         }
     }
 }
@@ -208,11 +205,8 @@ fn render_embeddings_assertion(out: &mut String, assertion: &Assertion, result_v
         "is_empty" => {
             let _ = writeln!(out, "    assert len({result_var}) == 0  # noqa: S101");
         }
-        _ => {
-            let _ = writeln!(
-                out,
-                "    # skipped: unsupported assertion type on synthetic field 'embeddings'"
-            );
+        other => {
+            panic!("Python e2e generator: unsupported assertion type '{other}' on synthetic field 'embeddings'");
         }
     }
 }
@@ -232,10 +226,9 @@ fn render_embedding_dimensions(out: &mut String, assertion: &Assertion, result_v
                 let _ = writeln!(out, "    assert {expr} > {py_val}  # noqa: S101");
             }
         }
-        _ => {
-            let _ = writeln!(
-                out,
-                "    // skipped: unsupported assertion type on synthetic field 'embedding_dimensions'"
+        other => {
+            panic!(
+                "Python e2e generator: unsupported assertion type '{other}' on synthetic field 'embedding_dimensions'"
             );
         }
     }
@@ -786,6 +779,73 @@ mod tests {
         assert!(
             negated.contains("not ("),
             "expected `not (...)` wrapper for already-negated expression"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "unsupported assertion type 'bogus_type' on synthetic field 'chunks_have_content'")]
+    fn python_synthetic_chunks_unsupported_type_fails_loudly() {
+        let assertion = make_assertion("bogus_type", Some("chunks_have_content"), None);
+        let mut out = String::new();
+        render_synthetic_field(&mut out, &assertion, "result", "chunks_have_content");
+    }
+
+    #[test]
+    fn python_synthetic_chunks_supported_type_renders_assertion() {
+        let assertion = make_assertion("is_true", Some("chunks_have_content"), None);
+        let mut out = String::new();
+        let handled = render_synthetic_field(&mut out, &assertion, "result", "chunks_have_content");
+        assert!(handled);
+        assert_eq!(
+            out.trim(),
+            "assert all(c.content for c in (result.chunks or []))  # noqa: S101"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "unsupported assertion type 'bogus_type' on synthetic field 'embeddings'")]
+    fn python_synthetic_embeddings_unsupported_type_fails_loudly() {
+        let assertion = make_assertion("bogus_type", Some("embeddings"), None);
+        let mut out = String::new();
+        render_synthetic_field(&mut out, &assertion, "result", "embeddings");
+    }
+
+    #[test]
+    fn python_synthetic_embeddings_supported_type_renders_assertion() {
+        let assertion = make_assertion("not_empty", Some("embeddings"), None);
+        let mut out = String::new();
+        let handled = render_synthetic_field(&mut out, &assertion, "result", "embeddings");
+        assert!(handled);
+        assert_eq!(out.trim(), "assert len(result) > 0  # noqa: S101");
+    }
+
+    #[test]
+    fn python_embedding_dimensions_unsupported_type_no_longer_emits_invalid_syntax() {
+        let assertion = make_assertion("bogus_type", Some("embedding_dimensions"), None);
+        let mut out = String::new();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            render_synthetic_field(&mut out, &assertion, "result", "embedding_dimensions");
+        }));
+        assert!(result.is_err(), "expected a panic for unsupported assertion type");
+        assert!(
+            !out.contains("//"),
+            "generated output must never contain a `//` (invalid Python comment token): {out}"
+        );
+    }
+
+    #[test]
+    fn python_embedding_dimensions_supported_type_renders_assertion() {
+        let assertion = make_assertion(
+            "greater_than",
+            Some("embedding_dimensions"),
+            Some(serde_json::Value::from(10)),
+        );
+        let mut out = String::new();
+        let handled = render_synthetic_field(&mut out, &assertion, "result", "embedding_dimensions");
+        assert!(handled);
+        assert_eq!(
+            out.trim(),
+            "assert (len(result[0]) if result else 0) > 10  # noqa: S101"
         );
     }
 }

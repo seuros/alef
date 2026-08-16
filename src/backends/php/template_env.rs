@@ -477,6 +477,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/php_stub_error_body.jinja"),
     ),
     (
+        "php_stub_unsupported_return.jinja",
+        include_str!("templates/php_stub_unsupported_return.jinja"),
+    ),
+    (
         "php_enum_string_match_arm.jinja",
         include_str!("templates/php_enum_string_match_arm.jinja"),
     ),

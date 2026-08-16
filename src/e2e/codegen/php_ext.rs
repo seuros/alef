@@ -22,7 +22,7 @@ use anyhow::Result;
 use std::fmt::Write as FmtWrite;
 use std::path::PathBuf;
 
-use super::{E2eCodegen, TestBackendEmission};
+use super::E2eCodegen;
 use crate::core::config::e2e::DependencyMode;
 
 /// PHP native extension (PIE) test_app generator.
@@ -277,12 +277,19 @@ fn render_readme(pkg_name: &str, version: &str) -> String {
 }
 
 /// Emit a test backend stub (not applicable for php_ext).
+///
+/// php_ext is a packaging-verification backend with no `test_backend` stub
+/// generator. Panic rather than return a placeholder `TestBackendEmission` a
+/// caller could accidentally splice into generated code. ~keep
 pub fn emit_test_backend(
-    _trait_bridge: &crate::core::config::TraitBridgeConfig,
+    trait_bridge: &crate::core::config::TraitBridgeConfig,
     _methods: &[&crate::core::ir::MethodDef],
-    _fixture: &crate::e2e::fixture::Fixture,
+    fixture: &crate::e2e::fixture::Fixture,
 ) -> super::TestBackendEmission {
-    TestBackendEmission::unimplemented("php_ext")
+    panic!(
+        "php_ext e2e generator: fixture `{}` requires a php_ext test_backend stub for trait `{}`, but the php_ext test-backend emitter is unimplemented; refusing to emit a call with a comment where the argument belongs",
+        fixture.id, trait_bridge.trait_name
+    );
 }
 
 #[cfg(test)]

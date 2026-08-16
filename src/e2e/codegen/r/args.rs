@@ -244,8 +244,14 @@ pub(super) fn build_args_string(
                         teardown_block.push_str(&emission.teardown_block);
                         return Some(format!("{arg_name} = {}", emission.arg_expr));
                     }
-                let emission = crate::e2e::codegen::TestBackendEmission::unimplemented("r");
-                return Some(format!("{arg_name} = NULL # {}", emission.arg_expr));
+                // A `test_backend` arg fills a required R stub parameter — there is no
+                // compilable value to fall back to when the trait isn't configured.
+                // Fail generation loudly instead of silently splicing a `NULL`
+                // argument with a comment where the real stub belongs. ~keep
+                panic!(
+                    "R e2e generator: fixture `{}` declares a `test_backend` arg `{arg_name}` with trait `{:?}`, but either it has no `trait_name` configured or no `[[crates.trait_bridges]]` entry matches it; cannot generate an R stub without a resolvable trait bridge",
+                    fixture.id, arg.trait_name
+                );
             }
             Some(format!("{arg_name} = {}", json_to_r(val, true)))
         })

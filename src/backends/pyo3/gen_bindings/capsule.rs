@@ -314,38 +314,45 @@ pub(super) fn gen_capsule_function(
                         .iter()
                         .find(|p| matches!(&p.ty, TypeRef::Named(n) if n == construct_from));
                     let dep_expr = if let Some(arg) = dep_arg {
-                        format!("{}.bind(py).clone()", arg.name)
+                        Some(format!("{}.bind(py).clone()", arg.name))
                     } else {
                         let dep_snake = construct_from.to_snake_case();
                         let first_str_param = func.params.iter().find(|p| matches!(p.ty, TypeRef::String));
-                        if let Some(str_param) = first_str_param {
+                        first_str_param.map(|str_param| {
                             format!("get_{dep_snake}(py, {param})?.bind(py).clone()", param = str_param.name)
-                        } else {
-                            format!("/* Unsupported: obtain {construct_from} capsule */ unreachable!()")
-                        }
+                        })
                     };
 
-                    out.push_str(&crate::backends::pyo3::template_env::render(
-                        "pyo3_capsule_construct_comment.jinja",
-                        minijinja::context! {
-                            python_type => python_type.as_str(),
-                        },
-                    ));
-                    if let Some((module_path, class_name)) = python_type.rsplit_once('.') {
+                    if let Some(dep_expr) = dep_expr {
                         out.push_str(&crate::backends::pyo3::template_env::render(
-                            "pyo3_capsule_construct_with_module.jinja",
+                            "pyo3_capsule_construct_comment.jinja",
                             minijinja::context! {
-                                dep_expr => dep_expr,
-                                module_path => module_path,
-                                class_name => class_name,
+                                python_type => python_type.as_str(),
                             },
                         ));
+                        if let Some((module_path, class_name)) = python_type.rsplit_once('.') {
+                            out.push_str(&crate::backends::pyo3::template_env::render(
+                                "pyo3_capsule_construct_with_module.jinja",
+                                minijinja::context! {
+                                    dep_expr => dep_expr,
+                                    module_path => module_path,
+                                    class_name => class_name,
+                                },
+                            ));
+                        } else {
+                            out.push_str(&crate::backends::pyo3::template_env::render(
+                                "pyo3_capsule_construct_with_builtin.jinja",
+                                minijinja::context! {
+                                    dep_expr => dep_expr,
+                                    python_type => python_type,
+                                },
+                            ));
+                        }
                     } else {
                         out.push_str(&crate::backends::pyo3::template_env::render(
-                            "pyo3_capsule_construct_with_builtin.jinja",
+                            "pyo3_capsule_no_dependency_param.jinja",
                             minijinja::context! {
-                                dep_expr => dep_expr,
-                                python_type => python_type,
+                                construct_from => construct_from.as_str(),
                             },
                         ));
                     }
@@ -511,5 +518,89 @@ mod tests {
         };
         assert!(capsule.is_capsule_roundtrip());
         assert!(!construct.is_capsule_roundtrip());
+    }
+
+    /// When a `ConstructFrom` capsule's dependency is resolvable (roundtrip capsule) but the
+    /// function has neither a matching `Named` dependency parameter nor a `TypeRef::String`
+    /// parameter to look it up through, codegen must emit a catchable `PyRuntimeError`
+    /// instead of splicing an `unreachable!()` into the generated Python-extension source.
+    #[test]
+    fn gen_capsule_function_construct_from_no_dependency_param_avoids_unreachable() {
+        use crate::core::ir::FunctionDef;
+
+        let func = FunctionDef {
+            name: "make_parser".to_string(),
+            rust_path: "lib::make_parser".to_string(),
+            params: vec![],
+            return_type: TypeRef::Named("Parser".to_string()),
+            ..Default::default()
+        };
+        let capsules = capsule_map(&[
+            (
+                "Language",
+                CapsuleTypeConfig::Capsule("tree_sitter.Language".to_string()),
+            ),
+            (
+                "Parser",
+                CapsuleTypeConfig::ConstructFrom {
+                    python_type: "tree_sitter.Parser".to_string(),
+                    construct_from: "Language".to_string(),
+                },
+            ),
+        ]);
+
+        let out = gen_capsule_function(&func, &capsules, "core", &[]);
+
+        assert!(
+            !out.contains("unreachable!()"),
+            "generated source must not contain unreachable!(): {out}"
+        );
+        assert!(
+            out.contains("no parameter available to obtain Language capsule"),
+            "expected loud-failure marker in output: {out}"
+        );
+    }
+
+    /// Sibling positive control: when a `TypeRef::String` parameter IS present, codegen still
+    /// emits the real `get_{dep_snake}(py, ...)` lookup call, unchanged by the fix above.
+    #[test]
+    fn gen_capsule_function_construct_from_uses_string_param_dependency_lookup() {
+        use crate::core::ir::{FunctionDef, ParamDef};
+
+        let func = FunctionDef {
+            name: "make_parser".to_string(),
+            rust_path: "lib::make_parser".to_string(),
+            params: vec![ParamDef {
+                name: "source_code".to_string(),
+                ty: TypeRef::String,
+                ..Default::default()
+            }],
+            return_type: TypeRef::Named("Parser".to_string()),
+            ..Default::default()
+        };
+        let capsules = capsule_map(&[
+            (
+                "Language",
+                CapsuleTypeConfig::Capsule("tree_sitter.Language".to_string()),
+            ),
+            (
+                "Parser",
+                CapsuleTypeConfig::ConstructFrom {
+                    python_type: "tree_sitter.Parser".to_string(),
+                    construct_from: "Language".to_string(),
+                },
+            ),
+        ]);
+
+        let out = gen_capsule_function(&func, &capsules, "core", &[]);
+
+        assert!(
+            !out.contains("unreachable!()"),
+            "generated source must not contain unreachable!(): {out}"
+        );
+        assert!(
+            out.contains("get_language(py, source_code)?.bind(py).clone()"),
+            "expected real dependency lookup call in output: {out}"
+        );
     }
 }

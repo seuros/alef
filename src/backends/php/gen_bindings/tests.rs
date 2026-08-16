@@ -223,3 +223,31 @@ fn config_m4_uses_underscored_cdylib_stem_and_hyphenated_crate_dir() {
         "missing-Cargo.toml error message must reference the hyphenated crate directory, got:\n{m4}"
     );
 }
+
+/// Positive-control companion to the above: `liter-llm` carries only one hyphen, so
+/// "replace the first hyphen" and "replace every hyphen" produce an identical dylib stem and
+/// cannot distinguish the two derivations. A crate name with multiple hyphens can: Cargo
+/// underscores ALL of them in the cdylib filename while the source directory keeps every one. ~keep
+#[test]
+fn config_m4_underscores_every_hyphen_in_a_multi_hyphen_crate_name() {
+    use super::rust_items::generate_config_m4;
+
+    let m4 = generate_config_m4("my_cool_lib", "my-cool-lib");
+
+    assert!(
+        m4.contains("crates/my-cool-lib-php/Cargo.toml"),
+        "crate directory path must keep every hyphen, got:\n{m4}"
+    );
+    assert!(
+        m4.contains("crates/my-cool-lib-php/target/release/libmy_cool_lib_php.dylib"),
+        "dylib stem must underscore every hyphen, not just the first, got:\n{m4}"
+    );
+    assert!(
+        m4.contains("crates/my-cool-lib-php/target/release/libmy_cool_lib_php.so"),
+        "so stem must underscore every hyphen, not just the first, got:\n{m4}"
+    );
+    assert!(
+        !m4.contains("my-cool-lib_php") && !m4.contains("my_cool-lib_php") && !m4.contains("my-cool_lib_php"),
+        "must never leave a partially-underscored stem, got:\n{m4}"
+    );
+}

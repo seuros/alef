@@ -130,10 +130,6 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/function_unimplemented_error.rs.jinja"),
     ),
     (
-        "function_unimplemented_string.rs.jinja",
-        include_str!("templates/function_unimplemented_string.rs.jinja"),
-    ),
-    (
         "function_unimplemented_panic.rs.jinja",
         include_str!("templates/function_unimplemented_panic.rs.jinja"),
     ),
