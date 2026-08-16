@@ -690,6 +690,33 @@ fn build_thirdparty_imports(
         }
     }
 
+    let mut extra_from_json_imports: BTreeSet<(String, String)> = BTreeSet::new();
+    for fixture in fixtures.iter() {
+        let cc = e2e_config.resolve_call_for_fixture(
+            fixture.call.as_deref(),
+            &fixture.id,
+            &fixture.resolved_category(),
+            &fixture.tags,
+            &fixture.input,
+        );
+        if let Some(python_override) = cc.overrides.get("python")
+            && python_override.options_via.as_deref() == Some("from_json")
+            && let Some(options_type) = &python_override.options_type
+            && helpers::effective_options_via_for_type(
+                "from_json",
+                Some(options_type.as_str()),
+                type_defs,
+                convertible_types,
+                crate_has_serde,
+            ) == "from_json"
+        {
+            let native_module = python_override.from_json_module.as_deref().unwrap_or(module);
+            extra_from_json_imports.insert((native_module.to_string(), options_type.clone()));
+        }
+    }
+
+    let public_import_names = public_import_names(&import_names, &extra_from_json_imports);
+
     if let (true, Some(opts_type)) = (
         needs_options_type && (options_via == "kwargs" || options_via == "from_json"),
         options_type,
@@ -699,10 +726,10 @@ fn build_thirdparty_imports(
             // not the public module — it needs the native from_json() staticmethod. Exclude it
             // from the public import line so the class isn't imported from both modules (the
             // second import silently shadows the first). ~keep
-            let public_names: Vec<&str> = import_names
+            let public_names: Vec<&str> = public_import_names
                 .iter()
+                .copied()
                 .filter(|name| *name != opts_type)
-                .map(String::as_str)
                 .collect();
             if !public_names.is_empty() {
                 thirdparty_from.push(format!("from {module} import {}", public_names.join(", ")));
@@ -713,45 +740,31 @@ fn build_thirdparty_imports(
             if !import_names.contains(opts_type) {
                 import_names.push(opts_type.clone());
             }
-            thirdparty_from.push(format!("from {module} import {}", import_names.join(", ")));
+            let public_names = public_import_names(&import_names, &extra_from_json_imports);
+            if !public_names.is_empty() {
+                thirdparty_from.push(format!("from {module} import {}", public_names.join(", ")));
+            }
         }
-    } else {
-        thirdparty_from.push(format!("from {module} import {}", import_names.join(", ")));
+    } else if !public_import_names.is_empty() {
+        thirdparty_from.push(format!("from {module} import {}", public_import_names.join(", ")));
     }
 
-    // Also collect per-fixture options_type from per-call overrides that use from_json.
-    // This handles test files where different calls use different request types.
-    let mut extra_from_json_types: BTreeSet<String> = BTreeSet::new();
-    for fixture in fixtures.iter() {
-        let cc = e2e_config.resolve_call_for_fixture(
-            fixture.call.as_deref(),
-            &fixture.id,
-            &fixture.resolved_category(),
-            &fixture.tags,
-            &fixture.input,
-        );
-        if let Some(py_override) = cc.overrides.get("python")
-            && py_override.options_via.as_deref() == Some("from_json")
-            && let Some(opts_type) = &py_override.options_type
-            && helpers::effective_options_via_for_type(
-                "from_json",
-                Some(opts_type.as_str()),
-                type_defs,
-                convertible_types,
-                crate_has_serde,
-            ) == "from_json"
-        {
-            let native_mod = py_override.from_json_module.as_deref().unwrap_or(module);
-            extra_from_json_types.insert(format!("from {native_mod} import {opts_type}"));
-        }
-    }
-    for imp in extra_from_json_types {
+    for (native_module, options_type) in extra_from_json_imports {
+        let imp = format!("from {native_module} import {options_type}");
         if !thirdparty_from.contains(&imp) {
             thirdparty_from.push(imp);
         }
     }
 
     let _ = enum_fields;
+}
+
+fn public_import_names<'a>(import_names: &'a [String], native_imports: &BTreeSet<(String, String)>) -> Vec<&'a str> {
+    import_names
+        .iter()
+        .filter(|name| !native_imports.iter().any(|(_, native_type)| native_type == *name))
+        .map(String::as_str)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -797,6 +810,19 @@ mod tests {
         let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
         let out = render_test_file("basic", &fixtures, &e2e_config, &config, &type_defs, &enums, false);
         assert!(out.contains("E2e tests for category: basic"), "got: {out}");
+    }
+
+    #[test]
+    fn per_call_native_types_are_excluded_from_public_imports() {
+        let import_names = vec!["create_client".to_string(), "WidgetRequest".to_string()];
+        let native_imports = [("my_lib._internal_bindings".to_string(), "WidgetRequest".to_string())]
+            .into_iter()
+            .collect();
+
+        assert_eq!(
+            public_import_names(&import_names, &native_imports),
+            vec!["create_client"]
+        );
     }
 
     /// Direct coverage of the import-deduplication fix on `build_thirdparty_imports`'s
