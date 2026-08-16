@@ -42,6 +42,30 @@ pub fn validate_resolved(config: &ResolvedCrateConfig) -> Result<(), AlefError> 
         c.precondition.as_deref()
     })?;
     validate_section("clean", &config.clean, clean_main_fields, |c| c.precondition.as_deref())?;
+    validate_trait_bridges(config)?;
+    Ok(())
+}
+
+/// Reject a trait bridge that declares a registration function it cannot emit.
+///
+/// `registry_getter` is `Option` on the config struct, but the FFI backend's registration
+/// emitter needs it and `expect`s it — so a bridge with `register_fn` and no `registry_getter`
+/// passed validation, survived extraction, and panicked several stages later inside binding
+/// generation, naming an internal function rather than the config key at fault. Checking it here
+/// fails at load with the bridge named, before any file is written. ~keep
+fn validate_trait_bridges(config: &ResolvedCrateConfig) -> Result<(), AlefError> {
+    for bridge in &config.trait_bridges {
+        if bridge.register_fn.is_some() && bridge.registry_getter.is_none() {
+            return Err(AlefError::Config(format!(
+                "trait bridge `{}` sets `register_fn` but no `registry_getter`. The generated \
+                 registration function needs the registry accessor to install an implementation, \
+                 so this pair cannot be emitted. Add `registry_getter` to \
+                 `[[crates.trait_bridges]]` for `{}`, or drop `register_fn` if the bridge is not \
+                 meant to be registerable.",
+                bridge.trait_name, bridge.trait_name
+            )));
+        }
+    }
     Ok(())
 }
 
