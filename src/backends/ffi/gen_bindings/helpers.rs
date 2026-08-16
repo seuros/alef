@@ -2,6 +2,7 @@ use crate::backends::ffi::type_map::is_void_return;
 use crate::codegen::doc_emission::emit_c_doxygen;
 use crate::core::ir::{ApiSurface, TypeRef};
 use ahash::AHashSet;
+use heck::ToShoutySnakeCase;
 
 /// Render a `/** ... */` Doxygen block above a `typedef` line. `doc` is the
 /// raw rustdoc lifted from the upstream type's `///` comments; an empty `doc`
@@ -382,7 +383,12 @@ pub(super) fn gen_cbindgen_toml(
     capsule_types: &std::collections::HashMap<String, crate::core::config::FfiCapsuleTypeConfig>,
     exclude_types: &std::collections::BTreeSet<String>,
 ) -> String {
-    let prefix_upper = prefix.to_uppercase();
+    // The literal string written here becomes cbindgen's `[export] prefix`, which cbindgen then
+    // prepends verbatim to every exported type name. Shouty-snake is the idiomatic C symbol
+    // prefix (and is what `docs/naming.rs`'s Ffi/C arm independently predicts for the header),
+    // so this derivation -- not a bare uppercase -- is what actually belongs in cbindgen.toml.
+    // See the note on `type_name`'s Ffi/C arm in docs/naming.rs for the full history. ~keep
+    let prefix_upper = prefix.to_shouty_snake_case();
     let feature_defines = cbindgen_feature_defines(api, &prefix_upper);
 
     let capsule_used_as_opaque: std::collections::HashSet<&str> = api
@@ -549,7 +555,11 @@ pub(super) fn gen_build_rs(
     capsule_types: &std::collections::HashMap<String, crate::core::config::FfiCapsuleTypeConfig>,
 ) -> String {
     let capsule_header_fixup = {
-        let prefix_upper = prefix.to_uppercase();
+        // Must match `gen_cbindgen_toml`'s `prefix_upper` above -- this rewrites capsule
+        // pointee type names as they literally appear in the generated header text, so a
+        // different derivation here would silently stop matching for a prefix with an
+        // internal capital. ~keep
+        let prefix_upper = prefix.to_shouty_snake_case();
         let mut pairs: Vec<(String, String)> = capsule_types
             .values()
             .map(|c| (format!("{prefix_upper}{}", c.c_return_type), c.c_return_type.clone()))

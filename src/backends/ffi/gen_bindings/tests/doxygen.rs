@@ -396,6 +396,37 @@ fn test_build_rs_omits_capsule_fixup_when_no_capsule_types() {
     );
 }
 
+/// `ts_pack` (the only tree that configures capsule types today) is already
+/// underscored, so `to_uppercase()` and `to_shouty_snake_case()` agree on it and
+/// `test_build_rs_rewrites_prefixed_capsule_return_type` above cannot tell the two
+/// derivations apart. `SampleCore` carries an internal capital with no separator,
+/// where the two diverge (`SAMPLECORE` vs `SAMPLE_CORE`) -- this is what actually
+/// exercises the fix.
+#[test]
+fn test_build_rs_capsule_fixup_uses_shouty_snake_case_prefix() {
+    use crate::core::config::FfiCapsuleTypeConfig;
+    let mut capsule_types = std::collections::HashMap::new();
+    capsule_types.insert(
+        "Language".to_string(),
+        FfiCapsuleTypeConfig {
+            into_raw_type: "tree_sitter::ffi::TSLanguage".to_string(),
+            c_return_type: "TSLanguage".to_string(),
+            package: None,
+            package_version: None,
+        },
+    );
+    let build = super::super::helpers::gen_build_rs("sample.h", "libsample_ffi", None, "SampleCore", &capsule_types);
+    assert!(
+        build.contains(r#"header.replace("SAMPLE_CORETSLanguage", "TSLanguage")"#),
+        "build.rs must rewrite the shouty-snake-prefixed capsule pointee, matching the header cbindgen \
+         actually writes, back to the unprefixed prelude name:\n{build}"
+    );
+    assert!(
+        !build.contains("SAMPLECORETSLanguage"),
+        "build.rs must not fall back to a bare-uppercase prefix for the capsule fixup:\n{build}"
+    );
+}
+
 #[test]
 fn test_custom_prefix() {
     let api = sample_api();
@@ -422,4 +453,47 @@ header_name = "mylib.h"
 
     let build = files.iter().find(|f| f.path.ends_with("build.rs")).unwrap();
     assert!(build.content.contains("mylib.h"));
+}
+
+/// Every prefix configured across the actual consumer trees (`literllm`, `ts_pack`,
+/// `htm`, `cberg`, `xberg`) is lowercase, single-word, or already underscored, so
+/// `to_uppercase()` and `to_shouty_snake_case()` return identical strings for all of
+/// them -- a test built on any of those prefixes cannot distinguish the two
+/// derivations and would pass unchanged before and after the fix. `SampleCore`
+/// carries an internal capital with no separator, which is exactly where the two
+/// derivations diverge (`SAMPLECORE` vs `SAMPLE_CORE`); cbindgen's `[export] prefix`
+/// is applied verbatim to every exported type name, so this is what the real header
+/// says once written into cbindgen.toml.
+#[test]
+fn test_cbindgen_export_prefix_uses_shouty_snake_case_for_internal_capital() {
+    let api = sample_api();
+    let config = resolved_one(
+        r#"
+[workspace]
+languages = ["ffi"]
+
+[[crates]]
+name = "my-lib"
+sources = ["src/lib.rs"]
+
+[crates.ffi]
+prefix = "SampleCore"
+header_name = "sample.h"
+"#,
+    );
+    let backend = FfiBackend;
+
+    let files = backend.generate_bindings(&api, &config).unwrap();
+    let cbindgen = files.iter().find(|f| f.path.ends_with("cbindgen.toml")).unwrap();
+
+    assert!(
+        cbindgen.content.contains(r#"prefix = "SAMPLE_CORE""#),
+        "expected shouty-snake `[export] prefix`, got:\n{}",
+        cbindgen.content
+    );
+    assert!(
+        !cbindgen.content.contains("SAMPLECORE"),
+        "must not fall back to a bare-uppercase prefix, got:\n{}",
+        cbindgen.content
+    );
 }
