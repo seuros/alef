@@ -35,7 +35,6 @@ fn test_package_json_includes_node_options_memory_cap() {
     let pkg_json = render_package_json(
         "@test/wasm",
         "pkg",
-        false,
         "0.1.0",
         crate::e2e::config::DependencyMode::Local,
         None,
@@ -60,7 +59,6 @@ fn test_package_json_registry_release_uses_caret() {
     let pkg_json = render_package_json(
         "@test/wasm",
         "pkg",
-        false,
         "1.2.3",
         crate::e2e::config::DependencyMode::Registry,
         None,
@@ -72,11 +70,27 @@ fn test_package_json_registry_release_uses_caret() {
 }
 
 #[test]
+fn test_package_json_local_uses_flat_wasm_pack_output() {
+    let rendered = render_package_json(
+        "@example/sample-wasm",
+        "crates/sample-wasm/pkg",
+        "1.2.3",
+        crate::e2e::config::DependencyMode::Local,
+        None,
+    );
+
+    assert!(
+        rendered.contains("\"@example/sample-wasm\": \"file:crates/sample-wasm/pkg\""),
+        "local dependency must use wasm-pack's flat pkg directory: {rendered}"
+    );
+    assert!(!rendered.contains("pkg/nodejs"), "{rendered}");
+}
+
+#[test]
 fn test_package_json_registry_prerelease_uses_caret_semver() {
     let pkg_json = render_package_json(
         "@test/wasm",
         "pkg",
-        false,
         "3.6.0-rc.1",
         crate::e2e::config::DependencyMode::Registry,
         None,
@@ -95,7 +109,6 @@ fn test_package_json_registry_already_prefixed_passes_through() {
     let pkg_json = render_package_json(
         "@test/wasm",
         "pkg",
-        false,
         "^3.6.0-rc.1",
         crate::e2e::config::DependencyMode::Registry,
         None,
