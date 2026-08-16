@@ -158,7 +158,14 @@ internal static class Program {
     private static int Main() {
         var original = new RouteBuilder(new IntPtr(41));
         var replacement = original.WithCors();
-        if (original.Handle != IntPtr.Zero) return 1;
+        try
+        {
+            _ = original.Handle;
+            return 1;
+        }
+        catch (ObjectDisposedException)
+        {
+        }
         original.Dispose();
         if (FreeCount() != 0) return 2;
         replacement.Dispose();
@@ -239,6 +246,10 @@ fn csharp_invalidates_the_consumed_safe_handle_before_observing_result() {
     );
 }
 
+/// `RouteBuilder.Handle` routes through `GetHandle()` / `ThrowIfHandleUnavailable()`,
+/// which trips on `SafeHandle.IsInvalid`/`IsClosed`. A consumed handle is therefore
+/// unreachable via `ObjectDisposedException`, not a silent zero read; the probe below
+/// asserts the throw rather than an `IntPtr.Zero` comparison. ~keep
 #[test]
 fn csharp_consuming_wrapper_compiles_and_preserves_single_owner() {
     let files = CsharpBackend

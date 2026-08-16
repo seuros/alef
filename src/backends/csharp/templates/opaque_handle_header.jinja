@@ -30,6 +30,14 @@ internal sealed class {{ class_name }}SafeHandle : SafeHandle
 
     public override bool IsInvalid => handle == IntPtr.Zero;
 
+{% if has_consuming_methods %}
+    internal void Invalidate()
+    {
+        SetHandle(IntPtr.Zero);
+        SetHandleAsInvalid();
+    }
+
+{% endif %}
     protected override bool ReleaseHandle()
     {
         NativeMethods.{{ free_method }}(handle);
