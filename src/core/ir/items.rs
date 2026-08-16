@@ -142,6 +142,17 @@ pub struct FieldDef {
     /// flattened bag instead of being rejected.
     #[serde(default)]
     pub serde_flatten: bool,
+    /// Path from `#[serde(with = "...")]` / `#[serde(serialize_with = "...")]` on this field.
+    ///
+    /// Presence means the field's wire shape comes from a hand-written codec, **not** from
+    /// serde's derive. Backends that special-case a type's derived wire shape (e.g. Go's
+    /// `DurationMillis`, which encodes `std::time::Duration` as `{"secs":_,"nanos":_}`) must
+    /// consult this and fall back to the underlying scalar, because the derive shape is simply
+    /// wrong for such a field — the common `duration_ms` convention writes a bare millisecond
+    /// integer. Alef cannot know what an arbitrary codec emits, so it must stop asserting a
+    /// shape it did not derive.
+    #[serde(default)]
+    pub serde_with: Option<String>,
     /// True when source metadata explicitly excludes this field from generated
     /// polyglot binding surfaces.
     #[serde(default)]
@@ -646,6 +657,7 @@ mod tests {
             newtype_wrapper: _,          // wrap/unwrap newtype at the binding boundary
             serde_rename: _,             // wire-name parity with core serde
             serde_flatten: _,            // language-native flatten support (e.g. Jackson)
+            serde_with: _,               // suppresses derive-shape wire assumptions (e.g. Duration)
             binding_excluded: _,         // drops the field from the generated surface
             binding_exclusion_reason: _, // diagnostics only; deliberately not codegen input
             original_type: _,            // reconstructs pre-sanitize (de)serialization

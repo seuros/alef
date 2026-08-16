@@ -51,6 +51,7 @@ fn make_field(name: &str, ty: TypeRef) -> FieldDef {
         newtype_wrapper: None,
         serde_rename: None,
         serde_flatten: false,
+        serde_with: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         original_type: None,

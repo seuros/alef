@@ -350,6 +350,42 @@ pub(crate) fn extract_serde_flatten(attrs: &[syn::Attribute]) -> bool {
     })
 }
 
+/// Extract the codec path from `#[serde(with = "...")]` or `#[serde(serialize_with = "...")]`
+/// (also matching the `#[cfg_attr(..., serde(...))]` forms).
+///
+/// A field carrying either attribute is serialized by hand-written code, so serde's *derived*
+/// wire shape for its type no longer describes the bytes. Backends must consult this before
+/// imposing a derive-shape wrapper — see `FieldDef::serde_with`. `deserialize_with` alone is
+/// deliberately ignored: it changes only the read side, so the serialized shape is still the
+/// derived one. ~keep
+pub(crate) fn extract_serde_with(attrs: &[syn::Attribute]) -> Option<String> {
+    attrs.iter().find_map(|attr| {
+        let attr_str = quote::quote!(#attr).to_string();
+        if !attr_str.contains("serde") {
+            return None;
+        }
+        // Every probe rejects a match preceded by an identifier character, so the substring
+        // `deserialize_with = "..."` matches neither the `with` needles nor the
+        // `serialize_with` ones (both occur inside it). All occurrences are scanned, not just
+        // the first: `#[serde(deserialize_with = "b", serialize_with = "a")]` puts a rejected
+        // match ahead of the real one. ~keep
+        for needle in ["serialize_with =", "serialize_with=", "with =", "with="] {
+            for (pos, _) in attr_str.match_indices(needle) {
+                let before = attr_str[..pos].trim_end();
+                if before.chars().last().is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                    continue;
+                }
+                let after = attr_str[pos + needle.len()..].trim_start();
+                let Some(start) = after.find('"') else { continue };
+                let value = &after[start + 1..];
+                let Some(end) = value.find('"') else { continue };
+                return Some(value[..end].to_string());
+            }
+        }
+        None
+    })
+}
+
 /// Extract a `#[serde(rename = "...")]` value from a list of attributes (also
 /// matching `#[cfg_attr(..., serde(rename = "..."))]`).
 pub(crate) fn extract_serde_rename(attrs: &[syn::Attribute]) -> Option<String> {

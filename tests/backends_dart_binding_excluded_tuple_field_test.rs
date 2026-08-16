@@ -21,6 +21,7 @@ fn make_binding_excluded_field(name: &str, ty: TypeRef) -> FieldDef {
         newtype_wrapper: None,
         serde_rename: None,
         serde_flatten: false,
+        serde_with: None,
         binding_excluded: true,
         binding_exclusion_reason: Some("type does not support bindings".to_string()),
         original_type: None,

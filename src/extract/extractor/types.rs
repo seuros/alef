@@ -281,6 +281,7 @@ pub(crate) fn extract_error_enum(item: &syn::ItemEnum, crate_name: &str, module_
                                 newtype_wrapper: None,
                                 serde_rename: None,
                                 serde_flatten: false,
+                                serde_with: None,
                                 binding_excluded,
                                 binding_exclusion_reason,
                                 original_type: None,

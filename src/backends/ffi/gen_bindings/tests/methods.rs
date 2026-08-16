@@ -235,6 +235,7 @@ fn test_field_and_same_named_method_do_not_emit_duplicate_symbol() {
                 newtype_wrapper: None,
                 serde_rename: None,
                 serde_flatten: false,
+                serde_with: None,
                 original_type: None,
                 binding_excluded: false,
                 binding_exclusion_reason: None,

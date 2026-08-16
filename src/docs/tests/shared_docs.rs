@@ -207,6 +207,7 @@ fn test_generate_configuration_doc_renders_referenced_enums_only() {
                 newtype_wrapper: None,
                 serde_rename: None,
                 serde_flatten: false,
+                serde_with: None,
                 binding_excluded: false,
                 binding_exclusion_reason: None,
                 original_type: None,

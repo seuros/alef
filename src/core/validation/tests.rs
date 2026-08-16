@@ -47,6 +47,7 @@ fn field_def(name: &str, ty: TypeRef) -> FieldDef {
         newtype_wrapper: None,
         serde_rename: None,
         serde_flatten: false,
+        serde_with: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
     }
@@ -98,6 +99,7 @@ fn api_surface_validation_reports_lossy_sanitized_fields() {
                 newtype_wrapper: None,
                 serde_rename: None,
                 serde_flatten: false,
+                serde_with: None,
                 binding_excluded: false,
                 binding_exclusion_reason: None,
             }],

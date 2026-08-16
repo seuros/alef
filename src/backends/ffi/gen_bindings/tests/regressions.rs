@@ -1297,6 +1297,7 @@ fn test_optional_bytes_field_accessor_emits_out_len_and_length_writes() {
         newtype_wrapper: None,
         serde_rename: None,
         serde_flatten: false,
+        serde_with: None,
         original_type: None,
         binding_excluded: false,
         binding_exclusion_reason: None,

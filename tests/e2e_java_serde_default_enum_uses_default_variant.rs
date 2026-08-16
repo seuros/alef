@@ -97,6 +97,7 @@ fn java_builder_uses_correct_default_variant_for_serde_default_enum_field() {
             newtype_wrapper: None,
             serde_rename: None,
             serde_flatten: false,
+            serde_with: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             original_type: None,

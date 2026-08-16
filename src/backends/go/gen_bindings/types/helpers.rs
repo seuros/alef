@@ -68,10 +68,11 @@ pub(in crate::backends::go::gen_bindings) fn gen_unmarshal_bytes_helper() -> Str
 /// methods (see `duration_millis_type.jinja`).
 ///
 /// Emitted exactly once per generated `binding.go`, only when the API surface has at
-/// least one `Duration`-typed struct field (see `binding_file::api_has_duration_field`).
-/// Struct fields use this type (via `type_map::go_struct_field_type`) instead of a bare
-/// `uint64` because `std::time::Duration`'s serde shape is `{"secs":u64,"nanos":u32}`,
-/// not a plain integer.
+/// least one `Duration`-typed struct field that resolves to this type (see
+/// `binding_file::api_has_duration_field`). Struct fields select it via
+/// `type_map::go_field_type` instead of a bare `uint64` because `std::time::Duration`'s
+/// *derived* serde shape is `{"secs":u64,"nanos":u32}`, not a plain integer — a field
+/// carrying `#[serde(with = "...")]` overrides that derive and keeps the bare `uint64`.
 pub(in crate::backends::go::gen_bindings) fn gen_duration_millis_helper() -> String {
     crate::backends::go::template_env::render("duration_millis_type.jinja", minijinja::Value::default())
 }

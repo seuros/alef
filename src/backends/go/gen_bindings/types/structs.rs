@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use heck::ToSnakeCase;
 use minijinja::context;
 
-use crate::backends::go::type_map::{go_optional_struct_field_type, go_struct_field_type, go_type};
+use crate::backends::go::type_map::{go_field_type, go_optional_field_type, go_type};
 use crate::codegen::naming::{go_type_name, to_go_name, wire_field_name};
 use crate::codegen::shared::binding_fields;
 use crate::core::config::{BridgeBinding, TraitBridgeConfig};
@@ -127,11 +127,11 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
         } else if is_sealed_interface {
             go_type(&field.ty)
         } else if field.optional {
-            go_optional_struct_field_type(&field.ty)
+            go_optional_field_type(field)
         } else if use_default_pointer {
-            go_optional_struct_field_type(&field.ty)
+            go_optional_field_type(field)
         } else {
-            go_struct_field_type(&field.ty)
+            go_field_type(field)
         };
 
         // Per-field `#[serde(rename = "...")]` wins over `rename_all`.
@@ -213,9 +213,9 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
             let go_field_type: String = if matches!(&field.ty, TypeRef::Bytes) {
                 "[]int".to_string()
             } else if field.optional || use_default_pointer {
-                go_optional_struct_field_type(&field.ty).to_string()
+                go_optional_field_type(field).to_string()
             } else {
-                go_struct_field_type(&field.ty).to_string()
+                go_field_type(field).to_string()
             };
             out.push_str(&crate::backends::go::template_env::render(
                 "struct_marshal_aux_field.jinja",
@@ -351,9 +351,9 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
                     && matches!(&field.ty, TypeRef::Named(n) if enum_names.contains(n.as_str()));
                 let is_collection = matches!(&field.ty, TypeRef::Vec(_) | TypeRef::Map(_, _));
                 let field_type = if field.optional || use_default_pointer {
-                    go_optional_struct_field_type(&field.ty)
+                    go_optional_field_type(field)
                 } else {
-                    go_struct_field_type(&field.ty)
+                    go_field_type(field)
                 };
                 let json_tag = if field.optional || is_collection || use_default_pointer || is_named_enum {
                     format!("json:\"{json_name},omitempty\"")

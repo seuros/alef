@@ -83,6 +83,7 @@ fn test_generate_docs_typescript_optional_field_emits_consistent_table_cells() {
                 newtype_wrapper: None,
                 serde_rename: None,
                 serde_flatten: false,
+                serde_with: None,
                 binding_excluded: false,
                 binding_exclusion_reason: None,
                 original_type: None,

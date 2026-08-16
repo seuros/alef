@@ -254,6 +254,7 @@ fn test_gen_constructor_more_than_7_fields_gets_clippy_allow() {
             newtype_wrapper: None,
             serde_rename: None,
             serde_flatten: false,
+            serde_with: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             original_type: None,

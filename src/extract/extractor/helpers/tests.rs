@@ -1,6 +1,6 @@
 use super::attributes::{
-    extract_alef_error_code, extract_alef_since, extract_deprecation, extract_serde_rename_all, has_derive,
-    has_derive_path,
+    extract_alef_error_code, extract_alef_since, extract_deprecation, extract_serde_rename_all, extract_serde_with,
+    has_derive, has_derive_path,
 };
 use super::normalize_rustdoc;
 
@@ -364,4 +364,60 @@ fn test_extract_deprecation_since_strips_leading_v_prefix() {
 fn test_extract_alef_since_absent_returns_none() {
     let attrs = parse_attrs("#[alef(skip)]");
     assert!(extract_alef_since(&attrs).is_none());
+}
+
+// --- extract_serde_with ---
+
+#[test]
+fn serde_with_captures_the_codec_module_path() {
+    let attrs = parse_attrs(r#"#[serde(with = "duration_ms")]"#);
+    assert_eq!(extract_serde_with(&attrs).as_deref(), Some("duration_ms"));
+}
+
+#[test]
+fn serde_with_captures_the_path_when_preceded_by_another_key() {
+    let attrs = parse_attrs(r#"#[serde(default, with = "option_duration_ms")]"#);
+    assert_eq!(extract_serde_with(&attrs).as_deref(), Some("option_duration_ms"));
+}
+
+#[test]
+fn serde_with_captures_serialize_with() {
+    let attrs = parse_attrs(r#"#[serde(serialize_with = "ordered_map")]"#);
+    assert_eq!(extract_serde_with(&attrs).as_deref(), Some("ordered_map"));
+}
+
+#[test]
+fn serde_with_ignores_a_lone_deserialize_with() {
+    let attrs = parse_attrs(r#"#[serde(deserialize_with = "lenient_u64")]"#);
+    assert_eq!(
+        extract_serde_with(&attrs),
+        None,
+        "deserialize_with changes only the read side, so the serialized shape is still derived"
+    );
+}
+
+#[test]
+fn serde_with_finds_serialize_with_listed_after_deserialize_with() {
+    // `deserialize_with = "..."` contains `serialize_with = "..."` as a substring, so the
+    // rejected match sits ahead of the real one — scanning only the first hit loses it. ~keep
+    let attrs = parse_attrs(r#"#[serde(deserialize_with = "read_ms", serialize_with = "write_ms")]"#);
+    assert_eq!(extract_serde_with(&attrs).as_deref(), Some("write_ms"));
+}
+
+#[test]
+fn serde_with_reads_through_cfg_attr() {
+    let attrs = parse_attrs(r#"#[cfg_attr(feature = "serde", serde(with = "duration_ms"))]"#);
+    assert_eq!(extract_serde_with(&attrs).as_deref(), Some("duration_ms"));
+}
+
+#[test]
+fn serde_with_absent_returns_none() {
+    let attrs = parse_attrs(r#"#[serde(rename = "type")]"#);
+    assert!(extract_serde_with(&attrs).is_none());
+}
+
+#[test]
+fn serde_with_ignores_a_non_serde_attribute() {
+    let attrs = parse_attrs("#[alef(skip)]");
+    assert!(extract_serde_with(&attrs).is_none());
 }

@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use crate::codegen::naming::go_type_name;
 use crate::codegen::type_mapper::TypeMapper;
-use crate::core::ir::{PrimitiveType, TypeRef};
+use crate::core::ir::{FieldDef, PrimitiveType, TypeRef};
 
 /// TypeMapper for Go bindings.
 ///
@@ -82,7 +82,7 @@ impl TypeMapper for GoMapper {
 }
 
 /// Exported Go identifier for the millisecond-based `Duration` wire type (see
-/// `duration_millis_type.jinja`). `std::time::Duration`'s serde representation is
+/// `duration_millis_type.jinja`). The shape serde *derives* for `std::time::Duration` is
 /// `{"secs":u64,"nanos":u32}`, not a plain number, so a struct field serialized through
 /// `encoding/json` against the real Rust wire shape cannot be a bare `uint64`/`*uint64` —
 /// see [`go_struct_field_type`]. Scalar function/method parameters are unaffected: those
@@ -111,6 +111,33 @@ pub fn go_optional_struct_field_type(ty: &TypeRef) -> Cow<'static, str> {
         Cow::Owned(format!("*{GO_DURATION_MILLIS_TYPE}"))
     } else {
         go_optional_type(ty)
+    }
+}
+
+/// Field-aware form of [`go_struct_field_type`]: emitters must call this, not the type-only
+/// function, for anything carrying a `json:"..."` tag.
+///
+/// [`go_struct_field_type`] rewrites `Duration` to [`GO_DURATION_MILLIS_TYPE`] on the premise
+/// that the field's bytes are whatever serde *derives*. A field with `#[serde(with = "...")]`
+/// or `serialize_with` breaks that premise — the widespread `duration_ms` convention writes a
+/// bare millisecond integer, so imposing the `{"secs","nanos"}` object would make every Go-side
+/// construction fail Rust deserialization with `invalid type: map, expected u64`. Alef cannot
+/// know what an arbitrary codec emits, so it declines to wrap and leaves the underlying scalar
+/// (`uint64`), which is both the pre-existing behavior and correct for that convention. ~keep
+pub fn go_field_type(field: &FieldDef) -> Cow<'static, str> {
+    if field.serde_with.is_some() {
+        go_type(&field.ty)
+    } else {
+        go_struct_field_type(&field.ty)
+    }
+}
+
+/// Optional/pointer counterpart of [`go_field_type`].
+pub fn go_optional_field_type(field: &FieldDef) -> Cow<'static, str> {
+    if field.serde_with.is_some() {
+        go_optional_type(&field.ty)
+    } else {
+        go_optional_struct_field_type(&field.ty)
     }
 }
 
@@ -317,5 +344,65 @@ mod tests {
         // Scalar FFI parameters must keep the bare `uint64` mapping — only struct fields
         // (via `go_struct_field_type`) switch to the wire-safe `DurationMillis` type. ~keep
         assert_eq!(GoMapper.map_type(&TypeRef::Duration), "uint64");
+    }
+
+    fn duration_field(serde_with: Option<&str>) -> FieldDef {
+        FieldDef {
+            name: "timeout".to_string(),
+            ty: TypeRef::Duration,
+            serde_with: serde_with.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn duration_field_without_serde_with_keeps_the_derived_object_shape() {
+        assert_eq!(
+            go_field_type(&duration_field(None)),
+            "DurationMillis",
+            "a plain Duration field is serialized by serde's derive, so it must round-trip \
+             the {{\"secs\",\"nanos\"}} object shape"
+        );
+    }
+
+    #[test]
+    fn duration_field_with_serde_with_falls_back_to_a_bare_integer() {
+        assert_eq!(
+            go_field_type(&duration_field(Some("duration_ms"))),
+            "uint64",
+            "`#[serde(with = \"duration_ms\")]` writes a bare millisecond integer; emitting \
+             DurationMillis would send an object and fail Rust deserialization with \
+             `invalid type: map, expected u64`"
+        );
+    }
+
+    #[test]
+    fn optional_duration_field_without_serde_with_keeps_the_derived_object_shape() {
+        assert_eq!(go_optional_field_type(&duration_field(None)), "*DurationMillis");
+    }
+
+    #[test]
+    fn optional_duration_field_with_serde_with_falls_back_to_a_bare_integer() {
+        assert_eq!(
+            go_optional_field_type(&duration_field(Some("option_duration_ms"))),
+            "*uint64",
+            "the optional path must honor the custom codec exactly like the required path"
+        );
+    }
+
+    #[test]
+    fn serde_with_on_a_non_duration_field_changes_nothing() {
+        let field = FieldDef {
+            name: "label".to_string(),
+            ty: TypeRef::String,
+            serde_with: Some("custom".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            go_field_type(&field),
+            go_type(&TypeRef::String),
+            "serde_with only suppresses the Duration derive-shape wrapper; no other type is \
+             special-cased, so the mapping must be untouched"
+        );
     }
 }

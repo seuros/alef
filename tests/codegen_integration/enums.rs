@@ -37,6 +37,7 @@ fn test_enum_has_data_variants_true_when_fields_present() {
                 newtype_wrapper: None,
                 serde_rename: None,
                 serde_flatten: false,
+                serde_with: None,
                 binding_excluded: false,
                 binding_exclusion_reason: None,
                 original_type: None,

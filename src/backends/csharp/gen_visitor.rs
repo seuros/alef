@@ -661,6 +661,7 @@ mod tests {
             newtype_wrapper: None,
             serde_rename: serde_rename.map(str::to_string),
             serde_flatten: false,
+            serde_with: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             original_type: None,

@@ -98,14 +98,20 @@ fn uses_ffi_enum_type(
     })
 }
 
-/// True if any non-opaque type in `api` has a `Duration`-typed struct field.
+/// True if any non-opaque type in `api` has a `Duration`-typed struct field that is actually
+/// emitted as `DurationMillis`.
 ///
 /// Decides whether the generated file needs the package-level `DurationMillis` wire
 /// helper (see [`gen_duration_millis_helper`]) and, in turn, the `encoding/json` import
 /// it depends on.
+///
+/// The `serde_with` test must stay in lockstep with `type_map::go_field_type`: a field with a
+/// hand-written codec keeps the bare `uint64`, so counting it here would emit a `DurationMillis`
+/// no field references — and with it an `encoding/json` import Go rejects as unused. ~keep
 fn api_has_duration_field(api: &ApiSurface) -> bool {
     api.types.iter().filter(|typ| !typ.is_opaque).any(|typ| {
-        crate::codegen::shared::binding_fields(&typ.fields).any(|field| matches!(field.ty, TypeRef::Duration))
+        crate::codegen::shared::binding_fields(&typ.fields)
+            .any(|field| matches!(field.ty, TypeRef::Duration) && field.serde_with.is_none())
     })
 }
 
