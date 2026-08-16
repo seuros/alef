@@ -408,7 +408,7 @@ pub fn write_scaffold_files_report(
             .context("failed to migrate pre-existing packages/swift/Tests/*Tests.swift placeholder")?;
     }
 
-    report.log_ownership_residue("scaffold");
+    super::write::report_refused_writes(&report);
     Ok(report)
 }
 

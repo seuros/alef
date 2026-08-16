@@ -12,13 +12,22 @@ use tracing::{debug, warn};
 pub struct WriteReport {
     pub expected_paths: std::collections::HashSet<std::path::PathBuf>,
     pub changed_paths: std::collections::HashSet<std::path::PathBuf>,
-    /// Pre-existing files the ownership guard refused to write.
+    /// Paths the ownership guard declined to write.
     ///
-    /// The population that was silently at risk before the guard existed and that
-    /// alef still cannot prove it owns. It has to be visible rather than inferred
-    /// from what did not change, because the remedy — `alef adopt` — is a human
-    /// action and a human cannot act on a number nobody reports. ~keep
-    pub refused_paths: std::collections::HashSet<std::path::PathBuf>,
+    /// Recorded rather than only logged, because a refusal is otherwise invisible to every
+    /// downstream signal: the guard `continue`s before the path reaches `expected_paths`, so
+    /// orphan sweeps, freshness checks and the changed count all behave as though alef never
+    /// intended to write the file. A permanently frozen file is then indistinguishable from
+    /// one alef simply does not manage.
+    ///
+    /// Unlike an ordinary skip the condition never clears on its own, and the remedy —
+    /// `alef adopt` — is a human action. A human cannot act on a number nobody reports, so
+    /// this has to be visible rather than inferred from what did not change.
+    ///
+    /// A `BTreeSet` rather than a `Vec`: the same path can be refused by more than one guard
+    /// site in a run, and the report is read by a person, so it must not repeat itself or
+    /// reorder between runs. ~keep
+    pub refused_paths: std::collections::BTreeSet<std::path::PathBuf>,
 }
 
 impl WriteReport {
@@ -34,29 +43,32 @@ impl WriteReport {
         self.refused_paths.len()
     }
 
-    /// Emit the ownership residue for one write pass: the files alef intended to
-    /// write and declined to, plus the command that resolves them.
-    ///
-    /// `WARN`, not `INFO`, per the level contract: the run continued but produced
-    /// less than it intended, and every refused path is a fix that never reached
-    /// the consumer tree. Silent when there is no residue, so a converged tree
-    /// stays quiet. Naming `alef adopt` here is the point of the message — a bare
-    /// refusal count is the "warning nobody reads during a regen" this guard was
-    /// criticised for; an actionable one is not. ~keep
-    pub fn log_ownership_residue(&self, scope: &str) {
-        if self.refused_paths.is_empty() {
-            return;
-        }
-        tracing::warn!(
-            scope,
-            refused = self.refused_count(),
-            "{} pre-existing file(s) left untouched: alef cannot prove it owns them. \
-             Review and adopt each with `alef adopt <path>`",
-            self.refused_count()
-        );
-        for path in &self.refused_paths {
-            tracing::debug!(scope, path = %path.display(), "left unmarked: ownership unproven");
-        }
+}
+
+/// Surface every write the ownership guard declined, naming the remedy.
+///
+/// The guard is self-perpetuating by construction: it refuses because the file carries no
+/// marker, and the marker can only arrive by writing the file. No later run breaks that
+/// cycle, so a per-file `warn!` mid-run understates the situation — the condition is
+/// permanent rather than transient, and only an operator can clear it. One consolidated
+/// block naming the fix is the difference between a log line and an actionable report. ~keep
+pub fn report_refused_writes(report: &WriteReport) {
+    if report.refused_paths.is_empty() {
+        return;
+    }
+    let mut paths: Vec<&std::path::PathBuf> = report.refused_paths.iter().collect();
+    paths.sort();
+    warn!(
+        "{} file(s) were NOT written: each already exists, carries no alef provenance marker, and \
+         alef has no durable record of owning it. This will not resolve on its own — the marker can \
+         only be written by writing the file, which is exactly what the guard declines. Review the \
+         diff for each and adopt the ones alef should own with `alef adopt <path>`. Do NOT hand-add \
+         the marker line: a refusal can be protecting a deliberate hand-edit, and stamping it blind \
+         re-enables exactly the clobbering the guard exists to prevent.",
+        paths.len()
+    );
+    for path in paths {
+        warn!("  not written: {}", path.display());
     }
 }
 
@@ -435,7 +447,13 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
     }
 
     let changed_paths = std::sync::Mutex::new(std::collections::HashSet::new());
-    let refused_paths = std::sync::Mutex::new(std::collections::HashSet::new());
+    let refused_paths = std::sync::Mutex::new(std::collections::BTreeSet::new());
+    let refuse = |path: &Path| {
+        refused_paths
+            .lock()
+            .expect("refused-path mutex poisoned")
+            .insert(path.to_path_buf());
+    };
     prepared
         .par_iter()
         .try_for_each(|(full_path, (content, is_text))| -> anyhow::Result<()> {
@@ -449,10 +467,7 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
                              leaving it untouched",
                             full_path.display()
                         );
-                        refused_paths
-                            .lock()
-                            .expect("refused-path mutex poisoned")
-                            .insert(full_path.clone());
+                        refuse(full_path);
                         return Ok(());
                     };
                     let existing_body = crate::core::hash::strip_hash_line(&existing);
@@ -479,10 +494,7 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
                              alef has no durable record of ever owning it -- leaving it untouched",
                             full_path.display()
                         );
-                        refused_paths
-                            .lock()
-                            .expect("refused-path mutex poisoned")
-                            .insert(full_path.clone());
+                        refuse(full_path);
                         return Ok(());
                     }
                 }
@@ -505,10 +517,7 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
                              alef ownership -- leaving it untouched",
                             full_path.display()
                         );
-                        refused_paths
-                            .lock()
-                            .expect("refused-path mutex poisoned")
-                            .insert(full_path.clone());
+                        refuse(full_path);
                         return Ok(());
                     }
                 }
@@ -523,13 +532,11 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
             Ok(())
         })?;
 
-    let report = WriteReport {
+    Ok(WriteReport {
         expected_paths: prepared.into_keys().collect(),
         changed_paths: changed_paths.into_inner().expect("changed-path mutex poisoned"),
         refused_paths: refused_paths.into_inner().expect("refused-path mutex poisoned"),
-    };
-    report.log_ownership_residue("bindings");
-    Ok(report)
+    })
 }
 
 /// Inject the per-file `alef:hash:` line into every alef-headered file in

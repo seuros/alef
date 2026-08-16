@@ -623,6 +623,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let sources_hash = cache::sources_hash(&resolved_cfg.sources)?;
                 let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
                 let report = pipeline::write_scaffold_files_report(&files, &base_dir, true)?;
+                pipeline::report_refused_writes(&report);
                 docs_result?;
                 let count = report.changed_count();
                 let output_paths: Vec<PathBuf> = files

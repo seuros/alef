@@ -208,6 +208,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let sources_hash = cache::sources_hash(&e2e_crate.sources)?;
                         let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
                         let report = pipeline::write_scaffold_files_report(&files, &base_dir, true)?;
+                        pipeline::report_refused_writes(&report);
                         let count = report.expected_count();
                         let managed_files = pipeline::managed_generated_files(&files);
 
@@ -423,6 +424,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let sources_hash = cache::sources_hash(&e2e_crate.sources)?;
                         let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
                         let report = pipeline::write_scaffold_files_report(&files, &base_dir, true)?;
+                        pipeline::report_refused_writes(&report);
                         let count = report.changed_count();
                         let managed_files: Vec<_> = files
                             .iter()

@@ -1267,7 +1267,7 @@ mod scaffold_ownership_guard_tests {
     }
 
     /// The refusal has to be *reported*, not merely performed. `refused_paths` is what
-    /// `log_ownership_residue` turns into an actionable "run `alef adopt <path>`" line;
+    /// `report_refused_writes` turns into an actionable "run `alef adopt <path>`" line;
     /// a guard that silently declines is the frozen-file failure mode that made a
     /// permanently-refused `Cargo.toml` invisible in a real consumer tree. ~keep
     #[test]
@@ -1764,6 +1764,41 @@ mod generated_header_tests {
             "a path with no alef marker must survive a generated_header: true binding write untouched"
         );
         assert_eq!(report.changed_count(), 0, "a refused write must not count as a change");
+        assert_eq!(
+            report.refused_paths,
+            std::collections::BTreeSet::from([dir.path().join("Example.java")]),
+            "a refused write must be recorded so it can be surfaced -- the guard returns before the \
+             path reaches expected_paths, so otherwise the refusal is invisible to every caller"
+        );
+    }
+
+    /// The other half of the predicate. Without this, the assertion above would still pass if
+    /// every write were recorded as refused -- which would make the report useless in the
+    /// direction that matters, reporting a freeze that is not happening. ~keep
+    #[test]
+    fn write_files_report_records_no_refusal_when_the_write_is_authorised() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let files = vec![(
+            crate::core::config::Language::Java,
+            vec![GeneratedFile {
+                path: "Fresh.java".into(),
+                content: "package example;\n\npublic final class Fresh {}\n".into(),
+                generated_header: true,
+            }],
+        )];
+
+        let report = write_files_report(&files, dir.path()).expect("write ok");
+
+        assert!(
+            report.refused_paths.is_empty(),
+            "writing a path that does not yet exist is never a refusal, got {:?}",
+            report.refused_paths
+        );
+        assert_eq!(
+            report.changed_count(),
+            1,
+            "the authorised write must still count as a change"
+        );
     }
 
     /// Counterpart: once a binding file already carries the marker (alef legitimately
