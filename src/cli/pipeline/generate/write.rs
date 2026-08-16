@@ -61,9 +61,12 @@ pub fn report_refused_writes(report: &WriteReport) {
         "{} file(s) were NOT written: each already exists, carries no alef provenance marker, and \
          alef has no durable record of owning it. This will not resolve on its own — the marker can \
          only be written by writing the file, which is exactly what the guard declines. Review the \
-         diff for each and adopt the ones alef should own with `alef adopt <path>`. Do NOT hand-add \
-         the marker line: a refusal can be protecting a deliberate hand-edit, and stamping it blind \
-         re-enables exactly the clobbering the guard exists to prevent.",
+         diff for each and adopt the ones alef should own with `alef adopt <path>`. If these are \
+         formats that cannot carry a marker (package.json, *.jar) and this is a fresh clone or a CI \
+         checkout, check whether .alef-ownership.toml was committed — that file is where their \
+         ownership is recorded. Do NOT hand-add the marker line: a refusal can be protecting a \
+         deliberate hand-edit, and stamping it blind re-enables exactly the clobbering the guard \
+         exists to prevent.",
         paths.len()
     );
     for path in paths {
@@ -166,10 +169,13 @@ pub(super) enum MarkerSyntax {
 ///
 /// Widening this side is safe in a way widening the ownership side is not: a
 /// header is only ever added on a write the guard has already authorised, so no
-/// file can be frozen by it. It is also the *only* durable fix for the
-/// `.alef/`-record fallback (alef #80), since a marker committed to git proves
-/// ownership identically on a fresh clone and a warm dev machine, whereas the
-/// gitignored record does not.
+/// file can be frozen by it. It is also the *preferred* fix for the record
+/// fallback (alef #80): a marker lives in the file it describes and cannot be
+/// separated from it, whereas a separate record can be deleted, moved or
+/// gitignored away from the artifact it covers. Every format that can hold a
+/// marker should end up here; only the ones that genuinely cannot (`.json`,
+/// `.jar`) fall back to `cache::OWNERSHIP_MANIFEST`, which is committed for the
+/// same reason — so a fresh clone and a warm dev machine agree.
 ///
 /// Per-format basis, verified against each format's own grammar rather than
 /// assumed from the extension:
@@ -388,9 +394,9 @@ pub fn write_files(files: &[(Language, Vec<GeneratedFile>)], base_dir: &Path) ->
 ///   must already carry the `alef:hash:` marker.
 /// - **Unmarkable** (`.pyi` type stubs, `.cmake` config, ...): proven instead
 ///   by [`crate::cli::cache::is_scaffold_owned_path`], the same `base_dir`-scoped
-///   local record `write_scaffold_files_report` populates and consults — no
-///   crate name needed for either writer, since the record is keyed on the
-///   full output path.
+///   committed record (`.alef-ownership.toml`) `write_scaffold_files_report`
+///   populates and consults — no crate name needed for either writer, since the
+///   record is keyed on the full output path.
 ///
 /// This was previously left unguarded for unmarkable extensions specifically
 /// because no incident had been observed for this writer's output; that
@@ -403,7 +409,7 @@ pub fn write_files(files: &[(Language, Vec<GeneratedFile>)], base_dir: &Path) ->
 /// change, so `frb_generated.rs`-style output that legitimately differs on
 /// every run (new API surface, a bumped dependency) keeps regenerating
 /// exactly as before, provided it already carries the marker (markable) or a
-/// local record (unmarkable) from the run that first wrote it. ~keep
+/// committed record (unmarkable) from the run that first wrote it. ~keep
 pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &Path) -> anyhow::Result<WriteReport> {
     let mut prepared = std::collections::BTreeMap::<std::path::PathBuf, (Vec<u8>, bool)>::new();
     for file in files.iter().flat_map(|(_, lang_files)| lang_files.iter()) {
@@ -481,9 +487,16 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
                     if existing_body == normalized_body {
                         apply_shebang_chmod(full_path, normalized)?;
                         debug!("  unchanged: {}", full_path.display());
-                        if !is_markable {
-                            crate::cli::cache::record_scaffold_owned_path(base_dir, full_path)?;
-                        }
+                        // Deliberately records nothing. Reaching here proves only that the
+                        // bytes coincide with this run's output, which is not evidence of
+                        // authorship — crawlberg's hand-written `e2e/go/helpers_test.go` was
+                        // byte-identical to alef's, and minting a claim from that is the
+                        // `bootstrap_owned` predicate `stamp_for_adoption`'s doc removed,
+                        // relocated into the record. Now that the record is committed
+                        // (`cache::OWNERSHIP_MANIFEST`) the claim would also be permanent and
+                        // shared, so a coincidence on one developer's disk would freeze into
+                        // ownership for everyone. A file alef genuinely wrote was recorded by
+                        // the authorised-write branch below on the run that created it. ~keep
                         return Ok(());
                     }
                     // Checked unconditionally, not only for markable extensions: content
@@ -514,7 +527,10 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
                     let existing_binary = std::fs::read(full_path).ok();
                     if existing_binary.as_deref() == Some(content.as_slice()) {
                         debug!("  unchanged: {}", full_path.display());
-                        crate::cli::cache::record_scaffold_owned_path(base_dir, full_path)?;
+                        // Records nothing, for the same reason as the text branch above: a
+                        // pre-existing binary that happens to match is not proof alef put it
+                        // there, and a binary target has no marker route to correct the
+                        // mistake later. ~keep
                         return Ok(());
                     }
                     if existing_binary.is_some() && !crate::cli::cache::is_scaffold_owned_path(base_dir, full_path) {

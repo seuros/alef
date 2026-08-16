@@ -121,6 +121,19 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 );
             } else {
                 tracing::info!("Adopted {} file(s)", report.adopted.len());
+                if !report.recorded_unstampable.is_empty() {
+                    // These adoptions changed no bytes in the files themselves — the whole
+                    // consent lives in `.alef-ownership.toml`. Leave it uncommitted and the
+                    // human read the diff for nothing: every other checkout, CI included,
+                    // still refuses these paths. Naming the file is the difference between
+                    // an adoption and an adoption that took effect. ~keep
+                    tracing::info!(
+                        "{} of these carry no marker syntax; their ownership is recorded in \
+                         .alef-ownership.toml. Commit that file or the adoption applies only to \
+                         this working copy.",
+                        report.recorded_unstampable.len()
+                    );
+                }
             }
             Ok(None)
         }

@@ -150,15 +150,17 @@ pub fn write_scaffold_files_with_overwrite(
 ///    marker and the extension genuinely cannot carry one
 ///    ([`super::write::marker_comment_style`] is `None` — `.json`, `.xml`, `.m4`, `.gradle`,
 ///    extensionless, ...), authorship falls back to [`crate::cli::cache::is_scaffold_owned_path`],
-///    a durable local record (`<base_dir>/.alef/scaffold-owned-paths.manifest`) that this
-///    write path itself populates via [`crate::cli::cache::record_scaffold_owned_path`] the
-///    first time it creates or confirms a path. `.alef/` is gitignored and machine-local, so
-///    a fresh clone or a cache-less CI job has no record for a path it has not personally
-///    written in this working copy yet — the guard degrades safely there (refuse rather than
-///    clobber) for both a warm dev machine and CI alike, since neither gets special-cased;
-///    only actually having produced the file locally does. This route is not dead weight for
+///    the committed record at `<base_dir>/.alef-ownership.toml` that this write path populates
+///    via [`crate::cli::cache::record_scaffold_owned_path`] the first time it *creates* a path.
+///    Committed rather than kept under `.alef/`, which alef writes into every consumer's
+///    `.gitignore` itself (`cli::pipeline::extract::gitignore::ensure_gitignore`): while the
+///    record was gitignored, a fresh clone and a warm dev machine gave different answers for
+///    the same commit, so CI refused writes a developer's machine permitted (alef #80). It is
+///    populated on creation and on an authorised rewrite only — never from a converged file,
+///    since byte-equality with generated output is not evidence of authorship and a committed
+///    record would spread that mistake to every clone. This route is not dead weight for
 ///    extensions that self-mark (docs pages, README) but it is the *only* protection for ones
-///    that don't and never will (`pom.xml` and friends — see
+///    that don't and never will (`package.json`, `.jar` — see
 ///    [`crate::cli::cache::scaffold_owned_path_key`]'s doc for a real bug in this record that
 ///    made it read as inert across ordinary multi-command sequences, now fixed).
 ///
@@ -224,7 +226,9 @@ pub fn write_scaffold_files_report(
             let existing_binary = std::fs::read(&full_path).ok();
             if existing_binary.as_deref() == Some(binary_content.as_slice()) {
                 debug!("  unchanged: {}", full_path.display());
-                crate::cli::cache::record_scaffold_owned_path(base_dir, &full_path)?;
+                // Records nothing: a pre-existing `.jar` that happens to match is not proof
+                // alef put it there, and the record is now committed, so the mistaken claim
+                // would travel to every clone. See the text branch below. ~keep
                 continue;
             }
             if existing_binary.is_some() && !crate::cli::cache::is_scaffold_owned_path(base_dir, &full_path) {
@@ -283,9 +287,15 @@ pub fn write_scaffold_files_report(
             if is_unchanged {
                 apply_shebang_chmod(&full_path, &normalized)?;
                 debug!("  unchanged: {}", full_path.display());
-                if !is_poly_merge_target && super::write::marker_comment_style(&full_path).is_none() {
-                    crate::cli::cache::record_scaffold_owned_path(base_dir, &full_path)?;
-                }
+                // Deliberately records nothing. Byte-equality with this run's output is not
+                // evidence of authorship — it is exactly the coincidence the founding
+                // incident (`e2e/go/helpers_test.go`) turned on — so recording here is the
+                // rejected `bootstrap_owned` predicate wearing the record as a disguise. It
+                // mattered less while the record was machine-local and gitignored; now that
+                // it is committed (`cache::OWNERSHIP_MANIFEST`) a coincidence on one
+                // developer's disk would become a permanent claim in every clone. Files alef
+                // really owns were recorded by the authorised-write path below on the run
+                // that created them. ~keep
                 continue;
             }
             if !is_poly_merge_target {
@@ -296,7 +306,7 @@ pub fn write_scaffold_files_report(
                 // that is never routed through `ensure_generated_header`/`CommentStyle`).
                 // Gating the check on `is_markable` missed that marker entirely and read
                 // every already-owned `.md` reference page as foreign on a cache-less
-                // checkout. The local ownership record is the fallback for extensions that
+                // checkout. The committed ownership record is the fallback for extensions that
                 // truly cannot carry a marker in any form, not the primary signal. ~keep
                 let has_marker = existing_text
                     .as_deref()

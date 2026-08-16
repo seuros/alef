@@ -279,7 +279,20 @@ pub fn read_scaffold_manifest(crate_name: &str) -> Vec<PathBuf> {
 }
 
 /// Repo-scoped (rooted at `base_dir`, not crate-scoped) durable record of
-/// every path a write pass has confirmed alef legitimately wrote or reused.
+/// every path alef owns whose format cannot carry an `alef:hash:` marker.
+///
+/// **Committed to git on purpose.** For every format that can carry a comment
+/// the marker is the proof of ownership and it travels in the repository; for
+/// `package.json`, `*.jar` and friends there is no such place to put it, so the
+/// proof has to live in a separate file — and that file has to travel too. The
+/// pre-#80 record lived at `.alef/scaffold-owned-paths.manifest`, inside the
+/// directory alef writes into every consumer's `.gitignore` itself
+/// (`cli::pipeline::extract::gitignore::ensure_gitignore`). That made ownership
+/// a property of a particular developer's disk: a fresh clone and a warm
+/// machine answered differently for the same commit, so CI refused writes a
+/// developer's machine permitted. Sitting at the repo root outside `.alef/`,
+/// this file is picked up by an ordinary `git add` and every checkout of a
+/// commit agrees about what alef owns.
 ///
 /// Deliberately additive and never replaced wholesale, unlike
 /// [`write_scaffold_manifest`]'s per-crate, per-run snapshot: the write-time
@@ -291,7 +304,39 @@ pub fn read_scaffold_manifest(crate_name: &str) -> Vec<PathBuf> {
 /// of. Rooted at `base_dir` rather than the process CWD so parallel tests
 /// (each with their own tempdir `base_dir`) never share, and race on, the
 /// same manifest file. ~keep
-const SCAFFOLD_OWNED_PATHS_MANIFEST: &str = "scaffold-owned-paths.manifest";
+const OWNERSHIP_MANIFEST: &str = ".alef-ownership.toml";
+
+/// The pre-#80 location of the same record, under the gitignored `.alef/` cache.
+///
+/// Still *read* (unioned with [`OWNERSHIP_MANIFEST`]) and never written. A
+/// working copy that established ownership under an older alef keeps it, so
+/// upgrading does not turn every unmarkable file in every existing consumer
+/// repo into a refusal at once; the entry migrates into the committed manifest
+/// the first time alef performs an authorised write of that path. Dropping the
+/// read outright would be correct in the abstract and a mass outage in
+/// practice. ~keep
+const LEGACY_SCAFFOLD_OWNED_PATHS_MANIFEST: &str = "scaffold-owned-paths.manifest";
+
+/// Preamble written above the path list.
+///
+/// Addressed at a human reading a `git diff` who has no reason to know what the
+/// file is for: without it the natural reaction to a mystery dotfile is to
+/// gitignore it, which restores exactly the bug this file exists to fix. ~keep
+const OWNERSHIP_MANIFEST_HEADER: &str = "\
+# alef ownership record -- COMMIT THIS FILE, do not add it to .gitignore.
+#
+# Lists the alef-generated paths whose format cannot carry an `alef:hash:`
+# provenance marker (`package.json`, `*.jar`, ...). Every other format proves
+# alef's ownership from the marker in the file itself and never appears here.
+# Without this list committed, a fresh clone cannot tell an alef-generated
+# `package.json` from a hand-written one and refuses to regenerate it.
+#
+# Ownership is a fact about history, not about content: a path lands here only
+# because alef created the file, or because a human ran `alef adopt` on it.
+# Nothing here is inferred by comparing bytes against generated output -- a
+# hand-written file that happens to match must never be claimed. Do not hand-add
+# entries; run `alef adopt <path>`, read the diff it prints, and let it write.
+";
 
 /// Normalize `path` to a `base_dir`-relative key before it is used to read or
 /// write the owned-paths manifest.
@@ -321,50 +366,34 @@ fn scaffold_owned_path_key(base_dir: &Path, path: &Path) -> String {
         .into_owned()
 }
 
-/// Record `path` (relative to `base_dir`, or already `base_dir`-joined -- see
-/// [`scaffold_owned_path_key`]) as alef-owned.
-///
-/// The write-time guard in `write_scaffold_files_report` consults this for
-/// extensions it cannot stamp with an `alef:hash:` marker (`.md`, `.json`,
-/// `.xml`, ...) to distinguish "alef legitimately wrote this before" from
-/// "this pre-existed alef and must not be silently claimed." Idempotent: a
-/// path already present is left alone.
-pub fn record_scaffold_owned_path(base_dir: &Path, path: &Path) -> anyhow::Result<()> {
-    let dir = base_dir.join(CACHE_DIR);
-    fs::create_dir_all(&dir)?;
-    let manifest_path = dir.join(SCAFFOLD_OWNED_PATHS_MANIFEST);
-    let key = scaffold_owned_path_key(base_dir, path);
-    let mut paths = read_scaffold_owned_paths_raw(&manifest_path);
-    if paths.iter().any(|existing| *existing == key) {
-        return Ok(());
-    }
-    paths.push(key);
-    paths.sort_unstable();
-    paths.dedup();
-    let mut content = paths.join("\n");
-    if !content.is_empty() {
-        content.push('\n');
-    }
-    fs::write(&manifest_path, content)?;
-    Ok(())
+#[derive(serde::Deserialize)]
+struct OwnershipManifest {
+    #[serde(default)]
+    owned_paths: Vec<String>,
 }
 
-/// True when `path` was previously recorded by [`record_scaffold_owned_path`]
-/// under this `base_dir`'s local `.alef/` cache.
-///
-/// `.alef/` is gitignored and machine-local, so a fresh clone or a
-/// cache-less CI job always answers `false` here -- the write-time guard
-/// treats that as "no durable evidence," refusing to overwrite rather than
-/// risk clobbering foreign content. ~keep
-pub fn is_scaffold_owned_path(base_dir: &Path, path: &Path) -> bool {
-    let manifest_path = base_dir.join(CACHE_DIR).join(SCAFFOLD_OWNED_PATHS_MANIFEST);
-    let key = scaffold_owned_path_key(base_dir, path);
-    read_scaffold_owned_paths_raw(&manifest_path)
-        .iter()
-        .any(|existing| *existing == key)
+fn ownership_manifest_path(base_dir: &Path) -> PathBuf {
+    base_dir.join(OWNERSHIP_MANIFEST)
 }
 
-fn read_scaffold_owned_paths_raw(manifest_path: &Path) -> Vec<String> {
+/// Read the committed record, treating an unreadable or unparseable file as
+/// empty.
+///
+/// Degrading to "alef owns nothing" is the safe direction on both sides: the
+/// guard then refuses rather than clobbers, and nothing is silently claimed on
+/// the strength of a file we could not actually parse. A hard error here would
+/// instead take down every generate in a repo where someone hand-edited the
+/// manifest into invalid TOML. ~keep
+fn read_committed_owned_paths(base_dir: &Path) -> Vec<String> {
+    fs::read_to_string(ownership_manifest_path(base_dir))
+        .ok()
+        .and_then(|content| toml::from_str::<OwnershipManifest>(&content).ok())
+        .map(|manifest| manifest.owned_paths)
+        .unwrap_or_default()
+}
+
+fn read_legacy_owned_paths(base_dir: &Path) -> Vec<String> {
+    let manifest_path = base_dir.join(CACHE_DIR).join(LEGACY_SCAFFOLD_OWNED_PATHS_MANIFEST);
     fs::read_to_string(manifest_path)
         .map(|content| {
             content
@@ -374,6 +403,94 @@ fn read_scaffold_owned_paths_raw(manifest_path: &Path) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Render the manifest by hand rather than through `toml::to_string`.
+///
+/// This file is read in `git diff` far more often than by a parser, and a
+/// serializer is free to emit the array inline on one line. Adopting a single
+/// path would then rewrite the whole line and show as a wholesale replacement,
+/// which is precisely the shape that hides an unintended ownership claim from a
+/// reviewer. One path per line makes every claim its own `+` line. ~keep
+fn render_ownership_manifest(paths: &[String]) -> String {
+    let mut content = String::from(OWNERSHIP_MANIFEST_HEADER);
+    content.push_str("\nowned_paths = [\n");
+    for path in paths {
+        content.push_str("  \"");
+        content.push_str(&path.replace('\\', "\\\\").replace('"', "\\\""));
+        content.push_str("\",\n");
+    }
+    content.push_str("]\n");
+    content
+}
+
+/// Record `path` (relative to `base_dir`, or already `base_dir`-joined -- see
+/// [`scaffold_owned_path_key`]) as alef-owned, in the committed
+/// [`OWNERSHIP_MANIFEST`].
+///
+/// The write-time guard in `write_scaffold_files_report` consults this for
+/// extensions it cannot stamp with an `alef:hash:` marker (`.json`, `.jar`,
+/// ...) to distinguish "alef legitimately wrote this before" from "this
+/// pre-existed alef and must not be silently claimed." Idempotent: a path
+/// already present is left alone, so a converged tree never rewrites the file
+/// and never produces a spurious diff.
+///
+/// Callers must only reach this having established ownership *historically* --
+/// alef created the file, or `alef adopt` obtained a human's consent for it.
+/// Calling it because the bytes on disk happen to equal this run's output turns
+/// a coincidence into a permanent, committed claim over a file nobody adopted;
+/// see `cli::pipeline::generate::write::stamp_for_adoption` for the incident
+/// that settles why byte-equality is not evidence. ~keep
+pub fn record_scaffold_owned_path(base_dir: &Path, path: &Path) -> anyhow::Result<()> {
+    // Serialised because this is a read-modify-write of one file and
+    // `write_files_report` calls it from a rayon `par_iter`: two threads that both
+    // observe the pre-write list and then both write it lose one entry, and a lost
+    // entry is a path alef silently stops owning — a refusal on the next run, in CI,
+    // for a file alef itself created. The old gitignored record had the same race and
+    // could be repaired by rerunning locally; a committed one gets the wrong answer
+    // captured in a commit instead. Cross-*process* concurrency in one repo is not a
+    // supported mode for any of this module's caches. ~keep
+    static WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = WRITE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+
+    fs::create_dir_all(base_dir)?;
+    let key = scaffold_owned_path_key(base_dir, path);
+    let mut paths = read_committed_owned_paths(base_dir);
+    if paths.iter().any(|existing| *existing == key) {
+        return Ok(());
+    }
+    let is_new_manifest = !ownership_manifest_path(base_dir).exists();
+    paths.push(key);
+    paths.sort_unstable();
+    paths.dedup();
+    fs::write(ownership_manifest_path(base_dir), render_ownership_manifest(&paths))?;
+    if is_new_manifest {
+        tracing::info!(
+            manifest = %OWNERSHIP_MANIFEST,
+            "created the alef ownership record: commit it, or a fresh clone cannot regenerate \
+             the unmarkable files listed in it"
+        );
+    }
+    Ok(())
+}
+
+/// True when `path` was previously recorded by [`record_scaffold_owned_path`]
+/// for this `base_dir`.
+///
+/// Reads the committed [`OWNERSHIP_MANIFEST`] unioned with the legacy
+/// gitignored record (see [`LEGACY_SCAFFOLD_OWNED_PATHS_MANIFEST`]). Once the
+/// committed manifest is in the repository this answers identically on a fresh
+/// clone and on a warm machine, which is the whole point of moving it; the
+/// legacy half is the only remaining source of machine-local divergence and it
+/// can only ever say `true` where the old code already did. When neither knows
+/// the path the answer is `false` and the write-time guard refuses rather than
+/// risk clobbering foreign content. ~keep
+pub fn is_scaffold_owned_path(base_dir: &Path, path: &Path) -> bool {
+    let key = scaffold_owned_path_key(base_dir, path);
+    read_committed_owned_paths(base_dir)
+        .iter()
+        .chain(read_legacy_owned_paths(base_dir).iter())
+        .any(|existing| *existing == key)
 }
 
 /// Repo-scoped (rooted at `base_dir`) local record of the array *values*
@@ -854,12 +971,147 @@ mod tests {
         record_scaffold_owned_path(base, &target).expect("record again (idempotent)");
 
         assert!(is_scaffold_owned_path(base, &target));
-        let manifest =
-            std::fs::read_to_string(base.join(".alef").join(SCAFFOLD_OWNED_PATHS_MANIFEST)).expect("read manifest");
+        let manifest = std::fs::read_to_string(base.join(OWNERSHIP_MANIFEST)).expect("read manifest");
         assert_eq!(
-            manifest.lines().count(),
+            manifest.matches("packages/java/pom.xml").count(),
             1,
             "recording the same path twice must not duplicate it, got:\n{manifest}"
+        );
+        assert!(
+            !base.join(".alef").join(LEGACY_SCAFFOLD_OWNED_PATHS_MANIFEST).exists(),
+            "the gitignored legacy record must no longer be written, got:\n{manifest}"
+        );
+    }
+
+    /// The record must be a file `git add` picks up, not one alef itself
+    /// gitignores. `ensure_gitignore` writes `.alef/` into every consumer's
+    /// `.gitignore` (`cli::pipeline::extract::gitignore`), so a record stored
+    /// under that directory can never travel with the commit it describes --
+    /// which is the entire #80 reproducibility hole. Asserting the location and
+    /// the parseability together, because a committed file nobody can parse is
+    /// worth no more than an ignored one. ~keep
+    #[test]
+    fn ownership_record_lives_outside_the_gitignored_cache_and_is_valid_toml() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+
+        record_scaffold_owned_path(base, &base.join("packages/typescript/package.json")).expect("record");
+
+        let manifest_path = base.join(OWNERSHIP_MANIFEST);
+        assert!(manifest_path.exists(), "the record must exist at the repo root");
+        assert!(
+            !manifest_path.starts_with(base.join(CACHE_DIR)),
+            "the record must not live under the gitignored `{CACHE_DIR}` directory"
+        );
+        let content = std::fs::read_to_string(&manifest_path).expect("read manifest");
+        let parsed: OwnershipManifest = toml::from_str(&content).expect("the record must be valid TOML");
+        assert_eq!(parsed.owned_paths, vec!["packages/typescript/package.json".to_owned()]);
+    }
+
+    /// A fresh clone carries the committed record but no `.alef/` cache at all.
+    /// Simulated by recording into one `base_dir` and reading the manifest back
+    /// from a second, cache-less one -- the machine-local half of the answer is
+    /// absent there by construction, so a `true` can only have come from the
+    /// committed file.
+    #[test]
+    fn committed_record_answers_identically_on_a_cache_less_clone() {
+        let warm = tempfile::tempdir().expect("tempdir warm");
+        let clone = tempfile::tempdir().expect("tempdir clone");
+        let relative = std::path::Path::new("packages/typescript/package.json");
+
+        record_scaffold_owned_path(warm.path(), &warm.path().join(relative)).expect("record");
+        std::fs::copy(
+            warm.path().join(OWNERSHIP_MANIFEST),
+            clone.path().join(OWNERSHIP_MANIFEST),
+        )
+        .expect("check out the committed record");
+
+        assert!(
+            !clone.path().join(CACHE_DIR).exists(),
+            "the simulated clone must have no machine-local cache"
+        );
+        assert!(
+            is_scaffold_owned_path(clone.path(), &clone.path().join(relative)),
+            "a fresh clone must agree with the warm machine about what alef owns"
+        );
+    }
+
+    /// A record written by a pre-#80 alef, which exists only under the
+    /// gitignored cache, must keep working -- otherwise upgrading turns every
+    /// unmarkable file in every existing consumer repo into a refusal at once.
+    #[test]
+    fn legacy_gitignored_record_is_still_honoured_for_reads() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let relative = std::path::Path::new("packages/java/pom.xml");
+
+        std::fs::create_dir_all(base.join(CACHE_DIR)).expect("create legacy cache dir");
+        std::fs::write(
+            base.join(CACHE_DIR).join(LEGACY_SCAFFOLD_OWNED_PATHS_MANIFEST),
+            "packages/java/pom.xml\n",
+        )
+        .expect("seed legacy record");
+
+        assert!(!base.join(OWNERSHIP_MANIFEST).exists(), "no committed record yet");
+        assert!(is_scaffold_owned_path(base, &base.join(relative)));
+    }
+
+    /// An unparseable record must read as "alef owns nothing" rather than
+    /// panicking or, far worse, being treated as ownership of everything.
+    #[test]
+    fn unparseable_ownership_record_claims_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        std::fs::write(base.join(OWNERSHIP_MANIFEST), "this is not = = valid toml [[[").expect("write junk");
+
+        assert!(!is_scaffold_owned_path(
+            base,
+            &base.join("packages/typescript/package.json")
+        ));
+    }
+
+    /// The record is itself a `.toml` file at the repo root, so `alef verify`'s walk
+    /// reaches it. Its explanatory header must not read as a provenance marker
+    /// ([`crate::core::hash::content_has_alef_marker`] matches the substrings
+    /// "auto-generated by alef" / "Generated by alef" anywhere in the first ten lines):
+    /// a file that claims to be alef-stamped but is outside the generated-file hash
+    /// pipeline has no computable hash, so it would surface as permanently stale. The
+    /// header is prose a human wrote and is easy to reword into a false positive, which
+    /// is why this is pinned rather than left to care. ~keep
+    #[test]
+    fn ownership_record_header_does_not_read_as_a_provenance_marker() {
+        let rendered = render_ownership_manifest(&["packages/typescript/package.json".to_owned()]);
+        assert!(
+            !crate::core::hash::content_has_alef_marker(&rendered),
+            "the record's own header must not look like an alef provenance marker, got:\n{rendered}"
+        );
+    }
+
+    /// A path containing a quote or a backslash (a Windows-spelled key, a perverse but
+    /// legal filename) must survive the hand-rolled TOML writer. Escaping it wrongly
+    /// produces a manifest that no longer parses, and an unparseable manifest reads as
+    /// "alef owns nothing" -- so the failure would not be loud, it would quietly un-own
+    /// every path in the repo at once. ~keep
+    #[test]
+    fn ownership_record_escapes_paths_that_need_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let awkward = "packages/we\"ird\\name.json";
+
+        record_scaffold_owned_path(base, &base.join(awkward)).expect("record");
+        record_scaffold_owned_path(base, &base.join("packages/plain.json")).expect("record plain");
+
+        let content = std::fs::read_to_string(base.join(OWNERSHIP_MANIFEST)).expect("read manifest");
+        let parsed: OwnershipManifest = toml::from_str(&content).expect("manifest must stay parseable");
+        assert!(
+            parsed.owned_paths.iter().any(|path| path == awkward),
+            "the awkward path must round-trip unchanged, got: {:?}",
+            parsed.owned_paths
+        );
+        assert!(is_scaffold_owned_path(base, &base.join(awkward)));
+        assert!(
+            is_scaffold_owned_path(base, &base.join("packages/plain.json")),
+            "a bad escape must not take the rest of the record down with it"
         );
     }
 

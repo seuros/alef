@@ -389,7 +389,7 @@ fn full_generation_writes_api_reference_pages_into_configured_output() {
 /// only ever be proved alef-owned by the `<!-- alef:hash: -->` line `finalize_hashes` stamps
 /// into its *content* -- which every published page carries. An ownership guard that ignores
 /// that in-content evidence for unstampable extensions and consults only the machine-local
-/// `.alef/` record (empty on a fresh clone and in cache-less CI) refuses every reference page
+/// ownership record (empty on a fresh clone and in cache-less CI) refuses every reference page
 /// forever, which is exactly the staleness this suite exists to prevent. ~keep
 #[test]
 fn stale_api_reference_page_is_regenerated_not_refused() {

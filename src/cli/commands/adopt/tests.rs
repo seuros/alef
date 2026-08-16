@@ -227,8 +227,8 @@ fn already_marked_file_is_reported_as_owned_and_produces_no_diff() {
 }
 
 /// A format with no comment syntax at all (`.json`) cannot be stamped, so adoption
-/// falls back to the durable `.alef/` record — the same proof route the write-time
-/// guard already consults for unmarkable extensions.
+/// falls back to the committed `.alef-ownership.toml` record — the same proof route the
+/// write-time guard already consults for unmarkable extensions.
 #[test]
 fn unstampable_format_is_adopted_through_the_durable_record_instead() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -254,6 +254,21 @@ fn unstampable_format_is_adopted_through_the_durable_record_instead() {
     assert_eq!(
         report.recorded_unstampable,
         vec![PathBuf::from("packages/node/package.json")]
+    );
+
+    // The axis that matters and that `is_scaffold_owned_path` alone does not examine:
+    // *where* the consent was written down. A human's adoption decision that only exists
+    // inside the gitignored `.alef/` cache is not a decision the rest of the team, or CI,
+    // can ever see — the operator reads the diff once and every other checkout still
+    // refuses. Dropping the cache is what a fresh clone of their commit looks like. ~keep
+    std::fs::remove_dir_all(base.join(".alef")).ok();
+    assert!(
+        base.join(".alef-ownership.toml").exists(),
+        "adoption must leave its proof in a file the operator can commit"
+    );
+    assert!(
+        crate::cli::cache::is_scaffold_owned_path(base, &target),
+        "an adoption must survive into a checkout that never had the adopting machine's cache"
     );
 }
 
