@@ -119,8 +119,9 @@ pub(crate) fn scaffold_ruby_cargo(
         format!("[features]\n{}\n\n", lines.join("\n"))
     };
 
+    let lints_section = crate::scaffold::cargo_lints_section(config);
     let content = format!(
-        r#"{pkg_header}
+        r#"{pkg_header}{lints_section}
 
 {machete_section}[lib]
 name = "{lib_name}"
@@ -130,6 +131,7 @@ crate-type = ["cdylib"]
 {features_table}[dependencies]
 {deps_section}{core_target_blocks_section}"#,
         pkg_header = pkg_header,
+        lints_section = lints_section,
         machete_section = machete_section,
         lib_name = lib_name,
         features_table = features_table,

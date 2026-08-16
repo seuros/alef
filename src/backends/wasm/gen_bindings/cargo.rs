@@ -187,6 +187,19 @@ pub(super) fn gen_cargo_toml(api: &ApiSurface, config: &ResolvedCrateConfig) -> 
     };
     let tracing_ignored_line = if has_trait_bridges { "    \"tracing\",\n" } else { "" };
 
+    // Unlike the scaffold emitters' `cargo_lints_section` (a "\n\n" + block glue
+    // meant to follow a header with no trailing newline), `keywords_toml` above
+    // always self-terminates with its own trailing "\n" (or is empty), and the
+    // template's own newline before `[package.metadata...]` already supplies the
+    // blank-line separator either way — so the block here only needs a leading
+    // "\n" (never a second one) plus a trailing "\n" to close its own last line. ~keep
+    let lints_block = config.cargo_lints.render();
+    let lints_section = if lints_block.is_empty() {
+        String::new()
+    } else {
+        format!("\n{lints_block}\n")
+    };
+
     format!(
         r#"{header}
 [package]
@@ -196,7 +209,7 @@ edition = "2024"
 license = "{license}"
 description = "{description}"
 repository = "{repository}"
-{keywords_toml}
+{keywords_toml}{lints_section}
 [package.metadata.cargo-machete]
 ignored = [
     "futures",
@@ -228,6 +241,7 @@ getrandom_03 = {{ package = "getrandom", version = "0.3", features = ["wasm_js"]
         description = description,
         repository = repository,
         keywords_toml = keywords_toml,
+        lints_section = lints_section,
         wasm_opt_line = wasm_opt_line,
         deps_block = deps_block,
         dev_deps_section = dev_deps_section,

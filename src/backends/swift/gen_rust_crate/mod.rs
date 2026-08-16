@@ -133,6 +133,7 @@ pub fn emit(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Ve
         &ffi_dep_path,
         ffi_features,
         ffi_target_overrides,
+        &config.cargo_lints,
     );
     let effective_features = feature_gate::effective_swift_codegen_features(api, config, &core_crate_dir);
     let configured_features: HashSet<&str> = effective_features.iter().map(String::as_str).collect();

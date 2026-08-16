@@ -4,10 +4,140 @@ use crate::core::config::{AdapterPattern, Language, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
 use crate::core::template_versions as tv;
 use crate::{
-    scaffold::cargo_package_header, scaffold::core_dep_features, scaffold::detect_workspace_inheritance,
-    scaffold::render_extra_deps, scaffold::scaffold_meta,
+    scaffold::cargo_package_header, scaffold::detect_workspace_inheritance, scaffold::render_extra_deps,
+    scaffold::scaffold_meta,
 };
+use std::collections::BTreeSet;
 use std::path::PathBuf;
+
+/// Additional features to request on the core feature that would satisfy `pred`, given `active`
+/// (the core features already unconditionally active on the dependency line, transitively
+/// resolved — see [`crate::scaffold::core_feature_closure`]) and `core_defaults` (the core
+/// crate's own declared `[features] default = [...]`).
+///
+/// - `Feature(X)`: nothing if `X` is already in `active`; otherwise `{X}`.
+/// - `All(arms)`: the union of what each arm needs — every arm must hold.
+/// - `Any(arms)`: **nothing** if any arm is already satisfied by `active` — do not union every
+///   arm just because one wasn't. Only when *no* arm holds do we add one, and then exactly one:
+///   an arm the core crate's own `default` list already picks if one exists, else the first arm.
+///   Forcing every arm on is not conservative, it's wrong: `any(native-http, wasm-http)` are
+///   mutually exclusive transports in the core crate (native-http pulls in the Tokio
+///   multi-thread runtime; wasm-http is for browser/Node targets that cannot run it), so unioning
+///   them would silently bloat every PHP build with an unused transport stack rather than pick
+///   the one the core crate already treats as its default.
+/// - `Not(_)` / `Other`: nothing — a `not(...)` can only be satisfied by *not* adding a feature,
+///   which this function has no way to enforce either way, so it is left alone rather than
+///   guessed at. ~keep
+fn missing_features_for(
+    pred: &crate::codegen::cfg::CfgPredicate,
+    active: &BTreeSet<String>,
+    core_defaults: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    use crate::codegen::cfg::CfgPredicate;
+    match pred {
+        CfgPredicate::Feature(name) => {
+            if active.contains(name) {
+                BTreeSet::new()
+            } else {
+                BTreeSet::from([name.clone()])
+            }
+        }
+        CfgPredicate::All(arms) => arms
+            .iter()
+            .flat_map(|arm| missing_features_for(arm, active, core_defaults))
+            .collect(),
+        CfgPredicate::Any(arms) => {
+            let already_satisfied = arms
+                .iter()
+                .any(|arm| missing_features_for(arm, active, core_defaults).is_empty());
+            if already_satisfied {
+                return BTreeSet::new();
+            }
+            let plain_arms: Vec<String> = arms
+                .iter()
+                .filter_map(|arm| match arm {
+                    CfgPredicate::Feature(name) => Some(name.clone()),
+                    _ => None,
+                })
+                .collect();
+            let chosen: Option<String> = plain_arms
+                .iter()
+                .find(|name| core_defaults.contains(name.as_str()))
+                .cloned()
+                .or_else(|| plain_arms.first().cloned());
+            match chosen {
+                Some(name) => BTreeSet::from([name]),
+                // No plain-feature arm at all (e.g. `any(all(...), not(...))`): fall back to
+                // whatever the first arm itself needs.
+                None => arms
+                    .first()
+                    .map(|arm| missing_features_for(arm, active, core_defaults))
+                    .unwrap_or_default(),
+            }
+        }
+        CfgPredicate::Not(_) | CfgPredicate::Other => BTreeSet::new(),
+    }
+}
+
+/// Core features PHP must additionally request beyond what's already configured, because
+/// standalone functions carrying a `cfg` predicate are emitted unconditionally into the
+/// `#[php_impl]` facade (see `rust_bindings.rs::generate_bindings`'s doc comment) and their
+/// underlying core symbols must therefore always exist.
+///
+/// Deliberately over-inclusive in one respect: it does not replicate `generate_bindings`'s
+/// `exclude_functions`/trait-bridge-managed filtering, so a function's cfg predicate can be
+/// evaluated here even when that particular function ends up excluded from the PHP facade.
+/// Requesting an unused core feature is harmless; the failure mode this function exists to
+/// prevent — a required feature silently missing — is the one that actually breaks the build. ~keep
+fn php_function_gated_core_features_to_add(api: &ApiSurface, config: &ResolvedCrateConfig) -> BTreeSet<String> {
+    let requested = config.features_for_language(Language::Php);
+    let (active, core_defaults) = crate::scaffold::core_feature_closure(config, requested);
+
+    let mut to_add = BTreeSet::new();
+    for func in &api.functions {
+        if let Some(cfg) = &func.cfg {
+            let pred = crate::codegen::cfg::parse_cfg_predicate(cfg);
+            to_add.extend(missing_features_for(&pred, &active, &core_defaults));
+        }
+    }
+    to_add
+}
+
+/// Every feature name referenced by any top-level function's `cfg` predicate, flattened —
+/// unlike [`php_function_gated_core_features_to_add`], this includes names that turned out to
+/// already be satisfied (e.g. `tower`/`tokenizer` when the core dependency line already requests
+/// `full`). Used only to keep `cfg_forwarding` from declaring these as togglable php-crate
+/// `[features]`: PHP never gates a function by cfg (see `rust_bindings.rs::generate_bindings`),
+/// so none of these names should appear there regardless of whether anything needed adding for
+/// them. ~keep
+fn php_function_referenced_feature_names(api: &ApiSurface) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for func in &api.functions {
+        if let Some(cfg) = &func.cfg {
+            crate::codegen::cfg::collect_cfg_feature_names(cfg, &mut out);
+        }
+    }
+    out
+}
+
+/// Render the core dependency's `, features = [...]` clause, unioning the user-configured
+/// per-language feature list with `extra` (features PHP must always request because it can't
+/// safely gate them — see [`php_function_gated_core_features_to_add`]). Returns an empty string
+/// when there is nothing to request, matching `crate::scaffold::core_dep_features`'s empty case.
+fn merged_core_dep_features(config: &ResolvedCrateConfig, extra: &BTreeSet<String>) -> String {
+    let mut features: Vec<String> = config.features_for_language(Language::Php).to_vec();
+    for name in extra {
+        if !features.iter().any(|f| f == name) {
+            features.push(name.clone());
+        }
+    }
+    if features.is_empty() {
+        String::new()
+    } else {
+        let quoted: Vec<String> = features.iter().map(|f| format!("\"{f}\"")).collect();
+        format!(", features = [{}]", quoted.join(", "))
+    }
+}
 
 pub(crate) fn scaffold_php_cargo(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
     let meta = scaffold_meta(config);
@@ -69,6 +199,18 @@ pub(crate) fn scaffold_php_cargo(api: &ApiSurface, config: &ResolvedCrateConfig)
         .map(|d| format!("\"{d}\""))
         .collect::<Vec<_>>()
         .join(", ");
+    // Functions carrying a source `cfg` predicate are emitted unconditionally into the
+    // `#[php_impl]` facade class (see rust_bindings.rs's `generate_bindings`: ext-php-rs's
+    // `#[php_impl]` derive references every method by identifier in its registration array
+    // regardless of `#[cfg]`, so a cfg'd-out method breaks the build). Their underlying core
+    // features must therefore be required unconditionally on the core dependency line rather
+    // than exposed as togglable php-crate `[features]` — a togglable feature that no generated
+    // code actually gates is a defect (see `cfg_forwarding` below, which excludes these names).
+    // `core_features_to_add` is deliberately *not* the flat union of every name a function's cfg
+    // mentions: an `any(A, B)` predicate only needs A or B, and here A (`native-http`) is already
+    // requested via the existing `features = [..., "full"]`, so nothing is added for it at all —
+    // see `missing_features_for`'s doc comment for why unioning both arms would be wrong. ~keep
+    let core_features_to_add = php_function_gated_core_features_to_add(api, config);
     let core_overrides = config
         .php
         .as_ref()
@@ -77,7 +219,7 @@ pub(crate) fn scaffold_php_cargo(api: &ApiSurface, config: &ResolvedCrateConfig)
     let (core_dep_php, core_target_blocks) = crate::scaffold::render_core_dep_with_overrides(
         &config.name,
         &format!("../{core_crate_dir}"),
-        &core_dep_features(config, Language::Php),
+        &merged_core_dep_features(config, &core_features_to_add),
         version,
         core_overrides,
     );
@@ -106,12 +248,19 @@ pub(crate) fn scaffold_php_cargo(api: &ApiSurface, config: &ResolvedCrateConfig)
     let dep_block = dep_entries.join("\n");
     let _ = extra_deps_section;
 
-    // `#[cfg(feature = "X")]` arms emitted by the codegen produce
-    // method inside a `#[php_impl]` block, a fatal E0599. Enable them all by
-    // default so `#[cfg(feature = "X")]` arms compile unconditionally.
+    // Forwards feature names that a `#[cfg(feature = "X")]` on a *type/field/enum* (never a
+    // function — those are handled unconditionally above and excluded here) could still
+    // reference, keeping such names known to Cargo's `[features]` table. PHP's own struct/enum
+    // codegen currently drops cfg'd-out fields and variants outright rather than emitting a
+    // `#[cfg]` for them, but declaring the passthrough keeps this backend consistent with the
+    // other binding backends that share `collect_cfg_features` and protects against a future
+    // codegen change that starts emitting such a `#[cfg]`.
     let core_dep_name = &config.name;
     let cfg_forwarding: String = {
-        let features = crate::codegen::cfg::collect_cfg_features(api);
+        let mut features = crate::codegen::cfg::collect_cfg_features(api);
+        for name in &php_function_referenced_feature_names(api) {
+            features.remove(name);
+        }
         if features.is_empty() {
             String::new()
         } else {
@@ -125,8 +274,9 @@ pub(crate) fn scaffold_php_cargo(api: &ApiSurface, config: &ResolvedCrateConfig)
         }
     };
 
+    let lints_section = crate::scaffold::cargo_lints_section(config);
     let content = format!(
-        r#"{pkg_header}
+        r#"{pkg_header}{lints_section}
 
 # `ahash` and `futures-util` are conditionally included but not directly used in PHP code.
 [package.metadata.cargo-machete]
@@ -143,6 +293,7 @@ extension-module = []
 {core_target_blocks_section}
 "#,
         pkg_header = pkg_header,
+        lints_section = lints_section,
         dep_block = dep_block,
         core_target_blocks_section = core_target_blocks_section,
         machete_ignored_str = machete_ignored_str,
@@ -288,5 +439,105 @@ fn composer_package_name(config: &ResolvedCrateConfig, meta: &crate::scaffold::S
     match parts.as_slice() {
         [owner, repo_name, ..] => (owner.to_lowercase(), repo_name.to_lowercase()),
         _ => ("unconfigured".to_string(), config.name.to_lowercase()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::cfg::CfgPredicate;
+
+    fn set(names: &[&str]) -> BTreeSet<String> {
+        names.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    /// Regression: an `any(A, B)` predicate must need nothing when one arm is already active —
+    /// it must never fall back to requesting *both* arms just because the other one wasn't
+    /// checked. `native-http`/`wasm-http` are mutually exclusive transports in the core crate;
+    /// requesting both would silently bloat the build with an unused transport stack.
+    #[test]
+    fn any_needs_nothing_when_one_arm_already_active() {
+        let pred = CfgPredicate::Any(vec![
+            CfgPredicate::Feature("native-http".to_string()),
+            CfgPredicate::Feature("wasm-http".to_string()),
+        ]);
+        let active = set(&["native-http", "full"]);
+        let core_defaults = set(&[]);
+        assert_eq!(missing_features_for(&pred, &active, &core_defaults), BTreeSet::new());
+    }
+
+    /// When no arm is active, exactly one must be added — the core crate's own declared
+    /// `default` arm — never both.
+    #[test]
+    fn any_with_no_arm_active_picks_the_core_crates_default_arm() {
+        let pred = CfgPredicate::Any(vec![
+            CfgPredicate::Feature("wasm-http".to_string()),
+            CfgPredicate::Feature("native-http".to_string()),
+        ]);
+        let active = set(&[]);
+        let core_defaults = set(&["native-http"]);
+        assert_eq!(
+            missing_features_for(&pred, &active, &core_defaults),
+            set(&["native-http"])
+        );
+    }
+
+    /// With no arm active and no core-declared default among the arms, fall back to the first
+    /// arm — still exactly one, never the union.
+    #[test]
+    fn any_with_no_arm_active_and_no_default_picks_first_arm() {
+        let pred = CfgPredicate::Any(vec![
+            CfgPredicate::Feature("native-http".to_string()),
+            CfgPredicate::Feature("wasm-http".to_string()),
+        ]);
+        let active = set(&[]);
+        let core_defaults = set(&[]);
+        assert_eq!(
+            missing_features_for(&pred, &active, &core_defaults),
+            set(&["native-http"])
+        );
+    }
+
+    #[test]
+    fn all_needs_the_union_of_every_missing_arm() {
+        let pred = CfgPredicate::All(vec![
+            CfgPredicate::Feature("a".to_string()),
+            CfgPredicate::Feature("b".to_string()),
+        ]);
+        let active = set(&[]);
+        let core_defaults = set(&[]);
+        assert_eq!(missing_features_for(&pred, &active, &core_defaults), set(&["a", "b"]));
+    }
+
+    #[test]
+    fn all_skips_arms_that_are_already_active() {
+        let pred = CfgPredicate::All(vec![
+            CfgPredicate::Feature("a".to_string()),
+            CfgPredicate::Feature("b".to_string()),
+        ]);
+        let active = set(&["a"]);
+        let core_defaults = set(&[]);
+        assert_eq!(missing_features_for(&pred, &active, &core_defaults), set(&["b"]));
+    }
+
+    #[test]
+    fn feature_already_active_needs_nothing() {
+        let pred = CfgPredicate::Feature("tower".to_string());
+        let active = set(&["tower"]);
+        let core_defaults = set(&[]);
+        assert_eq!(missing_features_for(&pred, &active, &core_defaults), BTreeSet::new());
+    }
+
+    /// `not(...)` can only be satisfied by *not* adding a feature — this function has no way to
+    /// enforce that, so it must contribute nothing, regardless of the inner feature's state.
+    #[test]
+    fn not_contributes_nothing_regardless_of_active_set() {
+        let pred = CfgPredicate::Not(Box::new(CfgPredicate::Feature("x".to_string())));
+        let core_defaults = set(&[]);
+        assert_eq!(missing_features_for(&pred, &set(&[]), &core_defaults), BTreeSet::new());
+        assert_eq!(
+            missing_features_for(&pred, &set(&["x"]), &core_defaults),
+            BTreeSet::new()
+        );
     }
 }

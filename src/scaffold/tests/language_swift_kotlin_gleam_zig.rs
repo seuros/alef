@@ -497,11 +497,28 @@ fn test_scaffold_zig() {
     let api = test_api();
     let all_files = scaffold(&api, &config, &[Language::Zig]).unwrap();
     let files = language_files(&all_files);
-    assert_eq!(files.len(), 7, "Expected 7 files for Zig scaffold");
+    assert_eq!(files.len(), 8, "Expected 8 files for Zig scaffold");
 
     let build_zig = &files[0];
     assert_eq!(build_zig.path, PathBuf::from("packages/zig/build.zig"));
     assert!(build_zig.content.contains("addModule"));
+    assert!(
+        build_zig
+            .content
+            .contains(r#".root_source_file = b.path("test/my_lib_test.zig")"#),
+        "test_module must point at the seeded test file, not the production source; got: {}",
+        build_zig.content
+    );
+    assert!(
+        build_zig.content.contains(r#"test_module.addImport("my_lib", module)"#),
+        "test_module must be able to import the package under test; got: {}",
+        build_zig.content
+    );
+    assert!(
+        build_zig.content.contains(r#"b.step("example", "Run the example")"#),
+        "build.zig must compile examples/example.zig via an example step; got: {}",
+        build_zig.content
+    );
 
     let build_zig_zon = &files[1];
     assert_eq!(build_zig_zon.path, PathBuf::from("packages/zig/build.zig.zon"));
@@ -519,11 +536,19 @@ fn test_scaffold_zig() {
     assert_eq!(readme.path, PathBuf::from("packages/zig/README.md"));
     assert!(readme.content.contains("zig build"));
 
-    let example = &files[5];
+    let test_seed = &files[5];
+    assert_eq!(test_seed.path, PathBuf::from("packages/zig/test/my_lib_test.zig"));
+    assert!(
+        test_seed.content.contains("test \""),
+        "seed must contain a real `test` block, not zero — that is the defect being fixed; got: {}",
+        test_seed.content
+    );
+
+    let example = &files[6];
     assert_eq!(example.path, PathBuf::from("packages/zig/examples/example.zig"));
     assert!(example.content.contains("pub fn main"));
 
-    let main = &files[6];
+    let main = &files[7];
     assert_eq!(main.path, PathBuf::from("packages/zig/src/main.zig"));
     assert!(main.content.contains("pub const api"));
     assert!(main.content.contains(".zig"));
@@ -543,6 +568,29 @@ fn scaffold_zig_example_passes_zig_ast_check() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("example.zig");
     std::fs::write(&path, &example.content).unwrap();
+    let output = std::process::Command::new("zig")
+        .arg("ast-check")
+        .arg(path)
+        .output()
+        .expect("Zig must be installed to verify scaffold compatibility");
+
+    assert!(
+        output.status.success(),
+        "zig ast-check failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn scaffold_zig_test_seed_passes_zig_ast_check() {
+    let files = scaffold(&test_api(), &test_config(), &[Language::Zig]).unwrap();
+    let test_seed = files
+        .iter()
+        .find(|file| file.path == Path::new("packages/zig/test/my_lib_test.zig"))
+        .expect("Zig scaffold must emit a test seed");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("my_lib_test.zig");
+    std::fs::write(&path, &test_seed.content).unwrap();
     let output = std::process::Command::new("zig")
         .arg("ast-check")
         .arg(path)

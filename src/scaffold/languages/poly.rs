@@ -128,10 +128,18 @@ fn classify_extra(raw: &str) -> ExcludeEntry {
 ///
 /// Covers build output + lock files, plus the conventional non-source trees a
 /// polyglot repo keeps under version control that must NOT be linted/reformatted:
-/// `fixtures/` and `test_documents/` (exact-byte test data), `docs/assets/`
-/// (canonical SVG/image assets), and `docs/snippets/` (compiled separately by the
-/// snippet runner). Generated code under `packages/`, `e2e/`, `test_apps/` is
-/// deliberately NOT excluded — poly owns its formatting.
+/// `fixtures/` and `test_documents/` (exact-byte test data). Generated code under
+/// `packages/`, `e2e/`, `test_apps/` is deliberately NOT excluded — poly owns its
+/// formatting.
+///
+/// Deliberately NOT here: a `docs/assets/**`-style entry for canonical doc images.
+/// Nothing in [`crate::core::config`] names a docs-asset directory, so a hardcoded
+/// `docs/` guess is unverifiable and, for a consumer whose docs live in a different
+/// tree (e.g. an Astro `docs-site/`), reinstates a phantom path on every run — see
+/// [`docs_snippets_excludes`] for the sibling entry this replaced, moved to a
+/// config-derived path for exactly that reason. A consumer that does keep
+/// hand-authored assets under a fixed path can add it via `[workspace.poly]
+/// exclude` (`PolyConfig::exclude`), which this list is unioned with. ~keep
 ///
 /// `artifacts/**`, `dist/**`, and `vendor/**` are tagged `AnyDepth` on the same
 /// reasoning as `target/**` / `node_modules/**`: in a polyglot monorepo these are
@@ -151,8 +159,6 @@ const EXCLUDES: &[(&str, ExcludeScope)] = &[
     (".alef/**", ExcludeScope::RepoRoot),
     ("artifacts/**", ExcludeScope::AnyDepth),
     ("dist/**", ExcludeScope::AnyDepth),
-    ("docs/assets/**", ExcludeScope::RepoRoot),
-    ("docs/snippets/**", ExcludeScope::RepoRoot),
     ("fixtures/**", ExcludeScope::RepoRoot),
     ("node_modules/**", ExcludeScope::AnyDepth),
     ("readme_templates/**", ExcludeScope::RepoRoot),
@@ -161,6 +167,25 @@ const EXCLUDES: &[(&str, ExcludeScope)] = &[
     ("test_documents/**", ExcludeScope::RepoRoot),
     ("vendor/**", ExcludeScope::AnyDepth),
 ];
+
+/// Build the `docs/snippets/**`-equivalent excludes from where the repo actually
+/// configured its snippet roots (`[workspace.docs.snippets] dirs`), instead of a
+/// hardcoded `docs/snippets/**` that assumes every consumer keeps a `docs/` tree.
+/// Snippets are compiled separately by the snippet runner and must not be
+/// linted/reformatted as ordinary source. Mirrors [`snippet_check_hook`]'s own
+/// read of `config.docs.snippets.dirs`. Returns no entries (not even a default)
+/// when the repo hasn't configured `dirs` — nothing to exclude yet, and guessing
+/// `docs/snippets` would reintroduce the phantom-path defect this replaces. ~keep
+fn docs_snippets_excludes(config: &ResolvedCrateConfig) -> Vec<ExcludeEntry> {
+    let Some(snippets) = config.docs.as_ref().and_then(|d| d.snippets.as_ref()) else {
+        return Vec::new();
+    };
+    snippets
+        .dirs
+        .iter()
+        .map(|dir| ExcludeEntry::root(format!("{}/**", dir.to_string_lossy().trim_end_matches('/'))))
+        .collect()
+}
 
 /// Globs excluded specifically to keep poly's whole-repo format pass from
 /// fighting alef's residual native passes (see `cli::pipeline::format`):
@@ -369,6 +394,7 @@ pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[La
             scope: *scope,
         })
         .collect();
+    all_excludes.extend(docs_snippets_excludes(config));
     all_excludes.extend(config.poly.exclude.iter().map(|raw| classify_extra(raw)));
 
     let discovery_excludes: Vec<String> = all_excludes.iter().map(ExcludeEntry::for_discovery).collect();

@@ -4,8 +4,8 @@ use crate::core::config::{AdapterPattern, Language, ResolvedCrateConfig};
 use crate::core::ir::{ApiSurface, TypeRef};
 use crate::core::template_versions as tv;
 use crate::{
-    scaffold::cargo_package_header, scaffold::core_dep_features, scaffold::detect_workspace_inheritance,
-    scaffold::render_extra_deps, scaffold::scaffold_meta,
+    scaffold::ScaffoldMeta, scaffold::cargo_package_header, scaffold::core_dep_features,
+    scaffold::detect_workspace_inheritance, scaffold::render_extra_deps, scaffold::scaffold_meta,
 };
 use std::path::PathBuf;
 
@@ -278,8 +278,9 @@ pub(crate) fn scaffold_node_cargo(
         format!("[features]\n{}\n\n", lines.join("\n"))
     };
 
+    let lints_section = crate::scaffold::cargo_lints_section(config);
     let content = format!(
-        r#"{pkg_header}
+        r#"{pkg_header}{lints_section}
 
 # `serde_json` is emitted unconditionally above so the manifest is stable
 # across regens, but for umbrella crates with no JSON-marshalled return types
@@ -300,6 +301,7 @@ napi-build = "{napi_build}"
 
 "#,
         pkg_header = pkg_header,
+        lints_section = lints_section,
         dep_block = dep_block,
         core_target_blocks_section = core_target_blocks_section,
         features_table = features_table,
@@ -464,7 +466,7 @@ fn generate_napi_platform_package_json(
     binary_name: &str,
     platform: &str,
     version: &str,
-    license: Option<&str>,
+    meta: &ScaffoldMeta,
     repository_block: &str,
 ) -> String {
     let package_name = napi_platform_package_name(parent_package_name, platform);
@@ -473,14 +475,17 @@ fn generate_napi_platform_package_json(
         .map(|value| format!(",\n  \"libc\": [\"{value}\"]"))
         .unwrap_or_default();
     let binary_file = format!("{binary_name}.{platform}.node");
-    let license_block = license
+    let license_block = meta
+        .license
+        .as_deref()
         .map(|value| format!(",\n  \"license\": \"{value}\""))
         .unwrap_or_default();
+    let (homepage_block, bugs_block, author_block, keywords_block) = npm_publish_metadata_blocks(meta);
 
     format!(
         r#"{{
   "name": "{package_name}",
-  "version": "{version}"{license_block}{repository_block},
+  "version": "{version}"{license_block}{repository_block}{homepage_block}{bugs_block}{author_block}{keywords_block},
   "main": "{binary_file}",
   "files": ["{binary_file}"],
   "os": ["{os}"],
@@ -509,6 +514,7 @@ pub(crate) fn scaffold_node(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
         .as_deref()
         .map(|license| format!(",\n  \"license\": \"{license}\""))
         .unwrap_or_default();
+    let (homepage_block, bugs_block, author_block, keywords_block) = npm_publish_metadata_blocks(&meta);
     let excluded = excluded_node_platforms(config);
     let active_platforms = napi_platforms_filtered(&excluded);
     let optional_dependencies = active_platforms
@@ -574,7 +580,7 @@ pub(crate) fn scaffold_node(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
         r#"{{
   "name": "{package_name}",
   "version": "{version}",
-  "description": "{description}"{license_block}{repository_block},
+  "description": "{description}"{license_block}{repository_block}{homepage_block}{bugs_block}{author_block}{keywords_block},
   "main": "{entrypoint}",
   "types": "index.d.ts",
   "exports": {exports_map},
@@ -604,6 +610,10 @@ pub(crate) fn scaffold_node(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
         description = meta.description,
         license_block = license_block,
         repository_block = repository_block,
+        homepage_block = homepage_block,
+        bugs_block = bugs_block,
+        author_block = author_block,
+        keywords_block = keywords_block,
         crate_dir = crate_dir,
         exports_map = exports_map,
         files_list = files_list,
@@ -648,7 +658,7 @@ pub(crate) fn scaffold_node(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
             &binary_name,
             platform,
             version,
-            meta.license.as_deref(),
+            &meta,
             &repository_block,
         ),
         generated_header: false,
@@ -672,4 +682,44 @@ fn npm_repository_block(repository_url: &str) -> String {
     "url": "{repository_git_url}"
   }}"#
     )
+}
+
+/// Build the `homepage` / `bugs` / `author` / `contributors` / `keywords` blocks
+/// shared by the crate package.json and each per-platform manifest, each already
+/// prefixed with a leading `,\n  "key": ...` for direct splicing after the
+/// existing `license_block`/`repository_block` fields. Empty when the
+/// corresponding [`ScaffoldMeta`] field is unset, matching the license/repository
+/// block convention already in place.
+fn npm_publish_metadata_blocks(meta: &ScaffoldMeta) -> (String, String, String, String) {
+    let homepage_block = if meta.homepage.is_empty() {
+        String::new()
+    } else {
+        format!(",\n  \"homepage\": \"{}\"", meta.homepage)
+    };
+    let bugs_block = if meta.issues.is_empty() {
+        String::new()
+    } else {
+        format!(",\n  \"bugs\": {{\n    \"url\": \"{}\"\n  }}", meta.issues)
+    };
+    // npm's package.json schema treats `author` as a single Person and
+    // `contributors` as the array for everyone else. ~keep
+    let author_block = match meta.authors.split_first() {
+        None => String::new(),
+        Some((primary, rest)) => {
+            let primary_block = format!(",\n  \"author\": \"{primary}\"");
+            if rest.is_empty() {
+                primary_block
+            } else {
+                let entries: Vec<String> = rest.iter().map(|a| format!("\"{a}\"")).collect();
+                format!("{primary_block},\n  \"contributors\": [{}]", entries.join(", "))
+            }
+        }
+    };
+    let keywords_block = if meta.keywords.is_empty() {
+        String::new()
+    } else {
+        let entries: Vec<String> = meta.keywords.iter().map(|k| format!("\"{k}\"")).collect();
+        format!(",\n  \"keywords\": [{}]", entries.join(", "))
+    };
+    (homepage_block, bugs_block, author_block, keywords_block)
 }

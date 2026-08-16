@@ -192,8 +192,9 @@ pub(crate) fn scaffold_python_cargo(
     let dep_block = dep_entries.join("\n");
     let _ = extra_deps_section;
 
+    let lints_section = crate::scaffold::cargo_lints_section(config);
     let content = format!(
-        r#"{pkg_header}
+        r#"{pkg_header}{lints_section}
 
 # `pyo3-async-runtimes` and `serde_json` are emitted unconditionally above so
 # the manifest is stable across regens, but for umbrella crates with no
@@ -216,6 +217,7 @@ extension-module = ["pyo3/extension-module", "pyo3/abi3-py310"]
 {core_target_blocks_section}
 "#,
         pkg_header = pkg_header,
+        lints_section = lints_section,
         module_name = module_name,
         dep_block = dep_block,
         core_target_blocks_section = core_target_blocks_section,

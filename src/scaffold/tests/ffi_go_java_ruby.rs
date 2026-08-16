@@ -696,8 +696,10 @@ fn test_scaffold_csharp_csproj_at_package_root() {
         "csproj must NOT suppress SDK AssemblyInfo so version stays in sync with <Version> tag"
     );
     assert!(
-        csproj.content.contains("<Company>Alef Team</Company>"),
-        "csproj must set Company to provide SDK-generated AssemblyCompanyAttribute"
+        csproj.content.contains("<Company>Alice</Company>"),
+        "csproj must derive Company from the configured authors (first author), \
+         not a hardcoded alef literal, to provide SDK-generated AssemblyCompanyAttribute; got:\n{}",
+        csproj.content
     );
     assert!(
         csproj.content.contains("<Product>"),
@@ -706,6 +708,78 @@ fn test_scaffold_csharp_csproj_at_package_root() {
     assert!(
         !csproj.generated_header,
         "csproj must be scaffold-once (generated_header = false)"
+    );
+}
+
+#[test]
+fn test_render_csharp_csproj_omits_project_url_and_tags_when_unconfigured() {
+    // `test_config()` sets `[crates.scaffold] keywords = ["test"]`, which is a
+    // genuinely-configured keyword list, not an unconfigured one — using it here
+    // would assert PackageTags is absent while the fixture guarantees it's present.
+    // `minimal_config_from_toml` carries no `[crates.scaffold]`/`[crates.package_metadata]`
+    // at all, so `ScaffoldMeta.homepage`/`.keywords` are genuinely empty. ~keep
+    let config = minimal_config_from_toml("");
+    let content = render_csharp_csproj(&config, "1.2.3");
+
+    assert!(
+        !content.contains("<PackageProjectUrl>"),
+        "unconfigured homepage must not invent a PackageProjectUrl: {content}"
+    );
+    assert!(
+        !content.contains("<PackageTags>"),
+        "unconfigured keywords must not invent PackageTags: {content}"
+    );
+}
+
+#[test]
+fn test_render_csharp_csproj_includes_project_url_and_tags_when_configured() {
+    let config = test_config_from_toml(
+        r#"
+[crates.package_metadata]
+homepage = "https://example.com/my-lib"
+keywords = ["llm", "bindings"]
+"#,
+    );
+    let meta_csproj = render_csharp_csproj(&config, "1.2.3");
+    let meta_runtime_csproj = render_csharp_runtime_csproj(&config, "1.2.3");
+
+    for content in [&meta_csproj, &meta_runtime_csproj] {
+        assert!(
+            content.contains("<PackageProjectUrl>https://example.com/my-lib</PackageProjectUrl>"),
+            "csproj must carry the configured homepage as PackageProjectUrl: {content}"
+        );
+        assert!(
+            content.contains("<PackageTags>bindings;llm</PackageTags>"),
+            "csproj must carry the configured keywords (alphabetised by scaffold_meta) as \
+             semicolon-separated PackageTags: {content}"
+        );
+    }
+}
+
+#[test]
+fn test_render_csharp_runtime_csproj_derives_company_from_authors() {
+    let config = test_config();
+    let content = render_csharp_runtime_csproj(&config, "1.2.3");
+
+    assert!(
+        content.contains("<Company>Alice</Company>"),
+        "runtime csproj must derive Company from the configured authors, not a hardcoded alef literal: {content}"
+    );
+}
+
+#[test]
+fn test_render_csharp_csproj_rid_comment_matches_thin_meta_package_reality() {
+    let config = test_config();
+    let content = render_csharp_csproj(&config, "1.2.3");
+
+    assert!(
+        !content.contains("Native asset resolution at consumer build time is driven by the\n         `runtimes/<rid>/native/` payload baked into the NuGet package"),
+        "the RID comment must not claim this package embeds runtimes/<rid>/native/ payload — \
+         the surrounding csproj is explicitly a thin meta-package that carries none: {content}"
+    );
+    assert!(
+        content.contains("RID-fallback graph"),
+        "the RID comment must describe NuGet's RID-fallback graph as the real resolution mechanism: {content}"
     );
 }
 

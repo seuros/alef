@@ -220,6 +220,61 @@ fn poly_toml_omits_snippet_check_without_discovery_roots() {
     assert!(!poly_toml(&files).content.contains("alef-snippets"));
 }
 
+/// Regression: a consumer with no `docs/` tree at all (e.g. docs migrated into
+/// an Astro `docs-site/`) must not have a hardcoded `docs/assets/**` or
+/// `docs/snippets/**` phantom path reinstated into their discovery excludes.
+#[test]
+fn poly_toml_omits_hardcoded_docs_excludes_without_snippets_config() {
+    let config = test_config();
+    let api = test_api();
+    let files = scaffold(&api, &config, &[Language::Python]).unwrap();
+    let c = &poly_toml(&files).content;
+
+    assert!(
+        !c.contains("docs/assets"),
+        "must not hardcode a docs/assets exclude; got:\n{c}"
+    );
+    assert!(
+        !c.contains("docs/snippets"),
+        "must not hardcode a docs/snippets exclude when no snippet dirs are configured; got:\n{c}"
+    );
+}
+
+/// The snippet-root exclude must track the CONFIGURED snippet directory, not a
+/// hardcoded `docs/snippets`, so a repo whose docs live under `docs-site/` still
+/// gets its actual snippet root excluded from lint/fmt.
+#[test]
+fn poly_toml_discovery_excludes_configured_snippet_dirs_not_hardcoded_docs_path() {
+    let config = test_config_with_workspace_toml(
+        r#"[workspace.docs.snippets]
+dirs = ["docs-site/src/snippets"]"#,
+    );
+    let files = scaffold_poly_config(&config, &[Language::Python]);
+    let c = &poly_toml(&files).content;
+
+    assert!(
+        c.contains("\"docs-site/src/snippets/**\""),
+        "discovery excludes must include the configured snippet root; got:\n{c}"
+    );
+    assert!(
+        !c.contains("\"docs/snippets/**\"") && !c.contains("/docs/snippets/**"),
+        "must not fall back to the hardcoded docs/snippets path; got:\n{c}"
+    );
+}
+
+#[test]
+fn poly_toml_discovery_excludes_every_configured_snippet_dir() {
+    let config = test_config_with_workspace_toml(
+        r#"[workspace.docs.snippets]
+dirs = ["docs/snippets", "docs/more-snippets"]"#,
+    );
+    let files = scaffold_poly_config(&config, &[Language::Python]);
+    let c = &poly_toml(&files).content;
+
+    assert!(c.contains("\"docs/snippets/**\""), "got:\n{c}");
+    assert!(c.contains("\"docs/more-snippets/**\""), "got:\n{c}");
+}
+
 #[test]
 fn poly_toml_php_uses_mago_correctness_security() {
     let config = test_config();

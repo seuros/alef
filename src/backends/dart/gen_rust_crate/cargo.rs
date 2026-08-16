@@ -112,6 +112,17 @@ pub(crate) fn emit_cargo_toml(
 ) -> GeneratedFile {
     let crate_name = config.name.as_str();
     let version = &api_version(config);
+    // Consumers keep this crate in their own Cargo workspace, so a literal `version =
+    // "…"` here silently falls behind on the next workspace-wide bump. Mirror every
+    // other binding-crate emitter (ffi.rs/php.rs/ruby.rs/node.rs/python.rs) and inherit
+    // `[workspace.package] version` when the root Cargo.toml declares one; a standalone
+    // (non-workspace) consumer still gets the literal. ~keep
+    let ws = crate::scaffold::detect_workspace_inheritance(config.workspace_root.as_deref());
+    let version_line = if ws.version {
+        "version.workspace = true".to_string()
+    } else {
+        format!("version = \"{version}\"")
+    };
     let frb_version = crate::backends::dart::naming::dart_frb_version(config);
     let core_crate_dir = config.core_crate_for_language(crate::core::config::extras::Language::Dart);
     let dart_override = config.dart.as_ref().and_then(|c| c.core_crate_override.as_deref());
@@ -361,11 +372,29 @@ pub(crate) fn emit_cargo_toml(
         }
     };
 
+    // The [lints.rust] block keeps cfg(frb_expand) in the allow-list (FRB-internal
+    // cfg used during macro expansion). Cargo allows only one `[lints.rust]` table
+    // per manifest, so a configured `[crates.cargo_lints.rust]` entry becomes an
+    // extra sibling line under this same hand-written header rather than a second
+    // one -- see `CargoLintsConfig::extra_rust_lines`. ~keep
+    let mut lints_rust_lines = vec![
+        "# flutter_rust_bridge uses #[cfg(frb_expand)] internally during macro expansion.".to_string(),
+        "unexpected_cfgs = { level = \"warn\", check-cfg = ['cfg(frb_expand)'] }".to_string(),
+    ];
+    lints_rust_lines.extend(config.cargo_lints.extra_rust_lines(&["unexpected_cfgs"]));
+    let clippy_block = config.cargo_lints.clippy_block();
+    let clippy_section = if clippy_block.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{clippy_block}")
+    };
+    let lints_block = format!("[lints.rust]\n{}{clippy_section}", lints_rust_lines.join("\n"));
+
     let content = template_env::render(
         "rust_cargo_toml.rs.jinja",
         minijinja::context! {
             crate_name => crate_name,
-            version => version.as_str(),
+            version_line => version_line.as_str(),
             license => license,
             machete_ignored_list => machete_ignored_list.as_str(),
             core_dep_line => core_dep_line.as_str(),
@@ -373,6 +402,7 @@ pub(crate) fn emit_cargo_toml(
             extra_deps => extra_deps.as_str(),
             target_override_blocks => target_override_blocks.as_str(),
             cfg_features_table => cfg_features_table.as_str(),
+            lints_block => lints_block.as_str(),
         },
     );
 
@@ -555,6 +585,82 @@ mod feature_cfg_tests {
             file.content
         );
         toml::from_str::<toml::Value>(&file.content).expect("generated Cargo.toml must be valid TOML");
+    }
+
+    /// The dart scaffold already emits its own `unexpected_cfgs` check-cfg
+    /// allowlist for `cfg(frb_expand)` into `[lints.rust]`. A configured
+    /// `[crates.cargo_lints]` table must compose with that single table -- not
+    /// open a second `[lints.rust]` header, which Cargo rejects as a duplicate
+    /// table -- and the builtin `cfg(frb_expand)` entry must survive a colliding
+    /// user key.
+    #[test]
+    fn cargo_toml_merges_configured_cargo_lints_with_builtin_unexpected_cfgs() {
+        use crate::core::config::{CargoLintsConfig, ResolvedCrateConfig};
+        use crate::core::ir::ApiSurface;
+
+        let mut cargo_lints = CargoLintsConfig::default();
+        cargo_lints
+            .rust
+            .insert("unexpected_cfgs".to_string(), toml::Value::String("warn".to_string()));
+        cargo_lints
+            .rust
+            .insert("unused_must_use".to_string(), toml::Value::String("deny".to_string()));
+        cargo_lints
+            .clippy
+            .insert("print_stdout".to_string(), toml::Value::String("deny".to_string()));
+        let config = ResolvedCrateConfig {
+            name: "sample-lib".to_string(),
+            cargo_lints,
+            ..Default::default()
+        };
+        let file = emit_cargo_toml("packages/dart/rust", &ApiSurface::default(), &config, "sample_lib");
+
+        assert_eq!(
+            file.content.matches("[lints.rust]").count(),
+            1,
+            "must not emit a second [lints.rust] table; got:\n{}",
+            file.content
+        );
+        assert!(
+            file.content
+                .contains("unexpected_cfgs = { level = \"warn\", check-cfg = ['cfg(frb_expand)'] }"),
+            "the builtin cfg(frb_expand) entry must survive the user's colliding key; got:\n{}",
+            file.content
+        );
+        assert!(
+            file.content.contains("unused_must_use = \"deny\""),
+            "non-colliding configured rust lints must be spliced in; got:\n{}",
+            file.content
+        );
+        assert!(
+            file.content.contains("[lints.clippy]\nprint_stdout = \"deny\""),
+            "configured clippy lints must be spliced in; got:\n{}",
+            file.content
+        );
+        toml::from_str::<toml::Value>(&file.content).expect("generated Cargo.toml must be valid TOML");
+    }
+
+    /// Absence of a configured `cargo_lints` table must reproduce the pre-existing
+    /// builtin `[lints.rust]` block exactly -- byte-identical to a crate that never
+    /// set the field.
+    #[test]
+    fn cargo_toml_omits_extra_lints_when_cargo_lints_unset() {
+        use crate::core::config::ResolvedCrateConfig;
+        use crate::core::ir::ApiSurface;
+
+        let config = ResolvedCrateConfig {
+            name: "sample-lib".to_string(),
+            ..Default::default()
+        };
+        let file = emit_cargo_toml("packages/dart/rust", &ApiSurface::default(), &config, "sample_lib");
+
+        assert!(
+            file.content.ends_with(
+                "[lints.rust]\n# flutter_rust_bridge uses #[cfg(frb_expand)] internally during macro expansion.\nunexpected_cfgs = { level = \"warn\", check-cfg = ['cfg(frb_expand)'] }\n"
+            ),
+            "got:\n{}",
+            file.content
+        );
     }
 
     /// When no item has a cfg attribute the `[features]` block must be omitted.
@@ -806,6 +912,87 @@ embeddings = []
             "the `not(...)` default branch must sort before `target_os = \"android\"`; got:\n{content}"
         );
         toml::from_str::<toml::Value>(content).expect("generated Cargo.toml must be valid TOML");
+    }
+
+    /// A consumer whose root `Cargo.toml` declares a `[workspace]` but no
+    /// `[workspace.package] version` (e.g. a plain `resolver`+`members` table) must
+    /// still get a literal `version = "…"` line — there is nothing to inherit from.
+    #[test]
+    fn cargo_toml_uses_literal_version_without_workspace_package_version() {
+        use crate::core::config::ResolvedCrateConfig;
+        use crate::core::ir::ApiSurface;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let root_cargo_toml = root.join("Cargo.toml");
+        fs::write(
+            &root_cargo_toml,
+            "[workspace]\nresolver = \"2\"\nmembers = [\"crates/sample-core\"]\n",
+        )
+        .unwrap();
+
+        let api = ApiSurface::default();
+        let config = ResolvedCrateConfig {
+            name: "sample-core".to_string(),
+            workspace_root: Some(root.to_path_buf()),
+            version_from: root_cargo_toml.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let file = emit_cargo_toml("packages/dart/rust", &api, &config, "sample_core");
+        assert!(
+            file.content.contains("version = \"0.1.0\""),
+            "must fall back to a literal version when [workspace.package] is absent; got:\n{}",
+            file.content
+        );
+        assert!(
+            !file.content.contains("version.workspace = true"),
+            "must not claim workspace inheritance that doesn't exist; got:\n{}",
+            file.content
+        );
+        toml::from_str::<toml::Value>(&file.content).expect("generated Cargo.toml must be valid TOML");
+    }
+
+    /// A consumer whose root `Cargo.toml` declares `[workspace.package] version` must
+    /// get `version.workspace = true` in the emitted dart rust crate's Cargo.toml, so
+    /// the crate tracks the workspace-wide version bump instead of drifting behind a
+    /// stamped-once literal.
+    #[test]
+    fn cargo_toml_inherits_workspace_version_when_workspace_package_declares_it() {
+        use crate::core::config::ResolvedCrateConfig;
+        use crate::core::ir::ApiSurface;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let root_cargo_toml = root.join("Cargo.toml");
+        fs::write(
+            &root_cargo_toml,
+            "[workspace]\nresolver = \"2\"\nmembers = [\"crates/sample-core\"]\n\n[workspace.package]\nversion = \"9.9.9\"\n",
+        )
+        .unwrap();
+
+        let api = ApiSurface::default();
+        let config = ResolvedCrateConfig {
+            name: "sample-core".to_string(),
+            workspace_root: Some(root.to_path_buf()),
+            version_from: root_cargo_toml.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let file = emit_cargo_toml("packages/dart/rust", &api, &config, "sample_core");
+        assert!(
+            file.content.contains("version.workspace = true"),
+            "must inherit the workspace version when [workspace.package] declares one; got:\n{}",
+            file.content
+        );
+        assert!(
+            !file.content.contains("version = \"9.9.9\""),
+            "must not also emit a literal version line; got:\n{}",
+            file.content
+        );
+        toml::from_str::<toml::Value>(&file.content).expect("generated Cargo.toml must be valid TOML");
     }
 }
 

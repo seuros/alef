@@ -109,6 +109,52 @@ serde = { version = "1", features = ["derive", "rc"] }
     toml::from_str::<toml::Value>(&cargo_toml).expect("generated Cargo.toml must be valid TOML");
 }
 
+/// `[crates.cargo_lints]` must round-trip into the emitted wasm `Cargo.toml` as a
+/// `[lints.rust]` / `[lints.clippy]` block, and produce valid TOML. The wasm crate
+/// has no builtin `[lints.*]` block of its own, so this is a plain splice, not a merge.
+#[test]
+fn cargo_toml_emits_configured_cargo_lints() {
+    let cfg: NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["wasm"]
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+
+[crates.cargo_lints.rust]
+unused_must_use = "deny"
+
+[crates.cargo_lints.clippy]
+print_stdout = "deny"
+"#,
+    )
+    .unwrap();
+    let config = cfg.resolve().unwrap().remove(0);
+    let cargo_toml = gen_cargo_toml(&empty_api(), &config);
+
+    assert!(
+        cargo_toml.contains("[lints.rust]\nunused_must_use = \"deny\""),
+        "expected [lints.rust] block, got:\n{cargo_toml}"
+    );
+    assert!(
+        cargo_toml.contains("[lints.clippy]\nprint_stdout = \"deny\""),
+        "expected [lints.clippy] block, got:\n{cargo_toml}"
+    );
+    toml::from_str::<toml::Value>(&cargo_toml).expect("generated Cargo.toml with cargo_lints must be valid TOML");
+}
+
+/// Absence of `[crates.cargo_lints]` must not emit any `[lints]` table at all.
+#[test]
+fn cargo_toml_omits_lints_block_when_cargo_lints_unset() {
+    let config = make_config();
+    let cargo_toml = gen_cargo_toml(&empty_api(), &config);
+    assert!(
+        !cargo_toml.contains("[lints"),
+        "no [lints] table should be emitted when cargo_lints is unset, got:\n{cargo_toml}"
+    );
+}
+
 #[test]
 fn cargo_toml_emits_passthrough_features_for_type_cfg_attrs() {
     use crate::core::ir::TypeDef;

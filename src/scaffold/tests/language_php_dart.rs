@@ -370,9 +370,11 @@ fn test_scaffold_dart() {
         "got: {}",
         test_file.content
     );
+    // A placeholder that never imports the package under test stays green through a total
+    // API break — it must link the generated package, not just package:test.
     assert!(
-        test_file.content.contains("expect(1 + 1, equals(2))"),
-        "got: {}",
+        test_file.content.contains("import 'package:my_lib/my_lib.dart'"),
+        "placeholder test must import the package under test; got: {}",
         test_file.content
     );
 
@@ -388,6 +390,12 @@ fn test_scaffold_dart() {
         PathBuf::from("packages/dart/example/my_lib_example.dart")
     );
     assert!(files[7].content.contains("void main"));
+    // `package:my_lib' (no path segment) is an invalid `package:` URI and fails `dart analyze`.
+    assert!(
+        files[7].content.contains("import 'package:my_lib/my_lib.dart'"),
+        "example must use a valid package: URI with a path segment; got: {}",
+        files[7].content
+    );
 
     let changelog = &files[8];
     assert_eq!(changelog.path, PathBuf::from("packages/dart/CHANGELOG.md"));
@@ -464,4 +472,27 @@ style = "ffi"
         .unwrap();
     assert!(readme.content.contains("cargo build --release -p my-lib-ffi"));
     assert!(!readme.content.contains("flutter_rust_bridge_codegen generate"));
+
+    // FFI style has no top-level barrel file (see gen_ffi::emit) — the public re-export
+    // wrapper lives at lib/src/{module}.dart, not lib/{module}.dart like FRB's default
+    // barrel, so the example/test package: URIs must point at the `src/` path instead.
+    let example = files
+        .iter()
+        .find(|f| f.path == Path::new("packages/dart/example/my_lib_example.dart"))
+        .unwrap();
+    assert!(
+        example.content.contains("import 'package:my_lib/src/my_lib.dart'"),
+        "FFI style example must import the src/ wrapper, not a nonexistent barrel; got: {}",
+        example.content
+    );
+
+    let test_file = files
+        .iter()
+        .find(|f| f.path == Path::new("packages/dart/test/my_lib_test.dart"))
+        .unwrap();
+    assert!(
+        test_file.content.contains("import 'package:my_lib/src/my_lib.dart'"),
+        "FFI style placeholder test must import the src/ wrapper, not a nonexistent barrel; got: {}",
+        test_file.content
+    );
 }

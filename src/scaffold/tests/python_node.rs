@@ -382,6 +382,66 @@ fn test_scaffold_node_package_json_centralizes_platform_metadata() {
 }
 
 #[test]
+fn test_scaffold_node_package_json_includes_publish_metadata() {
+    let config = test_config_from_toml(
+        r#"
+[crates.package_metadata]
+homepage = "https://example.com/my-lib"
+issues = "https://example.com/my-lib/issues"
+authors = ["Alice", "Bob"]
+keywords = ["llm", "bindings"]
+"#,
+    );
+    let api = test_api();
+    let files = scaffold(&api, &config, &[Language::Node]).unwrap();
+    let pkg_json = files
+        .iter()
+        .find(|f| f.path == Path::new("crates/my-lib-node/package.json"))
+        .expect("crate package.json must be emitted");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&pkg_json.content).expect("emitted package.json must be valid JSON");
+
+    assert_eq!(parsed["homepage"], "https://example.com/my-lib");
+    assert_eq!(parsed["bugs"]["url"], "https://example.com/my-lib/issues");
+    assert_eq!(parsed["author"], "Alice");
+    assert_eq!(parsed["contributors"][0], "Bob");
+    let keywords = parsed["keywords"].as_array().expect("keywords must be an array");
+    assert!(keywords.contains(&serde_json::Value::String("llm".to_string())));
+    assert!(keywords.contains(&serde_json::Value::String("bindings".to_string())));
+
+    let platform = files
+        .iter()
+        .find(|f| f.path == Path::new("crates/my-lib-node/npm/linux-x64-musl/package.json"))
+        .expect("musl platform package manifest must be emitted");
+    let platform_json: serde_json::Value =
+        serde_json::from_str(&platform.content).expect("valid platform package.json");
+    assert_eq!(
+        platform_json["homepage"], "https://example.com/my-lib",
+        "platform manifests must also carry publish metadata, got: {platform_json}"
+    );
+    assert_eq!(platform_json["author"], "Alice");
+}
+
+#[test]
+fn test_scaffold_node_package_json_omits_publish_metadata_when_unconfigured() {
+    let config = minimal_config_from_toml("");
+    let api = test_api();
+    let files = scaffold(&api, &config, &[Language::Node]).unwrap();
+    let pkg_json = files
+        .iter()
+        .find(|f| f.path == Path::new("crates/my-lib-node/package.json"))
+        .expect("crate package.json must be emitted");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&pkg_json.content).expect("emitted package.json must be valid JSON");
+
+    assert!(parsed.get("homepage").is_none(), "got: {parsed}");
+    assert!(parsed.get("bugs").is_none(), "got: {parsed}");
+    assert!(parsed.get("author").is_none(), "got: {parsed}");
+    assert!(parsed.get("contributors").is_none(), "got: {parsed}");
+    assert!(parsed.get("keywords").is_none(), "got: {parsed}");
+}
+
+#[test]
 fn test_scaffold_node_exclude_platforms_drops_musl() {
     let config = test_config_from_toml(
         r#"

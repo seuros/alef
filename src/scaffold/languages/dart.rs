@@ -181,15 +181,38 @@ linter:
     // them silently strips the natives and consumers cannot load the FFI library.
     let pubignore = "android/\nios/\nblobs/\nrust/\nexample/\ntest/\n";
 
-    let test_dart = r#"import 'package:test/test.dart';
+    // `package:` URIs require at least one path segment after the package name.
+    // FRB style exports the public API through the default barrel file at
+    // `lib/{module_name}.dart` (see `barrel_name` in gen_bindings::generate_bindings,
+    // which defaults to the same crate-derived module name used here). FFI style has
+    // no barrel — the re-export wrapper lives at `lib/src/{module_name}.dart`
+    // (see gen_ffi::emit). ~keep
+    let package_import_path = match style {
+        DartStyle::Frb => format!("{pubspec_name}/{module_name}.dart"),
+        DartStyle::Ffi => format!("{pubspec_name}/src/{module_name}.dart"),
+    };
 
-void main() {
-  test('placeholder', () {
+    // Importing the package (rather than only `package:test`) means a placeholder
+    // test still fails to compile if the generated bindings themselves fail to
+    // compile, catching a total API break instead of passing green while linking
+    // nothing. `{module_name}` is a library prefix, not a value — the API surface
+    // is not knowable at scaffold time, so there is nothing on it a generic seed
+    // can assert against; the import alone is what forces resolution, hence the
+    // explicit `unused_import` suppression rather than a fabricated call. ~keep
+    let test_dart = format!(
+        r#"import 'package:test/test.dart';
+// ignore: unused_import
+import 'package:{package_import_path}' as {module_name};
+
+void main() {{
+  test('placeholder', () {{
     expect(1 + 1, equals(2));
-  });
-}
-"#
-    .to_string();
+  }});
+}}
+"#,
+        package_import_path = package_import_path,
+        module_name = module_name,
+    );
 
     let crate_name = &api.crate_name;
     let build_commands = match style {
@@ -253,13 +276,14 @@ From the repository root:
     );
 
     let example_dart = format!(
-        r#"import 'package:{pubspec_name}' as {module_name};
+        r#"import 'package:{package_import_path}' as {module_name};
 
 void main() {{
   print('Example: {pubspec_name} loaded successfully');
   // Add your API calls here after code generation
 }}
 "#,
+        package_import_path = package_import_path,
         pubspec_name = pubspec_name,
         module_name = module_name,
     );

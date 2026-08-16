@@ -232,9 +232,10 @@ pub(crate) fn scaffold_ffi(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
         .as_deref()
         .map(|repository| format!("\nrepository = \"{repository}\""))
         .unwrap_or_default();
+    let lints_section = crate::scaffold::cargo_lints_section(config);
 
     let content = format!(
-        r#"{pkg_header}{repository_line}
+        r#"{pkg_header}{repository_line}{lints_section}
 
 # `serde`, `serde_json`, `ahash`, and `tokio` are emitted unconditionally above so the
 # manifest is stable across regens (and so the C FFI codegen can pull them in
@@ -265,6 +266,7 @@ tempfile = "{tempfile}"
 "#,
         pkg_header = pkg_header,
         repository_line = repository_line,
+        lints_section = lints_section,
         dep_block = dep_block,
         target_blocks_section = target_blocks_section,
         cbindgen = tv::cargo::CBINDGEN,
@@ -717,6 +719,69 @@ extra_features = ["wasm-http"]
                 "feature `{name}` is gated on but never declared, got:\n{features}"
             );
         }
+    }
+
+    /// `[crates.cargo_lints]` must round-trip into the emitted FFI `Cargo.toml` as a
+    /// `[lints.rust]` / `[lints.clippy]` block, and produce valid TOML.
+    #[test]
+    fn ffi_cargo_toml_emits_configured_cargo_lints() {
+        let config = resolve_config(
+            r#"
+[workspace]
+languages = ["ffi"]
+[[crates]]
+name = "my-lib"
+sources = []
+
+[crates.cargo_lints.rust]
+unused_must_use = "deny"
+
+[crates.cargo_lints.clippy]
+print_stdout = "deny"
+"#,
+        );
+        let api = crate::core::ir::ApiSurface::default();
+        let files = scaffold_ffi(&api, &config).expect("scaffold");
+        let cargo = &files
+            .iter()
+            .find(|f| f.path.ends_with("Cargo.toml"))
+            .expect("ffi Cargo.toml emitted")
+            .content;
+        // Exactly one blank line must separate the `[package]` header from the
+        // spliced `[lints.rust]` block -- not the whole file, since the `[features]`
+        // block's `{core_features_passthrough_block}` slot is independently blank
+        // whenever no cfg-gated feature is emitted (true for this test's empty API
+        // surface), which pre-existingly leaves a double blank line before
+        // `[dependencies]` regardless of cargo_lints. ~keep
+        assert!(
+            cargo.contains("categories = []\n\n[lints.rust]\nunused_must_use = \"deny\""),
+            "expected exactly one blank line between [package] and [lints.rust], got:\n{cargo}"
+        );
+        assert!(
+            cargo.contains("[lints.rust]\nunused_must_use = \"deny\"\n\n[lints.clippy]\nprint_stdout = \"deny\""),
+            "expected exactly one blank line between [lints.rust] and [lints.clippy], got:\n{cargo}"
+        );
+        assert!(
+            cargo.contains("print_stdout = \"deny\"\n\n# `serde`"),
+            "expected exactly one blank line between [lints.clippy] and the next section, got:\n{cargo}"
+        );
+        toml::from_str::<toml::Value>(cargo).expect("generated Cargo.toml with cargo_lints must be valid TOML");
+    }
+
+    /// Absence of `[crates.cargo_lints]` must not emit any `[lints]` table at all —
+    /// byte-identical output to a crate that never set the field.
+    #[test]
+    fn ffi_cargo_toml_omits_lints_block_when_cargo_lints_unset() {
+        let files = scaffold_ffi(&crate::core::ir::ApiSurface::default(), &minimal_config()).expect("scaffold");
+        let cargo = &files
+            .iter()
+            .find(|f| f.path.ends_with("Cargo.toml"))
+            .expect("ffi Cargo.toml emitted")
+            .content;
+        assert!(
+            !cargo.contains("[lints"),
+            "no [lints] table should be emitted when cargo_lints is unset, got:\n{cargo}"
+        );
     }
 
     #[test]

@@ -161,8 +161,9 @@ pub(crate) fn scaffold_r_cargo(api: &ApiSurface, config: &ResolvedCrateConfig) -
         String::new()
     };
 
+    let lints_section = crate::scaffold::cargo_lints_section(config);
     let cargo_content = format!(
-        r#"{pkg_header}
+        r#"{pkg_header}{lints_section}
 
 {machete_block}[lib]
 crate-type = ["staticlib", "lib"]
@@ -171,6 +172,7 @@ crate-type = ["staticlib", "lib"]
 {deps_section}
 {features_block}"#,
         pkg_header = pkg_header,
+        lints_section = lints_section,
         machete_block = machete_block,
         deps_section = deps_section,
         features_block = features_block,

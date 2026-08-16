@@ -3,8 +3,41 @@ use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::ApiSurface;
 use crate::core::version::to_dotnet_assembly_version;
 use crate::scaffold::naming::csharp_package_id;
-use crate::{scaffold::scaffold_meta, scaffold::xml_escape};
+use crate::{scaffold::ScaffoldMeta, scaffold::scaffold_meta, scaffold::xml_escape};
 use std::path::PathBuf;
+
+/// Build the `<PackageProjectUrl>` / `<PackageTags>` / `<Company>` csproj
+/// `<PropertyGroup>` lines shared by [`render_csharp_csproj`] and
+/// [`render_csharp_runtime_csproj`], each pre-indented and newline-terminated
+/// for direct splicing next to the existing `authors`/`repository` blocks.
+/// Empty for a field the consumer hasn't configured, matching that convention.
+///
+/// `<Company>` has no dedicated config field — an unconditional
+/// `Alef Team` literal here was wrong for every consumer (it names alef's own
+/// maintainers, not the binding's), so it's derived from the first configured
+/// author instead, the same source `<Authors>` reads. ~keep
+fn csharp_publish_metadata_blocks(meta: &ScaffoldMeta) -> (String, String, String) {
+    let project_url_block = if meta.homepage.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "    <PackageProjectUrl>{}</PackageProjectUrl>\n",
+            xml_escape(&meta.homepage)
+        )
+    };
+    let tags_block = if meta.keywords.is_empty() {
+        String::new()
+    } else {
+        let escaped: Vec<String> = meta.keywords.iter().map(|k| xml_escape(k)).collect();
+        format!("    <PackageTags>{}</PackageTags>\n", escaped.join(";"))
+    };
+    let company_block = meta
+        .authors
+        .first()
+        .map(|author| format!("    <Company>{}</Company>\n", xml_escape(author)))
+        .unwrap_or_default();
+    (project_url_block, tags_block, company_block)
+}
 
 /// Runtime Identifiers (RIDs) advertised by the binding NuGet package, each
 /// paired with the Rust target triple that produces its native asset.
@@ -62,6 +95,7 @@ pub fn render_csharp_csproj(config: &ResolvedCrateConfig, version: &str) -> Stri
         .as_deref()
         .map(|repository| format!("    <RepositoryUrl>{}</RepositoryUrl>\n", xml_escape(repository)))
         .unwrap_or_default();
+    let (project_url_csproj, tags_csproj, company_csproj) = csharp_publish_metadata_blocks(&meta);
 
     let assembly_version = to_dotnet_assembly_version(version);
     let runtime_identifiers = PUBLISHED_RUNTIME_IDENTIFIERS
@@ -83,16 +117,22 @@ pub fn render_csharp_csproj(config: &ResolvedCrateConfig, version: &str) -> Stri
     <InformationalVersion>{version}</InformationalVersion>
     <Description>{description}</Description>
     <PackageLicenseFile>LICENSE</PackageLicenseFile>
-{repository}{authors}    <Company>Alef Team</Company>
-    <Product>{namespace}</Product>
+{repository}{authors}{project_url}{tags}{company}    <Product>{namespace}</Product>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Nullable>enable</Nullable>
     <!-- AnyCPU managed assembly so the PE `Machine` header stays processor-neutral
          and consumers never see `warning CS8012: ... targets a different processor`.
-         Native asset resolution at consumer build time is driven by the
-         `runtimes/<rid>/native/` payload baked into the NuGet package — not a
-         single `<RuntimeIdentifier>` on the package author's side, which would
-         force runtime-specific output and break AnyCPU packaging. -->
+         Native asset resolution at consumer restore/build time is NOT this assembly's
+         own runtimes/<rid>/native/ payload — see the "Thin meta-package" note above,
+         this package carries none. It is NuGet's RID-fallback graph, driven by
+         runtime.json (rendered from runtime.json.template by CI) against
+         <RuntimeIdentifiers> below, which pulls in the matching
+         {package_id}.runtime.<rid> package for the consumer's RID. Keeping
+         <RuntimeIdentifiers> in sync with the RIDs actually published as
+         `*.runtime.<rid>` packages is enforced by
+         scripts/ci/check_csharp_rid_drift.py; a drift here reproduces the
+         `warning CS8012` / `FileNotFoundException` failure mode this list's
+         own doc comment describes. -->
     <PlatformTarget>AnyCPU</PlatformTarget>
     <RuntimeIdentifiers>{runtime_identifiers}</RuntimeIdentifiers>
   </PropertyGroup>
@@ -128,6 +168,9 @@ pub fn render_csharp_csproj(config: &ResolvedCrateConfig, version: &str) -> Stri
         description = meta.description,
         repository = repository_csproj,
         authors = authors_csproj,
+        project_url = project_url_csproj,
+        tags = tags_csproj,
+        company = company_csproj,
         capsule_package_refs = capsule_package_refs(config),
     )
 }
@@ -249,6 +292,7 @@ pub fn render_csharp_runtime_csproj(config: &ResolvedCrateConfig, version: &str)
         .as_deref()
         .map(|repository| format!("    <RepositoryUrl>{}</RepositoryUrl>\n", xml_escape(repository)))
         .unwrap_or_default();
+    let (project_url_csproj, tags_csproj, company_csproj) = csharp_publish_metadata_blocks(&meta);
 
     let assembly_version = to_dotnet_assembly_version(version);
 
@@ -277,8 +321,7 @@ pub fn render_csharp_runtime_csproj(config: &ResolvedCrateConfig, version: &str)
     <InformationalVersion>{version}</InformationalVersion>
     <Description>{description} — native runtime assets for $(PublishedRID).</Description>
     <PackageLicenseFile>LICENSE</PackageLicenseFile>
-{repository}{authors}    <Company>Alef Team</Company>
-    <Product>{namespace}</Product>
+{repository}{authors}{project_url}{tags}{company}    <Product>{namespace}</Product>
     <!-- No managed assembly ships: this package carries only the RID's native
          payload under runtimes/<rid>/native/. Suppress the build output, its
          transitive dependencies, and the NU5128 "no lib/ref assembly for TFM"
@@ -314,6 +357,9 @@ pub fn render_csharp_runtime_csproj(config: &ResolvedCrateConfig, version: &str)
         description = meta.description,
         repository = repository_csproj,
         authors = authors_csproj,
+        project_url = project_url_csproj,
+        tags = tags_csproj,
+        company = company_csproj,
     )
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "{{ crate_name }}-dart"
-version = "{{ version }}"
+{{ version_line }}
 edition = "2024"
 license = "{{ license }}"
 
@@ -16,6 +16,4 @@ crate-type = ["cdylib", "staticlib"]
 {% endif %}
 [dependencies]
 {{ extra_deps }}{{ target_override_blocks }}
-[lints.rust]
-# flutter_rust_bridge uses #[cfg(frb_expand)] internally during macro expansion.
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
+{{ lints_block }}
