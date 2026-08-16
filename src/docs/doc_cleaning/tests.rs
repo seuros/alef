@@ -387,7 +387,7 @@ fn test_clean_doc_inline_filters_blank_only_lines() {
 /// and triggering MD056.
 ///
 /// The correct output after the full pipeline is `\|\|` (each pipe escaped
-/// exactly once by `escape_table_cell`).
+/// exactly once by `escape_table_cell`). ~keep
 #[test]
 fn test_clean_doc_inline_does_not_double_escape_pipes_in_logical_or() {
     let doc = "The length of this vec is ≤ rows * cols. An empty table (rows == 0 || cols == 0) produces an empty vec.";

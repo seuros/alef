@@ -76,7 +76,7 @@ pub struct WasmConfig {
     /// Hand-written Rust modules to declare in the generated lib.rs with `pub mod <name>;`
     /// and re-export with `pub use <name>::*;`. This is the knob for Rust-side dispatch/glue
     /// modules under wasm. Note that `[custom_modules].wasm` is NOT consumed by the wasm
-    /// backend (no code path reads it) — use this field instead.
+    /// backend (no code path reads it) — use this field instead. ~keep
     #[serde(default)]
     pub custom_rust_modules: Vec<String>,
     /// Per-type field exclusions for the generated From impls and binding struct.

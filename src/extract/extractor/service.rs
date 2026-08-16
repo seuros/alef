@@ -76,7 +76,7 @@ pub(crate) fn extract_services(surface: &mut ApiSurface, config: &ResolvedCrateC
 /// on every type that appears as a wrapper. Backends consult this flag to opt
 /// the type's static constructor into host-language constructor emission so
 /// variant call sites like `RouteBuilder(method, path)` resolve to a real
-/// instance instead of a "cannot create instances" runtime error.
+/// instance instead of a "cannot create instances" runtime error. ~keep
 fn mark_variant_wrapper_types(surface: &mut ApiSurface) {
     let mut wrapper_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for svc in &surface.services {
@@ -106,7 +106,7 @@ fn mark_variant_wrapper_types(surface: &mut ApiSurface) {
 /// field-constructed default). Every method named by the service config —
 /// constructor, configurators, registrations, and entrypoints — is recovered when
 /// absent from the owner type's already-extracted methods. Recovered methods are
-/// injected into the owner `TypeDef`.
+/// injected into the owner `TypeDef`. ~keep
 fn recover_service_methods(surface: &mut ApiSurface, config: &ResolvedCrateConfig) -> Vec<String> {
     let mut errors = Vec::new();
     let mut wanted: Vec<(String, String)> = Vec::new();

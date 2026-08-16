@@ -6,16 +6,16 @@ use serde::{Deserialize, Serialize};
 pub enum CoreWrapper {
     #[default]
     None,
-    /// `Cow<'static, str>` — binding uses String, core needs `.into()`
+    /// `Cow<'static, str>` — binding uses String, core needs `.into()` ~keep
     Cow,
-    /// `Arc<T>` — binding unwraps, core wraps with `Arc::new()`
+    /// `Arc<T>` — binding unwraps, core wraps with `Arc::new()` ~keep
     Arc,
-    /// `bytes::Bytes` — binding uses `Vec<u8>`, core needs `Bytes::from()`
+    /// `bytes::Bytes` — binding uses `Vec<u8>`, core needs `Bytes::from()` ~keep
     Bytes,
-    /// `Arc<Mutex<T>>` — binding wraps with `Arc::new(Mutex::new())`, methods call `.lock()`
+    /// `Arc<Mutex<T>>` — binding wraps with `Arc::new(Mutex::new())`, methods call `.lock()` ~keep
     ArcMutex,
     /// `Box<str>` — binding uses String, core needs `.into()` (same shape as Cow
-    /// but distinct so backends can keep wrapper-specific behavior addressable).
+    /// but distinct so backends can keep wrapper-specific behavior addressable). ~keep
     Box,
 }
 

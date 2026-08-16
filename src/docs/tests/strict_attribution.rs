@@ -54,7 +54,7 @@ fn result(id: &str, language: Language, status: SnippetStatus) -> ValidationResu
 }
 
 /// A strict failure must name the snippets behind the count. The achieved level is not recorded
-/// in emitted frontmatter, so a bare total leaves a consumer with no way to find the regressions.
+/// in emitted frontmatter, so a bare total leaves a consumer with no way to find the regressions. ~keep
 #[test]
 fn attribution_names_language_count_and_level_transition() {
     let summary = RunSummary::from_results(vec![
@@ -149,7 +149,7 @@ fn attribution_breaks_downgrades_down_by_reason_within_a_language() {
 
 /// A downgrade with no recorded reason (constructed directly, bypassing `finalize_result`'s
 /// `classify_result`) must not break attribution — it just contributes no reason breakdown,
-/// exactly like the pre-existing tests above that never set `downgrade_reason`.
+/// exactly like the pre-existing tests above that never set `downgrade_reason`. ~keep
 #[test]
 fn attribution_tolerates_a_downgrade_with_no_recorded_reason() {
     let summary = RunSummary::from_results(vec![downgraded("fixture_c_smoke", Language::C)]);

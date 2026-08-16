@@ -75,7 +75,7 @@ exclude_types = ["FfiHidden"]
 
 /// `[crates.go].exclude_functions` must also hide the function from the generated Go docs
 /// page, unioned with (not replacing) `[crates.ffi].exclude_functions` — mirrors
-/// `test_generate_docs_respects_language_excludes` above, which only covers the FFI-level list.
+/// `test_generate_docs_respects_language_excludes` above, which only covers the FFI-level list. ~keep
 #[test]
 fn test_generate_docs_respects_go_language_exclude_functions() {
     let config = config_from_toml(
@@ -452,7 +452,7 @@ fn doc_content<'a>(files: &'a [crate::core::backend::GeneratedFile], slug: &str)
 /// fence is bare (rustdoc's implicit-Rust convention, as `html-to-markdown`'s `convert()`
 /// doc comment uses) must render with a bare closing fence in `api-rust.md`, not a closing
 /// fence that re-carries the `rust` language tag — which reopens a block instead of closing
-/// it and corrupts every line of Markdown that follows in the rendered page.
+/// it and corrupts every line of Markdown that follows in the rendered page. ~keep
 #[test]
 fn test_generate_docs_rust_authored_example_closes_fence_bare() {
     let mut api = make_minimal_api("1.0.0");
@@ -479,7 +479,7 @@ fn test_generate_docs_rust_authored_example_closes_fence_bare() {
     let files = generate_docs(&api, &config, &[Language::Rust], "docs").unwrap();
     let content = doc_content(&files, "api-rust");
 
-    // The signature block also renders a ` ```rust ` fence, so scope the check to the
+    // ~keep The signature block also renders a ` ```rust ` fence, so scope the check to the
     // fence pair that immediately follows the `**Example:**` heading.
     let example_start = content
         .find("**Example:**")

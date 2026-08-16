@@ -180,7 +180,7 @@ fn is_tuple_type(ty: &TypeRef) -> bool {
 
 /// True if `ty` is `&[&T]`, `Vec<&T>`, `Option<&[&T]>`, `Option<Vec<&T>>`, or `&Vec<&T>`.
 /// FFI codegen uses this to emit a `Vec<&T>` intermediate when calling the core function
-/// (since `&Vec<T>` coerces to `&[T]`, not `&[&T]`).
+/// (since `&Vec<T>` coerces to `&[T]`, not `&[&T]`). ~keep
 fn vec_inner_is_ref(ty: &syn::Type) -> bool {
     let deref_ty = if let syn::Type::Reference(r) = ty {
         r.elem.as_ref()

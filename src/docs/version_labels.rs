@@ -1,7 +1,7 @@
 /// Return the public docs label for a SemVer-like version.
 ///
 /// API reference pages keep their package release badge intact, but item-level
-/// feature labels should be stable across patch and prerelease churn.
+/// feature labels should be stable across patch and prerelease churn. ~keep
 pub(super) fn major_minor(version: &str) -> String {
     let version = version.trim().trim_start_matches('v');
     let core = version

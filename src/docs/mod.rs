@@ -80,7 +80,7 @@ pub fn generate_docs(
 /// Exposed so the generate pipeline can protect committed reference pages from
 /// orphan cleanup: the page set `generate_docs_stage` emits depends on host
 /// state (CLI/MCP source presence, doc languages), so a host that produces fewer
-/// pages must not delete the committed ones it simply did not regenerate (#184).
+/// pages must not delete the committed ones it simply did not regenerate (#184). ~keep
 pub fn reference_output_dir(config: &ResolvedCrateConfig) -> PathBuf {
     config
         .docs

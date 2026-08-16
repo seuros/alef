@@ -444,7 +444,7 @@ mod tests {
     /// (`expected path relative to build root; found absolute path`) — this is a real `zig
     /// build` error, not a style nit, and it fired on every session-scoped snippet whose package
     /// root was written verbatim (always absolute — `zig_package_root` walks up from an
-    /// absolute manifest path).
+    /// absolute manifest path). ~keep
     #[test]
     fn relative_path_rebases_a_deeper_absolute_target_onto_a_shallower_base() {
         let base = PathBuf::from("/tmp/session/scratch");
@@ -486,7 +486,7 @@ mod tests {
     /// randomly-generated fingerprint would churn the manifest (irrelevant for this scratch file,
     /// which is never committed, but the algorithm is shared in spirit with
     /// `scaffold::languages::zig::zig_fingerprint`, which does need determinism for committed
-    /// output — so this also guards against the two silently diverging).
+    /// output — so this also guards against the two silently diverging). ~keep
     #[test]
     fn snippet_package_fingerprint_is_deterministic_and_zig_valid() {
         let first = snippet_package_fingerprint();
@@ -500,7 +500,7 @@ mod tests {
 
     /// The strongest available proof the manifest is well-formed: actually run `zig build`
     /// against it, rather than `zig ast-check` on a single unrelated file (which does not parse
-    /// `build.zig.zon` at all and would pass green even with a missing `.fingerprint`).
+    /// `build.zig.zon` at all and would pass green even with a missing `.fingerprint`). ~keep
     #[test]
     fn snippet_build_zon_parses_under_real_zig() {
         if which::which("zig").is_err() {

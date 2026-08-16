@@ -16,7 +16,7 @@ pub struct GapConfig {
     ///
     /// Mirrors the `pymdownx.snippets` `base_path` list. Each target is resolved
     /// against these paths in order; the first match wins. Falls back to
-    /// `docs_dir.join(target)` when the list is empty or no path matches.
+    /// `docs_dir.join(target)` when the list is empty or no path matches. ~keep
     pub include_base_paths: Vec<PathBuf>,
     pub configured_references: Vec<PathBuf>,
     pub exclude: Vec<PathBuf>,
@@ -169,7 +169,7 @@ pub fn coverage_ledger_references(snippet_dirs: &[PathBuf]) -> Result<Vec<PathBu
 /// # Errors
 ///
 /// Returns an error when a discovered ledger is unreadable, stale, or names an
-/// invalid or missing generated file. Only the missing-cell case is tolerated.
+/// invalid or missing generated file. Only the missing-cell case is tolerated. ~keep
 pub fn coverage_ledger_references_allowing_missing_cells(snippet_dirs: &[PathBuf]) -> Result<Vec<PathBuf>> {
     collect_coverage_ledger_references(snippet_dirs, MissingCells::Tolerate)
 }
@@ -414,7 +414,7 @@ pub fn parse_include_target(line: &str) -> Option<&str> {
 /// Unlike a MkDocs include target (resolved against `docs_dir` /
 /// `include_base_paths`), an ES module import path is always resolved
 /// relative to the importing file's own directory, so this function
-/// deliberately does not take `include_base_paths`.
+/// deliberately does not take `include_base_paths`. ~keep
 #[must_use]
 pub fn parse_mdx_content_imports(content: &str, source: &Path) -> Vec<SnippetReference> {
     let Some(source_dir) = source.parent() else {
@@ -462,7 +462,7 @@ pub fn parse_mdx_content_import_target(line: &str) -> Option<&str> {
 /// Collapse `.`/`..` path components produced by joining a relative import
 /// target onto its importing file's directory, without touching the
 /// filesystem (the target may not exist yet, which is exactly the case
-/// `missing_references` needs to detect).
+/// `missing_references` needs to detect). ~keep
 fn normalize_path(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
@@ -886,7 +886,7 @@ mod tests {
         // the real `docs/<section>/<page>.mdx` -> `../../../snippets/...` shape),
         // so resolving against `docs_dir` directly (the MkDocs behavior) would
         // produce the wrong path. Resolution must instead be relative to the
-        // importing file's own directory.
+        // importing file's own directory. ~keep
         let refs = parse_mdx_content_imports(
             r#"import { Content as Snip_x } from "../../../snippets/cli/install_cargo.md";"#,
             Path::new("/repo/docs-site/src/content/docs/cli/usage.mdx"),

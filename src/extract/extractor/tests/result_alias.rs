@@ -6,7 +6,7 @@ use super::*;
 /// Functions that return the alias with a single type argument (`Result<Foo>`, relying on
 /// the alias to supply the error type) must resolve `error_type` to the alias's real error
 /// type (`ConversionError`), not fall back to a placeholder like `anyhow::Error` that gets
-/// rendered downstream as a bare `Error` — a type the crate does not export.
+/// rendered downstream as a bare `Error` — a type the crate does not export. ~keep
 #[test]
 fn test_generic_result_alias_supplies_real_error_type() {
     let source = r#"
@@ -32,7 +32,7 @@ fn test_generic_result_alias_supplies_real_error_type() {
 }
 
 /// Same as above, but for a method on an `impl` block rather than a free function, since
-/// methods resolve their return type through a separate code path (`functions/methods.rs`).
+/// methods resolve their return type through a separate code path (`functions/methods.rs`). ~keep
 #[test]
 fn test_generic_result_alias_supplies_real_error_type_for_method() {
     let source = r#"
@@ -66,7 +66,7 @@ fn test_generic_result_alias_supplies_real_error_type_for_method() {
 /// (`error.rs` declares `Result`, `convert_api.rs` returns it). Extraction walks one module at a
 /// time, so a per-module hint map that replaces rather than accumulates loses the alias before the
 /// function is resolved — the single-module cases above pass while every real crate still renders
-/// the placeholder `Error`.
+/// the placeholder `Error`. ~keep
 #[test]
 fn test_result_alias_resolves_when_declared_in_a_different_module() {
     let source = r#"

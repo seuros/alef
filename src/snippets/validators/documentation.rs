@@ -4,7 +4,7 @@
 //! (mermaid, powershell, xml, docker) or are pure prose (text). Snippets in these fences
 //! pass automatically; their value is that the audit subcommand stops reporting them as
 //! `UnknownLanguage`. Use a stricter validator (or an external linter) when you really need
-//! to verify the contents.
+//! to verify the contents. ~keep
 
 use crate::snippets::error::Result;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};

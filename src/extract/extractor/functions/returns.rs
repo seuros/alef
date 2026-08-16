@@ -11,7 +11,7 @@ use crate::extract::type_resolver;
 /// `result_wrapping_aliases` contains names of type aliases (e.g. `"BoxFuture"`) whose
 /// definition wraps the inner type in `Result<T>`. When the alias is used as
 /// `BoxFuture<'_, T>` (T is NOT `Result`), we still mark `is_result=true` because the
-/// typedef internally wraps `Result<T>`.
+/// typedef internally wraps `Result<T>`. ~keep
 pub(crate) fn unwrap_future_return(
     output: &syn::ReturnType,
     result_wrapping_aliases: &ahash::AHashSet<String>,

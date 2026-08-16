@@ -96,7 +96,7 @@ fn cfg_attr_walk_derives(attr: &syn::Attribute, mut predicate: impl FnMut(&syn::
 /// features a downstream build enables; every inner attribute is treated as if it applied
 /// unconditionally. `cfg_attr` may nest (`cfg_attr(a, cfg_attr(b, serde(...)))`); nested
 /// `cfg_attr` lists are unwrapped recursively rather than surfaced to `visit`, so callers
-/// always see the "real" inner attributes regardless of nesting depth.
+/// always see the "real" inner attributes regardless of nesting depth. ~keep
 fn cfg_attr_walk_inner_metas(attr: &syn::Attribute, visit: &mut impl FnMut(&syn::Meta)) {
     let Ok(meta_list) = attr.meta.require_list() else {
         return;
@@ -211,7 +211,7 @@ pub(crate) fn extract_serde_rename_all(attrs: &[syn::Attribute]) -> Option<Strin
 /// Invoke `visit` with the `syn::MetaList` of every `#[serde(...)]` attribute in `attrs`,
 /// including ones nested inside `#[cfg_attr(...)]` (recursively, and regardless of how
 /// complex the gating condition is — Alef never evaluates `cfg`/`cfg_attr` predicates, so a
-/// gated `serde(...)` attribute is treated the same as a bare one).
+/// gated `serde(...)` attribute is treated the same as a bare one). ~keep
 fn for_each_serde_meta_list(attrs: &[syn::Attribute], mut visit: impl FnMut(&syn::MetaList)) {
     for attr in attrs {
         if attr.path().is_ident("serde") {
@@ -381,7 +381,7 @@ pub(crate) fn extract_serde_rename(attrs: &[syn::Attribute]) -> Option<String> {
 /// matching `#[cfg_attr(..., serde(default = "..."))]`). Returns `None` for a
 /// bare `#[serde(default)]` with no explicit path. Bindings that mirror the
 /// core's serde behavior need the path to emit an equivalent field-level
-/// default (e.g. `SsrfPolicy::from_env`) instead of falling back to `Default`.
+/// default (e.g. `SsrfPolicy::from_env`) instead of falling back to `Default`. ~keep
 pub(crate) fn extract_serde_default_path(attrs: &[syn::Attribute]) -> Option<String> {
     attrs.iter().find_map(|attr| {
         let attr_str = quote::quote!(#attr).to_string();

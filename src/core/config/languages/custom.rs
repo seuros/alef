@@ -40,7 +40,7 @@ pub struct CustomModulesConfig {
     /// (e.g. around a core type marked `alef(skip)`) into the FFI crate: without
     /// an entry here, a hand-written sibling `.rs` file under the crate's `src/`
     /// is never reached from the generated crate root, so its `extern "C"`
-    /// functions are silently absent from both the cdylib and the header.
+    /// functions are silently absent from both the cdylib and the header. ~keep
     #[serde(default)]
     pub ffi: Vec<String>,
     #[serde(default)]

@@ -606,7 +606,7 @@ mod tests {
             original_rust_path: _,       // From-impl target when core_import re-exports
             fields: _,                   // drives the whole struct-field codegen loop
             methods: _,                  // drives the whole method codegen loop
-            is_opaque: _,                // opaque-handle vs. value-type binding strategy
+            is_opaque: _,                // opaque-handle vs. value-type binding strategy ~keep
             is_clone: _,                 // gates `.clone()` emission ~keep
             is_copy: _,                  // gates Copy-vs-clone (avoids clippy::clone_on_copy)
             doc: _,                      // doc-comment emission
@@ -731,7 +731,7 @@ mod tests {
             rust_path: _,                // qualified path for From/Into codegen
             original_rust_path: _,       // From-impl target when core_import re-exports
             variants: _,                 // drives the whole variant codegen loop
-            methods: _,                  // static factory method codegen ~keep
+            methods: _,                  // extraction bookkeeping only; no backend forwards this into codegen ~keep
             doc: _,                      // doc-comment emission
             cfg: _,                      // conditional `#[cfg]` propagation
             is_copy: _,                  // gates Copy-vs-clone (avoids clippy::clone_on_copy)

@@ -415,7 +415,7 @@ mod tests {
     /// A failed target must be visible beyond the final summary counts: every snippet aimed at it
     /// silently becomes `SnippetStatus::Error` downstream (see
     /// `runner::session_preparation_error`), and before this there was no `tracing::` call
-    /// anywhere in this module to explain why.
+    /// anywhere in this module to explain why. ~keep
     #[tracing_test::traced_test]
     #[test]
     fn rejects_missing_configured_manifest() {

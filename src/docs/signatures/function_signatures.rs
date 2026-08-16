@@ -170,7 +170,7 @@ fn test_render_go_fn_sig_error_type_unit_return() {
 fn test_render_go_fn_sig_named_return_is_pointer_wrapped_even_when_infallible() {
     // Verified from source, not inference: `gen_function_wrapper`
     // (backends/go/gen_bindings/functions.rs) pointer-wraps a Named return unconditionally,
-    // not only when the function is fallible.
+    // not only when the function is fallible. ~keep
     let func = make_function(
         "current_session",
         vec![],

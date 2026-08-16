@@ -187,7 +187,7 @@ pub enum ValidationLevel {
     /// TypeScript). Deeper than `Compile` for dynamically-typed languages whose compile step is
     /// only a bytecode/syntax pass; equivalent to `Compile` for languages whose compiler already
     /// type-checks. Ordered between `Compile` and `Run` so it is the strongest static guarantee
-    /// short of execution.
+    /// short of execution. ~keep
     TypeCheck,
     Run,
 }
@@ -315,7 +315,7 @@ pub enum DowngradeReason {
     /// attribution even though the status is `Pass`, not a violation. ~keep
     Declared,
     /// A `<!-- snippet:*-only -->` suppression annotation lowered the ceiling below what was
-    /// requested; the author's choice, so it still fails strict.
+    /// requested; the author's choice, so it still fails strict. ~keep
     Annotation,
     /// The validator can never reach the requested level for this language (`max_level`, or a
     /// structural `achievable_level` gap) — unsatisfiable in any environment.

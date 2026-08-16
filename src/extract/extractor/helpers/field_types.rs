@@ -149,7 +149,7 @@ fn outermost_ident(ty: &syn::Type) -> Option<String> {
 /// trait objects have different ownership semantics and must not be collapsed into
 /// `ArcMutex`. The `Mutex`/`RwLock` check uses last-segment matching, so both
 /// `std::sync::Mutex` and `tokio::sync::Mutex` map to `CoreWrapper::ArcMutex`
-/// (intentional — both share the same lock/unlock binding shape).
+/// (intentional — both share the same lock/unlock binding shape). ~keep
 pub(crate) fn detect_core_wrapper(ty: &syn::Type) -> crate::core::ir::CoreWrapper {
     use crate::core::ir::CoreWrapper;
 

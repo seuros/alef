@@ -35,7 +35,7 @@ fn result(id: &str, status: SnippetStatus) -> ValidationResult {
 /// A run that both failed outright and downgraded something must report the failure, not the
 /// downgrade. Before `enforce_snippet_summary` was factored out of `validate_snippets`, the
 /// strict downgraded check ran (and bailed) before the failure check further down was ever
-/// reached, so a consumer investigating "N downgraded" never learned the run had actually failed.
+/// reached, so a consumer investigating "N downgraded" never learned the run had actually failed. ~keep
 #[test]
 fn hard_failures_bail_before_a_strict_downgrade() {
     let summary = RunSummary::from_results(vec![
@@ -70,7 +70,7 @@ fn session_errors_bail_before_a_strict_downgrade() {
 }
 
 /// With no hard failures, a strict downgrade must still bail — the reorder must not accidentally
-/// swallow the downgraded check entirely.
+/// swallow the downgraded check entirely. ~keep
 #[test]
 fn a_strict_downgrade_still_bails_when_nothing_failed() {
     let summary = RunSummary::from_results(vec![result("fixture_downgraded", SnippetStatus::Downgraded)]);

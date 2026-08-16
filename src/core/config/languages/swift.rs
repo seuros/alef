@@ -92,7 +92,7 @@ pub struct SwiftConfig {
     ///
     /// Mirrors `DartTargetDepOverride`. Needed because `libheif-sys` (pulled in
     /// via the `heic` feature) cannot cross-compile to iOS or Android NDK
-    /// targets and is not on the Windows runner image's library path.
+    /// targets and is not on the Windows runner image's library path. ~keep
     #[serde(default)]
     pub target_dep_overrides: Vec<SwiftTargetDepOverride>,
     /// Feature names that should be declared as opt-in flags in the wrapper's
@@ -146,7 +146,7 @@ pub struct SwiftConfig {
     ///
     /// A configuration that sets only `ffi_features` and leaves this list
     /// empty is unaffected: the FFI dependency is still emitted as a single
-    /// `[dependencies]` line.
+    /// `[dependencies]` line. ~keep
     #[serde(default)]
     pub ffi_target_dep_overrides: Vec<SwiftTargetDepOverride>,
 }

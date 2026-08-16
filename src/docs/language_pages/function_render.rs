@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn test_returns_with_override_wins_over_status_code_inference_for_unit_return() {
-        // A curated return-type override (streaming's use case) is trusted verbatim even
+        // ~keep A curated return-type override (streaming's use case) is trusted verbatim even
         // when the logical return type is `()` -- the status-code inference must not
         // second-guess it.
         let mut out = String::new();

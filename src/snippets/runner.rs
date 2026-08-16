@@ -1262,7 +1262,7 @@ mod tests {
     /// A validator whose declared ceiling sits below the requested level has not degraded
     /// anything — that level was never reachable for the language. Marking it `Downgraded`
     /// made `strict` + a level any validator caps below structurally unsatisfiable, so a
-    /// consumer's only escape was lowering the level for every other language too.
+    /// consumer's only escape was lowering the level for every other language too. ~keep
     #[test]
     fn validator_ceiling_passes_instead_of_downgrading() {
         let mut registry = ValidatorRegistry::new();
@@ -1292,7 +1292,7 @@ mod tests {
     }
 
     /// The exemption is narrow: an annotation that lowers the level is the author's choice,
-    /// not a capability ceiling, so it must still register as a downgrade and still fail strict.
+    /// not a capability ceiling, so it must still register as a downgrade and still fail strict. ~keep
     #[test]
     fn annotation_downgrade_is_not_treated_as_a_capability_ceiling() {
         let mut registry = ValidatorRegistry::new();
@@ -1391,7 +1391,7 @@ mod tests {
     /// `achievable_level_is_structural` — is exempted from `Downgraded` the same way a
     /// `max_level` ceiling is, mirroring `validator_ceiling_passes_instead_of_downgrading` but
     /// through the `achievable_level` input instead. This is the generic form of what
-    /// `php`/`ruby`/`elixir`/`bash`/`r`'s own tests pin, without depending on a real toolchain.
+    /// `php`/`ruby`/`elixir`/`bash`/`r`'s own tests pin, without depending on a real toolchain. ~keep
     struct StructurallyCappedAchievableValidator {
         language: crate::snippets::types::Language,
     }

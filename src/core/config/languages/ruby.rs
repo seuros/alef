@@ -48,7 +48,7 @@ pub struct RubyConfig {
     pub target_dep_overrides: Vec<FfiTargetDepOverride>,
     /// Override the `required_ruby_version` constraint emitted into the gemspec. A single
     /// RubyGems requirement string (e.g. `">= 3.2.0"`). When unset, defaults to `">= 3.2.0"`
-    /// (no upper bound, so the gem installs on Ruby 4.x).
+    /// (no upper bound, so the gem installs on Ruby 4.x). ~keep
     #[serde(default)]
     pub required_ruby_version: Option<String>,
 }

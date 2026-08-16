@@ -128,7 +128,7 @@ pub struct FfiConfig {
     /// generated FFI Cargo.toml. Used when some `cfg(...)` target requires a
     /// reduced feature set (e.g. the `x86_64-linux-android` emulator cannot
     /// link ONNX Runtime, so sample_core ships an `android-target` feature
-    /// flag that drops every ORT-dependent extractor).
+    /// flag that drops every ORT-dependent extractor). ~keep
     ///
     /// When this list is non-empty the scaffold emits
     /// `[target.'cfg(not(<any-cfg>))'.dependencies]` for the default branch

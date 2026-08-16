@@ -326,7 +326,7 @@ mod tests {
     /// snippet:*-only -->` comment is a separate suppression tracked on `annotation`. The two
     /// used to collapse into the same field, which made an author who declared exactly the level
     /// they wanted indistinguishable from one who suppressed validation below what was
-    /// requested — see `runner::finalize_result` for how the distinction is used downstream.
+    /// requested — see `runner::finalize_result` for how the distinction is used downstream. ~keep
     #[test]
     fn frontmatter_level_is_independent_of_inline_annotation() {
         let directory = tempfile::tempdir().expect("temporary snippet directory");

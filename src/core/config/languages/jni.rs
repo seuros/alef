@@ -32,7 +32,7 @@ pub struct JniConfig {
     /// (and potentially iOS) targets, where native-C deps (libheif via `heic`)
     /// and ONNX Runtime (`ort-sys`, no Android prebuilt) cannot link. Without
     /// per-target gating the JNI crate pulls the unconditional `["full"]`
-    /// feature set on every target, breaking the Kotlin-Android build.
+    /// feature set on every target, breaking the Kotlin-Android build. ~keep
     ///
     /// When this list is non-empty the scaffold emits
     /// `[target.'cfg(not(<any-cfg>))'.dependencies]` for the default branch

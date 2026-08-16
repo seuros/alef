@@ -76,7 +76,7 @@ fn extract_serde_content(attrs: &[syn::Attribute]) -> Option<String> {
 /// Returns `None` for structs with type or const generic parameters — they can't be
 /// directly exposed to FFI. Structs with only lifetime parameters (e.g. `Foo<'a>`) are
 /// accepted; `has_lifetime_params` is set to `true` so backends can emit the appropriate
-/// lifetime placeholders in `From<T<'_>>` and `T<'static>` positions.
+/// lifetime placeholders in `From<T<'_>>` and `T<'static>` positions. ~keep
 pub(crate) fn extract_struct(item: &syn::ItemStruct, crate_name: &str, module_path: &str) -> Option<TypeDef> {
     let has_non_lifetime = item
         .generics
@@ -239,7 +239,7 @@ pub(crate) fn extract_error_enum(item: &syn::ItemEnum, crate_name: &str, module_
                             }
                             if has_field_attr(&f.attrs, "from") {
                                 from = true;
-                                source = true; // #[from] implies source
+                                source = true; // #[from] implies source ~keep
                             }
                             extract_field(f, Some(crate_name))
                         })

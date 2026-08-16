@@ -165,7 +165,7 @@ fn resolve_typeref(newtype_map: &AHashMap<String, TypeRef>, ty: &mut TypeRef) {
 /// When `impl Trait for Type` is encountered before the trait definition has been extracted
 /// (e.g., `pub mod extractors` comes before `pub mod plugins` in lib.rs), the single-segment
 /// trait name lookup fails because the trait `TypeDef` doesn't exist yet. This pass retroactively
-/// resolves those methods by matching method names against trait types' method lists.
+/// resolves those methods by matching method names against trait types' method lists. ~keep
 pub(super) fn resolve_trait_sources(surface: &mut ApiSurface) {
     let mut trait_method_map: AHashMap<String, Vec<(String, String)>> = AHashMap::new();
     let mut trait_methods_set: AHashMap<String, Vec<String>> = AHashMap::new();

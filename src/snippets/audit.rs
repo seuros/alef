@@ -58,7 +58,7 @@ impl AuditReport {
 /// # Errors
 ///
 /// This function reports unreadable files as audit issues rather than returning
-/// an error, so callers can see every problem found in one run.
+/// an error, so callers can see every problem found in one run. ~keep
 #[must_use]
 pub fn audit(config: &AuditConfig) -> AuditReport {
     let mut issues = Vec::new();
@@ -283,7 +283,7 @@ fn issue(kind: AuditIssueKind, path: &Path, line: usize, message: String) -> Aud
 /// should accept without flagging as `UnknownLanguage`. These tags do not map
 /// to executable validators in `Language::from_fence_tag`, but they are
 /// well-known in the Markdown / docs ecosystem (data formats, diagram DSLs,
-/// shell session transcripts, third-party JVM build files, etc.).
+/// shell session transcripts, third-party JVM build files, etc.). ~keep
 fn is_known_display_tag(tag: &str) -> bool {
     matches!(
         tag.trim().to_lowercase().as_str(),

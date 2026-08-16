@@ -613,7 +613,7 @@ fn collect_reexport_names_with_cfg(tree: &syn::UseTree, surface: &mut ApiSurface
 ///   same-named entry exists under a disjoint cfg (the `not(X)` stub pattern),
 ///   clone that concrete entry under the re-export's cfg. The cloned entry
 ///   compiles to a call against the crate-root path, which the linker resolves
-///   to whichever cfg-enabled implementation is active at build time.
+///   to whichever cfg-enabled implementation is active at build time. ~keep
 fn apply_cfg_to_item(surface: &mut ApiSurface, name: &str, cfg: &str) {
     for typ in &mut surface.types {
         if typ.name == name && typ.cfg.is_none() {

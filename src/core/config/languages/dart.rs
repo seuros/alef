@@ -85,7 +85,7 @@ pub struct DartConfig {
     /// Use this when a function's FFI signature (e.g. nested tuples containing
     /// `Vec<u8>`) cannot be represented across the FRB bridge at all. Consumers must
     /// list the method names explicitly — this field has no built-in defaults so the
-    /// knob is library-agnostic.
+    /// knob is library-agnostic. ~keep
     ///
     /// Example (`alef.toml`):
     /// ```toml
@@ -141,7 +141,7 @@ pub struct DartConfig {
     /// when a feature pulls in a system library (e.g. `libheif-sys` via `heic`)
     /// whose `build.rs` cannot satisfy `pkg-config` under cross-compilation.
     /// The target-conditional `[target.'cfg(...)'.dependencies]` block alone
-    /// is insufficient because cargo unions feature sets across dep instances.
+    /// is insufficient because cargo unions feature sets across dep instances. ~keep
     #[serde(default)]
     pub excluded_default_features: Vec<String>,
 }

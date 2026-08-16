@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum TypeRef {
     Primitive(PrimitiveType),
     String,
-    /// Rust `char` — single Unicode character. Binding layer represents as single-char string.
+    /// Rust `char` — single Unicode character. Binding layer represents as single-char string. ~keep
     Char,
     Bytes,
     Optional(Box<TypeRef>),
