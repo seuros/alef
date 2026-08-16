@@ -257,6 +257,13 @@ impl ApiSurface {
         filtered
             .functions
             .retain(|f| cfg_feature_satisfied(f.cfg.as_deref(), enabled_features));
+        // `ServiceDef` carries its own `cfg` (see `cbindgen_feature_defines`, which reads it for
+        // the FFI header's `#if` guards); host-facing service-API generators must drop a
+        // cfg-gated service the same way they drop a cfg-gated type/enum/function, or they emit
+        // glue that calls FFI service entrypoints the active feature set never compiles. ~keep
+        filtered
+            .services
+            .retain(|s| cfg_feature_satisfied(s.cfg.as_deref(), enabled_features));
         filtered
     }
 

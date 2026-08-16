@@ -27,6 +27,52 @@ fn report_deferred_formatting(crate_name: &str, deferred: &[crate::e2e::format::
     }
 }
 
+/// Whether `docs.snippets.validation_level` runs snippets against a built
+/// language artifact rather than just parsing/checking syntax.
+///
+/// `alef all` never builds those artifacts: its own doc comment scopes it to
+/// "generate + stubs + scaffold + readme + docs + sync + e2e", and the only
+/// build it performs is the narrow one in `complete_generated_artifacts`
+/// (post-build hooks plus, only for `Language::Ffi`, the native cdylib --
+/// see `bin_cli/helpers.rs`). The full per-language build
+/// (`pipeline::build`, e.g. `npm run build` / `mvn compile` / `swift build` /
+/// `zig build`) only runs from the standalone `alef build` command. A
+/// `typecheck`/`compile`/`run` level configured without that build having
+/// run separately fails every affected snippet with a toolchain error whose
+/// real cause -- the missing artifact -- is not stated anywhere. ~keep
+fn snippet_validation_needs_build_artifacts(validation_level: Option<&str>) -> bool {
+    matches!(
+        validation_level.map(str::to_ascii_lowercase).as_deref(),
+        Some("typecheck" | "compile" | "run")
+    )
+}
+
+/// Surface the unbuilt-artifact precondition above, once per crate, before the
+/// docs stage runs snippet validation -- so it is diagnosable at the top of
+/// the run instead of inferred from a flood of per-snippet compiler errors
+/// further down. Does not skip or gate the docs stage: `alef all` has no way
+/// to know here whether a prior `alef build` already satisfied it. ~keep
+fn warn_if_snippet_validation_needs_build(config: &crate::core::config::ResolvedCrateConfig) {
+    let Some(level) = config
+        .docs
+        .as_ref()
+        .and_then(|docs| docs.snippets.as_ref())
+        .and_then(|snippets| snippets.validation_level.as_deref())
+    else {
+        return;
+    };
+    if !snippet_validation_needs_build_artifacts(Some(level)) {
+        return;
+    }
+    tracing::warn!(
+        "[{}] docs.snippets.validation_level = \"{level}\" checks snippets against built language \
+         artifacts, but `alef all` does not build them -- run `alef build` first. If those artifacts \
+         are missing or stale, snippet validation fails with per-snippet toolchain errors whose real \
+         cause is the missing build, not the snippet.",
+        config.name
+    );
+}
+
 fn sync_registry_versions_before_all(
     config_path: &std::path::Path,
     configs: &[&crate::core::config::ResolvedCrateConfig],
@@ -465,15 +511,21 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 tracing::info!("Generating docs...");
+                warn_if_snippet_validation_needs_build(resolved_cfg);
                 let docs_api = pipeline::extract(resolved_cfg, config_path, false)?;
                 let doc_languages = resolve_doc_languages(resolved_cfg, None)?;
-                let doc_files =
-                    crate::docs::generate_docs_stage(&docs_api, resolved_cfg, &doc_languages, None, &base_dir)?;
+                // `generate_docs_stage` hands back every page it rendered even when a later step
+                // (snippet validation, CLI/MCP adoption, llms/skills) fails, specifically so a
+                // strict-mode bail never discards already-rendered API reference pages. Write and
+                // hash `doc_files` before propagating `doc_result`, not after. ~keep
+                let (doc_files, doc_result) =
+                    crate::docs::generate_docs_stage(&docs_api, resolved_cfg, &doc_languages, None, &base_dir);
                 let doc_count = pipeline::write_scaffold_files_with_overwrite(&doc_files, &base_dir, clean)?;
                 for file in doc_files.iter().filter(|file| file.carries_alef_marker()) {
                     current_gen_paths.insert(base_dir.join(&file.path));
                 }
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
+                doc_result?;
 
                 let cleanup_roots = pipeline::generate_sweep_roots(&languages, false, resolved_cfg, &base_dir);
                 let previous_paths: Vec<_> = languages

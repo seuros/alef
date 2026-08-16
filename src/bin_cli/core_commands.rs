@@ -614,11 +614,16 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 } else {
                     tracing::info!("Generating docs for: {}", format_languages(&languages));
                 }
-                let files =
-                    crate::docs::generate_docs_stage(&api, resolved_cfg, &languages, output.as_deref(), &base_dir)?;
+                // `generate_docs_stage` hands back every page it rendered even when a later step
+                // (snippet validation, CLI/MCP adoption, llms/skills) fails, specifically so a
+                // strict-mode bail never discards already-rendered API reference pages. Write
+                // `files` before propagating `docs_result`, not after. ~keep
+                let (files, docs_result) =
+                    crate::docs::generate_docs_stage(&api, resolved_cfg, &languages, output.as_deref(), &base_dir);
                 let sources_hash = cache::sources_hash(&resolved_cfg.sources)?;
                 let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
                 let report = pipeline::write_scaffold_files_report(&files, &base_dir, true)?;
+                docs_result?;
                 let count = report.changed_count();
                 let output_paths: Vec<PathBuf> = files
                     .iter()
