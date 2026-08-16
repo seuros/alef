@@ -3,7 +3,6 @@ use crate::codegen::c_consumer;
 use crate::codegen::doc_emission::emit_c_doxygen;
 use crate::core::ir::{ApiSurface, TypeRef};
 use ahash::AHashSet;
-use heck::ToShoutySnakeCase;
 
 /// Render a `/** ... */` Doxygen block above a `typedef` line. `doc` is the
 /// raw rustdoc lifted from the upstream type's `///` comments; an empty `doc`
@@ -388,8 +387,10 @@ pub(super) fn gen_cbindgen_toml(
     // prepends verbatim to every exported type name. Shouty-snake is the idiomatic C symbol
     // prefix (and is what `docs/naming.rs`'s Ffi/C arm independently predicts for the header),
     // so this derivation -- not a bare uppercase -- is what actually belongs in cbindgen.toml.
+    // It lives in `c_consumer::export_type_prefix` so the consumers that must *name* header
+    // types (docs snippets, e2e suites) read the same formula instead of re-deriving it.
     // See the note on `type_name`'s Ffi/C arm in docs/naming.rs for the full history. ~keep
-    let prefix_upper = prefix.to_shouty_snake_case();
+    let prefix_upper = c_consumer::export_type_prefix(prefix);
     let feature_defines = cbindgen_feature_defines(api, &prefix_upper);
 
     let capsule_used_as_opaque: std::collections::HashSet<&str> = api
@@ -560,7 +561,7 @@ pub(super) fn gen_build_rs(
         // pointee type names as they literally appear in the generated header text, so a
         // different derivation here would silently stop matching for a prefix with an
         // internal capital. ~keep
-        let prefix_upper = prefix.to_shouty_snake_case();
+        let prefix_upper = c_consumer::export_type_prefix(prefix);
         let mut pairs: Vec<(String, String)> = capsule_types
             .values()
             .map(|c| (format!("{prefix_upper}{}", c.c_return_type), c.c_return_type.clone()))

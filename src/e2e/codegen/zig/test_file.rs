@@ -679,6 +679,12 @@ pub(super) fn render_snippet_body(
         } else {
             "{any}"
         };
+        // `join("\n")` above drops the trailing newline `render_test_fn` wrote, so appending
+        // without restoring it splices the print onto the end of the last statement line —
+        // legal Zig, but a published snippet a reader has to un-run-on. ~keep
+        if !body.is_empty() && !body.ends_with('\n') {
+            body.push('\n');
+        }
         body.push_str(&format!(
             "    std.debug.print(\"{format}\\n\", .{{{displayed_result}}});\n"
         ));

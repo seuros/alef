@@ -48,7 +48,11 @@ pub(super) fn render_visitor_test_file(
     let _ = writeln!(out, "#include \"test_runner.h\"");
     let _ = writeln!(out);
 
-    let prefix_upper = prefix.to_uppercase();
+    // Header *type* names carry cbindgen's `[export] prefix`, which is shouty-snake, not a bare
+    // uppercase: the two disagree for any prefix with an internal word boundary. Derive it from
+    // the same helper the header producer uses so the emitted code cannot name a type the header
+    // never declares. ~keep
+    let prefix_upper = crate::codegen::c_consumer::export_type_prefix(prefix);
     let visitor_type_stem = prefix.to_pascal_case();
     let visitor_callbacks_type = format!("{prefix_upper}{visitor_type_stem}VisitorCallbacks");
     // The C FFI re-defines the visitor context as a stem-prefixed struct
@@ -738,5 +742,142 @@ mod visitor_tests {
             !c_visitor_fixture_has_typed_call(&fixture, &config),
             "visitor fixtures need a configured C function and options type"
         );
+    }
+
+    /// Net brace depth, ignoring braces inside string literals and comments — the emitted
+    /// snippet carries both (`from_json("{}")`, `/* description */`).
+    fn brace_depth(source: &str) -> i32 {
+        let mut depth = 0;
+        let mut in_string = false;
+        let mut escaped = false;
+        let mut chars = source.chars().peekable();
+        while let Some(character) = chars.next() {
+            if in_string {
+                match character {
+                    _ if escaped => escaped = false,
+                    '\\' => escaped = true,
+                    '"' => in_string = false,
+                    _ => {}
+                }
+                continue;
+            }
+            match character {
+                '"' => in_string = true,
+                '/' if chars.peek() == Some(&'/') => {
+                    for next in chars.by_ref() {
+                        if next == '\n' {
+                            break;
+                        }
+                    }
+                }
+                '/' if chars.peek() == Some(&'*') => {
+                    let mut previous = ' ';
+                    for next in chars.by_ref() {
+                        if previous == '*' && next == '/' {
+                            break;
+                        }
+                        previous = next;
+                    }
+                }
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                _ => {}
+            }
+        }
+        depth
+    }
+
+    #[test]
+    fn c_visitor_snippet_braces_balance() {
+        let content = render_visitor_snippet(
+            &visitor_fixture(),
+            "krz.h",
+            "krz",
+            &e2e_config_with_c_call(),
+            &crate_config_with_visitor_metadata(),
+        )
+        .expect("visitor snippet renders");
+
+        assert_eq!(brace_depth(&content), 0, "visitor snippet braces do not balance:\n{content}");
+    }
+
+    /// The snippet must spell header *types* with cbindgen's `[export] prefix`, which is
+    /// shouty-snake — not a bare uppercase of the symbol prefix. The two agree for every
+    /// single-word prefix, so `SampleCore` is the only shape that can fail here: it is where
+    /// `SAMPLE_CORE` and `SAMPLECORE` part ways.
+    ///
+    /// The header below is built from `c_consumer::export_type_prefix` / `handle_type` — the
+    /// same helpers `gen_cbindgen_toml` uses — so the test compiles the snippet against the
+    /// names the real header would carry rather than against a hand-copied spelling. A snippet
+    /// that re-derives the prefix itself fails as `unknown type name`, which is exactly how it
+    /// failed in a consumer repo. ~keep
+    #[test]
+    fn c_visitor_snippet_types_match_the_generated_header_export_prefix() {
+        use crate::codegen::c_consumer::{export_type_prefix, handle_type};
+
+        let prefix = "SampleCore";
+        let export_prefix = export_type_prefix(prefix);
+        let handle = handle_type(prefix);
+        let c_override = CallOverride {
+            function: Some(format!("{prefix}_render_document")),
+            prefix: Some(prefix.to_string()),
+            options_type: Some("RenderConfig".to_string()),
+            result_type: Some("RenderOutput".to_string()),
+            ..Default::default()
+        };
+        let e2e = E2eConfig {
+            call: CallConfig {
+                function: "render_document".to_string(),
+                overrides: [("c".to_string(), c_override)].into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let content = render_visitor_snippet(
+            &visitor_fixture(),
+            "sample_core.h",
+            prefix,
+            &e2e,
+            &crate_config_with_visitor_metadata(),
+        )
+        .expect("visitor snippet renders");
+
+        assert!(
+            content.contains(&format!("{export_prefix}SampleCoreVisitorCallbacks")),
+            "snippet must name the callbacks struct the header declares:\n{content}"
+        );
+        assert!(
+            content.contains(&format!("{handle} _visitor =")),
+            "the visitor is a scalar `{handle}`, never a pointer:\n{content}"
+        );
+        assert!(
+            !content.contains("SAMPLECORE"),
+            "snippet used a bare-uppercase prefix the header never declares:\n{content}"
+        );
+
+        // Substituted rather than `format!`ed so the C braces below stay readable and the two
+        // placeholders can only ever be filled from the derived names above. ~keep
+        const HEADER_TEMPLATE: &str = concat!(
+            "#include <stddef.h>\n",
+            "#include <stdint.h>\n",
+            "typedef uint64_t <HANDLE>;\n",
+            "typedef struct <PREFIX>SampleCoreContext <PREFIX>SampleCoreContext;\n",
+            "typedef struct <PREFIX>SampleCoreVisitorCallbacks {\n",
+            "  int32_t (*visit_text)(const <PREFIX>SampleCoreContext *, void *, const char *, char **, size_t *);\n",
+            "} <PREFIX>SampleCoreVisitorCallbacks;\n",
+            "<HANDLE> SampleCore_visitor_create(const <PREFIX>SampleCoreVisitorCallbacks *callbacks);\n",
+            "void SampleCore_visitor_free(<HANDLE> visitor);\n",
+            "<HANDLE> SampleCore_render_config_from_json(const char *json);\n",
+            "void SampleCore_render_config_free(<HANDLE> options);\n",
+            "void SampleCore_options_set_visitor(<HANDLE> options, <HANDLE> visitor);\n",
+            "<HANDLE> SampleCore_render_document(const char *html, <HANDLE> options);\n",
+            "void SampleCore_render_output_free(<HANDLE> result);\n",
+        );
+        let header = HEADER_TEMPLATE
+            .replace("<HANDLE>", &handle)
+            .replace("<PREFIX>", &export_prefix);
+
+        compile_snippet(&content, "sample_core.h", &header);
     }
 }

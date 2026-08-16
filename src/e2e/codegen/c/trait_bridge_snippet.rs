@@ -45,7 +45,9 @@ pub(super) fn render(
         .find(|definition| definition.name == trait_name)
         .ok_or_else(|| anyhow::anyhow!("C trait bridge recipe has no IR definition for `{trait_name}`"))?;
     let callbacks = callbacks(bridge, trait_def, type_defs);
-    let prefix_upper = prefix.to_uppercase();
+    // cbindgen's `[export] prefix` (shouty-snake), not a bare uppercase — see
+    // `c_consumer::export_type_prefix`. ~keep
+    let prefix_upper = crate::codegen::c_consumer::export_type_prefix(prefix);
     let vtable_type = format!("{prefix_upper}{}{}VTable", to_class_name(prefix), trait_name);
     let register_symbol = abi_symbol(prefix, register);
     let unregister_symbol = bridge

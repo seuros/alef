@@ -16,6 +16,7 @@
 
 use crate::codegen::naming::pascal_to_snake;
 use crate::core::config::{ResolvedCrateConfig, resolve_output_dir};
+use heck::ToShoutySnakeCase;
 use std::path::PathBuf;
 
 /// Context capturing the shared FFI consumer inputs across all language backends.
@@ -40,6 +41,33 @@ impl<'a> CConsumerContext<'a> {
             prefix: config.ffi_prefix(),
         }
     }
+}
+
+/// Return the prefix cbindgen prepends to every exported *type* name in the generated header.
+///
+/// This is the string `gen_cbindgen_toml` (`backends/ffi/gen_bindings/helpers.rs`) writes as
+/// cbindgen's `[export] prefix`, which cbindgen then prepends verbatim to each type it exports:
+/// `HtmVisitorCallbacks` becomes `HTMHtmVisitorCallbacks`, and the scalar handle typedef becomes
+/// `typedef uint64_t {PREFIX}AlefHandle`.
+///
+/// Unlike the *symbol* helpers above, which use `prefix` verbatim, the type prefix is
+/// shouty-snake-cased. The two conversions in play disagree exactly when the prefix has an
+/// internal word boundary: `SampleCore` shouty-snakes to `SAMPLE_CORE` but plain-uppercases to
+/// `SAMPLECORE`. Anything naming a header *type* — docs pages, e2e suites, documentation
+/// snippets — must derive it here, or it spells a type that occurs zero times in the header.
+pub fn export_type_prefix(prefix: &str) -> String {
+    prefix.to_shouty_snake_case()
+}
+
+/// Return the C spelling of the scalar opaque handle typedef.
+///
+/// Format: `{PREFIX}AlefHandle`, declared in the header as `typedef uint64_t {PREFIX}AlefHandle`.
+///
+/// Every opaque value crossing the C ABI — clients, options, results, visitors — is this
+/// integer handle, never a pointer. Declaring a local as `{PREFIX}SomeType *` instead is a
+/// pointer/integer type error at the boundary, not a cosmetic misspelling.
+pub fn handle_type(prefix: &str) -> String {
+    format!("{}AlefHandle", export_type_prefix(prefix))
 }
 
 /// Return the C symbol name of a generated free function.
@@ -233,6 +261,40 @@ sources = ["src/lib.rs"]
                 "`{type_name}` snake-cases differently in the two backends"
             );
         }
+    }
+
+    /// The type prefix is *not* the symbol prefix: cbindgen shouty-snakes it. Only a prefix
+    /// with an internal word boundary discriminates — every single-word or already-underscored
+    /// prefix returns the same string under both conversions, so a test built from those alone
+    /// would pass no matter which one the producer used. Rows mirror
+    /// `docs/naming.rs::type_name_ffi_matches_cbindgen_export_prefix`, the other predictor of
+    /// this same header spelling. ~keep
+    #[test]
+    fn export_type_prefix_shouty_snakes_rather_than_uppercasing() {
+        for (prefix, expected) in [
+            ("demoapi", "DEMOAPI"),
+            ("demo_api", "DEMO_API"),
+            ("ts_pack", "TS_PACK"),
+            ("SampleCore", "SAMPLE_CORE"),
+            ("sampleCore", "SAMPLE_CORE"),
+        ] {
+            assert_eq!(export_type_prefix(prefix), expected, "`{prefix}` mis-derived");
+        }
+        assert_ne!(
+            export_type_prefix("SampleCore"),
+            "SampleCore".to_uppercase(),
+            "the discriminating row stopped discriminating"
+        );
+    }
+
+    /// Opaque values cross the C ABI as `typedef uint64_t {PREFIX}AlefHandle`, never as a
+    /// pointer to the Rust type. A consumer that declares `{PREFIX}SomeType *` gets an
+    /// incompatible pointer/integer conversion, not a link error it can ignore.
+    #[test]
+    fn handle_type_is_the_prefixed_scalar_handle() {
+        assert_eq!(handle_type("htm"), "HTMAlefHandle");
+        assert_eq!(handle_type("SampleCore"), "SAMPLE_COREAlefHandle");
+        assert!(!handle_type("htm").contains('*'));
     }
 
     #[test]

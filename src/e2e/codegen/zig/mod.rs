@@ -593,6 +593,129 @@ mod snippet_module_tests {
         assert!(rendered.contains("const sample_binding = @import(\"sample_binding\")"));
         assert!(!rendered.contains("@import(\"sample_release_asset\")"));
     }
+
+    fn resolved(toml_text: &str) -> ResolvedCrateConfig {
+        let config: crate::core::config::NewAlefConfig = toml::from_str(toml_text).expect("valid config");
+        config.resolve().expect("resolve").remove(0)
+    }
+
+    /// Net brace depth of `source`, ignoring braces inside string literals and line comments —
+    /// a generated Zig snippet is full of both (`dupeZ(u8, "{}")`, `.{}` in format calls).
+    fn brace_depth(source: &str) -> i32 {
+        let mut depth = 0;
+        let mut in_string = false;
+        let mut escaped = false;
+        let mut chars = source.chars().peekable();
+        while let Some(character) = chars.next() {
+            if in_string {
+                match character {
+                    _ if escaped => escaped = false,
+                    '\\' => escaped = true,
+                    '"' => in_string = false,
+                    _ => {}
+                }
+                continue;
+            }
+            match character {
+                '"' => in_string = true,
+                '/' if chars.peek() == Some(&'/') => {
+                    for next in chars.by_ref() {
+                        if next == '\n' {
+                            break;
+                        }
+                    }
+                }
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                _ => {}
+            }
+        }
+        depth
+    }
+
+    fn visitor_fixture() -> Fixture {
+        let mut callbacks = BTreeMap::new();
+        callbacks.insert("visit_text".to_string(), crate::e2e::fixture::CallbackAction::Continue);
+        Fixture {
+            id: "visitor_snippet".into(),
+            description: "Visitor snippet".into(),
+            input: serde_json::json!({ "html": "<p>Hi</p>" }),
+            visitor: Some(crate::e2e::fixture::VisitorSpec { callbacks }),
+            ..Fixture::default()
+        }
+    }
+
+    fn visitor_snippet_config() -> ResolvedCrateConfig {
+        // `SampleCore` is the discriminating prefix: it is the shape where cbindgen's
+        // shouty-snake `[export] prefix` (`SAMPLE_CORE`) and a bare `.to_uppercase()`
+        // (`SAMPLECORE`) return different strings. Every prefix in the current consumer repos
+        // is single-word or already underscored, so any of those would pass no matter which
+        // conversion the emitter used. ~keep
+        resolved(
+            r#"
+[workspace]
+languages = ["zig"]
+[[crates]]
+name = "sample-core"
+sources = []
+
+[crates.ffi]
+prefix = "SampleCore"
+"#,
+        )
+    }
+
+    /// The visitor snippet is the shape that shipped unbalanced: the pre-fix extractor sliced
+    /// the wrapping `test "..." { ... }` off by line count and left its closing brace behind,
+    /// so `zig build` reported `expected 'EOF', found '}'` for every visitor snippet at once.
+    /// Counting braces catches that class directly, whatever produces it.
+    #[test]
+    fn visitor_snippet_braces_balance() {
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "convert".into();
+
+        let rendered = ZigE2eCodegen
+            .render_snippet_body(&visitor_fixture(), &e2e, &visitor_snippet_config(), &[], &[])
+            .expect("snippet");
+
+        assert_eq!(
+            brace_depth(&rendered),
+            0,
+            "visitor snippet braces do not balance:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("pub fn main() !void {"),
+            "snippet lost its `main`:\n{rendered}"
+        );
+    }
+
+    /// Zig reaches the visitor types through `@cImport` of the generated C header, so it must
+    /// spell them with cbindgen's `[export] prefix`. Deriving that prefix here from the helper
+    /// the header producer itself calls is the point: asserting a literal would pin whichever
+    /// spelling the emitter happens to use.
+    #[test]
+    fn visitor_snippet_names_the_c_types_the_header_declares() {
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "convert".into();
+
+        let rendered = ZigE2eCodegen
+            .render_snippet_body(&visitor_fixture(), &e2e, &visitor_snippet_config(), &[], &[])
+            .expect("snippet");
+
+        let export_prefix = crate::codegen::c_consumer::export_type_prefix("SampleCore");
+        assert!(
+            rendered.contains(&format!("c.{export_prefix}SampleCoreVisitorCallbacks")),
+            "snippet must name the callbacks struct the header declares:\n{rendered}"
+        );
+        assert!(
+            rendered.contains(&format!("c.{export_prefix}SampleCoreContext")),
+            "snippet must name the callback context struct the header declares:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("SAMPLECORE"),
+            "snippet used a bare-uppercase prefix the header never declares:\n{rendered}"
+        );
+    }
 }
 
 #[cfg(test)]

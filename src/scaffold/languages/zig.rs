@@ -1382,4 +1382,71 @@ pub fn build(b: *std.Build) void {
         assert!(!changed);
         assert!(!dir.path().join(relative_path).exists());
     }
+
+    /// Read the module name out of a scaffolded `build.zig` the way the snippet validator does
+    /// (`snippets::validators::zig`'s `zig_package_module` scans for the same `addModule("`
+    /// marker), so this test fails for the same reason a real `zig build` of a snippet would.
+    fn declared_module_name(build_zig: &str) -> &str {
+        let marker = "addModule(\"";
+        let start = build_zig.find(marker).expect("build.zig declares a module") + marker.len();
+        let end = start + build_zig[start..].find('"').expect("module name is terminated");
+        &build_zig[start..end]
+    }
+
+    // A documentation snippet's `@import` and the module `build.zig` declares are two producers
+    // of one name. When they disagree the snippet does not merely look wrong -- `zig build`
+    // fails outright with `no module named '<x>' available within module 'root'`, which is how
+    // every generated Zig snippet in a consumer repo failed at once.
+    //
+    // This test lives in the scaffold module because it is the only place that can see both
+    // producers: `scaffold::languages` is private to `scaffold`, while the e2e codegen is `pub`.
+    // Both names are read from generated output rather than written as literals, so the test
+    // cannot pin a matching pair of mistakes. `[crates.zig] module_name` is set here precisely
+    // because it is the discriminating case: without it both sides fall back to the crate name
+    // and would agree by accident. ~keep
+    #[test]
+    fn scaffolded_build_zig_declares_the_module_the_snippet_imports() {
+        use crate::e2e::codegen::E2eCodegen as _;
+
+        let config = resolve_config(
+            r#"
+[workspace]
+languages = ["zig"]
+[[crates]]
+name = "my-lib"
+sources = []
+
+[crates.zig]
+module_name = "my_lib_rs"
+"#,
+        );
+        let api = ApiSurface {
+            functions: vec![trivial_function("ping")],
+            ..Default::default()
+        };
+
+        let files = scaffold_zig(&api, &config).expect("scaffold");
+        let build_zig = &files
+            .iter()
+            .find(|file| file.path == *"packages/zig/build.zig")
+            .expect("build.zig must be scaffolded")
+            .content;
+        let module = declared_module_name(build_zig);
+
+        let mut e2e = crate::e2e::config::E2eConfig::default();
+        e2e.call.function = "ping".into();
+        let fixture = crate::e2e::fixture::Fixture {
+            id: "ping".into(),
+            description: "Ping".into(),
+            ..Default::default()
+        };
+        let snippet = crate::e2e::codegen::zig::ZigE2eCodegen
+            .render_snippet_body(&fixture, &e2e, &config, &[], &[])
+            .expect("snippet renders");
+
+        assert!(
+            snippet.contains(&format!("@import(\"{module}\")")),
+            "snippet must import the module build.zig declares (`{module}`):\n{snippet}"
+        );
+    }
 }

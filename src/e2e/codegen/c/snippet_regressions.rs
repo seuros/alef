@@ -470,6 +470,233 @@ fn client_snippet_keeps_adapter_identity_bare() {
     assert!(!rendered.contains("skipped:"), "{rendered}");
 }
 
+fn mock_backed_fixture(id: &str) -> Fixture {
+    serde_json::from_value(serde_json::json!({
+        "id": id,
+        "description": "Backed by the e2e mock server",
+        "input": {},
+        "mock_response": {"status": 200, "body": {}}
+    }))
+    .expect("fixture")
+}
+
+fn empty_field_resolver() -> FieldResolver {
+    FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+}
+
+fn streaming_client_config() -> ResolvedCrateConfig {
+    ResolvedCrateConfig {
+        name: "sample".into(),
+        adapters: vec![
+            serde_json::from_value(serde_json::json!({
+                "name": "chat_stream",
+                "pattern": "streaming",
+                "core_path": "sample::chat_stream",
+                "owner_type": "DefaultClient",
+                "item_type": "ChatChunk",
+                "request_type": "sample::ChatRequest"
+            }))
+            .expect("streaming adapter config"),
+        ],
+        ..ResolvedCrateConfig::default()
+    }
+}
+
+fn streaming_client_e2e() -> E2eConfig {
+    let mut e2e = E2eConfig::default();
+    e2e.call.function = "chat_stream".into();
+    e2e.call.streaming = Some(crate::core::config::e2e::StreamingConfig::Enabled(true));
+    e2e.call.overrides.insert(
+        "c".into(),
+        crate::core::config::e2e::CallOverride {
+            client_factory: Some("create_client".into()),
+            ..Default::default()
+        },
+    );
+    e2e
+}
+
+fn bytes_client_config() -> ResolvedCrateConfig {
+    ResolvedCrateConfig {
+        name: "sample".into(),
+        adapters: vec![
+            serde_json::from_value(serde_json::json!({
+                "name": "speech",
+                "pattern": "async_method",
+                "core_path": "sample::speech",
+                "owner_type": "DefaultClient"
+            }))
+            .expect("bytes adapter config"),
+        ],
+        ..ResolvedCrateConfig::default()
+    }
+}
+
+fn bytes_client_e2e() -> E2eConfig {
+    let mut e2e = E2eConfig::default();
+    e2e.call.function = "speech".into();
+    e2e.call.result_is_bytes = true;
+    e2e.call.overrides.insert(
+        "c".into(),
+        crate::core::config::e2e::CallOverride {
+            client_factory: Some("create_client".into()),
+            ..Default::default()
+        },
+    );
+    e2e
+}
+
+fn assert_no_mock_harness(rendered: &str, fixture_id: &str) {
+    assert!(
+        !rendered.contains("MOCK_SERVER"),
+        "mock-server env var leaked:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains(&format!("/fixtures/{fixture_id}")),
+        "mock-server fixture route leaked:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("\"test-key\""),
+        "literal credential leaked:\n{rendered}"
+    );
+}
+
+/// The streaming and byte-buffer emitters each computed `has_mock` from
+/// `Fixture::needs_mock_server()` alone, unlike `test_function::render_test_function`,
+/// which ANDs it with `!documentation_snippet`. Their `else` arms then hardcoded the
+/// harness credential `"test-key"` — which the central
+/// `snippets::reject_mock_harness_scaffolding` guard does *not* list as a marker — so a
+/// streaming or bytes fixture published a snippet telling the reader to authenticate
+/// with the e2e suite's fake key. ~keep
+#[test]
+fn client_factory_snippet_never_points_the_reader_at_the_mock_server() {
+    let streaming = mock_backed_fixture("chat_stream_basic");
+    let rendered = render_c_snippet(
+        &streaming,
+        &streaming_client_e2e(),
+        &streaming_client_config(),
+        &[],
+        &[],
+    )
+    .expect("streaming snippet renders");
+
+    assert_no_mock_harness(&rendered, "chat_stream_basic");
+    assert!(
+        rendered.contains("const char* api_key = getenv(\"API_KEY\");"),
+        "credential is not read from the environment:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("sample_create_client(api_key, NULL, (uint64_t)-1, (uint32_t)-1, NULL)"),
+        "streaming client is not constructed the way a reader would:\n{rendered}"
+    );
+
+    let bytes = mock_backed_fixture("speech_basic");
+    let rendered = render_c_snippet(&bytes, &bytes_client_e2e(), &bytes_client_config(), &[], &[])
+        .expect("bytes snippet renders");
+
+    assert_no_mock_harness(&rendered, "speech_basic");
+    assert!(
+        rendered.contains("const char* api_key = getenv(\"API_KEY\");"),
+        "credential is not read from the environment:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("sample_create_client(api_key, NULL, (uint64_t)-1, (uint32_t)-1, NULL)"),
+        "bytes client is not constructed the way a reader would:\n{rendered}"
+    );
+}
+
+/// Companion pin for the fix above: the same two fixtures rendered in e2e test mode
+/// (`documentation_snippet == false`) must keep every byte of the mock-server wiring the
+/// suites actually run against. The naive fix — dropping the mock branch outright —
+/// passes the snippet assertions and silently unplugs the C e2e suite. ~keep
+#[test]
+fn e2e_test_functions_still_point_the_client_at_the_mock_server() {
+    let resolver = empty_field_resolver();
+
+    let mut streaming_out = String::new();
+    render_test_function(
+        &mut streaming_out,
+        &mock_backed_fixture("chat_stream_basic"),
+        "sample",
+        "chat_stream",
+        "result",
+        &[],
+        &resolver,
+        &HashMap::new(),
+        &HashSet::new(),
+        "ChatChunk",
+        "",
+        Some("create_client"),
+        None,
+        None,
+        None,
+        false,
+        false,
+        Some(true),
+        &[],
+        &streaming_client_config(),
+        &[],
+        false,
+    )
+    .expect("streaming test function renders");
+
+    assert!(
+        streaming_out.contains("const char* mock_base = getenv(\"MOCK_SERVER_URL\");"),
+        "{streaming_out}"
+    );
+    assert!(
+        streaming_out.contains("\"%s/fixtures/chat_stream_basic\""),
+        "{streaming_out}"
+    );
+    assert!(
+        streaming_out.contains("sample_create_client(\"test-key\", base_url, (uint64_t)-1, (uint32_t)-1, NULL);"),
+        "{streaming_out}"
+    );
+
+    let mut bytes_out = String::new();
+    render_test_function(
+        &mut bytes_out,
+        &mock_backed_fixture("speech_basic"),
+        "sample",
+        "speech",
+        "result",
+        &[],
+        &resolver,
+        &HashMap::new(),
+        &HashSet::new(),
+        "SpeechResponse",
+        "",
+        Some("create_client"),
+        None,
+        None,
+        None,
+        false,
+        true,
+        None,
+        &[],
+        &bytes_client_config(),
+        &[],
+        false,
+    )
+    .expect("bytes test function renders");
+
+    assert!(
+        bytes_out.contains("const char* mock_base = getenv(\"MOCK_SERVER_URL\");"),
+        "{bytes_out}"
+    );
+    assert!(bytes_out.contains("\"%s/fixtures/speech_basic\""), "{bytes_out}");
+    assert!(
+        bytes_out.contains("sample_create_client(\"test-key\", base_url, (uint64_t)-1, (uint32_t)-1, NULL);"),
+        "{bytes_out}"
+    );
+}
+
 #[test]
 fn client_snippet_without_owner_metadata_is_rejected() {
     let fixture = Fixture {
