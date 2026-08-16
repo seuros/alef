@@ -494,8 +494,18 @@ fn cbindgen_feature_defines(api: &crate::core::ir::ApiSurface, prefix_upper: &st
                     }
                 })
                 .collect::<String>();
+            // cbindgen's `[defines]` key matcher (`DefineKey::load` in
+            // cbindgen's `ir::cfg`) splits the key on `=` and trims
+            // whitespace only — it does not strip quotes. The value side
+            // must therefore be the bare feature name (`feature = tokenizer`,
+            // matching cbindgen's own docs), not a quoted string
+            // (`feature = "tokenizer"`); the latter never equals the
+            // unquoted `cfg_value` cbindgen extracts from a parsed
+            // `#[cfg(feature = "tokenizer")]` attribute via `LitStr::value()`,
+            // so the define silently fails to match and the item is emitted
+            // unguarded. ~keep
             (
-                format!(r#"feature = \"{feature}\""#),
+                format!("feature = {feature}"),
                 format!("{prefix_upper}_FEATURE_{macro_name}"),
             )
         })

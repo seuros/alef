@@ -105,10 +105,14 @@ prefix = "sample"
     );
     let files = FfiBackend.generate_bindings(&api, &config).unwrap();
     let cbindgen = files.iter().find(|file| file.path.ends_with("cbindgen.toml")).unwrap();
+    // Unquoted value: cbindgen's `[defines]` key matcher splits on `=` and only
+    // trims whitespace, so a quoted value here never matches the unquoted
+    // `cfg_value` cbindgen reads from `#[cfg(feature = "download")]` via
+    // `LitStr::value()` — see the note in `cbindgen_feature_defines`. ~keep
     assert!(
         cbindgen
             .content
-            .contains(r#""feature = \"download\"" = "SAMPLE_FEATURE_DOWNLOAD""#)
+            .contains(r#""feature = download" = "SAMPLE_FEATURE_DOWNLOAD""#)
     );
 }
 

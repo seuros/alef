@@ -460,7 +460,9 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
         .collect();
     let call_args = arg_names.join(", ");
 
-    let can_inline = is_passthrough_return(&method.return_type)
+    // ~keep A void, non-fallible return needs no `let result = …;` binding at all — the call is
+    // already a valid statement/tail-expression and there is nothing to convert or propagate.
+    let can_inline = (is_passthrough_return(&method.return_type) || is_void_return(&method.return_type))
         && !is_bytes_result
         && !has_error
         && !returns_ref
@@ -945,7 +947,9 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
         .collect();
     let call_args = arg_names.join(", ");
 
-    let can_inline_fn = is_passthrough_return(&func.return_type)
+    // ~keep A void, non-fallible return needs no `let result = …;` binding at all — the call is
+    // already a valid statement/tail-expression and there is nothing to convert or propagate.
+    let can_inline_fn = (is_passthrough_return(&func.return_type) || is_void_return(&func.return_type))
         && !is_bytes_result
         && !has_error
         && !func.returns_ref

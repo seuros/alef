@@ -284,15 +284,28 @@ prefix = "sample"
     let files = FfiBackend.generate_bindings(&api, &config).unwrap();
     let cbindgen = files.iter().find(|file| file.path.ends_with("cbindgen.toml")).unwrap();
 
+    // cbindgen's `[defines]` key matcher (`DefineKey::load` in cbindgen's
+    // `ir::cfg`) splits the key on `=` and only trims whitespace — it never
+    // strips quotes. The value must therefore be the bare feature name
+    // (matching cbindgen's own documented `"feature = serde" = "DEFINE_SERDE"`
+    // example), not a quoted string: a quoted value never equals the unquoted
+    // `cfg_value` cbindgen extracts from a parsed `#[cfg(feature = "...")]`
+    // attribute via `LitStr::value()`, so the mapping silently fails to match
+    // and the item is emitted with no `#if` guard at all. ~keep
     assert!(
         cbindgen
             .content
-            .contains(r#""feature = \"document-render\"" = "SAMPLE_FEATURE_DOCUMENT_RENDER""#)
+            .contains(r#""feature = document-render" = "SAMPLE_FEATURE_DOCUMENT_RENDER""#)
     );
     assert!(
         cbindgen
             .content
-            .contains(r#""feature = \"native\"" = "SAMPLE_FEATURE_NATIVE""#)
+            .contains(r#""feature = native" = "SAMPLE_FEATURE_NATIVE""#)
+    );
+    assert!(
+        !cbindgen.content.contains('\\'),
+        "cbindgen.toml [defines] keys must not carry escaped quotes, got:\n{}",
+        cbindgen.content
     );
 }
 
@@ -1484,4 +1497,152 @@ fn generated_ffi_crate_allows_collapsible_if_for_its_own_free_functions() {
          emits fail a consumer's deny-level clippy run, got header:\n{}",
         lib.content.lines().take(30).collect::<Vec<_>>().join("\n")
     );
+}
+
+/// Regression for a `cargo check` warning: a void, infallible free function (e.g.
+/// `fn clear()`) was unconditionally routed through the `let result = …;` template even
+/// though there is nothing to convert or propagate, leaving `result` bound and unused.
+#[test]
+fn free_function_void_non_error_return_binds_no_result_variable() {
+    let config = resolved_one(
+        r#"
+[workspace]
+languages = ["ffi"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+
+[crates.ffi]
+prefix = "sample"
+"#,
+    );
+    let api = ApiSurface {
+        crate_name: "sample-lib".to_string(),
+        version: "1.0.0".to_string(),
+        functions: vec![FunctionDef {
+            name: "clear".to_string(),
+            rust_path: "sample_lib::clear".to_string(),
+            return_type: TypeRef::Unit,
+            error_type: None,
+            ..FunctionDef::default()
+        }],
+        ..ApiSurface::default()
+    };
+
+    let files = FfiBackend.generate_bindings(&api, &config).unwrap();
+    let lib = files.iter().find(|file| file.path.ends_with("lib.rs")).unwrap();
+
+    assert!(
+        lib.content.contains("sample_lib::clear()"),
+        "expected the call itself to still be emitted, got:\n{}",
+        lib.content
+    );
+    assert!(
+        !lib.content.contains("let result = sample_lib::clear()"),
+        "a void, infallible free function must not bind an unused `result`, got:\n{}",
+        lib.content
+    );
+
+    syn::parse_file(&lib.content).expect("void free function body must parse as valid Rust");
+}
+
+/// Companion regression: a void but *fallible* free function (`Result<(), E>`) must keep
+/// binding `result` — the existing status-code error channel (`error_match_void.jinja`)
+/// matches on it to report the error via `set_last_error` and return `-1`.
+#[test]
+fn free_function_void_error_return_still_binds_result_for_error_channel() {
+    let config = resolved_one(
+        r#"
+[workspace]
+languages = ["ffi"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+
+[crates.ffi]
+prefix = "sample"
+"#,
+    );
+    let api = ApiSurface {
+        crate_name: "sample-lib".to_string(),
+        version: "1.0.0".to_string(),
+        functions: vec![FunctionDef {
+            name: "install".to_string(),
+            rust_path: "sample_lib::install".to_string(),
+            return_type: TypeRef::Unit,
+            error_type: Some("SampleError".to_string()),
+            ..FunctionDef::default()
+        }],
+        ..ApiSurface::default()
+    };
+
+    let files = FfiBackend.generate_bindings(&api, &config).unwrap();
+    let lib = files.iter().find(|file| file.path.ends_with("lib.rs")).unwrap();
+
+    assert!(
+        lib.content.contains("let result = sample_lib::install();"),
+        "a fallible void free function must still bind `result` to route through the error match, got:\n{}",
+        lib.content
+    );
+    assert!(
+        lib.content.contains("match result {\n        Ok(()) => 0,"),
+        "expected the existing void error-match arm (status-code channel) to fire, got:\n{}",
+        lib.content
+    );
+    assert!(
+        lib.content
+            .contains("set_last_error(alef_ffi_error_code(&e), &e.to_string());"),
+        "the error must still be reported through the existing last-error channel, got:\n{}",
+        lib.content
+    );
+
+    syn::parse_file(&lib.content).expect("fallible void free function body must parse as valid Rust");
+}
+
+/// Same defect, method-shaped: a void, infallible instance method must not bind an unused
+/// `result` either. `can_inline` governs the method path the same way `can_inline_fn` governs
+/// the free-function path above.
+#[test]
+fn instance_method_void_non_error_return_binds_no_result_variable() {
+    let mut session = TypeDef {
+        name: "Session".into(),
+        is_opaque: true,
+        ..Default::default()
+    };
+    session.methods.push(MethodDef {
+        name: "reset".into(),
+        receiver: Some(ReceiverKind::RefMut),
+        return_type: TypeRef::Unit,
+        error_type: None,
+        ..Default::default()
+    });
+    let api = ApiSurface {
+        crate_name: "sample".into(),
+        types: vec![session],
+        ..Default::default()
+    };
+    let config = sample_config();
+
+    let files = FfiBackend.generate_bindings(&api, &config).unwrap();
+    let lib = files.iter().find(|file| file.path.ends_with("lib.rs")).unwrap();
+
+    assert!(
+        lib.content.contains("fn my_lib_session_reset("),
+        "expected the reset wrapper to be emitted, got:\n{}",
+        lib.content
+    );
+    assert!(
+        lib.content.contains("obj.reset()"),
+        "expected the call itself to still be emitted, got:\n{}",
+        lib.content
+    );
+    assert!(
+        !lib.content.contains("let result = obj.reset()"),
+        "a void, infallible instance method must not bind an unused `result`, got:\n{}",
+        lib.content
+    );
+
+    syn::parse_file(&lib.content).expect("void instance method body must parse as valid Rust");
 }
