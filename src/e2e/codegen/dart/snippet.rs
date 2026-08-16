@@ -81,6 +81,7 @@ pub(super) fn render_snippet_body(
     // emit `Uint8List`, which requires `dart:typed_data` — mirrors `has_batch_byte_items` in
     // the full e2e test-file emitter (test_file.rs).
     let needs_typed_data = stub_classes.contains("Uint8List");
+    let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "dart");
     Ok(crate::e2e::template_env::render(
         "dart/snippet_body.jinja",
         minijinja::context! {
@@ -93,6 +94,7 @@ pub(super) fn render_snippet_body(
             result_var => call.result_var,
             returns_void => call.returns_void,
             stub_classes => stub_classes,
+            presentation => presentation,
         },
     ))
 }
@@ -160,6 +162,33 @@ mod tests {
         assert_eq!(
             extract_test_statements(rendered),
             Some(vec!["final value = await Api.load();".to_string()])
+        );
+    }
+
+    #[test]
+    fn documented_presentation_binds_the_result_and_reads_the_shown_fields() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "present_items", "description": "Present returned items", "input": null,
+            "docs": {"topic": "guides", "presentation": {"operations": [
+                {"op": "show", "path": "summary", "display": true},
+                {"op": "iterate", "path": "items", "item": "item", "fields": ["label"]}
+            ]}}
+        }))
+        .expect("fixture");
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "process".into();
+        e2e.call.result_var = "result".into();
+        e2e.result_fields = ["summary".to_string(), "items".to_string()].into_iter().collect();
+
+        let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[]).expect("snippet");
+
+        assert!(body.contains("final result = await "), "{body}");
+        assert!(body.contains("stdout.writeln(result.summary);"), "{body}");
+        assert!(body.contains("for (final item in result.items) {"), "{body}");
+        assert!(body.contains("stdout.writeln(item.label);"), "{body}");
+        assert!(
+            !body.contains("stdout.writeln(result);"),
+            "the whole-result fallback must give way to the documented presentation:\n{body}"
         );
     }
 

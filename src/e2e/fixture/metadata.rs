@@ -50,9 +50,51 @@ pub struct FixtureDocs {
     #[serde(default)]
     pub presentation: Option<FixtureDocsPresentation>,
     #[serde(default)]
+    pub client: Option<FixtureDocsClient>,
+    #[serde(default)]
     pub side_effects: SideEffectClass,
     #[serde(default)]
     pub coverage_exceptions: BTreeMap<String, SnippetCoverageException>,
+}
+
+/// How a documentation snippet constructs its client, for fixtures whose subject
+/// *is* the client configuration.
+///
+/// A snippet is rendered with the mock harness stripped, so the generator's client
+/// construction degenerates to `factory(<credential>, <no base URL>, <defaults…>)`.
+/// A `configuration/*` fixture documenting a client setting can therefore not show
+/// the setting it is named for unless it says so here.
+///
+/// This is docs-only. Generators reach it through [`super::Fixture::docs_client`] and
+/// must pass it in from a documentation-only call site, so it cannot retarget the
+/// executable e2e suite, whose client has to keep pointing at the mock server.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FixtureDocsClient {
+    /// Base URL the snippet's client is constructed with.
+    ///
+    /// Carried as plain data rather than a rendered expression: every binding wraps
+    /// an optional string differently (`Some("…".to_string())` in Rust, a bare literal
+    /// in Java), and that wrapping is the generator's knowledge, not the fixture's.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Verbatim argument expressions following the base URL, keyed by binding language
+    /// (`rust`, `java`, …).
+    ///
+    /// Overrides `[e2e.call.overrides.<lang>] client_factory_trailing_args` for this
+    /// fixture alone; a language absent from the map keeps the configured list. Values
+    /// are emitted as written, so they must be valid source in the target language —
+    /// use this for settings with no language-agnostic representation (timeouts,
+    /// retry policies, builder expressions).
+    #[serde(default)]
+    pub args: BTreeMap<String, Vec<String>>,
+}
+
+impl FixtureDocsClient {
+    /// Verbatim trailing argument expressions this fixture declares for `language`,
+    /// or `None` when it defers to the configured default.
+    pub fn args_for(&self, language: &str) -> Option<&[String]> {
+        self.args.get(language).map(Vec::as_slice)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -237,6 +279,35 @@ mod tests {
             ),
             "`display: true` must survive deserialization"
         );
+    }
+
+    #[test]
+    fn docs_client_deserializes_a_base_url_and_per_language_argument_lists() {
+        let docs: FixtureDocs = serde_json::from_value(serde_json::json!({
+            "topic": "configuration",
+            "client": {
+                "base_url": "https://llm.internal.example.com/v1",
+                "args": {"rust": ["Some(30)", "None", "None"], "java": ["30", "null", "null"]}
+            }
+        }))
+        .expect("fixture docs client deserialize");
+
+        let client = docs.client.expect("client");
+        assert_eq!(client.base_url.as_deref(), Some("https://llm.internal.example.com/v1"));
+        let expected: Vec<String> = ["Some(30)", "None", "None"].map(String::from).to_vec();
+        assert_eq!(client.args_for("rust"), Some(expected.as_slice()));
+        assert_eq!(
+            client.args_for("gleam"),
+            None,
+            "an unlisted language must not be invented"
+        );
+    }
+
+    #[test]
+    fn docs_without_a_client_key_carry_no_client_override() {
+        let docs: FixtureDocs =
+            serde_json::from_value(serde_json::json!({"topic": "configuration"})).expect("fixture docs deserialize");
+        assert_eq!(docs.client, None);
     }
 
     #[test]

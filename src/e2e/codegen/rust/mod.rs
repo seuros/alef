@@ -174,6 +174,9 @@ impl E2eCodegen for RustE2eCodegen {
                 _type_defs,
                 &dep_name,
                 needs_mock_server,
+                // The executable suite ignores every fixture's docs client: its own
+                // client must reach the mock server. ~keep
+                None,
                 false,
             );
 
@@ -211,6 +214,7 @@ impl E2eCodegen for RustE2eCodegen {
             type_defs,
             &dep_name,
             call_fixture.needs_mock_server(),
+            fixture.docs_client(),
             expects_error,
         );
         let (imports, body, is_async) = extract_rust_snippet(&test_file)?;

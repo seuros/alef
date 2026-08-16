@@ -9,8 +9,8 @@ use std::path::Path;
 mod metadata;
 mod protocol;
 pub use metadata::{
-    FixtureDocs, FixtureDocsFileInput, FixtureDocsOperation, FixtureDocsPresentation, FixtureEnv, SetupCall,
-    SideEffectClass, SnippetCoverageException, TemplateReturnForm,
+    FixtureDocs, FixtureDocsClient, FixtureDocsFileInput, FixtureDocsOperation, FixtureDocsPresentation, FixtureEnv,
+    SetupCall, SideEffectClass, SnippetCoverageException, TemplateReturnForm,
 };
 pub use protocol::{
     AsyncApiFixture, WebSocketFixture, WebSocketFrameType, WebSocketHandler, WebSocketMessage,
@@ -420,6 +420,19 @@ impl Default for Fixture {
 }
 
 impl Fixture {
+    /// The client construction this fixture's *documentation snippet* must use, if it
+    /// declares one.
+    ///
+    /// This is docs-only and is deliberately not folded into
+    /// [`Fixture::docs_call_fixture`]'s returned value: the fixture it returns is fed
+    /// to renderers that also serve the executable e2e suite, where retargeting the
+    /// client away from the mock server would silently turn a real test into a call
+    /// against the illustrative endpoint the prose is about. Generators must therefore
+    /// pass this value in explicitly from a documentation-only call site.
+    pub fn docs_client(&self) -> Option<&FixtureDocsClient> {
+        self.docs.as_ref().and_then(|docs| docs.client.as_ref())
+    }
+
     pub fn docs_call_fixture(&self) -> Self {
         let mut fixture = self.clone();
         if let Some(input) = self.docs.as_ref().and_then(|docs| docs.input.as_ref()) {

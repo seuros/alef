@@ -128,6 +128,7 @@ pub(super) fn render_snippet_body(
     let needs_collections = setup_lines
         .iter()
         .any(|line| line.contains("List<") || line.contains("Dictionary<"));
+    let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "csharp");
     Ok(crate::e2e::template_env::render(
         "csharp/snippet_body.jinja",
         minijinja::context! {
@@ -147,6 +148,7 @@ pub(super) fn render_snippet_body(
             api_key_var => api_key_var,
             expects_error => expects_error,
             visitor_declarations => visitor_declarations,
+            presentation => presentation,
         },
     ))
 }
@@ -223,6 +225,42 @@ mod tests {
         assert!(body.contains("Console.WriteLine(document);"));
         assert!(!body.contains("[Fact]"));
         assert!(!body.contains("Assert."));
+    }
+
+    #[test]
+    fn documented_presentation_binds_the_result_and_reads_the_shown_fields() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "present_items", "description": "Present returned items", "input": null,
+            "docs": {"topic": "guides", "presentation": {"operations": [
+                {"op": "show", "path": "summary", "display": true},
+                {"op": "iterate", "path": "items", "item": "item", "fields": ["label"]}
+            ]}}
+        }))
+        .expect("fixture");
+        let e2e = E2eConfig {
+            call: CallConfig {
+                function: "process".into(),
+                result_var: "result".into(),
+                ..CallConfig::default()
+            },
+            result_fields: ["summary".to_string(), "items".to_string()].into_iter().collect(),
+            ..E2eConfig::default()
+        };
+        let config = ResolvedCrateConfig {
+            name: "sample_core".into(),
+            ..ResolvedCrateConfig::default()
+        };
+
+        let body = render_snippet_body(&fixture, &e2e, &config, &[], &[]).expect("snippet renders");
+
+        assert!(body.contains("var result = SampleCoreConverter.Process();"), "{body}");
+        assert!(body.contains("Console.WriteLine(result.Summary);"), "{body}");
+        assert!(body.contains("foreach (var item in result.Items)"), "{body}");
+        assert!(body.contains("Console.WriteLine(item.Label);"), "{body}");
+        assert!(
+            !body.contains("Console.WriteLine(result);"),
+            "the whole-result fallback must give way to the documented presentation:\n{body}"
+        );
     }
 
     #[test]

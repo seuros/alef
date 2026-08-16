@@ -82,12 +82,13 @@ pub(super) fn render_snippet_body(
         .assertions
         .iter()
         .any(|assertion| assertion.assertion_type == "error");
+    let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang);
     Ok(crate::e2e::template_env::render(
         "elixir/snippet_body.jinja",
         minijinja::context! {
             setup_lines => setup_lines, call_expr => call_expr, result_var => call.result_var,
             returns_void => call.returns_void, is_streaming => is_streaming,
-            expects_error => expects_error,
+            expects_error => expects_error, presentation => presentation,
         },
     ))
 }
@@ -164,6 +165,34 @@ mod tests {
             "html, options"
         );
         assert_eq!(setup, ["options = Map.put(options, :visitor, visitor)"]);
+    }
+
+    #[test]
+    fn documented_presentation_binds_the_result_and_reads_the_shown_fields() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "present_items", "description": "Present returned items", "input": null,
+            "docs": {"topic": "guides", "presentation": {"operations": [
+                {"op": "show", "path": "summary", "display": true},
+                {"op": "iterate", "path": "items", "item": "item", "fields": ["label"]}
+            ]}}
+        }))
+        .expect("fixture");
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "process".into();
+        e2e.call.module = "sample".into();
+        e2e.call.result_var = "result".into();
+        e2e.result_fields = ["summary".to_string(), "items".to_string()].into_iter().collect();
+
+        let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[]).expect("snippet");
+
+        assert!(body.contains("result = Sample.process()"), "{body}");
+        assert!(body.contains("IO.puts(result.summary)"), "{body}");
+        assert!(body.contains("Enum.each(result.items, fn item ->"), "{body}");
+        assert!(body.contains("IO.inspect(item.label)"), "{body}");
+        assert!(
+            !body.contains("IO.inspect(result)"),
+            "the whole-result fallback must give way to the documented presentation:\n{body}"
+        );
     }
 
     #[test]

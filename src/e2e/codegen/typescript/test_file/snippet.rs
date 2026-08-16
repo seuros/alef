@@ -414,6 +414,7 @@ mod tests {
                 files: Vec::new(),
                 operations: Vec::new(),
             }),
+            client: None,
             side_effects: crate::e2e::fixture::SideEffectClass::Safe,
             coverage_exceptions: Default::default(),
         });

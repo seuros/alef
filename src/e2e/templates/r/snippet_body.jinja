@@ -1,3 +1,22 @@
 library("{{ package }}", character.only = TRUE)
 
 {{ body }}
+{% for operation in presentation %}
+{% if operation.kind == "show" %}
+{% if operation.display %}
+cat({{ operation.expression }}, "\n")
+{% else %}
+print({{ operation.expression }})
+{% endif %}
+{% else %}
+for ({{ operation.item }} in {{ operation.expression }}) {
+{% for field in operation.fields %}
+{% if operation.display %}
+  cat({{ field }}, "\n")
+{% else %}
+  print({{ field }})
+{% endif %}
+{% endfor %}
+}
+{% endif %}
+{% endfor %}

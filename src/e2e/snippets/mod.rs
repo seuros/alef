@@ -709,6 +709,7 @@ mod tests {
                 shows: Vec::new(),
                 error: None,
                 presentation: None,
+                client: None,
                 side_effects: SideEffectClass::Safe,
                 coverage_exceptions: BTreeMap::new(),
             }),
@@ -776,6 +777,7 @@ mod tests {
             shows: Vec::new(),
             error: None,
             presentation: None,
+            client: None,
             side_effects: Default::default(),
             coverage_exceptions: BTreeMap::new(),
         };
@@ -815,6 +817,7 @@ mod tests {
             shows: Vec::new(),
             error: None,
             presentation: None,
+            client: None,
             side_effects: Default::default(),
             coverage_exceptions: BTreeMap::new(),
         };
@@ -871,6 +874,7 @@ mod tests {
             shows: Vec::new(),
             error: None,
             presentation: None,
+            client: None,
             side_effects: SideEffectClass::Safe,
             coverage_exceptions: BTreeMap::new(),
         };
@@ -928,6 +932,7 @@ mod tests {
                 shows: Vec::new(),
                 error: None,
                 presentation: None,
+                client: None,
                 side_effects,
                 coverage_exceptions: BTreeMap::new(),
             };
@@ -997,6 +1002,7 @@ mod tests {
             shows: Vec::new(),
             error: None,
             presentation: None,
+            client: None,
             side_effects: SideEffectClass::Network,
             coverage_exceptions: BTreeMap::new(),
         };

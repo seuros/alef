@@ -38,6 +38,7 @@
             },
             "error": { "type": "boolean", "default": false },
             "presentation": { "$ref": "#/$defs/docs_presentation" },
+            "client": { "$ref": "#/$defs/docs_client" },
             "coverage_exceptions": {
               "type": "object",
               "additionalProperties": {
@@ -128,6 +129,27 @@
         "operations": {
           "type": "array",
           "items": { "$ref": "#/$defs/docs_operation" }
+        }
+      }
+    },
+    "docs_client": {
+      "type": "object",
+      "description": "How the documentation snippet constructs its client. Docs-only: it never affects the generated e2e suite, whose client must keep pointing at the mock server.",
+      "additionalProperties": false,
+      "properties": {
+        "base_url": {
+          "type": "string",
+          "minLength": 1,
+          "format": "uri",
+          "description": "Base URL the snippet's client is constructed with. Each binding wraps it in its own optional syntax."
+        },
+        "args": {
+          "type": "object",
+          "description": "Verbatim argument expressions following the base URL, keyed by binding language (rust, java, ...). Overrides client_factory_trailing_args for this fixture only.",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          }
         }
       }
     },

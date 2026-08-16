@@ -10,7 +10,25 @@
 {% else %}
 {% if expects_error %}  {% endif %}{{ result_var }} = {{ call_expr }}
 {% endif %}
-{% if not expects_error and not returns_void %}IO.inspect({{ result_var }})
+{% if not expects_error and not returns_void %}
+{% if presentation %}
+{% for operation in presentation %}
+{% if operation.kind == "show" %}
+{{ "IO.puts" if operation.display else "IO.inspect" }}({{ operation.expression }})
+{% else %}
+Enum.each({{ operation.expression }}{% if operation.optional %} || []{% endif %}, fn {{ operation.item }} ->
+{% for field in operation.fields %}
+  {{ "IO.puts" if operation.display else "IO.inspect" }}({{ field }})
+{% endfor %}
+{% if not operation.fields %}
+  {{ "IO.puts" if operation.display else "IO.inspect" }}({{ operation.item }})
+{% endif %}
+end)
+{% endif %}
+{% endfor %}
+{% else %}
+IO.inspect({{ result_var }})
+{% endif %}
 {% endif %}
 {% if expects_error %}rescue
   error -> IO.puts(:stderr, "#{inspect(error.__struct__)}: #{Exception.message(error)}")

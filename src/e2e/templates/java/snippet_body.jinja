@@ -12,7 +12,7 @@ public final class Example {
 {% endfor %}
 {% if client_factory %}        var apiKey = System.getenv("{{ api_key_var }}");
         if (apiKey == null || apiKey.isEmpty()) throw new IllegalStateException("{{ api_key_var }} must be set");
-        var client = {{ class_name }}.{{ client_factory }}(apiKey, null, null, null, null);
+        var client = {{ class_name }}.{{ client_factory }}({{ client_args }});
 {% if returns_void %}        client.{{ function_name }}({{ args }});
 {% else %}        var {{ result_var }} = client.{{ function_name }}({{ args }});
 {% endif %}

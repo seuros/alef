@@ -15,9 +15,9 @@ pub(crate) struct PresentationOperation {
 }
 
 pub(crate) fn resolve(fixture: &Fixture, e2e_config: &E2eConfig, language: &str) -> Vec<PresentationOperation> {
-    let Some(docs) = fixture.docs.as_ref() else {
+    if fixture.docs.is_none() {
         return Vec::new();
-    };
+    }
     let call = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
         &fixture.id,
@@ -32,6 +32,50 @@ pub(crate) fn resolve(fixture: &Fixture, e2e_config: &E2eConfig, language: &str)
         e2e_config.effective_fields_array(call),
         e2e_config.effective_fields_method_calls(call),
     );
+    resolve_with(fixture, e2e_config, language, &resolver)
+}
+
+/// [`resolve`], but against a caller-supplied [`FieldResolver`].
+///
+/// Two backends cannot use the bare [`FieldResolver::new`] resolver that [`resolve`]
+/// builds, because their accessor syntax is decided by a per-type classification the
+/// bare resolver does not carry:
+///
+/// - Swift dispatches property (`result.text`) vs. swift-bridge method (`result.text()`)
+///   syntax on a [`SwiftFirstClassMap`]; an empty map classifies every type as opaque,
+///   so every accessor would gain a spurious `()`.
+/// - PHP dispatches property (`$result->text`) vs. getter (`$result->getText()`) syntax
+///   on a [`PhpGetterMap`]; an empty map emits property syntax for the non-scalar fields
+///   that ext-php-rs only exposes through a getter.
+///
+/// [`SwiftFirstClassMap`]: crate::e2e::field_access::SwiftFirstClassMap
+/// [`PhpGetterMap`]: crate::e2e::field_access::PhpGetterMap
+pub(crate) fn resolve_with(
+    fixture: &Fixture,
+    e2e_config: &E2eConfig,
+    language: &str,
+    resolver: &FieldResolver,
+) -> Vec<PresentationOperation> {
+    let Some(docs) = fixture.docs.as_ref() else {
+        return Vec::new();
+    };
+    let call = e2e_config.resolve_call_for_fixture(
+        fixture.call.as_deref(),
+        &fixture.id,
+        &fixture.resolved_category(),
+        &fixture.tags,
+        &fixture.input,
+    );
+    // `CallConfig`'s `result_var` serde default only applies when the call comes from
+    // TOML; a `CallConfig::default()` leaves it empty. The Swift, Zig and C emitters all
+    // bind `result` in that case, so anchoring the accessors anywhere else would emit
+    // reads against a variable the snippet never declared. ~keep
+    let result_var = if call.result_var.is_empty() {
+        "result"
+    } else {
+        call.result_var.as_str()
+    };
+    let result_root = root_variable(language, result_var);
     let operations = docs
         .shows
         .iter()
@@ -50,7 +94,7 @@ pub(crate) fn resolve(fixture: &Fixture, e2e_config: &E2eConfig, language: &str)
         .map(|operation| match operation {
             FixtureDocsOperation::Show { path, display } => PresentationOperation {
                 kind: "show",
-                expression: resolver.accessor(path, language, &call.result_var),
+                expression: resolver.accessor(path, language, &result_root),
                 item: String::new(),
                 fields: Vec::new(),
                 optional: false,
@@ -66,14 +110,15 @@ pub(crate) fn resolve(fixture: &Fixture, e2e_config: &E2eConfig, language: &str)
                 optional,
             } => {
                 let (destructure_source, destructure_item, expression) =
-                    typescript_first_item(path, language, &resolver, &call.result_var);
+                    typescript_first_item(path, language, resolver, &result_root);
+                let item_root = root_variable(language, item);
                 PresentationOperation {
                     kind: "iterate",
                     expression,
                     item: item.clone(),
                     fields: fields
                         .iter()
-                        .map(|field| resolver.accessor(field, language, item))
+                        .map(|field| resolver.accessor(field, language, &item_root))
                         .collect(),
                     // A fixture's own `optional` flag is authored by hand and can
                     // drift from the field-optionality data already known to the
@@ -92,6 +137,22 @@ pub(crate) fn resolve(fixture: &Fixture, e2e_config: &E2eConfig, language: &str)
             }
         })
         .collect()
+}
+
+/// The root variable an accessor chain is anchored on, spelled the way the target
+/// language spells a variable reference.
+///
+/// PHP is the only backend whose variables carry a sigil, and the sigil has to be part
+/// of the root handed to `FieldResolver::accessor` rather than prepended in the
+/// template: `render_php` wraps a trailing `.length` segment as `count(<chain>)`, so a
+/// template-side `$` would land outside the call (`$count(...)`) instead of on the
+/// variable. Matches `php::assertions`, which passes `format!("${result_var}")`. ~keep
+fn root_variable(language: &str, name: &str) -> String {
+    if language == "php" {
+        format!("${name}")
+    } else {
+        name.to_string()
+    }
 }
 
 fn typescript_first_item(
@@ -157,6 +218,7 @@ mod tests {
                         optional: true,
                     }],
                 }),
+                client: None,
                 side_effects: SideEffectClass::Safe,
                 coverage_exceptions: BTreeMap::new(),
             }),

@@ -659,7 +659,16 @@ pub(super) fn render_snippet_body(
         })
         .collect::<Vec<_>>()
         .join("\n");
-    if !expects_error && !call.returns_void {
+    // A `result_is_json_struct` call binds `_result_json` — a `[]u8` payload — instead of a
+    // typed `result`, so no `docs.shows` field path has a struct to read from. Those
+    // fixtures keep the whole-payload print below. ~keep
+    let binds_typed_result = !expects_error && !call.returns_void && !body.contains("const _result_json =");
+    let presentation = if binds_typed_result {
+        crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "zig")
+    } else {
+        Vec::new()
+    };
+    if !expects_error && !call.returns_void && presentation.is_empty() {
         let displayed_result = if body.contains("const _result_json =") {
             "_result_json"
         } else {
@@ -676,7 +685,8 @@ pub(super) fn render_snippet_body(
     }
     Ok(crate::e2e::template_env::render(
         "zig/snippet_body.jinja",
-        minijinja::context! { module => module_name, body => body, body_is_indented => true },
+        minijinja::context! { module => module_name, body => body, body_is_indented => true,
+        presentation => presentation },
     ))
 }
 
@@ -784,6 +794,72 @@ mod snippet_tests {
         assert!(!rendered.contains("defer "));
         assert!(rendered.contains("pub fn main() !void"));
         assert!(!rendered.contains("testing."));
+    }
+
+    #[test]
+    fn documented_presentation_binds_the_result_and_reads_the_shown_fields() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "present_items", "description": "Present returned items", "input": null,
+            "docs": {"topic": "guides", "presentation": {"operations": [
+                {"op": "show", "path": "summary", "display": true},
+                {"op": "iterate", "path": "items", "item": "item", "fields": ["label"]}
+            ]}}
+        }))
+        .expect("fixture");
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "process".into();
+        e2e.result_fields = ["summary".to_string(), "items".to_string()].into_iter().collect();
+
+        let rendered = render_snippet_body(&fixture, &e2e, "sample", "sample", &ResolvedCrateConfig::default(), &[])
+            .expect("snippet renders");
+
+        assert!(rendered.contains("const result = try sample.process()"), "{rendered}");
+        assert!(
+            rendered.contains("std.debug.print(\"{s}\\n\", .{ result.summary });"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("for (result.items) |item| {"), "{rendered}");
+        assert!(
+            rendered.contains("std.debug.print(\"{any}\\n\", .{ item.label });"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains(".{result})"),
+            "the whole-result fallback must give way to the documented presentation:\n{rendered}"
+        );
+    }
+
+    /// A `result_is_json_struct` call binds `_result_json` (a `[]u8` payload) and never a
+    /// typed `result`, so `docs.shows` field paths have no struct to read from — the
+    /// snippet must keep printing the whole payload rather than emit `result.summary`.
+    #[test]
+    fn json_struct_result_keeps_the_payload_print_instead_of_field_accessors() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "present_items", "description": "Present returned items", "input": null,
+            "docs": {"topic": "guides", "presentation": {"operations": [
+                {"op": "show", "path": "summary", "display": true}
+            ]}}
+        }))
+        .expect("fixture");
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "process".into();
+        e2e.result_fields = ["summary".to_string()].into_iter().collect();
+        e2e.call.overrides.insert(
+            "zig".into(),
+            crate::e2e::config::CallOverride {
+                result_is_json_struct: true,
+                ..Default::default()
+            },
+        );
+
+        let rendered = render_snippet_body(&fixture, &e2e, "sample", "sample", &ResolvedCrateConfig::default(), &[])
+            .expect("snippet renders");
+
+        assert!(!rendered.contains("result.summary"), "{rendered}");
+        assert!(
+            rendered.contains("std.debug.print(\"{s}\\n\", .{_result_json})"),
+            "{rendered}"
+        );
     }
 
     #[test]

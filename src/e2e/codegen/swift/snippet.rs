@@ -99,7 +99,24 @@ pub(super) fn render(
         .map(|line| line.replace("// success", "print(\"\\(type(of: error)): \\(error)\")"))
         .collect::<Vec<_>>()
         .join("\n");
-    if !expects_error && !call.returns_void {
+    // The presentation accessors are rooted on `result_var`, which only exists on the
+    // success path of a non-void call — the error path binds nothing and the void path
+    // has nothing to read. ~keep
+    let presentation = if expects_error || call.returns_void {
+        Vec::new()
+    } else {
+        let field_resolver = crate::e2e::field_access::FieldResolver::new_with_swift_first_class(
+            e2e_config.effective_fields(call),
+            e2e_config.effective_fields_optional(call),
+            e2e_config.effective_result_fields(call),
+            e2e_config.effective_fields_array(call),
+            e2e_config.effective_fields_method_calls(call),
+            &std::collections::HashMap::new(),
+            first_class_map.clone(),
+        );
+        crate::e2e::codegen::presentation::resolve_with(fixture, e2e_config, "swift", &field_resolver)
+    };
+    if !expects_error && !call.returns_void && presentation.is_empty() {
         body.push_str(&format!("\nprint({result_var})"));
     }
     let needs_foundation = ["Data(", "URL(", "JSONDecoder", "JSONEncoder"]
@@ -107,7 +124,8 @@ pub(super) fn render(
         .any(|symbol| body.contains(symbol));
     Ok(crate::e2e::template_env::render(
         "swift/snippet_body.jinja",
-        minijinja::context! { module => module, body => body, needs_foundation => needs_foundation },
+        minijinja::context! { module => module, body => body, needs_foundation => needs_foundation,
+        presentation => presentation },
     ))
 }
 
@@ -135,6 +153,36 @@ mod tests {
         assert!(rendered.contains(".countItems()"));
         assert!(rendered.contains("print(result)"));
         assert!(!rendered.contains("XCTest"));
+    }
+
+    #[test]
+    fn documented_presentation_binds_the_result_and_reads_the_shown_fields() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "present_items", "description": "Present returned items", "input": null,
+            "docs": {"topic": "guides", "presentation": {"operations": [
+                {"op": "show", "path": "summary", "display": true},
+                {"op": "iterate", "path": "items", "item": "item", "fields": ["label"]}
+            ]}}
+        }))
+        .expect("fixture");
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "process".into();
+        e2e.result_fields = ["summary".to_string(), "items".to_string()].into_iter().collect();
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+
+        let rendered = render(&fixture, &e2e, &config, &[], &[]).expect("snippet renders");
+
+        assert!(rendered.contains("let result = try "), "{rendered}");
+        assert!(rendered.contains("print(result.summary())"), "{rendered}");
+        assert!(rendered.contains("for item in result.items() {"), "{rendered}");
+        assert!(rendered.contains("debugPrint(item.label())"), "{rendered}");
+        assert!(
+            !rendered.contains("print(result)\n"),
+            "the whole-result fallback must give way to the documented presentation:\n{rendered}"
+        );
     }
 
     #[test]

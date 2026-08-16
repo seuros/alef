@@ -98,6 +98,7 @@ fn fields_array_binding_emitted_before_count_min_assertion_for_non_streaming_fix
         &[],
         "my_crate",
         None,
+        None,
         false,
     );
 
@@ -192,6 +193,7 @@ fn dropped_field_assertion_carries_the_marker_that_arms_the_strict_mode() {
         &[],
         "my_crate",
         None,
+        None,
         false,
     );
 
@@ -256,6 +258,7 @@ fn unregistered_test_backend_trait_fails_loudly_instead_of_falling_back() {
         &test_config,
         &[],
         "my_crate",
+        None,
         None,
         false,
     );
@@ -344,6 +347,7 @@ fn result_is_simple_count_assertion_binds_to_result_variable() {
         &test_config,
         &[],
         "my_crate",
+        None,
         None,
         false,
     );
@@ -435,6 +439,7 @@ fn handle_config_import_uses_resolved_options_type() {
         &[],
         "my_crate",
         false,
+        None,
         false,
     );
 
@@ -444,4 +449,176 @@ fn handle_config_import_uses_resolved_options_type() {
     );
     assert!(out.contains("let session_config: SessionConfig = serde_json::from_str"));
     assert!(!out.contains("CrawlConfig"));
+}
+
+mod client_factory_construction {
+    use super::*;
+    use crate::e2e::config::{CallConfig, CallOverride, E2eConfig};
+    use crate::e2e::fixture::{Fixture, FixtureDocsClient, MockResponse};
+
+    const DOCUMENTED_BASE_URL: &str = "https://llm.internal.example.com/v1";
+
+    fn crate_config() -> crate::core::config::ResolvedCrateConfig {
+        let cfg: crate::core::config::NewAlefConfig = toml::from_str(
+            "[workspace]\nlanguages = [\"rust\"]\n[[crates]]\nname = \"my_crate\"\nsources = [\"src/lib.rs\"]\n",
+        )
+        .unwrap();
+        cfg.resolve().unwrap().remove(0)
+    }
+
+    fn e2e_config(trailing_args: &[&str]) -> E2eConfig {
+        let mut call = CallConfig {
+            function: "chat".to_string(),
+            module: "my_crate".to_string(),
+            result_var: "result".to_string(),
+            returns_result: true,
+            ..Default::default()
+        };
+        call.overrides.insert(
+            "rust".to_string(),
+            CallOverride {
+                client_factory: Some("create_client".to_string()),
+                client_factory_trailing_args: trailing_args.iter().map(|arg| (*arg).to_string()).collect(),
+                ..Default::default()
+            },
+        );
+        E2eConfig {
+            call,
+            ..Default::default()
+        }
+    }
+
+    fn fixture(with_mock: bool) -> Fixture {
+        Fixture {
+            id: "custom_base_url".to_string(),
+            description: "Client configured with a custom base URL".to_string(),
+            input: serde_json::Value::Null,
+            mock_response: with_mock.then(|| MockResponse {
+                status: 200,
+                body: Some(serde_json::json!({"ok": true})),
+                stream_chunks: None,
+                headers: Default::default(),
+            }),
+            ..Fixture::default()
+        }
+    }
+
+    fn documented_client() -> FixtureDocsClient {
+        FixtureDocsClient {
+            base_url: Some(DOCUMENTED_BASE_URL.to_string()),
+            ..FixtureDocsClient::default()
+        }
+    }
+
+    fn render(fixture: &Fixture, config: &E2eConfig, docs_client: Option<&FixtureDocsClient>) -> String {
+        let mut out = String::new();
+        render_test_function(
+            &mut out,
+            fixture,
+            config,
+            &crate_config(),
+            &[],
+            "my_crate",
+            Some("create_client"),
+            docs_client,
+            false,
+        );
+        out
+    }
+
+    fn client_line(rendered: &str) -> String {
+        rendered
+            .lines()
+            .find(|line| line.contains("create_client("))
+            .unwrap_or_else(|| panic!("no client construction in:\n{rendered}"))
+            .trim()
+            .to_string()
+    }
+
+    #[test]
+    fn a_project_configuring_nothing_keeps_the_argument_list_it_renders_today() {
+        let rendered = render(&fixture(false), &e2e_config(&[]), None);
+        assert_eq!(
+            client_line(&rendered),
+            "let client = my_crate::create_client(\"test-key\".to_string(), None, None, None, None).unwrap();",
+            "reviving client_factory_trailing_args must not change unconfigured output"
+        );
+    }
+
+    #[test]
+    fn a_mocked_fixture_keeps_binding_the_mock_server_to_the_base_url_slot() {
+        let rendered = render(&fixture(true), &e2e_config(&[]), None);
+        assert_eq!(
+            client_line(&rendered),
+            "let client = my_crate::create_client(\"test-key\".to_string(), Some(mock_server.url.clone()), None, None, None).unwrap();"
+        );
+    }
+
+    #[test]
+    fn configured_trailing_args_replace_the_generators_hardcoded_defaults() {
+        let rendered = render(&fixture(false), &e2e_config(&["Some(30)", "Some(2)", "None"]), None);
+        assert_eq!(
+            client_line(&rendered),
+            "let client = my_crate::create_client(\"test-key\".to_string(), None, Some(30), Some(2), None).unwrap();"
+        );
+    }
+
+    #[test]
+    fn a_documentation_snippet_renders_the_base_url_the_fixture_documents() {
+        let client = documented_client();
+        let rendered = render(&fixture(false), &e2e_config(&[]), Some(&client));
+        assert_eq!(
+            client_line(&rendered),
+            format!(
+                "let client = my_crate::create_client(\"test-key\".to_string(), Some(\"{DOCUMENTED_BASE_URL}\".to_string()), None, None, None).unwrap();"
+            ),
+            "the snippet for a custom-base-url topic must show the custom base URL"
+        );
+    }
+
+    #[test]
+    fn a_documentation_client_can_replace_the_trailing_args_for_its_language_alone() {
+        let client = FixtureDocsClient {
+            base_url: Some(DOCUMENTED_BASE_URL.to_string()),
+            args: [(
+                "rust".to_string(),
+                vec!["Some(120)".to_string(), "None".to_string(), "None".to_string()],
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let rendered = render(&fixture(false), &e2e_config(&["None", "None", "None"]), Some(&client));
+        assert!(
+            client_line(&rendered).contains("Some(120), None, None"),
+            "got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn the_e2e_suite_ignores_the_documentation_base_url_of_every_fixture_that_declares_one() {
+        // ~keep The docs override and the mock server compete for the same argument
+        // slot. A generator that consulted the fixture's docs metadata directly would
+        // retarget a real e2e test at an endpoint that exists only in prose, and the
+        // suite would still compile — so the isolation is pinned here rather than left
+        // to the reader of the resolution order.
+        let mut documented = fixture(true);
+        documented.docs = Some(
+            serde_json::from_value(serde_json::json!({
+                "topic": "configuration",
+                "client": {"base_url": DOCUMENTED_BASE_URL}
+            }))
+            .expect("fixture docs"),
+        );
+
+        let e2e_mode = render(&documented, &e2e_config(&[]), None);
+        assert!(
+            !e2e_mode.contains(DOCUMENTED_BASE_URL),
+            "the documented endpoint leaked into the executable suite:\n{e2e_mode}"
+        );
+        assert_eq!(
+            client_line(&e2e_mode),
+            client_line(&render(&fixture(true), &e2e_config(&[]), None)),
+            "declaring docs.client must not change a single byte of the e2e test"
+        );
+    }
 }

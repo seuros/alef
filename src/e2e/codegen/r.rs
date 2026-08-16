@@ -177,12 +177,18 @@ impl E2eCodegen for RCodegen {
             .map(|line| line.strip_prefix("  ").unwrap_or(line))
             .collect::<Vec<_>>()
             .join("\n");
-        let body = if call.returns_void
-            || fixture
-                .assertions
-                .iter()
-                .any(|assertion| assertion.assertion_type == "error")
-        {
+        let expects_error = fixture
+            .assertions
+            .iter()
+            .any(|assertion| assertion.assertion_type == "error");
+        // The presentation accessors are rooted on `result_var`, which neither the error
+        // path nor a void call ever binds. ~keep
+        let presentation = if call.returns_void || expects_error {
+            Vec::new()
+        } else {
+            crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "r")
+        };
+        let body = if call.returns_void || expects_error || !presentation.is_empty() {
             body
         } else {
             format!("{body}\nprint({})", call.result_var)
@@ -193,7 +199,7 @@ impl E2eCodegen for RCodegen {
             .unwrap_or_else(|| call.module.clone());
         Ok(crate::e2e::template_env::render(
             "r/snippet_body.jinja",
-            minijinja::context! { package => package, body => body },
+            minijinja::context! { package => package, body => body, presentation => presentation },
         ))
     }
 }
@@ -228,6 +234,36 @@ mod snippet_tests {
         assert!(rendered.contains("visit_text = function(ctx, text)"));
         assert!(rendered.contains("render_document("));
         assert!(!rendered.contains("test_that("));
+    }
+
+    #[test]
+    fn documented_presentation_binds_the_result_and_reads_the_shown_fields() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "present_items", "description": "Present returned items", "input": null,
+            "docs": {"topic": "guides", "presentation": {"operations": [
+                {"op": "show", "path": "summary", "display": true},
+                {"op": "iterate", "path": "items", "item": "item", "fields": ["label"]}
+            ]}}
+        }))
+        .expect("fixture");
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "process".into();
+        e2e.call.module = "sampleR".into();
+        e2e.call.result_var = "result".into();
+        e2e.result_fields = ["summary".to_string(), "items".to_string()].into_iter().collect();
+
+        let rendered = RCodegen
+            .render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[])
+            .expect("R snippet renders");
+
+        assert!(rendered.contains("result <- "), "{rendered}");
+        assert!(rendered.contains("cat(result$summary, \"\\n\")"), "{rendered}");
+        assert!(rendered.contains("for (item in result$items) {"), "{rendered}");
+        assert!(rendered.contains("print(item$label)"), "{rendered}");
+        assert!(
+            !rendered.contains("print(result)"),
+            "the whole-result fallback must give way to the documented presentation:\n{rendered}"
+        );
     }
 
     #[test]

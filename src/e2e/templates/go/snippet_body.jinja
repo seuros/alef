@@ -28,6 +28,23 @@ func main() {
   {{- "\tif err != nil {\n\t\tpanic(err)\n\t}" }}
 {% endif %}
 {% if not returns_void and not expects_error %}
+{% if presentation %}
+{% for operation in presentation %}
+{% if operation.kind == "show" %}
+  {{- "\t" }}fmt.Printf("{{ "%v" if operation.display else "%+v" }}\n", {{ operation.expression }})
+{% else %}
+  {{- "\t" }}for _, {{ operation.item }} := range {{ operation.expression }} {
+{% for field in operation.fields %}
+  {{- "\t\t" }}fmt.Printf("{{ "%v" if operation.display else "%+v" }}\n", {{ field }})
+{% endfor %}
+{% if not operation.fields %}
+  {{- "\t\t" }}fmt.Printf("{{ "%v" if operation.display else "%+v" }}\n", {{ operation.item }})
+{% endif %}
+  {{- "\t" }}}
+{% endif %}
+{% endfor %}
+{% else %}
   {{- "\t" }}fmt.Printf("%+v\n", {{ result_var }})
+{% endif %}
 {% endif %}
 }

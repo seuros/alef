@@ -6,4 +6,18 @@ pub fn main() !void {
 {% else %}
 {{ body | indent(4, true) }}
 {% endif %}
+{% for operation in presentation %}
+{% if operation.kind == "show" %}
+    std.debug.print("{{ "{s}" if operation.display else "{any}" }}\n", .{ {{ operation.expression }} });
+{% else %}
+    for ({{ operation.expression }}) |{{ operation.item }}| {
+{% for field in operation.fields %}
+        std.debug.print("{{ "{s}" if operation.display else "{any}" }}\n", .{ {{ field }} });
+{% endfor %}
+{% if not operation.fields %}
+        std.debug.print("{{ "{s}" if operation.display else "{any}" }}\n", .{ {{ operation.item }} });
+{% endif %}
+    }
+{% endif %}
+{% endfor %}
 }

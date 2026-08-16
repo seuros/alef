@@ -22,7 +22,22 @@ Future<void> main() async {
 {% for statement in statements %}
     {{ statement }}
 {% endfor %}
-{% if not returns_void %}    stdout.writeln({{ result_var }});
+{% if not returns_void %}
+{% if presentation %}
+{% for operation in presentation %}
+{% if operation.kind == "show" %}
+    stdout.writeln({{ operation.expression }});
+{% else %}
+    for (final {{ operation.item }} in {{ operation.expression }}{% if operation.optional %} ?? []{% endif %}) {
+{% for field in operation.fields %}
+      stdout.writeln({{ field }});
+{% endfor %}
+    }
+{% endif %}
+{% endfor %}
+{% else %}
+    stdout.writeln({{ result_var }});
+{% endif %}
 {% endif %}
 {% endif %}
   } finally {

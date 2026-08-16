@@ -14,7 +14,22 @@ require "{{ require_path }}"
 {% else %}
 {% if expects_error %}  {% endif %}{{ result_var }} = {{ call_receiver }}.{{ function }}({{ args }})
 {% endif %}
-{% if not expects_error and not returns_void %}puts {{ result_var }}.inspect
+{% if not expects_error and not returns_void %}
+{% if presentation %}
+{% for operation in presentation %}
+{% if operation.kind == "show" %}
+puts {{ operation.expression }}{{ "" if operation.display else ".inspect" }}
+{% else %}
+{% if operation.optional %}({{ operation.expression }} || []){% else %}{{ operation.expression }}{% endif %}.each do |{{ operation.item }}|
+{% for field in operation.fields %}
+  puts {{ field }}{{ "" if operation.display else ".inspect" }}
+{% endfor %}
+end
+{% endif %}
+{% endfor %}
+{% else %}
+puts {{ result_var }}.inspect
+{% endif %}
 {% endif %}
 {% if expects_error %}rescue StandardError => error
   warn "#{error.class}: #{error.message}"

@@ -27,6 +27,29 @@ $chunks = iterator_to_array({{ call_expr }});
 {% else %}
 ${{ result_var }} = {{ call_expr }};
 {% endif %}
-{% if not returns_void and not is_streaming %}var_dump(${{ result_var }});
+{% if not returns_void and not is_streaming %}
+{% if presentation %}
+{% for operation in presentation %}
+{% if operation.kind == "show" %}
+{% if operation.display %}
+echo {{ operation.expression }}, PHP_EOL;
+{% else %}
+var_dump({{ operation.expression }});
+{% endif %}
+{% else %}
+foreach ({{ operation.expression }}{% if operation.optional %} ?? []{% endif %} as ${{ operation.item }}) {
+{% for field in operation.fields %}
+{% if operation.display %}
+    echo {{ field }}, PHP_EOL;
+{% else %}
+    var_dump({{ field }});
+{% endif %}
+{% endfor %}
+}
+{% endif %}
+{% endfor %}
+{% else %}
+var_dump(${{ result_var }});
+{% endif %}
 {% endif %}
 {% endif %}

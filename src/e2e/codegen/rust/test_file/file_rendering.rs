@@ -18,6 +18,10 @@ pub fn render_test_file(
     type_defs: &[crate::core::ir::TypeDef],
     dep_name: &str,
     needs_mock_server: bool,
+    // `docs_client` carries the override for the single fixture being rendered as a
+    // snippet. `None` renders the executable e2e suite, whose client keeps pointing at
+    // the mock server whatever the fixtures' docs metadata says. ~keep
+    docs_client: Option<&crate::e2e::fixture::FixtureDocsClient>,
     snippet_expects_error: bool,
 ) -> String {
     let mut out = String::new();
@@ -117,6 +121,7 @@ pub fn render_test_file(
             type_defs,
             dep_name,
             client_factory,
+            docs_client,
             snippet_expects_error,
         );
         let _ = writeln!(body_buf);

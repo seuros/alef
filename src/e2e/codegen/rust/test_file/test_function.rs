@@ -17,6 +17,14 @@ use crate::e2e::codegen::rust::mock_server::render_mock_server_setup;
 
 use super::helpers::{resolve_function_name_for_call, resolve_module_for_call};
 
+/// Argument list appended to a `client_factory` call when the project configures no
+/// `[e2e.call.overrides.rust] client_factory_trailing_args`.
+///
+/// These three `None`s were hardcoded into the emitted line before the override was
+/// wired up, so they remain the default: shortening the call for every existing
+/// project would break each one whose factory takes more than a key and a base URL.
+const RUST_CLIENT_FACTORY_FALLBACK_ARGS: [&str; 3] = ["None", "None", "None"];
+
 #[allow(clippy::too_many_arguments)]
 pub fn render_test_function(
     out: &mut String,
@@ -26,6 +34,7 @@ pub fn render_test_function(
     type_defs: &[crate::core::ir::TypeDef],
     dep_name: &str,
     client_factory: Option<&str>,
+    docs_client: Option<&crate::e2e::fixture::FixtureDocsClient>,
     snippet_expects_error: bool,
 ) {
     // Http fixtures get their own integration test code path.
@@ -344,16 +353,25 @@ pub fn render_test_function(
 
     // When client_factory is configured, emit a `create_client` call and dispatch
     // methods on the returned client object instead of calling free functions.
-    // The mock server URL (when present) is passed as `base_url`; otherwise `None`.
     let call_expr = if let Some(factory) = client_factory {
-        let base_url_arg = if has_mock {
-            "Some(mock_server.url.clone())"
-        } else {
-            "None"
+        // `docs_client` is `None` on the e2e path, so the mock server keeps the
+        // base-URL slot there no matter what a fixture's docs metadata says. ~keep
+        let base_url_arg = match crate::e2e::codegen::client_factory::docs_base_url(docs_client) {
+            Some(url) => format!("Some(\"{}\".to_string())", crate::e2e::escape::escape_rust(url)),
+            None if has_mock => "Some(mock_server.url.clone())".to_string(),
+            None => "None".to_string(),
         };
+        let trailing = crate::e2e::codegen::client_factory::trailing_args(
+            docs_client,
+            e2e_config,
+            call_config,
+            "rust",
+            &RUST_CLIENT_FACTORY_FALLBACK_ARGS,
+        );
+        let trailing: String = trailing.iter().map(|arg| format!(", {arg}")).collect();
         let _ = writeln!(
             out,
-            "    let client = {module}::{factory}(\"test-key\".to_string(), {base_url_arg}, None, None, None).unwrap();"
+            "    let client = {module}::{factory}(\"test-key\".to_string(), {base_url_arg}{trailing}).unwrap();"
         );
         format!("client.{function_name}({args_str})")
     } else {

@@ -21,6 +21,7 @@ pub mod assertion_recipes;
 pub mod brew;
 pub mod c;
 pub mod client;
+pub mod client_factory;
 pub mod csharp;
 pub mod dart;
 mod dart_visitors;

@@ -22,7 +22,23 @@ using {{ namespace }};
 {% elif returns_void %}{% if is_async %}await {% endif %}{{ class_name }}.{{ function_name }}({{ args }});
 {% else %}var {{ result_var }} = {% if is_async %}await {% endif %}{{ class_name }}.{{ function_name }}({{ args }});
 {% endif %}
-{% if not expects_error and not returns_void %}Console.WriteLine({{ result_var }});
+{% if not expects_error and not returns_void %}
+{% if presentation %}
+{% for operation in presentation %}
+{% if operation.kind == "show" %}
+Console.WriteLine({{ operation.expression }});
+{% else %}
+foreach (var {{ operation.item }} in {{ operation.expression }})
+{
+{% for field in operation.fields %}
+    Console.WriteLine({{ field }});
+{% endfor %}
+}
+{% endif %}
+{% endfor %}
+{% else %}
+Console.WriteLine({{ result_var }});
+{% endif %}
 {% endif %}
 {% if expects_error %}}
 catch (Exception error)

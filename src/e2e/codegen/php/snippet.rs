@@ -4,14 +4,14 @@ use crate::e2e::config::E2eConfig;
 use crate::e2e::fixture::Fixture;
 use anyhow::{Result, bail};
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub(super) fn render_snippet_body(
     fixture: &Fixture,
     e2e_config: &E2eConfig,
     config: &ResolvedCrateConfig,
     type_defs: &[TypeDef],
-    _enums: &[EnumDef],
+    enums: &[EnumDef],
 ) -> Result<String> {
     if fixture.is_http_test() {
         return render_http_snippet(fixture);
@@ -140,13 +140,29 @@ pub(super) fn render_snippet_body(
         .collect::<Vec<_>>();
     imported_types.sort_unstable();
     imported_types.dedup();
+    let php_enum_names: HashSet<String> = enums.iter().map(|value| value.name.clone()).collect();
+    let field_resolver = crate::e2e::field_access::FieldResolver::new_with_php_getters(
+        e2e_config.effective_fields(call),
+        e2e_config.effective_fields_optional(call),
+        e2e_config.effective_result_fields(call),
+        e2e_config.effective_fields_array(call),
+        e2e_config.effective_fields_method_calls(call),
+        &HashMap::new(),
+        super::types::build_php_getter_map(
+            type_defs,
+            &php_enum_names,
+            call,
+            e2e_config.effective_result_fields(call),
+        ),
+    );
+    let presentation = crate::e2e::codegen::presentation::resolve_with(fixture, e2e_config, lang, &field_resolver);
     Ok(crate::e2e::template_env::render(
         "php/snippet_body.jinja",
         minijinja::context! {
             namespace => namespace, class_name => class_name, setup_lines => setup_lines,
             client_factory => client_factory, call_expr => call_expr, result_var => call.result_var,
             returns_void => call.returns_void, is_streaming => is_streaming, imported_types => imported_types,
-            expects_error => expects_error,
+            expects_error => expects_error, presentation => presentation,
         },
     ))
 }
@@ -195,6 +211,38 @@ fn render_http_snippet(fixture: &Fixture) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn documented_presentation_binds_the_result_and_reads_the_shown_fields() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "present_items", "description": "Present returned items", "input": null,
+            "docs": {"topic": "guides", "presentation": {"operations": [
+                {"op": "show", "path": "summary", "display": true},
+                {"op": "iterate", "path": "items", "item": "item", "fields": ["label"]}
+            ]}}
+        }))
+        .expect("fixture");
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "process".into();
+        e2e.call.module = "Sample".into();
+        e2e.call.result_var = "result".into();
+        e2e.result_fields = ["summary".to_string(), "items".to_string()].into_iter().collect();
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+
+        let body = render_snippet_body(&fixture, &e2e, &config, &[], &[]).expect("snippet");
+
+        assert!(body.contains("$result = Sample::process();"), "{body}");
+        assert!(body.contains("echo $result->summary, PHP_EOL;"), "{body}");
+        assert!(body.contains("foreach ($result->items as $item) {"), "{body}");
+        assert!(body.contains("var_dump($item->label);"), "{body}");
+        assert!(
+            !body.contains("var_dump($result);"),
+            "the whole-result fallback must give way to the documented presentation:\n{body}"
+        );
+    }
 
     #[test]
     fn renders_native_call_without_phpunit() {

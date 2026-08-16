@@ -300,6 +300,7 @@ pub(super) fn render_snippet_body(
         .map(|(path, alias)| minijinja::context! { path => path, alias => alias })
         .collect::<Vec<_>>();
 
+    let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang);
     Ok(crate::e2e::template_env::render(
         "go/snippet_body.jinja",
         minijinja::context! {
@@ -310,6 +311,7 @@ pub(super) fn render_snippet_body(
             expects_error => expects_error,
             error_type => config.error_type_name(),
             import_alias => import_alias,
+            presentation => presentation,
         },
     )
     .trim_end()
@@ -394,6 +396,40 @@ mod tests {
             args: Vec::new(),
             assertion_recipes: Vec::new(),
         }
+    }
+
+    #[test]
+    fn documented_presentation_binds_the_result_and_reads_the_shown_fields() {
+        let documented: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "present_items", "description": "Present returned items", "input": null,
+            "docs": {"topic": "guides", "presentation": {"operations": [
+                {"op": "show", "path": "summary", "display": true},
+                {"op": "iterate", "path": "items", "item": "item", "fields": ["label"]}
+            ]}}
+        }))
+        .expect("fixture");
+        let e2e = E2eConfig {
+            call: CallConfig {
+                function: "process".to_string(),
+                module: "github.com/example/library".to_string(),
+                result_var: "result".to_string(),
+                ..CallConfig::default()
+            },
+            result_fields: ["summary".to_string(), "items".to_string()].into_iter().collect(),
+            ..E2eConfig::default()
+        };
+
+        let body = render_snippet_body(&documented, &e2e, &ResolvedCrateConfig::default(), &[], &[], &[])
+            .expect("snippet renders");
+
+        assert!(body.contains("result := pkg.Process()"), "{body}");
+        assert!(body.contains("fmt.Printf(\"%v\\n\", result.Summary)"), "{body}");
+        assert!(body.contains("for _, item := range result.Items {"), "{body}");
+        assert!(body.contains("fmt.Printf(\"%+v\\n\", item.Label)"), "{body}");
+        assert!(
+            !body.contains("fmt.Printf(\"%+v\\n\", result)"),
+            "the whole-result fallback must give way to the documented presentation:\n{body}"
+        );
     }
 
     #[test]

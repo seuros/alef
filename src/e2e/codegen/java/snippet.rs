@@ -72,6 +72,7 @@ pub(super) fn render_snippet_body(
                 .and_then(|value| value.client_factory.as_deref())
         })
         .map(ToLowerCamelCase::to_lower_camel_case);
+    let client_args = render_client_factory_args(fixture, e2e_config, call);
     let package_name = overrides
         .and_then(|value| value.module.clone())
         .unwrap_or_else(|| config.java_package());
@@ -91,6 +92,7 @@ pub(super) fn render_snippet_body(
             class_name => class_name,
             setup_lines => setup_lines,
             client_factory => client_factory,
+            client_args => client_args,
             function_name => function_name,
             args => args,
             result_var => call.result_var,
@@ -103,6 +105,41 @@ pub(super) fn render_snippet_body(
             api_key_var => api_key_var,
         },
     )
+}
+
+/// Argument list appended to a `client_factory` call when the project configures no
+/// `[e2e.call.overrides.java] client_factory_trailing_args`.
+///
+/// These were hardcoded into `java/snippet_body.jinja` before the override was wired
+/// up and remain the default, so a project that has not adopted the key keeps the
+/// argument list it renders today.
+const JAVA_CLIENT_FACTORY_FALLBACK_ARGS: [&str; 3] = ["null", "null", "null"];
+
+/// The full argument list for a snippet's `client_factory` call: the credential, the
+/// base URL, and whatever trails them.
+///
+/// The credential is always the `apiKey` local the template declares just above the
+/// call — a snippet must read it from the environment rather than inline a literal.
+fn render_client_factory_args(
+    fixture: &Fixture,
+    e2e_config: &E2eConfig,
+    call: &crate::e2e::config::CallConfig,
+) -> String {
+    let docs_client = fixture.docs_client();
+    let base_url = match crate::e2e::codegen::client_factory::docs_base_url(docs_client) {
+        Some(url) => format!("\"{}\"", crate::e2e::escape::escape_java(url)),
+        None => "null".to_string(),
+    };
+    let trailing = crate::e2e::codegen::client_factory::trailing_args(
+        docs_client,
+        e2e_config,
+        call,
+        "java",
+        &JAVA_CLIENT_FACTORY_FALLBACK_ARGS,
+    );
+    let mut args = vec!["apiKey".to_string(), base_url];
+    args.extend(trailing);
+    args.join(", ")
 }
 
 fn render_json_object_setup(
@@ -260,6 +297,94 @@ mod tests {
         assert!(
             body.contains("System.getenv(\"API_KEY\")"),
             "credential is not read from the environment:\n{body}"
+        );
+        assert!(
+            body.contains("createClient(apiKey, null, null, null, null)"),
+            "an unconfigured project must keep the argument list it renders today:\n{body}"
+        );
+    }
+
+    fn client_snippet(docs: Option<serde_json::Value>, trailing_args: &[&str]) -> String {
+        let mut fixture = Fixture {
+            id: "custom_base_url".into(),
+            description: "Custom base URL".into(),
+            input: serde_json::Value::Null,
+            ..Fixture::default()
+        };
+        fixture.docs = docs.map(|value| serde_json::from_value(value).expect("fixture docs"));
+        let mut call = CallConfig {
+            function: "chat".into(),
+            result_var: "result".into(),
+            ..CallConfig::default()
+        };
+        call.overrides.insert(
+            "java".into(),
+            CallOverride {
+                client_factory: Some("create_client".into()),
+                client_factory_trailing_args: trailing_args.iter().map(|arg| (*arg).to_string()).collect(),
+                ..CallOverride::default()
+            },
+        );
+        render_snippet_body(
+            &fixture,
+            &E2eConfig {
+                call,
+                ..E2eConfig::default()
+            },
+            &ResolvedCrateConfig::default(),
+            &[],
+        )
+    }
+
+    #[test]
+    fn configured_trailing_args_replace_the_templates_hardcoded_nulls() {
+        let body = client_snippet(None, &["java.time.Duration.ofSeconds(30)", "2", "null"]);
+        assert!(
+            body.contains("createClient(apiKey, null, java.time.Duration.ofSeconds(30), 2, null)"),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn a_snippet_renders_the_base_url_the_fixture_documents() {
+        let body = client_snippet(
+            Some(serde_json::json!({
+                "topic": "configuration",
+                "client": {"base_url": "https://llm.internal.example.com/v1"}
+            })),
+            &[],
+        );
+        assert!(
+            body.contains("createClient(apiKey, \"https://llm.internal.example.com/v1\", null, null, null)"),
+            "the snippet for a custom-base-url topic must show the custom base URL:\n{body}"
+        );
+    }
+
+    #[test]
+    fn a_fixture_scoped_argument_list_outranks_the_configured_one() {
+        let body = client_snippet(
+            Some(serde_json::json!({
+                "topic": "configuration",
+                "client": {"args": {"java": ["30", "null", "null"]}}
+            })),
+            &["1", "1", "1"],
+        );
+        assert!(body.contains("createClient(apiKey, null, 30, null, null)"), "{body}");
+    }
+
+    #[test]
+    fn a_documentation_client_declared_for_another_language_does_not_reach_java() {
+        let body = client_snippet(
+            Some(serde_json::json!({
+                "topic": "configuration",
+                "client": {"args": {"rust": ["Some(30)", "None", "None"]}}
+            })),
+            &[],
+        );
+        assert!(body.contains("createClient(apiKey, null, null, null, null)"), "{body}");
+        assert!(
+            !body.contains("Some(30)"),
+            "rust syntax leaked into a java snippet:\n{body}"
         );
     }
 

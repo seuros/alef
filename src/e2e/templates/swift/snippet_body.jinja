@@ -3,3 +3,14 @@
 import {{ module }}
 
 {{ body }}
+{% for operation in presentation %}
+{% if operation.kind == "show" %}
+{{ "print" if operation.display else "debugPrint" }}({{ operation.expression }})
+{% else %}
+for {{ operation.item }} in {{ operation.expression }}{% if operation.optional %} ?? []{% endif %} {
+{% for field in operation.fields %}
+    {{ "print" if operation.display else "debugPrint" }}({{ field }})
+{% endfor %}
+}
+{% endif %}
+{% endfor %}

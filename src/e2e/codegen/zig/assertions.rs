@@ -596,7 +596,8 @@ fn render_json_assertion_template(assertion: &Assertion, field_expr: &str, is_le
         })
         .collect();
 
-    let rendered = crate::e2e::template_env::render(
+    
+    crate::e2e::template_env::render(
         "zig/json_assertion.jinja",
         minijinja::context! {
             assertion_type => assertion.assertion_type.as_str(),
@@ -615,8 +616,7 @@ fn render_json_assertion_template(assertion: &Assertion, field_expr: &str, is_le
             is_float_val => is_float_val,
             values_list => values_list,
         },
-    );
-    rendered
+    )
 }
 
 /// Predicate matching `render_assertion`: returns true when the assertion
@@ -1036,6 +1036,24 @@ pub(super) fn render_assertion(
     }
 }
 
+/// Convert a `serde_json::Value` to a Zig literal string.
+pub(super) fn json_to_zig(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => format!("\"{}\"", escape_zig(s)),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(json_to_zig).collect();
+            format!("&.{{{}}}", items.join(", "))
+        }
+        serde_json::Value::Object(_) => {
+            let json_str = serde_json::to_string(value).unwrap_or_default();
+            format!("\"{}\"", escape_zig(&json_str))
+        }
+    }
+}
+
 #[cfg(test)]
 mod wildcard_tests {
     use super::*;
@@ -1168,23 +1186,5 @@ mod wildcard_tests {
         assert_eq!(split_wildcard("links[]"), None);
         assert_eq!(split_wildcard("results[0].url"), None);
         assert_eq!(split_wildcard("metadata.title"), None);
-    }
-}
-
-/// Convert a `serde_json::Value` to a Zig literal string.
-pub(super) fn json_to_zig(value: &serde_json::Value) -> String {
-    match value {
-        serde_json::Value::String(s) => format!("\"{}\"", escape_zig(s)),
-        serde_json::Value::Bool(b) => b.to_string(),
-        serde_json::Value::Number(n) => n.to_string(),
-        serde_json::Value::Null => "null".to_string(),
-        serde_json::Value::Array(arr) => {
-            let items: Vec<String> = arr.iter().map(json_to_zig).collect();
-            format!("&.{{{}}}", items.join(", "))
-        }
-        serde_json::Value::Object(_) => {
-            let json_str = serde_json::to_string(value).unwrap_or_default();
-            format!("\"{}\"", escape_zig(&json_str))
-        }
     }
 }
