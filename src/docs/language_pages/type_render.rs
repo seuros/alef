@@ -389,7 +389,7 @@ mod tests {
             ..Default::default()
         };
         // Go, not Java: naming.rs unconditionally renames every Java method literally named
-        // `default` to `defaultOptions` regardless of shape, which would make this assertion
+        // `default` to `defaultInstance` regardless of shape, which would make this assertion
         // about the *gate* (not about naming.rs's rename table) give a false failure.
         let rendered = render_type(&ty, Language::Go, &ResolvedCrateConfig::default(), &ApiSurface::default(), "Htm");
         assert!(

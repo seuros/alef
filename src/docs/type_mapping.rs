@@ -75,7 +75,10 @@ pub fn doc_type(ty: &TypeRef, lang: Language, ffi_prefix: &str) -> String {
                 // signature-side bug this guards against. Types that already render as
                 // pointers (strings, bytes, JSON, maps) are nullable in place; doubling
                 // the `*` for those was the `const char**`-vs-header `const char *`
-                // divergence. Jni keeps the old pointer rendering; see docs::examples for why.
+                // divergence. Jni is folded into the pointer arm below, and that is wrong for
+                // it: the JNI backend emits Rust, where an optional crosses as `jlong` (0 for
+                // absent), `jbyteArray`, or JSON over `jstring` -- never a pointer. See the
+                // note in docs::examples::sample_param_value.
                 Language::Ffi | Language::C
                     if matches!(inner.as_ref(), TypeRef::Named(_)) || inner_ty.ends_with('*') =>
                 {
@@ -259,8 +262,10 @@ pub fn doc_type(ty: &TypeRef, lang: Language, ffi_prefix: &str) -> String {
         }
         // ~keep Every Named type crosses the C ABI as the scalar `AlefHandle` token, not
         // a pointer to a struct named after the Rust type -- see FFI_HANDLE_TYPE_NAME.
-        // Jni is a distinct, currently-unreachable backend (see docs::examples) that
-        // keeps the pre-migration per-type rendering.
+        // Jni is a reachable target that falls through to the per-type rendering below, which
+        // is wrong for it as well: the JNI backend passes an opaque type as a `jlong` handle
+        // and a non-opaque one as JSON over `jstring`, so neither the per-type name nor
+        // `AlefHandle` describes it. See docs::examples::sample_param_value.
         TypeRef::Named(_) if matches!(lang, Language::Ffi | Language::C) => {
             type_name(FFI_HANDLE_TYPE_NAME, lang, ffi_prefix)
         }
@@ -424,8 +429,10 @@ pub(crate) fn doc_primitive(p: &PrimitiveType, lang: Language) -> String {
             // ~keep Rust `bool` is not passed across the C ABI directly -- the FFI backend's
             // `c_primitive` (backends/ffi/type_map.rs) maps `PrimitiveType::Bool` to `i32` for
             // both params and returns, which cbindgen renders as `int32_t` (see the `I32` arm
-            // below). Jni is a distinct, currently-unreachable backend (see docs::examples)
-            // left on its pre-migration `bool` rendering.
+            // below). Jni is a reachable target that falls through to plain `bool`, and that is
+            // wrong for it too -- the JNI backend uses `jboolean`
+            // (backends/jni/gen_shims/type_helpers.rs:64), which is neither `bool` nor
+            // `int32_t`. See docs::examples::sample_param_value.
             PrimitiveType::Bool if matches!(lang, Language::Ffi | Language::C) => "int32_t".to_string(),
             PrimitiveType::Bool => "bool".to_string(),
             PrimitiveType::U8 => "uint8_t".to_string(),

@@ -254,10 +254,11 @@ fn test_doc_type_named_ffi_uses_same_handle_name_regardless_of_concrete_type() {
 }
 
 #[test]
-fn test_doc_type_named_jni_keeps_pre_migration_rendering() {
-    // ~keep Jni is a distinct, currently-unreachable backend (see docs::examples) whose
-    // handle representation is `jlong`, not `AlefHandle`; it is deliberately left on the
-    // old per-type rendering rather than migrated alongside Ffi/C.
+fn test_doc_type_named_jni_currently_emits_per_type_c_name() {
+    // ~keep Characterisation only: this pins what the Jni arm currently emits, NOT what it
+    // ought to emit. Jni is reachable and `HTMParseOptions` is wrong for it -- the JNI backend
+    // passes an opaque type as `jlong` and a non-opaque one as JSON over `jstring`, so
+    // `AlefHandle` would be wrong here too. See docs::examples::sample_param_value.
     let ty = TypeRef::Named("ParseOptions".to_string());
     assert_eq!(doc_type(&ty, Language::Jni, TEST_PREFIX), "HTMParseOptions");
 }
@@ -279,9 +280,10 @@ fn test_doc_type_optional_string_ffi_is_single_pointer_not_double() {
 }
 
 #[test]
-fn test_doc_type_optional_string_jni_keeps_pre_migration_double_pointer() {
-    // ~keep Jni is untouched by this fix (see docs::examples for why); its rendering is
-    // pre-existing and left as-is.
+fn test_doc_type_optional_string_jni_currently_emits_c_double_pointer() {
+    // ~keep Characterisation only: pins what the Jni arm currently emits, NOT what it ought to
+    // emit. `const char**` is wrong for a backend that emits Rust and crosses an optional
+    // string as `jstring`. See docs::examples::sample_param_value.
     let ty = TypeRef::Optional(Box::new(TypeRef::String));
     assert_eq!(doc_type(&ty, Language::Jni, TEST_PREFIX), "const char**");
 }
@@ -530,9 +532,11 @@ fn test_doc_type_all_ffi_primitives() {
 }
 
 #[test]
-fn test_doc_type_bool_jni_keeps_pre_migration_rendering() {
-    // Jni is a distinct, currently-unreachable backend (see docs::examples); it is
-    // deliberately left on its old `bool` rendering rather than migrated to `int32_t`.
+fn test_doc_type_bool_jni_currently_emits_c_bool() {
+    // ~keep Characterisation only: pins what the Jni arm currently emits, NOT what it ought to
+    // emit. Jni is reachable, and neither `bool` nor `int32_t` is right -- the JNI backend uses
+    // `jboolean` (backends/jni/gen_shims/type_helpers.rs:64). See
+    // docs::examples::sample_param_value.
     assert_eq!(
         doc_type(&TypeRef::Primitive(PrimitiveType::Bool), Language::Jni, TEST_PREFIX),
         "bool"

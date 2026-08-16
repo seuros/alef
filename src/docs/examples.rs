@@ -213,11 +213,34 @@ fn sample_param_value(param: &ParamDef, lang: Language, ffi_prefix: &str) -> Str
         return "0".to_string();
     }
 
-    // Jni is a distinct backend (Rust JNI shim emitter for Kotlin Android, see
-    // backends/jni/) whose handle representation is `jlong`, not `AlefHandle`; it
-    // never reaches this docs pipeline as a real target today (`config.languages`
-    // never includes it — see backends/jni/mod.rs and core/config/extras.rs), so
-    // its pre-existing (already-nonsensical) rendering is left untouched here.
+    // ~keep Jni IS reachable from this docs pipeline — the arms below run against real
+    // configs. `"jni"` deserializes (core/config/extras.rs:30); core/config/new_config.rs:159
+    // explicitly accepts it in `languages`, erroring only when `kotlin_android` is absent;
+    // bin_cli/helpers.rs:231-237 (`resolve_languages_inner`, behind `resolve_doc_languages`)
+    // returns `config.languages` verbatim with no Jni filter; and docs/mod.rs:56 iterates that
+    // list straight into `generate_lang_doc`. So `languages = ["kotlin_android", "jni"]` — a
+    // legal config, and the pairing backends/jni/mod.rs:15-18 says is the only way the backend
+    // is driven — renders these arms today.
+    //
+    // What they render is wrong, and not merely stale. The JNI backend emits *Rust*: a
+    // `<crate>-jni` crate of `pub unsafe extern "system" fn Java_<pkg>_<Bridge>_<method>` shims
+    // built on the `jni` crate (backends/jni/mod.rs:1-18). Its boundary types are JNI's, not
+    // C's: opaque handles are `jlong` (gen_shims/function_shims.rs:212,
+    // gen_shims/method_shims.rs:95), strings and paths are `JString`
+    // (gen_shims/function_shims.rs:137-153,192-208), bools are `jboolean` and every other
+    // shape is JSON over `jstring` (gen_shims/type_helpers.rs:9,24,57,64). Errors do not
+    // return a sentinel at all — the shim calls `env.throw_new` and returns a type-specific
+    // zero (`()`, `false`, `0`, `std::ptr::null_mut()`; gen_shims/type_helpers.rs:29-42,
+    // templates/runtime_helpers.rs.jinja:32-42) — and a `0` handle *param* is rejected with a
+    // thrown exception (templates/opaque_handle_unmarshal.rs.jinja:1-4), so nothing here is
+    // nullable in the C sense. It emits no C at all, so every C-shaped token these arms
+    // produce — `NULL`, the `({ty}){0}` compound literal below, `const char*`, `bool`,
+    // `void*`, per-type struct names — documents an ABI that has never existed for this
+    // backend. `docs::naming::lang_slug` compounds it by mapping Jni to `"c"`,
+    // so the page is titled "C API Reference" and written to `api-c.md`, the same path the real
+    // C/Ffi page uses. These arms are left as-is rather than half-migrated to the handle ABI,
+    // which would be just as fictional; fixing them means modelling the JNI shim surface (or
+    // declining to emit a Jni page) and is tracked separately.
     if matches!(lang, Language::Jni)
         && let TypeRef::Named(name) = &param.ty
     {
@@ -386,9 +409,10 @@ fn render_call_statement(
 fn c_result_declaration(return_type: &TypeRef, lang: Language, ffi_prefix: &str) -> String {
     match return_type {
         // ~keep Named-type returns are a scalar `AlefHandle`, not a pointer to a
-        // struct named after the Rust type — see FFI_HANDLE_TYPE_NAME. Jni is left
-        // on the old (already-nonsensical) pointer rendering; see the comment in
-        // sample_param_value for why.
+        // struct named after the Rust type — see FFI_HANDLE_TYPE_NAME. Jni is a reachable
+        // target that falls through to the typed-pointer arm below, which is wrong for it:
+        // a JNI shim returns `jlong` and the Kotlin caller holds a `Long`. See the note in
+        // sample_param_value.
         TypeRef::Named(_) if matches!(lang, Language::Ffi | Language::C) => {
             format!("{} result", type_name(FFI_HANDLE_TYPE_NAME, lang, ffi_prefix))
         }
@@ -468,11 +492,12 @@ fn sample_named_value(name: &str, lang: Language, ffi_prefix: &str) -> String {
         Language::Elixir | Language::R => "%{}".to_string(),
         Language::Go => format!("{ty}{{}}"),
         Language::Rust => format!("{ty}::default()"),
-        // ~keep Same scalar-handle reasoning as sample_param_value; Jni keeps its
-        // old NULL rendering (see that function's comment for why). In practice
-        // this arm is unreachable for Ffi/C today — sample_param_value intercepts
-        // every Named-type param before falling through to sample_value — but it
-        // is fixed for defense-in-depth and consistency with the sentinel scheme.
+        // ~keep Same scalar-handle reasoning as sample_param_value. In practice the Ffi/C arm
+        // is unreachable today — sample_param_value intercepts every Named-type param before
+        // falling through to sample_value — but it is fixed for defense-in-depth and
+        // consistency with the sentinel scheme. The Jni arm is reachable and its `NULL` is
+        // wrong: the value is a `jlong` handle, and `NULL` is not a token the JNI backend
+        // emits anywhere. See the note in sample_param_value.
         Language::Ffi | Language::C => "0".to_string(),
         Language::Jni => "NULL".to_string(),
         Language::Gleam => "todo".to_string(),

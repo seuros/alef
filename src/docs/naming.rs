@@ -91,12 +91,23 @@ pub(crate) fn type_name(name: &str, lang: Language, ffi_prefix: &str) -> String 
         | Language::Dart
         | Language::Gleam
         | Language::Zig => short.to_pascal_case(),
-        // cbindgen renames every exported type with `[export] prefix`, which the FFI backend
-        // sets to the shouty form of `[ffi] prefix` (`gen_cbindgen_toml`), so the header spells
-        // this `LITERLLMDefaultClient`. Callers hand this function the PascalCase prefix, and
-        // `to_shouty_snake_case` is what recovers the header form from either spelling --
-        // plain `to_uppercase` would collapse `SampleCore` to `SAMPLECORE`. Matches the
-        // `enum_variant_name` arm below. ~keep
+        // cbindgen renames every exported type with `[export] prefix`. Callers hand this
+        // function the PascalCase form of `[ffi] prefix` (docs::generate_docs), so a
+        // case-restoring conversion is required to recover the header spelling: for
+        // liter-llm's `literllm` the header really does say `LITERLLMDefaultClient`, and
+        // emitting `LiterllmDefaultClient` names a symbol that occurs zero times in it.
+        //
+        // Note the two sides do not use the same conversion. `gen_cbindgen_toml`
+        // (backends/ffi/gen_bindings/helpers.rs:385) computes the real `[export] prefix` with
+        // plain `.to_uppercase()` on the raw config value, while this arm uses
+        // `to_shouty_snake_case`. They agree for every prefix any tree configures today --
+        // `literllm`, `ts_pack`, `htm`, `cberg`, `xberg` are all lowercase, single-word or
+        // already underscored -- and diverge only for an explicit prefix carrying an internal
+        // capital with no separator, where `SampleCore` yields `SAMPLE_CORE` here but
+        // `SAMPLECORE` in the header. Shouty-snake is the idiomatic C symbol prefix and is the
+        // intended behaviour, so the divergence is tracked as an implementation defect against
+        // `gen_cbindgen_toml`, not against this arm; do not "fix" it by reverting to
+        // `to_uppercase`. Matches the `enum_variant_name` arm below. ~keep
         Language::Ffi | Language::C | Language::Jni => {
             format!("{}{}", ffi_prefix.to_shouty_snake_case(), short.to_pascal_case())
         }
@@ -118,8 +129,32 @@ pub(crate) fn func_name(name: &str, lang: Language, ffi_prefix: &str) -> String 
             to_camel_case(name)
         }
     };
+    // ~keep Java's keyword renames must match `safe_java_method_name`
+    // (backends/java/gen_bindings/helpers.rs:207-215), which is what the Java backend applies
+    // to every opaque-type method: `default` -> `defaultInstance`, `new` -> `create`, any
+    // other keyword collision -> a trailing-underscore form. The previous hand-written arm
+    // emitted `defaultOptions`, a name the backend never generates, and carried no `new` arm
+    // at all -- so an opaque type's default static constructor (`pub fn new`, the shape the
+    // IR carries for it) arrived at `assert_valid_identifier` as the Java reserved word `new`
+    // and panicked the whole docs run instead of documenting `create`. Mirrored rather than
+    // delegated because the backend applies it only to opaque methods, while this function
+    // also names free functions (examples.rs, language_pages/function_render.rs); the mirror
+    // is arm-for-arm and shares the same `JAVA_KEYWORDS` constant, and
+    // `test_func_name_java_matches_backend_safe_java_method_name` pins it across that whole
+    // constant rather than a sample. The two camel-case helpers differ in name only for these
+    // inputs -- every entry in `JAVA_KEYWORDS` is a plain lowercase word, which both leave
+    // unchanged, so the membership arm keys identically on both sides.
+    //
+    // Known shared blind spot, deliberately mirrored rather than silently diverged from:
+    // `true`, `false`, and `null` are reserved *literals*, not keywords, so they are absent
+    // from `JAVA_KEYWORDS` and neither this table nor `safe_java_method_name` renames them.
+    // The backend would emit non-compiling Java for such a method and the docs gate
+    // (`reserved_words(Java)` in formatting.rs, which does list all three) would panic. Fixing
+    // that belongs in `safe_java_method_name`; this table must follow it, not lead it.
     match (lang, base.as_str()) {
-        (Language::Java, "default") => "defaultOptions".to_string(),
+        (Language::Java, "default") => "defaultInstance".to_string(),
+        (Language::Java, "new") => "create".to_string(),
+        (Language::Java, other) if crate::core::keywords::JAVA_KEYWORDS.contains(&other) => format!("{other}_"),
         (Language::Csharp, "Default") => "CreateDefault".to_string(),
         _ => base,
     }
@@ -229,9 +264,15 @@ mod tests {
     ///
     /// `alef all` used to publish `LiterllmDefaultClient` while `liter_llm.h` declared
     /// `LITERLLMDefaultClient` -- a name that occurs zero times in the header, so every C
-    /// snippet on the same site contradicted the reference page. The expected prefix here is
-    /// derived the same way `gen_cbindgen_toml` derives cbindgen's `[export] prefix`, so the
-    /// two cannot drift apart silently. ~keep
+    /// snippet on the same site contradicted the reference page.
+    ///
+    /// These cases do not discriminate between the two prefix conversions in play: for a
+    /// lowercase, single-word or already-underscored prefix, `to_shouty_snake_case` (used by
+    /// `type_name`) and `.to_uppercase()` (used by `gen_cbindgen_toml` to write the real
+    /// `[export] prefix`) return the same string. This test therefore pins the header spelling
+    /// for every prefix currently configured across the repos, but it does not prove the two
+    /// derivations cannot drift -- they already do, for an explicit prefix with an internal
+    /// capital and no separator. See the note on `type_name`'s Ffi/C arm. ~keep
     #[test]
     fn type_name_ffi_matches_cbindgen_export_prefix() {
         for (ffi_prefix, expected_export_prefix) in [
@@ -341,5 +382,66 @@ mod tests {
     fn test_type_name_zig_preserves_pascal_case() {
         assert_eq!(type_name("BrowserMode", Language::Zig, TEST_PREFIX), "BrowserMode");
         assert_eq!(type_name("CrawlConfig", Language::Zig, TEST_PREFIX), "CrawlConfig");
+    }
+
+    /// The default opaque constructor is a static `pub fn new` carried in `TypeDef::methods`.
+    /// The Java backend renames it to `create`; documenting it as `new` names a Java reserved
+    /// word, which `assert_valid_identifier` turns into a panic that aborts the whole docs run.
+    #[test]
+    fn test_func_name_java_renames_reserved_new_to_create() {
+        assert_eq!(func_name("new", Language::Java, TEST_PREFIX), "create");
+    }
+
+    /// `defaultOptions` was a docs-only invention; the backend emits `defaultInstance`.
+    #[test]
+    fn test_func_name_java_renames_default_to_default_instance() {
+        assert_eq!(func_name("default", Language::Java, TEST_PREFIX), "defaultInstance");
+    }
+
+    #[test]
+    fn test_func_name_java_suffixes_other_reserved_words() {
+        assert_eq!(func_name("class", Language::Java, TEST_PREFIX), "class_");
+        assert_eq!(func_name("static", Language::Java, TEST_PREFIX), "static_");
+    }
+
+    #[test]
+    fn test_func_name_java_leaves_ordinary_names_alone() {
+        assert_eq!(
+            func_name("parse_document", Language::Java, TEST_PREFIX),
+            "parseDocument"
+        );
+        assert_eq!(func_name("create", Language::Java, TEST_PREFIX), "create");
+    }
+
+    /// Pin the docs table against the Java backend's own, so the two cannot drift apart
+    /// silently the way `defaultOptions` did.
+    ///
+    /// Exhaustive over `JAVA_KEYWORDS`, not a sample: `safe_java_method_name`'s third arm is a
+    /// membership test against that whole constant, so a sampled cross-check would pass while
+    /// leaving 40-odd keywords free to diverge. The non-keyword names cover the fallthrough
+    /// arm, where the two sides use different (but equivalent) camel-case helpers -- docs'
+    /// `to_camel_case` vs heck's `to_lower_camel_case`.
+    #[test]
+    fn test_func_name_java_matches_backend_safe_java_method_name() {
+        let ordinary = ["parse_document", "to_json", "create", "with_options", "from_str", "id"];
+        for name in crate::core::keywords::JAVA_KEYWORDS.iter().copied().chain(ordinary) {
+            assert_eq!(
+                func_name(name, Language::Java, TEST_PREFIX),
+                crate::backends::java::gen_bindings::helpers::safe_java_method_name(name),
+                "docs must name `{name}` exactly as the Java backend does"
+            );
+        }
+    }
+
+    /// A Java identifier the docs emit must survive the identifier gate; before the rename
+    /// table was corrected, `new` reached it verbatim and panicked. Exhaustive over the
+    /// keyword table so no reserved word can reach the gate unrenamed.
+    #[test]
+    fn test_func_name_java_output_passes_the_identifier_gate() {
+        let ordinary = ["parse_document", "to_json", "create"];
+        for name in crate::core::keywords::JAVA_KEYWORDS.iter().copied().chain(ordinary) {
+            let rendered = func_name(name, Language::Java, TEST_PREFIX);
+            crate::docs::formatting::assert_valid_identifier(&rendered, Language::Java, "a naming test");
+        }
     }
 }

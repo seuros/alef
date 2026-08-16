@@ -105,17 +105,38 @@ fn test_c_signature_and_example_agree_on_named_return_handle_type() {
 }
 
 // ---------------------------------------------------------------------------
-// ~keep The C doc emitter (`render_c_fn_sig` in signatures.rs, not owned by this file --
-// see `type_mapping.rs`'s file-ownership note) builds a signature purely from
-// `FunctionDef.params`/`return_type` via `doc_type`, one C parameter per IR parameter.
+// ~keep The C doc emitter (`render_c_fn_sig`, defined in signatures.rs rather than in this
+// test module) builds a signature purely from `FunctionDef.params`/`return_type` via
+// `doc_type`, one C parameter per IR parameter.
 // The real FFI backend does not: `orchestration.rs`'s free-function codegen (mirrored in
-// its method-codegen sibling ~140 lines earlier in the same file) appends a `<name>_len:
+// its method-codegen sibling ~570 lines earlier in the same file) appends a `<name>_len:
 // usize` companion parameter for every `TypeRef::Bytes` parameter, and three extra
 // `out_ptr`/`out_len`/`out_cap` out-parameters whenever the return type resolves to bytes
 // -- neither is IR-visible to `doc_type`, so no formula fix in `type_mapping.rs` alone can
 // close this gap. This test pins the correct, ABI-faithful shape; it is expected to fail
 // until `render_c_fn_sig` reads the emitted binding (cbindgen header) or the same
 // param-shaping logic `orchestration.rs` uses, instead of the bare IR.
+//
+// Two qualifications, established while auditing task #67:
+//
+// 1. "Read the cbindgen header" is only conditionally available. alef never runs cbindgen --
+//    it emits `cbindgen.toml` plus a `build.rs` calling `cbindgen::generate`
+//    (backends/ffi/templates/build_rs.jinja), so the header is produced by the *consumer's*
+//    `cargo build`. `alef all` does build the FFI crate before the docs stage
+//    (bin_cli/all_commands.rs:265 precedes :513, via `complete_generated_artifacts` ->
+//    `ensure_ffi_header_freshness`), so a fresh header exists there. A bare `alef docs`
+//    (bin_cli/core_commands.rs:584-622) never calls it, so in a fresh tree there is no header
+//    at all. Any header-reading fix must therefore also decide what `alef docs` does when the
+//    header is missing -- emitting a fabricated signature is the current, wrong answer;
+//    omitting the signature is the honest one.
+//
+// 2. Not every gap needs the header. Two of the largest mismatches are plain IR and fixable
+//    here: the C arm of `render_method_signature_with_override` (signatures.rs:675-700) omits
+//    the leading `this` receiver that `orchestration.rs:141-147` always emits for a non-static
+//    method, and it names the symbol `{prefix}_{method}` via `func_name` while the backend
+//    emits `{prefix}_{type_snake}_{method}` (orchestration.rs:45,78) -- it already receives
+//    `type_name_str` and simply does not use it. Both are deferred with the rest of #67, but
+//    they are not blocked on the header.
 // ---------------------------------------------------------------------------
 
 #[test]

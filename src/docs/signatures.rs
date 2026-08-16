@@ -576,11 +576,10 @@ pub(crate) fn render_method_signature_with_override(
             }
         }
         Language::Java => {
-            let java_name = if name == "default" {
-                "defaultOptions".to_string()
-            } else {
-                name.clone()
-            };
+            // ~keep Java's keyword renames are applied once, by `func_name`, which mirrors the
+            // backend's `safe_java_method_name` (`default` -> `defaultInstance`, `new` ->
+            // `create`). A second rename here used to map `default` -> `defaultOptions` and
+            // silently won, emitting a name the Java backend never generates.
             let params: Vec<String> = method
                 .params
                 .iter()
@@ -604,9 +603,9 @@ pub(crate) fn render_method_signature_with_override(
                 format!(" throws {ffi_prefix}RsException")
             };
             if method.is_static {
-                format!("public static {} {}({}){}", ret, java_name, params.join(", "), throws)
+                format!("public static {} {}({}){}", ret, name, params.join(", "), throws)
             } else {
-                format!("public {} {}({}){}", ret, java_name, params.join(", "), throws)
+                format!("public {} {}({}){}", ret, name, params.join(", "), throws)
             }
         }
         Language::Csharp => {

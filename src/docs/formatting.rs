@@ -332,7 +332,7 @@ pub(crate) fn format_enum_variant_ref(enum_type: &str, variant: &str, lang: Lang
 }
 
 /// ~keep The C ABI's on-error return value depends on the function's return shape, not a
-/// single fixed sentinel -- traced from `backends/ffi/gen_bindings/orchestration.rs`
+/// single fixed sentinel -- traced from `backends/ffi/gen_bindings/functions/orchestration.rs`
 /// (`:223-229`/`:760-765`, `gen_function_wrapper_footer` `:615-617`) and `helpers.rs`
 /// (`:193-232`): a fallible `()` return, or any `Bytes` result (always delivered via
 /// out-param + status), reports failure as `-1`; a `TypeRef::Named` handle reports it as
@@ -388,8 +388,12 @@ pub(crate) fn format_error_phrase(error_type: &str, return_type: &TypeRef, lang:
             format!("Throws `{ename}`.")
         }
         Language::Ffi | Language::C => ffi_error_return_phrase(return_type),
-        // ~keep Jni is a distinct, currently-unreachable backend (see docs::examples); left
-        // on its pre-migration fixed `NULL` phrase rather than migrated to the shape-based one.
+        // ~keep Jni is reachable (see docs::examples::sample_param_value) and this fixed `NULL`
+        // phrase is wrong for it: a JNI shim signals failure by throwing
+        // `<Bridge>Exception` via `env.throw_new`, then returns a type-specific zero — `()`,
+        // `false`, `0`, or `std::ptr::null_mut()` (backends/jni/gen_shims/type_helpers.rs:29-42,
+        // templates/runtime_helpers.rs.jinja:32-42). "Returns `NULL`" is wrong for unit,
+        // primitive, and handle returns alike, and buries the exception the caller must catch.
         Language::Jni => "Returns `NULL` on error.".to_string(),
         Language::R => "Stops with error message.".to_string(),
         Language::Rust => {
@@ -417,12 +421,14 @@ pub(crate) fn doc_type_with_optional(ty: &TypeRef, lang: Language, optional: boo
             Language::Node | Language::Wasm => format!("{inner} | null"),
             Language::Go => format!("*{inner}"),
             // ~keep The public facade unwraps the internal `...Rs` `Optional<T>` and returns
-            // `@Nullable T` instead (backends/java/gen_bindings/facade.rs), and record fields do
-            // the same (gen_bindings/types/records.rs) -- both call `render_nullable_type`
-            // uniformly for params, returns, and fields. Delegating here, the same way
-            // type_mapping.rs's `TypeRef::Optional` arm does, is what makes a third
-            // hand-derived copy of this logic impossible; matching its output by hand is what
-            // produced this copy's drift in the first place.
+            // `@Nullable T` instead, calling `render_nullable_type` for both parameters and
+            // returns (backends/java/gen_bindings/facade.rs:37,62). Delegating here, the same
+            // way type_mapping.rs's `TypeRef::Optional` arm does, is what keeps this copy from
+            // drifting off the facade; matching its output by hand is what produced the drift
+            // this arm fixes. Record fields land on the same `@Nullable T` shape but do NOT
+            // route through `render_nullable_type` -- gen_bindings/types/records.rs:87-155
+            // hand-rolls the annotation from `has_nullable`/`nullable_at_leading_pos` -- so
+            // that third copy remains free to drift and is not guarded by this delegation.
             Language::Java => {
                 let boxed = java_boxed_type(ty);
                 crate::backends::java::gen_bindings::helpers::render_nullable_type(&boxed, true)
@@ -437,8 +443,10 @@ pub(crate) fn doc_type_with_optional(ty: &TypeRef, lang: Language, optional: boo
             // the C ABI as a scalar `AlefHandle`, never a pointer, so wrapping it in another
             // `*` here fabricates a pointer that doesn't exist. Types that already render as
             // pointers (strings, bytes, JSON, maps) are nullable in place -- doubling the `*`
-            // for those was the `const char**`-vs-header `const char *` divergence. Jni keeps
-            // the old pointer rendering; see docs::examples for why.
+            // for those was the `const char**`-vs-header `const char *` divergence. Jni falls
+            // into the pointer arm below, which is wrong for it: the JNI backend emits Rust,
+            // where an optional is `jlong`/`jbyteArray`/`jstring`, never a pointer. See
+            // docs::examples::sample_param_value.
             Language::Ffi | Language::C if matches!(ty, TypeRef::Named(_)) || inner.ends_with('*') => inner,
             Language::Ffi | Language::C | Language::Jni => format!("{inner}*"),
             Language::Kotlin
@@ -1411,7 +1419,7 @@ mod tests {
     }
 
     #[test]
-    fn test_doc_type_with_optional_string_jni_keeps_pre_migration_double_pointer() {
+    fn test_doc_type_with_optional_string_jni_currently_emits_c_double_pointer() {
         assert_eq!(
             doc_type_with_optional(&TypeRef::String, Language::Jni, true, TEST_PREFIX),
             "const char**"
@@ -1437,7 +1445,7 @@ mod tests {
     }
 
     // ~keep The on-error return value depends on the function's return shape; traced from
-    // backends/ffi/gen_bindings/{orchestration,helpers}.rs -- see ffi_error_return_phrase's
+    // backends/ffi/gen_bindings/{functions/orchestration,helpers}.rs -- see ffi_error_return_phrase's
     // doc comment for the source citations. One case per row of that table.
     #[test]
     fn test_format_error_phrase_ffi_unit_return_reports_negative_one() {
@@ -1517,10 +1525,11 @@ mod tests {
     }
 
     #[test]
-    fn test_format_error_phrase_jni_keeps_pre_migration_fixed_null_phrase() {
-        // Jni is a distinct, currently-unreachable backend (see docs::examples); it is
-        // deliberately left on the old fixed `NULL` phrase, not migrated to the shape-based
-        // table, regardless of what the return shape actually is.
+    fn test_format_error_phrase_jni_currently_emits_fixed_null_phrase() {
+        // ~keep Characterisation only: this pins what the Jni arm currently emits, NOT what it
+        // ought to emit. Jni is reachable and the phrase is wrong -- a JNI shim throws
+        // `<Bridge>Exception` and returns a type-specific zero, never `NULL`. See
+        // docs::examples::sample_param_value; expect this test to change when the arm is fixed.
         assert_eq!(
             format_error_phrase("InitError", &TypeRef::Unit, Language::Jni),
             "Returns `NULL` on error."

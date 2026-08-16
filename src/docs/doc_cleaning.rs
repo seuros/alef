@@ -180,7 +180,7 @@ pub fn clean_doc(doc: &str, lang: Language) -> String {
 /// Strip patch/prerelease suffixes from prose feature labels.
 ///
 /// This intentionally targets only feature provenance phrases. API page release
-/// badges are generated elsewhere and must keep the full package version.
+/// badges are generated elsewhere and must keep the full package version. ~keep
 pub(crate) fn normalize_feature_label_versions(doc: &str) -> String {
     static FEATURE_LABEL_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = FEATURE_LABEL_RE.get_or_init(|| {
@@ -648,11 +648,11 @@ pub(crate) fn rust_paths_to_dot_notation(doc: &str, lang: Language) -> String {
 
 /// Inline version that also strips newlines for use in table cells.
 ///
-/// Note: this function does NOT escape pipe characters. Every call site in
-/// `lib.rs` passes the result through `escape_table_cell`, which handles pipe
-/// escaping exactly once. Escaping here as well would double-escape `||` into
-/// `\\|\\|`, causing CommonMark parsers to see an extra cell separator and
-/// trigger MD056 violations.
+/// Note: this function does NOT escape pipe characters. Every call site (in
+/// `docs::language_pages::*` and `docs::shared_pages`) passes the result through
+/// `escape_table_cell`, which handles pipe escaping exactly once. Escaping here
+/// as well would double-escape `||` into `\\|\\|`, causing CommonMark parsers to
+/// see an extra cell separator and trigger MD056 violations. ~keep
 pub(crate) fn clean_doc_inline(doc: &str, lang: Language) -> String {
     if doc.is_empty() {
         return String::new();
@@ -888,7 +888,7 @@ pub(crate) fn rust_links_to_plain(doc: &str) -> String {
 /// closing backtick of one span is immediately followed by the opening backtick
 /// of the next, so genuine double-backtick spans (`` ``code with ` tick`` ``)
 /// are left untouched — those have content, not another opening delimiter,
-/// after their opening run.
+/// after their opening run. ~keep
 fn collapse_adjacent_code_spans(doc: &str) -> String {
     let chars: Vec<char> = doc.chars().collect();
     let mut result = String::with_capacity(doc.len());
