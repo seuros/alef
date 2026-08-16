@@ -21,7 +21,6 @@ ffi_style = "panama"
 [crates.e2e]
 fixtures = "fixtures"
 output = "e2e"
-java_group_id = "dev.sample_crate"
 
 [crates.e2e.call]
 function = "noop"

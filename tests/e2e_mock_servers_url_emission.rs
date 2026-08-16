@@ -162,7 +162,6 @@ sources = ["src/lib.rs"]
 [crates.e2e]
 fixtures = "fixtures"
 output = "e2e"
-java_group_id = "dev.sample_crate"
 
 [crates.e2e.call]
 function = "scrape"
@@ -188,7 +187,7 @@ module = "DemoCrawler"
 returns_result = true
 
 [crates.e2e.call.overrides.go]
-import_alias = "demo_crawler"
+alias = "demo_crawler"
 "#
     );
     let cfg: NewAlefConfig = toml::from_str(&toml_src).expect("config parses");
@@ -214,7 +213,6 @@ sources = ["src/lib.rs"]
 [crates.e2e]
 fixtures = "fixtures"
 output = "e2e"
-java_group_id = "dev.sample_crate"
 
 [crates.e2e.call]
 function = "{function}"

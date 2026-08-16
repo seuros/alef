@@ -66,7 +66,7 @@ module = "DemoCrawler"
 returns_result = true
 
 [crates.e2e.call.overrides.go]
-import_alias = "demo_crawler"
+alias = "demo_crawler"
 "#,
     );
     let cfg: NewAlefConfig = toml::from_str(&toml_src).expect("config parses");

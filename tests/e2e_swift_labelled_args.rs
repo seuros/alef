@@ -34,7 +34,7 @@ args = [
   { name = "config", field = "input.config", type = "json_object" },
 ]
 
-[crates.e2e.package.swift]
+[crates.e2e.packages.swift]
 name = "SampleLanguagePack"
 "#;
     let cfg: NewAlefConfig = toml::from_str(toml_src).expect("config parses");
@@ -133,7 +133,7 @@ result_var = "result"
 async = false
 args = []
 
-[crates.e2e.package.swift]
+[crates.e2e.packages.swift]
 name = "SampleLanguagePack"
 "#;
     let cfg: NewAlefConfig = toml::from_str(toml_src).expect("config parses");

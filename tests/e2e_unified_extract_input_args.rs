@@ -41,10 +41,10 @@ unnamed_arg_indices = [0, 1]
 function = "extract"
 options_type = "ExtractionConfig"
 
-[crates.e2e.package.swift]
+[crates.e2e.packages.swift]
 name = "Xberg"
 
-[crates.e2e.package.r]
+[crates.e2e.packages.r]
 name = "xberg"
 "#;
 
