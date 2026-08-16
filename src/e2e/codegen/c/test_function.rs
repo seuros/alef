@@ -173,7 +173,7 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         config,
         type_defs,
         true,
-    );
+    )?;
     let failure_check = format!("if ({result_var} != 0) {{ return EXIT_FAILURE; }}");
     let body_line_count = function.lines().count().saturating_sub(3);
     let body = function
@@ -224,7 +224,7 @@ pub(super) fn render_test_function(
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
     documentation_snippet: bool,
-) {
+) -> anyhow::Result<()> {
     let fn_name = sanitize_ident(&fixture.id);
     let description = &fixture.description;
 
@@ -301,8 +301,8 @@ pub(super) fn render_test_function(
             expects_error,
             raw_c_result_type,
             type_defs,
-        );
-        return;
+        )?;
+        return Ok(());
     }
 
     // Streaming adapters use an FFI iterator handle instead of a single
@@ -316,7 +316,7 @@ pub(super) fn render_test_function(
                 out,
                 "streaming fixture requires matching [[crates.adapters]] metadata for C e2e codegen",
             );
-            return;
+            return Ok(());
         };
         render_streaming_test_function(
             out,
@@ -329,7 +329,7 @@ pub(super) fn render_test_function(
             expects_error,
             api_key_var,
         );
-        return;
+        return Ok(());
     }
 
     // Byte-buffer pattern: methods like `speech` and `file_content` return raw
@@ -347,7 +347,7 @@ pub(super) fn render_test_function(
                 out,
                 "client_factory is configured but C e2e could not resolve the client owner type",
             );
-            return;
+            return Ok(());
         };
         render_bytes_test_function(
             out,
@@ -362,7 +362,7 @@ pub(super) fn render_test_function(
             &client_owner_type,
             expects_error,
         );
-        return;
+        return Ok(());
     }
 
     // Client pattern: used when client_factory is configured.
@@ -375,7 +375,7 @@ pub(super) fn render_test_function(
                 out,
                 "client_factory is configured but C e2e could not resolve the client owner type",
             );
-            return;
+            return Ok(());
         };
         let mut request_handle_vars: Vec<(String, String)> = Vec::new(); // (arg_name, var_name)
         // Inline argument expressions appended after request handles in the
@@ -541,7 +541,7 @@ pub(super) fn render_test_function(
             let _ = writeln!(out, "    {prefix}_default_client_free(client);");
             let _ = writeln!(out, "    assert({result_var} == 0 && \"expected call to fail\");");
             let _ = writeln!(out, "}}");
-            return;
+            return Ok(());
         }
 
         let _ = writeln!(
@@ -593,7 +593,7 @@ pub(super) fn render_test_function(
                         result_type_name,
                         f,
                         type_defs,
-                    );
+                    )?;
                     if let Some(prim) = leaf_primitive {
                         primitive_locals.insert(local_var.clone(), prim);
                     }
@@ -685,7 +685,7 @@ pub(super) fn render_test_function(
         }
         let _ = writeln!(out, "    {prefix}_default_client_free(client);");
         let _ = writeln!(out, "}}");
-        return;
+        return Ok(());
     }
 
     // Raw C result type path: functions returning a primitive C type (char*, int32_t,
@@ -738,7 +738,7 @@ pub(super) fn render_test_function(
                 }
             }
             let _ = writeln!(out, "}}");
-            return;
+            return Ok(());
         }
 
         // not_error assertion.
@@ -899,7 +899,7 @@ pub(super) fn render_test_function(
         }
 
         let _ = writeln!(out, "}}");
-        return;
+        return Ok(());
     }
 
     // Legacy (non-client) path: call the function directly.
@@ -990,7 +990,7 @@ pub(super) fn render_test_function(
             let _ = writeln!(out, "    assert({result_var} != NULL && \"expected call to succeed\");");
         }
         let _ = writeln!(out, "}}");
-        return;
+        return Ok(());
     }
 
     if expects_error {
@@ -1001,7 +1001,7 @@ pub(super) fn render_test_function(
         render_typed_arg_cleanup(out, prefix, &typed_arg_cleanup);
         let _ = writeln!(out, "    assert({result_var} == 0 && \"expected call to fail\");");
         let _ = writeln!(out, "}}");
-        return;
+        return Ok(());
     }
 
     // The FFI returns an opaque handle; extract the content string from it.
@@ -1062,7 +1062,7 @@ pub(super) fn render_test_function(
                     result_type_name,
                     f,
                     type_defs,
-                );
+                )?;
                 if let Some(returned_type) = leaf_result {
                     // Could be a primitive type (primitive_locals) or opaque handle type
                     if is_primitive_c_type(&returned_type) {
@@ -1157,6 +1157,7 @@ pub(super) fn render_test_function(
     let result_type_snake = result_type_name.to_snake_case();
     let _ = writeln!(out, "    {prefix}_{result_type_snake}_free({result_var});");
     let _ = writeln!(out, "}}");
+    Ok(())
 }
 
 fn render_typed_arg_cleanup(out: &mut String, prefix: &str, handles: &[(String, String)]) {

@@ -36,7 +36,7 @@ pub(super) fn emit_nested_accessor(
     result_type_name: &str,
     raw_field: &str,
     type_defs: &[crate::core::ir::TypeDef],
-) -> Option<String> {
+) -> anyhow::Result<Option<String>> {
     let segments: Vec<&str> = resolved.split('.').collect();
     let prefix_upper = prefix.to_uppercase();
 
@@ -68,7 +68,7 @@ pub(super) fn emit_nested_accessor(
                     out,
                     "    char* {local_var} = alef_json_get_string({current_handle}, \"{seg_snake}\");"
                 );
-                return None; // JSON key leaf — char*.
+                return Ok(None); // JSON key leaf — char*.
             }
             // Intermediate JSON key — must be an object/array value. Use the
             // object extractor so the substring includes braces/brackets and
@@ -130,7 +130,7 @@ pub(super) fn emit_nested_accessor(
                     json_extract_mode = true;
                     continue;
                 }
-                return None;
+                return Ok(None);
             }
             if let Ok(idx) = key.parse::<usize>() {
                 let elem_var = format!("{field_snake}_{idx}_json");
@@ -147,7 +147,7 @@ pub(super) fn emit_nested_accessor(
                     continue;
                 }
                 // Trailing `[N]` — caller asserts on the element JSON.
-                return None;
+                return Ok(None);
             }
 
             // Named map key access: extract the key value from the JSON object.
@@ -155,7 +155,7 @@ pub(super) fn emit_nested_accessor(
                 out,
                 "    char* {local_var} = alef_json_get_string({json_var}, \"{key}\");"
             );
-            return None; // Map access leaf — char*.
+            return Ok(None); // Map access leaf — char*.
         }
 
         let seg_snake = segment.to_snake_case();
@@ -163,7 +163,7 @@ pub(super) fn emit_nested_accessor(
 
         // Skip any assertion that touches a field marked "skip" in fields_c_types.
         if is_skipped_c_field(fields_c_types, &current_snake_type, &seg_snake) {
-            return Some("__skip__".to_string()); // Sentinel: no accessor emitted, assertion skipped later.
+            return Ok(Some("__skip__".to_string())); // Sentinel: no accessor emitted, assertion skipped later.
         }
 
         if is_leaf {
@@ -172,7 +172,7 @@ pub(super) fn emit_nested_accessor(
             let lookup_key = format!("{current_snake_type}.{seg_snake}");
             if let Some(t) = fields_c_types.get(&lookup_key).filter(|t| is_primitive_c_type(t)) {
                 let _ = writeln!(out, "    {t} {local_var} = {accessor_fn}({current_handle});");
-                return Some(t.clone());
+                return Ok(Some(t.clone()));
             }
             // Opaque struct leaf: when fields_c_types maps "{parent}.{field}" to a
             // PascalCase type name (not a primitive, not "char*", not "skip"), the
@@ -198,7 +198,7 @@ pub(super) fn emit_nested_accessor(
                 if local_var != handle_var {
                     let _ = writeln!(out, "    {prefix_upper}AlefHandle {local_var} = {handle_var};");
                 }
-                return Some(opaque_snake); // return type name so caller can register opaque handle cleanup
+                return Ok(Some(opaque_snake)); // return type name so caller can register opaque handle cleanup
             }
             // Enum leaf: opaque enum pointer that needs `_to_string` conversion.
             if try_emit_enum_accessor(
@@ -215,7 +215,7 @@ pub(super) fn emit_nested_accessor(
                 fields_enum,
                 intermediate_handles,
             ) {
-                return None;
+                return Ok(None);
             }
             let _ = writeln!(out, "    char* {local_var} = {accessor_fn}({current_handle});");
         } else {
@@ -234,15 +234,22 @@ pub(super) fn emit_nested_accessor(
                     // suffix (e.g. `data` -> `DataNode`, `metadata` -> `MetadataConfig`)
                     // the guessed name does not match what cbindgen emits and the
                     // generated C fails to compile with `unknown type name`. Fail loud
-                    // here so the operator declares the correct C type explicitly.
-                    panic!(
-                        "fields_c_types: missing key \"{lookup_key}\" (path \"{resolved}\", \
-                         segment \"{segment}\") — declare the C type for this intermediate \
-                         accessor explicitly in `[crates.e2e.fields_c_types]`. The previous \
-                         fallback derived `{guess}` from the field name, which silently \
-                         miscompiled when the Rust return type differed (e.g. `DataNode` \
-                         vs. `Data`).",
-                        guess = segment.to_pascal_case(),
+                    // here so the operator declares the correct C type explicitly. ~keep
+                    anyhow::bail!(
+                        "{}",
+                        missing_intermediate_type_diagnostic(MissingIntermediateType {
+                            prefix,
+                            lookup_key: &lookup_key,
+                            accessor_fn: &accessor_fn,
+                            resolved,
+                            raw_field,
+                            segment: *segment,
+                            seg_snake: &seg_snake,
+                            segments_walked: &segments[..=i],
+                            current_snake_type: &current_snake_type,
+                            result_type_name,
+                            type_defs,
+                        })
                     );
                 }
             };
@@ -258,7 +265,7 @@ pub(super) fn emit_nested_accessor(
                 // If the next (and final) segment is "length", emit the count accessor.
                 if i + 2 == segments.len() && segments[i + 1] == "length" {
                     let _ = writeln!(out, "    int {local_var} = alef_json_array_count({json_var});");
-                    return Some("int".to_string());
+                    return Ok(Some("int".to_string()));
                 }
                 current_snake_type = seg_snake.clone();
                 current_handle = json_var;
@@ -284,7 +291,7 @@ pub(super) fn emit_nested_accessor(
             current_handle = handle_var;
         }
     }
-    None
+    Ok(None)
 }
 
 fn resolve_intermediate_type(
@@ -300,6 +307,228 @@ fn resolve_intermediate_type(
         .iter()
         .find(|field| field.name.to_snake_case() == field_snake)?;
     super::named_type(&field.ty).map(str::to_string)
+}
+
+/// How deep [`find_field_path`] will search for a field name below the result type.
+///
+/// The bound exists to terminate on a self-referential IR, not to trade off cost -- this
+/// only ever runs on the way to returning an error. Six comfortably clears the chains that
+/// motivated it (crawlberg's `ScrapeResult.metadata.article.tags` is three hops); a chain
+/// deeper than this just loses the "here is where the field really lives" hint, it does not
+/// change the error.
+const MAX_FIELD_PATH_SEARCH_DEPTH: usize = 6;
+
+/// Where a field named `field_snake` really lives below some root type.
+struct ResolvedFieldChain {
+    /// The dotted path from the root type down to the field, e.g. `metadata.article.tags`.
+    path: String,
+    /// The IR type that actually declares the field. The C accessor symbol is built from
+    /// this type, not from the root -- naming it is the difference between the diagnostic
+    /// pointing at `cberg_article_metadata_tags` and at the `cberg_scrape_result_tags` that
+    /// does not exist.
+    owner_type: String,
+}
+
+/// The dotted path from `root_type` down to the first field whose snake_case name is
+/// `field_snake`, or `None` if no type reachable from `root_type` has such a field.
+///
+/// Shallowest-first, and only through `TypeRef::Named` struct fields — the same hops
+/// [`emit_nested_accessor`] itself can walk, so a path this returns is one the C codegen
+/// could actually emit accessors for.
+fn find_field_path(
+    root_type: &str,
+    field_snake: &str,
+    type_defs: &[crate::core::ir::TypeDef],
+) -> Option<ResolvedFieldChain> {
+    fn walk(
+        type_name: &str,
+        field_snake: &str,
+        type_defs: &[crate::core::ir::TypeDef],
+        depth: usize,
+        seen: &mut HashSet<String>,
+    ) -> Option<ResolvedFieldChain> {
+        if depth == 0 || !seen.insert(type_name.to_string()) {
+            return None;
+        }
+        let type_def = type_defs.iter().find(|type_def| type_def.name == type_name)?;
+        if let Some(field) = type_def
+            .fields
+            .iter()
+            .find(|field| field.name.to_snake_case() == field_snake)
+        {
+            return Some(ResolvedFieldChain {
+                path: field.name.to_snake_case(),
+                owner_type: type_def.name.clone(),
+            });
+        }
+        for field in &type_def.fields {
+            let Some(nested) = super::named_type(&field.ty) else {
+                continue;
+            };
+            if let Some(found) = walk(nested, field_snake, type_defs, depth - 1, seen) {
+                return Some(ResolvedFieldChain {
+                    path: format!("{}.{}", field.name.to_snake_case(), found.path),
+                    owner_type: found.owner_type,
+                });
+            }
+        }
+        None
+    }
+
+    walk(
+        root_type,
+        field_snake,
+        type_defs,
+        MAX_FIELD_PATH_SEARCH_DEPTH,
+        &mut HashSet::new(),
+    )
+}
+
+/// The leading segments `resolved` lost to virtual-namespace stripping, if any.
+///
+/// [`emit_nested_accessor`] is handed the already-stripped path (the callers in
+/// `test_function.rs`/`call_patterns.rs` strip before calling), so the only surviving record
+/// of a stripped prefix is that `raw_field` ends with `resolved`. Recovering it is what lets
+/// the diagnostic tell "add an alias" apart from "add a type mapping": a path that lost a
+/// segment is almost always a missing `[crates.e2e.fields]` alias, and declaring the C type
+/// the message names would instead emit a call to a symbol that does not exist. ~keep
+fn stripped_namespace_prefix<'a>(raw_field: &'a str, resolved: &str) -> Option<&'a str> {
+    let prefix_len = raw_field.len().checked_sub(resolved.len())?;
+    if prefix_len == 0 || !raw_field.ends_with(resolved) {
+        return None;
+    }
+    raw_field
+        .get(..prefix_len)
+        .and_then(|prefix| prefix.strip_suffix('.'))
+        .filter(|prefix| !prefix.is_empty())
+}
+
+/// Why `resolve_intermediate_type` could not derive a C type for `{parent_snake}.{field_snake}`.
+///
+/// The three ways it returns `None` need three different fixes, and the missing key alone
+/// cannot tell them apart: an unknown parent type means the walk arrived somewhere it should
+/// never have been (usually namespace stripping), a missing field means the path is wrong,
+/// and a non-`Named` field type means the path is right but the accessor returns something
+/// no opaque handle can carry. ~keep
+fn why_the_type_is_unknown(parent_snake: &str, field_snake: &str, type_defs: &[crate::core::ir::TypeDef]) -> String {
+    let Some(parent) = type_defs
+        .iter()
+        .find(|type_def| type_def.name.to_snake_case() == parent_snake)
+    else {
+        return format!("No IR type has the snake_case name `{parent_snake}`");
+    };
+    let Some(field) = parent
+        .fields
+        .iter()
+        .find(|field| field.name.to_snake_case() == field_snake)
+    else {
+        return format!("Type `{}` has no field `{field_snake}`", parent.name);
+    };
+    if super::named_type(&field.ty).is_none() {
+        return format!(
+            "Field `{}.{field_snake}` is not a named struct type, so no opaque accessor type can be derived from it",
+            parent.name
+        );
+    }
+    format!("Type `{}` does have a field `{field_snake}`", parent.name)
+}
+
+/// Inputs for [`missing_intermediate_type_diagnostic`]. A struct, not a dozen positional
+/// `&str`s, so two of them cannot be swapped without the compiler noticing.
+struct MissingIntermediateType<'a> {
+    /// The crate's FFI symbol prefix, for naming the accessor that really exists.
+    prefix: &'a str,
+    /// The `"{parent_snake}.{field_snake}"` key that was looked up and missed.
+    lookup_key: &'a str,
+    /// The C symbol the walk would call if that key were simply declared.
+    accessor_fn: &'a str,
+    /// The (already namespace-stripped) path being walked.
+    resolved: &'a str,
+    /// The fixture's own field path, before alias resolution and namespace stripping.
+    raw_field: &'a str,
+    segment: &'a str,
+    seg_snake: &'a str,
+    /// `resolved`'s segments up to and including the failing one.
+    segments_walked: &'a [&'a str],
+    /// The snake_case type the walk is standing on.
+    current_snake_type: &'a str,
+    /// The type the walk started from.
+    result_type_name: &'a str,
+    type_defs: &'a [crate::core::ir::TypeDef],
+}
+
+/// Explain a missing `fields_c_types` key in terms of the chain that produced it.
+///
+/// The bare "missing key `{parent}.{field}`" this replaced implied its own remedy — declare
+/// that key — and the implied remedy is wrong whenever the key names a field the parent type
+/// does not have. Adding it silences the failure and emits a call to a C function that was
+/// never generated, which then fails at `cc` time (or, worse, links against an unrelated
+/// symbol). So the message has to carry three things the key alone cannot: which prefix
+/// alef stripped as a virtual namespace to arrive at this path, which symbol declaring the
+/// key would conjure, and where the field really lives under the result type. ~keep
+fn missing_intermediate_type_diagnostic(context: MissingIntermediateType<'_>) -> String {
+    let MissingIntermediateType {
+        prefix,
+        lookup_key,
+        accessor_fn,
+        resolved,
+        raw_field,
+        segment,
+        seg_snake,
+        segments_walked,
+        current_snake_type,
+        result_type_name,
+        type_defs,
+    } = context;
+
+    let mut message = format!(
+        "e2e c codegen: fields_c_types is missing key \"{lookup_key}\" (path \"{resolved}\", segment \"{segment}\"), \
+         reached while walking fixture field \"{raw_field}\" from result type `{result_type_name}`. {why}, so \
+         declaring \"{lookup_key}\" would make the generated test call `{accessor_fn}()`. (The old fallback guessed \
+         `{guess}` from the field name, which silently miscompiled whenever the Rust return type differed, e.g. \
+         `DataNode` vs `Data`.)",
+        why = why_the_type_is_unknown(current_snake_type, seg_snake, type_defs),
+        guess = segment.to_pascal_case(),
+    );
+
+    if let Some(namespace) = stripped_namespace_prefix(raw_field, resolved) {
+        let _ = write!(
+            message,
+            " alef stripped the leading \"{namespace}\" from \"{raw_field}\" as a virtual namespace, because no \
+             `[crates.e2e.fields]` alias maps it onto a real path and its first segment is not a `result_fields` \
+             entry -- which is why the walk started at `{result_type_name}` instead of inside `{namespace}`."
+        );
+    }
+
+    match find_field_path(result_type_name, seg_snake, type_defs) {
+        Some(chain) => {
+            let alias_key = match stripped_namespace_prefix(raw_field, resolved) {
+                Some(namespace) => format!("{namespace}.{}", segments_walked.join(".")),
+                None => segments_walked.join("."),
+            };
+            let real_path = &chain.path;
+            let real_symbol = format!("{prefix}_{}_{seg_snake}", chain.owner_type.to_snake_case());
+            let _ = write!(
+                message,
+                " Field `{seg_snake}` does exist below `{result_type_name}`, at \"{real_path}\" -- it is declared on \
+                 `{owner}`, so the accessor that really exists is `{real_symbol}()`. Fix: add \
+                 \"{alias_key}\" = \"{real_path}\" under `[crates.e2e.fields]` so the fixture path resolves to the \
+                 real chain. Only add \"{lookup_key}\" to `[crates.e2e.fields_c_types]` if `{accessor_fn}()` really \
+                 is in the generated header.",
+                owner = chain.owner_type,
+            );
+        }
+        None => {
+            let _ = write!(
+                message,
+                " No type reachable from `{result_type_name}` has a field named `{seg_snake}` either, so the \
+                 fixture's field path is the thing to check first -- declaring \"{lookup_key}\" cannot make \
+                 `{accessor_fn}()` exist."
+            );
+        }
+    }
+
+    message
 }
 
 /// Build the C argument string for the function call.
@@ -1069,11 +1298,198 @@ mod tests {
             "ExtractionResult",
             "summary.processed",
             &types,
-        );
+        )
+        .expect("every hop resolves");
 
         assert!(output.contains("SAMPLEAlefHandle summary_handle"), "{output}");
         assert!(output.contains("sample_extraction_result_summary(result)"), "{output}");
         assert!(output.contains("uint64_t summary_processed"), "{output}");
+    }
+
+    /// The crawlberg shape: `ScrapeResult.metadata -> PageMetadata.article ->
+    /// ArticleMetadata.tags`, asserted by a fixture as `article.tags.length`. With no
+    /// `article.*` alias configured, `article` is stripped as a virtual namespace before
+    /// this function is called, so the walk starts on `ScrapeResult` and looks for a field
+    /// `tags` that lives two hops further down. ~keep
+    fn crawlberg_article_types() -> Vec<TypeDef> {
+        vec![
+            TypeDef {
+                name: "ScrapeResult".into(),
+                fields: vec![FieldDef {
+                    name: "metadata".into(),
+                    ty: TypeRef::Optional(Box::new(TypeRef::Named("PageMetadata".into()))),
+                    ..FieldDef::default()
+                }],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "PageMetadata".into(),
+                fields: vec![FieldDef {
+                    name: "article".into(),
+                    ty: TypeRef::Optional(Box::new(TypeRef::Named("ArticleMetadata".into()))),
+                    ..FieldDef::default()
+                }],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "ArticleMetadata".into(),
+                fields: vec![FieldDef {
+                    name: "tags".into(),
+                    ty: TypeRef::Vec(Box::new(TypeRef::String)),
+                    ..FieldDef::default()
+                }],
+                ..TypeDef::default()
+            },
+        ]
+    }
+
+    fn walk_crawlberg_article_tags() -> anyhow::Error {
+        let mut output = String::new();
+        let mut handles = Vec::new();
+        emit_nested_accessor(
+            &mut output,
+            "cberg",
+            "tags.length",
+            "article_tags_length",
+            "result",
+            &HashMap::new(),
+            &HashSet::new(),
+            &mut handles,
+            "ScrapeResult",
+            "article.tags.length",
+            &crawlberg_article_types(),
+        )
+        .expect_err("`tags` is not a field of ScrapeResult")
+    }
+
+    /// A consumer config gap must surface as an error, not a process-killing panic.
+    #[test]
+    fn missing_intermediate_type_returns_an_error_instead_of_panicking() {
+        let message = walk_crawlberg_article_tags().to_string();
+        assert!(message.contains("fields_c_types"), "{message}");
+        assert!(message.contains("scrape_result.tags"), "{message}");
+        assert!(message.contains("tags.length"), "{message}");
+    }
+
+    /// Every fact the old panic carried must survive the conversion.
+    #[test]
+    fn missing_intermediate_type_keeps_the_original_panic_facts() {
+        let message = walk_crawlberg_article_tags().to_string();
+        assert!(message.contains("path \"tags.length\""), "{message}");
+        assert!(message.contains("segment \"tags\""), "{message}");
+        assert!(message.contains("`Tags`"), "guessed-name rationale is gone: {message}");
+        assert!(message.contains("`DataNode` vs `Data`"), "{message}");
+    }
+
+    /// The point of the rewrite. The message must not leave "add the key it named" as the
+    /// obvious remedy, because that key would emit `cberg_scrape_result_tags()` -- a symbol
+    /// no backend generates. It has to name the stripped namespace, the real chain, and the
+    /// alias that reconnects them.
+    #[test]
+    fn missing_intermediate_type_names_the_real_chain_not_the_phantom_key() {
+        let message = walk_crawlberg_article_tags().to_string();
+
+        assert!(
+            message.contains("Type `ScrapeResult` has no field `tags`"),
+            "must say why the key is missing: {message}"
+        );
+        assert!(
+            message.contains("stripped the leading \"article\""),
+            "must name the namespace stripping that produced the path: {message}"
+        );
+        assert!(
+            message.contains("cberg_scrape_result_tags()"),
+            "must name the C symbol declaring the key would conjure: {message}"
+        );
+        assert!(
+            message.contains("cberg_article_metadata_tags()"),
+            "must name the C symbol that really exists: {message}"
+        );
+        assert!(
+            message.contains("\"metadata.article.tags\""),
+            "must name the real resolved chain: {message}"
+        );
+        assert!(
+            message.contains("\"article.tags\" = \"metadata.article.tags\""),
+            "must spell the alias that fixes it: {message}"
+        );
+        assert!(
+            message.contains("[crates.e2e.fields]"),
+            "must name the alias table, not just fields_c_types: {message}"
+        );
+    }
+
+    /// The other half of the diagnostic: when the field genuinely does not exist anywhere
+    /// under the result type, there is no alias to suggest and the message must say so
+    /// rather than inventing a chain.
+    #[test]
+    fn missing_intermediate_type_says_so_when_no_type_carries_the_field() {
+        let mut output = String::new();
+        let mut handles = Vec::new();
+        let error = emit_nested_accessor(
+            &mut output,
+            "cberg",
+            "nowhere.length",
+            "nowhere_length",
+            "result",
+            &HashMap::new(),
+            &HashSet::new(),
+            &mut handles,
+            "ScrapeResult",
+            "nowhere.length",
+            &crawlberg_article_types(),
+        )
+        .expect_err("`nowhere` is not a field of anything");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("No type reachable from `ScrapeResult` has a field named `nowhere`"),
+            "{message}"
+        );
+        assert!(
+            !message.contains("under `[crates.e2e.fields]`"),
+            "must not suggest an alias it cannot spell: {message}"
+        );
+        assert!(
+            !message.contains("stripped the leading"),
+            "nothing was stripped here: {message}"
+        );
+    }
+
+    #[test]
+    fn stripped_namespace_prefix_recovers_only_a_real_stripped_prefix() {
+        assert_eq!(
+            stripped_namespace_prefix("article.tags.length", "tags.length"),
+            Some("article")
+        );
+        assert_eq!(
+            stripped_namespace_prefix("interaction.action_results[0].x", "action_results[0].x"),
+            Some("interaction")
+        );
+        assert_eq!(stripped_namespace_prefix("tags.length", "tags.length"), None);
+        assert_eq!(
+            stripped_namespace_prefix("metadata.title", "something.else"),
+            None,
+            "a raw field that does not end with the resolved path was not produced by stripping"
+        );
+    }
+
+    #[test]
+    fn find_field_path_returns_the_shallowest_chain_and_its_declaring_type() {
+        let types = crawlberg_article_types();
+
+        let tags = find_field_path("ScrapeResult", "tags", &types).expect("tags is reachable");
+        assert_eq!(tags.path, "metadata.article.tags");
+        assert_eq!(
+            tags.owner_type, "ArticleMetadata",
+            "the C accessor symbol is built from the declaring type, not the root"
+        );
+
+        let metadata = find_field_path("ScrapeResult", "metadata", &types).expect("metadata is a direct field");
+        assert_eq!(metadata.path, "metadata");
+        assert_eq!(metadata.owner_type, "ScrapeResult");
+
+        assert!(find_field_path("ScrapeResult", "nowhere", &types).is_none());
     }
 
     fn test_backend_arg(trait_name: &str) -> crate::e2e::config::ArgMapping {

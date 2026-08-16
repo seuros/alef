@@ -327,7 +327,7 @@ impl E2eCodegen for CCodegen {
                 &field_resolver,
                 config,
                 type_defs,
-            );
+            )?;
             files.push(GeneratedFile {
                 path: output_base.join(filename),
                 content,
@@ -673,7 +673,7 @@ fn render_test_file(
     field_resolver: &FieldResolver,
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
-) -> String {
+) -> anyhow::Result<String> {
     let mut out = String::new();
     out.push_str(&hash::header(CommentStyle::Block));
     let _ = writeln!(out, "/* E2e tests for category: {category} */");
@@ -763,14 +763,14 @@ fn render_test_file(
             config,
             type_defs,
             false,
-        );
+        )?;
         crate::e2e::codegen::fail_on_unavailable_field_markers(&out[fixture_start..], "c", &fixture.id);
         if i + 1 < fixtures.len() {
             let _ = writeln!(out);
         }
     }
 
-    out
+    Ok(out)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1239,7 +1239,8 @@ mod snippet_tests {
                 &config,
                 &[],
                 false,
-            );
+            )
+            .expect("test fixture renders");
 
             assert!(
                 out.contains(expected_assert),
@@ -1304,7 +1305,8 @@ mod snippet_tests {
                 &config,
                 &[],
                 false,
-            );
+            )
+            .expect("test fixture renders");
 
             assert!(
                 out.contains("assert(sample_last_error_code() != 0 && \"expected call to fail\");"),

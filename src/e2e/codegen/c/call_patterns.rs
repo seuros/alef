@@ -36,7 +36,7 @@ pub(super) fn render_engine_factory_test_function(
     expects_error: bool,
     raw_c_result_type: Option<&str>,
     type_defs: &[crate::core::ir::TypeDef],
-) {
+) -> anyhow::Result<()> {
     let prefix_upper = prefix.to_uppercase();
     let config_snake = config_type.to_snake_case();
 
@@ -171,7 +171,7 @@ pub(super) fn render_engine_factory_test_function(
             let _ = writeln!(out, "    if ({result_var} != NULL) {prefix}_free_string({result_var});");
             let _ = writeln!(out, "    {prefix}_crawl_engine_handle_free(engine);");
             let _ = writeln!(out, "}}");
-            return;
+            return Ok(());
         } else {
             // Opaque struct return: emit the typed pointer, a soft null-guard, and the
             // matching free function derived from the snake_case type name.
@@ -186,7 +186,7 @@ pub(super) fn render_engine_factory_test_function(
             );
             let _ = writeln!(out, "    {prefix}_crawl_engine_handle_free(engine);");
             let _ = writeln!(out, "}}");
-            return;
+            return Ok(());
         }
     }
 
@@ -205,7 +205,7 @@ pub(super) fn render_engine_factory_test_function(
         );
         let _ = writeln!(out, "    {prefix}_crawl_engine_handle_free(engine);");
         let _ = writeln!(out, "}}");
-        return;
+        return Ok(());
     }
 
     let _ = writeln!(out, "    assert({result_var} != 0 && \"expected call to succeed\");");
@@ -251,7 +251,7 @@ pub(super) fn render_engine_factory_test_function(
                     result_type_name,
                     f,
                     type_defs,
-                );
+                )?;
                 if let Some(returned_type) = leaf_result {
                     // Could be a primitive type (primitive_locals) or opaque handle type
                     if is_primitive_c_type(&returned_type) {
@@ -345,6 +345,7 @@ pub(super) fn render_engine_factory_test_function(
     let _ = writeln!(out, "    {prefix}_{result_type_snake}_free({result_var});");
     let _ = writeln!(out, "    {prefix}_crawl_engine_handle_free(engine);");
     let _ = writeln!(out, "}}");
+    Ok(())
 }
 
 /// Emit a byte-buffer test function for FFI methods returning raw bytes via
