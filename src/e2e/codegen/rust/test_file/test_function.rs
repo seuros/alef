@@ -189,8 +189,19 @@ pub fn render_test_function(
                 arg_exprs.push(expr);
                 continue;
             } else {
-                tracing::warn!("trait_bridge not found for trait: {}", trait_name);
-                // Fall through to emit empty args if no trait bridge found.
+                // ~keep An unregistered trait has no vtable/stub to construct: falling
+                // through to render the raw (typically null) fixture value as an
+                // ordinary arg used to compile only by accident (or not at all), failing
+                // at a later `cargo build` far from the fixture that caused it, instead
+                // of at `alef e2e generate` time. `c/assertions.rs`'s
+                // `build_args_string_c` already fails loudly here for the identical
+                // scenario — mirror it (alef task #81).
+                panic!(
+                    "Rust e2e generator: fixture `{}` requires trait `{trait_name}` for its \
+                     `test_backend` arg `{}`, but no `[[crates.trait_bridges]]` entry named \
+                     `{trait_name}` is configured",
+                    fixture.id, arg.name
+                );
             }
         }
 

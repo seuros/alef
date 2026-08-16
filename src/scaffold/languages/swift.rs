@@ -5,9 +5,10 @@ use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::{ApiSurface, PrimitiveType, TypeDef, TypeRef};
 use crate::scaffold::naming::{swift_min_ios, swift_min_macos};
 use crate::scaffold::{readme_language_configured, scaffold_meta};
+use anyhow::Context as _;
 use heck::ToLowerCamelCase;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub(crate) fn scaffold_swift(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
     let meta = scaffold_meta(config);
@@ -507,6 +508,104 @@ fn scaffold_swift_test(api: &ApiSurface, config: &ResolvedCrateConfig, module: &
     }
 
     placeholder_test(module)
+}
+
+/// Repair a pre-existing `Tests/{module}Tests/{module}Tests.swift` that is still the vacuous
+/// `XCTAssertTrue(true)` placeholder this scaffold used to emit, now that
+/// [`scaffold_swift_test`] can generate a real assertion against the actual API surface.
+///
+/// Mirrors `migrate_build_zig_test_target` (`src/scaffold/languages/zig.rs`) and
+/// [`crate::scaffold::migrate_dart_placeholder_test`] in strategy and for the same reason:
+/// `Tests/*Tests.swift` is `generated_header: false` (create-only) on a markable `.swift`
+/// extension, so `write_scaffold_files_report`'s ownership guard permanently refuses to
+/// overwrite it once it exists. A generator fix to its *content* therefore can never reach an
+/// existing repo through the normal write path at all, whatever `overwrite` says — every repo
+/// scaffolded before the tiered seed landed would sit on a vacuous placeholder forever.
+///
+/// Detection is a *vacuity signature*, not a byte-for-byte template match, because the
+/// placeholder's exact bytes have already drifted across the repos this exists to fix: the
+/// current generator ([`placeholder_test`]) names the method `testModuleImportsSuccessfully`
+/// and carries a three-line rationale comment, while the shape actually found on disk
+/// (html-to-markdown's `packages/swift/Tests/HtmlToMarkdownTests/HtmlToMarkdownTests.swift`)
+/// names it `testPlaceholder` and carries a two-line "Placeholder test so `swift test` has a
+/// target to run" comment instead. A constant validated only against the current generator's
+/// own output matches neither historical shape it exists to repair.
+///
+/// So this fires only when the file's *sole* assertion is the tautology: it contains
+/// `XCTAssertTrue(true)` (or the bare `XCTAssert(true)` spelling of the same tautology), and
+/// contains **exactly one** `XCTAssert`-family call and **exactly one** `func test` in the
+/// whole file — i.e. there is nothing in it to lose. See [`is_vacuous_swift_placeholder`] for
+/// why neither count can be fooled by a longer identifier. Verified against all three real
+/// consumer trees: html-to-markdown (1 `XCTAssert`, 1 `func test`, tautology — fires);
+/// liter-llm (also 1 and 1, but its single assertion is a real
+/// `XCTAssertEqual(decoded, message)` round trip — does not fire, which is exactly why the
+/// counts alone are not the signature); tree-sitter-language-pack (17 and 17, hand-written —
+/// does not fire on either clause). Idempotent: the freshly generated replacement never
+/// matches this signature once real API surface exists, and when the surface is still empty
+/// (replacement is itself the placeholder) the byte-equality check below makes the second
+/// pass a no-op. ~keep
+pub(crate) fn migrate_swift_placeholder_test(
+    base_dir: &Path,
+    relative_path: &Path,
+    replacement: &str,
+) -> anyhow::Result<bool> {
+    let path = base_dir.join(relative_path);
+    let Ok(existing) = std::fs::read_to_string(&path) else {
+        return Ok(false);
+    };
+    if !is_vacuous_swift_placeholder(&existing) {
+        return Ok(false);
+    }
+    if existing == replacement {
+        return Ok(false);
+    }
+
+    let parent = path.parent().context("swift test path has no parent directory")?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("failed to create temporary file in {}", parent.display()))?;
+    std::io::Write::write_all(&mut temporary, replacement.as_bytes())
+        .with_context(|| format!("failed to write temporary file for {}", path.display()))?;
+    temporary
+        .persist(&path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("failed to replace {}", path.display()))?;
+    tracing::warn!(
+        path = %path.display(),
+        "repaired pre-existing Tests/*Tests.swift: replaced the vacuous XCTAssertTrue(true) \
+         placeholder with a real assertion against the generated API"
+    );
+    Ok(true)
+}
+
+/// The vacuity signature behind [`migrate_swift_placeholder_test`]: true when `content`'s only
+/// assertion is the `XCTAssertTrue(true)` tautology, regardless of which placeholder-template
+/// revision emitted it (see that function's doc for why a byte-match against the current
+/// template does not survive the drift already present in the real repos this targets).
+///
+/// Neither count can be fooled by a longer identifier, and the two are counted differently on
+/// purpose:
+///
+/// - `XCTAssert` is counted as a bare *prefix*, with no `(`, because the whole assertion family
+///   shares it (`XCTAssertEqual`, `XCTAssertNil`, `XCTAssertThrowsError`, ...). Counting
+///   `XCTAssert(` instead — the shape dart's `expect(` needs — would be the inverse of dart's
+///   `expectLater(` bug: tree-sitter-language-pack's 17 real assertions would count as 0. Every
+///   identifier that *extends* the prefix is itself an assertion, so counting it is correct, and
+///   each extra match pushes the count past 1 and makes this return `false` — the safe
+///   direction. `XCTUnwrap` does not contain the prefix and is deliberately not counted; a file
+///   using it also carries at least one real `XCTAssert*` call in every real tree checked.
+/// - `func test` likewise over-matches rather than under-matches (`func testing` counts), and
+///   over-matching can only suppress the migration. It cannot under-match a runnable XCTest
+///   method, since XCTest only discovers methods whose name begins with `test`. A
+///   swift-testing (`@Test func`) suite is not matched at all, but such a file uses `#expect`
+///   rather than `XCTAssert*` and so already fails the tautology clause.
+///
+/// The one accepted blind spot, also in the safe direction: a placeholder whose *comment* text
+/// happens to mention `XCTAssert` counts twice and is left alone. Neither the current template
+/// nor html-to-markdown's on-disk shape does that.
+fn is_vacuous_swift_placeholder(content: &str) -> bool {
+    (content.contains("XCTAssertTrue(true)") || content.contains("XCTAssert(true)"))
+        && content.matches("XCTAssert").count() == 1
+        && content.matches("func test").count() == 1
 }
 
 /// Names excluded from Swift binding generation, mirroring the union
@@ -1338,5 +1437,351 @@ package_version = "0.25.0"
             "root manifest module target must depend on the capsule product. Full content:\n{}",
             pkg.content
         );
+    }
+
+    /// Literal-for-literal reference set used by the migration tests below, each read
+    /// straight out of the named repo's real
+    /// `packages/swift/Tests/<Name>Tests/<Name>Tests.swift`: html-to-markdown carries the
+    /// historical placeholder shape (`testPlaceholder`, a two-line rationale comment --
+    /// exactly the shape a byte-match against the *current* generator's
+    /// `testModuleImportsSuccessfully` output would miss), while liter-llm and
+    /// tree-sitter-language-pack are real suites that must never be touched.
+    fn h2m_historical_placeholder() -> &'static str {
+        r##"import XCTest
+
+@testable import HtmlToMarkdown
+
+final class HtmlToMarkdownTests: XCTestCase {
+  func testPlaceholder() throws {
+    // Placeholder test so `swift test` has a target to run.
+    // Replace or extend with real tests against the HtmlToMarkdown module.
+    XCTAssertTrue(true)
+  }
+}
+"##
+    }
+
+    /// liter-llm's real suite: it has the *same* counts as the h2m placeholder (one
+    /// `XCTAssert`-family call, one `func test`), so it is the case that proves the counts
+    /// alone are not the signature -- its single assertion is a real `XCTAssertEqual`
+    /// round trip rather than the tautology, and only the tautology clause keeps this file
+    /// safe.
+    fn liter_llm_hand_written_suite() -> &'static str {
+        r##"import XCTest
+
+@testable import LiterLlm
+
+final class LiterLlmTests: XCTestCase {
+  func testSystemMessageRoundTripsThroughJSON() throws {
+    let message = SystemMessage(content: .text(field0: "be concise"), name: "system")
+    let data = try JSONEncoder().encode(message)
+    let decoded = try JSONDecoder().decode(SystemMessage.self, from: data)
+    XCTAssertEqual(decoded, message)
+  }
+}
+"##
+    }
+
+    /// Verbatim copy of tree-sitter-language-pack's real
+    /// `packages/swift/Tests/TreeSitterLanguagePackTests/TreeSitterLanguagePackTests.swift`
+    /// (17 `XCTAssert`-family calls across 17 `func test` methods, five `XCTestCase`
+    /// classes) -- the largest and structurally most different of the three real trees
+    /// checked against this predicate. It also carries two `XCTUnwrap` calls, which
+    /// deliberately do not count toward the `XCTAssert` prefix, and `XCTAssertTrue(` calls
+    /// whose argument is a real expression rather than the `true` literal, so it fails both
+    /// clauses independently.
+    fn tree_sitter_language_pack_hand_written_suite() -> &'static str {
+        r##"import XCTest
+import Foundation
+
+import TreeSitterLanguagePack
+import SwiftTreeSitter
+
+// Requires the native `tree-sitter-language-pack-swift` + `ts-pack-core-ffi` Rust crates to
+// be built and wired via `scripts/setup-swift-bridge.sh` (see `task swift:build` /
+// `task swift:test`), compiled with TSLP_LINK_MODE=static and TSLP_LANGUAGES=mojo,nim,norg
+// (see .task/swift.yml). Every test below that needs a real grammar (parsing, root-node
+// kind, `process()`) uses "nim", one of those three statically-compiled languages, so this
+// suite needs no network access and no warm download cache. "python"/"rust"/"markdown"
+// appear only as literal data values in the pure language-detection tests below, which
+// consult a static extension/shebang lookup table and never touch a parser.
+
+/// Pure functions that need no grammar at all: extension/path/shebang lookup tables.
+final class LanguageDetectionTests: XCTestCase {
+    func testDetectLanguageFromExtensionMapsPyToPython() {
+        XCTAssertEqual(
+            TreeSitterLanguagePack.detectLanguageFromExtension(ext: "py"),
+            "python",
+            "\"py\" is a well-known extension and must resolve to \"python\""
+        )
+    }
+
+    func testDetectLanguageFromExtensionIsCaseInsensitive() {
+        XCTAssertEqual(
+            TreeSitterLanguagePack.detectLanguageFromExtension(ext: "RS"),
+            "rust",
+            "extension matching must be case-insensitive per documented behavior"
+        )
+    }
+
+    func testDetectLanguageFromExtensionReturnsNilForUnknownExtension() {
+        XCTAssertNil(TreeSitterLanguagePack.detectLanguageFromExtension(ext: "this-extension-does-not-exist"))
+    }
+
+    func testDetectLanguageFromPathMatchesRustFile() {
+        XCTAssertEqual(TreeSitterLanguagePack.detectLanguageFromPath(path: "src/main.rs"), "rust")
+    }
+
+    func testDetectLanguageFromPathReturnsNilWithoutExtension() {
+        XCTAssertNil(
+            TreeSitterLanguagePack.detectLanguageFromPath(path: "Makefile"),
+            "a path with no extension has nothing to detect from"
+        )
+    }
+
+    func testDetectLanguageFromContentMatchesPythonShebang() {
+        XCTAssertEqual(
+            TreeSitterLanguagePack.detectLanguageFromContent(content: "#!/usr/bin/env python3\npass"),
+            "python"
+        )
+    }
+
+    func testDetectLanguageFromContentReturnsNilWithoutShebang() {
+        XCTAssertNil(TreeSitterLanguagePack.detectLanguageFromContent(content: "no shebang here"))
+    }
+
+    func testDetectLanguageAliasResolvesPathExtension() {
+        XCTAssertEqual(
+            TreeSitterLanguagePack.detectLanguage(path: "README.md"),
+            "markdown",
+            "detectLanguage is documented as a path/extension detection alias"
+        )
+    }
+}
+
+/// Bundled query lookup: also pure, no grammar required.
+final class BundledQueryTests: XCTestCase {
+    func testGetHighlightsQueryReturnsNilForUnknownLanguage() {
+        XCTAssertNil(TreeSitterLanguagePack.getHighlightsQuery(language: "this-language-does-not-exist"))
+    }
+}
+
+/// Registry checks against "nim", which `task swift:test` compiles in statically
+/// (TSLP_LANGUAGES=mojo,nim,norg), so these never touch the network.
+final class RegistryTests: XCTestCase {
+    func testHasLanguageIsTrueForStaticallyCompiledLanguage() {
+        XCTAssertTrue(
+            TreeSitterLanguagePack.hasLanguage(name: "nim"),
+            "nim is compiled in by the swift build task (TSLP_LANGUAGES=mojo,nim,norg)"
+        )
+    }
+
+    func testHasLanguageIsFalseForUnknownLanguage() {
+        XCTAssertFalse(TreeSitterLanguagePack.hasLanguage(name: "totally-bogus-language-name"))
+    }
+
+    func testAvailableLanguagesContainsStaticallyCompiledLanguage() {
+        XCTAssertTrue(TreeSitterLanguagePack.availableLanguages().contains("nim"))
+    }
+
+    func testLanguageCountMatchesAvailableLanguagesCount() {
+        let count = TreeSitterLanguagePack.languageCount()
+        let names = TreeSitterLanguagePack.availableLanguages()
+        XCTAssertEqual(
+            count,
+            UInt(names.count),
+            "languageCount() must always equal availableLanguages().count; a mismatch means one of the two "
+                + "accessors is stale relative to the other"
+        )
+    }
+}
+
+/// Real parsing through the upstream SwiftTreeSitter.Parser, mirroring
+/// CapsulePassthroughTests.swift's hand-written pattern: `getLanguage()` hands back a real
+/// `SwiftTreeSitter.Language` capsule usable directly with `SwiftTreeSitter.Parser`.
+///
+/// Uses "nim" (statically compiled, see the file-header comment) rather than "python": the
+/// upstream e2e CapsulePassthroughTests.swift precedent parses python, but that grammar is
+/// not one of TSLP_LANGUAGES=mojo,nim,norg baked into this package's build, so it would make
+/// this suite network-dependent.
+final class ParsingTests: XCTestCase {
+    // parsers/nim/src/grammar.json names its start rule "module", and node-types.json
+    // confirms "module" is a named node type — verified directly against the grammar
+    // sources vendored in this repo, not assumed from another language's doc example.
+    func testGetLanguageProducesAParserUsableNimLanguage() throws {
+        let nimLanguage = try TreeSitterLanguagePack.getLanguage(name: "nim")
+
+        var parser = Parser()
+        try parser.setLanguage(nimLanguage)
+
+        let tree = try XCTUnwrap(parser.parse("echo \"hello\""), "parsing valid nim source must produce a tree")
+        let root = try XCTUnwrap(tree.rootNode)
+
+        XCTAssertEqual(root.nodeType, "module", "nim's tree-sitter grammar names its root node \"module\"")
+    }
+
+    // fixtures/smoke/nim.json asserts `not_error` for this exact source, so it is
+    // known-valid nim, not a guess.
+    func testProcessEchoesBackTheRequestedLanguageForValidNim() throws {
+        let configObj = try TreeSitterLanguagePack.processConfigFromJson("{\"language\":\"nim\"}")
+        let result = try TreeSitterLanguagePack.process(source: "echo \"hello\"", config: configObj)
+
+        XCTAssertEqual(result.language().toString(), "nim")
+    }
+
+    // No structure-extraction test: crates/ts-pack-core/src/intel/intelligence.rs
+    // `structure_kind_at()` matches an exact, hardcoded set of tree-sitter node kind names
+    // (`function_definition`, `function_item`, `struct_item`, ...), and nim's grammar
+    // (parsers/nim/src/node-types.json) uses none of them — its declarations are named
+    // `declaration` / `declColonEquals`. Structure extraction is therefore unimplemented for
+    // nim and would always report an empty list; asserting that would be vacuous, so the
+    // test is omitted rather than weakened to a truthiness check.
+}
+
+/// Error paths: unknown languages and invalid configuration must fail loudly, never
+/// silently succeed with garbage output.
+final class ErrorHandlingTests: XCTestCase {
+    func testGetLanguageThrowsForUnknownLanguage() {
+        XCTAssertThrowsError(try TreeSitterLanguagePack.getLanguage(name: "this-language-does-not-exist-anywhere"))
+    }
+
+    func testProcessThrowsForEmptyLanguageName() throws {
+        let configObj = try TreeSitterLanguagePack.processConfigFromJson("{\"language\":\"\"}")
+        XCTAssertThrowsError(try TreeSitterLanguagePack.process(source: "hello", config: configObj))
+    }
+}
+"##
+    }
+
+    /// `is_vacuous_swift_placeholder` fires for html-to-markdown's real on-disk shape
+    /// (1 `XCTAssert`, 1 `func test`, tautology) and refuses liter-llm's and
+    /// tree-sitter-language-pack's real suites (1/1 without the tautology, and 17/17
+    /// respectively) -- pinning the predicate directly against the trees the migration
+    /// exists to repair, not just against synthetic fixtures.
+    #[test]
+    fn vacuity_signature_matches_real_consumer_trees() {
+        assert!(is_vacuous_swift_placeholder(h2m_historical_placeholder()));
+        assert!(!is_vacuous_swift_placeholder(liter_llm_hand_written_suite()));
+        assert!(!is_vacuous_swift_placeholder(tree_sitter_language_pack_hand_written_suite()));
+    }
+
+    /// Requirement (a): the *current* generator's own placeholder output -- regenerated
+    /// here, never hardcoded, since hardcoding it is how a byte-match migration silently
+    /// stops matching its own generator after the template drifts -- still migrates.
+    #[test]
+    fn migrates_the_current_generators_placeholder_output() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let test_dir = dir.path().join("packages/swift/Tests/MyLibTests");
+        std::fs::create_dir_all(&test_dir).expect("create Tests/MyLibTests");
+        let current_placeholder = placeholder_test("MyLib");
+        std::fs::write(test_dir.join("MyLibTests.swift"), &current_placeholder).expect("write current placeholder");
+
+        let replacement = codable_round_trip_test(
+            "MyLib",
+            "Widget",
+            &[SimpleCodableField {
+                swift_label: "count".to_string(),
+                literal: "1".to_string(),
+            }],
+        );
+        let relative_path = std::path::Path::new("packages/swift/Tests/MyLibTests/MyLibTests.swift");
+        let changed = migrate_swift_placeholder_test(dir.path(), relative_path, &replacement)
+            .expect("migration must not error");
+        assert!(changed, "the current generator's own placeholder must be reported as changed");
+
+        let on_disk = std::fs::read_to_string(test_dir.join("MyLibTests.swift")).expect("read migrated file");
+        assert_eq!(on_disk, replacement);
+    }
+
+    /// Requirement (b): the exact shape found on disk in html-to-markdown -- the historical
+    /// placeholder revision this migration exists to reach, and the one a byte-match
+    /// against only the current template would miss -- migrates, and a second pass over the
+    /// result is a no-op.
+    #[test]
+    fn migrates_the_h2m_historical_shape_and_is_idempotent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let test_dir = dir.path().join("packages/swift/Tests/HtmlToMarkdownTests");
+        std::fs::create_dir_all(&test_dir).expect("create Tests/HtmlToMarkdownTests");
+        std::fs::write(
+            test_dir.join("HtmlToMarkdownTests.swift"),
+            h2m_historical_placeholder(),
+        )
+        .expect("write h2m historical placeholder");
+
+        let replacement = codable_round_trip_test(
+            "HtmlToMarkdown",
+            "Widget",
+            &[SimpleCodableField {
+                swift_label: "count".to_string(),
+                literal: "1".to_string(),
+            }],
+        );
+        let relative_path =
+            std::path::Path::new("packages/swift/Tests/HtmlToMarkdownTests/HtmlToMarkdownTests.swift");
+        let changed = migrate_swift_placeholder_test(dir.path(), relative_path, &replacement)
+            .expect("migration must not error");
+        assert!(changed, "h2m's real on-disk placeholder shape must be reported as changed");
+
+        let on_disk =
+            std::fs::read_to_string(test_dir.join("HtmlToMarkdownTests.swift")).expect("read migrated file");
+        assert_eq!(on_disk, replacement);
+
+        let changed_again = migrate_swift_placeholder_test(dir.path(), relative_path, &replacement)
+            .expect("second pass must not error");
+        assert!(!changed_again, "second pass over an already-migrated file must be a no-op");
+    }
+
+    /// Requirement (c), the hard case: liter-llm's real suite has exactly the same 1/1
+    /// counts as the placeholder, so only the tautology clause distinguishes them. It must
+    /// survive byte for byte.
+    #[test]
+    fn does_not_touch_the_liter_llm_hand_written_suite() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let test_dir = dir.path().join("packages/swift/Tests/LiterLlmTests");
+        std::fs::create_dir_all(&test_dir).expect("create Tests/LiterLlmTests");
+        let hand_written = liter_llm_hand_written_suite();
+        std::fs::write(test_dir.join("LiterLlmTests.swift"), hand_written).expect("write hand-written test");
+
+        let relative_path = std::path::Path::new("packages/swift/Tests/LiterLlmTests/LiterLlmTests.swift");
+        let changed = migrate_swift_placeholder_test(dir.path(), relative_path, "anything else entirely")
+            .expect("migration must not error");
+        assert!(!changed, "a real suite must never be reported as changed");
+
+        let on_disk = std::fs::read_to_string(test_dir.join("LiterLlmTests.swift")).expect("read file");
+        assert_eq!(on_disk, hand_written, "a real suite must survive byte-for-byte");
+    }
+
+    /// Requirement (c), the large case: tree-sitter-language-pack's real 17-test suite must
+    /// never be reported as a migration candidate either.
+    #[test]
+    fn does_not_touch_the_tree_sitter_language_pack_hand_written_suite() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let test_dir = dir.path().join("packages/swift/Tests/TreeSitterLanguagePackTests");
+        std::fs::create_dir_all(&test_dir).expect("create Tests/TreeSitterLanguagePackTests");
+        let hand_written = tree_sitter_language_pack_hand_written_suite();
+        std::fs::write(test_dir.join("TreeSitterLanguagePackTests.swift"), hand_written)
+            .expect("write hand-written test");
+
+        let relative_path =
+            std::path::Path::new("packages/swift/Tests/TreeSitterLanguagePackTests/TreeSitterLanguagePackTests.swift");
+        let changed = migrate_swift_placeholder_test(dir.path(), relative_path, "anything else entirely")
+            .expect("migration must not error");
+        assert!(!changed, "a hand-written suite must never be reported as changed");
+
+        let on_disk = std::fs::read_to_string(test_dir.join("TreeSitterLanguagePackTests.swift")).expect("read file");
+        assert_eq!(on_disk, hand_written, "hand-written suite must survive byte-for-byte");
+    }
+
+    /// Requirement (d): a `Tests/<Name>Tests/<Name>Tests.swift` that does not exist yet
+    /// (nothing scaffolded so far) must not be created and must not error -- there is
+    /// nothing to migrate.
+    #[test]
+    fn migrate_swift_placeholder_is_a_no_op_when_file_does_not_exist() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let relative_path = std::path::Path::new("packages/swift/Tests/MyLibTests/MyLibTests.swift");
+        let changed =
+            migrate_swift_placeholder_test(dir.path(), relative_path, "new content").expect("must not error");
+        assert!(!changed);
+        assert!(!dir.path().join(relative_path).exists());
     }
 }

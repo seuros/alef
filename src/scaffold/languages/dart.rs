@@ -6,9 +6,10 @@ use crate::core::config::{DartStyle, ResolvedCrateConfig};
 use crate::core::ir::{ApiSurface, PrimitiveType, TypeDef, TypeRef};
 use crate::core::template_versions::{pub_dev, toolchain};
 use crate::scaffold::{readme_language_configured, scaffold_meta};
+use anyhow::Context as _;
 use heck::ToLowerCamelCase;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub(crate) fn scaffold_dart(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
     let meta = scaffold_meta(config);
@@ -459,6 +460,79 @@ fn scaffold_dart_test(
     dart_placeholder_test(module_name, package_import_path)
 }
 
+/// Repair a pre-existing `test/{module}_test.dart` that is still the vacuous
+/// `expect(1 + 1, equals(2))` placeholder this scaffold used to emit, now that
+/// [`scaffold_dart_test`] can generate a real assertion against the actual API surface.
+///
+/// Mirrors `migrate_build_zig_test_target`'s strategy (`src/scaffold/languages/zig.rs`) in
+/// spirit and for the same reason: `test/*_test.dart` is `generated_header: false`
+/// (create-only) on a markable `.dart` extension, so a fresh clone can never have this
+/// content fix reach it through the normal write path at all, no matter what flag is
+/// passed.
+///
+/// Detection is a *vacuity signature*, not a byte-for-byte template match, because the
+/// placeholder's exact bytes have already drifted across the repos this exists to fix: the
+/// current generator (`dart_placeholder_test`) wraps the assertion in a three-line rationale
+/// comment, while the oldest shape actually found on disk (html-to-markdown's
+/// `packages/dart/test/html_to_markdown_rs_test.dart`) has neither that comment nor a
+/// `package:` import at all — just `import 'package:test/test.dart';` and the bare
+/// `test('placeholder', ...) { expect(1 + 1, equals(2)); }`. A byte-match constant validated
+/// only against the current generator's own output, as an earlier revision of this function
+/// did, matches none of the historical shapes it exists to repair. So instead this fires
+/// only when the file's *sole* assertion is the tautology: it contains
+/// `expect(1 + 1, equals(2))`, contains `test('placeholder'`, and contains **exactly one**
+/// `expect(` and **exactly one** `test(` in the whole file — i.e. there is nothing else in
+/// it to lose. Any hand-written suite (more assertions, more tests, a renamed test) fails
+/// that count and is left completely untouched, verified against all three real consumer
+/// trees (html-to-markdown: 1/1, fires; liter-llm: 3 `expect(`/1 `test(`, hand-written,
+/// does not fire; tree-sitter-language-pack: 17 `expect(`/18 `test(`, hand-written, does not
+/// fire). Idempotent: the freshly generated replacement itself never matches this signature
+/// once real API surface exists, and even when the surface is still empty (replacement is
+/// itself the placeholder), the byte-equality check below makes the second pass a no-op. ~keep
+pub(crate) fn migrate_dart_placeholder_test(
+    base_dir: &Path,
+    relative_path: &Path,
+    replacement: &str,
+) -> anyhow::Result<bool> {
+    let path = base_dir.join(relative_path);
+    let Ok(existing) = std::fs::read_to_string(&path) else {
+        return Ok(false);
+    };
+    if !is_vacuous_dart_placeholder(&existing) {
+        return Ok(false);
+    }
+    if existing == replacement {
+        return Ok(false);
+    }
+
+    let parent = path.parent().context("dart test path has no parent directory")?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("failed to create temporary file in {}", parent.display()))?;
+    std::io::Write::write_all(&mut temporary, replacement.as_bytes())
+        .with_context(|| format!("failed to write temporary file for {}", path.display()))?;
+    temporary
+        .persist(&path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("failed to replace {}", path.display()))?;
+    tracing::warn!(
+        path = %path.display(),
+        "repaired pre-existing test/*_test.dart: replaced the vacuous 1 + 1 == 2 placeholder \
+         with a real assertion against the generated API"
+    );
+    Ok(true)
+}
+
+/// The vacuity signature behind [`migrate_dart_placeholder_test`]: true when `content`'s
+/// only assertion is the `1 + 1 == 2` tautology, regardless of which placeholder-template
+/// revision emitted it (see that function's doc for why a byte-match template comparison
+/// does not survive template drift across the real repos this targets).
+fn is_vacuous_dart_placeholder(content: &str) -> bool {
+    content.contains("expect(1 + 1, equals(2))")
+        && content.contains("test('placeholder'")
+        && content.matches("expect(").count() == 1
+        && content.matches("test(").count() == 1
+}
+
 /// Names excluded from Dart binding generation, mirroring `[crates.dart] exclude_types` plus
 /// `[crates.ffi] exclude_types` that the real Dart binding emitter honors. Kept in sync
 /// deliberately rather than shared, since this seed-picker only needs *a* safe, visible name,
@@ -829,5 +903,325 @@ sources = []
             "must not emit the old vacuous placeholder test, got:\n{}",
             test_file.content
         );
+    }
+
+    /// Literal-for-literal reference set used by the migration tests below, all three
+    /// verified by directly reading `packages/dart/test/*.dart` in the named repo:
+    /// html-to-markdown carries the oldest placeholder shape on disk (no `package:`
+    /// import, no rationale comment -- exactly the shape a byte-match against the
+    /// *current* generator output would miss); liter-llm and tree-sitter-language-pack
+    /// are real hand-written suites that must never be touched.
+    fn h2m_historical_placeholder() -> &'static str {
+        "import 'package:test/test.dart';\n\nvoid main() {\n  test('placeholder', () {\n    expect(1 + 1, equals(2));\n  });\n}\n"
+    }
+
+    fn liter_llm_hand_written_suite() -> &'static str {
+        "import 'package:liter_llm/liter_llm.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('AuthConfig equality is based on authType and envVar', () {\n    const a = AuthConfig(authType: AuthType.bearer, envVar: 'OPENAI_API_KEY');\n    const b = AuthConfig(authType: AuthType.bearer, envVar: 'OPENAI_API_KEY');\n    const c = AuthConfig(authType: AuthType.apiKey, envVar: 'OPENAI_API_KEY');\n\n    expect(a, equals(b));\n    expect(a.hashCode, equals(b.hashCode));\n    expect(a, isNot(equals(c)));\n  });\n}\n"
+    }
+
+    /// Verbatim copy of tree-sitter-language-pack's real
+    /// `packages/dart/test/tree_sitter_language_pack_test.dart` (162 lines, 17 `expect(`
+    /// calls across 18 `test(` blocks) -- the largest, most structurally different of the
+    /// three real hand-written suites checked against this predicate: `group()` nesting,
+    /// `setUpAll`/`tearDownAll`, async tests, and an unrelated `expectLater(` (which must
+    /// not be miscounted as `expect(`, since `expectLater(` does not contain the literal
+    /// substring `expect(` followed immediately by `(`... it contains `expect` followed by
+    /// `Later(`, so it is correctly excluded by construction, not by a special case).
+    fn tree_sitter_language_pack_hand_written_suite() -> &'static str {
+        r#"import 'package:test/test.dart';
+import 'package:tree_sitter_language_pack/tree_sitter_language_pack.dart';
+import 'package:tree_sitter_language_pack/src/tree_sitter_language_pack_bridge_generated/frb_generated.dart' show RustLib;
+
+// Requires the native `tree-sitter-language-pack-dart` Rust crate to be built
+// via `task dart:build`, which compiles with TSLP_LINK_MODE=static and
+// TSLP_LANGUAGES=mojo,nim,norg (see .task/dart.yml). Every test that needs a
+// real grammar (parsing, root-node kind, `process()`) uses "nim", one of
+// those three statically-compiled languages, so this suite needs no network
+// access and no warm download cache. "python"/"rust"/"markdown" appear only
+// as literal data values in the pure language-detection tests below, which
+// consult a static extension/shebang lookup table and never touch a parser.
+
+void main() {
+  var rustLibInitialized = false;
+
+  setUpAll(() async {
+    await RustLib.init();
+    rustLibInitialized = true;
+  });
+
+  tearDownAll(() async {
+    if (rustLibInitialized) {
+      RustLib.dispose();
+    }
+  });
+
+  group('language detection (pure, no grammar required)', () {
+    test('should_map_py_extension_to_python', () async {
+      final result = await TreeSitterLanguagePackBridge.detectLanguageFromExtension('py');
+      expect(result, equals('python'), reason: '"py" is a well-known extension and must resolve to "python"');
+    });
+
+    test('should_match_extensions_case_insensitively', () async {
+      final result = await TreeSitterLanguagePackBridge.detectLanguageFromExtension('RS');
+      expect(result, equals('rust'), reason: 'extension matching must be case-insensitive per documented behavior');
+    });
+
+    test('should_return_null_for_unrecognized_extension', () async {
+      final result = await TreeSitterLanguagePackBridge.detectLanguageFromExtension(
+        'this-extension-does-not-exist-anywhere',
+      );
+      expect(result, isNull, reason: 'unrecognized extensions must not resolve to any language');
+    });
+
+    test('should_detect_rust_from_file_path', () async {
+      final result = await TreeSitterLanguagePackBridge.detectLanguageFromPath('src/main.rs');
+      expect(result, equals('rust'));
+    });
+
+    test('should_return_null_for_path_without_extension', () async {
+      final result = await TreeSitterLanguagePackBridge.detectLanguageFromPath('Makefile');
+      expect(result, isNull, reason: 'a path with no extension has nothing to detect from');
+    });
+
+    test('should_detect_python_from_env_shebang', () async {
+      final result = await TreeSitterLanguagePackBridge.detectLanguageFromContent('#!/usr/bin/env python3\npass');
+      expect(result, equals('python'));
+    });
+
+    test('should_return_null_when_content_has_no_shebang', () async {
+      final result = await TreeSitterLanguagePackBridge.detectLanguageFromContent('no shebang here');
+      expect(result, isNull);
+    });
+
+    test('should_alias_detect_language_to_path_extension_lookup', () async {
+      final result = await TreeSitterLanguagePackBridge.detectLanguage('README.md');
+      expect(result, equals('markdown'), reason: 'detectLanguage is documented as a path/extension detection alias');
+    });
+  });
+
+  group('bundled queries (pure, no grammar required)', () {
+    test('should_return_null_highlights_query_for_unknown_language', () async {
+      final result = await TreeSitterLanguagePackBridge.getHighlightsQuery('this-language-does-not-exist');
+      expect(result, isNull);
+    });
+  });
+
+  group('registry (statically compiled "nim", no network required)', () {
+    test('should_report_statically_compiled_language_as_available', () async {
+      final result = await TreeSitterLanguagePackBridge.hasLanguage('nim');
+      expect(result, isTrue, reason: 'nim is compiled in by task dart:build (TSLP_LANGUAGES=mojo,nim,norg)');
+    });
+
+    test('should_report_unknown_language_as_unavailable', () async {
+      final result = await TreeSitterLanguagePackBridge.hasLanguage('totally-bogus-language-name');
+      expect(result, isFalse);
+    });
+
+    test('should_list_statically_compiled_language_in_available_languages', () async {
+      final result = await TreeSitterLanguagePackBridge.availableLanguages();
+      expect(result, contains('nim'));
+    });
+
+    test('should_keep_language_count_consistent_with_available_languages_list', () async {
+      final count = await TreeSitterLanguagePackBridge.languageCount();
+      final names = await TreeSitterLanguagePackBridge.availableLanguages();
+      expect(
+        count,
+        equals(names.length),
+        reason: 'languageCount() must always equal availableLanguages().length; a mismatch means one of the two '
+            'accessors is stale relative to the other',
+      );
+    });
+  });
+
+  group('parsing (statically compiled "nim", no network required)', () {
+    // parsers/nim/src/grammar.json names its start rule "module", and
+    // node-types.json confirms "module" is a named node type — verified
+    // directly against the grammar sources vendored in this repo, not
+    // assumed from another language's doc example.
+    test('should_parse_nim_source_to_a_module_root_node', () async {
+      final parser = await TreeSitterLanguagePackBridge.getParser('nim');
+      final tree = await parser.parse(source: 'echo "hello"');
+      expect(tree, isNotNull, reason: 'parsing valid nim source must produce a tree');
+      final root = await tree!.rootNode();
+      final kind = await root.kind();
+      expect(kind, equals('module'), reason: 'nim\'s tree-sitter grammar names its root node "module"');
+    });
+
+    // fixtures/smoke/nim.json asserts `not_error` for this exact source, so
+    // it is known-valid nim, not a guess.
+    test('should_report_zero_errors_for_syntactically_valid_nim', () async {
+      final config = await createProcessConfigFromJson(json: '{"language":"nim"}');
+      final result = await TreeSitterLanguagePackBridge.process('echo "hello"', config: config);
+      expect(result.language, equals('nim'));
+      expect(result.metrics.errorCount, equals(0));
+    });
+
+    // No structure-extraction test: crates/ts-pack-core/src/intel/intelligence.rs
+    // `structure_kind_at()` matches an exact, hardcoded set of tree-sitter node
+    // kind names (`function_definition`, `function_item`, `struct_item`, ...),
+    // and nim's grammar (parsers/nim/src/node-types.json) uses none of them —
+    // its declarations are named `declaration` / `declColonEquals`. Structure
+    // extraction is therefore unimplemented for nim and would always report an
+    // empty list; asserting that would be vacuous, so the test is omitted
+    // rather than weakened to a truthiness check.
+  });
+
+  group('error paths', () {
+    test('should_throw_when_getting_an_unknown_language', () async {
+      await expectLater(
+        TreeSitterLanguagePackBridge.getLanguage('this-language-does-not-exist-anywhere'),
+        throwsA(anything),
+      );
+    });
+
+    test('should_throw_when_getting_a_parser_for_an_unknown_language', () async {
+      await expectLater(
+        TreeSitterLanguagePackBridge.getParser('this-language-does-not-exist-anywhere'),
+        throwsA(anything),
+      );
+    });
+
+    test('should_throw_when_processing_with_an_empty_language_name', () async {
+      await expectLater(() async {
+        final config = await createProcessConfigFromJson(json: '{"language":""}');
+        return TreeSitterLanguagePackBridge.process('hello', config: config);
+      }(), throwsA(anything));
+    });
+  });
+}
+"#
+    }
+
+    /// `is_vacuous_dart_placeholder` fires for html-to-markdown's real on-disk shape
+    /// (1 `expect(`, 1 `test(`) and refuses liter-llm's and tree-sitter-language-pack's
+    /// real hand-written suites (3/1 and 17/18 respectively) -- pinning the counts this
+    /// predicate depends on directly against the trees the migration exists to repair,
+    /// not just against synthetic fixtures.
+    #[test]
+    fn vacuity_signature_matches_real_consumer_trees() {
+        assert!(is_vacuous_dart_placeholder(h2m_historical_placeholder()));
+        assert!(!is_vacuous_dart_placeholder(liter_llm_hand_written_suite()));
+        assert!(!is_vacuous_dart_placeholder(tree_sitter_language_pack_hand_written_suite()));
+    }
+
+    /// tree-sitter-language-pack's real 162-line hand-written suite, the largest and
+    /// structurally most different of the three real trees checked, must never be
+    /// reported as a migration candidate.
+    #[test]
+    fn does_not_touch_the_tree_sitter_language_pack_hand_written_suite() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let test_dir = dir.path().join("packages/dart/test");
+        std::fs::create_dir_all(&test_dir).expect("create packages/dart/test");
+        let hand_written = tree_sitter_language_pack_hand_written_suite();
+        std::fs::write(test_dir.join("tree_sitter_language_pack_test.dart"), hand_written)
+            .expect("write hand-written test");
+
+        let relative_path = std::path::Path::new("packages/dart/test/tree_sitter_language_pack_test.dart");
+        let changed = migrate_dart_placeholder_test(dir.path(), relative_path, "anything else entirely")
+            .expect("migration must not error");
+        assert!(!changed, "a hand-written test must never be reported as changed");
+
+        let on_disk =
+            std::fs::read_to_string(test_dir.join("tree_sitter_language_pack_test.dart")).expect("read file");
+        assert_eq!(on_disk, hand_written, "hand-written test must survive byte-for-byte");
+    }
+
+    /// Requirement 1: the *current* generator's own placeholder output -- regenerated
+    /// here, never hardcoded, since hardcoding this exact string is how the byte-match
+    /// version of this migration silently stopped matching its own generator's output
+    /// after the template grew a rationale comment -- still migrates.
+    #[test]
+    fn migrates_the_current_generators_placeholder_output() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let test_dir = dir.path().join("packages/dart/test");
+        std::fs::create_dir_all(&test_dir).expect("create packages/dart/test");
+        let current_placeholder = dart_placeholder_test("my_lib", "my_lib/my_lib.dart");
+        std::fs::write(test_dir.join("my_lib_test.dart"), &current_placeholder).expect("write current placeholder");
+
+        let replacement = dart_equality_round_trip_test(
+            "my_lib",
+            "my_lib/my_lib.dart",
+            "Widget",
+            &[SimpleDartField {
+                label: "count".to_string(),
+                literal: "1".to_string(),
+            }],
+        );
+        let relative_path = std::path::Path::new("packages/dart/test/my_lib_test.dart");
+        let changed = migrate_dart_placeholder_test(dir.path(), relative_path, &replacement)
+            .expect("migration must not error");
+        assert!(changed, "the current generator's own placeholder must be reported as changed");
+
+        let on_disk = std::fs::read_to_string(test_dir.join("my_lib_test.dart")).expect("read migrated file");
+        assert_eq!(on_disk, replacement);
+    }
+
+    /// Requirement 2: the exact marker-less, import-less shape found on disk in
+    /// html-to-markdown -- the historical placeholder revision this migration exists to
+    /// reach, and the one a byte-match against only the current template would miss --
+    /// migrates, and a second pass over the result is a no-op (requirement 4).
+    #[test]
+    fn migrates_the_h2m_historical_shape_and_is_idempotent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let test_dir = dir.path().join("packages/dart/test");
+        std::fs::create_dir_all(&test_dir).expect("create packages/dart/test");
+        std::fs::write(test_dir.join("html_to_markdown_rs_test.dart"), h2m_historical_placeholder())
+            .expect("write h2m historical placeholder");
+
+        let replacement = dart_equality_round_trip_test(
+            "html_to_markdown_rs",
+            "html_to_markdown_rs/html_to_markdown_rs.dart",
+            "Widget",
+            &[SimpleDartField {
+                label: "count".to_string(),
+                literal: "1".to_string(),
+            }],
+        );
+        let relative_path = std::path::Path::new("packages/dart/test/html_to_markdown_rs_test.dart");
+        let changed = migrate_dart_placeholder_test(dir.path(), relative_path, &replacement)
+            .expect("migration must not error");
+        assert!(changed, "h2m's real historical placeholder shape must be reported as changed");
+
+        let on_disk =
+            std::fs::read_to_string(test_dir.join("html_to_markdown_rs_test.dart")).expect("read migrated file");
+        assert_eq!(on_disk, replacement);
+
+        let changed_again = migrate_dart_placeholder_test(dir.path(), relative_path, &replacement)
+            .expect("second pass must not error");
+        assert!(!changed_again, "second pass over an already-migrated file must be a no-op");
+    }
+
+    /// Requirement 3: liter-llm's real hand-written suite (3 `expect(` calls, a
+    /// descriptive test name, no `'placeholder'` anywhere) must never be touched, byte
+    /// for byte -- the same guarantee `migrate_build_zig_test_target` provides for
+    /// `build.zig`.
+    #[test]
+    fn does_not_touch_the_liter_llm_hand_written_suite() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let test_dir = dir.path().join("packages/dart/test");
+        std::fs::create_dir_all(&test_dir).expect("create packages/dart/test");
+        let hand_written = liter_llm_hand_written_suite();
+        std::fs::write(test_dir.join("liter_llm_test.dart"), hand_written).expect("write hand-written test");
+
+        let relative_path = std::path::Path::new("packages/dart/test/liter_llm_test.dart");
+        let changed = migrate_dart_placeholder_test(dir.path(), relative_path, "anything else entirely")
+            .expect("migration must not error");
+        assert!(!changed, "a hand-written test must never be reported as changed");
+
+        let on_disk = std::fs::read_to_string(test_dir.join("liter_llm_test.dart")).expect("read file");
+        assert_eq!(on_disk, hand_written, "hand-written test must survive byte-for-byte");
+    }
+
+    /// Requirement 5: a `test/*_test.dart` that does not exist yet (nothing scaffolded so
+    /// far) must not be created or error -- there is nothing to migrate.
+    #[test]
+    fn migrate_dart_placeholder_is_a_no_op_when_file_does_not_exist() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let relative_path = std::path::Path::new("packages/dart/test/my_lib_test.dart");
+        let changed =
+            migrate_dart_placeholder_test(dir.path(), relative_path, "new content").expect("must not error");
+        assert!(!changed);
+        assert!(!dir.path().join(relative_path).exists());
     }
 }

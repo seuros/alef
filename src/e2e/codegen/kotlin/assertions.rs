@@ -687,3 +687,54 @@ pub(super) fn render_assertion(
         }
     }
 }
+
+#[cfg(test)]
+mod strict_field_availability_marker_tests {
+    use super::render_assertion;
+    use crate::e2e::field_access::FieldResolver;
+    use crate::e2e::fixture::Assertion;
+    use std::collections::{HashMap, HashSet};
+
+    /// Regression test for alef task #81: Kotlin's "skipped: field not available"
+    /// comment text must survive as the exact marker the shared
+    /// `crate::e2e::codegen::fail_on_unavailable_field_markers` mechanism matches on
+    /// (wired into `kotlin/test_method.rs`, shared by `kotlin` and `kotlin_android`),
+    /// so arming `ALEF_E2E_STRICT_FIELD_AVAILABILITY` turns a dropped field assertion
+    /// into a generation-time failure instead of a silently-passing comment.
+    #[test]
+    fn unavailable_field_skip_comment_carries_the_strict_mode_marker() {
+        let result_fields: HashSet<String> = ["content".to_string()].into_iter().collect();
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &result_fields,
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        let assertion = Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("nonexistent_field".to_string()),
+            value: Some(serde_json::json!("x")),
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            "SampleClient",
+            &resolver,
+            false,
+            false,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            false,
+        );
+        assert!(
+            out.contains("field 'nonexistent_field' not available"),
+            "got: {out}"
+        );
+    }
+}

@@ -279,4 +279,81 @@ mod tests {
         assert!(body.contains("'json' => [\"name\" => \"sample\"]"), "{body}");
         assert!(!body.contains("assert"));
     }
+
+    fn visitor_fixture() -> Fixture {
+        serde_json::from_value(serde_json::json!({
+            "id": "visitor_link_rewrite",
+            "description": "Visitor rewrites links",
+            "input": {"html": "<a href=\"a\">a</a>"},
+            "visitor": {"callbacks": {"visit_link": {"action": "skip"}}}
+        }))
+        .expect("fixture")
+    }
+
+    fn visitor_e2e() -> E2eConfig {
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "convert".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.args = vec![crate::e2e::config::ArgMapping {
+            name: "html".into(),
+            field: "input.html".into(),
+            arg_type: "string".into(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }];
+        e2e
+    }
+
+    fn bridge_config(options_type: Option<&str>) -> ResolvedCrateConfig {
+        ResolvedCrateConfig {
+            name: "sample".into(),
+            trait_bridges: vec![crate::core::config::TraitBridgeConfig {
+                trait_name: "HtmlVisitor".into(),
+                type_alias: Some("VisitorHandle".into()),
+                param_name: Some("visitor".into()),
+                options_type: options_type.map(str::to_string),
+                ..Default::default()
+            }],
+            ..ResolvedCrateConfig::default()
+        }
+    }
+
+    /// A visitor fixture with no resolvable options type is a configuration defect —
+    /// there is nowhere to attach the declared visitor — so the snippet must fail closed
+    /// rather than fabricate a type name (C#) or drop the visitor (Go). This pins the
+    /// message the snippet pipeline surfaces as an undocumented coverage gap. ~keep
+    #[test]
+    fn visitor_without_a_trait_bridge_options_type_fails_closed() {
+        let error = render_snippet_body(&visitor_fixture(), &visitor_e2e(), &bridge_config(None), &[], &[])
+            .expect_err("a visitor with no options type must not render");
+
+        assert_eq!(
+            format!("{error}"),
+            "PHP documentation snippet `visitor_link_rewrite` needs an options type for its visitor"
+        );
+    }
+
+    /// Positive control for the above: with the bridge's `options_type` configured, the
+    /// ordinary visitor path is unchanged and builds against the real type. ~keep
+    #[test]
+    fn visitor_with_a_trait_bridge_options_type_builds_against_the_real_type() {
+        let body = render_snippet_body(
+            &visitor_fixture(),
+            &visitor_e2e(),
+            &bridge_config(Some("ConversionOptions")),
+            &[],
+            &[],
+        )
+        .expect("snippet renders");
+
+        assert!(body.contains("ConversionOptions::builder();"), "{body}");
+        assert!(
+            body.contains("$options = $builder->visitor($visitor)->build();"),
+            "{body}"
+        );
+    }
 }

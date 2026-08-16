@@ -22,7 +22,7 @@ pub use csharp::{
     PUBLISHED_RUNTIME_IDENTIFIERS, render_csharp_csproj, render_csharp_runtime_csproj,
     render_csharp_runtime_json_template,
 };
-pub(crate) use dart::scaffold_dart;
+pub(crate) use dart::{migrate_dart_placeholder_test, scaffold_dart};
 pub(crate) use elixir::{scaffold_elixir, scaffold_elixir_cargo};
 pub(crate) use ffi::scaffold_ffi;
 pub(crate) use gleam::scaffold_gleam;
@@ -36,6 +36,6 @@ pub(crate) use poly::scaffold_poly_config;
 pub(crate) use python::{scaffold_python, scaffold_python_cargo};
 pub(crate) use r::{scaffold_r, scaffold_r_cargo};
 pub(crate) use ruby::{scaffold_ruby, scaffold_ruby_cargo};
-pub(crate) use swift::scaffold_swift;
+pub(crate) use swift::{migrate_swift_placeholder_test, scaffold_swift};
 pub(crate) use wasm::scaffold_wasm;
 pub(crate) use zig::{migrate_build_zig_test_target, scaffold_zig};

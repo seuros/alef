@@ -289,9 +289,7 @@ impl E2eCodegen for CSharpCodegen {
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
     ) -> Result<String> {
-        Ok(snippet::render_snippet_body(
-            fixture, e2e_config, config, type_defs, enums,
-        ))
+        snippet::render_snippet_body(fixture, e2e_config, config, type_defs, enums)
     }
 
     fn language_name(&self) -> &'static str {
@@ -661,17 +659,21 @@ fn render_test_method(
     // args_str should contain the function arguments with null for missing options (e.g., "html, null").
     // We need to replace that null with an options instance that has Visitor set.
     let final_args = if has_visitor && !visitor_arg.is_empty() {
+        // A visitor has no standalone C# parameter — it is only reachable by assignment
+        // onto an options object, so without a resolvable options type there is nowhere
+        // to attach it. This used to emit `[Fact] ... { return; }`: a test xUnit reports
+        // as PASSING while exercising none of the visitor behavior the fixture declares.
+        // The sanctioned ways to opt a fixture out of this backend (`fixture.skip`, via
+        // `fixture_inclusion`, and the no-callable branch above) have both already run by
+        // here, so reaching this point means the fixture is genuinely required for C# and
+        // the config is wrong. Fail generation instead of emitting a vacuous green test. ~keep
         let Some(opts_type) =
             effective_options_type.or_else(|| crate::e2e::codegen::recipe::trait_bridge_options_type(config))
         else {
-            let return_type = if is_async { "async Task" } else { "void" };
-            let _ = writeln!(out, "    [Fact]");
-            let _ = writeln!(out, "    public {return_type} Test{method_name}()");
-            let _ = writeln!(out, "    {{");
-            let _ = writeln!(out, "        // {description}");
-            let _ = writeln!(out, "        return;");
-            let _ = writeln!(out, "    }}");
-            return;
+            panic!(
+                "C# e2e generator: fixture `{}` declares a `visitor`, but neither its `[e2e.call]` config nor any `[[crates.trait_bridges]]` entry provides an `options_type` to attach it to; cannot generate a C# visitor test without a resolvable trait bridge options type",
+                fixture.id
+            );
         };
         if args_str.contains("JsonSerializer.Deserialize") {
             // Deserialize form: extract the deserialized object and set Visitor on it

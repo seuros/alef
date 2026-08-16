@@ -203,6 +203,10 @@ pub(super) fn render_test_case(
         }
     }
 
+    // `out` accumulates every fixture's rendered test case in this file (see the
+    // caller in `test_file.rs`), so the strict-availability scan below must only
+    // look at the text this fixture's own assertion loop appends. ~keep
+    let assertions_start = out.len();
     for assertion in &fixture.assertions {
         if result_is_simple
             && let Some(f) = &assertion.field
@@ -221,6 +225,7 @@ pub(super) fn render_test_case(
             &pkg_module,
         );
     }
+    crate::e2e::codegen::fail_on_unavailable_field_markers(&out[assertions_start..], "gleam", &fixture.id);
 
     let _ = writeln!(out, "}}");
 }

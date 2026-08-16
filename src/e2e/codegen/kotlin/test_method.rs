@@ -479,6 +479,7 @@ pub(super) fn render_test_method(
         if !collect_snippet.is_empty() {
             let _ = writeln!(out, "        {collect_snippet}");
         }
+        let assertions_start = out.len();
         for assertion in &fixture.assertions {
             render_assertion(
                 out,
@@ -495,6 +496,7 @@ pub(super) fn render_test_method(
                 kotlin_android_style,
             );
         }
+        crate::e2e::codegen::fail_on_unavailable_field_markers(&out[assertions_start..], "kotlin", &fixture.id);
         let _ = writeln!(out, "        client.close()");
         let _ = writeln!(out, "    }}");
         return Ok(());
@@ -535,6 +537,7 @@ pub(super) fn render_test_method(
         let _ = writeln!(out, "        {collect_snippet}");
     }
 
+    let assertions_start = out.len();
     for assertion in &fixture.assertions {
         render_assertion(
             out,
@@ -551,6 +554,7 @@ pub(super) fn render_test_method(
             kotlin_android_style,
         );
     }
+    crate::e2e::codegen::fail_on_unavailable_field_markers(&out[assertions_start..], "kotlin", &fixture.id);
 
     let _ = writeln!(out, "    }}");
     Ok(())

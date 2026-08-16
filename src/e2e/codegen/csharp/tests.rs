@@ -1,7 +1,9 @@
+use crate::core::config::ResolvedCrateConfig;
 use crate::e2e::config::{ArgMapping, CallConfig, E2eConfig, SelectWhen};
-use crate::e2e::fixture::Fixture;
+use crate::e2e::field_access::FieldResolver;
+use crate::e2e::fixture::{Assertion, Fixture};
 use heck::ToPascalCase;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::stubs::emit_test_backend_with_class_name;
 
@@ -399,5 +401,184 @@ fn declared_error_value_check_escapes_quotes_and_backslashes() {
     assert!(
         check.contains("bad \\\"field\\\" \\\\ value"),
         "expected escaped literal, got: {check}"
+    );
+}
+
+/// Renders a fixture through the real per-fixture entry point
+/// (`render_test_method`) whose sole assertion targets a field absent from
+/// `result_fields`. Proves the `field '<name>' not available on result type`
+/// marker `assertions.rs`'s `is_valid_for_result` skip branch emits survives
+/// into the rendered method body, which is what
+/// `fail_on_unavailable_field_markers` scans at generation time.
+#[test]
+fn dropped_field_assertion_carries_the_marker_in_the_rendered_test_method() {
+    let fixture = Fixture {
+        id: "widget_smoke".into(),
+        description: "Widget smoke".into(),
+        assertions: vec![Assertion {
+            assertion_type: "not_empty".into(),
+            field: Some("definitely_missing_field".into()),
+            ..Assertion::default()
+        }],
+        ..Fixture::default()
+    };
+    let mut e2e_config = E2eConfig::default();
+    e2e_config.call.function = "get_widget".into();
+    e2e_config.call.result_var = "result".into();
+    e2e_config.result_fields = ["content".to_string()].into_iter().collect::<HashSet<_>>();
+
+    let field_resolver = FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+    let config = ResolvedCrateConfig {
+        name: "sample".into(),
+        ..ResolvedCrateConfig::default()
+    };
+
+    let mut out = String::new();
+    let mut visitor_class_decls: Vec<String> = Vec::new();
+    super::render_test_method(
+        &mut out,
+        &mut visitor_class_decls,
+        &fixture,
+        "Widget",
+        "GetWidget",
+        "WidgetException",
+        "result",
+        &[],
+        &field_resolver,
+        false,
+        false,
+        &e2e_config,
+        &HashMap::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+        &[],
+        &config,
+        &[],
+        &[],
+    );
+
+    assert!(
+        out.contains("skipped: field 'definitely_missing_field' not available on result type"),
+        "expected the unavailable-field marker in the rendered test method, got:\n{out}"
+    );
+}
+
+/// Renders a streaming fixture directly through `render_streaming_test_method`
+/// (csharp's structurally separate streaming assertion path) whose sole
+/// assertion targets a field the non-chat-stream branch's `result_fields`
+/// predicate rejects. Proves the `unsupported field '<name>'`-shaped marker
+/// `streaming.rs` emits (a differently-worded variant from the main assertions
+/// path) also survives into the rendered method body.
+#[test]
+fn dropped_streaming_field_assertion_carries_the_unsupported_field_marker() {
+    let fixture = Fixture {
+        id: "stream_widget_smoke".into(),
+        description: "Streaming widget smoke".into(),
+        assertions: vec![Assertion {
+            assertion_type: "not_empty".into(),
+            field: Some("weird_untracked_field".into()),
+            ..Assertion::default()
+        }],
+        ..Fixture::default()
+    };
+    let call_config = CallConfig::default();
+    let e2e_config = E2eConfig::default();
+    let config = ResolvedCrateConfig {
+        name: "sample".into(),
+        ..ResolvedCrateConfig::default()
+    };
+
+    let mut out = String::new();
+    super::render_streaming_test_method(
+        &mut out,
+        &fixture,
+        "Widget",
+        &call_config,
+        None,
+        &e2e_config,
+        &HashMap::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+        "WidgetException",
+        &[],
+        &config,
+        &[],
+        &[],
+        Some("ChunkItem"),
+    );
+
+    assert!(
+        out.contains("skipped: streaming assertion on unsupported field 'weird_untracked_field'"),
+        "expected the streaming unsupported-field marker in the rendered method, got:\n{out}"
+    );
+}
+
+/// Regression test for alef task #86: a `visitor` fixture whose options type resolves
+/// from neither `[e2e.call]` nor any `[[crates.trait_bridges]]` entry used to emit
+/// `[Fact] public void TestX() { return; }` — a test xUnit reports as PASSING while
+/// exercising none of the visitor behavior, so the emitted suite tested strictly less
+/// than it claimed. It must now fail at generation time, naming the fixture and the
+/// missing options type — mirroring `c/assertions.rs`'s `build_args_string_c` and
+/// `kotlin/args.rs`, which already refuse to emit for an unresolvable trait bridge.
+#[test]
+#[should_panic(expected = "C# e2e generator: fixture `visitor_smoke` declares a `visitor`")]
+fn visitor_fixture_without_trait_bridge_options_type_fails_loudly_instead_of_emitting_an_empty_test() {
+    use crate::e2e::fixture::{CallbackAction, VisitorSpec};
+
+    let fixture = Fixture {
+        id: "visitor_smoke".into(),
+        description: "Visitor smoke".into(),
+        visitor: Some(VisitorSpec {
+            callbacks: [("visit_element".to_string(), CallbackAction::Skip)]
+                .into_iter()
+                .collect(),
+        }),
+        ..Fixture::default()
+    };
+    let mut e2e_config = E2eConfig::default();
+    e2e_config.call.function = "convert".into();
+    e2e_config.call.result_var = "result".into();
+
+    let field_resolver = FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+    // No `[[crates.trait_bridges]]` entries declared — nothing supplies an `options_type`.
+    let config = ResolvedCrateConfig {
+        name: "sample".into(),
+        ..ResolvedCrateConfig::default()
+    };
+
+    let mut out = String::new();
+    let mut visitor_class_decls: Vec<String> = Vec::new();
+    super::render_test_method(
+        &mut out,
+        &mut visitor_class_decls,
+        &fixture,
+        "Widget",
+        "Convert",
+        "WidgetException",
+        "result",
+        &[],
+        &field_resolver,
+        false,
+        false,
+        &e2e_config,
+        &HashMap::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+        &[],
+        &config,
+        &[],
+        &[],
     );
 }

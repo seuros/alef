@@ -564,6 +564,23 @@ pub(super) fn render_test_case(
             is_streaming,
         );
     }
+    // A fixture that declared at least one assertion but every one of them resolved
+    // to a "skipped" comment (all its fields are unavailable on the result type) is
+    // otherwise indistinguishable from a fixture with zero declared assertions — an
+    // entirely comment-only, vacuously-passing test body. `not_error` already emits
+    // a real `refute is_nil(...)` (see `render_assertion`'s `not_error` arm), so this
+    // only fires on the remaining gap: real field assertions that all got dropped.
+    // Elixir was the one backend in this defect class with no fallback of any kind
+    // for that case — mirror python/php/typescript's `apply_vacuous_assertion_fallback`.
+    // A fixture with genuinely zero declared assertions is left untouched, matching
+    // every other backend's deliberate "just call it" smoke-test contract. ~keep
+    apply_vacuous_assertion_fallback(
+        &mut assertions_body,
+        !fixture.assertions.is_empty(),
+        is_streaming,
+        chunks_var,
+        &result_var,
+    );
     crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, "elixir", &fixture.id);
     out.push_str(&assertions_body);
 
@@ -572,6 +589,36 @@ pub(super) fn render_test_case(
     }
     let _ = writeln!(out, "    end");
     let _ = writeln!(out, "  end");
+}
+
+/// When a fixture declares at least one assertion but the rendered body has no
+/// executable statement — every field assertion resolved to a "skipped" comment —
+/// inject a real assertion instead of leaving the test vacuous. `not_error` already
+/// renders a real `refute is_nil(...)` on its own (see `render_assertion`'s
+/// `not_error` arm), so this only fires on the remaining gap: declared field
+/// assertions that all turned out unavailable. Fixtures that declare NO assertions
+/// at all are left untouched — a deliberate "just call it" smoke test, matching
+/// every other backend in this defect class. Reuses the exact `refute is_nil(...)`
+/// idiom `not_error` already emits, on whichever variable the assertion loop itself
+/// targeted (`chunks_var` for streaming fixtures, `result_var` otherwise), so a
+/// streaming fixture whose only real assertions were non-streaming-virtual field
+/// checks gets covered by this same fix. ~keep
+fn apply_vacuous_assertion_fallback(
+    assertions_body: &mut String,
+    has_declared_assertions: bool,
+    is_streaming: bool,
+    chunks_var: &str,
+    result_var: &str,
+) {
+    let has_real_assertion = assertions_body.lines().any(|line| {
+        let trimmed = line.trim();
+        !trimmed.is_empty() && !trimmed.starts_with('#')
+    });
+    if !has_declared_assertions || has_real_assertion {
+        return;
+    }
+    let fallback_var = if is_streaming { chunks_var } else { result_var };
+    let _ = writeln!(assertions_body, "      refute is_nil({fallback_var})");
 }
 
 fn fixture_has_elixir_callable(fixture: &Fixture, e2e_config: &E2eConfig) -> bool {
@@ -602,4 +649,195 @@ fn fixture_has_elixir_callable(fixture: &Fixture, e2e_config: &E2eConfig) -> boo
 
     // If there's an override function, use it. Otherwise, Elixir can use the base function.
     function_from_override.is_some() || !call_config.function.is_empty()
+}
+
+#[cfg(test)]
+mod dropped_field_marker_tests {
+    use super::render_test_case;
+    use crate::e2e::config::{CallConfig, E2eConfig};
+    use crate::e2e::fixture::{Assertion, Fixture};
+    use std::collections::{HashMap, HashSet};
+
+    fn make_fixture(id: &str, field: &str) -> Fixture {
+        Fixture {
+            docs: None,
+            requirements: Vec::new(),
+            id: id.to_string(),
+            category: None,
+            description: "test".to_string(),
+            tags: vec![],
+            skip: None,
+            env: None,
+            setup: Vec::new(),
+            call: None,
+            input: serde_json::Value::Null,
+            mock_response: None,
+            source: String::new(),
+            http: None,
+            asyncapi: None,
+            websocket: None,
+            preserve_input_urls: false,
+            assertions: vec![Assertion {
+                assertion_type: "equals".to_string(),
+                field: Some(field.to_string()),
+                value: Some(serde_json::json!("x")),
+                ..Default::default()
+            }],
+            visitor: None,
+            args: vec![],
+            assertion_recipes: vec![],
+        }
+    }
+
+    /// Regression test for alef task #81: Elixir's "skipped: field not available" comment
+    /// must carry the exact marker text the shared `fail_on_unavailable_field_markers`
+    /// mechanism (src/e2e/codegen/mod.rs) matches on, so arming
+    /// `ALEF_E2E_STRICT_FIELD_AVAILABILITY` turns a dropped field assertion into a
+    /// generation-time failure. The arming behaviour itself is proven in `mod.rs`'s
+    /// `unavailable_field_marker_tests`; this test only pins the marker text Elixir emits
+    /// through the real per-fixture rendering entry point. ~keep
+    #[test]
+    fn dropped_field_assertion_carries_the_marker_that_arms_the_strict_mode() {
+        let fixture = make_fixture("process_smoke", "nonexistent_field");
+        let call = CallConfig {
+            function: "process".to_string(),
+            module: "MyLib".to_string(),
+            result_var: "result".to_string(),
+            result_fields: HashSet::from(["content".to_string()]),
+            returns_result: true,
+            ..Default::default()
+        };
+        let e2e_config = E2eConfig {
+            call,
+            ..Default::default()
+        };
+        let config = crate::core::config::ResolvedCrateConfig::default();
+        let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
+
+        let mut out = String::new();
+        render_test_case(
+            &mut out,
+            &fixture,
+            &e2e_config,
+            "",
+            "",
+            "",
+            &[],
+            None,
+            None,
+            &HashMap::new(),
+            None,
+            &HashSet::new(),
+            &[],
+            &[],
+            &config,
+            &type_defs,
+        );
+
+        assert!(
+            out.contains("field 'nonexistent_field' not available on result type"),
+            "got:\n{out}"
+        );
+    }
+
+    /// Regression test for alef task #81 (vacuous-fallback gap): a fixture whose
+    /// sole assertion drops (its field is unavailable) must still get a real
+    /// `refute is_nil(...)` on the bound result, not an entirely comment-only body
+    /// that vacuously passes. Mirrors typescript's
+    /// `dropped_field_assertion_still_gets_a_real_fallback_assertion`. ~keep
+    #[test]
+    fn dropped_field_assertion_still_gets_a_real_fallback_assertion() {
+        let fixture = make_fixture("process_smoke", "nonexistent_field");
+        let call = CallConfig {
+            function: "process".to_string(),
+            module: "MyLib".to_string(),
+            result_var: "result".to_string(),
+            result_fields: HashSet::from(["content".to_string()]),
+            returns_result: true,
+            ..Default::default()
+        };
+        let e2e_config = E2eConfig {
+            call,
+            ..Default::default()
+        };
+        let config = crate::core::config::ResolvedCrateConfig::default();
+        let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
+
+        let mut out = String::new();
+        render_test_case(
+            &mut out,
+            &fixture,
+            &e2e_config,
+            "",
+            "",
+            "",
+            &[],
+            None,
+            None,
+            &HashMap::new(),
+            None,
+            &HashSet::new(),
+            &[],
+            &[],
+            &config,
+            &type_defs,
+        );
+
+        assert!(
+            out.contains("refute is_nil(result)"),
+            "expected a real fallback assertion on the bound result, got:\n{out}"
+        );
+        assert!(
+            out.contains("{:ok, result} ="),
+            "the result must be bound (not `_result`) once a real assertion references it, got:\n{out}"
+        );
+    }
+
+    /// Positive control for the same fix: a fixture with genuinely zero declared
+    /// assertions is left untouched (deliberate "just call it" smoke test). Mirrors
+    /// typescript's `zero_declared_assertions_are_left_untouched`. ~keep
+    #[test]
+    fn zero_declared_assertions_are_left_untouched() {
+        let mut fixture = make_fixture("process_smoke", "nonexistent_field");
+        fixture.assertions = Vec::new();
+        let call = CallConfig {
+            function: "process".to_string(),
+            module: "MyLib".to_string(),
+            result_var: "result".to_string(),
+            result_fields: HashSet::from(["content".to_string()]),
+            returns_result: true,
+            ..Default::default()
+        };
+        let e2e_config = E2eConfig {
+            call,
+            ..Default::default()
+        };
+        let config = crate::core::config::ResolvedCrateConfig::default();
+        let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
+
+        let mut out = String::new();
+        render_test_case(
+            &mut out,
+            &fixture,
+            &e2e_config,
+            "",
+            "",
+            "",
+            &[],
+            None,
+            None,
+            &HashMap::new(),
+            None,
+            &HashSet::new(),
+            &[],
+            &[],
+            &config,
+            &type_defs,
+        );
+
+        assert!(
+            !out.contains("refute is_nil(result)"),
+            "a fixture with zero declared assertions must stay vacuous, got:\n{out}"
+        );
+    }
 }

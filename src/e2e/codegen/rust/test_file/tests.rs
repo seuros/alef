@@ -183,6 +183,57 @@ fn dropped_field_assertion_carries_the_marker_that_arms_the_strict_mode() {
     );
 }
 
+/// Regression test for alef task #81: a `test_backend` arg whose declared trait has
+/// no matching `[[crates.trait_bridges]]` entry used to fall through — with only a
+/// `tracing::warn!` — to rendering the arg's raw (null) fixture value as an ordinary
+/// argument, deferring the real failure to a later `cargo build` far from the
+/// fixture that caused it. It must now fail at generation time, naming the fixture,
+/// the arg, and the missing trait — mirroring `c/assertions.rs`'s
+/// `build_args_string_c`, which already fails loudly for the identical scenario.
+#[test]
+#[should_panic(expected = "fixture `register_sample_backend` requires trait `SampleBackend`")]
+fn unregistered_test_backend_trait_fails_loudly_instead_of_falling_back() {
+    use crate::e2e::config::{ArgMapping, CallConfig};
+    use crate::e2e::fixture::Fixture;
+
+    let call = CallConfig {
+        function: "register_backend".to_string(),
+        module: "my_crate".to_string(),
+        result_var: "result".to_string(),
+        returns_result: false,
+        ..Default::default()
+    };
+    let e2e_config = crate::e2e::config::E2eConfig {
+        call,
+        ..Default::default()
+    };
+    let fixture = Fixture {
+        id: "register_sample_backend".to_string(),
+        description: "Register a sample backend".to_string(),
+        args: vec![ArgMapping {
+            name: "backend".to_string(),
+            field: "backend".to_string(),
+            arg_type: "test_backend".to_string(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: Some("SampleBackend".to_string()),
+        }],
+        ..Fixture::default()
+    };
+
+    let mut out = String::new();
+    let cfg: crate::core::config::NewAlefConfig = toml::from_str(
+        "[workspace]\nlanguages = [\"rust\"]\n[[crates]]\nname = \"my_crate\"\nsources = [\"src/lib.rs\"]\n",
+    )
+    .unwrap();
+    // No `[[crates.trait_bridges]]` entries declared — `SampleBackend` is unregistered.
+    let test_config = cfg.resolve().unwrap().remove(0);
+    render_test_function(&mut out, &fixture, &e2e_config, &test_config, &[], "my_crate", None);
+}
+
 /// Regression test: a `result_is_simple` call with a `count_equals` assertion whose
 /// `field` is NOT a real field on the (plain Vec) result type must still bind the
 /// call to the result variable.  The assertion renderer emits `result.len()` for

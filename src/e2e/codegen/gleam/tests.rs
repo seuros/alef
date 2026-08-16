@@ -1,6 +1,9 @@
 use super::args::build_args_and_setup;
 use super::constructors::render_gleam_element_constructor;
+use super::test_case::render_test_case;
 use crate::core::config::{GleamElementConstructor, GleamElementField};
+use crate::e2e::config::{CallConfig, E2eConfig};
+use crate::e2e::fixture::{Assertion, Fixture};
 
 fn file_job_recipe() -> GleamElementConstructor {
     GleamElementConstructor {
@@ -176,5 +179,80 @@ fn render_element_constructor_string_falls_back_to_default() {
     assert!(
         out.contains("mime_type: \"text/plain\""),
         "missing string field must fall back to default; got:\n{out}"
+    );
+}
+
+fn field_gated_e2e_config() -> E2eConfig {
+    E2eConfig {
+        result_fields: std::collections::HashSet::from(["content".to_string()]),
+        call: CallConfig {
+            function: "process".to_string(),
+            result_var: "result".to_string(),
+            returns_result: true,
+            ..CallConfig::default()
+        },
+        ..E2eConfig::default()
+    }
+}
+
+/// `render_test_case` writes into a `String` buffer shared across every fixture in
+/// the generated file (see the loop in `test_file.rs`), so this proves the
+/// offset-scoped scan wired into `render_test_case` attributes a skip marker to the
+/// fixture that actually produced it, not to a fixture that merely shares the buffer.
+#[test]
+fn dropped_field_assertion_carries_the_marker_and_is_correctly_attributed_per_fixture() {
+    let e2e_config = field_gated_e2e_config();
+    let mut out = String::new();
+
+    let clean_fixture = Fixture {
+        id: "clean_smoke".to_string(),
+        description: "clean smoke".to_string(),
+        ..Fixture::default()
+    };
+    render_test_case(
+        &mut out,
+        &clean_fixture,
+        &e2e_config,
+        "sample_crate",
+        "process",
+        "result",
+        &[],
+        &[],
+        None,
+    );
+    let clean_len = out.len();
+
+    let mut dirty_fixture = Fixture {
+        id: "dirty_smoke".to_string(),
+        description: "dirty smoke".to_string(),
+        ..Fixture::default()
+    };
+    dirty_fixture.assertions = vec![Assertion {
+        assertion_type: "equals".to_string(),
+        field: Some("nonexistent_field".to_string()),
+        value: Some(serde_json::json!("x")),
+        ..Default::default()
+    }];
+    render_test_case(
+        &mut out,
+        &dirty_fixture,
+        &e2e_config,
+        "sample_crate",
+        "process",
+        "result",
+        &[],
+        &[],
+        None,
+    );
+
+    assert!(
+        !out[..clean_len].contains("not available"),
+        "the first fixture's own render must carry no skip marker, got:\n{}",
+        &out[..clean_len]
+    );
+    assert!(
+        out[clean_len..].contains("field 'nonexistent_field' not available on result type"),
+        "the second fixture's own render must carry the skip marker, got:\n{}",
+        &out[clean_len..]
     );
 }

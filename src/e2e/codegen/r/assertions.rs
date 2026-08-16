@@ -592,6 +592,43 @@ mod tests {
         assert!(out.contains("skipped"), "got: {out}");
     }
 
+    /// Regression test for alef task #81: R's "skipped: field not available" comment
+    /// text must survive as the exact marker the shared
+    /// `crate::e2e::codegen::fail_on_unavailable_field_markers` mechanism matches on
+    /// (wired into `r/test_case.rs`), so arming `ALEF_E2E_STRICT_FIELD_AVAILABILITY`
+    /// turns a dropped field assertion into a generation-time failure instead of a
+    /// silently-passing comment.
+    #[test]
+    fn unavailable_field_skip_comment_carries_the_strict_mode_marker() {
+        let result_fields: HashSet<String> = ["content".to_string()].into_iter().collect();
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &result_fields,
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        let enum_fields = HashMap::new();
+        let assertion = Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("nonexistent_field".to_string()),
+            value: Some(json!("x")),
+            ..Assertion::default()
+        };
+        let context = RAssertionContext {
+            field_resolver: &resolver,
+            result_is_simple: false,
+            result_is_bytes: false,
+            assert_enum_fields: &enum_fields,
+        };
+        let mut out = String::new();
+        render_assertion(&mut out, &assertion, "result", &context);
+        assert!(
+            out.contains("field 'nonexistent_field' not available"),
+            "got: {out}"
+        );
+    }
+
     #[test]
     fn render_simple_result_contains_assertion() {
         let resolver = FieldResolver::new(

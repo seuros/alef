@@ -536,7 +536,11 @@ fn test_scaffold_ruby_production_features() {
     let api = test_api();
     let all_files = scaffold(&api, &config, &[Language::Ruby]).unwrap();
     let files = language_files(&all_files);
-    assert_eq!(files.len(), 7);
+    // The `spec/<gem>_spec.rb` seed is appended last inside `scaffold_ruby`, so it takes index
+    // 6 and pushes `scaffold_ruby_cargo`'s manifest — extended onto the tail by the `Language::
+    // Ruby` scaffold arm, and therefore always last overall — from 6 to 7. Every index before
+    // it is unchanged. ~keep
+    assert_eq!(files.len(), 8);
     let content = &files[0].content;
     assert!(content.contains(r#"spec.required_ruby_version = ">= 3.2.0""#));
     assert!(!content.contains("< 4.0"));
@@ -569,13 +573,18 @@ fn test_scaffold_ruby_production_features() {
     );
     assert_eq!(files[4].path, PathBuf::from("packages/ruby/Gemfile"));
     assert_eq!(files[5].path, PathBuf::from("packages/ruby/Steepfile"));
+    assert_eq!(files[6].path, PathBuf::from("packages/ruby/spec/my_lib_spec.rb"));
+    assert!(
+        !files[6].generated_header,
+        "the spec seed must stay create-only so a real suite is never overwritten"
+    );
     assert_eq!(
-        files[6].path,
+        files[7].path,
         PathBuf::from("packages/ruby/ext/my_lib_rb/native/Cargo.toml")
     );
-    assert!(files[6].content.contains("magnus"));
+    assert!(files[7].content.contains("magnus"));
     assert!(
-        files[6].content.contains("path = \"../src/lib.rs\""),
+        files[7].content.contains("path = \"../src/lib.rs\""),
         "Ruby Cargo.toml [lib] must set path to the binding source crate"
     );
 }

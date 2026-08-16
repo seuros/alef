@@ -97,7 +97,21 @@ pub(super) fn build_args_string(
             // configs) whenever the fixture omits an optional value.
             let val = if val.is_null() {
                 if !arg.optional {
-                    return None;
+                    // ~keep A required arg with no resolvable fixture value used to be
+                    // silently dropped from `parts` (via `filter_map` returning `None`),
+                    // producing an R call with one fewer named argument than the extendr
+                    // wrapper expects. That is only caught at test-run time, as an R
+                    // "argument is missing" error far from the fixture that caused it —
+                    // fail at generation time instead, naming the fixture and the field
+                    // that resolved to nothing, matching how every other silently-dropped
+                    // value in this defect class now fails (alef task #81).
+                    panic!(
+                        "R e2e generator: fixture `{}` has no value for required arg `{arg_name}` \
+                         (fixture field `{}`) — the generated R call would otherwise silently omit \
+                         this named argument. Add `{}` to the fixture's `input`, or mark this arg \
+                         optional in the call config if it genuinely has no required value.",
+                        fixture.id, arg.field, arg.field
+                    );
                 }
                 if arg.arg_type == "json_object" {
                     let r_value = r_default_for_config_arg(arg_name, options_type);
@@ -426,5 +440,93 @@ mod tests {
             rendered.starts_with("request = DocumentRequest$from_json"),
             "{rendered}"
         );
+    }
+
+    /// Regression test for alef task #81: a required arg whose fixture field
+    /// resolves to null used to be silently dropped from the emitted R call
+    /// (`filter_map` returning `None`), producing a call with the wrong arity.
+    /// It must now fail generation loudly, naming the fixture and the field.
+    #[test]
+    #[should_panic(expected = "fixture `missing_required_arg`")]
+    fn required_arg_with_null_value_fails_loudly_instead_of_being_dropped() {
+        let input = json!({});
+        let args = vec![ArgMapping {
+            name: "content".to_string(),
+            field: "input.content".to_string(),
+            arg_type: "string".to_string(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }];
+        let fixture = Fixture {
+            docs: None,
+            requirements: Vec::new(),
+            id: "missing_required_arg".to_string(),
+            ..Fixture::default()
+        };
+        let config = ResolvedCrateConfig::default();
+        let mut setup_lines = Vec::new();
+        let mut teardown_block = String::new();
+
+        build_args_string(
+            &input,
+            &args,
+            RArgsContext {
+                arg_name_map: None,
+                options_type: None,
+                fixture: &fixture,
+                config: &config,
+                type_defs: &[],
+                setup_lines: &mut setup_lines,
+                teardown_block: &mut teardown_block,
+            },
+        );
+    }
+
+    /// Positive control for the same fix: an OPTIONAL arg with a null value must
+    /// still degrade to an explicit `NULL` literal, not panic — only required args
+    /// with no value are a generation-time failure.
+    #[test]
+    fn optional_arg_with_null_value_still_emits_explicit_null() {
+        let input = json!({});
+        let args = vec![ArgMapping {
+            name: "content".to_string(),
+            field: "input.content".to_string(),
+            arg_type: "string".to_string(),
+            optional: true,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }];
+        let fixture = Fixture {
+            docs: None,
+            requirements: Vec::new(),
+            id: "optional_missing_arg".to_string(),
+            ..Fixture::default()
+        };
+        let config = ResolvedCrateConfig::default();
+        let mut setup_lines = Vec::new();
+        let mut teardown_block = String::new();
+
+        let rendered = build_args_string(
+            &input,
+            &args,
+            RArgsContext {
+                arg_name_map: None,
+                options_type: None,
+                fixture: &fixture,
+                config: &config,
+                type_defs: &[],
+                setup_lines: &mut setup_lines,
+                teardown_block: &mut teardown_block,
+            },
+        );
+
+        assert_eq!(rendered, "content = NULL");
     }
 }

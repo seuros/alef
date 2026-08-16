@@ -360,6 +360,8 @@ pub(super) fn render_streaming_test_method(
         body.push_str("        Assert.True(streamComplete);\n");
     }
 
+    crate::e2e::codegen::fail_on_unavailable_field_markers(&body, "csharp", &fixture.id);
+
     body.push_str("    }\n");
 
     for line in body.lines() {
@@ -544,5 +546,36 @@ fn emit_chat_stream_assertion(out: &mut String, assertion: &Assertion) {
                 "        // skipped: streaming assertion '{atype}' on field '{field}' not supported"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod strict_field_availability_marker_tests {
+    use super::emit_non_chat_stream_assertion;
+    use crate::e2e::fixture::Assertion;
+
+    /// Regression test for alef task #81: csharp's streaming path
+    /// (`emit_non_chat_stream_assertion`) has its own "unsupported field" skip
+    /// comment, structurally separate from `csharp/assertions.rs`'s
+    /// `render_assertion`. The shared `fail_on_unavailable_field_markers`
+    /// mechanism (wired into `render_streaming_test_method` just above) matches
+    /// on this exact wording, so arming `ALEF_E2E_STRICT_FIELD_AVAILABILITY`
+    /// turns a dropped streaming assertion into a generation-time failure
+    /// instead of a silently-passing comment.
+    #[test]
+    fn unavailable_streaming_field_skip_comment_carries_the_strict_mode_marker() {
+        let assertion = Assertion {
+            assertion_type: "not_empty".to_string(),
+            field: Some("weird_field".to_string()),
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+
+        emit_non_chat_stream_assertion(&mut out, &assertion, &std::collections::HashSet::new());
+
+        assert!(
+            out.contains("streaming assertion on unsupported field 'weird_field'"),
+            "got: {out}"
+        );
     }
 }

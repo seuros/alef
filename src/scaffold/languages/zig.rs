@@ -316,9 +316,12 @@ pub fn main() !void {
 /// other shape) — idempotent by construction, so calling this on every scaffold run is safe.
 ///
 /// Also inserts `test_module.addImport("<module>", module);` immediately after the block's
-/// closing `});`, but only when no `test_module.addImport(` call exists anywhere in the file
-/// yet — the pre-fix template never wired this import, so a freshly repointed test module
-/// would otherwise fail to resolve `@import("<module>")`. ~keep
+/// closing `});`, but only when that exact self-import is not already present — the pre-fix
+/// template never wired it, so a freshly repointed test module would otherwise fail to
+/// resolve `@import("<module>")`. The check is deliberately for the whole call and not for a
+/// bare `test_module.addImport(` prefix: a consumer may already import unrelated third-party
+/// modules into the test module (tree-sitter-language-pack imports `tree_sitter`), and a
+/// prefix match would read those as the self-import and skip the one line that matters. ~keep
 pub(crate) fn migrate_build_zig_test_target(base_dir: &Path) -> anyhow::Result<bool> {
     let path = base_dir.join("packages/zig/build.zig");
     let Ok(content) = std::fs::read_to_string(&path) else {
@@ -372,7 +375,12 @@ fn repair_build_zig_test_target(content: &str) -> Option<String> {
 
     let trimmed = lines[bad_line_index].trim();
     let module_name = trimmed.strip_prefix(BAD_PREFIX)?.strip_suffix(BAD_SUFFIX)?;
-    let field_indent = &lines[bad_line_index][..lines[bad_line_index].len() - trimmed.len()];
+    // Leading indent only (`trim_start`, not `trim`): `line.len() - line.trim().len()` would
+    // count *trailing* whitespace too, and if the matched line ever carried any, that extra
+    // width would be byte-sliced off the front here, corrupting the rewritten line. This
+    // repair's entire purpose is exact preservation of everything outside the one field it
+    // touches, so getting this slice wrong is a real correctness bug, not a style nit. ~keep
+    let field_indent = &lines[bad_line_index][..lines[bad_line_index].len() - lines[bad_line_index].trim_start().len()];
     // Statement-level indent (one level shallower than the struct-literal field above),
     // taken from the block's own closing `});` line, for the sibling `test_module.*`
     // call this may insert — not `field_indent`, which belongs to a field one level deeper. ~keep
@@ -409,14 +417,26 @@ fn repair_build_zig_test_target(content: &str) -> Option<String> {
 /// 1. A visible zero-parameter function returning a bare primitive is actually called end-to-end
 ///    (real FFI link, real invocation) — the strongest check: it fails on a broken build, a link
 ///    error, or a removed/renamed export, not just a missing declaration.
-/// 2. Otherwise, any other visible function is checked for existence via `@hasDecl` at comptime.
-///    Calling an arbitrary function generically isn't safe (unknown allocator/ownership/JSON
-///    conversion needs per parameter), but its declaration existing is still a real, falsifiable
-///    fact about the generated output.
-/// 3. Otherwise, a visible type or enum is checked the same way.
+/// 2. Otherwise, any other visible function is *referenced without being called*
+///    (`_ = &{module}.{fn};`). Calling an arbitrary function generically isn't safe (unknown
+///    allocator/ownership/JSON conversion needs per parameter), but a bare reference needs no
+///    knowledge of the argument contract at all, and still forces Zig to semantically analyse
+///    the wrapper's body and to resolve the extern C symbol that body calls. See
+///    [`symbol_reference_test`] for the measured evidence and for the one class of change this
+///    provably cannot catch.
+/// 3. Otherwise, a visible type or enum is checked for existence via `@hasDecl` at comptime.
+///    Types and enums have no referenceable-as-value form (`&SomeType` is not valid Zig), so
+///    comptime existence is the strongest fact available about them — but this tier compiles no
+///    wrapper body and links nothing, so it catches only a rename or a removal.
 /// 4. Only when the API surface is genuinely empty (e.g. scaffolding before any Rust code exists)
 ///    does this fall back to asserting the module resolves at all — there is nothing else to
-///    assert against yet, and once real items exist this file is never regenerated over. ~keep
+///    assert against yet, and once real items exist this file is never regenerated over.
+///
+/// Every tier draws its candidate from `api` (the parsed Rust surface) and never from the
+/// generated `.zig` file's declaration list. That is why the Zig binding generator's synthetic
+/// helpers — `_last_error`, `_free_string`, `_first_error`, emitted directly as text by
+/// `backends::zig::gen_bindings::helpers` with no backing `FunctionDef` — can never be picked as
+/// the seed subject: they are structurally invisible here, not filtered out by name. ~keep
 fn scaffold_zig_test(api: &ApiSurface, config: &ResolvedCrateConfig, module_name: &str) -> String {
     let (exclude_functions, exclude_types) = zig_binding_exclusions(api, config);
     let function_is_visible = |f: &FunctionDef| !f.binding_excluded && !exclude_functions.contains(&f.name);
@@ -431,7 +451,7 @@ fn scaffold_zig_test(api: &ApiSurface, config: &ResolvedCrateConfig, module_name
     }
 
     if let Some(f) = api.functions.iter().find(|f| function_is_visible(f)) {
-        return import_line + &hasdecl_test(module_name, &f.name, "function");
+        return import_line + &symbol_reference_test(module_name, &f.name);
     }
 
     if let Some(t) = api
@@ -504,8 +524,58 @@ fn trivial_call_test(module_name: &str, f: &FunctionDef) -> String {
     )
 }
 
+/// Reference — but do not call — a visible function, for the (common) case where no function in
+/// the surface is safe to call generically.
+///
+/// `_ = &{module}.{fn};` needs no knowledge of the function's per-parameter ownership contract,
+/// which is exactly why it is synthesizable where a real call is not. It is strictly stronger
+/// than the comptime `@hasDecl` tier below it: taking the address of a function forces Zig to
+/// semantically analyse that function's body and to resolve the extern C symbol the body calls,
+/// so this tier fails on a link error or a wrapper-body type error, not merely on a rename.
+///
+/// Measured, not assumed — the html-to-markdown owner ran all three forms on Zig 0.16.0 with
+/// controls. Against a wrapper whose extern symbol did not exist in the compiled library:
+/// `@hasDecl` exited 0 ("All 1 tests passed"); `_ = &m.convert;` exited 1 with
+/// `undefined symbol: _htm_probe_definitely_missing_symbol ... referenced by _lib.convert`; and
+/// `_ = m.convert(1);` — the positive control — exited 1 with the same error. Against a type
+/// error in the wrapper body with no extern involved: `@hasDecl` exited 0, `_ = &m.convert;`
+/// exited 1 with `expected type '[]const u8', found 'c_int'`.
+///
+/// It cannot catch a C-level ABI change that preserves the symbol name; see the emitted comment,
+/// which states that limit in the generated file where a reader of a green run will actually
+/// encounter it. ~keep
+fn symbol_reference_test(module_name: &str, name: &str) -> String {
+    format!(
+        "// `{name}` isn't a zero-arg, primitive-returning function this seed can safely call\n\
+         // generically — its per-parameter allocator/ownership/JSON conversion contract is not\n\
+         // knowable here — so this *references* it rather than calling it. That is not a weaker\n\
+         // `@hasDecl`: taking the address forces Zig to semantically analyse the wrapper's body\n\
+         // and to resolve the extern C symbol that body calls, neither of which a comptime\n\
+         // `@hasDecl` does. Measured on Zig 0.16.0 with a deleted extern symbol: `@hasDecl` exits\n\
+         // 0 (\"All 1 tests passed\"); this line exits 1 with `undefined symbol: ... referenced\n\
+         // by ...`, matching a real call (the positive control). Same split for a type error in\n\
+         // the wrapper body with no extern involved.\n\
+         //\n\
+         // LIMIT — read this before trusting a green run. This proves the symbol EXISTS and the\n\
+         // wrapper typechecks. It does NOT prove the symbol is CORRECT. A C-level ABI change that\n\
+         // preserves the symbol name is invisible to it: the linker resolves by name and C\n\
+         // symbols carry no type information, so if the C signature changes and the generated Zig\n\
+         // `extern` declaration is regenerated to match it, both move together and nothing ever\n\
+         // disagrees. This closes \"the symbol does not exist\". It leaves \"the symbol lies\" wide\n\
+         // open. Create-only scaffold seed. ~keep\n\
+         test \"{module_name}.{name} symbol resolves\" {{\n    _ = &{module_name}.{name};\n}}\n",
+    )
+}
+
 /// Comptime `@hasDecl` existence check against `name` (a real declaration in the currently
-/// generated API surface), used when no function is safe to call generically.
+/// generated API surface). Used for types and enums, which — unlike functions — have no
+/// referenceable-as-value form (`&SomeType` is not valid Zig), so comptime existence is the
+/// strongest fact synthesizable about them.
+///
+/// This tier is deliberately the weakest one that still asserts something falsifiable. It
+/// compiles no wrapper body and links nothing, so it catches a rename or a removal and nothing
+/// else — a signature or ABI change that preserves the name passes it, and the symbol need not
+/// exist in the compiled library at all for the test to go green. ~keep
 fn hasdecl_test(module_name: &str, name: &str, kind: &str) -> String {
     format!(
         "// `{name}` isn't a zero-arg, primitive-returning function this seed can safely call\n\
@@ -618,10 +688,11 @@ sources = []
     }
 
     /// A function that isn't zero-arg-and-primitive-returning can't be called generically
-    /// (unknown allocator/ownership/JSON conversion needs), so this falls back to a comptime
-    /// `@hasDecl` existence check — still a real, falsifiable fact about the generated output.
+    /// (unknown allocator/ownership/JSON conversion needs), so it is *referenced* instead —
+    /// which still forces Zig to analyse the wrapper body and resolve its extern C symbol,
+    /// unlike the comptime `@hasDecl` tier below it. Pins the emitted line exactly.
     #[test]
-    fn falls_back_to_hasdecl_for_a_non_trivial_function() {
+    fn references_without_calling_a_function_that_fails_the_trivial_call_tier() {
         let api = ApiSurface {
             functions: vec![FunctionDef {
                 name: "greet".to_string(),
@@ -632,8 +703,134 @@ sources = []
         };
         let out = scaffold_zig_test(&api, &minimal_config(), "my_lib");
 
-        assert!(out.contains("if (!@hasDecl(my_lib, \"greet\"))"), "got:\n{out}");
-        assert!(out.contains("@compileError"), "got:\n{out}");
+        assert!(out.contains("test \"my_lib.greet symbol resolves\" {"), "got:\n{out}");
+        assert!(out.contains("\n    _ = &my_lib.greet;\n"), "got:\n{out}");
+        assert!(
+            !out.contains("my_lib.greet("),
+            "the reference tier must never synthesize a call, got:\n{out}"
+        );
+        assert!(
+            !out.contains("@hasDecl"),
+            "a visible function must not fall through to the weaker comptime tier, got:\n{out}"
+        );
+    }
+
+    /// The emitted comment must state the one thing this tier provably cannot catch. An
+    /// overclaiming comment is precisely how a green run gets misread as ABI verification,
+    /// so the honest limit is part of the contract, not decoration.
+    #[test]
+    fn reference_tier_documents_that_it_cannot_catch_an_abi_change() {
+        let api = ApiSurface {
+            functions: vec![FunctionDef {
+                name: "greet".to_string(),
+                return_type: TypeRef::String,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let out = scaffold_zig_test(&api, &minimal_config(), "my_lib");
+
+        assert!(out.contains("It does NOT prove the symbol is CORRECT."), "got:\n{out}");
+        assert!(
+            out.contains("A C-level ABI change that"),
+            "the limit must name the uncaught change class, got:\n{out}"
+        );
+        assert!(out.contains("~keep"), "got:\n{out}");
+    }
+
+    /// The T1 boundary is `matches!(return_type, TypeRef::Primitive(_))` — a *bare* primitive.
+    /// An optional-returning function is the real-world shape that falls through it (an
+    /// optional slice is what a fallible getter binding actually returns), and until now no
+    /// test pinned that boundary with anything but `TypeRef::String`. `Optional(Primitive)` is
+    /// the sharp case: it contains a primitive but is not one, so a `matches!` loosened to
+    /// look inside the `Box` would silently start synthesizing an uncallable call.
+    #[test]
+    fn an_optional_return_falls_through_the_trivial_call_tier() {
+        for return_type in [
+            TypeRef::Optional(Box::new(TypeRef::String)),
+            TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::Bool))),
+        ] {
+            let api = ApiSurface {
+                functions: vec![FunctionDef {
+                    name: "maybe_name".to_string(),
+                    return_type: return_type.clone(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            let out = scaffold_zig_test(&api, &minimal_config(), "my_lib");
+
+            assert!(
+                out.contains("\n    _ = &my_lib.maybe_name;\n"),
+                "{return_type:?} must fall through to the reference tier, got:\n{out}"
+            );
+            assert!(
+                !out.contains("my_lib.maybe_name()"),
+                "{return_type:?} is not a bare primitive and must never be called, got:\n{out}"
+            );
+        }
+    }
+
+    /// The Zig binding generator emits `_last_error`, `_free_string` and `_first_error` directly
+    /// as text (`backends::zig::gen_bindings::helpers`) with no backing `FunctionDef`, so they
+    /// exist as public declarations in the generated module but not in `ApiSurface`. Exclusion
+    /// from the seed is therefore structural — every tier draws only from `api` — rather than a
+    /// name filter that could be dropped. Pinned anyway: an implementation that ever picked its
+    /// subject by inspecting the generated module's declarations would seed a test that asserts
+    /// only against alef's own boilerplate and links nothing of the real surface, which is the
+    /// vacuous-green failure this whole seed exists to prevent. Checked on the empty surface
+    /// too, since that is the case where such an implementation would have nothing else to grab.
+    #[test]
+    fn never_seeds_against_the_synthetic_binding_helpers() {
+        let non_trivial = ApiSurface {
+            functions: vec![FunctionDef {
+                name: "greet".to_string(),
+                return_type: TypeRef::String,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        for api in [non_trivial, ApiSurface::default()] {
+            let out = scaffold_zig_test(&api, &minimal_config(), "my_lib");
+            for helper in ["_last_error", "_free_string", "_first_error"] {
+                assert!(
+                    !out.contains(helper),
+                    "synthetic helper `{helper}` must never be the seed subject, got:\n{out}"
+                );
+            }
+        }
+    }
+
+    /// The `@hasDecl` tier's defining weakness, pinned so nobody mistakes it for a link check:
+    /// it emits no call and no reference, so it compiles no wrapper body and asks the linker to
+    /// resolve nothing. The subject name appears only as a comptime string argument — never as
+    /// a field access on the module. Catches a rename or a removal, nothing more.
+    #[test]
+    fn hasdecl_tier_neither_calls_nor_references_its_subject() {
+        let api = ApiSurface {
+            types: vec![TypeDef {
+                name: "Widget".to_string(),
+                is_opaque: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let out = scaffold_zig_test(&api, &minimal_config(), "my_lib");
+
+        assert!(out.contains("if (!@hasDecl(my_lib, \"Widget\"))"), "got:\n{out}");
+        assert!(out.contains("comptime {"), "got:\n{out}");
+        assert!(
+            !out.contains("my_lib.Widget"),
+            "the comptime tier must not emit a field access, got:\n{out}"
+        );
+        assert!(
+            !out.contains("_ = &"),
+            "the comptime tier must not emit a symbol reference, got:\n{out}"
+        );
+        assert!(
+            !out.contains("Widget()"),
+            "the comptime tier must not emit a call, got:\n{out}"
+        );
     }
 
     /// `binding_excluded` functions were never emitted into the generated `.zig` file, so the
@@ -727,6 +924,69 @@ exclude_functions = ["ping"]
         assert!(out.contains("test \"module imports successfully\""), "got:\n{out}");
         assert!(out.contains("_ = my_lib;"), "got:\n{out}");
         assert!(!out.contains("@hasDecl"), "got:\n{out}");
+    }
+
+    fn build_zig_of(config: &ResolvedCrateConfig) -> String {
+        scaffold_zig(&ApiSurface::default(), config)
+            .expect("scaffold")
+            .into_iter()
+            .find(|f| f.path == PathBuf::from("packages/zig/build.zig"))
+            .expect("build.zig must be scaffolded")
+            .content
+    }
+
+    /// Regression for a real defect found in html-to-markdown: the `ffi_include_path` default
+    /// must come from `[crates.output] ffi`, never from a `{crate name}-ffi` template.
+    ///
+    /// This template *was* the derivation — `scaffold_zig` used a local
+    /// `format!("{}-ffi", config.name)` until it was switched to `config.ffi_crate_path()`,
+    /// which consults `[crates.output] ffi` first. The two agree only when the alef crate name
+    /// happens to equal the FFI crate's directory stem, and in two of the three consumer repos
+    /// it does not: html-to-markdown's crate is named `html-to-markdown-rs` while its FFI crate
+    /// is `crates/html-to-markdown-ffi`, and tree-sitter-language-pack's crate is named
+    /// `tree-sitter-language-pack` while its FFI crate is `crates/ts-pack-core-ffi`. Both repos
+    /// carry a hand commit fixing the emitted default, and html-to-markdown additionally carries
+    /// a `crates/html-to-markdown-rs-ffi/` directory holding nothing but a README — the tombstone
+    /// the bad default pointed at. This pins the fix against the html-to-markdown shape verbatim,
+    /// because the failure is silent: the path is only a default, so a build that overrides
+    /// `-Dffi_include_path=` never notices it is wrong. ~keep
+    #[test]
+    fn ffi_include_default_follows_configured_output_path_not_the_crate_name() {
+        let config = resolve_config(
+            r#"
+[workspace]
+languages = ["zig"]
+[[crates]]
+name = "html-to-markdown-rs"
+sources = []
+
+[crates.output]
+ffi = "crates/html-to-markdown-ffi/src/"
+"#,
+        );
+        let build_zig = build_zig_of(&config);
+
+        assert!(
+            build_zig.contains(") orelse \"../../crates/html-to-markdown-ffi/include\";"),
+            "got:\n{build_zig}"
+        );
+        assert!(
+            !build_zig.contains("html-to-markdown-rs-ffi"),
+            "the crate-name template must not leak back in, got:\n{build_zig}"
+        );
+    }
+
+    /// With no `[crates.output] ffi` configured there is nothing better to go on, so the
+    /// `crates/{name}-ffi` convention is the honest fallback — pinned so the fix above is
+    /// understood as a precedence change, not as removing the convention.
+    #[test]
+    fn ffi_include_default_falls_back_to_the_crate_name_convention_when_unconfigured() {
+        let build_zig = build_zig_of(&minimal_config());
+
+        assert!(
+            build_zig.contains(") orelse \"../../crates/my-lib-ffi/include\";"),
+            "got:\n{build_zig}"
+        );
     }
 
     /// A representative pre-fix `build.zig`: the library `module` and the `test_module`

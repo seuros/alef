@@ -140,11 +140,19 @@ impl E2eCodegen for PhpCodegen {
             });
         }
 
-        // Generate phpunit.xml.
+        // `generated_header: true` so `ensure_generated_header` actually runs and stamps
+        // provenance. Without it poly cannot recognise the file as generated, lints it as
+        // hand-written source, and then alef and poly fight over its bytes on every regen.
+        // The extension table was NOT the cause here — `marker_header_syntax` handles `.xml`
+        // (marker on line 1, after the `<?xml ?>` declaration); this callsite simply never
+        // asked for a header. Safe to flip specifically because e2e/test_apps files are
+        // written with `overwrite = true`, so `can_skip` is already false and this controls
+        // nothing but the header. Do NOT copy the flip to a `packages/**` file on that
+        // reasoning — those are create-once and flipping it there can freeze them. ~keep
         files.push(GeneratedFile {
             path: output_base.join("phpunit.xml"),
             content: project::render_phpunit_xml(),
-            generated_header: false,
+            generated_header: true,
         });
 
         // Check if any fixture needs a mock HTTP server (either http-shape or

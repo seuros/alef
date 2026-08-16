@@ -927,12 +927,25 @@ pub(super) fn render_test_function(
                     documentation_snippet,
                 );
                 out.push_str(&docs_setup);
+                // A `json_object` arg needs a type name to call the FFI `from_json` helper
+                // and produce a typed handle below. Silently skipping here used to leave
+                // `arg.name` out of `typed_arg_handles`, so `build_args_string_c` fell
+                // through to splicing the raw JSON literal as the argument expression
+                // (`c/assertions.rs`'s `parts.push(json_to_c(v))` fallback) — exactly the
+                // untyped-literal bug the `element_type` backfill exists to prevent. Fail
+                // generation loudly instead, matching the other "cannot render this" panics
+                // in this backend (see `build_args_string_c`'s `test_backend` arm). ~keep
                 let Some(type_name) = arg
                     .element_type
                     .as_deref()
                     .or_else(|| (!options_type_name.is_empty()).then_some(options_type_name))
                 else {
-                    continue;
+                    panic!(
+                        "C e2e generator: fixture `{}` declares a `json_object` arg `{}` with no resolvable type — \
+                         `element_type` is unset and no `options_type_name` fallback is configured; cannot construct \
+                         a typed `from_json` handle without knowing the target type",
+                        fixture.id, arg.name
+                    );
                 };
                 let type_snake = type_name.to_snake_case();
                 let handle = format!("{}_handle", sanitize_ident(&arg.name));

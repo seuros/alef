@@ -277,6 +277,18 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
         );
     }
 
+    // A fixture that declared at least one assertion but every one of them resolved
+    // to a "skipped" comment (all its fields are unavailable on the result type) is
+    // otherwise indistinguishable from a fixture with zero declared assertions — an
+    // entirely comment-only, vacuously-passing test body. `not_error` already emits
+    // a real `expect(...).toBeDefined()` (see `render_assertion`'s `not_error` arm),
+    // so this only fires on the remaining gap: real field assertions that all got
+    // dropped. TypeScript was the one backend in this defect class with no fallback
+    // of any kind for that case — mirror python/php's `apply_vacuous_assertion_fallback`.
+    // A fixture with genuinely zero declared assertions is left untouched, matching
+    // every other backend's deliberate "just call it" smoke-test contract. ~keep
+    apply_vacuous_assertion_fallback(&mut assertions_body, !fixture.assertions.is_empty(), is_streaming, result_var);
+
     // Whether the call's result is worth binding to `const result = ...` rather
     // than discarding with a bare `await callExpr();`. Derived from what
     // `assertions_body` actually contains (a real, non-comment line) instead of a
@@ -351,6 +363,33 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
     };
     let rendered = crate::e2e::template_env::render("typescript/test_function.jinja", ctx);
     out.push_str(&rendered);
+}
+
+/// When a fixture declares at least one assertion but the rendered body has no
+/// executable statement — every field assertion resolved to a "skipped" comment —
+/// inject a real assertion instead of leaving the test vacuous. `not_error`
+/// already renders a real `expect(...).toBeDefined()` on its own (see
+/// `render_assertion`'s `not_error` arm), so this only fires on the remaining
+/// gap: declared field assertions that all turned out unavailable. Fixtures that
+/// declare NO assertions at all are left untouched — a deliberate "just call it"
+/// smoke test, matching every other backend in this defect class. ~keep
+fn apply_vacuous_assertion_fallback(
+    assertions_body: &mut String,
+    has_declared_assertions: bool,
+    is_streaming: bool,
+    result_var: &str,
+) {
+    let has_real_assertion = assertions_body
+        .lines()
+        .any(|line| !line.trim().is_empty() && !line.trim().starts_with("//"));
+    if !has_declared_assertions || has_real_assertion {
+        return;
+    }
+    if is_streaming {
+        assertions_body.push_str("    expect(chunks).toBeDefined();\n");
+    } else {
+        assertions_body.push_str(&format!("    expect({result_var}).toBeDefined();\n"));
+    }
 }
 
 /// Check if a grammar has slow load times and needs extended timeout.

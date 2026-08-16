@@ -12,7 +12,9 @@ pub use languages::{
     PUBLISHED_RUNTIME_IDENTIFIERS, render_csharp_csproj, render_csharp_runtime_csproj,
     render_csharp_runtime_json_template,
 };
-pub(crate) use languages::migrate_build_zig_test_target;
+pub(crate) use languages::{
+    migrate_build_zig_test_target, migrate_dart_placeholder_test, migrate_swift_placeholder_test,
+};
 
 /// Fields available via `[workspace.package]` inheritance detected from the root `Cargo.toml`.
 #[derive(Debug, Default)]

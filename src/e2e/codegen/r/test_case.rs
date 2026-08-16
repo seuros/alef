@@ -199,6 +199,12 @@ pub(super) fn render_test_case(
     let assert_enum_fields = r_override
         .map(|o| &o.assert_enum_fields)
         .unwrap_or(&EMPTY_ASSERT_ENUM_FIELDS);
+    // `out` accumulates every fixture's rendered test case in this file (see the
+    // caller in `test_file.rs`), so the strict-availability scan below must only
+    // look at the text this fixture's own assertion loop appends — scanning the
+    // whole buffer would misattribute an earlier fixture's skip comment to this
+    // fixture's id. ~keep
+    let assertions_start = out.len();
     for assertion in &fixture.assertions {
         let context = assertions::RAssertionContext {
             field_resolver,
@@ -208,6 +214,14 @@ pub(super) fn render_test_case(
         };
         assertions::render_assertion(out, assertion, result_var, &context);
     }
+    apply_vacuous_assertion_fallback(
+        out,
+        assertions_start,
+        !fixture.assertions.is_empty(),
+        call_config.returns_void,
+        result_var,
+    );
+    crate::e2e::codegen::fail_on_unavailable_field_markers(&out[assertions_start..], "r", &fixture.id);
 
     // Emit teardown for trait-bridge tests to clean up registered test backends.
     for line in teardown_block.lines() {
@@ -215,6 +229,38 @@ pub(super) fn render_test_case(
     }
 
     let _ = writeln!(out, "}})");
+}
+
+/// When a fixture declares at least one assertion but the rendered body has no
+/// executable statement — every field assertion resolved to a "skipped: ..."
+/// comment because the field is unavailable on the result type — inject a
+/// real assertion instead of leaving the test vacuous. `not_error` already
+/// renders a real `expect_true(TRUE)` on its own (see
+/// `assertions::render_assertion`'s `not_error` arm), so this only fires on
+/// the remaining gap: declared field assertions that all turned out
+/// unavailable. Fixtures that declare NO assertions at all are left
+/// untouched — a deliberate "just call it" smoke test, matching every other
+/// backend in this defect class (mirrors typescript's
+/// `apply_vacuous_assertion_fallback`). `returns_void` calls never bind
+/// `result_var` (see the `invisible(...)` branch above), so this must never
+/// fire for them — referencing an unbound variable would not compile. ~keep
+fn apply_vacuous_assertion_fallback(
+    out: &mut String,
+    assertions_start: usize,
+    has_declared_assertions: bool,
+    returns_void: bool,
+    result_var: &str,
+) {
+    if returns_void || !has_declared_assertions {
+        return;
+    }
+    let has_real_assertion = out[assertions_start..]
+        .lines()
+        .any(|line| !line.trim().is_empty() && !line.trim().starts_with('#'));
+    if has_real_assertion {
+        return;
+    }
+    let _ = writeln!(out, "  expect_true(!is.null({result_var}))");
 }
 
 #[cfg(test)]
@@ -244,6 +290,86 @@ mod render_r_error_check_tests {
         assert!(
             check.contains("\"field\\\\.name\\\\[0\\\\]\""),
             "expected escaped regex literal, got: {check}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod vacuous_assertion_fallback_tests {
+    use super::render_test_case;
+    use crate::core::config::ResolvedCrateConfig;
+    use crate::e2e::config::E2eConfig;
+    use crate::e2e::fixture::{Assertion, Fixture};
+
+    /// A fixture whose sole assertion targets a field absent from
+    /// `result_fields` renders only a "skipped" comment for that assertion.
+    /// `apply_vacuous_assertion_fallback` must inject a real
+    /// `expect_true(!is.null(result))` so the generated `testthat` block is
+    /// never vacuously passing.
+    #[test]
+    fn dropped_field_assertion_still_gets_a_real_fallback_assertion() {
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.call.function = "process".to_string();
+        e2e_config.call.result_var = "result".to_string();
+        e2e_config.call.result_fields = std::collections::HashSet::from(["content".to_string()]);
+
+        let fixture = Fixture {
+            id: "process_smoke".to_string(),
+            description: "test".to_string(),
+            assertions: vec![Assertion {
+                assertion_type: "equals".to_string(),
+                field: Some("nonexistent_field".to_string()),
+                value: Some(serde_json::json!("x")),
+                ..Assertion::default()
+            }],
+            ..Fixture::default()
+        };
+
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+
+        let mut out = String::new();
+        render_test_case(&mut out, &fixture, &e2e_config, false, false, &config, &[]);
+
+        assert!(
+            out.contains("# skipped: field 'nonexistent_field' not available on result type"),
+            "expected the dropped assertion's skip comment, got:\n{out}"
+        );
+        assert!(
+            out.contains("expect_true(!is.null(result))"),
+            "expected a real fallback assertion on the discarded result, got:\n{out}"
+        );
+    }
+
+    /// Positive control for the same fix: a fixture with genuinely zero
+    /// declared assertions is left untouched (deliberate "just call it"
+    /// smoke test), matching every other backend in this defect class.
+    #[test]
+    fn zero_declared_assertions_are_left_untouched() {
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.call.function = "process".to_string();
+        e2e_config.call.result_var = "result".to_string();
+
+        let fixture = Fixture {
+            id: "process_smoke".to_string(),
+            description: "test".to_string(),
+            assertions: Vec::new(),
+            ..Fixture::default()
+        };
+
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+
+        let mut out = String::new();
+        render_test_case(&mut out, &fixture, &e2e_config, false, false, &config, &[]);
+
+        assert!(
+            !out.contains("expect_true(!is.null(result))"),
+            "a fixture with zero declared assertions must stay vacuous, got:\n{out}"
         );
     }
 }

@@ -3,6 +3,7 @@ use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::{EnumDef, FunctionDef, ParamDef, TypeDef, TypeRef};
 use crate::e2e::config::E2eConfig;
 use crate::e2e::fixture::Fixture;
+use anyhow::{Result, bail};
 
 use super::setup::build_args_and_setup;
 
@@ -57,7 +58,7 @@ pub(super) fn render_snippet_body(
     type_defs: &[TypeDef],
     enums: &[EnumDef],
     functions: &[FunctionDef],
-) -> String {
+) -> Result<String> {
     let lang = "go";
     let mut call = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
@@ -162,10 +163,21 @@ pub(super) fn render_snippet_body(
         true,
     );
     let mut configured_arg_count = recipe.args.len();
-    if let Some(visitor_spec) = &fixture.visitor
-        && let Some(options_type) =
+    if let Some(visitor_spec) = &fixture.visitor {
+        // Silently dropping the visitor here published a snippet that compiles but omits
+        // the one behaviour the fixture exists to demonstrate, under a heading that still
+        // promises it — a reader cannot tell that from a language that legitimately needs
+        // no visitor. Fail closed instead, matching `php::snippet` and `csharp::snippet`;
+        // a deliberate omission belongs in the fixture's `docs.coverage_exceptions`,
+        // which records a reader-visible reason. ~keep
+        let Some(options_type) =
             options_type.or_else(|| crate::e2e::codegen::recipe::trait_bridge_options_type(config))
-    {
+        else {
+            bail!(
+                "Go documentation snippet `{}` needs an options type for its visitor",
+                fixture.id
+            );
+        };
         let struct_name = super::visitors::visitor_struct_name(&fixture.id);
         let binding = super::visitors::resolve_go_visitor_binding(config, type_defs, visitor_spec, import_alias);
         let mut declaration = String::new();
@@ -288,7 +300,7 @@ pub(super) fn render_snippet_body(
         .map(|(path, alias)| minijinja::context! { path => path, alias => alias })
         .collect::<Vec<_>>();
 
-    crate::e2e::template_env::render(
+    Ok(crate::e2e::template_env::render(
         "go/snippet_body.jinja",
         minijinja::context! {
             imports => imports,
@@ -301,7 +313,7 @@ pub(super) fn render_snippet_body(
         },
     )
     .trim_end()
-    .to_string()
+    .to_string())
 }
 
 fn replace_go_options(args: &str) -> String {
@@ -396,7 +408,8 @@ mod tests {
             },
             ..E2eConfig::default()
         };
-        let body = render_snippet_body(&fixture(), &e2e, &ResolvedCrateConfig::default(), &[], &[], &[]);
+        let body = render_snippet_body(&fixture(), &e2e, &ResolvedCrateConfig::default(), &[], &[], &[])
+            .expect("snippet renders");
 
         assert!(body.contains("pkg \"github.com/example/library\""));
         let fmt_position = body.find("\"fmt\"").expect("fmt import");
@@ -414,7 +427,8 @@ mod tests {
         let mut e2e = E2eConfig::default();
         e2e.call.module = "example.com/sample".into();
         e2e.call.returns_result = true;
-        let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[], &[]);
+        let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[], &[])
+            .expect("snippet renders");
 
         assert!(body.contains("_, err := pkg."), "{body}");
         assert!(body.contains("var typedError pkg.Error"), "{body}");
@@ -437,7 +451,8 @@ mod tests {
         e2e.call.module = "github.com/example/library".into();
         e2e.call.returns_void = true;
 
-        let body = render_snippet_body(&fixture(), &e2e, &ResolvedCrateConfig::default(), &[], &[], &[]);
+        let body = render_snippet_body(&fixture(), &e2e, &ResolvedCrateConfig::default(), &[], &[], &[])
+            .expect("snippet renders");
 
         assert!(!body.contains("\"fmt\""), "{body}");
     }
@@ -447,7 +462,8 @@ mod tests {
         let mut e2e = E2eConfig::default();
         e2e.call.module = "example.com/sample".into();
 
-        let body = render_snippet_body(&fixture(), &e2e, &ResolvedCrateConfig::default(), &[], &[], &[]);
+        let body = render_snippet_body(&fixture(), &e2e, &ResolvedCrateConfig::default(), &[], &[], &[])
+            .expect("snippet renders");
 
         assert!(body.starts_with("package main\n\nimport (\n"), "{body}");
         assert!(!body.contains("package main import"), "{body}");
@@ -460,7 +476,8 @@ mod tests {
         e2e.call.function = "process".into();
         e2e.call.result_var = "result".into();
         e2e.call.returns_result = true;
-        let body = render_snippet_body(&fixture(), &e2e, &ResolvedCrateConfig::default(), &[], &[], &[]);
+        let body = render_snippet_body(&fixture(), &e2e, &ResolvedCrateConfig::default(), &[], &[], &[])
+            .expect("snippet renders");
         let Ok(mut child) = std::process::Command::new("gofmt")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -573,7 +590,8 @@ mod tests {
             ],
             &[],
             &[],
-        );
+        )
+        .expect("snippet renders");
 
         assert!(
             body.contains(
@@ -625,7 +643,8 @@ mod tests {
             }],
             &[],
             &[],
-        );
+        )
+        .expect("snippet renders");
 
         assert!(rendered.contains("&options"), "{rendered}");
         assert!(rendered.contains("fmt.Printf(\"%+v\\n\", result)"), "{rendered}");
@@ -682,7 +701,8 @@ mod tests {
             }],
             &[],
             &functions,
-        );
+        )
+        .expect("snippet renders");
 
         assert!(
             rendered.contains("&options"),
@@ -739,7 +759,8 @@ mod tests {
             }],
             &[],
             &functions,
-        );
+        )
+        .expect("snippet renders");
 
         assert!(
             !rendered.contains("&options"),
@@ -814,7 +835,8 @@ mod tests {
             }],
             &[],
             &functions,
-        );
+        )
+        .expect("snippet renders");
 
         assert!(rendered.contains("pkg.Convert("), "{rendered}");
         assert!(
@@ -823,6 +845,91 @@ mod tests {
              trailing `extra_args = [\"nil\"]` (sized for a different, visitor-accepting \
              overload) must be dropped rather than emitted as a third positional \
              argument: {rendered}"
+        );
+    }
+
+    fn visitor_fixture() -> Fixture {
+        let mut fixture = fixture();
+        fixture.id = "visitor_link_rewrite".into();
+        fixture.description = "Visitor rewrites links".into();
+        fixture.input = serde_json::json!({ "html": "<a href=\"a\">a</a>" });
+        fixture.visitor = serde_json::from_value(serde_json::json!({
+            "callbacks": {"visit_link": {"action": "skip"}}
+        }))
+        .expect("visitor spec");
+        fixture
+    }
+
+    fn visitor_e2e() -> E2eConfig {
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "convert".into();
+        e2e.call.module = "github.com/example/sample".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.args = vec![crate::e2e::config::ArgMapping {
+            name: "html".into(),
+            field: "html".into(),
+            arg_type: "string".into(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }];
+        e2e
+    }
+
+    fn bridge_config(options_type: Option<&str>) -> ResolvedCrateConfig {
+        ResolvedCrateConfig {
+            trait_bridges: vec![crate::core::config::TraitBridgeConfig {
+                trait_name: "HtmlVisitor".into(),
+                type_alias: Some("VisitorHandle".into()),
+                param_name: Some("visitor".into()),
+                options_type: options_type.map(str::to_string),
+                ..Default::default()
+            }],
+            ..ResolvedCrateConfig::default()
+        }
+    }
+
+    /// Regression: a visitor fixture with no resolvable options type used to fall through
+    /// the `if let` chain, publishing a snippet that compiles but silently omits the
+    /// visitor the fixture exists to demonstrate — while the docs page around it still
+    /// carries the fixture's visitor title. It must fail closed, matching PHP and C#. ~keep
+    #[test]
+    fn visitor_without_a_trait_bridge_options_type_fails_instead_of_dropping_the_visitor() {
+        let error = render_snippet_body(&visitor_fixture(), &visitor_e2e(), &bridge_config(None), &[], &[], &[])
+            .expect_err("a visitor with no options type must not render");
+
+        assert_eq!(
+            format!("{error}"),
+            "Go documentation snippet `visitor_link_rewrite` needs an options type for its visitor"
+        );
+    }
+
+    /// Positive control for the above: with the bridge's `options_type` configured, the
+    /// ordinary visitor path is unchanged and wires the visitor into the real type. ~keep
+    #[test]
+    fn visitor_with_a_trait_bridge_options_type_still_wires_the_visitor() {
+        let rendered = render_snippet_body(
+            &visitor_fixture(),
+            &visitor_e2e(),
+            &bridge_config(Some("ConversionOptions")),
+            &[],
+            &[],
+            &[],
+        )
+        .expect("snippet renders");
+
+        assert!(
+            rendered.contains("visitor := &testVisitorVisitorLinkRewrite{}"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("opts := &pkg.ConversionOptions{}"), "{rendered}");
+        assert!(rendered.contains("opts.Visitor = visitor"), "{rendered}");
+        assert!(
+            rendered.contains("type testVisitorVisitorLinkRewrite struct{"),
+            "{rendered}"
         );
     }
 }

@@ -66,7 +66,8 @@ fn snippet_body_declares_typed_error_by_value_not_by_pointer() {
     };
     let config = crate::core::config::ResolvedCrateConfig::default();
 
-    let body = super::snippet::render_snippet_body(&fixture, &e2e_config, &config, &[], &[], &[]);
+    let body =
+        super::snippet::render_snippet_body(&fixture, &e2e_config, &config, &[], &[], &[]).expect("snippet renders");
 
     assert!(body.contains("var typedError pkg.Error"), "{body}");
     assert!(!body.contains("var typedError *pkg.Error"), "{body}");
@@ -192,6 +193,102 @@ fn dropped_field_assertion_carries_the_marker_and_is_correctly_attributed_per_fi
         "the second fixture's own render must carry the skip marker, got:\n{}",
         &out[clean_len..]
     );
+}
+
+/// Regression test for alef task #81: a `!effective_returns_result && result_is_simple`
+/// function (no error return to check, plain non-error-returning signature) whose
+/// fixture's only declared assertion is `not_error` used to discard the call result
+/// to `_` and assert literally nothing — the one Go shape with no fallback of any
+/// kind, since the sibling branches (`returns_void`, `returns_result`) both still
+/// have a real `if err != nil { t.Fatalf(...) }` check to fall back on. It must now
+/// bind the result and assert non-nil instead of silently discarding it.
+#[test]
+fn declared_not_error_only_fixture_on_a_simple_errorless_call_still_gets_a_real_assertion() {
+    let e2e_config = E2eConfig {
+        call: CallConfig {
+            function: "normalize".to_string(),
+            module: "github.com/example/mylib".to_string(),
+            result_var: "result".to_string(),
+            returns_result: false,
+            result_is_simple: true,
+            ..CallConfig::default()
+        },
+        ..E2eConfig::default()
+    };
+    // `make_fixture` declares exactly one `not_error` assertion by default — the
+    // "declared but unusable here" case this fix targets.
+    let fixture = make_fixture("normalize_smoke");
+    let mut out = String::new();
+    let config = crate::core::config::ResolvedCrateConfig::default();
+    let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
+    let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
+    render_test_function(
+        &mut out,
+        &fixture,
+        GoTestFunctionContext {
+            import_alias: "sample_crate",
+            e2e_config: &e2e_config,
+            adapters: &[],
+            data_enum_names: &std::collections::HashSet::new(),
+            config: &config,
+            type_defs: &type_defs,
+            enums: &enums,
+        },
+    );
+
+    assert!(
+        !out.contains("_ = sample_crate.Normalize("),
+        "must bind the result instead of discarding it, got:\n{out}"
+    );
+    assert!(out.contains("result := sample_crate.Normalize("), "got:\n{out}");
+    assert!(
+        out.contains("if result == nil {") && out.contains("t.Fatalf(\"expected non-nil result\")"),
+        "expected a real non-nil fallback assertion, got:\n{out}"
+    );
+}
+
+/// Positive control for the same fix: a fixture with genuinely zero declared
+/// assertions is left exactly as before (deliberate smoke-test contract) — the
+/// result is still discarded, since there is nothing to fall back on behalf of.
+#[test]
+fn zero_declared_assertions_on_a_simple_errorless_call_still_discards_the_result() {
+    let e2e_config = E2eConfig {
+        call: CallConfig {
+            function: "normalize".to_string(),
+            module: "github.com/example/mylib".to_string(),
+            result_var: "result".to_string(),
+            returns_result: false,
+            result_is_simple: true,
+            ..CallConfig::default()
+        },
+        ..E2eConfig::default()
+    };
+    let mut fixture = make_fixture("normalize_smoke");
+    fixture.assertions = Vec::new();
+    let mut out = String::new();
+    let config = crate::core::config::ResolvedCrateConfig::default();
+    let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
+    let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
+    render_test_function(
+        &mut out,
+        &fixture,
+        GoTestFunctionContext {
+            import_alias: "sample_crate",
+            e2e_config: &e2e_config,
+            adapters: &[],
+            data_enum_names: &std::collections::HashSet::new(),
+            config: &config,
+            type_defs: &type_defs,
+            enums: &enums,
+        },
+    );
+
+    assert!(
+        out.contains("_ = sample_crate.Normalize("),
+        "a fixture with zero declared assertions is an intentional smoke test and must \
+         still discard the result, got:\n{out}"
+    );
+    assert!(!out.contains("t.Fatalf(\"expected non-nil result\")"), "got:\n{out}");
 }
 
 #[test]
@@ -1296,5 +1393,55 @@ fn not_empty_on_a_sized_field_still_uses_len() {
     assert!(
         out.contains("\tif len(result.Results[0].Content) == 0 {\n\t\tt.Errorf(\"expected non-empty value\")\n\t}\n"),
         "not_empty on a field with no numeric sibling assertion must still use len(); got:\n{out}"
+    );
+}
+
+/// Regression test for alef task #86: a `visitor` fixture whose options type resolves
+/// from neither `[e2e.call]` nor any `[[crates.trait_bridges]]` entry used to emit a
+/// `t.Skip("go: visitor fixture requires trait bridge options_type")` body. That reads
+/// as an author-intended skip in `go test` output but is really a config failure, so the
+/// emitted suite went green while exercising none of the visitor behavior it claimed.
+/// It must now fail at generation time, naming the fixture and the missing options type
+/// — mirroring `c/assertions.rs` and `kotlin/args.rs`, which already refuse to emit for
+/// an unresolvable trait bridge.
+#[test]
+#[should_panic(expected = "Go e2e generator: fixture `visitor_smoke` declares a `visitor`")]
+fn visitor_fixture_without_trait_bridge_options_type_fails_loudly_instead_of_emitting_a_skip() {
+    use crate::e2e::fixture::{CallbackAction, VisitorSpec};
+
+    let e2e_config = E2eConfig {
+        call: CallConfig {
+            function: "convert".to_string(),
+            module: "github.com/example/mylib".to_string(),
+            result_var: "result".to_string(),
+            ..CallConfig::default()
+        },
+        ..E2eConfig::default()
+    };
+
+    let mut fixture = make_fixture("visitor_smoke");
+    fixture.visitor = Some(VisitorSpec {
+        callbacks: [("visit_element".to_string(), CallbackAction::Skip)]
+            .into_iter()
+            .collect(),
+    });
+
+    let mut out = String::new();
+    // No `[[crates.trait_bridges]]` entries declared — nothing supplies an `options_type`.
+    let config = crate::core::config::ResolvedCrateConfig::default();
+    let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
+    let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
+    render_test_function(
+        &mut out,
+        &fixture,
+        GoTestFunctionContext {
+            import_alias: "sample_crate",
+            e2e_config: &e2e_config,
+            adapters: &[],
+            data_enum_names: &std::collections::HashSet::new(),
+            config: &config,
+            type_defs: &type_defs,
+            enums: &enums,
+        },
     );
 }

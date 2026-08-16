@@ -1115,3 +1115,168 @@ fn escape_js_regex_literal_escapes_metacharacters_and_delimiter() {
         r"line1\nline2\ttab\rcr"
     );
 }
+
+/// Regression test for alef task #81: TypeScript's "skipped: field not available" comment
+/// must carry the exact marker text the shared `fail_on_unavailable_field_markers`
+/// mechanism (src/e2e/codegen/mod.rs) matches on, so arming
+/// `ALEF_E2E_STRICT_FIELD_AVAILABILITY` turns a dropped field assertion into a
+/// generation-time failure. The arming behaviour itself is proven in `mod.rs`'s
+/// `unavailable_field_marker_tests`; this test only pins the marker text TypeScript emits
+/// through the real per-fixture rendering entry point (`render_test_file`), which also
+/// covers wasm since `wasm.rs` delegates to this same function. ~keep
+#[test]
+fn dropped_field_assertion_carries_the_marker_that_arms_the_strict_mode() {
+    let mut e2e_config = crate::e2e::config::E2eConfig::default();
+    e2e_config.call.function = "process".to_string();
+    e2e_config.call.result_var = "result".to_string();
+    e2e_config.call.result_fields = std::collections::HashSet::from(["content".to_string()]);
+    e2e_config.call.returns_result = true;
+
+    let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
+        id: "process_smoke".to_string(),
+        description: "test".to_string(),
+        input: serde_json::Value::Null,
+        assertions: vec![crate::e2e::fixture::Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("nonexistent_field".to_string()),
+            value: Some(serde_json::json!("x")),
+            values: None,
+            method: None,
+            check: None,
+            args: None,
+            return_type: None,
+        }],
+        ..Default::default()
+    };
+
+    let config = crate::core::config::ResolvedCrateConfig::default();
+
+    let output = render_test_file(
+        "typescript",
+        "smoke",
+        &[&fixture],
+        "",
+        "@test/pkg",
+        "process",
+        &[],
+        None,
+        None,
+        &e2e_config,
+        &[],
+        &[],
+        "",
+        &config,
+    );
+
+    assert!(
+        output.contains("field 'nonexistent_field' not available on result type"),
+        "got:\n{output}"
+    );
+}
+
+/// Regression test for alef task #81: TypeScript had no vacuous-test fallback of
+/// any kind — a fixture whose sole declared assertion resolved to a "skipped"
+/// comment (its field is unavailable on the result type) produced an entirely
+/// comment-only, vacuously-passing test body. It must now get a real fallback
+/// assertion, matching python/php's `apply_vacuous_assertion_fallback`.
+#[test]
+fn dropped_field_assertion_still_gets_a_real_fallback_assertion() {
+    let mut e2e_config = crate::e2e::config::E2eConfig::default();
+    e2e_config.call.function = "process".to_string();
+    e2e_config.call.result_var = "result".to_string();
+    e2e_config.call.result_fields = std::collections::HashSet::from(["content".to_string()]);
+    e2e_config.call.returns_result = true;
+
+    let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
+        id: "process_smoke".to_string(),
+        description: "test".to_string(),
+        input: serde_json::Value::Null,
+        assertions: vec![crate::e2e::fixture::Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("nonexistent_field".to_string()),
+            value: Some(serde_json::json!("x")),
+            values: None,
+            method: None,
+            check: None,
+            args: None,
+            return_type: None,
+        }],
+        ..Default::default()
+    };
+
+    let config = crate::core::config::ResolvedCrateConfig::default();
+
+    let output = render_test_file(
+        "typescript",
+        "smoke",
+        &[&fixture],
+        "",
+        "@test/pkg",
+        "process",
+        &[],
+        None,
+        None,
+        &e2e_config,
+        &[],
+        &[],
+        "",
+        &config,
+    );
+
+    assert!(
+        output.contains("expect(result).toBeDefined();"),
+        "expected a real fallback assertion on the discarded result, got:\n{output}"
+    );
+    assert!(
+        output.contains("const result ="),
+        "the result must be bound once a real assertion references it, got:\n{output}"
+    );
+}
+
+/// Positive control for the same fix: a fixture with genuinely zero declared
+/// assertions is left untouched (deliberate "just call it" smoke test).
+#[test]
+fn zero_declared_assertions_are_left_untouched() {
+    let mut e2e_config = crate::e2e::config::E2eConfig::default();
+    e2e_config.call.function = "process".to_string();
+    e2e_config.call.result_var = "result".to_string();
+    e2e_config.call.returns_result = true;
+
+    let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
+        id: "process_smoke".to_string(),
+        description: "test".to_string(),
+        input: serde_json::Value::Null,
+        assertions: Vec::new(),
+        ..Default::default()
+    };
+
+    let config = crate::core::config::ResolvedCrateConfig::default();
+
+    let output = render_test_file(
+        "typescript",
+        "smoke",
+        &[&fixture],
+        "",
+        "@test/pkg",
+        "process",
+        &[],
+        None,
+        None,
+        &e2e_config,
+        &[],
+        &[],
+        "",
+        &config,
+    );
+
+    assert!(
+        !output.contains("expect(result).toBeDefined();"),
+        "a fixture with zero declared assertions must stay vacuous, got:\n{output}"
+    );
+}

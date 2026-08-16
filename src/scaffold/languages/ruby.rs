@@ -1,11 +1,12 @@
 use crate::core::backend::GeneratedFile;
 use crate::core::config::{Language, ResolvedCrateConfig};
-use crate::core::ir::ApiSurface;
+use crate::core::ir::{ApiSurface, FieldDef, FunctionDef, PrimitiveType, TypeDef, TypeRef};
 use crate::core::template_versions as tv;
 use crate::{
     scaffold::cargo_package_header, scaffold::core_dep_features, scaffold::detect_workspace_inheritance,
     scaffold::render_extra_deps, scaffold::scaffold_meta,
 };
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 pub(crate) fn scaffold_ruby_cargo(
@@ -499,5 +500,875 @@ end
             ),
             generated_header: false,
         },
+        // Appended last, deliberately: `test_scaffold_ruby_production_features` in
+        // `src/scaffold/tests/ffi_go_java_ruby.rs` asserts this vec's entries by index, so
+        // inserting the seed next to the `Rakefile` it belongs with would renumber every
+        // later assertion. Appending still shifts one: the `Language::Ruby` scaffold arm
+        // extends `scaffold_ruby_cargo`'s manifest onto the tail, so that manifest moves from
+        // index 6 to 7 while every entry before the seed keeps its position.
+        //
+        // The `Rakefile` above unconditionally wires `RSpec::Core::RakeTask.new(:spec)` and
+        // `task default: :spec`, so `rake` has always *run* a spec suite — against a `spec/`
+        // directory nothing ever created. `rake spec` over an empty suite exits 0, so the
+        // lane reported green while proving nothing; this seeds one real example so the
+        // wiring has something to execute from day one. ~keep
+        GeneratedFile {
+            path: PathBuf::from(format!("{pkg_dir}/spec/{gem_name_snake}_spec.rb")),
+            content: scaffold_ruby_spec(api, config, &gem_name_snake),
+            generated_header: false,
+        },
     ])
+}
+
+/// Literal value the seed passes for a String field, and asserts back out of the accessor.
+const RUBY_SEED_STRING_LITERAL: &str = "alef-scaffold";
+
+/// Build the seed content for `{pkg_dir}/spec/{gem_name_snake}_spec.rb`.
+///
+/// `write_scaffold_files_report` skips any `generated_header: false` path that already
+/// exists (`can_skip`), so this only ever seeds a fresh project and never overwrites a real
+/// suite. Because the path is *new*, existing repos pick the seed up with no migration at all
+/// — unlike the zig/dart/swift seeds, whose files already existed with the wrong content and
+/// each needed an in-place repair pass to reach a repo that had already been generated once.
+///
+/// "Pick it up" means the next run of a command that actually writes scaffold output: `alef
+/// scaffold`, `alef all`, or `alef init`. Plain `alef generate` does not — it calls
+/// `pipeline::scaffold` only to feed `reconcile_managed_scaffold_manifests`, which filters the
+/// set down to `generated_header: true` `.toml` manifests and drops every seed on the floor.
+/// That is pre-existing behaviour for every scaffold seed, not something this path introduces,
+/// but it is the difference between "next generate" and "next scaffold" and is worth knowing
+/// before wondering why the file has not appeared. ~keep
+///
+/// The seed must not be vacuous: `expect(1).to eq(1)` passes no matter what alef generated,
+/// which is strictly worse than an empty lane because it manufactures confidence. Every tier
+/// below therefore asserts against the *real*, currently-generated API surface, and every
+/// tier — including the weakest — goes through `require_relative "../lib/<gem>"`, which loads
+/// `lib/<gem>/native.rb`; that file raises `LoadError` when the compiled extension is absent.
+/// So no tier can pass without the native extension actually being built and dlopened. That
+/// is the deliberate difference from `scaffold_zig_test`'s `@hasDecl` tier, which is
+/// comptime-only and therefore never links or invokes anything (alef task #85).
+///
+/// Tiers, strongest first:
+///
+/// 1. A visible zero-parameter, non-async function with a primitive/`String` return whose
+///    generated wrapper really delegates to the core crate is actually **called** through the
+///    Magnus boundary and its result type-checked; an infallible one is preferred over a
+///    fallible one. Proves: extension links, the module function is registered under that
+///    name, and its return value converts to the mapped Ruby type. Does not prove: anything
+///    about the value's semantics — the seed cannot know what the function should return.
+/// 2. Otherwise a visible DTO whose every binding-visible field is a plain
+///    primitive/`String` is **constructed** through the generated kwargs constructor and
+///    every field read back through its generated accessor. Proves: the class is registered,
+///    the constructor accepts those keyword symbols, and each accessor round-trips the value
+///    it was given (a renamed or dropped field fails, because the constructor silently
+///    ignores unknown keys and the accessor would return the default instead). Does not
+///    prove: any behaviour beyond field storage.
+/// 3. Otherwise a visible type name is resolved as a constant on the module. Proves: the
+///    extension loaded and registered that class. Does not prove: its shape or that anything
+///    can be called on it.
+/// 4. Only when no visible function or type exists at all (scaffolding before any Rust code)
+///    does this fall back to asserting `VERSION` — always emitted by `generate_public_api` —
+///    has a version-like shape. Proves: the gem and the native extension both load. Does not
+///    prove: any generated API exists, because at this point none does.
+///
+/// Enums are deliberately absent from the ladder: the Magnus backend does not register them
+/// as Ruby constants (see the note above `public_types` in `MagnusBackend::generate_public_api`),
+/// so a `LiterLlm::SomeEnum` reference would name something that does not exist. ~keep
+fn scaffold_ruby_spec(api: &ApiSurface, config: &ResolvedCrateConfig, gem_name_snake: &str) -> String {
+    use heck::ToUpperCamelCase as _;
+
+    // `get_module_name(&config.ruby_gem_name())` in `MagnusBackend::generate_public_api` — the
+    // module the generated `lib/<gem>.rb` opens and the native extension registers into. ~keep
+    let module_name = config.ruby_gem_name().to_upper_camel_case();
+    let (exclude_functions, exclude_types) = ruby_binding_exclusions(api, config);
+
+    let call_candidates: Vec<(&FunctionDef, &'static str)> = api
+        .functions
+        .iter()
+        .filter(|f| ruby_function_is_callable_seed_target(f, config, &exclude_functions))
+        .filter_map(|f| ruby_return_expectation(&f.return_type).map(|expectation| (f, expectation)))
+        .collect();
+    // Infallible first: a fallible function's generated wrapper propagates a core `Err` as a
+    // raised Ruby exception, and a function that legitimately fails in a clean checkout (no
+    // network, no model downloaded, no GPU) would make the seed permanently red on a healthy
+    // build — a false alarm is only marginally better than the vacuous pass this replaces. A
+    // fallible function is still used when it is the only candidate: an example that can fail
+    // for a real reason beats degrading to a weaker tier. ~keep
+    let call_candidate = call_candidates
+        .iter()
+        .find(|(f, _)| f.error_type.is_none())
+        .or_else(|| call_candidates.first())
+        .copied();
+    if let Some((f, expectation)) = call_candidate {
+        return ruby_spec(gem_name_snake, &module_name, &ruby_call_example(&f.name, expectation));
+    }
+
+    let construct_candidate = api
+        .types
+        .iter()
+        .filter(|t| ruby_type_is_visible(t, &exclude_types))
+        .find_map(|t| simple_ruby_fields(t).map(|fields| (t, fields)));
+    if let Some((ty, fields)) = construct_candidate {
+        return ruby_spec(gem_name_snake, &module_name, &ruby_construct_example(&ty.name, &fields));
+    }
+
+    if let Some(ty) = api.types.iter().find(|t| ruby_type_is_visible(t, &exclude_types)) {
+        return ruby_spec(gem_name_snake, &module_name, &ruby_constant_example(&ty.name));
+    }
+
+    ruby_spec(gem_name_snake, &module_name, &ruby_version_example())
+}
+
+/// Names excluded from Ruby binding generation, mirroring the union `MagnusBackend` itself
+/// computes (`src/backends/magnus/gen_bindings/mod.rs`): `[crates.ruby] exclude_functions` /
+/// `exclude_types`, plus any type marked `binding_excluded`. Unlike the zig and dart seeds
+/// this deliberately does **not** fold in `[crates.ffi]`'s lists — the Magnus backend reads
+/// only `config.ruby`, and mirroring an exclusion it does not honour would make the seed skip
+/// a name that really is emitted. `is_reserved_fn` is not mirrored either: its backing list
+/// (`MAGNUS_RESERVED_FN_NAMES`) is currently empty, so mirroring it would be dead code.
+fn ruby_binding_exclusions(api: &ApiSurface, config: &ResolvedCrateConfig) -> (HashSet<String>, HashSet<String>) {
+    let exclude_functions: HashSet<String> = config
+        .ruby
+        .as_ref()
+        .map(|c| c.exclude_functions.iter().cloned().collect())
+        .unwrap_or_default();
+    let mut exclude_types: HashSet<String> = config
+        .ruby
+        .as_ref()
+        .map(|c| c.exclude_types.iter().cloned().collect())
+        .unwrap_or_default();
+    exclude_types.extend(api.types.iter().filter(|t| t.binding_excluded).map(|t| t.name.clone()));
+    (exclude_functions, exclude_types)
+}
+
+/// A type the seed may safely name, mirroring the `public_types` filter in
+/// `MagnusBackend::generate_public_api` — that curated list is what a gem whose module name
+/// differs from its crate name re-exports, so anything outside it may be absent from the
+/// module the spec describes. `cfg`-gated types are additionally skipped: the Magnus backend
+/// prepends `#[cfg(...)]` to them, so whether they are registered depends on which features
+/// the extension was compiled with, which this scaffold-time seed cannot know.
+fn ruby_type_is_visible(ty: &TypeDef, exclude_types: &HashSet<String>) -> bool {
+    !ty.is_trait
+        && !ty.is_opaque
+        && !ty.binding_excluded
+        && ty.cfg.is_none()
+        && !exclude_types.contains(&ty.name)
+        && !ty.name.ends_with("Update")
+        && !ty.name.ends_with("Builder")
+}
+
+/// Whether `f` is safe for the strongest tier: a zero-argument, non-async, non-`cfg`-gated
+/// function the seed can call with no knowledge of any parameter's ownership or conversion
+/// requirements. The return type is checked separately by the caller, via
+/// [`ruby_return_expectation`].
+///
+/// Async functions are excluded even when they take no arguments: Magnus registers them under
+/// a different Rust body (`ruby_native_function_name` appends `_async`) that drives a Tokio
+/// runtime, which is not something a scaffold seed should be the first thing to exercise.
+/// Trait-bridge-managed functions are excluded because `module_init` skips registering them
+/// outright. Functions whose Ruby-visible name (`ruby_public_function_name`, the leaf of
+/// `original_rust_path`) differs from `name` are excluded too: the native extension registers
+/// the leaf while `generate_public_api`'s re-export list uses `name`, so only functions where
+/// the two agree are reachable under one name in both layouts.
+///
+/// The delegability check is the load-bearing one, not a formality. When
+/// [`crate::codegen::shared::can_auto_delegate_function`] is false, the Magnus wrapper
+/// generator (`gen_magnus_unimplemented_body`) emits a body that *raises* `RuntimeError:
+/// Not implemented: <name>` for a fallible function — the symbol is registered and callable,
+/// so nothing here would notice, and the seed would be permanently red on a perfectly healthy
+/// build. Passing an empty opaque-type set is exact rather than approximate: every remaining
+/// term of that predicate ranges over `params`, which this function has already constrained to
+/// be empty, leaving only `!sanitized` and the return type. ~keep
+fn ruby_function_is_callable_seed_target(
+    f: &FunctionDef,
+    config: &ResolvedCrateConfig,
+    exclude_functions: &HashSet<String>,
+) -> bool {
+    !f.binding_excluded
+        && !exclude_functions.contains(&f.name)
+        && f.cfg.is_none()
+        && !f.is_async
+        && f.params.is_empty()
+        && !f.return_sanitized
+        && crate::codegen::shared::can_auto_delegate_function(f, &ahash::AHashSet::default())
+        && crate::backends::magnus::ruby_public_function_name(f) == f.name
+        && !crate::codegen::generators::trait_bridge::is_trait_bridge_managed_fn(&f.name, &config.trait_bridges)
+}
+
+/// The RSpec matcher asserting that a returned value has the Ruby type the Magnus type map
+/// produces for `ty`, or `None` when the return type is not one this seed can type-check.
+fn ruby_return_expectation(ty: &TypeRef) -> Option<&'static str> {
+    match ty {
+        TypeRef::String => Some("be_a(String)"),
+        TypeRef::Primitive(primitive) => Some(ruby_primitive_expectation(primitive)),
+        _ => None,
+    }
+}
+
+fn ruby_primitive_expectation(primitive: &PrimitiveType) -> &'static str {
+    match primitive {
+        PrimitiveType::Bool => "be(true).or be(false)",
+        PrimitiveType::F32 | PrimitiveType::F64 => "be_a(Float)",
+        _ => "be_a(Integer)",
+    }
+}
+
+/// A field simple enough for the seed to both pass as a constructor keyword and assert back
+/// out of its accessor.
+struct SimpleRubyField {
+    name: String,
+    literal: String,
+}
+
+/// Compute a literal-constructible field list for `ty`, or `None` when any binding-visible
+/// field falls outside the safely synthesizable subset. Bails on the *whole type* rather than
+/// constructing it partially: a `Named` field with no default makes the generated constructor
+/// raise `ArgumentError`, so a partial construction would fail at runtime rather than assert
+/// anything.
+///
+/// Rejected: optional fields (the accessor returns `nil` semantics this seed would have to
+/// model), `cfg`-gated fields, `binding_excluded` fields (dropped from the generated struct),
+/// and anything whose name is not plain snake_case — the Ruby accessor and the constructor's
+/// keyword symbol are both the raw Rust field name, so a positional name like `_0` would
+/// produce an example naming a method that reads nothing.
+fn simple_ruby_fields(ty: &TypeDef) -> Option<Vec<SimpleRubyField>> {
+    if ty.has_stripped_cfg_fields {
+        return None;
+    }
+    let mut fields = Vec::new();
+    for field in crate::codegen::shared::binding_fields(&ty.fields) {
+        if field.optional || field.cfg.is_some() || !is_plain_ruby_field_name(field) {
+            return None;
+        }
+        let literal = match &field.ty {
+            TypeRef::Primitive(primitive) => ruby_primitive_literal(primitive).to_string(),
+            TypeRef::String => format!("\"{RUBY_SEED_STRING_LITERAL}\""),
+            _ => return None,
+        };
+        fields.push(SimpleRubyField {
+            name: field.name.clone(),
+            literal,
+        });
+    }
+    if fields.is_empty() { None } else { Some(fields) }
+}
+
+fn is_plain_ruby_field_name(field: &FieldDef) -> bool {
+    let mut chars = field.name.chars();
+    chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// A literal Ruby value for a primitive field. `bool` gets a non-default `true` and floats a
+/// non-integral `1.5` so a constructor that silently drops the keyword and falls back to the
+/// field's default is still caught by the accessor assertion.
+fn ruby_primitive_literal(primitive: &PrimitiveType) -> &'static str {
+    match primitive {
+        PrimitiveType::Bool => "true",
+        PrimitiveType::F32 | PrimitiveType::F64 => "1.5",
+        _ => "1",
+    }
+}
+
+/// Wrap one generated example in the spec file's frame. `require_relative` (rather than
+/// `require`) is deliberate: it resolves against the package directory, so `rake spec` works
+/// straight out of a fresh scaffold without a `spec_helper.rb` or a `$LOAD_PATH` entry.
+fn ruby_spec(gem_name_snake: &str, module_name: &str, example: &str) -> String {
+    format!(
+        r#"# frozen_string_literal: true
+
+require_relative "../lib/{gem_name_snake}"
+
+RSpec.describe {module_name} do
+{example}end
+"#
+    )
+}
+
+fn ruby_call_example(function_name: &str, expectation: &str) -> String {
+    format!(
+        r#"  # Calls the generated `{function_name}` module function end-to-end. The
+  # `require_relative` above loads the gem, whose `native.rb` dlopens the compiled
+  # extension and raises LoadError when it is missing, so this example crosses the real
+  # Magnus boundary: it fails on an unbuilt extension, a link error, or a removed or
+  # renamed export. It does not assert *what* the value should be -- only that the
+  # binding returns a value of the mapped Ruby type. Create-only scaffold seed: alef never
+  # regenerates over this file, so replace it with a real suite. ~keep
+  it "calls the generated `{function_name}` module function" do
+    expect(described_class.{function_name}).to {expectation}
+  end
+"#
+    )
+}
+
+fn ruby_construct_example(type_name: &str, fields: &[SimpleRubyField]) -> String {
+    let kwargs = fields
+        .iter()
+        .map(|f| format!("{}: {}", f.name, f.literal))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let assertion = if let [only] = fields {
+        format!(
+            "    expect(instance.{name}).to eq({literal})",
+            name = only.name,
+            literal = only.literal
+        )
+    } else {
+        // One expectation over every field rather than one per field: the generated
+        // `.rubocop.yml` caps `RSpec/MultipleExpectations` at 25, and a DTO can carry more
+        // fields than that. ~keep
+        let readers = fields
+            .iter()
+            .map(|f| format!("instance.{}", f.name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let literals = fields.iter().map(|f| f.literal.clone()).collect::<Vec<_>>().join(", ");
+        format!("    expect([{readers}]).to eq([{literals}])")
+    };
+    format!(
+        r#"  # No generated function is safe to call with no arguments, so this exercises the
+  # binding through the generated `{type_name}` class instead: the `require_relative`
+  # above dlopens the compiled extension (LoadError when missing), the keyword
+  # constructor registered by Magnus is invoked, and every field is read back through its
+  # generated accessor. A dropped or renamed field fails here, because the constructor
+  # ignores unknown keys and the accessor would return the field's default instead of the
+  # value passed in. It proves nothing beyond field storage. Create-only scaffold seed:
+  # alef never regenerates over this file, so replace it with a real suite. ~keep
+  it "constructs the generated `{type_name}` class from keyword arguments" do
+    instance = described_class::{type_name}.new({kwargs})
+{assertion}
+  end
+"#
+    )
+}
+
+fn ruby_constant_example(type_name: &str) -> String {
+    format!(
+        r#"  # `{type_name}` is not literal-constructible by a seed that cannot synthesize values
+  # for its fields, so this only resolves it as a constant on the module. The
+  # `require_relative` above still dlopens the compiled extension (LoadError when
+  # missing) and the constant only exists because the extension registered the class, so
+  # this fails on an unbuilt extension or a removed type -- but it proves nothing about
+  # the class's shape and calls nothing on it. Create-only scaffold seed: alef never
+  # regenerates over this file, so replace it with a real suite. ~keep
+  it "registers the generated `{type_name}` class on the module" do
+    expect(described_class.const_get(:{type_name})).to be_a(Module)
+  end
+"#
+    )
+}
+
+fn ruby_version_example() -> String {
+    r#"  # No generated API surface exists yet for this crate, so there is nothing to assert
+  # against beyond the gem loading. `VERSION` is emitted unconditionally by alef, and the
+  # `require_relative` above pulls in `native.rb`, which raises LoadError when the compiled
+  # extension is missing -- so this still fails on an unbuilt or unlinkable extension. It
+  # proves no generated API exists, because at this point none does. The version is matched
+  # by shape, not value, because this file is a create-only scaffold seed alef never
+  # regenerates over -- pinning the exact version would break on the next release. ~keep
+  it "loads the native extension and exposes a version" do
+    expect(described_class::VERSION).to match(/\A\d+\.\d+\.\d+/)
+  end
+"#
+    .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::config::NewAlefConfig;
+
+    fn resolve_config(toml_text: &str) -> ResolvedCrateConfig {
+        let cfg: NewAlefConfig = toml::from_str(toml_text).expect("valid config");
+        cfg.resolve().expect("resolve").remove(0)
+    }
+
+    fn minimal_config() -> ResolvedCrateConfig {
+        resolve_config(
+            r#"
+[workspace]
+languages = ["ruby"]
+[[crates]]
+name = "my-lib"
+sources = []
+"#,
+        )
+    }
+
+    fn zero_arg_function(name: &str, return_type: TypeRef) -> FunctionDef {
+        FunctionDef {
+            name: name.to_string(),
+            return_type,
+            ..Default::default()
+        }
+    }
+
+    fn simple_field(name: &str, ty: TypeRef) -> FieldDef {
+        FieldDef {
+            name: name.to_string(),
+            ty,
+            ..Default::default()
+        }
+    }
+
+    fn dto(name: &str, fields: Vec<FieldDef>) -> TypeDef {
+        TypeDef {
+            name: name.to_string(),
+            fields,
+            ..Default::default()
+        }
+    }
+
+    /// The strongest tier: a visible zero-arg, primitive-returning function is actually
+    /// invoked across the Magnus boundary, not merely named.
+    #[test]
+    fn calls_a_visible_zero_argument_function() {
+        let api = ApiSurface {
+            functions: vec![zero_arg_function("ping", TypeRef::Primitive(PrimitiveType::Bool))],
+            ..Default::default()
+        };
+        let out = scaffold_ruby_spec(&api, &minimal_config(), "my_lib");
+
+        assert!(out.starts_with("# frozen_string_literal: true\n"), "got:\n{out}");
+        assert!(out.contains("require_relative \"../lib/my_lib\"\n"), "got:\n{out}");
+        assert!(out.contains("RSpec.describe MyLib do\n"), "got:\n{out}");
+        assert!(
+            out.contains("    expect(described_class.ping).to be(true).or be(false)\n"),
+            "got:\n{out}"
+        );
+    }
+
+    /// The matcher must follow the Magnus type map, not a generic truthiness check.
+    #[test]
+    fn matches_the_returned_ruby_type_for_each_return_kind() {
+        let cases = [
+            (TypeRef::String, "expect(described_class.probe).to be_a(String)"),
+            (
+                TypeRef::Primitive(PrimitiveType::U64),
+                "expect(described_class.probe).to be_a(Integer)",
+            ),
+            (
+                TypeRef::Primitive(PrimitiveType::F64),
+                "expect(described_class.probe).to be_a(Float)",
+            ),
+        ];
+        for (return_type, expected) in cases {
+            let api = ApiSurface {
+                functions: vec![zero_arg_function("probe", return_type)],
+                ..Default::default()
+            };
+            let out = scaffold_ruby_spec(&api, &minimal_config(), "my_lib");
+            assert!(out.contains(expected), "expected `{expected}`, got:\n{out}");
+        }
+    }
+
+    /// A function taking parameters cannot be called generically (unknown ownership and
+    /// conversion needs per parameter), so the ladder must degrade instead of guessing.
+    #[test]
+    fn skips_functions_that_take_parameters() {
+        let api = ApiSurface {
+            functions: vec![FunctionDef {
+                params: vec![crate::core::ir::ParamDef {
+                    name: "input".to_string(),
+                    ty: TypeRef::String,
+                    ..Default::default()
+                }],
+                ..zero_arg_function("greet", TypeRef::String)
+            }],
+            types: vec![dto("Widget", vec![simple_field("label", TypeRef::String)])],
+            ..Default::default()
+        };
+        let out = scaffold_ruby_spec(&api, &minimal_config(), "my_lib");
+
+        assert!(!out.contains("greet"), "got:\n{out}");
+        assert!(
+            out.contains("described_class::Widget.new(label: \"alef-scaffold\")"),
+            "got:\n{out}"
+        );
+    }
+
+    /// Async functions run through a Tokio runtime under a differently-named Rust body; the
+    /// seed must not be the first thing to exercise that path.
+    #[test]
+    fn skips_async_functions() {
+        let api = ApiSurface {
+            functions: vec![FunctionDef {
+                is_async: true,
+                ..zero_arg_function("fetch", TypeRef::String)
+            }],
+            ..Default::default()
+        };
+        let out = scaffold_ruby_spec(&api, &minimal_config(), "my_lib");
+
+        assert!(!out.contains("fetch"), "got:\n{out}");
+        assert!(out.contains("described_class::VERSION"), "got:\n{out}");
+    }
+
+    /// A `cfg`-gated function is registered only when the extension was compiled with that
+    /// feature, which a scaffold-time seed cannot know.
+    #[test]
+    fn skips_cfg_gated_functions() {
+        let api = ApiSurface {
+            functions: vec![FunctionDef {
+                cfg: Some("feature = \"extra\"".to_string()),
+                ..zero_arg_function("extra_ping", TypeRef::String)
+            }],
+            ..Default::default()
+        };
+        let out = scaffold_ruby_spec(&api, &minimal_config(), "my_lib");
+
+        assert!(!out.contains("extra_ping"), "got:\n{out}");
+    }
+
+    /// A function the Magnus wrapper generator cannot delegate gets an `unimplemented` body
+    /// that raises `RuntimeError` when called. It is still registered and callable, so only
+    /// this predicate keeps the seed off it — otherwise the example would be permanently red
+    /// on a healthy build.
+    #[test]
+    fn skips_functions_whose_generated_body_only_raises() {
+        let api = ApiSurface {
+            functions: vec![FunctionDef {
+                sanitized: true,
+                error_type: Some("Error".to_string()),
+                ..zero_arg_function("not_delegatable", TypeRef::String)
+            }],
+            types: vec![dto("Widget", vec![simple_field("label", TypeRef::String)])],
+            ..Default::default()
+        };
+        let out = scaffold_ruby_spec(&api, &minimal_config(), "my_lib");
+
+        assert!(!out.contains("not_delegatable"), "got:\n{out}");
+        assert!(
+            out.contains("described_class::Widget.new(label: \"alef-scaffold\")"),
+            "got:\n{out}"
+        );
+    }
+
+    /// A fallible function can raise for reasons that have nothing to do with the binding, so
+    /// an infallible candidate wins even when it appears later in the surface.
+    #[test]
+    fn prefers_an_infallible_function_over_a_fallible_one() {
+        let api = ApiSurface {
+            functions: vec![
+                FunctionDef {
+                    error_type: Some("Error".to_string()),
+                    ..zero_arg_function("might_fail", TypeRef::String)
+                },
+                zero_arg_function("always_works", TypeRef::String),
+            ],
+            ..Default::default()
+        };
+        let out = scaffold_ruby_spec(&api, &minimal_config(), "my_lib");
+
+        assert!(
+            out.contains("    expect(described_class.always_works).to be_a(String)\n"),
+            "got:\n{out}"
+        );
+        assert!(!out.contains("might_fail"), "got:\n{out}");
+    }
+
+    /// When every candidate is fallible the strongest tier still fires: an example that can
+    /// fail for a real reason is worth more than degrading to a weaker one.
+    #[test]
+    fn still_calls_a_fallible_function_when_it_is_the_only_candidate() {
+        let api = ApiSurface {
+            functions: vec![FunctionDef {
+                error_type: Some("Error".to_string()),
+                ..zero_arg_function("might_fail", TypeRef::String)
+            }],
+            ..Default::default()
+        };
+        let out = scaffold_ruby_spec(&api, &minimal_config(), "my_lib");
+
+        assert!(
+            out.contains("    expect(described_class.might_fail).to be_a(String)\n"),
+            "got:\n{out}"
+        );
+    }
+
+    /// `binding_excluded` functions never reach the generated extension, so the seed must not
+    /// call one.
+    #[test]
+    fn skips_binding_excluded_functions() {
+        let api = ApiSurface {
+            functions: vec![
+                FunctionDef {
+                    binding_excluded: true,
+                    ..zero_arg_function("hidden", TypeRef::String)
+                },
+                zero_arg_function("visible", TypeRef::String),
+            ],
+            ..Default::default()
+        };
+        let out = scaffold_ruby_spec(&api, &minimal_config(), "my_lib");
+
+        assert!(out.contains("described_class.visible"), "got:\n{out}");
+        assert!(!out.contains("hidden"), "got:\n{out}");
+    }
+
+    /// `[crates.ruby] exclude_functions` mirrors `MagnusBackend`'s own filter, so a function
+    /// excluded there must be skipped here too.
+    #[test]
+    fn skips_functions_excluded_via_ruby_config() {
+        let config = resolve_config(
+            r#"
+[workspace]
+languages = ["ruby"]
+[[crates]]
+name = "my-lib"
+sources = []
+
+[crates.ruby]
+exclude_functions = ["ping"]
+"#,
+        );
+        let api = ApiSurface {
+            functions: vec![zero_arg_function("ping", TypeRef::String)],
+            ..Default::default()
+        };
+        let out = scaffold_ruby_spec(&api, &config, "my_lib");
+
+        assert!(
+            !out.contains("ping"),
+            "excluded function must not be referenced, got:\n{out}"
+        );
+        assert!(out.contains("described_class::VERSION"), "got:\n{out}");
+    }
+
+    /// With no callable function, a literal-constructible DTO is built through the generated
+    /// keyword constructor and every field read back through its accessor.
+    #[test]
+    fn constructs_a_simple_dto_and_asserts_every_field() {
+        let api = ApiSurface {
+            types: vec![dto(
+                "Widget",
+                vec![
+                    simple_field("label", TypeRef::String),
+                    simple_field("count", TypeRef::Primitive(PrimitiveType::U32)),
+                ],
+            )],
+            ..Default::default()
+        };
+        let out = scaffold_ruby_spec(&api, &minimal_config(), "my_lib");
+
+        assert!(
+            out.contains("    instance = described_class::Widget.new(label: \"alef-scaffold\", count: 1)\n"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("    expect([instance.label, instance.count]).to eq([\"alef-scaffold\", 1])\n"),
+            "got:\n{out}"
+        );
+    }
+
+    /// A single-field DTO reads better as a scalar comparison than a one-element array.
+    #[test]
+    fn asserts_a_single_field_dto_without_an_array() {
+        let api = ApiSurface {
+            types: vec![dto("Widget", vec![simple_field("label", TypeRef::String)])],
+            ..Default::default()
+        };
+        let out = scaffold_ruby_spec(&api, &minimal_config(), "my_lib");
+
+        assert!(
+            out.contains("    expect(instance.label).to eq(\"alef-scaffold\")\n"),
+            "got:\n{out}"
+        );
+    }
+
+    /// A `Named` field has no default in the generated constructor, so a partial construction
+    /// would raise `ArgumentError`. The whole type is rejected rather than partly built.
+    #[test]
+    fn falls_back_to_a_constant_reference_for_a_dto_with_a_named_field() {
+        let api = ApiSurface {
+            types: vec![dto(
+                "Widget",
+                vec![
+                    simple_field("label", TypeRef::String),
+                    simple_field("nested", TypeRef::Named("Other".to_string())),
+                ],
+            )],
+            ..Default::default()
+        };
+        let out = scaffold_ruby_spec(&api, &minimal_config(), "my_lib");
+
+        assert!(!out.contains(".new("), "got:\n{out}");
+        assert!(
+            out.contains("    expect(described_class.const_get(:Widget)).to be_a(Module)\n"),
+            "got:\n{out}"
+        );
+    }
+
+    /// Optional fields carry `nil` semantics this seed does not model, so they disqualify the
+    /// construction tier rather than being guessed at.
+    #[test]
+    fn falls_back_to_a_constant_reference_for_a_dto_with_an_optional_field() {
+        let api = ApiSurface {
+            types: vec![dto(
+                "Widget",
+                vec![FieldDef {
+                    optional: true,
+                    ..simple_field("label", TypeRef::String)
+                }],
+            )],
+            ..Default::default()
+        };
+        let out = scaffold_ruby_spec(&api, &minimal_config(), "my_lib");
+
+        assert!(!out.contains(".new("), "got:\n{out}");
+        assert!(out.contains("const_get(:Widget)"), "got:\n{out}");
+    }
+
+    /// `[crates.ruby] exclude_types` and `binding_excluded` both remove a class from the
+    /// generated extension, so neither may be named by the seed.
+    #[test]
+    fn skips_types_excluded_by_config_or_binding_exclusion() {
+        let config = resolve_config(
+            r#"
+[workspace]
+languages = ["ruby"]
+[[crates]]
+name = "my-lib"
+sources = []
+
+[crates.ruby]
+exclude_types = ["Excluded"]
+"#,
+        );
+        let api = ApiSurface {
+            types: vec![
+                dto("Excluded", vec![simple_field("label", TypeRef::String)]),
+                TypeDef {
+                    binding_excluded: true,
+                    ..dto("Hidden", vec![simple_field("label", TypeRef::String)])
+                },
+                dto("Visible", vec![simple_field("label", TypeRef::String)]),
+            ],
+            ..Default::default()
+        };
+        let out = scaffold_ruby_spec(&api, &config, "my_lib");
+
+        assert!(!out.contains("Excluded"), "got:\n{out}");
+        assert!(!out.contains("Hidden"), "got:\n{out}");
+        assert!(out.contains("described_class::Visible.new("), "got:\n{out}");
+    }
+
+    /// `MagnusBackend::generate_public_api` drops `*Update` and `*Builder` types from the
+    /// module's curated re-export list, so a seed naming one may reference nothing.
+    #[test]
+    fn skips_update_and_builder_types() {
+        let api = ApiSurface {
+            types: vec![
+                dto("WidgetUpdate", vec![simple_field("label", TypeRef::String)]),
+                dto("WidgetBuilder", vec![simple_field("label", TypeRef::String)]),
+            ],
+            ..Default::default()
+        };
+        let out = scaffold_ruby_spec(&api, &minimal_config(), "my_lib");
+
+        assert!(!out.contains("WidgetUpdate"), "got:\n{out}");
+        assert!(!out.contains("WidgetBuilder"), "got:\n{out}");
+        assert!(out.contains("described_class::VERSION"), "got:\n{out}");
+    }
+
+    /// Enums are not registered as Ruby constants by the Magnus backend, so an enum-only
+    /// surface must degrade to the version tier rather than name a constant that is absent.
+    #[test]
+    fn never_names_an_enum_because_magnus_registers_none_as_constants() {
+        let api = ApiSurface {
+            enums: vec![crate::core::ir::EnumDef {
+                name: "Colour".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let out = scaffold_ruby_spec(&api, &minimal_config(), "my_lib");
+
+        assert!(!out.contains("Colour"), "got:\n{out}");
+        assert!(out.contains("described_class::VERSION"), "got:\n{out}");
+    }
+
+    /// An empty API surface still gets a falsifiable example: `VERSION` only resolves once the
+    /// gem — and therefore the native extension `native.rb` dlopens — has loaded.
+    #[test]
+    fn falls_back_to_the_version_assertion_when_the_api_surface_is_empty() {
+        let out = scaffold_ruby_spec(&ApiSurface::default(), &minimal_config(), "my_lib");
+
+        assert!(
+            out.contains("    expect(described_class::VERSION).to match(/\\A\\d+\\.\\d+\\.\\d+/)\n"),
+            "got:\n{out}"
+        );
+    }
+
+    /// No tier may emit a tautology, and every tier must go through the `require_relative`
+    /// that dlopens the native extension — that is the property making even the weakest tier
+    /// falsifiable rather than decorative.
+    #[test]
+    fn no_tier_emits_a_vacuous_or_unlinked_example() {
+        let surfaces = [
+            ApiSurface {
+                functions: vec![zero_arg_function("ping", TypeRef::String)],
+                ..Default::default()
+            },
+            ApiSurface {
+                types: vec![dto("Widget", vec![simple_field("label", TypeRef::String)])],
+                ..Default::default()
+            },
+            ApiSurface {
+                types: vec![dto(
+                    "Widget",
+                    vec![simple_field("nested", TypeRef::Named("Other".to_string()))],
+                )],
+                ..Default::default()
+            },
+            ApiSurface::default(),
+        ];
+        for api in surfaces {
+            let out = scaffold_ruby_spec(&api, &minimal_config(), "my_lib");
+            assert!(
+                out.contains("require_relative \"../lib/my_lib\""),
+                "every tier must load the gem, got:\n{out}"
+            );
+            assert_eq!(out.matches("  it \"").count(), 1, "exactly one example, got:\n{out}");
+            for tautology in ["expect(1)", "eq(1 + 1)", "to be_truthy", "to be_falsey"] {
+                assert!(!out.contains(tautology), "vacuous assertion `{tautology}` in:\n{out}");
+            }
+            assert!(
+                out.contains("described_class"),
+                "the example must assert against the generated module, got:\n{out}"
+            );
+        }
+    }
+
+    /// The seed carries no alef header marker, and must not: the marker is what
+    /// `write_scaffold_files_report`'s ownership guard reads as "alef owns this file", which
+    /// would let an `overwrite: true` run (e.g. `alef version`) replace a hand-written suite.
+    #[test]
+    fn seed_content_carries_no_alef_marker() {
+        let out = scaffold_ruby_spec(&ApiSurface::default(), &minimal_config(), "my_lib");
+
+        assert!(
+            !crate::core::hash::content_has_alef_marker(&out),
+            "seed must stay unmarked so it is never reclaimed by an overwrite run, got:\n{out}"
+        );
+    }
+
+    /// The seed lands at the path the generated `Rakefile`'s `RSpec::Core::RakeTask` already
+    /// scans, and is emitted create-only so a real suite is never overwritten.
+    #[test]
+    fn seed_is_emitted_create_only_at_the_rspec_default_path() {
+        let config = minimal_config();
+        let api = ApiSurface {
+            version: "1.2.3".to_string(),
+            ..Default::default()
+        };
+        let files = scaffold_ruby(&api, &config).expect("scaffold");
+        let spec = files
+            .iter()
+            .find(|f| f.path.to_string_lossy().contains("/spec/"))
+            .expect("a spec seed must be emitted");
+
+        assert_eq!(spec.path.to_string_lossy(), "packages/ruby/spec/my_lib_spec.rb");
+        assert!(!spec.generated_header, "the seed must stay create-only");
+    }
 }

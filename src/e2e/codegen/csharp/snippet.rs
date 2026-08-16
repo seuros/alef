@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use anyhow::{Result, bail};
 use heck::ToUpperCamelCase;
 
 use crate::core::config::ResolvedCrateConfig;
@@ -13,7 +14,7 @@ pub(super) fn render_snippet_body(
     config: &ResolvedCrateConfig,
     type_defs: &[TypeDef],
     enums: &[EnumDef],
-) -> String {
+) -> Result<String> {
     let mut call = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
         &fixture.id,
@@ -62,6 +63,21 @@ pub(super) fn render_snippet_body(
         &mut teardown_lines,
     );
     if let Some(visitor_spec) = &fixture.visitor {
+        // A fixture that declares a visitor with no options type to bind it to is a
+        // configuration defect, not a legitimate shape: there is nowhere to attach the
+        // visitor. Fail closed here — the snippet pipeline records this as an
+        // undocumented coverage gap naming the fixture — rather than fabricating a type
+        // name, which publishes a documentation example that does not compile. Matches
+        // `php::snippet` and `go::snippet`. Intentional omissions belong in the
+        // fixture's `docs.coverage_exceptions`, where the reason is visible. ~keep
+        let Some(options_type) =
+            options_type.or_else(|| crate::e2e::codegen::recipe::trait_bridge_options_type(config))
+        else {
+            bail!(
+                "C# documentation snippet `{}` needs an options type for its visitor",
+                fixture.id
+            );
+        };
         let visitor_config = super::visitor::resolve_csharp_visitor_config(config, overrides, type_defs, visitor_spec);
         let visitor = super::visitor::build_csharp_visitor(
             &mut setup_lines,
@@ -70,9 +86,6 @@ pub(super) fn render_snippet_body(
             visitor_spec,
             &visitor_config,
         );
-        let options_type = options_type
-            .or_else(|| crate::e2e::codegen::recipe::trait_bridge_options_type(config))
-            .unwrap_or("Options");
         setup_lines.push(format!("var options = new {options_type} {{ Visitor = {visitor} }};"));
         args = replace_or_append_options(&args, options_type);
     }
@@ -115,7 +128,7 @@ pub(super) fn render_snippet_body(
     let needs_collections = setup_lines
         .iter()
         .any(|line| line.contains("List<") || line.contains("Dictionary<"));
-    crate::e2e::template_env::render(
+    Ok(crate::e2e::template_env::render(
         "csharp/snippet_body.jinja",
         minijinja::context! {
             namespace => namespace,
@@ -135,7 +148,7 @@ pub(super) fn render_snippet_body(
             expects_error => expects_error,
             visitor_declarations => visitor_declarations,
         },
-    )
+    ))
 }
 
 fn replace_or_append_options(args: &str, options_type: &str) -> String {
@@ -201,7 +214,8 @@ mod tests {
             &config,
             &[],
             &[],
-        );
+        )
+        .expect("snippet renders");
 
         assert!(body.contains("await SampleCoreConverter.LoadDocumentAsync()"));
         assert!(!body.contains("using System.Collections.Generic;"));
@@ -224,7 +238,8 @@ mod tests {
             &ResolvedCrateConfig::default(),
             &[],
             &[],
-        );
+        )
+        .expect("snippet renders");
 
         assert!(body.contains("catch (Exception error)"), "{body}");
         assert!(!body.contains("InvalidOperationException"), "{body}");
@@ -277,10 +292,101 @@ mod tests {
                 ..TypeDef::default()
             }],
             &[],
-        );
+        )
+        .expect("snippet renders");
 
         assert!(body.contains("new SampleInput { Label = \"sample\" }"), "{body}");
         assert!(!body.contains("FromJson"), "{body}");
         assert!(!body.contains("JsonSerializer"), "{body}");
+    }
+
+    fn visitor_fixture() -> Fixture {
+        serde_json::from_value(serde_json::json!({
+            "id": "visitor_link_rewrite",
+            "description": "Visitor rewrites links",
+            "input": {"html": "<a href=\"a\">a</a>"},
+            "visitor": {"callbacks": {"visit_link": {"action": "skip"}}}
+        }))
+        .expect("fixture")
+    }
+
+    fn visitor_call() -> CallConfig {
+        CallConfig {
+            function: "convert".into(),
+            result_var: "result".into(),
+            args: vec![crate::e2e::config::ArgMapping {
+                name: "html".into(),
+                field: "input.html".into(),
+                arg_type: "string".into(),
+                optional: false,
+                owned: false,
+                element_type: None,
+                go_type: None,
+                vec_inner_is_ref: false,
+                trait_name: None,
+            }],
+            ..CallConfig::default()
+        }
+    }
+
+    fn bridge_config(options_type: Option<&str>) -> ResolvedCrateConfig {
+        ResolvedCrateConfig {
+            name: "sample_core".into(),
+            trait_bridges: vec![crate::core::config::TraitBridgeConfig {
+                trait_name: "HtmlVisitor".into(),
+                type_alias: Some("VisitorHandle".into()),
+                param_name: Some("visitor".into()),
+                options_type: options_type.map(str::to_string),
+                ..Default::default()
+            }],
+            ..ResolvedCrateConfig::default()
+        }
+    }
+
+    /// Regression: a visitor fixture with no resolvable options type used to fall back to
+    /// the literal type name `Options`, publishing `new Options { Visitor = .. }` — a
+    /// documentation example naming a type that does not exist. It must fail closed
+    /// instead, matching PHP and Go. ~keep
+    #[test]
+    fn visitor_without_a_trait_bridge_options_type_fails_instead_of_fabricating_one() {
+        let error = render_snippet_body(
+            &visitor_fixture(),
+            &E2eConfig {
+                call: visitor_call(),
+                ..E2eConfig::default()
+            },
+            &bridge_config(None),
+            &[],
+            &[],
+        )
+        .expect_err("a visitor with no options type must not render");
+
+        assert_eq!(
+            format!("{error}"),
+            "C# documentation snippet `visitor_link_rewrite` needs an options type for its visitor"
+        );
+    }
+
+    /// Positive control for the above: with the bridge's `options_type` configured, the
+    /// ordinary visitor path is unchanged and names the real type. ~keep
+    #[test]
+    fn visitor_with_a_trait_bridge_options_type_still_names_the_real_type() {
+        let body = render_snippet_body(
+            &visitor_fixture(),
+            &E2eConfig {
+                call: visitor_call(),
+                ..E2eConfig::default()
+            },
+            &bridge_config(Some("ConversionOptions")),
+            &[],
+            &[],
+        )
+        .expect("snippet renders");
+
+        assert!(
+            body.contains("var options = new ConversionOptions { Visitor = _visitor_visitor_link_rewrite };"),
+            "{body}"
+        );
+        assert!(!body.contains("new Options"), "{body}");
     }
 }

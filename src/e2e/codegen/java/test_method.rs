@@ -518,3 +518,91 @@ mod assertion_line_ending_tests {
         assert_eq!(assertions, "        assertTrue(first);\n        assertTrue(second);\n");
     }
 }
+
+#[cfg(test)]
+mod dropped_field_marker_tests {
+    use super::render_test_method;
+    use crate::e2e::config::{CallConfig, E2eConfig};
+    use crate::e2e::fixture::{Assertion, Fixture};
+    use std::collections::HashSet;
+
+    fn make_fixture(id: &str, field: &str) -> Fixture {
+        Fixture {
+            docs: None,
+            requirements: Vec::new(),
+            id: id.to_string(),
+            category: None,
+            description: "test".to_string(),
+            tags: vec![],
+            skip: None,
+            env: None,
+            setup: Vec::new(),
+            call: None,
+            input: serde_json::Value::Null,
+            mock_response: None,
+            source: String::new(),
+            http: None,
+            asyncapi: None,
+            websocket: None,
+            preserve_input_urls: false,
+            assertions: vec![Assertion {
+                assertion_type: "equals".to_string(),
+                field: Some(field.to_string()),
+                value: Some(serde_json::json!("x")),
+                ..Default::default()
+            }],
+            visitor: None,
+            args: vec![],
+            assertion_recipes: vec![],
+        }
+    }
+
+    /// Regression test for alef task #81: Java's "skipped: field not available" comment
+    /// must carry the exact marker text the shared `fail_on_unavailable_field_markers`
+    /// mechanism (src/e2e/codegen/mod.rs) matches on, so arming
+    /// `ALEF_E2E_STRICT_FIELD_AVAILABILITY` turns a dropped field assertion into a
+    /// generation-time failure. The arming behaviour itself is proven in `mod.rs`'s
+    /// `unavailable_field_marker_tests`; this test only pins the marker text Java emits
+    /// through the real per-fixture rendering entry point. ~keep
+    #[test]
+    fn dropped_field_assertion_carries_the_marker_that_arms_the_strict_mode() {
+        let fixture = make_fixture("process_smoke", "nonexistent_field");
+        let call = CallConfig {
+            function: "process".to_string(),
+            module: "MyLib".to_string(),
+            result_var: "result".to_string(),
+            result_fields: HashSet::from(["content".to_string()]),
+            returns_result: true,
+            ..Default::default()
+        };
+        let e2e_config = E2eConfig {
+            call,
+            ..Default::default()
+        };
+        let config = crate::core::config::ResolvedCrateConfig::default();
+        let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
+
+        let mut out = String::new();
+        render_test_method(
+            &mut out,
+            &fixture,
+            "SampleClass",
+            "",
+            "",
+            &[],
+            None,
+            false,
+            &e2e_config,
+            &std::collections::HashMap::new(),
+            false,
+            &[],
+            &config,
+            &type_defs,
+        );
+
+        assert!(
+            out.contains("field 'nonexistent_field' not available on result type"),
+            "got:\n{out}"
+        );
+    }
+}

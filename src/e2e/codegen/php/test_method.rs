@@ -234,23 +234,20 @@ pub(super) fn render_test_method(
     if let Some(visitor_spec) = &fixture.visitor {
         visitor::build_php_visitor(&mut setup_lines, visitor_spec);
         if !options_already_created {
+            // A visitor has no standalone PHP parameter — it is only reachable by
+            // assignment onto an options object, so without a resolvable options type
+            // there is nowhere to attach it. This used to re-render the template with
+            // `skip_test => true` — the *same* output the sanctioned `skip_languages`
+            // branch above emits — so a config failure was indistinguishable from an
+            // author-declared skip, and the suite reported green either way. That
+            // sanctioned branch has already returned by here, so reaching this point
+            // means the fixture is genuinely required for PHP. Fail generation instead
+            // of emitting a test that silently drops the visitor. ~keep
             let Some(options_type) = call_options_type.or_else(|| stubs::trait_bridge_options_type(config)) else {
-                let rendered = crate::e2e::template_env::render(
-                    "php/test_method.jinja",
-                    minijinja::context! {
-                        method_name => method_name,
-                        description => description,
-                        client_factory => String::new(),
-                        setup_lines => Vec::<String>::new(),
-                        expects_error => false,
-                        skip_test => true,
-                        call_expr => String::new(),
-                        result_var => result_var,
-                        assertions_body => String::new(),
-                    },
+                panic!(
+                    "PHP e2e generator: fixture `{}` declares a `visitor`, but neither its `[e2e.call]` config nor any `[[crates.trait_bridges]]` entry provides an `options_type` to attach it to; cannot generate a PHP visitor test without a resolvable trait bridge options type",
+                    fixture.id
                 );
-                out.push_str(&rendered);
-                return;
             };
             if options_via == "from_json" {
                 // When options_via is "from_json", create options from JSON first,
@@ -602,6 +599,69 @@ mod error_test_body_tests {
         assert!(
             body.contains("match it\\'s bad')"),
             "expected escaped single quote in message, got: {body}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod visitor_options_type_tests {
+    use super::render_test_method;
+    use crate::core::config::ResolvedCrateConfig;
+    use crate::e2e::config::E2eConfig;
+    use crate::e2e::fixture::{CallbackAction, Fixture, VisitorSpec};
+    use std::collections::{HashMap, HashSet};
+
+    /// Regression test for alef task #86: a `visitor` fixture whose options type resolves
+    /// from neither `[e2e.call]` nor any `[[crates.trait_bridges]]` entry used to re-render
+    /// `php/test_method.jinja` with `skip_test => true` — byte-identical to the output the
+    /// sanctioned `skip_languages` branch emits. A config failure was therefore
+    /// indistinguishable from an author-declared skip, and the emitted PHPUnit suite went
+    /// green while exercising none of the visitor behavior it claimed. It must now fail at
+    /// generation time, naming the fixture and the missing options type — mirroring
+    /// `c/assertions.rs` and `kotlin/args.rs`, which already refuse to emit for an
+    /// unresolvable trait bridge.
+    #[test]
+    #[should_panic(expected = "PHP e2e generator: fixture `visitor_smoke` declares a `visitor`")]
+    fn visitor_fixture_without_trait_bridge_options_type_fails_loudly_instead_of_emitting_a_skip() {
+        let fixture = Fixture {
+            id: "visitor_smoke".into(),
+            description: "Visitor smoke".into(),
+            visitor: Some(VisitorSpec {
+                callbacks: [("visit_element".to_string(), CallbackAction::Skip)]
+                    .into_iter()
+                    .collect(),
+            }),
+            ..Fixture::default()
+        };
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.call.function = "convert".into();
+        e2e_config.call.result_var = "result".into();
+
+        // No `[[crates.trait_bridges]]` entries declared — nothing supplies an `options_type`.
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+
+        let mut out = String::new();
+        let mut trait_bridge_imports: Vec<String> = Vec::new();
+        render_test_method(
+            &mut out,
+            &fixture,
+            &e2e_config,
+            "php",
+            "Sample",
+            "SampleClient",
+            &[],
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            None,
+            "",
+            &[],
+            "",
+            &config,
+            &mut trait_bridge_imports,
         );
     }
 }

@@ -248,16 +248,21 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
     if fixture.visitor.is_some() {
         let struct_name = visitor_struct_name(&fixture.id);
         setup_lines.push(format!("visitor := &{struct_name}{{}}"));
+        // A visitor has no standalone Go parameter — it is only reachable by assignment
+        // onto an options struct, so without a resolvable options type there is nowhere
+        // to attach it. This used to emit a `t.Skip(...)` body, which reads as an
+        // author-intended skip in `go test` output but is really a config failure the
+        // suite then reports green. The sanctioned opt-outs (`skip_languages`, checked in
+        // `fixture_has_go_callable` above, and `fixture.skip` via `fixture_inclusion`)
+        // have both already run by here, so reaching this point means the fixture is
+        // genuinely required for Go. Fail generation instead of emitting a weaker test. ~keep
         let Some(opts_type) =
             call_options_type.or_else(|| crate::e2e::codegen::recipe::trait_bridge_options_type(config))
         else {
-            let _ = writeln!(out, "func Test_{fn_name}(t *testing.T) {{");
-            let _ = writeln!(
-                out,
-                "\tt.Skip(\"go: visitor fixture requires trait bridge options_type\")"
+            panic!(
+                "Go e2e generator: fixture `{}` declares a `visitor`, but neither its `[e2e.call]` config nor any `[[crates.trait_bridges]]` entry provides an `options_type` to attach it to; cannot generate a Go visitor test without a resolvable trait bridge options type",
+                fixture.id
             );
-            let _ = writeln!(out, "}}");
-            return;
         };
         let opts_var = "opts".to_string();
         setup_lines.push(format!("opts := &{import_alias}.{opts_type}{{}}"));
@@ -404,7 +409,17 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
     let effective_returns_result = returns_result || binding_returns_error || client_factory.is_some();
 
     if !effective_returns_result && result_is_simple {
-        let result_binding = if has_usable_assertion {
+        // A fixture that declared an assertion but produced none usable here (e.g. its
+        // only assertion is `not_error`, and this function has no error return to check
+        // in the first place) used to be indistinguishable from a genuinely empty
+        // fixture: both discarded the result to `_` and asserted nothing at all. Every
+        // other backend in this defect class (python, php, ...) still emits a real
+        // fallback check when the fixture declared *something* — mirror that here by
+        // binding the result and asserting non-nil instead of discarding it, for the one
+        // Go shape (`!effective_returns_result && result_is_simple`) that has no error
+        // return to fall back on either. ~keep
+        let declared_but_unusable = !has_usable_assertion && !fixture.assertions.is_empty();
+        let result_binding = if has_usable_assertion || declared_but_unusable {
             result_var.to_string()
         } else {
             "_".to_string()
@@ -435,6 +450,19 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
                         let _ = writeln!(out, "\tvalue := {result_var}");
                     }
                 }
+            }
+        } else if declared_but_unusable {
+            let result_is_ptr = overrides.map(|o| o.result_is_pointer).unwrap_or(true);
+            if result_is_ptr {
+                let _ = writeln!(out, "\tif {result_var} == nil {{");
+                let _ = writeln!(out, "\t\tt.Fatalf(\"expected non-nil result\")");
+                let _ = writeln!(out, "\t}}");
+            } else {
+                // No type-safe zero-value check exists generically for a non-pointer
+                // result without knowing its concrete Go type; keep the binding (so a
+                // future assertion can reference it) but consume it to satisfy
+                // `-D unused_variables` rather than silently discarding to `_`.
+                let _ = writeln!(out, "\t_ = {result_var}");
             }
         }
     } else if !effective_returns_result || returns_void {
