@@ -387,8 +387,7 @@ fn repair_build_zig_test_target(content: &str) -> Option<String> {
     let stmt_indent = &lines[block_end][..lines[block_end].len() - lines[block_end].trim_start().len()];
 
     let mut repaired: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
-    repaired[bad_line_index] =
-        format!("{field_indent}.root_source_file = b.path(\"test/{module_name}_test.zig\"),");
+    repaired[bad_line_index] = format!("{field_indent}.root_source_file = b.path(\"test/{module_name}_test.zig\"),");
 
     let import_call = format!("test_module.addImport(\"{module_name}\", module);");
     if !repaired.iter().any(|line| line.contains(import_call.as_str())) {
@@ -618,6 +617,54 @@ fn crc32_ieee(bytes: &[u8]) -> u32 {
         }
     }
     !crc
+}
+
+/// The exact `examples/example.zig` body [`scaffold_zig`] emitted before the fix that rewrote
+/// it for Zig 0.16's `std.Io` API.
+const STALE_EXAMPLE_ZIG: &str = "const std = @import(\"std\");\n\npub fn main() !void {\n    var gpa = std.heap.GeneralPurposeAllocator(.{}){};\n    defer _ = gpa.deinit();\n    const allocator = gpa.allocator();\n\n    const stdout = std.io.getStdOut().writer();\n    try stdout.print(\"Example: module loaded successfully\\n\", .{});\n}\n";
+
+/// Repair a pre-existing `packages/zig/examples/example.zig` that still carries the
+/// pre-Zig-0.16 example -- the exact defect fixed when `scaffold_zig`'s `example_zig` literal
+/// was rewritten to Zig 0.16's `std.Io` API (`cc7f824b0`, "update Zig example for 0.16").
+///
+/// `examples/example.zig` is `generated_header: false` (create-only), so a repo scaffolded
+/// before that fix keeps shipping an example that no longer compiles under the pinned Zig
+/// 0.16 toolchain forever: `std.heap.GeneralPurposeAllocator`/`std.io.getStdOut` were removed,
+/// and the unused `allocator` binding is a hard error too. Every scaffolded Zig package gets
+/// the identical literal (no crate name, no module name — this file has no per-project
+/// variables at all), so an exact byte match against the one known-bad constant is both
+/// sufficient and maximally conservative: any consumer edit at all — even just adding a
+/// comment — fails the match and leaves the file completely untouched. ~keep
+pub(crate) fn migrate_zig_example(base_dir: &Path, relative_path: &Path, replacement: &str) -> anyhow::Result<bool> {
+    let path = base_dir.join(relative_path);
+    let Ok(existing) = std::fs::read_to_string(&path) else {
+        return Ok(false);
+    };
+    if existing != STALE_EXAMPLE_ZIG {
+        return Ok(false);
+    }
+    if existing == replacement {
+        return Ok(false);
+    }
+
+    let parent = path
+        .parent()
+        .context("examples/example.zig path has no parent directory")?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("failed to create temporary file in {}", parent.display()))?;
+    std::io::Write::write_all(&mut temporary, replacement.as_bytes())
+        .with_context(|| format!("failed to write temporary file for {}", path.display()))?;
+    temporary
+        .persist(&path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("failed to replace {}", path.display()))?;
+    tracing::warn!(
+        path = %path.display(),
+        "repaired pre-existing packages/zig/examples/example.zig: replaced the pre-Zig-0.16 \
+         example (std.heap.GeneralPurposeAllocator/std.io.getStdOut) with the \
+         std.Io.Threaded-based one"
+    );
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -1064,7 +1111,9 @@ pub fn build(b: *std.Build) void {
         );
         // The library module's own identical-looking line must be untouched.
         assert!(
-            repaired.contains("const module = b.addModule(\"my_lib\", .{\n        .root_source_file = b.path(\"src/my_lib.zig\"),"),
+            repaired.contains(
+                "const module = b.addModule(\"my_lib\", .{\n        .root_source_file = b.path(\"src/my_lib.zig\"),"
+            ),
             "library module's root_source_file must not be touched, got:\n{repaired}"
         );
         // The hand-fixed ffi_include_path default must survive byte-for-byte.
@@ -1075,10 +1124,7 @@ pub fn build(b: *std.Build) void {
         // Only one line changed in the test_module block itself, plus one inserted line —
         // every other line of the 50-odd-line file is byte-identical.
         let original_lines: std::collections::HashSet<&str> = original.lines().collect();
-        let unexpected_new_lines: Vec<&str> = repaired
-            .lines()
-            .filter(|line| !original_lines.contains(line))
-            .collect();
+        let unexpected_new_lines: Vec<&str> = repaired.lines().filter(|line| !original_lines.contains(line)).collect();
         assert_eq!(
             unexpected_new_lines,
             vec![
@@ -1144,7 +1190,10 @@ pub fn build(b: *std.Build) void {
 
         // Running it again against the now-repaired file must be a no-op.
         let changed_again = migrate_build_zig_test_target(dir.path()).expect("second pass must not error");
-        assert!(!changed_again, "second pass over an already-repaired file must be a no-op");
+        assert!(
+            !changed_again,
+            "second pass over an already-repaired file must be a no-op"
+        );
     }
 
     /// A `build.zig` that does not exist yet (nothing scaffolded so far) must not be
@@ -1155,5 +1204,64 @@ pub fn build(b: *std.Build) void {
         let changed = migrate_build_zig_test_target(dir.path()).expect("must not error on a missing file");
         assert!(!changed);
         assert!(!dir.path().join("packages/zig/build.zig").exists());
+    }
+
+    const FIXED_EXAMPLE_ZIG: &str = "const std = @import(\"std\");\n\npub fn main() !void {\n    var threaded: std.Io.Threaded = .init(std.heap.smp_allocator, .{});\n    defer threaded.deinit();\n\n    var stdout_buffer: [64]u8 = undefined;\n    var stdout_writer = std.Io.File.stdout().writer(threaded.io(), &stdout_buffer);\n    const stdout = &stdout_writer.interface;\n\n    try stdout.print(\"Example: module loaded successfully\\n\", .{});\n    try stdout.flush();\n}\n";
+
+    #[test]
+    fn should_replace_stale_example_zig_predating_the_zig_0_16_rewrite() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let examples_dir = dir.path().join("packages/zig/examples");
+        std::fs::create_dir_all(&examples_dir).expect("create packages/zig/examples");
+        std::fs::write(examples_dir.join("example.zig"), STALE_EXAMPLE_ZIG).expect("write stale example.zig");
+
+        let relative_path = Path::new("packages/zig/examples/example.zig");
+        let changed =
+            migrate_zig_example(dir.path(), relative_path, FIXED_EXAMPLE_ZIG).expect("migration must not error");
+        assert!(changed, "the known-stale example.zig must be reported as changed");
+
+        let on_disk = std::fs::read_to_string(examples_dir.join("example.zig")).expect("read migrated file");
+        assert_eq!(on_disk, FIXED_EXAMPLE_ZIG);
+        assert!(
+            !on_disk.contains("GeneralPurposeAllocator") && !on_disk.contains("getStdOut"),
+            "removed Zig 0.16 APIs must not remain"
+        );
+
+        let changed_again =
+            migrate_zig_example(dir.path(), relative_path, FIXED_EXAMPLE_ZIG).expect("second pass must not error");
+        assert!(
+            !changed_again,
+            "second pass over an already-migrated file must be a no-op"
+        );
+    }
+
+    #[test]
+    fn should_not_touch_a_hand_edited_example_zig() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let examples_dir = dir.path().join("packages/zig/examples");
+        std::fs::create_dir_all(&examples_dir).expect("create packages/zig/examples");
+        let hand_written =
+            "const std = @import(\"std\");\n\npub fn main() !void {\n    std.debug.print(\"hello\\n\", .{});\n}\n";
+        std::fs::write(examples_dir.join("example.zig"), hand_written).expect("write hand-edited example.zig");
+
+        let relative_path = Path::new("packages/zig/examples/example.zig");
+        let changed =
+            migrate_zig_example(dir.path(), relative_path, FIXED_EXAMPLE_ZIG).expect("migration must not error");
+        assert!(!changed, "a hand-edited example.zig must never be touched");
+
+        let on_disk = std::fs::read_to_string(examples_dir.join("example.zig")).expect("read file");
+        assert_eq!(
+            on_disk, hand_written,
+            "hand-edited example.zig must survive byte-for-byte"
+        );
+    }
+
+    #[test]
+    fn migrate_zig_example_is_a_no_op_when_file_does_not_exist() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let relative_path = Path::new("packages/zig/examples/example.zig");
+        let changed = migrate_zig_example(dir.path(), relative_path, FIXED_EXAMPLE_ZIG).expect("must not error");
+        assert!(!changed);
+        assert!(!dir.path().join(relative_path).exists());
     }
 }

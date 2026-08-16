@@ -7,8 +7,9 @@ use crate::{
     scaffold::cargo_package_header, scaffold::detect_workspace_inheritance, scaffold::render_extra_deps,
     scaffold::scaffold_meta,
 };
+use anyhow::Context as _;
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Additional features to request on the core feature that would satisfy `pred`, given `active`
 /// (the core features already unconditionally active on the dependency line, transitively
@@ -425,6 +426,56 @@ pub(crate) fn scaffold_php(_api: &ApiSurface, config: &ResolvedCrateConfig) -> a
     Ok(files)
 }
 
+/// The `phpunit/phpunit` constraint `scaffold_php` emitted before the fix (`ddde77260`) that
+/// widened it to span every PHPUnit major supporting the declared `"php": ">=8.2"` floor.
+const STALE_PHPUNIT_CONSTRAINT: &str = "\"phpunit/phpunit\": \"^13.1\"";
+/// The replacement constraint -- the exact value `tv::packagist::PHPUNIT` renders today.
+const FIXED_PHPUNIT_CONSTRAINT: &str = "\"phpunit/phpunit\": \"^11.5 || ^12.0 || ^13.1\"";
+
+/// Repair a pre-existing `composer.json` (root or `{pkg_dir}`) whose `require-dev` still pins
+/// `phpunit/phpunit` to the PHPUnit-13-only constraint -- the exact defect fixed in
+/// `ddde77260` ("widen the scaffolded PHPUnit constraint to the declared PHP floor").
+///
+/// `composer.json` is `generated_header: false` (create-only), so a repo scaffolded before that
+/// fix keeps a `^13.1`-only constraint forever even though the same file declares
+/// `"php": ">=8.2"`: PHPUnit 13 requires PHP >=8.4.1, so `composer install` cannot resolve on
+/// 8.2 or 8.3, and Dependabot -- which resolves Composer against the declared platform floor
+/// rather than the runtime PHP -- fails on every run. `^13.1` is the one and only value alef
+/// itself has ever emitted here, so an exact substring match is a safe positive-identification
+/// signature; the additional `"type": "php-ext"` check confirms this really is one of alef's
+/// own PHP extension manifests and not a coincidental match in an unrelated project. This only
+/// ever replaces the one matched substring -- a consumer's own `require`/`autoload`/`scripts`
+/// customisations survive byte-for-byte. ~keep
+pub(crate) fn migrate_php_composer_phpunit_constraint(base_dir: &Path, relative_path: &Path) -> anyhow::Result<bool> {
+    let path = base_dir.join(relative_path);
+    let Ok(existing) = std::fs::read_to_string(&path) else {
+        return Ok(false);
+    };
+    if !existing.contains("\"type\": \"php-ext\"") {
+        return Ok(false);
+    }
+    if existing.matches(STALE_PHPUNIT_CONSTRAINT).count() != 1 {
+        return Ok(false);
+    }
+    let migrated = existing.replacen(STALE_PHPUNIT_CONSTRAINT, FIXED_PHPUNIT_CONSTRAINT, 1);
+
+    let parent = path.parent().context("composer.json path has no parent directory")?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("failed to create temporary file in {}", parent.display()))?;
+    std::io::Write::write_all(&mut temporary, migrated.as_bytes())
+        .with_context(|| format!("failed to write temporary file for {}", path.display()))?;
+    temporary
+        .persist(&path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("failed to replace {}", path.display()))?;
+    tracing::warn!(
+        path = %path.display(),
+        "repaired pre-existing composer.json: widened the phpunit/phpunit constraint to span \
+         every major supporting the declared PHP floor"
+    );
+    Ok(true)
+}
+
 fn composer_package_name(config: &ResolvedCrateConfig, meta: &crate::scaffold::ScaffoldMeta) -> (String, String) {
     let Some(repository) = meta.configured_repository.as_deref() else {
         return ("unconfigured".to_string(), config.name.to_lowercase());
@@ -539,5 +590,93 @@ mod tests {
             missing_features_for(&pred, &set(&["x"]), &core_defaults),
             BTreeSet::new()
         );
+    }
+}
+
+#[cfg(test)]
+mod migrate_tests {
+    use super::*;
+
+    fn composer_json_with_phpunit_constraint(constraint: &str) -> String {
+        format!(
+            "{{\n  \"name\": \"acme/example-php\",\n  \"description\": \"An example crate\",\n  \"type\": \"php-ext\",\n  \"require\": {{\n    \"php\": \">=8.2\"\n  }},\n  \"require-dev\": {{\n    {constraint}\n  }},\n  \"autoload\": {{\n    \"psr-4\": {{\n      \"Acme\\\\Example\\\\\": \"src/\"\n    }}\n  }},\n  \"php-ext\": {{\n    \"extension-name\": \"example\"\n  }}\n}}\n"
+        )
+    }
+
+    #[test]
+    fn should_widen_stale_phpunit_13_only_constraint() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let stale = composer_json_with_phpunit_constraint("\"phpunit/phpunit\": \"^13.1\"");
+        std::fs::write(dir.path().join("composer.json"), &stale).expect("write stale composer.json");
+
+        let relative_path = Path::new("composer.json");
+        let changed = migrate_php_composer_phpunit_constraint(dir.path(), relative_path).expect("must not error");
+        assert!(
+            changed,
+            "a composer.json pinned to the PHPUnit-13-only constraint must be reported as changed"
+        );
+
+        let on_disk = std::fs::read_to_string(dir.path().join("composer.json")).expect("read migrated file");
+        let parsed: serde_json::Value = serde_json::from_str(&on_disk).expect("migrated file must be valid JSON");
+        assert_eq!(parsed["require-dev"]["phpunit/phpunit"], "^11.5 || ^12.0 || ^13.1");
+        assert_eq!(
+            parsed["require"]["php"], ">=8.2",
+            "unrelated fields must survive untouched"
+        );
+        assert_eq!(
+            parsed["autoload"]["psr-4"]["Acme\\Example\\"], "src/",
+            "autoload must survive untouched"
+        );
+
+        let changed_again = migrate_php_composer_phpunit_constraint(dir.path(), relative_path).expect("must not error");
+        assert!(
+            !changed_again,
+            "second pass over an already-migrated file must be a no-op"
+        );
+    }
+
+    #[test]
+    fn should_not_touch_a_composer_json_with_a_different_phpunit_constraint() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let customised = composer_json_with_phpunit_constraint("\"phpunit/phpunit\": \"^10.0\"");
+        std::fs::write(dir.path().join("composer.json"), &customised).expect("write customised composer.json");
+
+        let relative_path = Path::new("composer.json");
+        let changed = migrate_php_composer_phpunit_constraint(dir.path(), relative_path).expect("must not error");
+        assert!(!changed, "a hand-chosen phpunit constraint must never be touched");
+
+        let on_disk = std::fs::read_to_string(dir.path().join("composer.json")).expect("read file");
+        assert_eq!(
+            on_disk, customised,
+            "customised composer.json must survive byte-for-byte"
+        );
+    }
+
+    #[test]
+    fn should_not_touch_a_foreign_composer_json_without_the_php_ext_marker() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let foreign =
+            "{\n  \"name\": \"someone/else\",\n  \"require-dev\": {\n    \"phpunit/phpunit\": \"^13.1\"\n  }\n}\n"
+                .to_string();
+        std::fs::write(dir.path().join("composer.json"), &foreign).expect("write foreign composer.json");
+
+        let relative_path = Path::new("composer.json");
+        let changed = migrate_php_composer_phpunit_constraint(dir.path(), relative_path).expect("must not error");
+        assert!(
+            !changed,
+            "a composer.json without alef's php-ext marker must never be touched"
+        );
+
+        let on_disk = std::fs::read_to_string(dir.path().join("composer.json")).expect("read file");
+        assert_eq!(on_disk, foreign);
+    }
+
+    #[test]
+    fn migrate_php_composer_phpunit_is_a_no_op_when_file_does_not_exist() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let relative_path = Path::new("composer.json");
+        let changed = migrate_php_composer_phpunit_constraint(dir.path(), relative_path).expect("must not error");
+        assert!(!changed);
+        assert!(!dir.path().join(relative_path).exists());
     }
 }

@@ -3,8 +3,9 @@ use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::ApiSurface;
 use crate::core::template_versions::{maven, toolchain};
 use crate::{scaffold::parse_author, scaffold::scaffold_meta, scaffold::xml_escape};
+use anyhow::Context as _;
 use minijinja::context;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Render `<dependency>` blocks for host-native capsule (Language) passthrough.
 /// Each `package` is a Maven `groupId:artifactId` coordinate (e.g.
@@ -256,6 +257,62 @@ pub(crate) fn scaffold_java(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
     ])
 }
 
+/// The two known-stale `LineLength` max values `scaffold_java` emitted before the fix that
+/// raised the ceiling to 200 for alef-emitted FFM call shims (`a95defbf5` raised 120 -> 140,
+/// `6382afdf6` raised 140 -> 200). Each is paired with the immediately following
+/// `ignorePattern` property line -- unique to this one `LineLength` module in the whole
+/// template -- so the anchor can never coincidentally match `MethodLength`'s own unrelated
+/// `max` property (150) or anything else in the file.
+const STALE_LINE_LENGTH_120: &str = "<property name=\"max\" value=\"120\"/>\n        <property name=\"ignorePattern\" value=\"^package.*|^import.*|a]href|href|http://|https://|ftp://\"/>";
+const STALE_LINE_LENGTH_140: &str = "<property name=\"max\" value=\"140\"/>\n        <property name=\"ignorePattern\" value=\"^package.*|^import.*|a]href|href|http://|https://|ftp://\"/>";
+const FIXED_LINE_LENGTH: &str = "<property name=\"max\" value=\"200\"/>\n        <property name=\"ignorePattern\" value=\"^package.*|^import.*|a]href|href|http://|https://|ftp://\"/>";
+
+/// Repair a pre-existing `packages/java/checkstyle.xml` whose `LineLength` ceiling is still
+/// 120 or 140 -- the exact defect fixed across two commits (`a95defbf5`, `6382afdf6`) that
+/// raised the limit to 200 so `mvn verify` stops failing on alef-emitted FFM call shims in
+/// `DefaultClient.java` that cannot reflow within a shorter line.
+///
+/// `packages/java/checkstyle.xml` is `generated_header: false` (create-only), so a repo
+/// scaffolded before either fix landed keeps checkstyle's default "error" severity on every
+/// regenerated facade file that legitimately needs more than 120 or 140 columns -- a build
+/// failure, not a warning. 120 and 140 are the *only* two values alef itself has ever emitted
+/// as this property's default (see the fix history), so an exact match against either is a
+/// safe positive-identification signature: a user who happened to configure `max` at precisely
+/// one of alef's own two historical defaults either never touched the line, or chose the same
+/// value alef would have -- either way, advancing it to alef's current correct value is the
+/// right outcome, and any other value (a deliberate customisation) is left untouched. ~keep
+pub(crate) fn migrate_java_checkstyle_line_length(base_dir: &Path, relative_path: &Path) -> anyhow::Result<bool> {
+    let path = base_dir.join(relative_path);
+    let Ok(existing) = std::fs::read_to_string(&path) else {
+        return Ok(false);
+    };
+
+    let stale = [STALE_LINE_LENGTH_120, STALE_LINE_LENGTH_140]
+        .into_iter()
+        .find(|candidate| existing.matches(candidate).count() == 1);
+    let Some(stale) = stale else {
+        return Ok(false);
+    };
+
+    let migrated = existing.replacen(stale, FIXED_LINE_LENGTH, 1);
+
+    let parent = path.parent().context("checkstyle.xml path has no parent directory")?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("failed to create temporary file in {}", parent.display()))?;
+    std::io::Write::write_all(&mut temporary, migrated.as_bytes())
+        .with_context(|| format!("failed to write temporary file for {}", path.display()))?;
+    temporary
+        .persist(&path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("failed to replace {}", path.display()))?;
+    tracing::warn!(
+        path = %path.display(),
+        "repaired pre-existing packages/java/checkstyle.xml: raised LineLength max to 200 \
+         to accommodate alef-emitted FFM call shims"
+    );
+    Ok(true)
+}
+
 struct ScmUrls {
     connection: String,
     developer_connection: String,
@@ -277,5 +334,107 @@ fn scm_urls(repository: &str) -> ScmUrls {
     ScmUrls {
         connection: format!("scm:git:git://{host}{suffix}"),
         developer_connection: format!("scm:git:ssh://git@{host}{suffix}"),
+    }
+}
+
+#[cfg(test)]
+mod migrate_tests {
+    use super::*;
+
+    fn checkstyle_with_line_length(max_property: &str) -> String {
+        format!(
+            "<?xml version=\"1.0\"?>\n<module name=\"Checker\">\n    <module name=\"LineLength\">\n        {max_property}\n        <property name=\"ignorePattern\" value=\"^package.*|^import.*|a]href|href|http://|https://|ftp://\"/>\n    </module>\n    <module name=\"TreeWalker\">\n        <module name=\"MethodLength\">\n            <property name=\"max\" value=\"150\"/>\n        </module>\n    </module>\n</module>\n"
+        )
+    }
+
+    #[test]
+    fn should_raise_line_length_to_200_when_stale_at_120() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path().join("packages/java");
+        std::fs::create_dir_all(&pkg_dir).expect("create packages/java");
+        let stale = checkstyle_with_line_length("<property name=\"max\" value=\"120\"/>");
+        std::fs::write(pkg_dir.join("checkstyle.xml"), &stale).expect("write stale checkstyle.xml");
+
+        let relative_path = Path::new("packages/java/checkstyle.xml");
+        let changed = migrate_java_checkstyle_line_length(dir.path(), relative_path).expect("must not error");
+        assert!(
+            changed,
+            "a checkstyle.xml stuck at the old LineLength ceiling must be reported as changed"
+        );
+
+        let on_disk = std::fs::read_to_string(pkg_dir.join("checkstyle.xml")).expect("read migrated file");
+        assert!(on_disk.contains("<property name=\"max\" value=\"200\"/>"));
+        assert!(!on_disk.contains("value=\"120\""));
+        assert!(
+            on_disk.contains("<property name=\"max\" value=\"150\"/>"),
+            "MethodLength's unrelated max property must survive untouched"
+        );
+
+        let changed_again = migrate_java_checkstyle_line_length(dir.path(), relative_path).expect("must not error");
+        assert!(
+            !changed_again,
+            "second pass over an already-migrated file must be a no-op"
+        );
+    }
+
+    #[test]
+    fn should_raise_line_length_to_200_when_stale_at_140() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path().join("packages/java");
+        std::fs::create_dir_all(&pkg_dir).expect("create packages/java");
+        let stale = checkstyle_with_line_length("<property name=\"max\" value=\"140\"/>");
+        std::fs::write(pkg_dir.join("checkstyle.xml"), &stale).expect("write stale checkstyle.xml");
+
+        let relative_path = Path::new("packages/java/checkstyle.xml");
+        let changed = migrate_java_checkstyle_line_length(dir.path(), relative_path).expect("must not error");
+        assert!(changed);
+
+        let on_disk = std::fs::read_to_string(pkg_dir.join("checkstyle.xml")).expect("read migrated file");
+        assert!(on_disk.contains("<property name=\"max\" value=\"200\"/>"));
+        assert!(!on_disk.contains("value=\"140\""));
+    }
+
+    #[test]
+    fn should_not_touch_a_checkstyle_with_a_customised_line_length() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path().join("packages/java");
+        std::fs::create_dir_all(&pkg_dir).expect("create packages/java");
+        let customised = checkstyle_with_line_length("<property name=\"max\" value=\"100\"/>");
+        std::fs::write(pkg_dir.join("checkstyle.xml"), &customised).expect("write customised checkstyle.xml");
+
+        let relative_path = Path::new("packages/java/checkstyle.xml");
+        let changed = migrate_java_checkstyle_line_length(dir.path(), relative_path).expect("must not error");
+        assert!(
+            !changed,
+            "a LineLength max outside alef's two known historical defaults must never be touched"
+        );
+
+        let on_disk = std::fs::read_to_string(pkg_dir.join("checkstyle.xml")).expect("read file");
+        assert_eq!(
+            on_disk, customised,
+            "customised checkstyle.xml must survive byte-for-byte"
+        );
+    }
+
+    #[test]
+    fn should_not_touch_a_checkstyle_already_at_200() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path().join("packages/java");
+        std::fs::create_dir_all(&pkg_dir).expect("create packages/java");
+        let current = checkstyle_with_line_length("<property name=\"max\" value=\"200\"/>");
+        std::fs::write(pkg_dir.join("checkstyle.xml"), &current).expect("write current checkstyle.xml");
+
+        let relative_path = Path::new("packages/java/checkstyle.xml");
+        let changed = migrate_java_checkstyle_line_length(dir.path(), relative_path).expect("must not error");
+        assert!(!changed);
+    }
+
+    #[test]
+    fn migrate_java_checkstyle_is_a_no_op_when_file_does_not_exist() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let relative_path = Path::new("packages/java/checkstyle.xml");
+        let changed = migrate_java_checkstyle_line_length(dir.path(), relative_path).expect("must not error");
+        assert!(!changed);
+        assert!(!dir.path().join(relative_path).exists());
     }
 }

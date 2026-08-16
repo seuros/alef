@@ -7,7 +7,8 @@ use crate::{
     scaffold::ScaffoldMeta, scaffold::cargo_package_header, scaffold::core_dep_features,
     scaffold::detect_workspace_inheritance, scaffold::render_extra_deps, scaffold::scaffold_meta,
 };
-use std::path::PathBuf;
+use anyhow::Context as _;
+use std::path::{Path, PathBuf};
 
 const NAPI_TARGETS: &[&str] = &[
     "x86_64-unknown-linux-gnu",
@@ -666,6 +667,65 @@ pub(crate) fn scaffold_node(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
     Ok(files)
 }
 
+/// The exact `exports` map [`scaffold_node`] emitted for a service-API crate before the fix
+/// that exposed a `./service` subpath. `entrypoint` is a fixed literal (`index-wrapper.cjs`)
+/// whenever `has_service_api` is true, so this whole block carries no per-project variables at
+/// all — every service-API crate scaffolded before the fix got this identical text.
+const STALE_SERVICE_EXPORTS_MAP: &str = "\"exports\": {\n    \".\": {\n      \"types\": \"./index.d.ts\",\n      \"require\": \"./index-wrapper.cjs\",\n      \"default\": \"./index-wrapper.cjs\"\n    }\n  },";
+
+/// The replacement `exports` map for a service-API crate, adding the `./service` subpath —
+/// the exact shape [`scaffold_node`]'s `has_service_api` branch emits today.
+const FIXED_SERVICE_EXPORTS_MAP: &str = "\"exports\": {\n    \".\": {\n      \"types\": \"./index.d.ts\",\n      \"require\": \"./index-wrapper.cjs\",\n      \"default\": \"./index-wrapper.cjs\"\n    },\n    \"./service\": {\n      \"types\": \"./index.d.ts\",\n      \"require\": \"./service.cjs\",\n      \"default\": \"./service.cjs\"\n    }\n  },";
+
+/// Repair a pre-existing `crates/<crate>-node/package.json` whose `exports` map still lacks the
+/// `./service` subpath for a service-API crate — the exact defect fixed in [`scaffold_node`]'s
+/// `has_service_api` branch (a `./service` subpath export was added so consumers can
+/// `import ... from '<pkg>/service'`).
+///
+/// `crates/*-node/package.json` is `generated_header: false` (create-only), so a service-API
+/// crate scaffolded before that fix keeps shipping `service.cjs` in `files` (the module ships)
+/// while `exports` never resolves the `./service` subpath at all — the file is present but
+/// entirely unreachable via `require`/`import`. Detection requires *both* the exact stale
+/// `exports` block text (see [`STALE_SERVICE_EXPORTS_MAP`], which — unlike `main`/`module`/
+/// `types` in the wasm package.json case — carries no per-project variables, so an exact
+/// substring match is sufficient) *and* `"service.cjs"` present in the file's `files` array, as
+/// independent confirmation this really is a service-API crate's package.json and not some
+/// coincidental byte match. Only a single occurrence of the stale block is ever replaced — a
+/// package.json with the block duplicated (which `scaffold_node` never produces) is left
+/// untouched rather than guessed at. Everything else in the file — a consumer's added
+/// `devDependencies`, extra `scripts`, reordered fields — survives byte-for-byte, since this
+/// only ever replaces the one matched substring. ~keep
+pub(crate) fn migrate_node_package_json_service_export(base_dir: &Path, relative_path: &Path) -> anyhow::Result<bool> {
+    let path = base_dir.join(relative_path);
+    let Ok(existing) = std::fs::read_to_string(&path) else {
+        return Ok(false);
+    };
+    if !existing.contains("\"service.cjs\"") {
+        return Ok(false);
+    }
+    if existing.matches(STALE_SERVICE_EXPORTS_MAP).count() != 1 {
+        return Ok(false);
+    }
+    let migrated = existing.replacen(STALE_SERVICE_EXPORTS_MAP, FIXED_SERVICE_EXPORTS_MAP, 1);
+
+    let parent = path
+        .parent()
+        .context("node package.json path has no parent directory")?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("failed to create temporary file in {}", parent.display()))?;
+    std::io::Write::write_all(&mut temporary, migrated.as_bytes())
+        .with_context(|| format!("failed to write temporary file for {}", path.display()))?;
+    temporary
+        .persist(&path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("failed to replace {}", path.display()))?;
+    tracing::warn!(
+        path = %path.display(),
+        "repaired pre-existing crates/*-node/package.json: exposed the ./service subpath export"
+    );
+    Ok(true)
+}
+
 fn npm_repository_block(repository_url: &str) -> String {
     let repository_git_url = if repository_url.starts_with("git+") {
         repository_url.to_string()
@@ -722,4 +782,108 @@ fn npm_publish_metadata_blocks(meta: &ScaffoldMeta) -> (String, String, String, 
         format!(",\n  \"keywords\": [{}]", entries.join(", "))
     };
     (homepage_block, bugs_block, author_block, keywords_block)
+}
+
+#[cfg(test)]
+mod migrate_tests {
+    use super::*;
+
+    fn pre_fix_service_package_json() -> String {
+        format!(
+            "{{\n  \"name\": \"@scope/example\",\n  \"version\": \"1.0.0\",\n  \"main\": \"index-wrapper.cjs\",\n  \"types\": \"index.d.ts\",\n  {STALE_SERVICE_EXPORTS_MAP}\n  \"files\": [\"index.js\", \"index-wrapper.cjs\", \"index.d.ts\", \"service.cjs\", \"*.node\"],\n  \"scripts\": {{\n    \"build\": \"napi build\"\n  }}\n}}\n"
+        )
+    }
+
+    #[test]
+    fn should_add_service_subpath_export_when_missing_from_service_api_crate() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path().join("crates/example-node");
+        std::fs::create_dir_all(&pkg_dir).expect("create crates/example-node");
+        std::fs::write(pkg_dir.join("package.json"), pre_fix_service_package_json())
+            .expect("write pre-fix package.json");
+
+        let relative_path = Path::new("crates/example-node/package.json");
+        let changed =
+            migrate_node_package_json_service_export(dir.path(), relative_path).expect("migration must not error");
+        assert!(
+            changed,
+            "a service-API package.json missing ./service export must be reported as changed"
+        );
+
+        let on_disk = std::fs::read_to_string(pkg_dir.join("package.json")).expect("read migrated file");
+        let parsed: serde_json::Value = serde_json::from_str(&on_disk).expect("migrated file must be valid JSON");
+        assert_eq!(parsed["exports"]["./service"]["require"], "./service.cjs");
+        assert_eq!(
+            parsed["exports"]["."]["require"], "./index-wrapper.cjs",
+            "the root export must be preserved"
+        );
+        assert_eq!(
+            parsed["scripts"]["build"], "napi build",
+            "fields outside exports must survive untouched"
+        );
+
+        let changed_again =
+            migrate_node_package_json_service_export(dir.path(), relative_path).expect("second pass must not error");
+        assert!(
+            !changed_again,
+            "second pass over an already-migrated file must be a no-op"
+        );
+    }
+
+    #[test]
+    fn should_not_touch_a_non_service_package_json() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path().join("crates/example-node");
+        std::fs::create_dir_all(&pkg_dir).expect("create crates/example-node");
+        let non_service = "{\n  \"name\": \"@scope/example\",\n  \"main\": \"index.js\",\n  \"exports\": {\n    \".\": {\n      \"types\": \"./index.d.ts\",\n      \"require\": \"./index.js\",\n      \"default\": \"./index.js\"\n    }\n  },\n  \"files\": [\"index.js\", \"index.d.ts\", \"*.node\"]\n}\n";
+        std::fs::write(pkg_dir.join("package.json"), non_service).expect("write non-service package.json");
+
+        let relative_path = Path::new("crates/example-node/package.json");
+        let changed =
+            migrate_node_package_json_service_export(dir.path(), relative_path).expect("migration must not error");
+        assert!(
+            !changed,
+            "a package.json with no service.cjs in files must never be touched"
+        );
+
+        let on_disk = std::fs::read_to_string(pkg_dir.join("package.json")).expect("read file");
+        assert_eq!(
+            on_disk, non_service,
+            "a non-service package.json must survive byte-for-byte"
+        );
+    }
+
+    #[test]
+    fn should_not_touch_a_package_json_that_already_has_the_service_export() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path().join("crates/example-node");
+        std::fs::create_dir_all(&pkg_dir).expect("create crates/example-node");
+        let already_fixed = format!(
+            "{{\n  \"name\": \"@scope/example\",\n  {FIXED_SERVICE_EXPORTS_MAP}\n  \"files\": [\"index.js\", \"index-wrapper.cjs\", \"index.d.ts\", \"service.cjs\", \"*.node\"]\n}}\n"
+        );
+        std::fs::write(pkg_dir.join("package.json"), &already_fixed).expect("write already-fixed package.json");
+
+        let relative_path = Path::new("crates/example-node/package.json");
+        let changed =
+            migrate_node_package_json_service_export(dir.path(), relative_path).expect("migration must not error");
+        assert!(
+            !changed,
+            "a package.json that already has the ./service export must never be touched"
+        );
+
+        let on_disk = std::fs::read_to_string(pkg_dir.join("package.json")).expect("read file");
+        assert_eq!(
+            on_disk, already_fixed,
+            "an already-fixed package.json must survive byte-for-byte"
+        );
+    }
+
+    #[test]
+    fn migrate_node_service_export_is_a_no_op_when_file_does_not_exist() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let relative_path = Path::new("crates/example-node/package.json");
+        let changed = migrate_node_package_json_service_export(dir.path(), relative_path).expect("must not error");
+        assert!(!changed);
+        assert!(!dir.path().join(relative_path).exists());
+    }
 }

@@ -333,7 +333,10 @@ pub fn write_scaffold_files_report(
     // (html-to-markdown is in exactly that state). Repairing first would leave any run that
     // failed between the two steps pointing at a nonexistent root source file -- trading
     // silent coverage loss for a build graph that will not resolve. ~keep
-    if files.iter().any(|file| file.path == Path::new("packages/zig/build.zig")) {
+    if files
+        .iter()
+        .any(|file| file.path == Path::new("packages/zig/build.zig"))
+    {
         crate::scaffold::migrate_build_zig_test_target(base_dir)
             .context("failed to migrate pre-existing packages/zig/build.zig test target")?;
     }
@@ -387,6 +390,115 @@ pub fn write_scaffold_files_report(
         crate::scaffold::migrate_swift_placeholder_test(base_dir, &swift_test_file.path, &swift_test_file.content)
             .context("failed to migrate pre-existing packages/swift/Tests/*Tests.swift placeholder")?;
     }
+
+    // `packages/dart/.pubignore` is `generated_header: false` on a markable (`.pubignore` is not
+    // a `CommentStyle`-recognised extension, but see `migrate_dart_pubignore`'s doc for why an
+    // exact byte match is still safe here). A repo scaffolded before the fix that stopped
+    // excluding native FFI libraries from the pub.dev tarball keeps silently stripping them from
+    // every release; see `migrate_dart_pubignore`'s doc for the full defect. ~keep
+    if let Some(pubignore_file) = files
+        .iter()
+        .find(|file| file.path == Path::new("packages/dart/.pubignore"))
+    {
+        crate::scaffold::migrate_dart_pubignore(base_dir, &pubignore_file.path, &pubignore_file.content)
+            .context("failed to migrate pre-existing packages/dart/.pubignore")?;
+    }
+
+    // `crates/<crate>-wasm/package.json` is `generated_header: false`; a repo scaffolded before
+    // the `exports` map existed keeps shipping a package.json unresolvable via package-exports
+    // subpath/conditional resolution forever. Self-contained (derives the target/crate values it
+    // needs from the file's own `main`/`module`/`types` fields), so no `replacement` content is
+    // threaded through; see `migrate_wasm_package_json_exports`'s doc. ~keep
+    if let Some(wasm_pkg_file) = files.iter().find(|file| {
+        file.path
+            .to_str()
+            .is_some_and(|path| path.ends_with("-wasm/package.json"))
+    }) {
+        crate::scaffold::migrate_wasm_package_json_exports(base_dir, &wasm_pkg_file.path)
+            .context("failed to migrate pre-existing crates/*-wasm/package.json exports map")?;
+    }
+
+    // `crates/<crate>-node/package.json` (the main napi-rs package, not the per-platform
+    // `npm/<platform>/package.json` sub-packages) is `generated_header: false`; a service-API
+    // crate scaffolded before the fix that exposed a `./service` subpath keeps shipping
+    // `service.cjs` unreachable via `require`/`import`. Matched by parent-directory name (ending
+    // in `-node`) rather than the bare filename, so the platform sub-package manifests --
+    // nested one level deeper under `npm/<platform>/` -- are never candidates. ~keep
+    if let Some(node_pkg_file) = files.iter().find(|file| {
+        file.path.file_name() == Some(std::ffi::OsStr::new("package.json"))
+            && file
+                .path
+                .parent()
+                .and_then(|parent| parent.file_name())
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with("-node"))
+    }) {
+        crate::scaffold::migrate_node_package_json_service_export(base_dir, &node_pkg_file.path)
+            .context("failed to migrate pre-existing crates/*-node/package.json service export")?;
+    }
+
+    // `packages/zig/examples/example.zig` is `generated_header: false`; a repo scaffolded before
+    // the Zig 0.16 rewrite (`cc7f824b0`) keeps shipping an example that no longer compiles under
+    // the pinned toolchain. Fires only on an exact match against the one known pre-0.16 shape --
+    // see `migrate_zig_example`'s doc. ~keep
+    if let Some(zig_example_file) = files
+        .iter()
+        .find(|file| file.path == Path::new("packages/zig/examples/example.zig"))
+    {
+        crate::scaffold::migrate_zig_example(base_dir, &zig_example_file.path, &zig_example_file.content)
+            .context("failed to migrate pre-existing packages/zig/examples/example.zig")?;
+    }
+
+    // `packages/kotlin/build.gradle.kts` is `generated_header: false`; a repo scaffolded before
+    // either of the two independent fixes (`srcDir(".")` output-overlap breaking
+    // `publishToMavenCentral`, the missing mavenPublishing trailing comma churning against
+    // ktlint) keeps carrying one or both. Self-contained (no `replacement` needed, the file's own
+    // path is fixed); see `migrate_kotlin_build_gradle`'s doc. ~keep
+    if files
+        .iter()
+        .any(|file| file.path == Path::new("packages/kotlin/build.gradle.kts"))
+    {
+        crate::scaffold::migrate_kotlin_build_gradle(base_dir)
+            .context("failed to migrate pre-existing packages/kotlin/build.gradle.kts")?;
+    }
+
+    // `composer.json` (root and/or `{pkg_dir}`) is `generated_header: false`; a repo scaffolded
+    // before `ddde77260` ("widen the scaffolded PHPUnit constraint to the declared PHP floor")
+    // keeps a `phpunit/phpunit` constraint that cannot resolve against the declared PHP >=8.2
+    // floor on 8.2/8.3. Run over every emitted composer.json path this run (there are at most
+    // two -- root and package-dir, see `scaffold_php`), each independently guarded by
+    // `migrate_php_composer_phpunit_constraint`'s own exact-match + php-ext marker check. ~keep
+    for composer_file in files.iter().filter(|file| {
+        file.path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == "composer.json")
+    }) {
+        crate::scaffold::migrate_php_composer_phpunit_constraint(base_dir, &composer_file.path)
+            .context("failed to migrate pre-existing composer.json phpunit constraint")?;
+    }
+
+    // `packages/java/checkstyle.xml` is `generated_header: false`; a repo scaffolded before
+    // either LineLength bump (`a95defbf5` 120->140, `6382afdf6` 140->200) fails `mvn verify` on
+    // every alef-emitted FFM call shim that needs more columns than the stale ceiling allows.
+    // Self-contained; see `migrate_java_checkstyle_line_length`'s doc. ~keep
+    if files
+        .iter()
+        .any(|file| file.path == Path::new("packages/java/checkstyle.xml"))
+    {
+        crate::scaffold::migrate_java_checkstyle_line_length(base_dir, Path::new("packages/java/checkstyle.xml"))
+            .context("failed to migrate pre-existing packages/java/checkstyle.xml LineLength ceiling")?;
+    }
+
+    // `.cargo/config.toml`'s wasm-only fallback (no `[scaffold.cargo]` configured) is unusual:
+    // `scaffold()` only pushes it into `files` when the path does *not already exist*, so once a
+    // repo has one it drops out of `files` entirely and this can never be gated the way every
+    // migration above is (on the file's presence in this run's `files`). The migrator is
+    // therefore called unconditionally on every run; it is self-guarding via an exact byte match
+    // against the one known pre-fix constant, so it is a no-op on any non-wasm project, any
+    // `[scaffold.cargo]`-driven config, or a file that doesn't exist at all. ~keep
+    crate::scaffold::migrate_wasm_cargo_config_allow_multiple_definition(base_dir)
+        .context("failed to migrate pre-existing .cargo/config.toml wasm32 rustflags")?;
 
     Ok(report)
 }

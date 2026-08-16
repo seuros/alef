@@ -533,6 +533,53 @@ fn is_vacuous_dart_placeholder(content: &str) -> bool {
         && content.matches("test(").count() == 1
 }
 
+/// The exact `.pubignore` body [`scaffold_dart`] emitted before the fix that stopped excluding
+/// native FFI libraries from the published pub.dev tarball.
+const STALE_PUBIGNORE: &str = "android/\nios/\nblobs/\nlib/src/native/\nrust/\nexample/\ntest/\n*.so\n*.dylib\n*.dll\n";
+
+/// Repair a pre-existing `packages/dart/.pubignore` that still excludes `lib/src/native/` and
+/// `*.so`/`*.dylib`/`*.dll` — the exact defect fixed in [`scaffold_dart`]'s `pubignore` literal.
+///
+/// `.pubignore` is `generated_header: false` (create-only), so a repo scaffolded before that fix
+/// keeps excluding its own native FFI libraries from the published pub.dev tarball forever:
+/// `.pubignore` fully replaces git-based file listing, so those entries silently strip the
+/// CI-staged natives from every release, leaving consumers unable to load the FFI library at
+/// all — not a degraded build, a completely broken one. Unlike the placeholder-test migrators,
+/// `.pubignore` carries no per-project variables at all (no crate name, no module name — every
+/// scaffolded Dart package gets the identical literal), so an exact byte match against the one
+/// known-bad constant is both sufficient and maximally conservative: any consumer edit at all —
+/// adding an entry, reordering lines, even trailing-whitespace drift — fails the match and is
+/// left completely untouched, exactly like `migrate_swift_placeholder_test`'s "hand-written
+/// suite must survive byte for byte" guarantee. ~keep
+pub(crate) fn migrate_dart_pubignore(base_dir: &Path, relative_path: &Path, replacement: &str) -> anyhow::Result<bool> {
+    let path = base_dir.join(relative_path);
+    let Ok(existing) = std::fs::read_to_string(&path) else {
+        return Ok(false);
+    };
+    if existing != STALE_PUBIGNORE {
+        return Ok(false);
+    }
+    if existing == replacement {
+        return Ok(false);
+    }
+
+    let parent = path.parent().context(".pubignore path has no parent directory")?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("failed to create temporary file in {}", parent.display()))?;
+    std::io::Write::write_all(&mut temporary, replacement.as_bytes())
+        .with_context(|| format!("failed to write temporary file for {}", path.display()))?;
+    temporary
+        .persist(&path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("failed to replace {}", path.display()))?;
+    tracing::warn!(
+        path = %path.display(),
+        "repaired pre-existing packages/dart/.pubignore: stopped excluding native FFI \
+         libraries (lib/src/native/, *.so/*.dylib/*.dll) from the published package"
+    );
+    Ok(true)
+}
+
 /// Names excluded from Dart binding generation, mirroring `[crates.dart] exclude_types` plus
 /// `[crates.ffi] exclude_types` that the real Dart binding emitter honors. Kept in sync
 /// deliberately rather than shared, since this seed-picker only needs *a* safe, visible name,
@@ -746,7 +793,10 @@ sources = []
         };
         let out = scaffold_dart_test(&api, &minimal_config(), "my_lib", "my_lib/my_lib.dart");
 
-        assert!(out.contains("import 'package:my_lib/my_lib.dart' as my_lib;"), "got:\n{out}");
+        assert!(
+            out.contains("import 'package:my_lib/my_lib.dart' as my_lib;"),
+            "got:\n{out}"
+        );
         assert!(
             out.contains("test('Widget equality holds for identical field values'"),
             "got:\n{out}"
@@ -862,9 +912,17 @@ sources = []
     /// case where the placeholder assertion is legitimate.
     #[test]
     fn scaffold_test_falls_back_to_placeholder_when_api_surface_is_empty() {
-        let out = scaffold_dart_test(&ApiSurface::default(), &minimal_config(), "my_lib", "my_lib/my_lib.dart");
+        let out = scaffold_dart_test(
+            &ApiSurface::default(),
+            &minimal_config(),
+            "my_lib",
+            "my_lib/my_lib.dart",
+        );
 
-        assert!(out.contains("import 'package:my_lib/my_lib.dart' as my_lib;"), "got:\n{out}");
+        assert!(
+            out.contains("import 'package:my_lib/my_lib.dart' as my_lib;"),
+            "got:\n{out}"
+        );
         assert!(out.contains("test('placeholder', () {"), "got:\n{out}");
         assert!(out.contains("expect(1 + 1, equals(2));"), "got:\n{out}");
         assert!(
@@ -893,11 +951,7 @@ sources = []
             !test_file.generated_header,
             "test seed must be generated_header: false (create-only)"
         );
-        assert!(
-            test_file.content.contains("equals(b)"),
-            "got:\n{}",
-            test_file.content
-        );
+        assert!(test_file.content.contains("equals(b)"), "got:\n{}", test_file.content);
         assert!(
             !test_file.content.contains("expect(1 + 1, equals(2));"),
             "must not emit the old vacuous placeholder test, got:\n{}",
@@ -1102,7 +1156,9 @@ void main() {
     fn vacuity_signature_matches_real_consumer_trees() {
         assert!(is_vacuous_dart_placeholder(h2m_historical_placeholder()));
         assert!(!is_vacuous_dart_placeholder(liter_llm_hand_written_suite()));
-        assert!(!is_vacuous_dart_placeholder(tree_sitter_language_pack_hand_written_suite()));
+        assert!(!is_vacuous_dart_placeholder(
+            tree_sitter_language_pack_hand_written_suite()
+        ));
     }
 
     /// tree-sitter-language-pack's real 162-line hand-written suite, the largest and
@@ -1122,8 +1178,7 @@ void main() {
             .expect("migration must not error");
         assert!(!changed, "a hand-written test must never be reported as changed");
 
-        let on_disk =
-            std::fs::read_to_string(test_dir.join("tree_sitter_language_pack_test.dart")).expect("read file");
+        let on_disk = std::fs::read_to_string(test_dir.join("tree_sitter_language_pack_test.dart")).expect("read file");
         assert_eq!(on_disk, hand_written, "hand-written test must survive byte-for-byte");
     }
 
@@ -1149,9 +1204,12 @@ void main() {
             }],
         );
         let relative_path = std::path::Path::new("packages/dart/test/my_lib_test.dart");
-        let changed = migrate_dart_placeholder_test(dir.path(), relative_path, &replacement)
-            .expect("migration must not error");
-        assert!(changed, "the current generator's own placeholder must be reported as changed");
+        let changed =
+            migrate_dart_placeholder_test(dir.path(), relative_path, &replacement).expect("migration must not error");
+        assert!(
+            changed,
+            "the current generator's own placeholder must be reported as changed"
+        );
 
         let on_disk = std::fs::read_to_string(test_dir.join("my_lib_test.dart")).expect("read migrated file");
         assert_eq!(on_disk, replacement);
@@ -1166,8 +1224,11 @@ void main() {
         let dir = tempfile::tempdir().expect("tempdir");
         let test_dir = dir.path().join("packages/dart/test");
         std::fs::create_dir_all(&test_dir).expect("create packages/dart/test");
-        std::fs::write(test_dir.join("html_to_markdown_rs_test.dart"), h2m_historical_placeholder())
-            .expect("write h2m historical placeholder");
+        std::fs::write(
+            test_dir.join("html_to_markdown_rs_test.dart"),
+            h2m_historical_placeholder(),
+        )
+        .expect("write h2m historical placeholder");
 
         let replacement = dart_equality_round_trip_test(
             "html_to_markdown_rs",
@@ -1179,17 +1240,23 @@ void main() {
             }],
         );
         let relative_path = std::path::Path::new("packages/dart/test/html_to_markdown_rs_test.dart");
-        let changed = migrate_dart_placeholder_test(dir.path(), relative_path, &replacement)
-            .expect("migration must not error");
-        assert!(changed, "h2m's real historical placeholder shape must be reported as changed");
+        let changed =
+            migrate_dart_placeholder_test(dir.path(), relative_path, &replacement).expect("migration must not error");
+        assert!(
+            changed,
+            "h2m's real historical placeholder shape must be reported as changed"
+        );
 
         let on_disk =
             std::fs::read_to_string(test_dir.join("html_to_markdown_rs_test.dart")).expect("read migrated file");
         assert_eq!(on_disk, replacement);
 
-        let changed_again = migrate_dart_placeholder_test(dir.path(), relative_path, &replacement)
-            .expect("second pass must not error");
-        assert!(!changed_again, "second pass over an already-migrated file must be a no-op");
+        let changed_again =
+            migrate_dart_placeholder_test(dir.path(), relative_path, &replacement).expect("second pass must not error");
+        assert!(
+            !changed_again,
+            "second pass over an already-migrated file must be a no-op"
+        );
     }
 
     /// Requirement 3: liter-llm's real hand-written suite (3 `expect(` calls, a
@@ -1219,8 +1286,68 @@ void main() {
     fn migrate_dart_placeholder_is_a_no_op_when_file_does_not_exist() {
         let dir = tempfile::tempdir().expect("tempdir");
         let relative_path = std::path::Path::new("packages/dart/test/my_lib_test.dart");
-        let changed =
-            migrate_dart_placeholder_test(dir.path(), relative_path, "new content").expect("must not error");
+        let changed = migrate_dart_placeholder_test(dir.path(), relative_path, "new content").expect("must not error");
+        assert!(!changed);
+        assert!(!dir.path().join(relative_path).exists());
+    }
+
+    #[test]
+    fn should_replace_stale_pubignore_that_excludes_native_libraries() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path().join("packages/dart");
+        std::fs::create_dir_all(&pkg_dir).expect("create packages/dart");
+        std::fs::write(pkg_dir.join(".pubignore"), STALE_PUBIGNORE).expect("write stale .pubignore");
+
+        let replacement = "android/\nios/\nblobs/\nrust/\nexample/\ntest/\n";
+        let relative_path = std::path::Path::new("packages/dart/.pubignore");
+        let changed = migrate_dart_pubignore(dir.path(), relative_path, replacement).expect("migration must not error");
+        assert!(changed, "the known-stale .pubignore must be reported as changed");
+
+        let on_disk = std::fs::read_to_string(pkg_dir.join(".pubignore")).expect("read migrated file");
+        assert_eq!(on_disk, replacement);
+        assert!(
+            !on_disk.contains("lib/src/native/") && !on_disk.contains("*.so"),
+            "native FFI libraries must no longer be excluded"
+        );
+
+        let changed_again =
+            migrate_dart_pubignore(dir.path(), relative_path, replacement).expect("second pass must not error");
+        assert!(
+            !changed_again,
+            "second pass over an already-migrated file must be a no-op"
+        );
+    }
+
+    #[test]
+    fn should_not_touch_a_hand_edited_pubignore() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path().join("packages/dart");
+        std::fs::create_dir_all(&pkg_dir).expect("create packages/dart");
+        let hand_written =
+            "android/\nios/\nblobs/\nlib/src/native/\nrust/\nexample/\ntest/\n*.so\n*.dylib\n*.dll\ncustom_ignore/\n";
+        std::fs::write(pkg_dir.join(".pubignore"), hand_written).expect("write hand-edited .pubignore");
+
+        let relative_path = std::path::Path::new("packages/dart/.pubignore");
+        let changed = migrate_dart_pubignore(
+            dir.path(),
+            relative_path,
+            "android/\nios/\nblobs/\nrust/\nexample/\ntest/\n",
+        )
+        .expect("migration must not error");
+        assert!(!changed, "a .pubignore with any consumer edit must never be touched");
+
+        let on_disk = std::fs::read_to_string(pkg_dir.join(".pubignore")).expect("read file");
+        assert_eq!(
+            on_disk, hand_written,
+            "hand-edited .pubignore must survive byte-for-byte"
+        );
+    }
+
+    #[test]
+    fn migrate_dart_pubignore_is_a_no_op_when_file_does_not_exist() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let relative_path = std::path::Path::new("packages/dart/.pubignore");
+        let changed = migrate_dart_pubignore(dir.path(), relative_path, "new content").expect("must not error");
         assert!(!changed);
         assert!(!dir.path().join(relative_path).exists());
     }

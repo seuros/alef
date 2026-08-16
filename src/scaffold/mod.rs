@@ -3,6 +3,7 @@
 use crate::core::backend::GeneratedFile;
 use crate::core::config::{Language, ResolvedCrateConfig, ScaffoldCargo, ScaffoldCargoEnvValue};
 use crate::core::ir::ApiSurface;
+use anyhow::Context as _;
 
 mod languages;
 pub(crate) mod naming;
@@ -13,7 +14,10 @@ pub use languages::{
     render_csharp_runtime_json_template,
 };
 pub(crate) use languages::{
-    migrate_build_zig_test_target, migrate_dart_placeholder_test, migrate_swift_placeholder_test,
+    migrate_build_zig_test_target, migrate_dart_placeholder_test, migrate_dart_pubignore,
+    migrate_java_checkstyle_line_length, migrate_kotlin_build_gradle, migrate_node_package_json_service_export,
+    migrate_php_composer_phpunit_constraint, migrate_swift_placeholder_test, migrate_wasm_package_json_exports,
+    migrate_zig_example,
 };
 
 /// Fields available via `[workspace.package]` inheritance detected from the root `Cargo.toml`.
@@ -610,6 +614,60 @@ pub fn scaffold(
     files.extend(scaffold_gitattributes(config, languages));
 
     Ok(files)
+}
+
+/// The exact `.cargo/config.toml` body [`scaffold`] emitted for wasm-only projects (no
+/// `[scaffold.cargo]` configured) before the fix that added
+/// `-C link-arg=--allow-multiple-definition` to the wasm32 rustflags.
+const STALE_WASM_CARGO_CONFIG: &str = "[build]\nincremental = true\n\n[target.wasm32-unknown-unknown]\nrustflags = [\"-C\", \"target-feature=+bulk-memory\", \"--cfg\", \"getrandom_backend=\\\"wasm_js\\\"\"]\n\n[net]\ngit-fetch-with-cli = true\n\n[registries.crates-io]\nprotocol = \"sparse\"\n";
+
+/// Repair a pre-existing `.cargo/config.toml` that still carries the pre-fix wasm32 rustflags
+/// -- the exact defect fixed when this file's hardcoded, wasm-only literal above gained
+/// `-C link-arg=--allow-multiple-definition` (`cda088792`, "allow multiple definition on
+/// wasm32 link"). wasm32-unknown-unknown has no unified libc, so multiple C dependencies
+/// (tree-sitter's wasm shim, a WASI-built Tesseract) can each ship functionally-equivalent
+/// libc stubs that `wasm-ld` rejects as duplicate definitions without this flag; a repo that
+/// never happens to combine such dependencies never hits the failure, which is why this can
+/// stay unnoticed indefinitely once scaffolded.
+///
+/// This file is unusual among the create-once scaffold seeds above: `scaffold()`'s `else if`
+/// arm only ever pushes it into the returned `files` list when `.cargo/config.toml` does
+/// *not already exist* on disk, so once a repo has one it drops out of `files` entirely and
+/// never reaches `write_scaffold_files_report`'s per-file ownership guard the way the other
+/// create-once seeds (the zig/dart/swift placeholders, `.pubignore`, `example.zig`) do.
+/// Detection here is therefore unconditional on the generated file list and purely
+/// content-driven: an exact byte match against the one known-bad constant. This file carries
+/// no per-project variables at all (this branch only fires without `[scaffold.cargo]`
+/// configured, so nothing here is templated), so exact-match is both sufficient and maximally
+/// conservative -- any consumer edit at all leaves the file completely untouched. ~keep
+pub(crate) fn migrate_wasm_cargo_config_allow_multiple_definition(base_dir: &std::path::Path) -> anyhow::Result<bool> {
+    let path = base_dir.join(".cargo/config.toml");
+    let Ok(existing) = std::fs::read_to_string(&path) else {
+        return Ok(false);
+    };
+    if existing != STALE_WASM_CARGO_CONFIG {
+        return Ok(false);
+    }
+
+    let replacement = "[build]\nincremental = true\n\n[target.wasm32-unknown-unknown]\nrustflags = [\"-C\", \"target-feature=+bulk-memory\", \"--cfg\", \"getrandom_backend=\\\"wasm_js\\\"\", \"-C\", \"link-arg=--allow-multiple-definition\"]\n\n[net]\ngit-fetch-with-cli = true\n\n[registries.crates-io]\nprotocol = \"sparse\"\n";
+
+    let parent = path
+        .parent()
+        .context(".cargo/config.toml path has no parent directory")?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("failed to create temporary file in {}", parent.display()))?;
+    std::io::Write::write_all(&mut temporary, replacement.as_bytes())
+        .with_context(|| format!("failed to write temporary file for {}", path.display()))?;
+    temporary
+        .persist(&path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("failed to replace {}", path.display()))?;
+    tracing::warn!(
+        path = %path.display(),
+        "repaired pre-existing .cargo/config.toml: added -C link-arg=--allow-multiple-definition \
+         to the wasm32-unknown-unknown rustflags"
+    );
+    Ok(true)
 }
 
 /// Render the canonical workspace `.cargo/config.toml` from a `[scaffold.cargo]`
