@@ -845,18 +845,19 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             // that emits one file per public type, an item added since the last
             // regen) is invisible to it. Closing that requires knowing what
             // generation would produce, so every crate pays a regeneration pass
-            // here (mirrors `alef diff`) to find files entirely absent from disk. ~keep
+            // here (mirrors `alef diff`) to find files entirely absent from disk, and
+            // -- in the same pass -- files that exist but were never marked and so
+            // can never be written by a plain `alef generate` (frozen; see
+            // `FrozenFile`). ~keep
             let mut missing_generated_files: Vec<String> = Vec::new();
+            let mut frozen_generated_files: Vec<FrozenFile> = Vec::new();
             for resolved_cfg in &crates_to_process {
                 let languages = resolve_languages(resolved_cfg, None)?;
                 let api = pipeline::extract(resolved_cfg, config_path, false)?;
-                missing_generated_files.extend(find_missing_generated_files(
-                    &languages,
-                    &api,
-                    resolved_cfg,
-                    config_path,
-                    &base_dir,
-                )?);
+                let found =
+                    find_missing_and_frozen_generated_files(&languages, &api, resolved_cfg, config_path, &base_dir)?;
+                missing_generated_files.extend(found.missing);
+                frozen_generated_files.extend(found.frozen);
 
                 let Some(e2e_config) = &resolved_cfg.e2e else {
                     continue;
@@ -874,7 +875,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             }
             missing_generated_files.sort();
             missing_generated_files.dedup();
+            frozen_generated_files.sort_by(|a, b| a.path.cmp(&b.path));
+            frozen_generated_files.dedup_by(|a, b| a.path == b.path);
             let has_missing_files = !missing_generated_files.is_empty();
+            let has_frozen_files = !frozen_generated_files.is_empty();
 
             // Catches the cross-artifact ABI straddle a per-file hash check cannot
             // see: an FFI header and a binding backend's opaque-handle file each
@@ -916,6 +920,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
             if stale.is_empty()
                 && !has_missing_files
+                && !has_frozen_files
                 && !has_abi_disagreement
                 && !has_version_issues
                 && snippet_coverage_issues.is_empty()
@@ -939,9 +944,30 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         crate::bin_cli::output::line(format_args!("  {path}"));
                     }
                 }
+                // Reported separately from stale/missing, never folded into either
+                // count: the remedy is different (a human must review and adopt or
+                // delete the file -- `alef generate` alone cannot fix it) and folding
+                // it in would make a frozen file look like ordinary drift. ~keep
+                if has_frozen_files {
+                    crate::bin_cli::output::line(
+                        "Frozen generated files detected (alef owns these paths but the files carry no \
+                         provenance marker, so alef refuses to write them -- review each file, then either \
+                         add the marker shown and rerun `alef generate`, or delete the file so generation \
+                         can write it cleanly):",
+                    );
+                    for frozen in &frozen_generated_files {
+                        crate::bin_cli::output::line(format_args!("  {}", frozen.path));
+                        match &frozen.remedy {
+                            Some(remedy) => crate::bin_cli::output::line(format_args!("    add marker: {remedy}")),
+                            None => crate::bin_cli::output::line(
+                                "    this format has no comment syntax to carry a marker -- adopt or delete it",
+                            ),
+                        }
+                    }
+                }
             }
             super::verify_outcome::ensure_success(
-                !stale.is_empty() || has_missing_files || has_abi_disagreement,
+                !stale.is_empty() || has_missing_files || has_frozen_files || has_abi_disagreement,
                 has_version_issues,
                 snippet_coverage_issues.len(),
                 report_only,

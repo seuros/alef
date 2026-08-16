@@ -24,7 +24,8 @@ pub use scaffold::{
 };
 pub use write::report_refused_writes;
 pub(crate) use write::{
-    apply_shebang_chmod, atomic_write, ensure_generated_header, marker_comment_style, stamp_for_adoption,
+    apply_shebang_chmod, atomic_write, ensure_generated_header, marker_comment_style, provenance_header_for_path,
+    stamp_for_adoption,
 };
 pub use write::{
     finalize_hashes, finalize_hashes_sweeping, managed_generated_files, managed_output_paths, write_files,

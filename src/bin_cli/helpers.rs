@@ -517,21 +517,105 @@ fn missing_managed_paths(files: &[crate::core::backend::GeneratedFile], base_dir
         .collect()
 }
 
-/// Display paths of every alef-owned generated file that generation would now
-/// produce for `config` but that does not exist on disk at all.
+/// A generated file alef would own and mark, that already exists on disk but
+/// carries no provenance marker at all.
+///
+/// This is a different, unrecoverable condition from a stale [`StaleMismatch`]
+/// or a [`missing_managed_paths`] entry: the write guard in
+/// `crate::cli::pipeline::generate::write::write_files_report` and
+/// `crate::cli::pipeline::generate::scaffold::write_scaffold_files_report`
+/// refuses to touch a pre-existing file that carries no marker (it cannot tell
+/// a hand-written file from an alef output that predates the marker system),
+/// and the marker can only ever be added *by* a write the guard has already
+/// authorised — so an unmarked pre-existing file is frozen forever. Running
+/// `alef generate` again does nothing; a human must read the file, then either
+/// adopt it (paste `remedy` in and rerun `alef generate`) or delete it so
+/// generation can write it cleanly. ~keep
+pub(crate) struct FrozenFile {
+    pub(crate) path: String,
+    /// The literal marker line to add to the top of the file, or `None` when
+    /// the format has no comment syntax to carry one (`.json`, lockfiles).
+    pub(crate) remedy: Option<String>,
+}
+
+/// The line within `content` that [`crate::core::hash::content_has_alef_marker`]
+/// would recognize as the provenance marker, if any.
+///
+/// Delegates the actual match to `content_has_alef_marker` itself, applied one
+/// line at a time, instead of re-implementing its marker text here — so the
+/// two can never drift apart. ~keep
+fn marker_line(content: &str) -> Option<&str> {
+    content
+        .lines()
+        .find(|line| crate::core::hash::content_has_alef_marker(line))
+}
+
+/// [`FrozenFile`] entries for every alef-owned file in `files` that already
+/// exists on disk but carries no marker.
+///
+/// Uses the same ownership predicate as [`missing_managed_paths`] — a
+/// scaffold-once file alef never marks is excluded here exactly as it is from
+/// the missing-file check, so a hand-edited `Cargo.toml`/`package.json`
+/// template is never mistaken for a frozen generated file.
+///
+/// The remedy text is read straight from the in-memory `GeneratedFile::content`
+/// first, because a self-marking backend (custom Swift/Kotlin/Dart/Gleam/Zig
+/// headers, `docs::render`'s HTML-commented `.md` pages) already bakes its
+/// literal header into `content` regardless of `generated_header`. Only when
+/// that content carries no marker yet — the common case, where the header is
+/// added later by `write_files_report`'s `ensure_generated_header` pass — does
+/// this fall back to reconstructing it from the path via
+/// [`crate::cli::pipeline::provenance_header_for_path`]. ~keep
+fn frozen_managed_paths(files: &[crate::core::backend::GeneratedFile], base_dir: &std::path::Path) -> Vec<FrozenFile> {
+    crate::cli::pipeline::managed_generated_files(files)
+        .into_iter()
+        .filter_map(|file| {
+            let full_path = base_dir.join(&file.path);
+            let existing = std::fs::read_to_string(&full_path).ok()?;
+            if crate::core::hash::content_has_alef_marker(&existing) {
+                return None;
+            }
+            let remedy = marker_line(&file.content).map(str::to_owned).or_else(|| {
+                let header = crate::cli::pipeline::provenance_header_for_path(&file.path)?;
+                marker_line(&header).map(str::to_owned)
+            });
+            Some(FrozenFile {
+                path: full_path.display().to_string(),
+                remedy,
+            })
+        })
+        .collect()
+}
+
+/// Missing and frozen generated files found for one crate — see
+/// [`find_missing_and_frozen_generated_files`].
+#[derive(Default)]
+pub(crate) struct MissingAndFrozenFiles {
+    pub(crate) missing: Vec<String>,
+    pub(crate) frozen: Vec<FrozenFile>,
+}
+
+/// Find both generated files that generation would now produce for `config`
+/// but that do not exist on disk at all ([`missing_managed_paths`]), and
+/// generated files that do exist but were never marked
+/// ([`frozen_managed_paths`]).
 ///
 /// `verify_walk`/`verify_walk_multi` only ever see files that already exist and
 /// carry an `alef:hash:` header, so a file generation would emit but that was
 /// never written — a new API item a backend maps to a brand-new per-type file
 /// (`src/backends/java/gen_bindings/mod.rs`, `src/backends/csharp/gen_bindings/mod.rs`
 /// both emit one file per public type), forgotten after adding the item — is
-/// invisible to a pure disk walk. Closing that gap requires knowing what
-/// generation would produce, which is IR-derived for those backends and cannot
-/// be answered from `alef.toml` alone; this mirrors `alef diff`'s approach
-/// ([`crate::cli::pipeline::diff_files`], `src/cli/pipeline/generate/diff.rs`)
-/// and pays a comparable cost: bindings, type stubs, service API, public API, and
-/// scaffold are regenerated in memory (never written to disk) for every configured
-/// language.
+/// invisible to a pure disk walk. Same for a frozen file: it fails ownership,
+/// not freshness, so a walk that only opens marker-bearing files by
+/// construction cannot see it either (see [`collect_alef_hashes`]'s doc). Both
+/// gaps require knowing what generation would produce, which is IR-derived for
+/// some backends and cannot be answered from `alef.toml` alone; this mirrors
+/// `alef diff`'s approach ([`crate::cli::pipeline::diff_files`],
+/// `src/cli/pipeline/generate/diff.rs`) and pays a comparable cost: bindings,
+/// type stubs, service API, public API, and scaffold are regenerated in memory
+/// (never written to disk) for every configured language — paid once here for
+/// both checks together, since paying it twice (one full regeneration pass per
+/// check) would double the cost of every `alef verify` run for no benefit. ~keep
 ///
 /// `clean = false` is passed to [`crate::cli::pipeline::generate`] deliberately,
 /// not to save cost in CI (a fresh checkout's `.alef/` cache is always cold, so
@@ -539,24 +623,26 @@ fn missing_managed_paths(files: &[crate::core::backend::GeneratedFile], base_dir
 /// free and safe on a warm local machine: `crate::cli::cache::is_lang_cached`
 /// only reports a cache hit when the IR+config hash still matches *and* every
 /// previously recorded output path still exists on disk, so skipping a
-/// cache-hit language can never hide a genuinely missing file. ~keep
-pub(crate) fn find_missing_generated_files(
+/// cache-hit language can never hide a genuinely missing or frozen file. ~keep
+pub(crate) fn find_missing_and_frozen_generated_files(
     languages: &[crate::core::config::Language],
     api: &crate::core::ir::ApiSurface,
     config: &crate::core::config::ResolvedCrateConfig,
     config_path: &std::path::Path,
     base_dir: &std::path::Path,
-) -> anyhow::Result<Vec<String>> {
-    let mut missing = Vec::new();
+) -> anyhow::Result<MissingAndFrozenFiles> {
+    let mut result = MissingAndFrozenFiles::default();
 
     let bindings = crate::cli::pipeline::generate(api, config, languages, false, config_path, false)?;
     for (_, files) in &bindings {
-        missing.extend(missing_managed_paths(files, base_dir));
+        result.missing.extend(missing_managed_paths(files, base_dir));
+        result.frozen.extend(frozen_managed_paths(files, base_dir));
     }
 
     let stubs = crate::cli::pipeline::generate_stubs(api, config, languages)?;
     for (_, files) in &stubs {
-        missing.extend(missing_managed_paths(files, base_dir));
+        result.missing.extend(missing_managed_paths(files, base_dir));
+        result.frozen.extend(frozen_managed_paths(files, base_dir));
     }
 
     // `generate_service_api` already no-ops when `api.services` is empty, so it is
@@ -568,22 +654,27 @@ pub(crate) fn find_missing_generated_files(
     // file (Java, C#) that was never written was invisible to `alef verify`. ~keep
     let svc_files = crate::cli::pipeline::generate_service_api(api, config, languages)?;
     for (_, files) in &svc_files {
-        missing.extend(missing_managed_paths(files, base_dir));
+        result.missing.extend(missing_managed_paths(files, base_dir));
+        result.frozen.extend(frozen_managed_paths(files, base_dir));
     }
 
     if config.generate.public_api {
         let public_api_files = crate::cli::pipeline::generate_public_api(api, config, languages, config_path)?;
         for (_, files) in &public_api_files {
-            missing.extend(missing_managed_paths(files, base_dir));
+            result.missing.extend(missing_managed_paths(files, base_dir));
+            result.frozen.extend(frozen_managed_paths(files, base_dir));
         }
     }
 
     let scaffold_files = crate::cli::pipeline::scaffold(api, config, languages, config_path)?;
-    missing.extend(missing_managed_paths(&scaffold_files, base_dir));
+    result.missing.extend(missing_managed_paths(&scaffold_files, base_dir));
+    result.frozen.extend(frozen_managed_paths(&scaffold_files, base_dir));
 
-    missing.sort();
-    missing.dedup();
-    Ok(missing)
+    result.missing.sort();
+    result.missing.dedup();
+    result.frozen.sort_by(|a, b| a.path.cmp(&b.path));
+    result.frozen.dedup_by(|a, b| a.path == b.path);
+    Ok(result)
 }
 
 /// Multi-crate variant of [`verify_walk`].
@@ -904,6 +995,121 @@ e2e = "cargo test"
         let files = vec![gen_file_unheadered("Cargo.toml", "[package]\nname = \"demo\"\n")];
 
         assert!(missing_managed_paths(&files, dir.path()).is_empty());
+    }
+
+    #[test]
+    fn marker_line_finds_the_line_carrying_the_provenance_marker() {
+        let header = crate::core::hash::header(crate::core::hash::CommentStyle::DoubleSlash);
+
+        assert_eq!(
+            marker_line(&header),
+            Some("// This file is auto-generated by alef — DO NOT EDIT.")
+        );
+    }
+
+    #[test]
+    fn marker_line_finds_nothing_in_content_without_a_marker() {
+        assert_eq!(marker_line("final class SomeType {}\n"), None);
+    }
+
+    /// The defect this closes: a pre-existing file at a path alef would emit
+    /// and mark, but that predates the marker system, deadlocks the write
+    /// guard forever (see `FrozenFile`'s doc). `alef verify` must surface it
+    /// even though it never carries a hash to compare, which is why this is a
+    /// distinct check from `verify_walk`'s stale-hash comparison.
+    #[test]
+    fn frozen_managed_paths_reports_an_unmarked_pre_existing_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("SomeType.java"), "final class SomeType {}\n").unwrap();
+        let files = vec![gen_file("SomeType.java", "final class SomeType {}\n")];
+
+        let frozen = frozen_managed_paths(&files, dir.path());
+
+        assert_eq!(frozen.len(), 1);
+        assert_eq!(frozen[0].path, dir.path().join("SomeType.java").display().to_string());
+        assert_eq!(
+            frozen[0].remedy.as_deref(),
+            Some("// This file is auto-generated by alef — DO NOT EDIT.")
+        );
+    }
+
+    /// A managed file that already carries the marker is stale-or-fresh
+    /// territory (`verify_walk`'s job), never frozen — the guard that would
+    /// deadlock a write never engages once a marker is present.
+    #[test]
+    fn frozen_managed_paths_reports_nothing_when_the_existing_file_already_carries_the_marker() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let marked = format!(
+            "{}final class SomeType {{}}\n",
+            crate::core::hash::header(crate::core::hash::CommentStyle::DoubleSlash)
+        );
+        std::fs::write(dir.path().join("SomeType.java"), &marked).unwrap();
+        let files = vec![gen_file("SomeType.java", "final class SomeType {}\n")];
+
+        assert!(frozen_managed_paths(&files, dir.path()).is_empty());
+    }
+
+    /// A managed file that does not yet exist is `missing_managed_paths`'
+    /// territory, not frozen's -- there is nothing on disk to be frozen.
+    #[test]
+    fn frozen_managed_paths_reports_nothing_when_the_file_does_not_exist() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let files = vec![gen_file("SomeType.java", "final class SomeType {}\n")];
+
+        assert!(frozen_managed_paths(&files, dir.path()).is_empty());
+    }
+
+    /// The required negative control: a legitimately user-owned, unmarked
+    /// scaffold-once file (`Cargo.toml`, `package.json`, gemspec, lockfiles)
+    /// must never be reported frozen, even though it exists on disk without a
+    /// marker -- exactly the shape a naive "unmarked file that looks
+    /// generated" heuristic would misfire on. Getting this wrong would tell
+    /// users to hand ownership of their own hand-edited files to alef.
+    #[test]
+    fn frozen_managed_paths_ignores_a_hand_written_scaffold_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]\nname = \"demo\"\n").unwrap();
+        let files = vec![gen_file_unheadered("Cargo.toml", "[package]\nname = \"demo\"\n")];
+
+        assert!(frozen_managed_paths(&files, dir.path()).is_empty());
+    }
+
+    /// A self-marking backend (custom Swift/Kotlin/Dart/Gleam/Zig headers,
+    /// `docs::render`'s `.md` pages) bakes its literal header straight into
+    /// `GeneratedFile::content` regardless of `generated_header`. The remedy
+    /// must be read from that content, not reconstructed from the path -- a
+    /// path-derived generic header would be the wrong text to hand back here.
+    #[test]
+    fn frozen_managed_paths_reads_the_remedy_from_self_marked_content() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("Foo.swift"), "struct Foo {}\n").unwrap();
+        let files = vec![gen_file_unheadered(
+            "Foo.swift",
+            "// Generated by alef. Do not edit by hand.\nstruct Foo {}\n",
+        )];
+
+        let frozen = frozen_managed_paths(&files, dir.path());
+
+        assert_eq!(frozen.len(), 1);
+        assert_eq!(
+            frozen[0].remedy.as_deref(),
+            Some("// Generated by alef. Do not edit by hand.")
+        );
+    }
+
+    /// A managed path whose format has no comment syntax at all (`.json`)
+    /// still gets reported frozen when `generated_header` claims ownership,
+    /// but with no literal line to hand back -- there is nothing to paste in.
+    #[test]
+    fn frozen_managed_paths_reports_no_remedy_for_an_unmarkable_extension() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("manifest.json"), "{}\n").unwrap();
+        let files = vec![gen_file("manifest.json", "{}\n")];
+
+        let frozen = frozen_managed_paths(&files, dir.path());
+
+        assert_eq!(frozen.len(), 1);
+        assert_eq!(frozen[0].remedy, None);
     }
 
     #[test]

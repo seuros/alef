@@ -22,7 +22,7 @@ pub use format::{format_generated, warn_missing_formatters};
 pub(crate) use format::{install_poly_hooks, poly_format, poly_format_strict};
 pub(crate) use generate::{
     apply_shebang_chmod, atomic_write, check_ffi_header_freshness, ensure_ffi_header_freshness,
-    ensure_generated_header, stamp_for_adoption,
+    ensure_generated_header, provenance_header_for_path, stamp_for_adoption,
 };
 pub use generate::{
     collect_alef_headered_paths, diff_files, finalize_hashes, finalize_hashes_sweeping, generate, generate_public_api,
