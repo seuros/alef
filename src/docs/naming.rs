@@ -139,8 +139,8 @@ pub(crate) fn func_name(name: &str, lang: Language, ffi_prefix: &str) -> String 
     // other keyword collision -> a trailing-underscore form. The previous hand-written arm
     // emitted `defaultOptions`, a name the backend never generates, and carried no `new` arm
     // at all -- so an opaque type's default static constructor (`pub fn new`, the shape the
-    // IR carries for it) arrived at `assert_valid_identifier` as the Java reserved word `new`
-    // and panicked the whole docs run instead of documenting `create`. Mirrored rather than
+    // IR carries for it) arrived at the identifier gate as the Java reserved word `new` and
+    // panicked the whole docs run instead of documenting `create`. Mirrored rather than
     // delegated because the backend applies it only to opaque methods, while this function
     // also names free functions (examples.rs, language_pages/function_render.rs); the mirror
     // is arm-for-arm and shares the same `JAVA_KEYWORDS` constant, and
@@ -153,7 +153,8 @@ pub(crate) fn func_name(name: &str, lang: Language, ffi_prefix: &str) -> String 
     // `true`, `false`, and `null` are reserved *literals*, not keywords, so they are absent
     // from `JAVA_KEYWORDS` and neither this table nor `safe_java_method_name` renames them.
     // The backend would emit non-compiling Java for such a method and the docs gate
-    // (`reserved_words(Java)` in formatting.rs, which does list all three) would panic. Fixing
+    // (`reserved_words(Java)` in formatting.rs, which does list all three) would report a
+    // violation for it -- correctly, since the emitted Java really is broken. Fixing
     // that belongs in `safe_java_method_name`; this table must follow it, not lead it.
     match (lang, base.as_str()) {
         (Language::Java, "default") => "defaultInstance".to_string(),
@@ -453,7 +454,8 @@ mod tests {
 
     /// The default opaque constructor is a static `pub fn new` carried in `TypeDef::methods`.
     /// The Java backend renames it to `create`; documenting it as `new` names a Java reserved
-    /// word, which `assert_valid_identifier` turns into a panic that aborts the whole docs run.
+    /// word, which the identifier gate reports as a violation (and used to panic on, aborting
+    /// the whole docs run).
     #[test]
     fn test_func_name_java_renames_reserved_new_to_create() {
         assert_eq!(func_name("new", Language::Java, TEST_PREFIX), "create");
@@ -501,14 +503,24 @@ mod tests {
     }
 
     /// A Java identifier the docs emit must survive the identifier gate; before the rename
-    /// table was corrected, `new` reached it verbatim and panicked. Exhaustive over the
-    /// keyword table so no reserved word can reach the gate unrenamed.
+    /// table was corrected, `new` reached it verbatim and aborted the run. Exhaustive over
+    /// the keyword table so no reserved word can reach the gate unrenamed.
+    ///
+    /// Asserts on the gate's `Result` rather than relying on it to panic: a rejected name is
+    /// no longer fatal, so a test that only *called* the gate would pass no matter what the
+    /// rename table produced.
     #[test]
     fn test_func_name_java_output_passes_the_identifier_gate() {
+        use crate::docs::formatting::{IdentifierPosition, check_identifier};
+
         let ordinary = ["parse_document", "to_json", "create"];
         for name in crate::core::keywords::JAVA_KEYWORDS.iter().copied().chain(ordinary) {
             let rendered = func_name(name, Language::Java, TEST_PREFIX);
-            crate::docs::formatting::assert_valid_identifier(&rendered, Language::Java, "a naming test");
+            assert_eq!(
+                check_identifier(&rendered, Language::Java, IdentifierPosition::Member, "a naming test"),
+                Ok(()),
+                "`{name}` renders as `{rendered}`, which Java rejects as a member name"
+            );
         }
     }
 }

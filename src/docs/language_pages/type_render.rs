@@ -108,11 +108,18 @@ pub(super) fn render_type(
 ) -> String {
     let mut out = String::new();
     let tname = type_name(&ty.name, lang, ffi_prefix);
-    // ~keep Every documented type name must be a legal identifier in `lang` -- see
-    // formatting.rs's `assert_valid_identifier`. Rarely fires (PascalCase type names
+    // Every documented type name must be a legal identifier in `lang` -- see
+    // formatting.rs's `report_identifier_violation`. Rarely fires (PascalCase type names
     // don't usually collide with lowercase keywords), but a handful of languages have
-    // capitalized reserved words too (Rust's `Self`, Swift's `Any`/`Self`).
-    crate::docs::formatting::assert_valid_identifier(&tname, lang, "a type heading");
+    // capitalized reserved words too (Rust's `Self`, Swift's `Any`/`Self`). A class or
+    // struct name is a declaration, not a member, so no language's member-position
+    // relaxation applies to it. ~keep
+    crate::docs::formatting::report_identifier_violation(
+        &tname,
+        lang,
+        crate::docs::formatting::IdentifierPosition::Declaration,
+        "a type heading",
+    );
 
     out.push_str(&template_env::render(
         "heading.jinja",

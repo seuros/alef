@@ -1,5 +1,6 @@
 use crate::core::config::Language;
 use crate::core::ir::{FunctionDef, MethodDef, TypeRef};
+use crate::docs::formatting::{IdentifierPosition, report_identifier_violation};
 use crate::docs::naming::{field_name, method_name, to_camel_case, type_name};
 use crate::docs::type_mapping::{FFI_HANDLE_TYPE_NAME, doc_type};
 use heck::{ToPascalCase, ToSnakeCase};
@@ -29,7 +30,12 @@ pub(crate) fn render_function_signature(func: &FunctionDef, lang: Language, ffi_
 
 pub(crate) fn render_python_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
     let name = func.name.to_snake_case();
-    crate::docs::formatting::assert_valid_identifier(&name, Language::Python, "a function signature");
+    report_identifier_violation(
+        &name,
+        Language::Python,
+        IdentifierPosition::Declaration,
+        "a function signature",
+    );
     let params: Vec<String> = func
         .params
         .iter()
@@ -49,7 +55,12 @@ pub(crate) fn render_python_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> Stri
 
 pub(crate) fn render_typescript_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
     let name = to_camel_case(&func.name);
-    crate::docs::formatting::assert_valid_identifier(&name, Language::Node, "a function signature");
+    report_identifier_violation(
+        &name,
+        Language::Node,
+        IdentifierPosition::Declaration,
+        "a function signature",
+    );
     let params: Vec<String> = func
         .params
         .iter()
@@ -92,7 +103,12 @@ fn go_return_type(return_type: &TypeRef, ret: String) -> String {
 
 pub(crate) fn render_go_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
     let name = func.name.to_pascal_case();
-    crate::docs::formatting::assert_valid_identifier(&name, Language::Go, "a function signature");
+    report_identifier_violation(
+        &name,
+        Language::Go,
+        IdentifierPosition::Declaration,
+        "a function signature",
+    );
     let params: Vec<String> = func
         .params
         .iter()
@@ -118,7 +134,12 @@ pub(crate) fn render_go_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
 
 pub(crate) fn render_java_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
     let name = to_camel_case(&func.name);
-    crate::docs::formatting::assert_valid_identifier(&name, Language::Java, "a function signature");
+    report_identifier_violation(
+        &name,
+        Language::Java,
+        IdentifierPosition::Member,
+        "a function signature",
+    );
     let ret = doc_type(&func.return_type, Language::Java, ffi_prefix);
     let params: Vec<String> = func
         .params
@@ -141,7 +162,12 @@ pub(crate) fn render_java_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String
 
 pub(crate) fn render_ruby_fn_sig(func: &FunctionDef) -> String {
     let name = func.name.to_snake_case();
-    crate::docs::formatting::assert_valid_identifier(&name, Language::Ruby, "a function signature");
+    report_identifier_violation(
+        &name,
+        Language::Ruby,
+        IdentifierPosition::Member,
+        "a function signature",
+    );
     let params: Vec<String> = func
         .params
         .iter()
@@ -185,7 +211,7 @@ pub(crate) fn render_c_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
 
 pub(crate) fn render_php_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
     let name = to_camel_case(&func.name);
-    crate::docs::formatting::assert_valid_identifier(&name, Language::Php, "a function signature");
+    report_identifier_violation(&name, Language::Php, IdentifierPosition::Member, "a function signature");
     let params: Vec<String> = func
         .params
         .iter()
@@ -205,7 +231,12 @@ pub(crate) fn render_php_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String 
 
 pub(crate) fn render_elixir_fn_sig(func: &FunctionDef) -> String {
     let name = func.name.to_snake_case();
-    crate::docs::formatting::assert_valid_identifier(&name, Language::Elixir, "a function signature");
+    report_identifier_violation(
+        &name,
+        Language::Elixir,
+        IdentifierPosition::Declaration,
+        "a function signature",
+    );
     let params: Vec<String> = func.params.iter().map(|p| p.name.to_snake_case()).collect();
     format!(
         "@spec {}({}) :: {{:ok, term()}} | {{:error, term()}}\ndef {}({})",
@@ -231,7 +262,12 @@ pub(crate) fn render_r_fn_sig(func: &FunctionDef) -> String {
 
 pub(crate) fn render_csharp_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
     let name = func.name.to_pascal_case();
-    crate::docs::formatting::assert_valid_identifier(&name, Language::Csharp, "a function signature");
+    report_identifier_violation(
+        &name,
+        Language::Csharp,
+        IdentifierPosition::Member,
+        "a function signature",
+    );
     let ret = doc_type(&func.return_type, Language::Csharp, ffi_prefix);
     let params: Vec<String> = func
         .params
@@ -304,7 +340,12 @@ pub(crate) fn render_rust_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String
 
 pub(crate) fn render_kotlin_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
     let name = to_camel_case(&func.name);
-    crate::docs::formatting::assert_valid_identifier(&name, Language::Kotlin, "a function signature");
+    report_identifier_violation(
+        &name,
+        Language::Kotlin,
+        IdentifierPosition::Declaration,
+        "a function signature",
+    );
     let ret = doc_type(&func.return_type, Language::Kotlin, ffi_prefix);
     let params: Vec<String> = func
         .params
@@ -334,7 +375,12 @@ pub(crate) fn render_kotlin_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> Stri
 
 pub(crate) fn render_swift_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
     let name = to_camel_case(&func.name);
-    crate::docs::formatting::assert_valid_identifier(&name, Language::Swift, "a function signature");
+    report_identifier_violation(
+        &name,
+        Language::Swift,
+        IdentifierPosition::Member,
+        "a function signature",
+    );
     let ret = doc_type(&func.return_type, Language::Swift, ffi_prefix);
     let params: Vec<String> = func
         .params
@@ -360,7 +406,12 @@ pub(crate) fn render_swift_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> Strin
 
 pub(crate) fn render_dart_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
     let name = to_camel_case(&func.name);
-    crate::docs::formatting::assert_valid_identifier(&name, Language::Dart, "a function signature");
+    report_identifier_violation(
+        &name,
+        Language::Dart,
+        IdentifierPosition::Declaration,
+        "a function signature",
+    );
     let ret = doc_type(&func.return_type, Language::Dart, ffi_prefix);
     let required: Vec<String> = func
         .params
@@ -407,7 +458,12 @@ pub(crate) fn render_dart_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String
 
 pub(crate) fn render_zig_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
     let name = func.name.to_snake_case();
-    crate::docs::formatting::assert_valid_identifier(&name, Language::Zig, "a function signature");
+    report_identifier_violation(
+        &name,
+        Language::Zig,
+        IdentifierPosition::Declaration,
+        "a function signature",
+    );
     let ret = doc_type(&func.return_type, Language::Zig, ffi_prefix);
     let params: Vec<String> = func
         .params
@@ -499,10 +555,15 @@ pub(crate) fn render_method_signature_with_override(
         .and_then(|override_| override_.name.as_deref())
         .map(str::to_string)
         .unwrap_or_else(|| method_name(type_name_str, &method.name, lang, ffi_prefix));
-    // ~keep Every documented method name must be a legal identifier in `lang` -- reject a
+    // Every documented method name must be a legal identifier in `lang` -- report a
     // reserved-word collision (Java/Dart's `new`, etc.) rather than silently document code
-    // that would not compile. See formatting.rs's `assert_valid_identifier`.
-    crate::docs::formatting::assert_valid_identifier(&name, lang, "a method signature");
+    // that would not compile. `name` is the *renamed* form: `method_name` has already run
+    // `func_name`'s per-language keyword table (Java `new` -> `create`), so what the gate
+    // judges is what the page will print. Member position, not declaration: this renders a
+    // class member in every language, which is exactly why the napi `static new(...)` that
+    // used to abort the whole docs run now passes. See formatting.rs's
+    // `IdentifierPosition`. ~keep
+    report_identifier_violation(&name, lang, IdentifierPosition::Member, "a method signature");
     let overridden_ret = signature_override.and_then(|override_| override_.return_type.as_deref());
     // ~keep An explicitly overridden return type is already the backend-accurate spelling (the
     // streaming adapters supply Dart `Stream<T>`, Swift `AsyncThrowingStream<T, Error>`, ...), so

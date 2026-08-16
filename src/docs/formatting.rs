@@ -475,6 +475,11 @@ pub(crate) fn doc_type_with_optional(ty: &TypeRef, lang: Language, optional: boo
 /// where a language's contextual/soft-keyword rules are large (Kotlin, Swift, C#), the
 /// list is a conservative subset that includes every word reserved in *every* context, not
 /// an exhaustive grammar -- see each arm's word count for how conservative.
+///
+/// These lists answer "is this word reserved", not "is it usable here": the grammatical
+/// position a name occupies is a separate axis, applied by
+/// `identifier_violation`/`reserved_words_bind_in_member_position`. Do not prune a word
+/// from a list because some position accepts it.
 fn reserved_words(lang: Language) -> &'static [&'static str] {
     match lang {
         Language::Python => &[
@@ -1107,13 +1112,75 @@ fn has_valid_identifier_syntax(name: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// Returns the reason `name` cannot legally appear as an identifier in `lang`, or `None`
-/// if it can.
-pub(crate) fn identifier_violation(name: &str, lang: Language) -> Option<&'static str> {
+/// Where in the target language's grammar a generated name lands.
+///
+/// A reserved word is only unusable in the slot a grammar treats as a *bare* identifier;
+/// several of these languages admit keywords once the name is a member. The docs pipeline
+/// emits names into both kinds of slot from the same naming helpers, so a gate that cannot
+/// tell them apart has to guess -- and guessing "bare" is what made it reject
+/// `static new(version: string): DownloadManager`, a member declaration the napi backend
+/// really does emit into `index.d.ts`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IdentifierPosition {
+    /// A bare binding name: a top-level `function`/`def`/`fn` declaration, a type or class
+    /// heading, a local, a parameter. Every language's reserved words are illegal here.
+    Declaration,
+    /// A member name: a class or struct method/property declaration, or the name following
+    /// a `.` in a member access.
+    Member,
+}
+
+impl IdentifierPosition {
+    /// The word used for this position in diagnostics.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Declaration => "declaration",
+            Self::Member => "member",
+        }
+    }
+}
+
+/// Whether `lang`'s reserved words stay unusable when the name occupies member position.
+///
+/// True for every language except the two whose grammars explicitly free the member slot:
+///
+/// - **TypeScript / JavaScript** (`Node`, `Wasm`). ES5 dropped ES3's restriction on
+///   reserved words after `.` and in object-literal keys; ECMA-262 defines a class
+///   element's `ClassElementName` as a `PropertyName`, and `PropertyName` accepts any
+///   `IdentifierName` -- keywords included. So `class A { static new() {} }` and `a.new`
+///   both parse, and TypeScript inherits the rule. The napi backend depends on it:
+///   `to_node_name` (codegen/naming.rs) lower-camel-cases a method name with no keyword
+///   escape at all, and the `index.d.ts` it produces really does declare
+///   `static new(version: string): DownloadManager`.
+/// - **PHP**. The PHP 7.0 "Context Sensitive Lexer" RFC made every reserved word usable as
+///   a method name, property name and class-constant name. The PHP backend depends on it
+///   too -- its method emitters use a bare `method.name.to_lower_camel_case()` with no
+///   keyword escape; the one escape that survives, `escape_php_reserved_constant`
+///   (php/gen_bindings/types/enums.rs), covers the class-constant position the RFC left
+///   partly reserved, not methods.
+///
+/// Dart deliberately stays on the strict side. `new` is in Dart's `RESERVED_WORD` set, and
+/// a Dart member declaration takes an `identifier`, which excludes reserved words outright
+/// -- unlike Dart's separate built-in-identifier set (`get`, `factory`, `library`, ...),
+/// which *is* usable as an ordinary name. So `new` is illegal for Dart in either position
+/// and the gate must keep saying so.
+fn reserved_words_bind_in_member_position(lang: Language) -> bool {
+    !matches!(lang, Language::Node | Language::Wasm | Language::Php)
+}
+
+/// Returns the reason `name` cannot legally appear at `position` in `lang`, or `None` if it
+/// can.
+///
+/// Syntactic well-formedness is checked in both positions -- no language here accepts an
+/// unquoted `1invalid` as a member name any more than as a declaration -- while the
+/// reserved-word rule is relaxed exactly where `reserved_words_bind_in_member_position`
+/// says the grammar relaxes it.
+pub(crate) fn identifier_violation(name: &str, lang: Language, position: IdentifierPosition) -> Option<&'static str> {
     if name.is_empty() {
         return Some("empty identifier");
     }
-    if reserved_words(lang).contains(&name) {
+    let reserved_applies = position == IdentifierPosition::Declaration || reserved_words_bind_in_member_position(lang);
+    if reserved_applies && reserved_words(lang).contains(&name) {
         return Some("reserved word");
     }
     if !has_valid_identifier_syntax(name) {
@@ -1122,17 +1189,80 @@ pub(crate) fn identifier_violation(name: &str, lang: Language) -> Option<&'stati
     None
 }
 
-/// ~keep Panics -- deliberately, not a `Result` threaded through every renderer -- because
-/// an identifier collision is a defect in whatever fed the generator this name (a
-/// template, a curated override, config), not a recoverable per-document condition, and
-/// the fix belongs there, not in a formatted-error return value docs call sites would have
-/// to remember to check. See `identifier_violation` for the rule and `reserved_words` for
-/// the per-language keyword source.
-pub(crate) fn assert_valid_identifier(name: &str, lang: Language, context: &str) {
-    if let Some(reason) = identifier_violation(name, lang) {
-        panic!(
-            "generated {lang:?} identifier `{name}` is invalid ({reason}) while rendering {context} -- the docs \
-             pipeline must not emit an identifier a {lang:?} toolchain would reject"
+/// A generated name the docs pipeline must not emit, and everything needed to find it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct IdentifierViolation {
+    pub(crate) name: String,
+    pub(crate) lang: Language,
+    pub(crate) position: IdentifierPosition,
+    pub(crate) reason: &'static str,
+    pub(crate) context: String,
+}
+
+impl std::fmt::Display for IdentifierViolation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            name,
+            lang,
+            position,
+            reason,
+            context,
+        } = self;
+        write!(
+            f,
+            "generated {lang:?} identifier `{name}` is invalid ({reason}) in {} position while rendering {context} \
+             -- the docs pipeline must not emit an identifier a {lang:?} toolchain would reject",
+            position.label()
+        )
+    }
+}
+
+impl std::error::Error for IdentifierViolation {}
+
+/// The fallible form of the identifier gate: the structured error a caller can inspect,
+/// propagate, or render.
+pub(crate) fn check_identifier(
+    name: &str,
+    lang: Language,
+    position: IdentifierPosition,
+    context: &str,
+) -> Result<(), IdentifierViolation> {
+    match identifier_violation(name, lang, position) {
+        None => Ok(()),
+        Some(reason) => Err(IdentifierViolation {
+            name: name.to_string(),
+            lang,
+            position,
+            reason,
+            context: context.to_string(),
+        }),
+    }
+}
+
+/// Run the gate at a renderer call site and report a violation without aborting.
+///
+/// This used to `panic!`, on the reasoning that an illegal identifier is a defect in
+/// whatever fed the generator the name rather than a recoverable per-document condition.
+/// The reasoning held; the failure mode did not. A panic unwound the whole process from
+/// deep inside a docs renderer, so a single bad name in one type's method list took down
+/// the stages that run after docs (orphan sweep, formatting, hash finalisation) and
+/// produced no ERROR line at all -- 31k lines of clean log and a raw backtrace. Docs are
+/// not a release gate, so a name the gate rejects must not cost the run everything that
+/// already succeeded; it must cost exactly one loud, greppable ERROR event naming the
+/// identifier, the language, the position and the render context. Threading a `Result`
+/// out instead would reach ~100 call sites across the signature renderers for no extra
+/// signal, since no caller between here and the docs stage can do anything but forward
+/// it. Callers that *can* act on the failure use [`check_identifier`].
+pub(crate) fn report_identifier_violation(name: &str, lang: Language, position: IdentifierPosition, context: &str) {
+    if let Err(violation) = check_identifier(name, lang, position, context) {
+        tracing::error!(
+            identifier = %violation.name,
+            language = ?violation.lang,
+            position = violation.position.label(),
+            reason = violation.reason,
+            render_context = %violation.context,
+            "{}",
+            violation
         );
     }
 }
@@ -1149,7 +1279,7 @@ mod tests {
     // ground truths the tslp `DownloadManager` audit measured against a real compiler
     // (`javac`) and real language specs, not inference -- see reserved_words' doc comment.
     #[test]
-    fn test_identifier_violation_rejects_new_in_languages_where_it_is_reserved() {
+    fn test_identifier_violation_rejects_new_in_declaration_position_wherever_it_is_reserved() {
         for lang in [
             Language::Java,
             Language::Dart,
@@ -1158,9 +1288,73 @@ mod tests {
             Language::Csharp,
         ] {
             assert_eq!(
-                identifier_violation("new", lang),
+                identifier_violation("new", lang, IdentifierPosition::Declaration),
                 Some("reserved word"),
-                "`new` must be rejected for {lang:?}"
+                "`new` must be rejected in declaration position for {lang:?}"
+            );
+        }
+    }
+
+    /// The tslp crash. `new` in *member* position is legal TypeScript and legal PHP 7+, and
+    /// both backends emit it verbatim -- napi's `index.d.ts` really carries
+    /// `static new(version: string): DownloadManager`. A position-blind gate called that a
+    /// reserved word and panicked the docs run over correct output.
+    #[test]
+    fn test_identifier_violation_accepts_new_in_member_position_where_the_grammar_allows_it() {
+        for lang in [Language::Node, Language::Wasm, Language::Php] {
+            assert_eq!(
+                identifier_violation("new", lang, IdentifierPosition::Member),
+                None,
+                "`new` is a legal member name in {lang:?}"
+            );
+        }
+    }
+
+    /// Position-awareness is not a blanket amnesty. Java, C# and Dart all take an
+    /// `identifier` in member position, which excludes their reserved words, so the gate
+    /// must keep firing there -- these are the positive controls that separate the fix from
+    /// "make the gate always pass".
+    #[test]
+    fn test_identifier_violation_still_rejects_new_in_member_position_where_the_grammar_forbids_it() {
+        for lang in [Language::Java, Language::Csharp, Language::Dart] {
+            assert_eq!(
+                identifier_violation("new", lang, IdentifierPosition::Member),
+                Some("reserved word"),
+                "`new` is not a legal member name in {lang:?}"
+            );
+        }
+    }
+
+    /// A language whose member slot *is* relaxed still cannot take a keyword as the binding
+    /// identifier of a top-level `function` declaration -- which is exactly what
+    /// `render_typescript_fn_sig` emits for a free function.
+    #[test]
+    fn test_identifier_violation_node_relaxation_does_not_reach_declaration_position() {
+        assert_eq!(
+            identifier_violation("class", Language::Node, IdentifierPosition::Member),
+            None
+        );
+        assert_eq!(
+            identifier_violation("class", Language::Node, IdentifierPosition::Declaration),
+            Some("reserved word")
+        );
+    }
+
+    /// Syntactic well-formedness is position-independent: no member slot here accepts an
+    /// unquoted name starting with a digit, so relaxing the reserved-word rule must not
+    /// relax this one with it.
+    #[test]
+    fn test_identifier_violation_rejects_malformed_names_in_member_position_too() {
+        for lang in [Language::Node, Language::Wasm, Language::Php] {
+            assert_eq!(
+                identifier_violation("1invalid", lang, IdentifierPosition::Member),
+                Some("not a syntactically valid identifier"),
+                "{lang:?}"
+            );
+            assert_eq!(
+                identifier_violation("", lang, IdentifierPosition::Member),
+                Some("empty identifier"),
+                "{lang:?}"
             );
         }
     }
@@ -1177,11 +1371,13 @@ mod tests {
             Language::Zig,
             Language::Elixir,
         ] {
-            assert_eq!(
-                identifier_violation("new", lang),
-                None,
-                "`new` must be accepted for {lang:?}"
-            );
+            for position in [IdentifierPosition::Declaration, IdentifierPosition::Member] {
+                assert_eq!(
+                    identifier_violation("new", lang, position),
+                    None,
+                    "`new` must be accepted for {lang:?} in {position:?} position"
+                );
+            }
         }
     }
 
@@ -1192,32 +1388,50 @@ mod tests {
         // `New`, which is not the reserved `new` and so the gate correctly does not fire on
         // it -- catching this class of bug needs item 1 (modeling the curated
         // constructor), not the gate.
-        assert_eq!(identifier_violation("new", Language::Csharp), Some("reserved word"));
-        assert_eq!(identifier_violation("New", Language::Csharp), None);
+        assert_eq!(
+            identifier_violation("new", Language::Csharp, IdentifierPosition::Declaration),
+            Some("reserved word")
+        );
+        assert_eq!(
+            identifier_violation("New", Language::Csharp, IdentifierPosition::Declaration),
+            None
+        );
     }
 
     #[test]
     fn test_identifier_violation_rejects_python_default_arg_style_keywords() {
-        assert_eq!(identifier_violation("class", Language::Python), Some("reserved word"));
-        assert_eq!(identifier_violation("import", Language::Python), Some("reserved word"));
+        assert_eq!(
+            identifier_violation("class", Language::Python, IdentifierPosition::Declaration),
+            Some("reserved word")
+        );
+        assert_eq!(
+            identifier_violation("import", Language::Python, IdentifierPosition::Declaration),
+            Some("reserved word")
+        );
     }
 
     #[test]
     fn test_identifier_violation_kotlin_default_is_not_reserved() {
         // Regression guard for the existing `default` -> `@JvmStatic fun default()` test
         // fixture: Kotlin does not reserve `default` as a hard keyword.
-        assert_eq!(identifier_violation("default", Language::Kotlin), None);
+        assert_eq!(
+            identifier_violation("default", Language::Kotlin, IdentifierPosition::Declaration),
+            None
+        );
     }
 
     #[test]
     fn test_identifier_violation_rejects_empty_identifier() {
-        assert_eq!(identifier_violation("", Language::Python), Some("empty identifier"));
+        assert_eq!(
+            identifier_violation("", Language::Python, IdentifierPosition::Declaration),
+            Some("empty identifier")
+        );
     }
 
     #[test]
     fn test_identifier_violation_rejects_identifier_starting_with_digit() {
         assert_eq!(
-            identifier_violation("1invalid", Language::Python),
+            identifier_violation("1invalid", Language::Python, IdentifierPosition::Declaration),
             Some("not a syntactically valid identifier")
         );
     }
@@ -1247,22 +1461,57 @@ mod tests {
             Language::Jni,
         ] {
             assert_eq!(
-                identifier_violation("classifyLink", lang),
+                identifier_violation("classifyLink", lang, IdentifierPosition::Declaration),
                 None,
                 "an ordinary camelCase identifier must be accepted for {lang:?}"
             );
         }
     }
 
+    /// The gate no longer aborts the process; a rejected name comes back as an inspectable
+    /// error whose text carries every field the old panic message did, plus the position
+    /// that decided the verdict.
     #[test]
-    #[should_panic(expected = "reserved word")]
-    fn test_assert_valid_identifier_panics_on_reserved_word() {
-        assert_valid_identifier("new", Language::Java, "a test context");
+    fn test_check_identifier_returns_a_structured_error_instead_of_panicking() {
+        let violation = check_identifier("new", Language::Java, IdentifierPosition::Member, "a method signature")
+            .expect_err("`new` is not a legal Java member name");
+
+        assert_eq!(violation.name, "new");
+        assert_eq!(violation.lang, Language::Java);
+        assert_eq!(violation.position, IdentifierPosition::Member);
+        assert_eq!(violation.reason, "reserved word");
+        assert_eq!(violation.context, "a method signature");
+
+        let rendered = violation.to_string();
+        assert!(rendered.contains("`new`"), "{rendered}");
+        assert!(rendered.contains("reserved word"), "{rendered}");
+        assert!(rendered.contains("member position"), "{rendered}");
+        assert!(rendered.contains("a method signature"), "{rendered}");
+        assert!(rendered.contains("Java"), "{rendered}");
     }
 
+    /// The exact tslp input: a napi method named `new`. This must now be `Ok`, and
+    /// `report_identifier_violation` must return normally rather than unwinding.
     #[test]
-    fn test_assert_valid_identifier_is_silent_on_a_legal_identifier() {
-        assert_valid_identifier("createClient", Language::Java, "a test context");
+    fn test_check_identifier_accepts_the_napi_static_new_that_used_to_abort_the_docs_run() {
+        assert_eq!(
+            check_identifier("new", Language::Node, IdentifierPosition::Member, "a method signature"),
+            Ok(())
+        );
+        report_identifier_violation("new", Language::Node, IdentifierPosition::Member, "a method signature");
+    }
+
+    /// A violation must not unwind either -- it is reported through `tracing` and rendering
+    /// continues, so one bad name costs an ERROR event rather than the whole run.
+    #[test]
+    fn test_report_identifier_violation_does_not_unwind_on_a_violation() {
+        report_identifier_violation("new", Language::Java, IdentifierPosition::Member, "a test context");
+        report_identifier_violation(
+            "createClient",
+            Language::Java,
+            IdentifierPosition::Member,
+            "a test context",
+        );
     }
 
     #[test]

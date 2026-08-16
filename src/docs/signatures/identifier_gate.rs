@@ -25,11 +25,10 @@ fn download_manager_new_method() -> crate::core::ir::MethodDef {
 
 /// ~keep Java's real defect used to be a reserved-word collision: before 28f310259, `new`
 /// had no arm in the docs' Java keyword-rename table (only `default` did), so a curated
-/// opaque type's default constructor reached `assert_valid_identifier` as the raw word
-/// `new` and panicked, aborting the whole docs run. The table is now mirrored from the
-/// backend's `safe_java_method_name`, so this shape renders as `create` -- same outcome
-/// class as the Go/C#/Zig/Elixir siblings below, not a panic. Asserting `should_panic`
-/// here would pin the bug back in.
+/// opaque type's default constructor reached the identifier gate as the raw word `new` and
+/// panicked, aborting the whole docs run. The table is now mirrored from the backend's
+/// `safe_java_method_name`, so this shape renders as `create` -- same outcome class as the
+/// Go/C#/Zig/Elixir siblings below. Asserting a failure here would pin the bug back in.
 #[test]
 fn test_java_constructor_named_new_is_renamed_to_create_by_the_identifier_gate() {
     let sig = render_method_signature(
@@ -48,22 +47,113 @@ fn test_java_constructor_named_new_is_renamed_to_create_by_the_identifier_gate()
 /// keyword table now renames every `JAVA_KEYWORDS` entry, `new` included, before it can
 /// reach the gate (see `test_func_name_java_output_passes_the_identifier_gate` in
 /// naming.rs) -- so this calls the gate directly instead of routing through a constructor
-/// path that no longer produces an unrenamed keyword.
+/// path that no longer produces an unrenamed keyword. It asserts the returned error rather
+/// than a panic: the gate reports now, it does not abort, so a `should_panic` test here
+/// would fail for the wrong reason and a bare call would assert nothing at all.
 #[test]
-#[should_panic(expected = "reserved word")]
 fn test_identifier_gate_still_rejects_a_raw_java_keyword() {
-    crate::docs::formatting::assert_valid_identifier("new", Language::Java, "a test context");
+    let violation = crate::docs::formatting::check_identifier(
+        "new",
+        Language::Java,
+        crate::docs::formatting::IdentifierPosition::Member,
+        "a test context",
+    )
+    .expect_err("`new` is a Java reserved word in every position");
+    assert_eq!(violation.reason, "reserved word");
+    assert!(violation.to_string().contains("member position"), "{violation}");
 }
 
+/// ~keep Dart is the language the member-position relaxation deliberately does NOT cover.
+/// `new` sits in Dart's `RESERVED_WORD` set, and a Dart member declaration takes an
+/// `identifier`, which excludes reserved words outright -- unlike Dart's separate built-in
+/// identifiers (`get`, `factory`, `library`, ...), which are usable as ordinary names. So
+/// `class DownloadManager { static DownloadManager new(...) }` does not compile, and the
+/// gate must keep saying so even though the same input is now fine for TypeScript and PHP.
+///
+/// This is the positive control for the position fix: it fails the moment the gate is
+/// relaxed into "member position never rejects anything".
+///
+/// The signature still renders (the gate reports rather than aborts) and still spells
+/// `new`, because neither `func_name` nor the Dart backend renames it -- `dart_safe_ident`
+/// is applied to Dart free functions and fields but not to opaque-type method names, so
+/// the Dart binding for a `pub fn new` does not compile either. Adding a docs-only
+/// `new` -> `new_` arm to `func_name` would document a name the backend never emits, which
+/// is the `defaultOptions` defect naming.rs already warns against; the fix belongs on the
+/// Dart backend first, and this table must follow it.
 #[test]
-#[should_panic(expected = "reserved word")]
-fn test_dart_constructor_named_new_is_rejected_by_the_identifier_gate() {
-    render_method_signature(
+fn test_dart_constructor_named_new_is_still_rejected_by_the_identifier_gate() {
+    let name = crate::docs::naming::method_name("DownloadManager", "new", Language::Dart, TEST_PREFIX);
+    assert_eq!(name, "new", "no Dart rename exists yet -- see this test's doc comment");
+
+    let violation = crate::docs::formatting::check_identifier(
+        &name,
+        Language::Dart,
+        crate::docs::formatting::IdentifierPosition::Member,
+        "a method signature",
+    )
+    .expect_err("`new` is a Dart reserved word in member position too");
+    assert_eq!(violation.reason, "reserved word");
+
+    let sig = render_method_signature(
         &download_manager_new_method(),
         "DownloadManager",
         Language::Dart,
         TEST_PREFIX,
     );
+    assert!(sig.contains("new"), "{sig}");
+}
+
+/// ~keep The tslp crash, end to end. `static new(version: string): DownloadManager` is what
+/// the napi backend really writes into `crates/ts-pack-core-node/index.d.ts`, and it is
+/// valid TypeScript -- ES5 freed reserved words in `PropertyName` position, which is what a
+/// class element's name is. Rendering it used to abort the entire docs run with a raw panic
+/// and no ERROR line; it must now render, and the gate must agree it is legal.
+#[test]
+fn test_typescript_constructor_named_new_renders_instead_of_aborting_the_docs_run() {
+    let name = crate::docs::naming::method_name("DownloadManager", "new", Language::Node, TEST_PREFIX);
+    assert_eq!(name, "new");
+    assert_eq!(
+        crate::docs::formatting::check_identifier(
+            &name,
+            Language::Node,
+            crate::docs::formatting::IdentifierPosition::Member,
+            "a method signature",
+        ),
+        Ok(())
+    );
+
+    let sig = render_method_signature(
+        &download_manager_new_method(),
+        "DownloadManager",
+        Language::Node,
+        TEST_PREFIX,
+    );
+    assert!(sig.contains("new("), "{sig}");
+}
+
+/// ~keep PHP's failure on this input was the same false positive as TypeScript's: the PHP
+/// 7.0 context-sensitive lexer made every reserved word usable as a method name, and the
+/// PHP backend emits `method.name.to_lower_camel_case()` with no keyword escape, so
+/// `public function new(...)` is exactly what ships.
+#[test]
+fn test_php_constructor_named_new_renders_instead_of_aborting_the_docs_run() {
+    assert_eq!(
+        crate::docs::formatting::check_identifier(
+            "new",
+            Language::Php,
+            crate::docs::formatting::IdentifierPosition::Member,
+            "a method signature",
+        ),
+        Ok(())
+    );
+
+    let sig = render_method_signature(
+        &download_manager_new_method(),
+        "DownloadManager",
+        Language::Php,
+        TEST_PREFIX,
+    );
+    assert!(sig.contains("new("), "{sig}");
 }
 
 /// ~keep Two defects, not one: Go's real bug (on the default, unconfigured opaque-

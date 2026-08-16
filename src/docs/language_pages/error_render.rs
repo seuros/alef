@@ -134,7 +134,7 @@ mod tests {
     #[test]
     fn test_csharp_error_variant_gets_real_exception_class_name() {
         let err = make_error("MyError", &["LanguageNotFound"]);
-        let rendered = render_error(&err, &[err.clone()], Language::Csharp, TEST_PREFIX);
+        let rendered = render_error(&err, std::slice::from_ref(&err), Language::Csharp, TEST_PREFIX);
         assert!(
             rendered.contains("LanguageNotFoundException"),
             "C# binds one exception subclass per variant, named `{{Variant}}Exception` \
@@ -145,7 +145,7 @@ mod tests {
     #[test]
     fn test_java_error_variant_gets_real_exception_class_name() {
         let err = make_error("MyError", &["DynamicLoad"]);
-        let rendered = render_error(&err, &[err.clone()], Language::Java, TEST_PREFIX);
+        let rendered = render_error(&err, std::slice::from_ref(&err), Language::Java, TEST_PREFIX);
         assert!(
             rendered.contains("DynamicLoadException"),
             "Java follows the same `{{Variant}}Exception` convention as C# \
@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn test_go_error_variant_gets_real_sentinel_name() {
         let err = make_error("MyError", &["LanguageNotFound"]);
-        let rendered = render_error(&err, &[err.clone()], Language::Go, TEST_PREFIX);
+        let rendered = render_error(&err, std::slice::from_ref(&err), Language::Go, TEST_PREFIX);
         assert!(
             rendered.contains("ErrLanguageNotFound"),
             "Go binds a package-level `Err{{Variant}}` sentinel, not the bare variant name \
@@ -171,7 +171,7 @@ mod tests {
     #[test]
     fn test_swift_error_variant_uses_lower_camel_case_not_pascal_case() {
         let err = make_error("MyError", &["LanguageNotFound"]);
-        let rendered = render_error(&err, &[err.clone()], Language::Swift, TEST_PREFIX);
+        let rendered = render_error(&err, std::slice::from_ref(&err), Language::Swift, TEST_PREFIX);
         assert!(
             rendered.contains("languageNotFound"),
             "Swift emits a lowerCamelCase `case`, not a PascalCase one \
@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn test_python_error_variant_without_error_suffix_gets_one() {
         let err = make_error("MyError", &["InvalidInput"]);
-        let rendered = render_error(&err, &[err.clone()], Language::Python, TEST_PREFIX);
+        let rendered = render_error(&err, std::slice::from_ref(&err), Language::Python, TEST_PREFIX);
         assert!(
             rendered.contains("InvalidInputError"),
             "pyo3's `create_exception!` macro appends `Error` when the variant name lacks it \
@@ -199,7 +199,7 @@ mod tests {
     #[test]
     fn test_python_error_variant_already_ending_in_error_is_unchanged() {
         let err = make_error("MyError", &["IoError"]);
-        let rendered = render_error(&err, &[err.clone()], Language::Python, TEST_PREFIX);
+        let rendered = render_error(&err, std::slice::from_ref(&err), Language::Python, TEST_PREFIX);
         assert!(rendered.contains("IoError"), "got:\n{rendered}");
         assert!(
             !rendered.contains("IoErrorError"),
@@ -213,7 +213,7 @@ mod tests {
     #[test]
     fn test_kotlin_error_variant_keeps_bare_pascal_case() {
         let err = make_error("MyError", &["LanguageNotFound"]);
-        let rendered = render_error(&err, &[err.clone()], Language::Kotlin, TEST_PREFIX);
+        let rendered = render_error(&err, std::slice::from_ref(&err), Language::Kotlin, TEST_PREFIX);
         assert!(
             rendered.contains("`LanguageNotFound`"),
             "Kotlin's real `data class` name is the bare variant name, unlike C#/Java/Go/Swift; \
