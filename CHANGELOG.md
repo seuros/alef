@@ -28,9 +28,128 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   python, php, jni, r, ruby, elixir, wasm, swift, dart); the six that emit no Cargo.toml are deliberately excluded.
   Where a backend already emits a builtin `[lints.rust]` block (elixir, swift, dart), a configured table merges
   into the same table rather than emitting a duplicate, which Cargo rejects.
+- **`alef verify` reports frozen generated files**: a file alef intends to stamp, that exists on disk carrying no
+  marker, can never be written by the ownership guard and so is frozen permanently. Previously this was invisible
+  without running a generate. `collect_alef_hashes` cannot see such a file by construction — it only opens files
+  that already carry a marker — so detection reuses the in-memory regeneration `verify` already performs to find
+  missing files, intersected against what exists on disk unmarked. No heuristic and no added cost. Reported as its
+  own section with the literal marker line to paste, never folded into stale or missing, because `alef generate`
+  fixes those and cannot fix this. Scope is the ownership guard's freeze class only: create-once artifacts are
+  emitted without a generated header and are deliberately excluded, so a hand-edited `Cargo.toml` is never reported.
+- **eight create-once migrators**: artifacts emitted without a generated header are written once and never updated,
+  so a repo scaffolded before a template fix keeps the broken content forever. Each migrator is pinned to the commit
+  that fixed its template and repairs only content it can positively identify as alef's own stale output —
+  `packages/dart/.pubignore`, `crates/*-wasm/package.json` exports, `crates/*-node/package.json` service export,
+  `packages/java/checkstyle.xml` line length, the wasm `.cargo/config.toml` rustflags, and others. A migrator that
+  cannot establish that provenance repairs nothing, because clobbering a hand-edit is far worse than a stale file.
+- **fixture `docs.shows` gains `display`**: selects human-readable over debug formatting, matching the flag
+  `iterate` already had. Without it Rust snippets always rendered `println!("{:?}", …)`, so documentation printed
+  `Some(Text("Hello!"))` where a reader expects `Hello!`. Defaults to the previous behaviour.
+
+### Changed
+
+- **`alef verify` now fails on a frozen file rather than warning.** This is a semantics change for consumer CI. The
+  condition is permanent and self-perpetuating by construction — the guard refuses because there is no marker, and
+  the marker can only arrive by writing the file — so no later run clears it and a warning is indistinguishable from
+  one nobody reads. Remedy is `alef adopt <path>`.
+- **the scaffold ownership record moved to a committed `.alef-ownership.toml`.** Ownership of a file whose format
+  cannot carry a comment previously lived under `.alef/`, which alef itself writes into every consumer's
+  `.gitignore` — so a fresh clone and a warm dev machine disagreed about which files alef owns, and CI refused
+  writes a developer's machine permitted. Reads union the committed record with the legacy gitignored one, which is
+  never written again, so upgrading does not turn every unmarkable file into a refusal at once. Entries migrate on
+  the first authorised write of that path. Commit the file. Do not hand-add entries: use `alef adopt`.
 
 ### Fixed
 
+- **e2e/snippets (wasm)**: stop gating snippet availability on a codegen predicate. `function_is_exported`
+  answers "should the plain-function generator emit a wrapper for this?" and returns `false` for trait-bridge
+  register/unregister/clear functions precisely because the trait-bridge generator emits them instead. The snippet
+  gate reused it to mean "can a snippet call this?", where `false` is flatly wrong — those functions are exported,
+  from the generated `__alef_wasm_bridge_*` modules. A 0.61.0 regression with a committed positive control: 0.60.0
+  emitted a valid snippet for the same fixture, with the correct import and JS name. It did not merely drop
+  snippets, it aborted `alef all` before a byte was written, so an affected repo could not regenerate at all.
+  Symbol resolution is fixed alongside the predicate: the gate needs a Rust identity while
+  `overrides.wasm.function` legitimately holds the JavaScript spelling, so a symbol now resolves under either
+  spelling and the bridge registry is searched beside the plain function surface. A name that resolves to nothing
+  is reported as its own condition — folding it into "not exported" sends the reader to audit the wasm backend for
+  what was only ever a misspelling in config.
+- **cli/generate**: read a `#[cfg(...)]` attribute that rustfmt wrapped. The FFI header parity gate scanned
+  attributes one line at a time, so a wrapped predicate was lost twice over — the single-line parser failed on the
+  opening line, and the continuation lines, being neither attribute-prefixed nor function signatures, hit the state
+  reset that clears the pending cfg. The export was recorded as unconditional and a correctly guarded header was
+  reported as drifted, aborting `alef all`. The gate was unclearable by its own remedy: it advises running a cargo
+  build so cbindgen regenerates the header, and the run had already done exactly that, successfully, moments
+  before. An attribute the scanner cannot delimit is now recorded as an unparsed cfg rather than as no cfg, so the
+  gate gets stricter here rather than looser.
+- **cli/generate**: report every refused write rather than one phase's. A run writes through five independent
+  phases, but the consolidated refusal summary was emitted from inside the scaffold writer, so it could only ever
+  describe scaffolding — and `alef all` never called the reporter at all, dropping `refused_paths` from its four
+  write sites. Measured across three real regenerations: 34 refused and 30 reported, 15,677 refused and 15,669
+  rostered, 34 refused and 29 reported. The omitted paths are real binding sources. Worse than a wrong number: the
+  summary tells the operator to review and adopt each path, so someone who works the printed list finishes
+  believing they are done while those files stay permanently frozen.
+- **backends/zig**: never report a typed error the binding cannot substantiate. A variant's FFI code comes only
+  from an explicit `#[alef(error_code = N)]`, and no consumer declares one, so every zig binding resolved every
+  failure to `_first_error(E)` — literally the first declared variant. Silently wrong error types rather than
+  missing ones. The FFI layer was already honest here, sending `ALEF_FFI_UNKNOWN_ERROR` across the boundary; zig
+  was the only backend that turned unknown into wrong. `_first_error` is removed rather than patched, because eight
+  further emission sites used it with the identical defect — null constructor handle, null `to_json` pointer,
+  stream start and next, trait-bridge clear and unregister, opaque-handle returns. An implicit `UnknownFfiError` is
+  injected into every generated error set by the same mechanism that already injects `OutOfMemory`, so it coerces
+  into any caller-supplied set; coded variants still dispatch per code, and only the `else` arm changed. Separately,
+  `_first_error(anyerror)` never compiled at all: `@typeInfo(anyerror).error_set` is `null`, so `orelse unreachable`
+  was comptime-evaluated, and two templates emitted exactly that. Five assertions across two files pinned the old
+  behaviour — including one named `..._use_the_unknown_fallback` that asserted `_first_error`, which is not an
+  unknown fallback — and were inverted rather than worked around.
+- **e2e/snippets**: give generated markdown a provenance marker. Fixture snippets carried neither a marker nor an
+  ownership record, so once written they were refused forever — 15,677 refusals in one consumer repo and 9,139 in
+  another, dominated by the ~12,000 snippet `.md` files between them. `marker_header_syntax` excludes `.md` on the
+  stated grounds that `readme::template` and `docs::render` both route content through
+  `docs::render::with_html_header`; that is true of READMEs and docs pages and false of fixture snippets, which are
+  assembled in `render_snippet_markdown` and never touch `docs::render`. The header now comes from that same
+  emitter rather than a second producer. `marker_comment_style` is untouched — `.md` stays out of the *ownership*
+  predicate, since adding it there would freeze every unmarked `.md` in every consumer repo. Note the placement has
+  zero slack: front matter is 8 lines, the header lands on line 10, and the marker scan window is 10, so a ninth
+  front-matter field would silently restore the deadlock with the marker still in the file. Files already committed
+  without a marker are not unfrozen by this and still need adoption or regeneration from absent.
+- **scaffold/ownership**: stop minting ownership from byte-equality alone. Four write paths recorded a file as
+  alef-owned whenever its bytes already matched generated output, *before* any ownership check ran — the rejected
+  content-equivalence predicate, relocated from a predicate into the record. A hand-written file that coincided with
+  generated output silently acquired permanent overwrite permission, and the run that granted it changed nothing
+  observable, which is why a test asserting only on file contents and the changed count passed throughout.
+  Ownership is a fact about history, not about content; only `alef adopt` confers it now.
+- **docs/c**: derive every documented C symbol from one helper. Docs published `{prefix}_{method}` while the FFI
+  backend emits `{prefix}_{type_snake}_{method}`, so documented symbols did not exist, and the `this: AlefHandle`
+  receiver was missing from documented signatures. A repo sweep found the symbol shape derived at roughly 262 sites
+  — four of them independently inside docs alone — so patching the docs arm would have traded one divergence for
+  two. Producers, docs and the streaming `_start`/`_next`/`_free` triple now route through `free_function_symbol` /
+  `method_symbol` / `stream_adapter_symbol` in `codegen::c_consumer`.
+- **backends/java, backends/kotlin**: reject a service `Finalize` entrypoint whose return type is not opaque. The
+  FFI layer renders every non-opaque entrypoint return as an `i32` status code — `null_return = 1` on the error path
+  — and no template carries a primitive value across the boundary. Java's representability gate nevertheless
+  admitted the shape and then emitted `void`, and Kotlin would have declared `Int` against that `void`. Generation
+  now fails on the shape instead, and Kotlin's `Finalize` return is the raw `AlefHandle` as `Long`.
+- **scaffold/zig**: emit no test step when there is nothing to assert. `zig build test` exited 0 having run nothing,
+  which is indistinguishable from coverage. The seed file and the `test_module`/`test_step` block now branch on one
+  condition, so the step and the file it points at cannot drift apart; an empty surface fails with
+  `error: no step named 'test'`. The fixture that should have caught this was empty, so the test validating the seed
+  was validating the placeholder.
+- **e2e/snippets**: keep mock-harness scaffolding out of published documentation. The zig snippet renderer called
+  the test renderer, so published docs told readers to read `MOCK_SERVER_URL` and route through `/fixtures/<id>`.
+  The existing scrub never covered this surface in any language — it swaps a placeholder in `fixture.input`, while
+  these URLs are synthesised by the client-factory emitters from the fixture id at emission time. The guard is now
+  applied at the single funnel every language and extension passes through, so a new backend inherits it.
+- **e2e/codegen/rust**: emit an error branch for a fixture that expects an error. Rust was the only one of the
+  fifteen snippet languages without one; it rendered `.expect("call failed")`, so the snippet documenting a failure
+  panicked on it. Rust has no `try`, so this is a `match` on the `Result` with an `Err` arm.
+- **hooks/check_project_mentions**: count `#[cfg(test)]` braces in code rather than in raw text. alef is a template
+  generator and its comments are dense with Jinja — `{% endif %}` alone is one opener and two closers — so prose
+  steered the exemption. Surplus closers ended the region early and reported test fixtures as violations; surplus
+  openers extended a phantom region past the module's closing brace and silently hid every real violation in the
+  production code below, leaving the gate reporting clean. Both directions are covered by a regression test.
+- **backends/swift**: replace five regression files that had never been compiled. None was in the module tree, so
+  Rust never saw them, and all sixteen of their assertions were `assert!(true)`. Wiring them in as written would
+  have added no coverage. Rewritten against the private modules they actually cover.
 - **bin_cli/verify**: scan every backend's output when collecting `alef:hash:` provenance. `VERIFY_SCAN_EXTENSIONS`
   omitted five backends outright, so `alef verify` reported those trees clean without ever opening a file in them —
   a passing verify was evidence of nothing for the languages it silently skipped. Dotfile stamps
