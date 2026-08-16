@@ -353,7 +353,44 @@ fn build_command_for(
         }
         "wasm-pack" => {
             let profile = if release { "--release" } else { "--dev" };
-            format!("wasm-pack build {crate_dir} {profile} --target web")
+            // `crate_dir` is empty whenever `[crates.output] wasm` is not set explicitly
+            // (the common case) — fall back to the same default formula `package_dir`
+            // already uses for scaffolding, matching the `gradle`/`swift`/`zig` arms below.
+            let wasm_crate_dir = if crate_dir.is_empty() {
+                config.package_dir(lang)
+            } else {
+                crate_dir.to_string()
+            };
+            // Build every configured target into `pkg/<target>`, byte-for-byte matching the
+            // `build:wasm:<target>` scripts `scaffold::languages::wasm` writes into the crate's
+            // own `package.json` (and which `publish::package::wasm` re-runs via `npm run
+            // build:all`). Nothing consumes a bare `pkg/`: the scaffolded manifest resolves
+            // `main`/`types` to `pkg/<nodejs>/…` and `module` to `pkg/<web>/…`, and `alef e2e`
+            // depends on `pkg/nodejs` specifically (`ResolvedCrateConfig::wasm_crate_path`).
+            // The previous `--target web` with wasm-pack's default out-dir wrote a bare `pkg/`
+            // that no manifest, publish step or e2e suite reads, while never producing the
+            // `pkg/nodejs` e2e needs — which is why consumers hand-rolled an extra build step.
+            // Driving off `wasm_targets()` rather than a hardcoded pair also honours a crate
+            // that narrows `[crates.wasm] targets` to keep its published package small. `cd`
+            // into the crate dir instead of passing a positional `<path>`, since wasm-pack
+            // resolves `--out-dir` against the process cwd, not against that argument. ~keep
+            let targets = config.wasm_targets();
+            if targets.is_empty() {
+                // `scaffold::languages::wasm` rejects an empty target list, but that runs only
+                // when scaffolding; reaching here with `targets = []` would otherwise emit a
+                // dangling `cd <dir> && ` that the shell reports as a syntax error naming
+                // neither alef nor the setting at fault. ~keep
+                return format!(
+                    "echo 'alef: [crates.wasm] targets is empty for {lang}; list at least one \
+                     wasm-pack target (web, bundler, nodejs, deno)' >&2 && false"
+                );
+            }
+            let builds = targets
+                .iter()
+                .map(|target| format!("wasm-pack build {profile} --target {target} --out-dir pkg/{target}"))
+                .collect::<Vec<_>>()
+                .join(" && ");
+            format!("cd {wasm_crate_dir} && {builds}")
         }
         "cargo" => {
             if crate_dir.is_empty() && !bc.crate_suffix.is_empty() {
@@ -742,9 +779,56 @@ pub fn run_post_build(
                 }
                 info!("Re-materialized swift-bridge files for '{binding_crate_name}' from fresh build output");
             }
+            PostBuildStep::RewriteWasmPackageName {
+                package_json_path,
+                package_name,
+            } => {
+                // Unlike every other step above, `package_json_path` is already relative to
+                // `base_dir` (not `crate_dir`): the wasm crate directory itself may be
+                // `config.package_dir(Language::Wasm)`'s default-formula fallback rather than
+                // `crate_dir` (empty whenever `[crates.output] wasm` isn't set explicitly — see
+                // `build_command_for`'s "wasm-pack" arm), so the caller resolves the full path
+                // up front instead of relying on this function's `crate_dir`. ~keep
+                let file_path = base_dir.join(package_json_path);
+                if file_path.exists() {
+                    rewrite_wasm_package_json_name(&file_path, package_name)
+                        .with_context(|| format!("failed to rewrite wasm package name in {}", file_path.display()))?;
+                } else {
+                    debug!(
+                        "wasm-pack package.json not found for name rewrite: {}",
+                        file_path.display()
+                    );
+                }
+            }
         }
     }
 
+    Ok(())
+}
+
+/// Rewrite the `"name"` field of a wasm-pack-generated `package.json` in place.
+///
+/// wasm-pack always writes `"name"` as a plain top-level string field, but the value itself
+/// (derived from the wasm crate's `Cargo.toml`) is not known until build time, so this can't
+/// be a static [`PostBuildStep::PatchFile`] find/replace — the "find" half would have to be
+/// discovered from the very file being patched. A regex on the `"name": "..."` field is a
+/// minimal, order- and formatting-preserving edit; a full `serde_json` parse+reserialize would
+/// risk reordering keys or changing indentation on every build. ~keep
+fn rewrite_wasm_package_json_name(path: &Path, new_name: &str) -> anyhow::Result<()> {
+    let content = std::fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let name_field = regex::Regex::new(r#""name"\s*:\s*"[^"]*""#).expect("static regex is valid");
+    let escaped_name = new_name.replace('\\', "\\\\").replace('"', "\\\"");
+    let replacement = format!("\"name\": \"{escaped_name}\"");
+    let rewritten = name_field.replacen(&content, 1, replacement.as_str());
+    if rewritten != content {
+        std::fs::write(path, rewritten.as_ref()).with_context(|| format!("failed to write {}", path.display()))?;
+        info!("Rewrote wasm package name in {} to '{new_name}'", path.display());
+    } else {
+        debug!(
+            "wasm package.json {}: name already '{new_name}' or no name field found",
+            path.display()
+        );
+    }
     Ok(())
 }
 
@@ -914,6 +998,113 @@ sources = ["src/lib.rs"]
         );
     }
 
+    fn wasm_config(extra: &str) -> ResolvedCrateConfig {
+        let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(&format!(
+            r#"
+[workspace]
+languages = ["wasm"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+{extra}
+"#
+        ))
+        .unwrap();
+        alef_cfg.resolve().unwrap().remove(0)
+    }
+
+    fn wasm_build_config() -> BuildConfig {
+        BuildConfig {
+            tool: "wasm-pack",
+            crate_suffix: "-wasm",
+            build_dep: BuildDependency::None,
+            post_build: Vec::new(),
+        }
+    }
+
+    /// Regression test: `alef e2e` (local mode) resolves the wasm package through
+    /// `pkg/nodejs` (`ResolvedCrateConfig::wasm_crate_path`), and the scaffolded crate
+    /// manifest resolves `main`/`types` to `pkg/nodejs/…` and `module` to `pkg/web/…`.
+    /// `alef build` used to run a single `--target web` with wasm-pack's *default* out-dir,
+    /// producing a bare `pkg/` that none of those consumers read while never producing
+    /// `pkg/nodejs` at all — so a fresh checkout needed a hand-rolled extra build step.
+    /// The emitted command must match the scaffolded `build:wasm:<target>` scripts exactly,
+    /// since `publish::package::wasm` re-runs those same scripts via `npm run build:all`
+    /// and the two must not disagree about where a target lands. ~keep
+    #[test]
+    fn wasm_build_command_builds_every_default_target_into_its_own_pkg_subdir() {
+        let config = wasm_config("");
+
+        let command = build_command_for(Language::Wasm, &wasm_build_config(), &config, false);
+
+        assert_eq!(
+            command,
+            "cd crates/sample-lib-wasm && \
+             wasm-pack build --dev --target web --out-dir pkg/web && \
+             wasm-pack build --dev --target bundler --out-dir pkg/bundler && \
+             wasm-pack build --dev --target nodejs --out-dir pkg/nodejs && \
+             wasm-pack build --dev --target deno --out-dir pkg/deno"
+        );
+    }
+
+    /// The bare `pkg/` that the pre-fix command produced is exactly what nothing consumes;
+    /// asserting its absence is what distinguishes this fix from "also happens to build web".
+    #[test]
+    fn wasm_build_command_never_leaves_a_target_in_the_bare_pkg_dir() {
+        let command = build_command_for(Language::Wasm, &wasm_build_config(), &wasm_config(""), true);
+
+        assert!(
+            !command.contains("--target web --out-dir pkg "),
+            "no target may use wasm-pack's default bare `pkg/` out-dir: {command}"
+        );
+        for target in ["web", "bundler", "nodejs", "deno"] {
+            assert!(
+                command.contains(&format!("--target {target} --out-dir pkg/{target}")),
+                "release build must still pair every target with its own out-dir: {command}"
+            );
+        }
+        assert!(command.contains("--release"), "{command}");
+        assert!(!command.contains("--dev"), "{command}");
+    }
+
+    /// Failure path: a crate that narrows `[crates.wasm] targets` to keep its published
+    /// package small must get exactly that set — not a hardcoded web+nodejs pair. This is
+    /// the case a hardcoded command silently gets wrong, and it also proves the emitted
+    /// set is genuinely read from config rather than a constant that happens to match the
+    /// default. Note `pkg/nodejs` is absent here, so `alef e2e` cannot resolve the package
+    /// for such a crate — a config-consistency problem that belongs to config validation,
+    /// not something the build command should paper over by force-building nodejs. ~keep
+    #[test]
+    fn wasm_build_command_honours_a_narrowed_target_set() {
+        let config = wasm_config("\n[crates.wasm]\ntargets = [\"web\"]\n");
+
+        let command = build_command_for(Language::Wasm, &wasm_build_config(), &config, false);
+
+        assert_eq!(
+            command,
+            "cd crates/sample-lib-wasm && wasm-pack build --dev --target web --out-dir pkg/web"
+        );
+        assert!(!command.contains("nodejs"), "{command}");
+    }
+
+    /// An empty target list must fail loudly and name the setting, matching the unknown-tool
+    /// arm, rather than emitting a dangling `cd <dir> && ` the shell rejects as a syntax error
+    /// that names neither alef nor the offending config key.
+    #[test]
+    fn wasm_build_command_fails_loudly_on_an_empty_target_set() {
+        let config = wasm_config("\n[crates.wasm]\ntargets = []\n");
+
+        let command = build_command_for(Language::Wasm, &wasm_build_config(), &config, false);
+
+        assert!(command.ends_with("&& false"), "must exit non-zero: {command}");
+        assert!(command.contains("[crates.wasm] targets is empty"), "{command}");
+        assert!(
+            !command.contains("wasm-pack build"),
+            "must not emit a truncated wasm-pack invocation: {command}"
+        );
+    }
+
     #[test]
     fn swift_build_command_uses_swift_build_with_package_path() {
         let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(
@@ -1027,6 +1218,107 @@ sources = ["src/lib.rs"]
             ),
             Err(_) => panic!("building an unsupported binding target must not panic"),
         }
+    }
+
+    /// Regression test: wasm-pack derives `pkg/nodejs/package.json`'s `"name"` from the wasm
+    /// crate's `Cargo.toml`, not from `config.wasm_package_name()` — so every `file:` dependency
+    /// and `require()`/`import` specifier the wasm e2e codegen emits (which use
+    /// `wasm_package_name()`) would name a package the directory does not declare unless
+    /// something patches it after the build. This proves the patch is surgical: only the
+    /// `"name"` field changes, every other field (including unrelated `"name"`-shaped strings
+    /// elsewhere in the file) is untouched.
+    #[test]
+    fn rewrite_wasm_package_json_name_only_touches_the_name_field() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let manifest_path = dir.path().join("package.json");
+        std::fs::write(
+            &manifest_path,
+            r#"{
+  "name": "ts-pack-core-wasm",
+  "version": "0.1.0",
+  "description": "not a name field: \"name\" appears here too",
+  "main": "ts_pack_core_wasm.js"
+}
+"#,
+        )
+        .expect("failed to write fixture package.json");
+
+        rewrite_wasm_package_json_name(&manifest_path, "@xberg-io/tree-sitter-language-pack-wasm")
+            .expect("rewrite must succeed");
+
+        let rewritten = std::fs::read_to_string(&manifest_path).expect("failed to read rewritten package.json");
+        assert!(
+            rewritten.contains(r#""name": "@xberg-io/tree-sitter-language-pack-wasm""#),
+            "{rewritten}"
+        );
+        assert!(!rewritten.contains("ts-pack-core-wasm"), "{rewritten}");
+        assert!(
+            rewritten.contains(r#""main": "ts_pack_core_wasm.js""#),
+            "unrelated fields must survive untouched: {rewritten}"
+        );
+        assert!(
+            rewritten.contains(r#"not a name field: \"name\" appears here too"#),
+            "a `\"name\"` substring inside another field's value must not be touched: {rewritten}"
+        );
+    }
+
+    #[test]
+    fn rewrite_wasm_package_json_name_is_idempotent() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let manifest_path = dir.path().join("package.json");
+        std::fs::write(&manifest_path, r#"{"name": "already-correct"}"#).expect("failed to write fixture");
+
+        rewrite_wasm_package_json_name(&manifest_path, "already-correct").expect("rewrite must succeed");
+
+        let rewritten = std::fs::read_to_string(&manifest_path).expect("failed to read package.json");
+        assert_eq!(rewritten, r#"{"name": "already-correct"}"#);
+    }
+
+    /// End-to-end regression through the public `run_post_build` entry point, proving the
+    /// `PostBuildStep::RewriteWasmPackageName` variant is actually wired up (not just the
+    /// private helper it calls) and resolves `package_json_path` relative to `base_dir`
+    /// directly — not `base_dir.join(crate_dir)`, unlike every other `PostBuildStep` — since
+    /// the crate directory (`config.package_dir(Language::Wasm)`'s default-formula fallback,
+    /// used when `[crates.output] wasm` isn't set) must already be baked into the path by
+    /// the caller that constructs this step.
+    #[test]
+    fn run_post_build_rewrites_wasm_package_json_name_relative_to_base_dir() {
+        let base_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let pkg_dir = base_dir.path().join("crates/sample-lib-wasm/pkg/nodejs");
+        std::fs::create_dir_all(&pkg_dir).expect("failed to create pkg/nodejs");
+        std::fs::write(pkg_dir.join("package.json"), r#"{"name": "sample-lib-wasm-crate"}"#)
+            .expect("failed to write fixture package.json");
+
+        let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["wasm"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+"#,
+        )
+        .unwrap();
+        let config = alef_cfg.resolve().unwrap().remove(0);
+        let build_config = BuildConfig {
+            tool: "wasm-pack",
+            crate_suffix: "-wasm",
+            build_dep: BuildDependency::None,
+            post_build: vec![crate::core::backend::PostBuildStep::RewriteWasmPackageName {
+                package_json_path: std::path::PathBuf::from("crates/sample-lib-wasm/pkg/nodejs/package.json"),
+                package_name: config.wasm_package_name(),
+            }],
+        };
+
+        run_post_build(Language::Wasm, &build_config, &config, base_dir.path()).expect("post-build must succeed");
+
+        let rewritten =
+            std::fs::read_to_string(pkg_dir.join("package.json")).expect("failed to read rewritten package.json");
+        assert!(
+            rewritten.contains(&format!(r#""name": "{}""#, config.wasm_package_name())),
+            "{rewritten}"
+        );
     }
 }
 

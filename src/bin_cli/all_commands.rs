@@ -179,7 +179,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let mut deferred_formatting: Vec<crate::e2e::format::DeferredFormatting> = Vec::new();
 
                 tracing::info!("Generating bindings...");
-                let bindings = pipeline::generate(&api, resolved_cfg, &languages, clean, config_path)?;
+                let bindings = pipeline::generate(&api, resolved_cfg, &languages, clean, config_path, true)?;
 
                 let mut binding_count: usize = 0;
                 for (lang, lang_files) in &bindings {

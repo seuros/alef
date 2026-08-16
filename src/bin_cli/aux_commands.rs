@@ -29,7 +29,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             let sources_hash = cache::sources_hash(&resolved_cfg.sources)?;
 
             tracing::info!("  Generating bindings...");
-            let bindings = pipeline::generate(&api, resolved_cfg, &languages, false, config_path)?;
+            let bindings = pipeline::generate(&api, resolved_cfg, &languages, false, config_path, true)?;
             let mut binding_count: usize = 0;
             let mut all_paths = std::collections::HashSet::new();
             for (lang_key, lang_files) in &bindings {

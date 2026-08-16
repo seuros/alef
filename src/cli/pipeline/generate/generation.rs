@@ -8,12 +8,22 @@ use rayon::prelude::*;
 use std::path::Path;
 use tracing::{debug, info};
 
+/// `write_cache` controls whether a freshly generated language's output paths are
+/// recorded to `.alef/<crate>/hashes/<lang>.{hash,manifest}`. Read-only callers that
+/// regenerate in memory only to inspect the result — `alef verify`'s missing-file
+/// check is the motivating case — must pass `false`: a command named `verify`
+/// writing cache state as a side effect is surprising, and measurement showed the
+/// cache buys nothing on this path (cold and warm regeneration both land around
+/// 3.4s). Callers that actually write the generated files to disk (`alef generate`,
+/// `alef all`, `alef init`) must pass `true` so the cache stays authoritative for
+/// subsequent runs. ~keep
 pub fn generate(
     api: &ApiSurface,
     config: &ResolvedCrateConfig,
     languages: &[Language],
     clean: bool,
     config_path: &Path,
+    write_cache: bool,
 ) -> anyhow::Result<Vec<(Language, Vec<GeneratedFile>)>> {
     let validated_api = validate_generation_api(api, config, languages)?;
 
@@ -91,10 +101,12 @@ pub fn generate(
                 Ok::<(), anyhow::Error>(())
             })?;
 
-            let base_dir = std::env::current_dir().unwrap_or_default();
-            let output_paths: Vec<std::path::PathBuf> = files.iter().map(|f| base_dir.join(&f.path)).collect();
-            cache::write_lang_hash(&config.name, lang_str, lang_hash, &output_paths)
-                .with_context(|| format!("failed to write language hash for {lang_str}"))?;
+            if write_cache {
+                let base_dir = std::env::current_dir().unwrap_or_default();
+                let output_paths: Vec<std::path::PathBuf> = files.iter().map(|f| base_dir.join(&f.path)).collect();
+                cache::write_lang_hash(&config.name, lang_str, lang_hash, &output_paths)
+                    .with_context(|| format!("failed to write language hash for {lang_str}"))?;
+            }
             Ok((*lang, files))
         })
         .collect::<anyhow::Result<_>>()?;
@@ -475,7 +487,7 @@ mod tests {
         let config_path = std::path::Path::new("does-not-exist-alef.toml");
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            generate(&api, &config, &[Language::C], true, config_path)
+            generate(&api, &config, &[Language::C], true, config_path, true)
         }));
 
         match result {
@@ -488,5 +500,52 @@ mod tests {
             },
             Err(_) => panic!("generating for an unsupported binding target must not panic"),
         }
+    }
+
+    /// `hashes_dir` in `cli::cache` resolves `.alef/<crate>/hashes/` relative to
+    /// CWD, so this test (like the equivalent CWD-changing tests in `cli::cache`
+    /// and `cli::pipeline::version_tests`) needs its own chdir guard; the mutex
+    /// is local to this module by the same existing convention. ~keep
+    static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Regression for making `alef verify` read-only again: its missing-file
+    /// check regenerates bindings in memory only to look for absent files, and
+    /// must not leave `.alef/<crate>/hashes/<lang>.{hash,manifest}` behind —
+    /// acquiring a cache-write side effect under a command named `verify` was
+    /// the bug. `write_cache = true` (what `alef generate`/`alef all`/`alef init`
+    /// pass) must still record the cache normally. ~keep
+    #[test]
+    fn write_cache_flag_gates_the_lang_hash_cache_write() {
+        let _guard = CWD_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let original_cwd = std::env::current_dir().expect("cwd");
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::env::set_current_dir(dir.path()).expect("chdir into tempdir");
+
+        let api = ApiSurface::default();
+        let config = ResolvedCrateConfig {
+            name: "cache-write-test".to_string(),
+            ..Default::default()
+        };
+        let config_path = std::path::Path::new("does-not-exist-alef.toml");
+        let hash_path = dir.path().join(".alef/cache-write-test/hashes/ffi.hash");
+
+        let read_only_result = generate(&api, &config, &[Language::Ffi], true, config_path, false);
+        let existed_after_read_only = hash_path.exists();
+
+        let writing_result = generate(&api, &config, &[Language::Ffi], true, config_path, true);
+        let existed_after_write = hash_path.exists();
+
+        let _ = std::env::set_current_dir(&original_cwd);
+
+        read_only_result.expect("write_cache=false must not turn a successful generate into an error");
+        writing_result.expect("write_cache=true must not turn a successful generate into an error");
+        assert!(
+            !existed_after_read_only,
+            "write_cache=false must not create the language hash cache file"
+        );
+        assert!(
+            existed_after_write,
+            "write_cache=true must create the language hash cache file"
+        );
     }
 }

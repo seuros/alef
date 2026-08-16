@@ -188,21 +188,6 @@ pub fn write_scaffold_files_report(
     base_dir: &Path,
     overwrite: bool,
 ) -> anyhow::Result<super::write::WriteReport> {
-    // `packages/zig/build.zig` is a `generated_header: false` seed on a markable (`.zig`)
-    // extension, so the ownership guard below permanently refuses to overwrite it once it
-    // exists on disk -- by design, since consumers legitimately hand-edit it (see
-    // `migrate_build_zig_test_target`'s doc for the evidence). That means a generator fix to
-    // its content can never reach an existing repo through the normal write path at all, no
-    // matter what `overwrite` is. Run first, before the create-only/ownership logic below
-    // even sees this run's `build.zig` entry, so it can repair the one specific known-bad
-    // shape (test module compiling zero `test` blocks) in place without going through -- or
-    // being blocked by -- that guard. A no-op when zig isn't part of this run, the file
-    // doesn't exist yet, or it does not match the known-bad shape. ~keep
-    if files.iter().any(|file| file.path == Path::new("packages/zig/build.zig")) {
-        crate::scaffold::migrate_build_zig_test_target(base_dir)
-            .context("failed to migrate pre-existing packages/zig/build.zig test target")?;
-    }
-
     let mut report = super::write::WriteReport::default();
     let mut prepared = std::collections::BTreeMap::new();
     for file in files {
@@ -335,6 +320,74 @@ pub fn write_scaffold_files_report(
             normalize_poly_config(&full_path, base_dir);
         }
     }
+
+    // `packages/zig/build.zig` is a `generated_header: false` seed on a markable (`.zig`)
+    // extension, so the ownership guard above permanently refuses to overwrite it once it
+    // exists -- by design, since consumers legitimately hand-edit it. A generator fix to its
+    // content therefore never reaches an existing repo through the normal write path at all,
+    // whatever `overwrite` says, so the one known-bad shape (test module compiling the
+    // generated `src/<module>.zig`, which carries zero `test` blocks) is repaired in place
+    // here instead. Runs AFTER the write loop, not before: the repair repoints the test
+    // module at `test/<module>_test.zig`, which the same batch seeds create-only, and a repo
+    // can legitimately have the bad `build.zig` with no `test/` directory at all
+    // (html-to-markdown is in exactly that state). Repairing first would leave any run that
+    // failed between the two steps pointing at a nonexistent root source file -- trading
+    // silent coverage loss for a build graph that will not resolve. ~keep
+    if files.iter().any(|file| file.path == Path::new("packages/zig/build.zig")) {
+        crate::scaffold::migrate_build_zig_test_target(base_dir)
+            .context("failed to migrate pre-existing packages/zig/build.zig test target")?;
+    }
+
+    // Same reachability gap, same shape of fix, for Dart: `packages/dart/test/*_test.dart` is
+    // also `generated_header: false` on a markable (`.dart`) extension, so the vacuous
+    // `expect(1 + 1, equals(2))` placeholder this scaffold used to always emit can never be
+    // replaced by `scaffold_dart_test`'s real assertion through the normal write path either,
+    // on any pre-existing repo. Unlike the zig repair, this one only ever fires when the
+    // on-disk file still matches the *exact* old placeholder shape byte-for-byte -- see
+    // `migrate_dart_placeholder_test`'s doc -- so a hand-written suite is never at risk. This
+    // run's freshly generated content for that path (already computed by `scaffold_dart_test`
+    // above, using the real API surface) is what gets written when the shape matches. ~keep
+    if let Some(dart_test_file) = files.iter().find(|file| {
+        file.path.starts_with("packages/dart/test")
+            && file
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with("_test.dart"))
+    }) {
+        crate::scaffold::migrate_dart_placeholder_test(base_dir, &dart_test_file.path, &dart_test_file.content)
+            .context("failed to migrate pre-existing packages/dart/test/*_test.dart placeholder")?;
+    }
+
+    // Same reachability gap again, for Swift: `packages/swift/Tests/<Name>Tests/<Name>Tests.swift`
+    // is `generated_header: false` on a markable (`.swift`) extension, so the vacuous
+    // `XCTAssertTrue(true)` placeholder this scaffold used to always emit can never be replaced
+    // by `scaffold_swift_test`'s real assertion through the normal write path on any
+    // pre-existing repo (html-to-markdown is in exactly that state). Fires only on the vacuity
+    // signature -- one `XCTAssert`-family call, one `func test`, and that call is the tautology
+    // -- so a hand-written suite is never at risk; see `migrate_swift_placeholder_test`'s doc.
+    // This run's freshly generated content for that path (already computed by
+    // `scaffold_swift_test` above, against the real API surface) is what gets written when the
+    // signature matches.
+    //
+    // Singular by construction, so `find` cannot silently skip a second candidate: this
+    // function's `files` come from one `crate::scaffold::scaffold(api, config, languages)` call
+    // for a single crate, and `scaffold_swift` emits exactly one `Tests/<module>Tests` file per
+    // call (`module` is the crate's one `config.swift_module()`). A multi-crate workspace runs
+    // this whole path once per crate, each with its own distinct module directory. Placed after
+    // the write loop for the same reason as the zig repair. ~keep
+    if let Some(swift_test_file) = files.iter().find(|file| {
+        file.path.starts_with("packages/swift/Tests")
+            && file
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with("Tests.swift"))
+    }) {
+        crate::scaffold::migrate_swift_placeholder_test(base_dir, &swift_test_file.path, &swift_test_file.content)
+            .context("failed to migrate pre-existing packages/swift/Tests/*Tests.swift placeholder")?;
+    }
+
     Ok(report)
 }
 

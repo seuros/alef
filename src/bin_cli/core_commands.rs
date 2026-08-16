@@ -71,7 +71,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     tracing::info!("Generating bindings for: {}", format_languages(&languages));
                 }
                 let api = pipeline::extract(resolved_cfg, config_path, clean)?;
-                let files = pipeline::generate(&api, resolved_cfg, &languages, clean, config_path)?;
+                let files = pipeline::generate(&api, resolved_cfg, &languages, clean, config_path, true)?;
                 let regenerated_languages: std::collections::HashSet<_> =
                     files.iter().map(|(language, _)| *language).collect();
                 let sources_hash = cache::sources_hash(&resolved_cfg.sources)?;
@@ -875,6 +875,25 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             missing_generated_files.dedup();
             let has_missing_files = !missing_generated_files.is_empty();
 
+            // Catches the cross-artifact ABI straddle a per-file hash check cannot
+            // see: an FFI header and a binding backend's opaque-handle file each
+            // individually fresh against current inputs, but stamped by two
+            // different handle-ABI generations because only one side was
+            // regenerated. See `crate::core::hash::HANDLE_ABI_STAMP_KEY` and
+            // `find_stamp_disagreement` for why 0/1 distinct values is silently
+            // fine and only 2+ is reported. ~keep
+            let abi_disagreement = find_stamp_disagreement(&base_dir, crate::core::hash::HANDLE_ABI_STAMP_KEY);
+            let has_abi_disagreement = abi_disagreement.is_some();
+            if let Some(disagreement) = &abi_disagreement {
+                crate::bin_cli::output::line(format_args!(
+                    "ABI generation disagreement detected for `{}`:",
+                    disagreement.key
+                ));
+                for (path, value) in &disagreement.examples {
+                    crate::bin_cli::output::line(format_args!("  {path} -> {value}"));
+                }
+            }
+
             let mut all_version_mismatches: Vec<String> = Vec::new();
             for resolved_cfg in &crates_to_process {
                 let mismatches = pipeline::verify_versions(resolved_cfg)?;
@@ -894,7 +913,12 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 }
             }
 
-            if stale.is_empty() && !has_missing_files && !has_version_issues && snippet_coverage_issues.is_empty() {
+            if stale.is_empty()
+                && !has_missing_files
+                && !has_abi_disagreement
+                && !has_version_issues
+                && snippet_coverage_issues.is_empty()
+            {
                 crate::bin_cli::output::line("All bindings and versions are up to date.");
             } else {
                 if !stale.is_empty() {
@@ -916,7 +940,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 }
             }
             super::verify_outcome::ensure_success(
-                !stale.is_empty() || has_missing_files,
+                !stale.is_empty() || has_missing_files || has_abi_disagreement,
                 has_version_issues,
                 snippet_coverage_issues.len(),
                 report_only,
@@ -932,7 +956,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             for resolved_cfg in &crates_to_process {
                 let languages = resolve_languages(resolved_cfg, None)?;
                 let api = pipeline::extract(resolved_cfg, config_path, false)?;
-                let bindings = pipeline::generate(&api, resolved_cfg, &languages, true, config_path)?;
+                let bindings = pipeline::generate(&api, resolved_cfg, &languages, true, config_path, true)?;
                 let stubs = pipeline::generate_stubs(&api, resolved_cfg, &languages)?;
                 let scaffold = pipeline::scaffold(&api, resolved_cfg, &languages, config_path)?;
                 all_diffs.extend(pipeline::diff_files(&bindings, &base_dir)?);

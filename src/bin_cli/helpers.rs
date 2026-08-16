@@ -287,11 +287,42 @@ const VERIFY_SKIP_DIRS: &[&str] = &[
     ".vscode",
 ];
 
-/// File extensions the verify walk inspects for an `alef:hash:` header.
+/// Extensions the ownership walk will open. A generated file whose extension is absent here is
+/// invisible to `alef verify` entirely — not reported stale, not reported missing, and not
+/// visible to [`find_stamp_disagreement`] either.
+///
+/// This list is only ONE of two filters. [`collect_alef_hashes`] needs a scanned extension AND
+/// an `alef:hash:` line, so adding an extension does nothing for a language whose emitted files
+/// carry no stamp at all — measured in tree-sitter-language-pack, `packages/java` and
+/// `packages/go` have ZERO stamped files while `java`/`go` were already listed here. Those are
+/// unreachable by any extension change; see the task tracking per-file stamping.
+///
+/// Scope of what a passing verify proves, because "verify passed" reads as the stronger claim
+/// downstream: the hash covers generation INPUTS, not output bytes. One stamped manifest per
+/// crate therefore detects input drift for that crate's outputs even when the outputs are
+/// unstamped — but a hand-edit to an emitted file leaves inputs untouched and still verifies
+/// fresh. Demonstrated in tslp: a dependency bumped inside a stamped, alef-generated
+/// `Cargo.toml` reports fresh while the committed bytes differ from what alef would emit.
+/// Freshness means the inputs have not moved, not that the file is what the generator writes.
+///
+/// `zig`/`dart`/`kt`/`kts`/`swift`/`gleam` were missing, which meant the cross-artifact straddle
+/// gate could not see the zig side of a zig-vs-FFI-header straddle — the exact artifact pair it
+/// exists to protect. `properties`/`pro`/`sh`/`props` were also stamped-but-unscanned, and
+/// `packages/csharp/Directory.Build.props` is the ONLY stamped file in that whole package, so
+/// csharp's freshness claim rested entirely on a file this walk never opened. Any new emitting
+/// backend must add its extension here or its output silently leaves the
+/// freshness claim. ~keep
 const VERIFY_SCAN_EXTENSIONS: &[&str] = &[
     "rs", "py", "pyi", "ts", "tsx", "js", "mjs", "cjs", "rb", "rbs", "php", "phpstub", "go", "java", "cs", "ex", "exs",
-    "R", "r", "toml", "json", "md", "h", "c", "yaml", "yml",
+    "R", "r", "toml", "json", "md", "h", "c", "yaml", "yml", "zig", "dart", "kt", "kts", "swift", "gleam",
+    "properties", "pro", "sh", "props",
 ];
+
+/// Dotfiles alef stamps that [`VERIFY_SCAN_EXTENSIONS`] structurally cannot reach: `Path::extension`
+/// returns `None` for a name that is entirely a leading-dot stem, so `.gitignore` has no extension
+/// to match and would stay invisible no matter what is added to that list. Matched on the whole
+/// file name instead. ~keep
+const VERIFY_SCAN_FILENAMES: &[&str] = &[".gitignore", ".gitattributes", ".editorconfig"];
 
 /// Walk `base_dir` and return every alef-owned file paired with its optional
 /// `alef:hash:<hex>` stamp. Skips build/cache directories and files without the
@@ -323,15 +354,20 @@ fn collect_alef_hashes(base_dir: &std::path::Path) -> Vec<(std::path::PathBuf, O
             if !file_type.is_file() {
                 continue;
             }
-            let ext_ok = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| {
-                    VERIFY_SCAN_EXTENSIONS
-                        .iter()
-                        .any(|allowed| allowed.eq_ignore_ascii_case(e))
-                })
-                .unwrap_or(false);
+            let name_ok = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| VERIFY_SCAN_FILENAMES.contains(&n));
+            let ext_ok = name_ok
+                || path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| {
+                        VERIFY_SCAN_EXTENSIONS
+                            .iter()
+                            .any(|allowed| allowed.eq_ignore_ascii_case(e))
+                    })
+                    .unwrap_or(false);
             if !ext_ok {
                 continue;
             }
@@ -345,6 +381,58 @@ fn collect_alef_hashes(base_dir: &std::path::Path) -> Vec<(std::path::PathBuf, O
         }
     }
     found
+}
+
+/// A cross-artifact ABI-generation disagreement: two or more alef-owned files
+/// in the tree carry different values for the same `alef:<key>:` stamp (see
+/// [`crate::core::hash::inject_stamp_line`]/[`extract_stamp`]).
+///
+/// A single `alef generate` run stamps every file it touches with the same
+/// value, so two different values coexisting can only mean files from two
+/// different generation runs are mixed in the tree — e.g. an FFI header
+/// regenerated after a handle-representation change sitting next to a
+/// binding backend's opaque-handle file that was not. `alef verify`'s
+/// per-file `alef:hash:` staleness check cannot see this: each file's hash is
+/// compared against the *current* generation inputs in isolation, never
+/// against what a *different* file on disk was stamped with. ~keep
+///
+/// [`extract_stamp`]: crate::core::hash::extract_stamp
+pub(crate) struct StampDisagreement {
+    pub(crate) key: String,
+    /// One `(display_path, value)` pair per distinct value found, so the
+    /// report can show a representative example from each side of the split.
+    pub(crate) examples: Vec<(String, String)>,
+}
+
+/// Find whether every alef-owned file under `base_dir` that carries an
+/// `alef:<key>:` stamp agrees on its value.
+///
+/// Returns `None` when zero or one distinct value is present. Both are
+/// silently fine, deliberately: zero stamped files means no backend in this
+/// tree emits `key` yet — every consumer repo today, since nothing calls
+/// `inject_stamp_line` — and that tree cannot be verified this way, not that
+/// it disagrees; one distinct value is the healthy up-to-date case. Only 2+
+/// distinct values is a provable disagreement (see [`StampDisagreement`]).
+/// This intentionally does not attempt to flag "some files stamped, others
+/// plausibly should be but aren't" as a softer warning: that requires knowing
+/// which unstamped files are ABI-relevant, which a generic content walk
+/// cannot determine — only the backend that emits a given file knows whether
+/// it encodes the handle representation. ~keep
+pub(crate) fn find_stamp_disagreement(base_dir: &std::path::Path, key: &str) -> Option<StampDisagreement> {
+    let mut by_value: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for (path, _hash, content) in collect_alef_hashes(base_dir) {
+        let Some(value) = crate::core::hash::extract_stamp(&content, key) else {
+            continue;
+        };
+        by_value.entry(value).or_insert_with(|| path.display().to_string());
+    }
+    if by_value.len() < 2 {
+        return None;
+    }
+    Some(StampDisagreement {
+        key: key.to_string(),
+        examples: by_value.into_iter().map(|(value, path)| (path, value)).collect(),
+    })
 }
 
 /// Display paths (joined onto `base_dir`, matching `StaleMismatch::path`'s
@@ -378,8 +466,9 @@ fn missing_managed_paths(files: &[crate::core::backend::GeneratedFile], base_dir
 /// generation would produce, which is IR-derived for those backends and cannot
 /// be answered from `alef.toml` alone; this mirrors `alef diff`'s approach
 /// ([`crate::cli::pipeline::diff_files`], `src/cli/pipeline/generate/diff.rs`)
-/// and pays a comparable cost: bindings, type stubs, and scaffold are
-/// regenerated in memory (never written to disk) for every configured language.
+/// and pays a comparable cost: bindings, type stubs, service API, public API, and
+/// scaffold are regenerated in memory (never written to disk) for every configured
+/// language.
 ///
 /// `clean = false` is passed to [`crate::cli::pipeline::generate`] deliberately,
 /// not to save cost in CI (a fresh checkout's `.alef/` cache is always cold, so
@@ -397,7 +486,7 @@ pub(crate) fn find_missing_generated_files(
 ) -> anyhow::Result<Vec<String>> {
     let mut missing = Vec::new();
 
-    let bindings = crate::cli::pipeline::generate(api, config, languages, false, config_path)?;
+    let bindings = crate::cli::pipeline::generate(api, config, languages, false, config_path, false)?;
     for (_, files) in &bindings {
         missing.extend(missing_managed_paths(files, base_dir));
     }
@@ -405,6 +494,25 @@ pub(crate) fn find_missing_generated_files(
     let stubs = crate::cli::pipeline::generate_stubs(api, config, languages)?;
     for (_, files) in &stubs {
         missing.extend(missing_managed_paths(files, base_dir));
+    }
+
+    // `generate_service_api` already no-ops when `api.services` is empty, so it is
+    // safe to call unconditionally. `generate_public_api` has no such internal
+    // guard — mirror `Commands::Generate`'s `resolved_cfg.generate.public_api` gate
+    // so this stays a pure read matching what `alef generate` would actually
+    // produce, not a superset of it. Both were missing here even though
+    // `Commands::Generate` calls them, so a backend's per-type service/public-API
+    // file (Java, C#) that was never written was invisible to `alef verify`. ~keep
+    let svc_files = crate::cli::pipeline::generate_service_api(api, config, languages)?;
+    for (_, files) in &svc_files {
+        missing.extend(missing_managed_paths(files, base_dir));
+    }
+
+    if config.generate.public_api {
+        let public_api_files = crate::cli::pipeline::generate_public_api(api, config, languages, config_path)?;
+        for (_, files) in &public_api_files {
+            missing.extend(missing_managed_paths(files, base_dir));
+        }
     }
 
     let scaffold_files = crate::cli::pipeline::scaffold(api, config, languages, config_path)?;
@@ -629,7 +737,11 @@ e2e = "cargo test"
     #[test]
     fn missing_managed_paths_reports_nothing_when_every_headered_file_exists() {
         let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("SomeType.java"), "final class SomeType { /* stale */ }\n").unwrap();
+        std::fs::write(
+            dir.path().join("SomeType.java"),
+            "final class SomeType { /* stale */ }\n",
+        )
+        .unwrap();
         let files = vec![gen_file("SomeType.java", "final class SomeType {}\n")];
 
         assert!(missing_managed_paths(&files, dir.path()).is_empty());
@@ -688,5 +800,94 @@ e2e = "cargo test"
         assert_eq!(stale.len(), 1);
         assert_eq!(stale[0].path, path.display().to_string());
         assert_eq!(stale[0].embedded, "<missing>");
+    }
+
+    /// `find_stamp_disagreement` walks `collect_alef_hashes`, which only yields files that
+    /// carry an `alef:hash:` line — so a fixture bearing only a stamp is invisible to it and
+    /// every assertion over it passes vacuously. Both lines must be injected, in that order,
+    /// to produce a file shaped like one a backend actually emits. ~keep
+    fn write_stamped(dir: &std::path::Path, name: &str, key: &str, value: &str) -> std::path::PathBuf {
+        let path = dir.join(name);
+        let body = "// This file is auto-generated by alef — DO NOT EDIT.\nfn generated() {}\n";
+        let stamped = crate::core::hash::inject_stamp_line(body, key, value);
+        let hash = crate::core::hash::compute_file_hash("test-inputs-hash", &stamped);
+        std::fs::write(&path, crate::core::hash::inject_hash_line(&stamped, &hash)).expect("write stamped file");
+        path
+    }
+
+    /// Guards the fixture itself, because the bug this replaces was a fixture bug, not a
+    /// logic bug: if `write_stamped` ever stops producing a file the hash walk can see, the
+    /// disagreement tests below go quietly vacuous instead of failing. ~keep
+    #[test]
+    fn write_stamped_produces_a_file_the_hash_walk_actually_collects() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_stamped(dir.path(), "header.h", "handle-abi", "1");
+
+        let collected = collect_alef_hashes(dir.path());
+        assert_eq!(collected.len(), 1, "the stamped fixture must be visible to the hash walk");
+        assert_eq!(
+            crate::core::hash::extract_stamp(&collected[0].2, "handle-abi").as_deref(),
+            Some("1"),
+            "the stamp must survive alongside the hash line"
+        );
+    }
+
+    /// The concrete cross-artifact ABI straddle this closes: an FFI-side file
+    /// stamped for one ABI generation coexisting with a binding-side file
+    /// stamped for a different one must be reported, even though each file's
+    /// own `alef:hash:` may be perfectly fresh relative to current inputs.
+    #[test]
+    fn find_stamp_disagreement_reports_two_distinct_values() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_stamped(dir.path(), "header.h", "handle-abi", "1");
+        write_stamped(dir.path(), "binding.zig", "handle-abi", "2");
+
+        let disagreement =
+            find_stamp_disagreement(dir.path(), "handle-abi").expect("two distinct stamp values must be reported");
+
+        assert_eq!(disagreement.key, "handle-abi");
+        assert_eq!(disagreement.examples.len(), 2);
+        let values: Vec<&str> = disagreement.examples.iter().map(|(_, v)| v.as_str()).collect();
+        assert!(values.contains(&"1"));
+        assert!(values.contains(&"2"));
+    }
+
+    /// Positive control: every stamped file agreeing must not be reported —
+    /// this is the healthy, fully-regenerated-together state.
+    #[test]
+    fn find_stamp_disagreement_is_none_when_every_stamped_file_agrees() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_stamped(dir.path(), "header.h", "handle-abi", "2");
+        write_stamped(dir.path(), "binding.zig", "handle-abi", "2");
+
+        assert!(find_stamp_disagreement(dir.path(), "handle-abi").is_none());
+    }
+
+    /// The required negative control for the rollout gap the task describes:
+    /// a tree where no backend has started emitting the stamp yet (every
+    /// consumer repo today) must not be reported as disagreeing — there is
+    /// nothing to compare, not a proven mismatch.
+    #[test]
+    fn find_stamp_disagreement_is_none_when_nothing_is_stamped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("header.h"),
+            "// This file is auto-generated by alef — DO NOT EDIT.\nfn generated() {}\n",
+        )
+        .expect("write unstamped file");
+
+        assert!(find_stamp_disagreement(dir.path(), "handle-abi").is_none());
+    }
+
+    /// A file stamped under a different key must not be mistaken for a
+    /// `handle-abi` disagreement — `find_stamp_disagreement` is keyed, not a
+    /// blanket "does this file have any stamp" check.
+    #[test]
+    fn find_stamp_disagreement_ignores_a_different_key() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_stamped(dir.path(), "header.h", "some-other-marker", "1");
+        write_stamped(dir.path(), "binding.zig", "some-other-marker", "2");
+
+        assert!(find_stamp_disagreement(dir.path(), "handle-abi").is_none());
     }
 }

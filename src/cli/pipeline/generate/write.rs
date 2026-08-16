@@ -59,15 +59,25 @@ pub(crate) fn atomic_write(path: &Path, content: &[u8]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The comment style alef stamps a provenance marker with, or `None` when the
-/// extension has no comment syntax alef knows how to write one in.
+/// The **ownership** predicate: extensions where a missing `alef:hash:` marker is
+/// treated as proof alef never authored the file.
 ///
-/// `None` is load-bearing beyond formatting: a file alef cannot stamp never carries
-/// an `alef:hash:` marker even when alef authored every byte of it (`.md` READMEs are
-/// the widest instance — none of the generated per-language READMEs has ever had one).
-/// So for those paths a missing marker is NOT evidence the file is foreign, and any
-/// ownership check keyed on the marker must exempt them or it will freeze legitimate
-/// regeneration forever. ~keep
+/// Deliberately *narrower* than [`marker_header_syntax`], which is the **emit**
+/// predicate. Both `write_files_report` and
+/// [`super::scaffold::write_scaffold_files_report`] read `is_some()` here as
+/// "absence of a marker is evidence of foreign authorship", and refuse to
+/// overwrite on that basis. Adding an extension here therefore retroactively
+/// freezes every already-existing file of that extension in every consumer repo
+/// that does not carry a marker *yet*: the guard refuses the write, so the marker
+/// can never land, so the guard refuses forever (the #77/#84 create-once trap).
+/// Extensions graduate onto this list only after a release has been emitting a
+/// marker for them long enough that consumer trees actually carry one; until then
+/// they stay `None` and prove ownership through
+/// [`crate::cli::cache::is_scaffold_owned_path`] as before.
+///
+/// `None` is load-bearing beyond formatting: for these paths a missing marker is
+/// NOT evidence the file is foreign, and any ownership check keyed on the marker
+/// must exempt them or it will freeze legitimate regeneration forever. ~keep
 pub(super) fn marker_comment_style(path: &Path) -> Option<hash::CommentStyle> {
     match path.extension().and_then(|extension| extension.to_str()) {
         Some("py" | "rb" | "r" | "ex" | "exs" | "toml" | "yaml" | "yml" | "sh") => Some(hash::CommentStyle::Hash),
@@ -80,20 +90,129 @@ pub(super) fn marker_comment_style(path: &Path) -> Option<hash::CommentStyle> {
     }
 }
 
+/// How alef renders a provenance marker into a given file, or `None` when the
+/// format genuinely has no comment syntax (`.json`) or alef must not write one
+/// (lockfiles, which their own tool rewrites wholesale).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MarkerSyntax {
+    /// One of [`hash::CommentStyle`]'s forms, rendered by [`hash::header`].
+    Comment(hash::CommentStyle),
+    /// `<!-- ... -->`, for XML-family formats. [`hash::CommentStyle`] has no
+    /// variant for this, but every read-side function already understands the
+    /// shape — [`hash::inject_hash_line`], [`hash::inject_stamp_line`],
+    /// [`hash::extract_stamp`] and `hash::parse_generated_hash_line` all branch on
+    /// a leading `<!--` — because `docs::render::with_html_header` has been
+    /// emitting exactly this header for `.md` docs pages and READMEs all along.
+    Html,
+}
+
+/// The **emit** predicate: which syntax [`ensure_generated_header`] stamps a marker
+/// in. Covers strictly more paths than [`marker_comment_style`] — see that
+/// function's doc for why the two must not be merged.
+///
+/// Widening this side is safe in a way widening the ownership side is not: a
+/// header is only ever added on a write the guard has already authorised, so no
+/// file can be frozen by it. It is also the *only* durable fix for the
+/// `.alef/`-record fallback (alef #80), since a marker committed to git proves
+/// ownership identically on a fresh clone and a warm dev machine, whereas the
+/// gitignored record does not.
+///
+/// Per-format basis, verified against each format's own grammar rather than
+/// assumed from the extension:
+/// - `.cmake` — CMake `#` line comments (`cmake-language(7)`); no position
+///   constraint. This is the escalated `crates/*-ffi/cmake/*-config.cmake` case.
+/// - `.xml`, `.csproj` — XML comments. **Position-constrained**: XML 1.0 §2.8
+///   requires the `<?xml ...?>` declaration to be the very first thing in the
+///   document, so when one is present the marker goes on the line *after* it,
+///   never at line 0. MSBuild `.csproj` is plain XML and usually omits the
+///   declaration, in which case the marker leads.
+/// - `Makefile` — `#` line comments. Matched on file *name*, since a makefile has
+///   no extension.
+/// - `go.mod` — `//` line comments (Go modules reference). Matched on file name,
+///   not the `.mod` extension, which is shared with unrelated (and binary)
+///   formats such as Fortran module files and tracker music.
+/// - `.zon` — Zig Object Notation is read by the Zig tokenizer, so `//` line
+///   comments apply, as in `.zig`.
+/// - `.gemspec` — evaluated as Ruby, so `#` line comments apply.
+///
+/// Deliberately excluded:
+/// - `.json` — genuinely has no comment syntax in the spec. Unfixable; these keep
+///   the `.alef/`-record fallback permanently.
+/// - `.lock` — markability varies by lockfile (`Cargo.lock` is TOML and takes `#`;
+///   `package-lock.json` takes nothing), but the distinction is moot: every
+///   lockfile is written by its own package manager, which rewrites the file
+///   wholesale and would drop an alef marker on the next resolve. alef does not
+///   author them.
+/// - `.md` — markable via HTML comments, but already solved upstream:
+///   `readme::template` and `docs::render` both route content through
+///   `docs::render::with_html_header`, which embeds the identical marker before
+///   this function is ever reached. Adding it here would be redundant at best and
+///   would newly stamp unrelated markdown at worst. ~keep
+pub(super) fn marker_header_syntax(path: &Path) -> Option<MarkerSyntax> {
+    if let Some(style) = marker_comment_style(path) {
+        return Some(MarkerSyntax::Comment(style));
+    }
+    match path.file_name().and_then(|name| name.to_str()) {
+        Some("Makefile" | "GNUmakefile" | "makefile") => return Some(MarkerSyntax::Comment(hash::CommentStyle::Hash)),
+        Some("go.mod") => return Some(MarkerSyntax::Comment(hash::CommentStyle::DoubleSlash)),
+        _ => {}
+    }
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some("cmake" | "gemspec") => Some(MarkerSyntax::Comment(hash::CommentStyle::Hash)),
+        Some("zon") => Some(MarkerSyntax::Comment(hash::CommentStyle::DoubleSlash)),
+        Some("xml" | "csproj") => Some(MarkerSyntax::Html),
+        _ => None,
+    }
+}
+
+/// Render the standard alef header as XML/HTML comments.
+///
+/// Derived from the `//` rendering rather than re-typing the body so the marker
+/// text stays a single source of truth with [`hash::header`] — and so it stays
+/// byte-identical to `docs::render::with_html_header`'s, which the `.md` side has
+/// been emitting for as long as READMEs have proven ownership from content. ~keep
+fn html_header() -> String {
+    hash::header(hash::CommentStyle::DoubleSlash)
+        .lines()
+        .map(|line| format!("<!-- {} -->\n", line.strip_prefix("// ").unwrap_or(line)))
+        .collect()
+}
+
+/// Split off a leading `<?xml ...?>` declaration, returning it and the remaining
+/// body with the separating newline consumed.
+///
+/// Splits on the declaration's own `?>` terminator rather than on the first
+/// newline, because a declaration may be the file's only line (no trailing
+/// newline) or may wrap — and getting this wrong emits a comment *before* the
+/// declaration, which is a hard XML parse error rather than a cosmetic slip. ~keep
+fn split_xml_declaration(content: &str) -> Option<(&str, &str)> {
+    let rest = content.strip_prefix("<?xml")?;
+    let terminator = rest.find("?>")?;
+    let split_at = "<?xml".len() + terminator + "?>".len();
+    let (declaration, body) = content.split_at(split_at);
+    Some((declaration, body.strip_prefix('\n').unwrap_or(body)))
+}
+
 pub(super) fn ensure_generated_header(path: &Path, content: &str) -> String {
     if hash::content_has_alef_marker(content) {
         return content.to_owned();
     }
 
-    let Some(style) = marker_comment_style(path) else {
+    let Some(syntax) = marker_header_syntax(path) else {
         return content.to_owned();
     };
-    let header = hash::header(style);
+    let header = match syntax {
+        MarkerSyntax::Comment(style) => hash::header(style),
+        MarkerSyntax::Html => html_header(),
+    };
     if let Some((shebang, body)) = content.split_once('\n').filter(|(line, _)| line.starts_with("#!/")) {
         return format!("{shebang}\n{header}\n{body}");
     }
     if let Some((opening_tag, body)) = content.split_once('\n').filter(|(line, _)| line.trim() == "<?php") {
         return format!("{opening_tag}\n{header}\n{body}");
+    }
+    if let Some((declaration, body)) = split_xml_declaration(content) {
+        return format!("{declaration}\n{header}\n{body}");
     }
     format!("{header}\n{content}")
 }
@@ -382,4 +501,253 @@ pub fn finalize_hashes_sweeping(
         swept.extend(super::orphans::collect_alef_headered_paths(root));
     }
     finalize_hashes(&swept, sources_hash, alef_toml_bytes)
+}
+
+#[cfg(test)]
+mod marker_syntax_tests {
+    use super::{MarkerSyntax, ensure_generated_header, marker_comment_style, marker_header_syntax};
+    use crate::core::hash;
+    use std::path::Path;
+
+    const HASH: &str = "0ce4d753fdb4854e44358639dcbaebee3449a4afa142dbc4f0a72aa72c214648";
+
+    const HASH_HEADER: &str = "# This file is auto-generated by alef — DO NOT EDIT.\n\
+# To regenerate: alef generate\n\
+# To verify freshness: alef verify\n";
+    const SLASH_HEADER: &str = "// This file is auto-generated by alef — DO NOT EDIT.\n\
+// To regenerate: alef generate\n\
+// To verify freshness: alef verify\n";
+    const HTML_HEADER: &str = "<!-- This file is auto-generated by alef — DO NOT EDIT. -->\n\
+<!-- To regenerate: alef generate -->\n\
+<!-- To verify freshness: alef verify -->\n";
+
+    /// Emit a header, then run the exact stamping pass `finalize_hashes` runs, and
+    /// return both stages so a test can assert bytes at each.
+    fn emit_and_stamp(path: &str, body: &str) -> (String, String) {
+        let stamped = ensure_generated_header(Path::new(path), body);
+        let hashed = hash::inject_hash_line(&stamped, HASH);
+        (stamped, hashed)
+    }
+
+    /// The full read-side contract every newly markable type must satisfy: the
+    /// marker is findable, the hash injected next to it round-trips out again, and
+    /// stripping the hash line reproduces the pre-stamp bytes exactly.
+    fn assert_read_side_agrees(stamped: &str, hashed: &str) {
+        assert!(
+            hash::content_has_alef_marker(stamped),
+            "content_has_alef_marker must find the emitted marker in:\n{stamped}"
+        );
+        assert_eq!(
+            hash::extract_hash(hashed),
+            Some(HASH.to_owned()),
+            "extract_hash must recover the injected hash from:\n{hashed}"
+        );
+        assert_eq!(
+            hash::strip_hash_line(hashed),
+            stamped,
+            "strip_hash_line must reproduce the pre-stamp bytes exactly"
+        );
+    }
+
+    #[test]
+    fn should_stamp_cmake_config_with_hash_comment() {
+        let (stamped, hashed) = emit_and_stamp("crates/foo-ffi/cmake/foo-ffi-config.cmake", "if(TARGET foo::foo)\n");
+        assert_eq!(stamped, format!("{HASH_HEADER}\nif(TARGET foo::foo)\n"));
+        assert_eq!(
+            hashed,
+            format!(
+                "# This file is auto-generated by alef — DO NOT EDIT.\n\
+# alef:hash:{HASH}\n\
+# To regenerate: alef generate\n\
+# To verify freshness: alef verify\n\
+\n\
+if(TARGET foo::foo)\n"
+            )
+        );
+        assert_read_side_agrees(&stamped, &hashed);
+    }
+
+    /// The load-bearing position case: XML 1.0 §2.8 forbids anything, comments
+    /// included, before the `<?xml ...?>` declaration, so the marker lands on line
+    /// 1 rather than line 0 — and every read-side function has to tolerate that.
+    #[test]
+    fn should_stamp_xml_after_the_declaration_never_before_it() {
+        let (stamped, hashed) = emit_and_stamp(
+            "test_apps/php/phpunit.xml",
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<phpunit/>\n",
+        );
+        assert_eq!(
+            stamped,
+            format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{HTML_HEADER}\n<phpunit/>\n")
+        );
+        assert_eq!(
+            stamped.lines().next(),
+            Some("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"),
+            "the XML declaration must remain the very first bytes of the document"
+        );
+        assert_eq!(
+            stamped.lines().nth(1),
+            Some("<!-- This file is auto-generated by alef — DO NOT EDIT. -->"),
+            "the marker belongs on line 1, immediately after the declaration"
+        );
+        assert_eq!(
+            hashed,
+            format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<!-- This file is auto-generated by alef — DO NOT EDIT. -->\n\
+<!-- alef:hash:{HASH} -->\n\
+<!-- To regenerate: alef generate -->\n\
+<!-- To verify freshness: alef verify -->\n\
+\n\
+<phpunit/>\n"
+            )
+        );
+        assert_read_side_agrees(&stamped, &hashed);
+    }
+
+    /// A declaration that is the whole first line without a trailing newline still
+    /// must not get a comment pushed in front of it.
+    #[test]
+    fn should_stamp_xml_whose_declaration_has_no_trailing_newline() {
+        let (stamped, hashed) = emit_and_stamp("packages/java/pom.xml", "<?xml version=\"1.0\"?><project/>\n");
+        assert_eq!(stamped, format!("<?xml version=\"1.0\"?>\n{HTML_HEADER}\n<project/>\n"));
+        assert_read_side_agrees(&stamped, &hashed);
+    }
+
+    #[test]
+    fn should_stamp_csproj_without_declaration_at_line_zero() {
+        let (stamped, hashed) = emit_and_stamp(
+            "e2e/csharp/Foo.E2eTests.csproj",
+            "<Project Sdk=\"Microsoft.NET.Sdk\">\n</Project>\n",
+        );
+        assert_eq!(
+            stamped,
+            format!("{HTML_HEADER}\n<Project Sdk=\"Microsoft.NET.Sdk\">\n</Project>\n")
+        );
+        assert_read_side_agrees(&stamped, &hashed);
+    }
+
+    #[test]
+    fn should_stamp_makefile_with_hash_comment() {
+        let (stamped, hashed) = emit_and_stamp("e2e/c/Makefile", "all:\n\t$(CC) main.c\n");
+        assert_eq!(stamped, format!("{HASH_HEADER}\nall:\n\t$(CC) main.c\n"));
+        assert_read_side_agrees(&stamped, &hashed);
+    }
+
+    #[test]
+    fn should_stamp_gemspec_with_ruby_hash_comment() {
+        let (stamped, hashed) = emit_and_stamp("packages/ruby/foo.gemspec", "Gem::Specification.new do |s|\nend\n");
+        assert_eq!(stamped, format!("{HASH_HEADER}\nGem::Specification.new do |s|\nend\n"));
+        assert_read_side_agrees(&stamped, &hashed);
+    }
+
+    #[test]
+    fn should_stamp_go_mod_with_double_slash_comment() {
+        let (stamped, hashed) = emit_and_stamp("e2e/go/go.mod", "module example.com/e2e\n\ngo 1.24\n");
+        assert_eq!(stamped, format!("{SLASH_HEADER}\nmodule example.com/e2e\n\ngo 1.24\n"));
+        assert_read_side_agrees(&stamped, &hashed);
+    }
+
+    #[test]
+    fn should_stamp_zon_with_zig_double_slash_comment() {
+        let (stamped, hashed) = emit_and_stamp("packages/zig/build.zig.zon", ".{\n    .name = \"foo\",\n}\n");
+        assert_eq!(stamped, format!("{SLASH_HEADER}\n.{{\n    .name = \"foo\",\n}}\n"));
+        assert_read_side_agrees(&stamped, &hashed);
+    }
+
+    #[test]
+    fn should_leave_json_untouched_because_it_has_no_comment_syntax() {
+        let body = "{\n  \"name\": \"foo\"\n}\n";
+        assert_eq!(
+            ensure_generated_header(Path::new("packages/node/package.json"), body),
+            body
+        );
+        assert_eq!(marker_header_syntax(Path::new("packages/node/package.json")), None);
+    }
+
+    /// Lockfiles are rewritten wholesale by their own package manager, which would
+    /// drop an alef marker on the next resolve, so alef never stamps one.
+    #[test]
+    fn should_leave_lockfiles_untouched() {
+        let body = "# This file is automatically @generated by Cargo.\nversion = 4\n";
+        assert_eq!(ensure_generated_header(Path::new("Cargo.lock"), body), body);
+        assert_eq!(marker_header_syntax(Path::new("e2e/php/composer.lock")), None);
+    }
+
+    /// The emit table must stay strictly wider than the ownership table: every
+    /// newly markable type has to keep proving ownership through the `.alef/`
+    /// record, or every such file already on disk without a marker is frozen
+    /// forever (the guard refuses the write, so the marker never lands).
+    #[test]
+    fn should_not_promote_newly_emitted_types_onto_the_ownership_table() {
+        for path in [
+            "crates/foo-ffi/cmake/foo-ffi-config.cmake",
+            "test_apps/php/phpunit.xml",
+            "e2e/csharp/Foo.E2eTests.csproj",
+            "e2e/c/Makefile",
+            "packages/ruby/foo.gemspec",
+            "e2e/go/go.mod",
+            "packages/zig/build.zig.zon",
+        ] {
+            assert!(
+                marker_header_syntax(Path::new(path)).is_some(),
+                "{path} must be stamped with a marker"
+            );
+            assert_eq!(
+                marker_comment_style(Path::new(path)),
+                None,
+                "{path} must stay off the ownership table until markers have propagated \
+                 to consumer repos, otherwise existing unmarked copies freeze permanently"
+            );
+        }
+    }
+
+    /// Existing markable extensions must keep their exact previous behaviour: the
+    /// emit table delegates to the ownership table first, so nothing about `.rs`,
+    /// `.py`, `.h` or the `<?php` / shebang prefix handling may shift.
+    #[test]
+    fn should_preserve_existing_markable_extension_behaviour() {
+        assert_eq!(
+            marker_header_syntax(Path::new("src/lib.rs")),
+            Some(MarkerSyntax::Comment(hash::CommentStyle::DoubleSlash))
+        );
+        assert_eq!(
+            marker_header_syntax(Path::new("foo.h")),
+            Some(MarkerSyntax::Comment(hash::CommentStyle::Block))
+        );
+        let (stamped, hashed) = emit_and_stamp("scripts/run.sh", "#!/usr/bin/env bash\nset -e\n");
+        assert_eq!(stamped, format!("#!/usr/bin/env bash\n{HASH_HEADER}\nset -e\n"));
+        assert_read_side_agrees(&stamped, &hashed);
+
+        let (php_stamped, php_hashed) = emit_and_stamp("src/Foo.php", "<?php\nclass Foo {}\n");
+        assert_eq!(php_stamped, format!("<?php\n{SLASH_HEADER}\nclass Foo {{}}\n"));
+        assert_read_side_agrees(&php_stamped, &php_hashed);
+    }
+
+    /// Content that already self-marks (README/docs pages via
+    /// `docs::render::with_html_header`) must not gain a second header now that
+    /// `.md`-style HTML markers are also emittable from this side.
+    #[test]
+    fn should_not_double_stamp_content_that_already_carries_a_marker() {
+        let already = format!("{HTML_HEADER}\n<project/>\n");
+        assert_eq!(
+            ensure_generated_header(Path::new("packages/java/pom.xml"), &already),
+            already
+        );
+    }
+
+    /// The generalized stamp channel has to survive the line-1 marker position too,
+    /// since `extract_stamp` scans for the marker before it starts matching keys.
+    #[test]
+    fn should_round_trip_a_generic_stamp_through_an_xml_declaration_prologue() {
+        let stamped = ensure_generated_header(
+            Path::new("test_apps/php/phpunit.xml"),
+            "<?xml version=\"1.0\"?>\n<phpunit/>\n",
+        );
+        let with_stamp = hash::inject_stamp_line(&stamped, hash::HANDLE_ABI_STAMP_KEY, "2");
+        assert_eq!(
+            hash::extract_stamp(&with_stamp, hash::HANDLE_ABI_STAMP_KEY),
+            Some("2".to_owned())
+        );
+    }
 }
