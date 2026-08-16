@@ -235,4 +235,47 @@ mod tests {
         );
         assert!(!output.contains("_result == null"), "{output}");
     }
+
+    /// Regression test for the emitter shape reported against `Parser.parse` /
+    /// `Node.parent` / `Node.child`: a method declared to return `Optional<Named>`
+    /// (e.g. `?Tree`, `?Node`) must wrap the raw handle into the struct instead of
+    /// returning the raw FFI value bare, which does not type-check in Zig.
+    #[test]
+    fn optional_handle_returns_wrap_into_struct_instead_of_bare_raw_value() {
+        let ty = TypeDef {
+            name: "NodeHandle".to_owned(),
+            rust_path: "sample::NodeHandle".to_owned(),
+            is_opaque: true,
+            methods: vec![MethodDef {
+                name: "parent".to_owned(),
+                is_static: false,
+                return_type: TypeRef::Optional(Box::new(TypeRef::Named("NodeHandle".to_owned()))),
+                ..MethodDef::default()
+            }],
+            ..TypeDef::default()
+        };
+        let mut output = String::new();
+
+        emit_opaque_handle(
+            &ty,
+            "sample",
+            &[],
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &mut output,
+        );
+
+        assert!(output.contains("!?NodeHandle"), "{output}");
+        assert!(
+            output.contains("return if (_result == 0) null else NodeHandle{ ._handle = _result };"),
+            "{output}"
+        );
+        assert!(!output.contains("return _result;"), "{output}");
+
+        // Positive control: `free()` legitimately returns nothing (`void`) and must still
+        // emit a bare `return;` on the handle-already-closed path. If this assertion ever
+        // fails, the fix above is over-wrapping and the negative assertion is vacuous.
+        assert!(output.contains("if (handle == 0) return;"), "{output}");
+    }
 }

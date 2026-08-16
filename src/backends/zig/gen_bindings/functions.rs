@@ -829,6 +829,9 @@ fn unwrap_return_expr(
                 );
                 format!("if ({raw} == 0) null else {inner_block}")
             }
+            TypeRef::Named(name) => {
+                format!("if ({raw} == 0) null else {name}{{ ._handle = {raw} }}")
+            }
             _ => raw.to_string(),
         },
         _ => raw.to_string(),
@@ -862,3 +865,37 @@ pub(crate) fn zig_return_type(ty: &TypeRef, struct_names: &std::collections::Has
 
 #[cfg(test)]
 mod capsule_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn optional_opaque_handle_return_wraps_into_struct_instead_of_bare_raw_value() {
+        let expr = unwrap_return_expr(
+            "_result",
+            &TypeRef::Optional(Box::new(TypeRef::Named("NodeHandle".to_string()))),
+            "sample",
+            &std::collections::HashSet::new(),
+            None,
+        );
+
+        assert_eq!(expr, "if (_result == 0) null else NodeHandle{ ._handle = _result }");
+    }
+
+    /// Positive control: an `Optional<primitive>` has no null/zero sentinel to translate and
+    /// must stay a bare passthrough. Guards against a fix that wraps every `Optional<_>`
+    /// unconditionally, which would make the assertion above pass for the wrong reason.
+    #[test]
+    fn optional_primitive_return_stays_a_bare_passthrough() {
+        let expr = unwrap_return_expr(
+            "_result",
+            &TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::I64))),
+            "sample",
+            &std::collections::HashSet::new(),
+            None,
+        );
+
+        assert_eq!(expr, "_result");
+    }
+}
