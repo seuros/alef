@@ -532,17 +532,12 @@ fn render_package_json(
     extras: Option<&crate::core::config::manifest_extras::ManifestExtras>,
 ) -> String {
     let dep_value = match dep_mode {
-        crate::e2e::config::DependencyMode::Registry => {
-            // If alef.toml provides the version with a semver range operator
-            // (`^`, `~`, `>=`, etc.), the caller has chosen the registry-conventional
-            // form — use it verbatim. Otherwise prepend `^` for caret-range semver.
-            let trimmed = pkg_version.trim_start();
-            if trimmed.starts_with(['^', '~', '>', '<', '=']) {
-                pkg_version.to_string()
-            } else {
-                format!("^{pkg_version}")
-            }
-        }
+        // This manifest exists to verify one specific published artifact, so pin it
+        // exactly rather than a floating range — a range would let a later publish
+        // silently swap what's under test. If alef.toml already supplies a semver
+        // range operator (`^`, `~`, `>=`, etc.) that's an explicit escape hatch and
+        // passes through unchanged, since we never strip it. ~keep
+        crate::e2e::config::DependencyMode::Registry => pkg_version.to_string(),
         crate::e2e::config::DependencyMode::Local => format!("file:{pkg_path}"),
     };
     let rendered = crate::e2e::template_env::render(

@@ -499,15 +499,31 @@ pub struct TestBackendEmission {
     pub teardown_block: String,
 }
 
+/// Sentinel prefix identifying a [`TestBackendEmission::unimplemented`] placeholder.
+/// Shared by the constructor and [`TestBackendEmission::is_unimplemented`] so the two
+/// can never drift out of sync — the marker is the ONLY thing that makes the sentinel
+/// distinguishable from a real emission. ~keep
+const UNIMPLEMENTED_MARKER: &str = "/* test_backend unimplemented for ";
+
 impl TestBackendEmission {
     /// Placeholder for unimplemented backends.
     pub fn unimplemented(language: &str) -> Self {
         Self {
             setup_block: String::new(),
-            arg_expr: format!("/* test_backend unimplemented for {} */", language),
+            arg_expr: format!("{UNIMPLEMENTED_MARKER}{language} */"),
             type_imports: Vec::new(),
             teardown_block: String::new(),
         }
+    }
+
+    /// True when this emission is the [`Self::unimplemented`] placeholder rather than a
+    /// real stub. `arg_expr` is meant to be spliced verbatim into a call's positional
+    /// argument list; the placeholder's `arg_expr` is a bare `/* ... */` comment, so a
+    /// caller that skips this check and uses it anyway emits code that cannot compile.
+    /// Every `test_backend` call site MUST check this before using `arg_expr` as an
+    /// argument, and fail generation loudly instead of splicing the comment in. ~keep
+    pub fn is_unimplemented(&self) -> bool {
+        self.arg_expr.starts_with(UNIMPLEMENTED_MARKER)
     }
 }
 

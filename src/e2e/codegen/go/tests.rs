@@ -66,7 +66,7 @@ fn snippet_body_declares_typed_error_by_value_not_by_pointer() {
     };
     let config = crate::core::config::ResolvedCrateConfig::default();
 
-    let body = super::snippet::render_snippet_body(&fixture, &e2e_config, &config, &[], &[]);
+    let body = super::snippet::render_snippet_body(&fixture, &e2e_config, &config, &[], &[], &[]);
 
     assert!(body.contains("var typedError pkg.Error"), "{body}");
     assert!(!body.contains("var typedError *pkg.Error"), "{body}");

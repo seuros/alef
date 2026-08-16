@@ -322,29 +322,51 @@ pub(super) fn build_args_string_c(
     for arg in args {
         // Handle test_backend args: emit the stub and use it.
         if arg.arg_type == "test_backend" {
-            if let Some(trait_name) = &arg.trait_name
-                && let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name)
+            // A `test_backend` arg fills a C trait-bridge vtable-pointer parameter.
+            // There is no fixture-supplied value to fall back to: an unregistered
+            // trait has no vtable to point at, and `TestBackendEmission::unimplemented(...)`'s
+            // `arg_expr` is a bare `/* ... */` comment, never an expression — splicing
+            // either into `parts` emits C that cannot compile. Unlike a non-null-typed
+            // target language, C's type system would happily accept a `NULL` fallback
+            // here too (any pointer type admits it), so the compiler can't be relied on
+            // to catch a bad default the way it can elsewhere — fail loud here instead,
+            // matching every other "cannot render this" case in this file (see
+            // `resolve_intermediate_type`'s `None` arm above, and the assertion-type
+            // panics below). ~keep
+            let Some(trait_name) = &arg.trait_name else {
+                panic!(
+                    "C e2e generator: fixture `{}` declares a `test_backend` arg `{}` with no `trait_name` configured; cannot generate a C stub without knowing which trait to implement",
+                    fixture.id, arg.name
+                );
+            };
+            let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name) else {
+                panic!(
+                    "C e2e generator: fixture `{}` requires trait `{trait_name}` for its `test_backend` arg `{}`, but no `[[crates.trait_bridges]]` entry named `{trait_name}` is configured",
+                    fixture.id, arg.name
+                );
+            };
+            let mut methods: Vec<&crate::core::ir::MethodDef> = type_defs
+                .iter()
+                .find(|t| t.name == *trait_name)
+                .map(|t| t.methods.iter().collect())
+                .unwrap_or_default();
+            if let Some(super_trait) = &trait_bridge.super_trait
+                && let Some(super_type) = type_defs.iter().find(|t| &t.rust_path == super_trait)
             {
-                let mut methods: Vec<&crate::core::ir::MethodDef> = type_defs
-                    .iter()
-                    .find(|t| t.name == *trait_name)
-                    .map(|t| t.methods.iter().collect())
-                    .unwrap_or_default();
-                if let Some(super_trait) = &trait_bridge.super_trait
-                    && let Some(super_type) = type_defs.iter().find(|t| &t.rust_path == super_trait)
-                {
-                    for method in &super_type.methods {
-                        if !methods.iter().any(|m| m.name == method.name) {
-                            methods.push(method);
-                        }
+                for method in &super_type.methods {
+                    if !methods.iter().any(|m| m.name == method.name) {
+                        methods.push(method);
                     }
                 }
-                let emission = crate::e2e::codegen::emit_test_backend("c", trait_bridge, &methods, fixture, &[]);
-                parts.push(emission.arg_expr);
-                continue;
             }
-            // Unimplemented trait fallback
-            parts.push("NULL".to_string());
+            let emission = crate::e2e::codegen::emit_test_backend("c", trait_bridge, &methods, fixture, &[]);
+            if emission.is_unimplemented() {
+                panic!(
+                    "C e2e generator: fixture `{}` requires a C test_backend stub for trait `{trait_name}` (arg `{}`), but the C test-backend emitter is unimplemented; refusing to emit a call with a comment where the argument belongs",
+                    fixture.id, arg.name
+                );
+            }
+            parts.push(emission.arg_expr);
             continue;
         }
 
@@ -980,5 +1002,67 @@ mod tests {
         assert!(output.contains("SAMPLEAlefHandle summary_handle"), "{output}");
         assert!(output.contains("sample_extraction_result_summary(result)"), "{output}");
         assert!(output.contains("uint64_t summary_processed"), "{output}");
+    }
+
+    fn test_backend_arg(trait_name: &str) -> crate::e2e::config::ArgMapping {
+        crate::e2e::config::ArgMapping {
+            name: "backend".into(),
+            field: "backend".into(),
+            arg_type: "test_backend".into(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: Some(trait_name.to_string()),
+        }
+    }
+
+    /// Pin: a `test_backend` arg whose trait IS registered still panics today,
+    /// because `c::emit_test_backend` (`trait_bridge_snippet.rs`) is unimplemented —
+    /// see its doc comment for why. `build_args_string_c` must refuse to splice the
+    /// `/* test_backend unimplemented for c */` sentinel into the call's argument
+    /// list rather than emit uncompilable C. This is the regression guard: it fails
+    /// if the `is_unimplemented()` check is ever removed and the sentinel comment
+    /// silently reaches the generated call again.
+    #[test]
+    #[should_panic(expected = "test-backend emitter is unimplemented")]
+    fn registered_test_backend_trait_panics_because_c_backend_is_unimplemented() {
+        use crate::core::config::TraitBridgeConfig;
+
+        let bridge = TraitBridgeConfig {
+            trait_name: "SampleBackend".into(),
+            ..TraitBridgeConfig::default()
+        };
+        let config = ResolvedCrateConfig {
+            trait_bridges: vec![bridge],
+            ..ResolvedCrateConfig::default()
+        };
+        let fixture = Fixture {
+            id: "register_sample_backend".into(),
+            ..Fixture::default()
+        };
+        let args = vec![test_backend_arg("SampleBackend")];
+
+        build_args_string_c(&fixture.input, &args, &HashMap::new(), &config, &[], &fixture);
+    }
+
+    /// An unregistered trait (no matching `[[crates.trait_bridges]]` entry) has no
+    /// vtable to point at — generation must fail loudly instead of falling back to
+    /// `NULL`. Unlike Kotlin's non-null interface parameter, nothing in C's type
+    /// system would catch a bad `NULL` default at compile time, so this loud check
+    /// is the only thing standing between a misconfigured `alef.toml` and either an
+    /// uncompilable comment or a `NULL` vtable pointer reaching generated C.
+    #[test]
+    #[should_panic(expected = "no `[[crates.trait_bridges]]` entry")]
+    fn unregistered_test_backend_trait_panics_instead_of_falling_back_to_null() {
+        let config = ResolvedCrateConfig::default();
+        let fixture = Fixture {
+            id: "register_sample_backend".into(),
+            ..Fixture::default()
+        };
+        let args = vec![test_backend_arg("SampleBackend")];
+
+        build_args_string_c(&fixture.input, &args, &HashMap::new(), &config, &[], &fixture);
     }
 }

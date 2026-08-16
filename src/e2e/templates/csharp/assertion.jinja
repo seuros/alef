@@ -145,8 +145,6 @@
 {% endif %}
 {% elif assertion_type == "matches_regex" -%}
         Assert.Matches({{ cs_val }}, {{ field_expr }});
-{% elif assertion_type == "not_error" -%}
-{#- not_error assertions produce no output; already handled by call succeeding #}
 {% elif assertion_type == "error" -%}
 {#- error assertions are handled at the test method level #}
 {% endif %}

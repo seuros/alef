@@ -486,10 +486,12 @@ pub(super) fn render_assertion_dart(
         "not_error" => {
             // The `await` already guarantees no thrown error reaches this point — if
             // the call throws, the test fails before reaching here. Don't emit
-            // `expect(result, isNotNull)`: for void-returning trait-bridge fns
-            // (clear_*) Dart rejects `expect(<void>, ...)` with "expression has type
-            // 'void' and can't be used". The implicit exception handling proves
-            // success.
+            // `expect(result, isNotNull)` here unconditionally: for void-returning
+            // trait-bridge fns (clear_*) Dart rejects `expect(<void>, ...)` with
+            // "expression has type 'void' and can't be used". `test_case.rs`'s
+            // caller adds a real `expect(result, isNotNull)` fallback (mirroring
+            // the streaming path's existing idiom) when this is the fixture's only
+            // assertion and the call is non-void, so the body isn't left vacuous.
         }
         "error" => {
             // ~keep Handled at the test method level, via `dart_error_matcher` in

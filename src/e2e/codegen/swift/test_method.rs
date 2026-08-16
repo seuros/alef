@@ -510,6 +510,7 @@ pub(super) fn render_test_method(
             result_field_accessor,
             &effective_enum_fields,
             is_streaming,
+            call_config.returns_void,
         );
         // Module-qualify swift-bridge-ambiguous DTO type names that appear in
         // streaming-virtual assertion expressions (e.g. `[StreamToolCall]`,
@@ -527,16 +528,20 @@ pub(super) fn render_test_method(
 
     // Decide how to emit the call based on return type and whether result is referenced.
     // - void returns: emit bare call
-    // - non-void with result referenced (or a `not_error` assertion, which is satisfied by
-    //   the call returning a value without throwing): bind with `let result = `
+    // - non-void with result referenced: bind with `let result = `
     // - non-void without result referenced: discard with `_ = `
-    let has_not_error_assertion = fixture
-        .assertions
-        .iter()
-        .any(|assertion| assertion.assertion_type == "not_error");
+    //
+    // A `not_error`-only fixture no longer needs a special case here: the
+    // `render_assertion` "not_error" arm now emits a real `XCTAssertNotNil(result)`
+    // into `body_buffer` itself (see `assertions.rs`), so `body_buffer.contains
+    // (result_var)` is already true whenever that's the case. Previously a
+    // dedicated `has_not_error_assertion` flag forced the `let` binding here
+    // while `not_error` rendered no assertion at all — the bound result was
+    // never referenced anywhere, an unused-but-harmless variable standing in
+    // for what should have been a real assertion. ~keep
     if call_config.returns_void {
         let _ = writeln!(out, "        {call_expr}");
-    } else if body_buffer.contains(result_var) || has_not_error_assertion {
+    } else if body_buffer.contains(result_var) {
         let _ = writeln!(out, "        let {result_var} = {call_expr}");
     } else {
         let _ = writeln!(out, "        _ = {call_expr}");

@@ -11,9 +11,10 @@
    - call_expr: the function call expression
    - result_var: variable to store result
    - assertions_rendered: pre-rendered assertion blocks
-   - has_usable: bool - whether there are any usable assertions
+   - has_usable: bool - whether there are any usable assertions (false when the
+     fixture's only assertion is `not_error`/`error`, or every field assertion
+     resolved to a skip). Drives the `expect(result).not_to be_nil` fallback below.
    - returns_void: bool - whether the call returns unit (Rust `()` → Ruby nil)
-   - is_only_not_error: bool - whether the only assertion is not_error (no usable assertions)
    - client_factory: optional client factory expression
    - fixture_id: fixture ID (for client factory)
    - call_receiver: module or class name for the call

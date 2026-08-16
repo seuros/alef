@@ -10,6 +10,30 @@ use super::super::assertions::render_assertion;
 use super::super::helpers::resolve_assert_enum_fields;
 use super::super::json::value_to_python_string;
 
+/// True when `body` contains at least one line that is not blank and not a
+/// `#`-prefixed comment — i.e. an executable `assert` statement. A body made
+/// up only of "# skipped: ..." comments is not executable.
+fn has_real_assertion(body: &str) -> bool {
+    body.lines().any(|line| {
+        let trimmed = line.trim();
+        !trimmed.is_empty() && !trimmed.starts_with('#')
+    })
+}
+
+/// When a fixture declares at least one assertion but the rendered body has
+/// no executable statement — its only assertion was `not_error`, or every
+/// field assertion resolved to a "skipped" comment — inject a real assertion
+/// on the result instead of leaving the test vacuous. Fixtures that declare
+/// NO assertions at all are left untouched: that's a pre-existing, intentional
+/// "just call it" smoke test contract (see
+/// `should_discard_result_when_force_bind_result_is_unset_and_unused`). ~keep
+fn apply_vacuous_assertion_fallback(temp_assertions: &mut String, has_declared_assertions: bool, result_var: &str) {
+    if !has_declared_assertions || has_real_assertion(temp_assertions) {
+        return;
+    }
+    let _ = writeln!(temp_assertions, "    assert {result_var} is not None  # noqa: S101");
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_result_and_assertions(
     out: &mut String,
@@ -23,49 +47,19 @@ pub(super) fn emit_result_and_assertions(
     is_streaming: bool,
     force_bind_result: bool,
 ) {
-    // For streaming fixtures, streaming virtual fields are always usable
-    // (they resolve against the collected `chunks` list, not the result type).
+    // Streaming virtual fields resolve against the collected `chunks` list, not
+    // the result type.
+    //
+    // ~keep This used to be preceded by a `let _ = fixture.assertions.iter()
+    // .any(...)` closure computing a `has_usable_assertion`-shaped predicate
+    // (excluding not_error/error, accepting streaming-virtual and
+    // result_is_simple fields) whose result was discarded (`let _ =`) and never
+    // referenced anywhere in this function — dead code that looked like a check.
+    // The real usability decision lives below, derived from what
+    // `apply_vacuous_assertion_fallback`/`temp_assertions` actually render, not
+    // a separately maintained predicate that can drift out of sync with it (see
+    // the php/typescript/ruby fixes for the same drift in this defect class).
     let chunks_var = "chunks";
-    let _ = fixture.assertions.iter().any(|a| {
-        if a.assertion_type == "not_error" || a.assertion_type == "error" {
-            return false;
-        }
-        if is_streaming
-            && let Some(f) = &a.field
-            && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(f)
-        {
-            return true;
-        }
-        if result_is_simple {
-            if let Some(f) = &a.field {
-                let f_lower = f.to_lowercase();
-                if !f.is_empty()
-                    && f_lower != "content"
-                    && f_lower != "result"
-                    && (f_lower.starts_with("metadata")
-                        || f_lower.starts_with("document")
-                        || f_lower.starts_with("structure")
-                        || f_lower.starts_with("pages")
-                        || f_lower.starts_with("chunks")
-                        || f_lower.starts_with("tables")
-                        || f_lower.starts_with("images")
-                        || f_lower.starts_with("mime_type")
-                        || f_lower.starts_with("is_")
-                        || f_lower == "byte_length"
-                        || f_lower == "page_count"
-                        || f_lower == "output_format"
-                        || f_lower == "extraction_method")
-                {
-                    return false;
-                }
-            }
-            return true;
-        }
-        match &a.field {
-            Some(f) if !f.is_empty() => field_resolver.is_valid_for_result(f),
-            _ => true,
-        }
-    });
 
     let fields_enum = e2e_config.effective_fields_enum(call_config);
     let assert_enum_fields = resolve_assert_enum_fields(call_config);
@@ -103,10 +97,9 @@ pub(super) fn emit_result_and_assertions(
         let mut temp_assertions = String::new();
 
         for assertion in &fixture.assertions {
+            // `not_error` has no explicit rendering: an uncaught exception already
+            // fails the test, so the check is implicit in the call succeeding.
             if assertion.assertion_type == "not_error" {
-                if !call_config.returns_result {
-                    continue;
-                }
                 continue;
             }
             render_assertion(
@@ -119,6 +112,8 @@ pub(super) fn emit_result_and_assertions(
                 result_is_simple,
             );
         }
+
+        apply_vacuous_assertion_fallback(&mut temp_assertions, !fixture.assertions.is_empty(), result_var);
 
         // Check if result_var appears in actual code (not in comments).
         // Only count lines that start with "assert" or contain actual code tokens.
@@ -375,5 +370,99 @@ mod tests {
         );
 
         assert!(!out.contains("result ="), "unused result must not be bound, got: {out}");
+    }
+
+    #[test]
+    fn has_real_assertion_is_false_for_comment_only_body() {
+        let body = "    # skipped: field 'foo' not available on result type\n";
+        assert!(
+            !has_real_assertion(body),
+            "comment-only body must not count as asserting"
+        );
+    }
+
+    #[test]
+    fn has_real_assertion_is_true_when_a_real_statement_is_present() {
+        let body = "    # skipped: field 'foo' not available on result type\n    assert result.ok\n";
+        assert!(has_real_assertion(body), "a real assert line must count as asserting");
+    }
+
+    #[test]
+    fn vacuous_fallback_is_a_noop_without_declared_assertions() {
+        let mut body = String::new();
+        apply_vacuous_assertion_fallback(&mut body, false, "result");
+        assert!(
+            body.is_empty(),
+            "a fixture with no declared assertions is an intentional smoke test and must stay untouched"
+        );
+    }
+
+    #[test]
+    fn vacuous_fallback_emits_a_real_assertion_when_body_is_empty() {
+        let mut body = String::new();
+        apply_vacuous_assertion_fallback(&mut body, true, "result");
+        assert_eq!(body, "    assert result is not None  # noqa: S101\n");
+    }
+
+    #[test]
+    fn vacuous_fallback_emits_a_real_assertion_over_comment_only_body() {
+        let mut body = "    # skipped: field 'chunks' not available on result type\n".to_string();
+        apply_vacuous_assertion_fallback(&mut body, true, "result");
+        assert!(
+            body.contains("assert result is not None"),
+            "a comment-only body must still get a real fallback assertion, got: {body}"
+        );
+    }
+
+    #[test]
+    fn vacuous_fallback_leaves_a_real_assertion_untouched() {
+        let mut body = "    assert result.count == 1  # noqa: S101\n".to_string();
+        let original = body.clone();
+        apply_vacuous_assertion_fallback(&mut body, true, "result");
+        assert_eq!(
+            body, original,
+            "a fixture with a real assertion must not get an extra fallback line"
+        );
+    }
+
+    /// Regression test for the not_error-only vacuous-test defect: a fixture whose
+    /// only declared assertion is `not_error` must bind the call result and emit a
+    /// real assertion, not silently discard the result with no assertion at all.
+    #[test]
+    fn not_error_only_fixture_binds_result_and_emits_real_assertion() {
+        let mut fixture = minimal_fixture();
+        fixture.assertions = vec![assertion("not_error", None, None)];
+        let e2e_config = E2eConfig::default();
+        let call_config = crate::e2e::config::CallConfig::default();
+        let field_resolver = FieldResolver::new(
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        );
+        let mut out = String::new();
+
+        emit_result_and_assertions(
+            &mut out,
+            &fixture,
+            &e2e_config,
+            &call_config,
+            "await widget_client.create()",
+            "result",
+            &field_resolver,
+            false,
+            false,
+            false,
+        );
+
+        assert!(
+            out.contains("result = await widget_client.create()"),
+            "a not_error-only fixture must bind the result, got: {out}"
+        );
+        assert!(
+            out.contains("assert result is not None"),
+            "a not_error-only fixture must emit a real assertion instead of a vacuous body, got: {out}"
+        );
     }
 }

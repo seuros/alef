@@ -14,17 +14,12 @@ pub(crate) fn render_package_json(
     extras: Option<&ManifestExtras>,
 ) -> String {
     let dep_value = match dep_mode {
-        crate::e2e::config::DependencyMode::Registry => {
-            // If alef.toml provides the version with a semver range operator
-            // (`^`, `~`, `>=`, etc.), the caller has chosen the registry-conventional
-            // form — use it verbatim. Otherwise prepend `^` for caret-range semver.
-            let trimmed = pkg_version.trim_start();
-            if trimmed.starts_with(['^', '~', '>', '<', '=']) {
-                pkg_version.to_string()
-            } else {
-                format!("^{pkg_version}")
-            }
-        }
+        // This manifest exists to verify one specific published artifact, so pin it
+        // exactly rather than a floating range — a range would let a later publish
+        // silently swap what's under test. If alef.toml already supplies a semver
+        // range operator (`^`, `~`, `>=`, etc.) that's an explicit escape hatch and
+        // passes through unchanged, since we never strip it. ~keep
+        crate::e2e::config::DependencyMode::Registry => pkg_version.to_string(),
         crate::e2e::config::DependencyMode::Local => "workspace:*".to_string(),
     };
     let _ = has_http_fixtures; // HTTP test deps are added when http fixtures require them
@@ -158,17 +153,22 @@ mod tests {
     }
 
     #[test]
-    fn render_package_json_registry_uses_caret_version() {
+    fn render_package_json_registry_uses_exact_pin() {
         let out = render_package_json("my-pkg", "", "1.2.3", DependencyMode::Registry, false, None);
-        assert!(out.contains("\"^1.2.3\""), "got: {out}");
+        assert!(out.contains("\"1.2.3\""), "got: {out}");
+        assert!(!out.contains("\"^1.2.3\""), "must not add a caret range, got: {out}");
     }
 
     #[test]
-    fn render_package_json_registry_prerelease_uses_caret_semver() {
+    fn render_package_json_registry_prerelease_uses_exact_pin() {
         let out = render_package_json("my-pkg", "", "3.6.0-rc.1", DependencyMode::Registry, false, None);
         assert!(
-            out.contains("\"^3.6.0-rc.1\""),
-            "pre-release npm pin must include caret, got: {out}"
+            out.contains("\"3.6.0-rc.1\""),
+            "pre-release npm pin must be exact (no range operator), got: {out}"
+        );
+        assert!(
+            !out.contains("\"^3.6.0-rc.1\""),
+            "must not add a caret range, got: {out}"
         );
     }
 

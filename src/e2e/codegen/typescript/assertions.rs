@@ -17,6 +17,25 @@ pub(super) fn render_assertion(
     lang: &str,
     is_streaming: bool,
 ) {
+    // An uncaught throw already fails the test, but the caller (`test_case.rs`)
+    // only ever used a separate `has_usable_assertion` predicate to decide
+    // whether to bind `const result = ...` — never to assert on it — and that
+    // predicate excluded `not_error` outright. A fixture whose only assertion
+    // was `not_error` discarded the call's result entirely (`await
+    // callExpr();` with no binding, no assertion). `not_error` never carries a
+    // `field`, so intercept it here, before any field-specific machinery.
+    // For streaming fixtures, assert on the drained `chunks` array (the
+    // literal name every streaming-virtual-field accessor in this file
+    // already hardcodes) rather than the raw, undrained stream. ~keep
+    if assertion.assertion_type == "not_error" {
+        if is_streaming {
+            out.push_str("    expect(chunks).toBeDefined();\n");
+        } else {
+            out.push_str(&format!("    expect({result_var}).toBeDefined();\n"));
+        }
+        return;
+    }
+
     // For simple-result methods (e.g., `speech` returning bytes/Buffer), every
     // field-based assertion targets the result itself — there is no struct to
     // access. Drop length-only assertions onto the result directly and skip
@@ -639,9 +658,11 @@ fn render_standard_assertion(
                 out.push_str(&rendered);
             }
         }
-        "not_error" => {
-            // No-op — if we got here, the call succeeded (it would have thrown).
-        }
+        // `not_error` is intercepted earlier, in the top-level `render_assertion`
+        // (before `field_expr`/`is_enum_field` are even computed — it never carries
+        // a `field`) — see the fix there. Unreachable here; treated as unsupported
+        // rather than silently doing nothing if a future refactor ever routes it
+        // this far, so the gap surfaces immediately instead of hiding again.
         "error" => {
             // Handled at the test level (early return above).
         }
@@ -1021,5 +1042,47 @@ mod tests {
     fn build_ts_method_call_root_child_count() {
         let expr = build_ts_method_call("tree", "root_child_count", None);
         assert_eq!(expr, "tree.rootNode.childCount");
+    }
+
+    /// Regression test for the not_error vacuous-test defect: before this fix,
+    /// `not_error` rendered nothing at all (it was a no-op in this file's
+    /// `render_standard_assertion`), and `test_case.rs`'s `has_usable_assertion`
+    /// predicate separately excluded `not_error`, so a fixture whose only
+    /// assertion was `not_error` produced `await callExpr();` with the result
+    /// entirely discarded and zero assertions. Must emit a real, visible check.
+    #[test]
+    fn not_error_emits_a_real_expect_to_be_defined_on_the_result() {
+        let resolver = empty_resolver();
+        let assertion = make_assertion("not_error", None, None);
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            false,
+            &std::collections::HashMap::new(),
+            "node",
+            false,
+        );
+        assert_eq!(out, "    expect(result).toBeDefined();\n");
+    }
+
+    #[test]
+    fn not_error_on_a_streaming_fixture_asserts_on_drained_chunks_not_result() {
+        let resolver = empty_resolver();
+        let assertion = make_assertion("not_error", None, None);
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            false,
+            &std::collections::HashMap::new(),
+            "node",
+            true,
+        );
+        assert_eq!(out, "    expect(chunks).toBeDefined();\n");
     }
 }

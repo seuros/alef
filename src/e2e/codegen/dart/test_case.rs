@@ -35,6 +35,16 @@ fn dart_error_matcher(declared_error: Option<&str>) -> String {
     }
 }
 
+/// True when `body` contains at least one line that is not blank and not a
+/// `//`-prefixed comment — i.e. a real `expect(...)` statement. A body made
+/// up only of "// skipped: ..." lines is not executable.
+fn has_real_dart_assertion(body: &str) -> bool {
+    body.lines().any(|line| {
+        let trimmed = line.trim();
+        !trimmed.is_empty() && !trimmed.starts_with("//")
+    })
+}
+
 pub(super) struct DartTestCaseContext<'a> {
     pub(super) e2e_config: &'a E2eConfig,
     pub(super) lang: &'a str,
@@ -1034,6 +1044,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                 "    final {result_var} = await {receiver}.{function_name}({args_str});"
             );
         }
+        let assertions_start = out.len();
         for assertion in &fixture.assertions {
             if is_streaming {
                 render_streaming_assertion_dart(out, assertion, result_var);
@@ -1048,8 +1059,55 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                 );
             }
         }
+
+        // A non-streaming fixture whose only assertion is `not_error` (which
+        // intentionally renders nothing — a thrown error already fails the
+        // `await`) or whose field assertions all resolved to "skipped"
+        // comments leaves the body with no real `expect(...)` call, even
+        // though `result` was already bound above. Mirror the streaming path's
+        // existing `not_error` idiom (`expect(result, isNotNull)`) instead of
+        // leaving the test vacuous. Skipped for `returns_void` calls, where
+        // `result` was never bound and `expect(<void>, ...)` is a compile
+        // error, and for fixtures that declare no assertions at all (an
+        // intentional bare smoke test). ~keep
+        if !is_streaming
+            && !call_config.returns_void
+            && !fixture.assertions.is_empty()
+            && !has_real_dart_assertion(&out[assertions_start..])
+        {
+            let _ = writeln!(out, "    expect({result_var}, isNotNull);");
+        }
     }
 
     let _ = writeln!(out, "  }});");
     let _ = writeln!(out);
+}
+
+#[cfg(test)]
+mod vacuous_assertion_fallback_tests {
+    use super::has_real_dart_assertion;
+
+    #[test]
+    fn has_real_dart_assertion_is_false_for_comment_only_body() {
+        let body = "    // skipped: field 'foo' not available on dart result type\n";
+        assert!(
+            !has_real_dart_assertion(body),
+            "comment-only body must not count as asserting"
+        );
+    }
+
+    #[test]
+    fn has_real_dart_assertion_is_false_for_empty_body() {
+        assert!(!has_real_dart_assertion(""));
+        assert!(!has_real_dart_assertion("   \n  \n"));
+    }
+
+    #[test]
+    fn has_real_dart_assertion_is_true_when_a_real_statement_is_present() {
+        let body = "    // skipped: field 'foo' not available on dart result type\n    expect(result.ok, isTrue);\n";
+        assert!(
+            has_real_dart_assertion(body),
+            "a real expect(...) line must count as asserting"
+        );
+    }
 }

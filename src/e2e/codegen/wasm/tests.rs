@@ -55,7 +55,7 @@ fn test_package_json_includes_node_options_memory_cap() {
 }
 
 #[test]
-fn test_package_json_registry_release_uses_caret() {
+fn test_package_json_registry_release_uses_exact_pin() {
     let pkg_json = render_package_json(
         "@test/wasm",
         "pkg",
@@ -64,30 +64,37 @@ fn test_package_json_registry_release_uses_caret() {
         None,
     );
     assert!(
-        pkg_json.contains("\"^1.2.3\""),
-        "registry release pin must use caret; got:\n{pkg_json}"
+        pkg_json.contains("\"1.2.3\""),
+        "registry release pin must be exact (no range operator); got:\n{pkg_json}"
+    );
+    assert!(
+        !pkg_json.contains("\"^1.2.3\""),
+        "must not add a caret range; got:\n{pkg_json}"
     );
 }
 
 #[test]
-fn test_package_json_local_uses_flat_wasm_pack_output() {
+fn test_package_json_local_uses_wasm_pack_nodejs_output() {
+    // wasm-pack build --target nodejs --out-dir pkg/nodejs writes the only
+    // npm-consumable package (its own package.json with main/types); the
+    // parent pkg/ dir has none, so the `file:` dependency must point at
+    // pkg/nodejs specifically. ~keep
     let rendered = render_package_json(
         "@example/sample-wasm",
-        "crates/sample-wasm/pkg",
+        "crates/sample-wasm/pkg/nodejs",
         "1.2.3",
         crate::e2e::config::DependencyMode::Local,
         None,
     );
 
     assert!(
-        rendered.contains("\"@example/sample-wasm\": \"file:crates/sample-wasm/pkg\""),
-        "local dependency must use wasm-pack's flat pkg directory: {rendered}"
+        rendered.contains("\"@example/sample-wasm\": \"file:crates/sample-wasm/pkg/nodejs\""),
+        "local dependency must point at wasm-pack's nodejs target output: {rendered}"
     );
-    assert!(!rendered.contains("pkg/nodejs"), "{rendered}");
 }
 
 #[test]
-fn test_package_json_registry_prerelease_uses_caret_semver() {
+fn test_package_json_registry_prerelease_uses_exact_pin() {
     let pkg_json = render_package_json(
         "@test/wasm",
         "pkg",
@@ -96,8 +103,12 @@ fn test_package_json_registry_prerelease_uses_caret_semver() {
         None,
     );
     assert!(
-        pkg_json.contains("\"^3.6.0-rc.1\""),
-        "registry pre-release pin must use caret with raw semver; got:\n{pkg_json}"
+        pkg_json.contains("\"3.6.0-rc.1\""),
+        "registry pre-release pin must be exact (no range operator); got:\n{pkg_json}"
+    );
+    assert!(
+        !pkg_json.contains("\"^3.6.0-rc.1\""),
+        "must not add a caret range; got:\n{pkg_json}"
     );
 }
 

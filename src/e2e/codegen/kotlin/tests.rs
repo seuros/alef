@@ -113,7 +113,8 @@ fn handle_config_deserialization_uses_resolved_options_type() {
             type_defs: &[],
             owner_handle_is_receiver: false,
         },
-    );
+    )
+    .expect("args build succeeds");
 
     let rendered = setup.join("\n");
     assert_eq!(args_str, "session");
@@ -738,7 +739,8 @@ fn kotlin_android_streaming_fixture_emits_flow_to_list_import() {
         true,
         &config,
         &type_defs,
-    );
+    )
+    .expect("android streaming test file renders");
     assert!(
         out_android.contains("import kotlinx.coroutines.flow.toList"),
         "kotlin_android streaming file must import flow.toList, got:\n{out_android}"
@@ -764,7 +766,8 @@ fn kotlin_android_streaming_fixture_emits_flow_to_list_import() {
         false,
         &config,
         &type_defs,
-    );
+    )
+    .expect("jvm streaming test file renders");
     assert!(
         !out_jvm.contains("import kotlinx.coroutines.flow.toList"),
         "non-android streaming file must NOT import flow.toList, got:\n{out_jvm}"
@@ -852,7 +855,8 @@ fn kotlin_android_object_mapper_emits_register_kotlin_module() {
         true,
         &config,
         &type_defs,
-    );
+    )
+    .expect("android configuration test file renders");
     assert!(
         out_android.contains("import com.fasterxml.jackson.module.kotlin.registerKotlinModule"),
         "kotlin_android with ObjectMapper must import registerKotlinModule, got:\n{out_android}"
@@ -878,7 +882,8 @@ fn kotlin_android_object_mapper_emits_register_kotlin_module() {
         false,
         &config,
         &type_defs,
-    );
+    )
+    .expect("jvm configuration test file renders");
     assert!(
         !out_jvm.contains("registerKotlinModule"),
         "non-android MAPPER must NOT reference registerKotlinModule, got:\n{out_jvm}"
@@ -995,7 +1000,8 @@ fn kotlin_android_bytes_arg_emits_files_read_all_bytes() {
             type_defs: &[],
             owner_handle_is_receiver: false,
         },
-    );
+    )
+    .expect("args build succeeds");
     assert!(
         args_jvm.contains("\"pdf/test.pdf\""),
         "JVM style must emit string literal, got: {args_jvm}"
@@ -1015,7 +1021,8 @@ fn kotlin_android_bytes_arg_emits_files_read_all_bytes() {
             type_defs: &[],
             owner_handle_is_receiver: false,
         },
-    );
+    )
+    .expect("args build succeeds");
     assert!(
         args_android.contains("java.nio.file.Files.readAllBytes"),
         "kotlin_android bytes arg must use Files.readAllBytes, got: {args_android}"
@@ -1078,7 +1085,8 @@ fn kotlin_android_batch_bytes_item_wraps_paths() {
             type_defs: &[],
             owner_handle_is_receiver: false,
         },
-    );
+    )
+    .expect("args build succeeds");
     assert!(
         args_android.contains("FileBytesItem"),
         "kotlin_android batch must wrap items in the configured item type, got: {args_android}"
@@ -1173,7 +1181,8 @@ fn kotlin_android_test_file_loads_resolved_jni_lib_name_not_crate_name() {
         true,
         &config,
         &type_defs,
-    );
+    )
+    .expect("kotlin_android test file renders");
     assert!(
         out.contains("System.loadLibrary(\"custom_runtime_jni\")"),
         "kotlin_android test must loadLibrary the resolved jni_lib_name (`custom_runtime_jni`), got:\n{out}"

@@ -461,11 +461,23 @@ fn dart_trait_stub_wrapper_compiles() {
     );
     let directory = tempfile::tempdir().expect("temporary directory");
     let source_path = directory.path().join("stub.dart");
-    std::fs::write(&source_path, source).expect("write Dart source");
+    std::fs::write(&source_path, &source).expect("write Dart source");
+    // Pin the child's working directory. Other tests in this binary mutate the
+    // process-global cwd via `set_current_dir` into tempdirs that are then dropped, so
+    // an inherited cwd can already be deleted by the time this runs -- the Dart VM then
+    // fails startup with "Error determining current directory" rather than any analysis
+    // result. ~keep
     let output = std::process::Command::new("dart")
         .args(["analyze", "--fatal-infos"])
         .arg(&source_path)
+        .current_dir(directory.path())
         .output()
         .expect("run Dart analyzer");
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stdout));
+    assert!(
+        output.status.success(),
+        "dart analyze failed ({})\n--- stdout ---\n{}\n--- stderr ---\n{}\n--- source ---\n{source}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
 }

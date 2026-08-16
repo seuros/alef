@@ -1,7 +1,7 @@
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
 
 use crate::core::config::ResolvedCrateConfig;
-use crate::core::ir::TypeDef;
+use crate::core::ir::{EnumDef, TypeDef};
 use crate::e2e::config::E2eConfig;
 use crate::e2e::fixture::{Fixture, FixtureEnv};
 
@@ -26,8 +26,9 @@ pub(crate) fn render_snippet_body(
     e2e_config: &E2eConfig,
     config: &ResolvedCrateConfig,
     type_defs: &[TypeDef],
+    enums: &[EnumDef],
     kotlin_android_style: bool,
-) -> String {
+) -> anyhow::Result<String> {
     let lang = if kotlin_android_style {
         "kotlin_android"
     } else {
@@ -91,13 +92,14 @@ pub(crate) fn render_snippet_body(
             type_defs,
             owner_handle_is_receiver: streaming_owner_handle.is_some(),
         },
-    );
+    )?;
     let mut setup_lines = setup_lines
         .into_iter()
         .map(|line| rebind_mapper_references(&line))
         .collect::<Vec<_>>();
     if let Some(visitor) = &fixture.visitor
-        && let Some(visitor_args) = super::visitor::attach_visitor(&mut setup_lines, &args, visitor, config, type_defs)
+        && let Some(visitor_args) =
+            super::visitor::attach_visitor(&mut setup_lines, &args, visitor, config, type_defs, enums)
     {
         args = visitor_args;
     }
@@ -149,7 +151,7 @@ pub(crate) fn render_snippet_body(
         class_name
     };
 
-    crate::e2e::template_env::render(
+    Ok(crate::e2e::template_env::render(
         "kotlin/snippet_body.jinja",
         minijinja::context! {
             package_name => package_name,
@@ -166,7 +168,7 @@ pub(crate) fn render_snippet_body(
             expects_error => expects_error,
             api_key_var => api_key_var,
         },
-    )
+    ))
 }
 
 #[cfg(test)]
@@ -236,8 +238,10 @@ mod tests {
             },
             &config,
             &[],
+            &[],
             kotlin_android_style,
         )
+        .expect("snippet renders")
     }
 
     #[test]
@@ -300,8 +304,10 @@ mod tests {
             },
             &ResolvedCrateConfig::default(),
             &[],
+            &[],
             false,
-        );
+        )
+        .expect("snippet renders");
 
         assert!(body.contains("DocumentApi.loadDocument()"));
         assert!(body.contains("println(document)"), "{body}");
@@ -338,8 +344,10 @@ mod tests {
             },
             &config,
             &[],
+            &[],
             true,
-        );
+        )
+        .expect("snippet renders");
 
         assert!(body.contains("import dev.sample.*"), "{body}");
         assert!(body.contains("SampleApi.convert()"), "{body}");
@@ -408,8 +416,10 @@ mod tests {
             },
             &config,
             &[],
+            &[],
             true,
-        );
+        )
+        .expect("snippet renders");
 
         assert!(body.contains("val config = mapper.readValue"), "{body}");
         assert!(body.contains("ProcessConfig::class.java"), "{body}");
@@ -426,7 +436,8 @@ mod tests {
         .expect("fixture");
         let mut e2e = E2eConfig::default();
         e2e.call.function = "process".into();
-        let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], false);
+        let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[], false)
+            .expect("snippet renders");
 
         assert!(body.contains("catch (error: Exception)"), "{body}");
         assert!(body.contains("error::class.simpleName"), "{body}");
@@ -477,8 +488,10 @@ mod tests {
             },
             &ResolvedCrateConfig::default(),
             &[],
+            &[],
             false,
-        );
+        )
+        .expect("snippet renders");
 
         assert!(
             body.contains("Files.readAllBytes(java.nio.file.Path.of(\"document.pdf\"))"),
@@ -527,8 +540,10 @@ mod tests {
             },
             &ResolvedCrateConfig::default(),
             &[],
+            &[],
             true,
-        );
+        )
+        .expect("snippet renders");
 
         assert!(body.contains("val input = mapper.readValue("), "{body}");
         assert!(body.contains("DocumentInput::class.java"), "{body}");
@@ -603,8 +618,10 @@ mod tests {
             },
             &ResolvedCrateConfig::default(),
             &type_defs,
+            &[],
             true,
-        );
+        )
+        .expect("snippet renders");
 
         assert!(body.contains(r#"\"request-id\":\"one\""#), "{body}");
         assert!(body.contains(r#"\"pageCount\":2"#), "{body}");

@@ -374,10 +374,6 @@ pub(super) fn render_test_file(
     thirdparty_bare.sort();
     thirdparty_from.sort();
 
-    // Render helper functions
-    let mut helper_functions = String::new();
-    render_item_text_helper(&mut helper_functions);
-
     // Render all fixtures
     let mut fixtures_body = String::new();
     for fixture in fixtures {
@@ -402,6 +398,15 @@ pub(super) fn render_test_file(
             );
         }
         let _ = writeln!(fixtures_body);
+    }
+
+    // Only emit the item-text helper when a rendered assertion actually calls it —
+    // the array `contains`/`contains_any` paths are the only callers. Emitting it
+    // unconditionally left a dead `_alef_e2e_item_texts` in every file, defined but
+    // never referenced, whenever no assertion needed array-item text extraction. ~keep
+    let mut helper_functions = String::new();
+    if references_identifier(&fixtures_body, "_alef_e2e_item_texts") {
+        render_item_text_helper(&mut helper_functions);
     }
 
     prune_unreferenced_from_imports(
@@ -875,5 +880,71 @@ mod tests {
             thirdparty_from.contains(&"from my_lib import create_client".to_string()),
             "the client factory must still be imported from the public module, got: {thirdparty_from:?}"
         );
+    }
+
+    fn minimal_fixture(id: &str, assertions: Vec<crate::e2e::fixture::Assertion>) -> crate::e2e::fixture::Fixture {
+        crate::e2e::fixture::Fixture {
+            docs: None,
+            requirements: Vec::new(),
+            id: id.to_string(),
+            description: "Smoke test".to_string(),
+            input: serde_json::Value::Null,
+            http: None,
+            asyncapi: None,
+            websocket: None,
+            preserve_input_urls: false,
+            assertions,
+            call: None,
+            skip: None,
+            env: None,
+            setup: Vec::new(),
+            visitor: None,
+            args: vec![],
+            assertion_recipes: vec![],
+            mock_response: None,
+            source: String::new(),
+            category: None,
+            tags: Vec::new(),
+        }
+    }
+
+    /// Regression test for the dead-helper defect: `_alef_e2e_item_texts`/
+    /// `_alef_e2e_text` were emitted into every generated file unconditionally,
+    /// even when no assertion in the file ever called them (defined but
+    /// referenced zero times, in all 44 python e2e files at time of writing).
+    /// A fixture whose only assertion is `not_error` never calls the helper.
+    #[test]
+    fn render_test_file_without_array_assertions_omits_the_dead_item_text_helper() {
+        let fixture = minimal_fixture(
+            "widget_smoke",
+            vec![crate::e2e::fixture::Assertion {
+                assertion_type: "not_error".to_string(),
+                ..Default::default()
+            }],
+        );
+        let fixtures: Vec<&crate::e2e::fixture::Fixture> = vec![&fixture];
+        let e2e_config = crate::e2e::config::E2eConfig::default();
+        let config = crate::core::config::ResolvedCrateConfig::default();
+        let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
+        let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
+        let out = render_test_file("smoke", &fixtures, &e2e_config, &config, &type_defs, &enums, false);
+
+        assert!(
+            !out.contains("_alef_e2e_item_texts"),
+            "a file with no array-contains assertion must not define the unused helper, got: {out}"
+        );
+        assert!(!out.contains("_alef_e2e_text"), "got: {out}");
+    }
+
+    /// The gating predicate for the dead-helper fix: `references_identifier` must
+    /// find the helper call as it is actually emitted (a real call site inside a
+    /// generator expression), and must not false-negative on it.
+    #[test]
+    fn references_identifier_finds_the_item_texts_helper_call_site() {
+        let emitted_assertion = "        assert any(\"Function\" in text for item in result.structure for text in _alef_e2e_item_texts(item))  # noqa: S101\n";
+        assert!(references_identifier(emitted_assertion, "_alef_e2e_item_texts"));
+
+        let emitted_without_helper = "        assert result.content == \"hello\"  # noqa: S101\n";
+        assert!(!references_identifier(emitted_without_helper, "_alef_e2e_item_texts"));
     }
 }

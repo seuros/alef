@@ -24,11 +24,11 @@ pub(super) fn render_test_method(
     kotlin_android_style: bool,
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
-) {
+) -> anyhow::Result<()> {
     // Delegate HTTP fixtures to the HTTP-specific renderer.
     if let Some(http) = &fixture.http {
         super::http::render_http_test_method(out, fixture, http);
-        return;
+        return Ok(());
     }
 
     // Resolve per-fixture call config (supports named calls via fixture.call field).
@@ -374,7 +374,7 @@ pub(super) fn render_test_method(
             type_defs,
             owner_handle_is_receiver: streaming_owner_handle.is_some(),
         },
-    );
+    )?;
     if streaming_owner_handle.is_some()
         && let Some(request) = streaming_request
     {
@@ -461,7 +461,7 @@ pub(super) fn render_test_method(
             // any @Test method whose return type is not void/Unit.
             let _ = writeln!(out, "        Unit");
             let _ = writeln!(out, "    }}");
-            return;
+            return Ok(());
         }
         for line in &setup_lines {
             let _ = writeln!(out, "        {line}");
@@ -495,7 +495,7 @@ pub(super) fn render_test_method(
         }
         let _ = writeln!(out, "        client.close()");
         let _ = writeln!(out, "    }}");
-        return;
+        return Ok(());
     }
 
     // Flat-function call style (no client_factory). For a streaming owner_type
@@ -517,7 +517,7 @@ pub(super) fn render_test_method(
         // Trailing Unit — see comment in the client-factory branch above.
         let _ = writeln!(out, "        Unit");
         let _ = writeln!(out, "    }}");
-        return;
+        return Ok(());
     }
 
     for line in &setup_lines {
@@ -551,6 +551,7 @@ pub(super) fn render_test_method(
     }
 
     let _ = writeln!(out, "    }}");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -638,7 +639,8 @@ mod tests {
             false,
             &config,
             &[],
-        );
+        )
+        .expect("render_test_method succeeds");
         out
     }
 
@@ -746,16 +748,173 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary Kotlin compile directory");
         let source_path = directory.path().join("Assertions.kt");
         std::fs::write(&source_path, source).expect("write generated Kotlin source");
+        // Pin the child's working directory. Other tests in this binary mutate the
+        // process-global cwd via `set_current_dir` into tempdirs that are then dropped,
+        // and a JVM launched with a deleted cwd dies in `SystemModuleFinders` before it
+        // ever reads the source. ~keep
         let output = std::process::Command::new("kotlinc")
             .arg(&source_path)
             .arg("-d")
             .arg(directory.path().join("assertions.jar"))
+            .current_dir(directory.path())
             .output()
             .expect("run kotlinc");
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.status.success(),
+            "kotlinc failed ({})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
         assert!(
             !generated.contains("\\\"handle\\\""),
             "owner handle config leaked into request JSON: {generated}"
+        );
+    }
+
+    fn test_backend_arg(name: &str, trait_name: &str) -> ArgMapping {
+        ArgMapping {
+            name: name.to_string(),
+            field: format!("input.{name}"),
+            arg_type: "test_backend".to_string(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: Some(trait_name.to_string()),
+        }
+    }
+
+    /// Pin: when a `test_backend` arg's trait is registered in
+    /// `config.trait_bridges`, kotlin_android must always splice a concrete stub
+    /// instantiation into the call's argument list, never the
+    /// `TestBackendEmission::unimplemented(...)` sentinel comment. This is the
+    /// regression the round's `test_backend` bug class targets — if someone
+    /// reintroduces an unchecked `parts.push(emission.arg_expr)` (or
+    /// `kotlin_android::emit_test_backend` regresses to a stub that can return
+    /// `unimplemented(...)`), this test fails.
+    #[test]
+    fn kotlin_android_test_backend_arg_renders_concrete_stub_instantiation() {
+        use crate::core::config::TraitBridgeConfig;
+        use crate::core::ir::{MethodDef, PrimitiveType, ReceiverKind, TypeDef, TypeRef};
+
+        let trait_bridge = TraitBridgeConfig {
+            trait_name: "Validator".to_string(),
+            super_trait: Some("Plugin".to_string()),
+            register_fn: Some("register_validator".to_string()),
+            ..Default::default()
+        };
+        let method = MethodDef {
+            name: "validate".to_string(),
+            return_type: TypeRef::Primitive(PrimitiveType::Bool),
+            receiver: Some(ReceiverKind::Ref),
+            ..Default::default()
+        };
+        let type_def = TypeDef {
+            name: "Validator".to_string(),
+            methods: vec![method],
+            ..Default::default()
+        };
+        let config = ResolvedCrateConfig {
+            trait_bridges: vec![trait_bridge],
+            ..ResolvedCrateConfig::default()
+        };
+        let call = CallConfig {
+            function: "register_backend".to_string(),
+            result_var: "result".to_string(),
+            args: vec![test_backend_arg("backend", "Validator")],
+            ..CallConfig::default()
+        };
+        let fixture = Fixture {
+            id: "register_validator".to_string(),
+            description: "register a validator backend".to_string(),
+            input: serde_json::json!({ "backend": { "name": "test-validator" } }),
+            ..Fixture::default()
+        };
+        let e2e_config = E2eConfig {
+            call,
+            ..E2eConfig::default()
+        };
+
+        let mut out = String::new();
+        render_test_method(
+            &mut out,
+            &fixture,
+            "Facade",
+            "",
+            "",
+            &[],
+            None,
+            false,
+            &e2e_config,
+            &std::collections::HashMap::new(),
+            true, // kotlin_android_style
+            &config,
+            &[type_def],
+        )
+        .expect("a registered, implemented trait bridge must render successfully");
+
+        assert!(
+            out.contains("TestStubRegisterValidator()"),
+            "expected a concrete kotlin_android stub instantiation as the call argument, got:\n{out}"
+        );
+        assert!(
+            !out.contains("/* test_backend unimplemented"),
+            "must never splice the unimplemented sentinel into generated Kotlin, got:\n{out}"
+        );
+    }
+
+    /// A `test_backend` arg whose trait has no matching `[[crates.trait_bridges]]`
+    /// entry has no compilable value to fall back to (the `I{TraitName}` parameter
+    /// is non-null) — generation must fail loudly instead of silently emitting
+    /// `null` or a comment where the argument belongs.
+    #[test]
+    fn kotlin_android_test_backend_arg_with_unregistered_trait_fails_loudly() {
+        let call = CallConfig {
+            function: "register_backend".to_string(),
+            result_var: "result".to_string(),
+            args: vec![test_backend_arg("backend", "Validator")],
+            ..CallConfig::default()
+        };
+        let fixture = Fixture {
+            id: "register_validator".to_string(),
+            description: "register a validator backend".to_string(),
+            input: serde_json::json!({ "backend": { "name": "test-validator" } }),
+            ..Fixture::default()
+        };
+        let e2e_config = E2eConfig {
+            call,
+            ..E2eConfig::default()
+        };
+        // No `trait_bridges` configured — "Validator" is unregistered.
+        let config = ResolvedCrateConfig::default();
+
+        let mut out = String::new();
+        let error = render_test_method(
+            &mut out,
+            &fixture,
+            "Facade",
+            "",
+            "",
+            &[],
+            None,
+            false,
+            &e2e_config,
+            &std::collections::HashMap::new(),
+            true,
+            &config,
+            &[],
+        )
+        .expect_err("an unregistered trait must fail generation loudly, not silently degrade");
+
+        assert!(
+            error.to_string().contains("Validator"),
+            "error should name the unresolved trait, got: {error}"
+        );
+        assert!(
+            !out.contains("null"),
+            "must not have emitted a silent `null` placeholder before failing, got:\n{out}"
         );
     }
 }

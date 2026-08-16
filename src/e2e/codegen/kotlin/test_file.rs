@@ -132,7 +132,7 @@ pub(crate) fn render_test_file(
     type_enum_fields: &std::collections::HashMap<String, HashSet<String>>,
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
-) -> String {
+) -> anyhow::Result<String> {
     render_test_file_inner(
         category,
         fixtures,
@@ -180,7 +180,7 @@ pub(crate) fn render_test_file_android(
     type_enum_fields: &std::collections::HashMap<String, HashSet<String>>,
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
-) -> String {
+) -> anyhow::Result<String> {
     render_test_file_inner(
         category,
         fixtures,
@@ -215,7 +215,7 @@ pub(super) fn render_test_file_inner(
     kotlin_android_style: bool,
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
-) -> String {
+) -> anyhow::Result<String> {
     let mut out = String::new();
     out.push_str(&hash::header(CommentStyle::DoubleSlash));
     let test_class_name = format!("{}Test", sanitize_filename(category).to_upper_camel_case());
@@ -647,12 +647,12 @@ pub(super) fn render_test_file_inner(
             kotlin_android_style,
             config,
             type_defs,
-        );
+        )?;
         let _ = writeln!(out);
     }
 
     let _ = writeln!(out, "}}");
-    out
+    Ok(out)
 }
 
 /// Returns true when `ty` is a `Named(T)` reference (or `Optional<Named(T)>`)

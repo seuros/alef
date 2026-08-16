@@ -260,10 +260,18 @@ pub(super) fn emit_java_visitor_method(
     };
 
     // Emit the unsupported-diagnostic stub only when method metadata is missing.
-    // The Jinja template renders generic `{result_type}.skip()`/`continue_()`/
-    // `preserveHtml()`/`custom(...)` calls — any discriminated-union type that
-    // exposes those factories compiles out of the box, not only the default
-    // fallback type. The host project opts in by setting
+    // ~keep The Jinja template renders `new {result_type}.Skip()` / `.Continue()` /
+    // `.PreserveHtml()` / `.Custom(...)` — direct construction of the variant record
+    // nested inside the sealed interface, not a static-factory call. alef's Java
+    // backend emits every sum-type variant as `record Variant(...) implements
+    // ResultType { }` nested in `ResultType` — see `gen_java_tagged_union` in
+    // `backends/java/gen_bindings/types/enums.rs` and `visit_result.jinja` in
+    // `backends/java/templates/` (the dedicated visitor-result generator used when a
+    // `[[trait_bridges]]` entry resolves). Both paths nest the record the same way, so
+    // `new ResultType.Variant(args)` compiles regardless of which one produced the
+    // type — unlike a `.variant()` static-factory call, which only exists on the
+    // dedicated visitor-result path and is absent from the generic tagged-union
+    // shape. The host project opts in to trait-bridge visitor generation by setting
     // `[[trait_bridges]].result_type` in `alef.toml`.
     let unsupported_diagnostic = binding
         .has_missing_method_metadata
@@ -281,7 +289,87 @@ pub(super) fn emit_java_visitor_method(
             unsupported_diagnostic => unsupported_diagnostic,
         },
     );
-    setup_lines.push(rendered);
+    // ~keep `visitor_method.jinja` can render more than one physical line; pushing
+    // it as one `setup_lines` entry would only get the outer template's indent on
+    // the first — see `split_rendered_lines` in `snippet.rs`.
+    setup_lines.extend(super::snippet::split_rendered_lines(&rendered));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn binding() -> JavaVisitorBinding {
+        JavaVisitorBinding {
+            options_type: "RenderOptions".into(),
+            options_field: "visitor".into(),
+            trait_type: "TextVisitor".into(),
+            context_type: "VisitContext".into(),
+            result_type: "VisitResult".into(),
+            methods: vec![JavaVisitorMethod {
+                name: "visit_text".into(),
+                params: "String text".into(),
+            }],
+            has_missing_method_metadata: false,
+        }
+    }
+
+    /// ~keep alef's Java backend nests every sum-type variant as `record Variant(...)
+    /// implements ResultType { }` and never guarantees a static factory (see the
+    /// `~keep` comment on `emit_java_visitor_method`), so a unit variant must be
+    /// constructed with `new ResultType.Variant()`, not the Dart-style
+    /// `ResultType.variant()` static-factory call.
+    #[test]
+    fn unit_variant_uses_direct_record_construction() {
+        let mut setup = Vec::new();
+        emit_java_visitor_method(&mut setup, "visit_text", &CallbackAction::Skip, "Doc", &binding());
+        let rendered = setup.join("\n");
+
+        assert!(rendered.contains("new VisitResult.Skip()"), "{rendered}");
+        assert!(!rendered.contains("VisitResult.skip()"), "{rendered}");
+    }
+
+    /// ~keep A payload-carrying variant (`Custom`) takes the same
+    /// `new Outer.Variant(args)` form, with the escaped string as the record's
+    /// positional constructor argument.
+    #[test]
+    fn payload_variant_uses_direct_record_construction_with_args() {
+        let mut setup = Vec::new();
+        let action = CallbackAction::Custom {
+            output: "replacement".into(),
+        };
+        emit_java_visitor_method(&mut setup, "visit_text", &action, "Doc", &binding());
+        let rendered = setup.join("\n");
+
+        assert!(
+            rendered.contains("new VisitResult.Custom(\"replacement\")"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("VisitResult.custom("), "{rendered}");
+    }
+
+    /// ~keep Regression guard: `java/snippet_body.jinja` prepends the method body's
+    /// indent to each `setup_lines` *entry* once, not to every physical line inside
+    /// it (see `split_rendered_lines` in `snippet.rs`). Any producer that hands back
+    /// a rendered block containing an embedded newline and pushes it as a single
+    /// `setup_lines` entry would put every line after the first at column 0 once
+    /// wrapped by the outer template. `emit_java_visitor_method` must route its
+    /// render through `split_rendered_lines` so every element it contributes is a
+    /// single physical line, whatever the template's own line count happens to be.
+    #[test]
+    fn visitor_method_emission_never_pushes_an_embedded_newline() {
+        let mut setup = Vec::new();
+        emit_java_visitor_method(&mut setup, "visit_text", &CallbackAction::Skip, "Doc", &binding());
+
+        assert!(!setup.is_empty(), "{setup:?}");
+        for line in &setup {
+            assert!(!line.contains('\n'), "setup_lines entry embeds a newline: {line:?}");
+        }
+        assert!(
+            setup.iter().any(|line| line.contains("new VisitResult.Skip()")),
+            "{setup:?}"
+        );
+    }
 }
 
 /// Convert snake_case method names to Java camelCase.

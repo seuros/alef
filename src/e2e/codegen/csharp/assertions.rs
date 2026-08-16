@@ -797,14 +797,18 @@ pub(super) fn render_assertion(
             out.push_str(&rendered);
         }
         "not_error" => {
-            // Already handled by the call succeeding without exception.
-            let rendered = crate::e2e::template_env::render(
-                "csharp/assertion.jinja",
-                minijinja::context! {
-                    assertion_type => "not_error",
-                },
-            );
-            out.push_str(&rendered);
+            // An uncaught exception already fails the test, but the template's
+            // "not_error" branch (`csharp/assertion.jinja`) intentionally renders
+            // nothing — before this fix, a fixture whose only assertion was
+            // `not_error` left `assertions_body` empty, and the caller
+            // (`csharp.rs`'s misleadingly-named `has_usable_assertion`, which is
+            // just `!expects_error && !returns_void` and does not actually check
+            // whether anything renders) still bound `result_var` and emitted no
+            // assertion at all — a vacuous test. Mirror the byte[] branch's
+            // existing `Assert.NotNull` idiom instead. Not reached for streaming
+            // fixtures: `csharp/test_method.jinja`'s `is_streaming` branch takes
+            // priority over `assertions_body` and never references it. ~keep
+            let _ = writeln!(out, "        Assert.NotNull({result_var});");
         }
         "error" => {
             // Handled at the test method level.
@@ -950,5 +954,81 @@ pub(super) fn render_assertion(
         other => {
             panic!("C# e2e generator: unsupported assertion type: {other}");
         }
+    }
+}
+
+#[cfg(test)]
+mod not_error_vacuous_test_fix_tests {
+    use super::render_assertion;
+    use crate::e2e::field_access::FieldResolver;
+    use crate::e2e::fixture::Assertion;
+
+    fn empty_resolver() -> FieldResolver {
+        FieldResolver::new(
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        )
+    }
+
+    fn not_error_assertion() -> Assertion {
+        Assertion {
+            assertion_type: "not_error".to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// Regression test for the not_error vacuous-test defect: `csharp/assertion.jinja`
+    /// previously rendered nothing at all for `not_error` ("already handled by call
+    /// succeeding"), and the caller's `has_usable_assertion` flag (`csharp.rs`) does
+    /// not actually check whether anything renders — it's just `!expects_error &&
+    /// !returns_void` — so a fixture whose only assertion was `not_error` bound
+    /// `result_var` and asserted nothing. Must emit a real `Assert.NotNull` instead.
+    #[test]
+    fn not_error_emits_a_real_assert_not_null_on_the_result() {
+        let resolver = empty_resolver();
+        let assertion = not_error_assertion();
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            "SampleClass",
+            "SampleException",
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            &std::collections::HashSet::new(),
+            &std::collections::HashMap::new(),
+        );
+        assert_eq!(out, "        Assert.NotNull(result);\n");
+    }
+
+    /// Control: the byte[] result path already had this idiom (`Assert.NotNull`)
+    /// before this fix — confirm the general path now matches it byte-for-byte.
+    #[test]
+    fn not_error_on_bytes_result_matches_the_general_path_idiom() {
+        let resolver = empty_resolver();
+        let assertion = not_error_assertion();
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            "SampleClass",
+            "SampleException",
+            &resolver,
+            false,
+            false,
+            false,
+            true,
+            &std::collections::HashSet::new(),
+            &std::collections::HashMap::new(),
+        );
+        assert_eq!(out, "        Assert.NotNull(result);\n");
     }
 }

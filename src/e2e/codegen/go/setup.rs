@@ -103,10 +103,23 @@ fn native_go_dto_literal_at(
                             }
                         }
                     }
-                    crate::core::ir::TypeRef::Primitive(_) => {
+                    crate::core::ir::TypeRef::Primitive(primitive) => {
                         let literal = json_to_go(value);
                         if uses_pointer {
-                            format!("ptr({literal})")
+                            // `ptr[T any](value T) *T` infers `T` from the argument
+                            // expression. A bare numeric literal (e.g. `30`) defaults to
+                            // Go's untyped-constant rule (`int` for integers, `float64` for
+                            // floats), which only matches the field's actual pointer type
+                            // by coincidence — `*uint`/`*uint64`/`*int32`/etc. fields need
+                            // an explicit conversion so `ptr(...)` infers the field's real
+                            // width instead. `bool` has exactly one Go type, so it never
+                            // needs this. ~keep
+                            if matches!(primitive, crate::core::ir::PrimitiveType::Bool) {
+                                format!("ptr({literal})")
+                            } else {
+                                let go_primitive_type = crate::backends::go::type_map::go_struct_field_type(inner);
+                                format!("ptr({go_primitive_type}({literal}))")
+                            }
                         } else {
                             literal
                         }
@@ -619,6 +632,65 @@ mod file_dto_tests {
         )
         .expect("native DTO");
         assert!(rendered.contains("Content: mustReadFile(`guide.pdf`)"), "{rendered}");
+    }
+
+    /// The generic `ptr[T any](value T) *T` helper infers `T` from its argument. A bare
+    /// numeric literal like `300` defaults to Go's untyped-constant rule (`int`), so
+    /// `ptr(300)` produces `*int` — a type error against a `*uint64` field. The literal
+    /// must be explicitly widened (`ptr(uint64(300))`) so `ptr[T any]` infers the field's
+    /// actual pointer type instead of Go's default. ~keep
+    #[test]
+    fn renders_pointer_integer_field_with_explicit_width_cast() {
+        let types = [TypeDef {
+            name: "ChunkingConfig".into(),
+            fields: vec![FieldDef {
+                name: "max_characters".into(),
+                ty: TypeRef::Primitive(crate::core::ir::PrimitiveType::U64),
+                optional: true,
+                ..FieldDef::default()
+            }],
+            ..TypeDef::default()
+        }];
+        let rendered = native_go_dto_literal(
+            &serde_json::json!({"max_characters": 300}),
+            "ChunkingConfig",
+            "xberg",
+            &types,
+            &[],
+        )
+        .expect("native DTO");
+
+        assert!(rendered.contains("MaxCharacters: ptr(uint64(300))"), "{rendered}");
+        assert!(
+            !rendered.contains("ptr(300)"),
+            "must not emit a bare untyped literal for a non-bool pointer field: {rendered}"
+        );
+    }
+
+    /// `bool` has exactly one Go type, so `ptr(true)` never needs a width cast — this pins
+    /// that the cast is scoped to non-bool primitives only. ~keep
+    #[test]
+    fn renders_pointer_bool_field_without_a_cast() {
+        let types = [TypeDef {
+            name: "SampleConfig".into(),
+            fields: vec![FieldDef {
+                name: "retry".into(),
+                ty: TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool),
+                optional: true,
+                ..FieldDef::default()
+            }],
+            ..TypeDef::default()
+        }];
+        let rendered = native_go_dto_literal(
+            &serde_json::json!({"retry": true}),
+            "SampleConfig",
+            "xberg",
+            &types,
+            &[],
+        )
+        .expect("native DTO");
+
+        assert!(rendered.contains("Retry: ptr(true)"), "{rendered}");
     }
 
     /// Pins the defect behind task #540: the Go binding backend

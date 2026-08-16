@@ -137,27 +137,51 @@ fn render_json_object_setup(
                 })
                 .collect::<Vec<_>>();
             let json = serde_json::to_string(&normalized).unwrap_or_default();
-            Some(
-                crate::e2e::template_env::render(
-                    "java/snippet_json_object_setup.jinja",
-                    minijinja::context! {
-                        variable => arg.name,
-                        json => crate::e2e::escape::escape_java(&json),
-                        type_name => type_name,
-                        file_reads => file_reads,
-                    },
-                )
-                .trim_end()
-                .to_string(),
-            )
+            Some(crate::e2e::template_env::render(
+                "java/snippet_json_object_setup.jinja",
+                minijinja::context! {
+                    variable => arg.name,
+                    json => crate::e2e::escape::escape_java(&json),
+                    type_name => type_name,
+                    file_reads => file_reads,
+                },
+            ))
         })
+        .flat_map(|block| split_rendered_lines(&block))
         .collect()
+}
+
+/// ~keep `java/snippet_body.jinja` indents `setup_lines` by prepending the method
+/// body's indent to each *entry* once (`        {{ line }}`), not to every physical
+/// line inside it. A producer that renders a multi-statement block (this file's own
+/// `snippet_json_object_setup.jinja` emits a `varJson = "...";` line and a separate
+/// `var = JsonUtil.fromJson(...)` line, plus a base64-file-read block spanning three
+/// lines) and pushes it as one `String` therefore gets the indent on only the first
+/// physical line — every line after it renders flush left. Regression: every
+/// generated Java snippet with a `json_object` arg had its `JsonUtil.fromJson(...)`
+/// line at column 0 instead of the surrounding method's indent. Splitting the
+/// rendered block here, so each physical line becomes its own `setup_lines` entry,
+/// lets the template's per-entry indent apply uniformly while preserving each
+/// producer's own relative indentation between lines (e.g. the base64 read's
+/// continuation line and closing `);`).
+pub(super) fn split_rendered_lines(block: &str) -> Vec<String> {
+    block.trim_end().lines().map(str::to_string).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::e2e::config::{CallConfig, CallOverride};
+
+    fn line_containing<'a>(body: &'a str, needle: &str) -> &'a str {
+        body.lines()
+            .find(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("no line contains {needle} in:\n{body}"))
+    }
+
+    fn leading_spaces(line: &str) -> usize {
+        line.len() - line.trim_start().len()
+    }
 
     #[test]
     fn snippet_keeps_native_call_without_junit_harness() {
@@ -306,6 +330,25 @@ mod tests {
         assert!(body.contains("var options = JsonUtil.fromJson(optionsJson, ProcessOptions.class);"));
         assert!(body.contains("dev.example.SampleService.process(\"example\", options)"));
         assert!(!body.contains("DevExampleSampleService"));
+
+        // ~keep Regression: `snippet_json_object_setup.jinja` renders a two-statement
+        // block (the JSON-literal line, then the `JsonUtil.fromJson(...)` line) as one
+        // string; `java/snippet_body.jinja` only prepends the method body's indent to
+        // the first physical line of each `setup_lines` entry, so an un-split block put
+        // the second statement at column 0 in every generated Java snippet with a
+        // `json_object` arg.
+        let json_line = line_containing(&body, "var optionsJson =");
+        let deserialize_line = line_containing(&body, "JsonUtil.fromJson(optionsJson");
+        assert_eq!(
+            leading_spaces(json_line),
+            leading_spaces(deserialize_line),
+            "json literal and its deserialize call must share the method body's indent:\n{body}"
+        );
+        assert_eq!(
+            leading_spaces(deserialize_line),
+            8,
+            "expected the `public static void main` body's 8-space indent:\n{body}"
+        );
     }
 
     #[test]
@@ -360,5 +403,14 @@ mod tests {
         );
         assert!(body.contains("Base64.getEncoder().encodeToString"), "{body}");
         assert!(body.contains("DocumentRequest.class"), "{body}");
+
+        // ~keep Regression: the base64 file-read is a three-line block (opening call,
+        // an indented continuation line, a closing `);`). Every physical line must
+        // land at the method body's indent, with the continuation line one level
+        // deeper — the same defect class as the two-statement json_object setup above.
+        let open_line = line_containing(&body, "Base64.getEncoder().encodeToString(");
+        let continuation_line = line_containing(&body, "Files.readAllBytes(java.nio.file.Path.of(\"document.pdf\"))");
+        assert_eq!(leading_spaces(open_line), 8, "{body}");
+        assert_eq!(leading_spaces(continuation_line), 12, "{body}");
     }
 }

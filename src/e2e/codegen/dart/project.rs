@@ -12,19 +12,13 @@ pub(super) fn render_pubspec(
     let ffi_ver = crate::core::template_versions::pub_dev::FFI_PACKAGE;
 
     let dep_block = match dep_mode {
+        // This manifest exists to verify one specific published artifact, so pin it
+        // exactly rather than a floating range — a range would let a later publish
+        // silently swap what's under test. If alef.toml already supplies a version
+        // constraint operator (`^`, `~`, `>=`, etc.) that's an explicit escape hatch
+        // and passes through unchanged, since we never strip it. ~keep
         crate::e2e::config::DependencyMode::Registry => {
-            // Only add ^ prefix if version doesn't already start with a constraint operator
-            let constraint = if pkg_version.starts_with('^')
-                || pkg_version.starts_with('~')
-                || pkg_version.starts_with('>')
-                || pkg_version.starts_with('<')
-                || pkg_version.starts_with('=')
-            {
-                pkg_version.to_string()
-            } else {
-                format!("^{pkg_version}")
-            };
-            format!("  {pkg_name}: {constraint}")
+            format!("  {pkg_name}: {pkg_version}")
         }
         crate::e2e::config::DependencyMode::Local => {
             format!("  {pkg_name}:\n    path: {pkg_path}")
@@ -120,4 +114,33 @@ pub(super) fn render_app_harness(groups: &[FixtureGroup], e2e_config: &E2eConfig
         port => e2e_config.harness.port,
     };
     crate::e2e::template_env::render("dart/app_harness.dart.jinja", ctx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::e2e::config::DependencyMode;
+
+    #[test]
+    fn render_pubspec_registry_uses_exact_pin() {
+        let out = render_pubspec("my_pkg", "", "1.2.3", DependencyMode::Registry);
+        assert!(out.contains("my_pkg: 1.2.3"), "got: {out}");
+        assert!(
+            !out.contains("my_pkg: ^1.2.3"),
+            "must not add a caret range, got: {out}"
+        );
+    }
+
+    #[test]
+    fn render_pubspec_registry_already_prefixed_passes_through() {
+        let out = render_pubspec("my_pkg", "", "^1.2.3", DependencyMode::Registry);
+        assert!(out.contains("my_pkg: ^1.2.3"), "got: {out}");
+        assert!(!out.contains("^^"), "must not double the prefix, got: {out}");
+    }
+
+    #[test]
+    fn render_pubspec_local_uses_path_dependency() {
+        let out = render_pubspec("my_pkg", "../my_pkg", "1.2.3", DependencyMode::Local);
+        assert!(out.contains("my_pkg:\n    path: ../my_pkg"), "got: {out}");
+    }
 }

@@ -1,10 +1,54 @@
 use crate::codegen::naming::{go_free_function_name, go_type_name, to_go_name};
 use crate::core::config::ResolvedCrateConfig;
-use crate::core::ir::{EnumDef, TypeDef};
+use crate::core::ir::{EnumDef, FunctionDef, ParamDef, TypeDef, TypeRef};
 use crate::e2e::config::E2eConfig;
 use crate::e2e::fixture::Fixture;
 
 use super::setup::build_args_and_setup;
+
+/// Unwraps a (possibly `Optional`-wrapped) `TypeRef::Named` down to its type name.
+///
+/// Used to match a function parameter's IR type against the configured `options_type`
+/// name so the pointer-vs-value and arity decisions below can be derived from the
+/// same signature the Go binding backend generated from, instead of re-asserting it
+/// independently. ~keep
+fn go_ir_named_type(ty: &TypeRef) -> Option<&str> {
+    match ty {
+        TypeRef::Named(name) => Some(name.as_str()),
+        TypeRef::Optional(inner) => go_ir_named_type(inner),
+        _ => None,
+    }
+}
+
+/// Mirrors `backends::go::gen_bindings::functions::gen_function_wrapper`'s pointer-vs-value
+/// decision for a non-bridge parameter: the Go binding backend emits `*T` when the IR
+/// parameter is `optional`, or when its `Named` type is opaque — value `T` otherwise. Both
+/// this function and the binding backend read the same `ParamDef`/`TypeDef.is_opaque`
+/// facts; this is a re-derivation of the same public inputs; it is not a copy of any
+/// gen_bindings-private logic. ~keep
+fn go_options_param_is_pointer(param: &ParamDef, opaque_names: &std::collections::HashSet<&str>) -> bool {
+    if param.optional {
+        return true;
+    }
+    matches!(&param.ty, TypeRef::Named(name) if opaque_names.contains(name.as_str()))
+}
+
+/// Mirrors `gen_bindings::functions::is_bridge_param`'s two membership checks (by
+/// parameter name, then by `Named` type alias) using the same `TraitBridgeConfig` facts
+/// the binding backend reads — the params those checks match are real Rust function
+/// parameters that the Go binding backend strips from its emitted signature (replaced by
+/// a `nil` argument at the FFI call site), so they must not be counted toward the
+/// Go-visible arity used by the `extra_args` clamp below. ~keep
+fn go_is_bridge_param(
+    param: &ParamDef,
+    bridge_param_names: &std::collections::HashSet<String>,
+    bridge_type_aliases: &std::collections::HashSet<String>,
+) -> bool {
+    if bridge_param_names.contains(&param.name) {
+        return true;
+    }
+    go_ir_named_type(&param.ty).is_some_and(|name| bridge_type_aliases.contains(name))
+}
 
 pub(super) fn render_snippet_body(
     fixture: &Fixture,
@@ -12,6 +56,7 @@ pub(super) fn render_snippet_body(
     config: &ResolvedCrateConfig,
     type_defs: &[TypeDef],
     enums: &[EnumDef],
+    functions: &[FunctionDef],
 ) -> String {
     let lang = "go";
     let mut call = e2e_config.resolve_call_for_fixture(
@@ -65,13 +110,6 @@ pub(super) fn render_snippet_body(
         })
         .map(|value| value.name.as_str())
         .collect();
-    let options_ptr = override_config.is_some_and(|value| value.options_ptr)
-        || call.overrides.get(lang).is_some_and(|value| value.options_ptr)
-        || e2e_config
-            .call
-            .overrides
-            .get(lang)
-            .is_some_and(|value| value.options_ptr);
     let options_type = recipe.options_type.or_else(|| {
         e2e_config
             .call
@@ -79,6 +117,36 @@ pub(super) fn render_snippet_body(
             .get(lang)
             .and_then(|value| value.options_type.as_deref())
     });
+    // `functions` is the same IR the Go binding backend generated the actual signature
+    // from (see `gen_bindings::functions::gen_function_wrapper`). When the target call
+    // resolves to a known free function, derive `options_ptr` from its real parameter
+    // instead of trusting the hand-authored `options_ptr` override, which can drift from
+    // what the binding backend emits. The override remains the fallback for calls this
+    // harness cannot resolve to a `FunctionDef` (e.g. method calls, synthetic call
+    // names) — those keep today's config-driven behavior unchanged. ~keep
+    let target_function = functions.iter().find(|value| value.name == call.function);
+    let opaque_names: std::collections::HashSet<&str> = type_defs
+        .iter()
+        .filter(|value| value.is_opaque)
+        .map(|value| value.name.as_str())
+        .collect();
+    let options_param = target_function.and_then(|function| {
+        function
+            .params
+            .iter()
+            .find(|param| go_ir_named_type(&param.ty) == options_type)
+    });
+    let options_ptr = options_param
+        .map(|param| go_options_param_is_pointer(param, &opaque_names))
+        .unwrap_or_else(|| {
+            override_config.is_some_and(|value| value.options_ptr)
+                || call.overrides.get(lang).is_some_and(|value| value.options_ptr)
+                || e2e_config
+                    .call
+                    .overrides
+                    .get(lang)
+                    .is_some_and(|value| value.options_ptr)
+        });
     let (mut package_decls, mut setup_lines, mut args) = build_args_and_setup(
         &fixture.input,
         recipe.args,
@@ -93,6 +161,7 @@ pub(super) fn render_snippet_body(
         enums,
         true,
     );
+    let mut configured_arg_count = recipe.args.len();
     if let Some(visitor_spec) = &fixture.visitor
         && let Some(options_type) =
             options_type.or_else(|| crate::e2e::codegen::recipe::trait_bridge_options_type(config))
@@ -111,15 +180,49 @@ pub(super) fn render_snippet_body(
         setup_lines.push(format!("visitor := &{struct_name}{{}}"));
         setup_lines.push(format!("opts := &{import_alias}.{options_type}{{}}"));
         setup_lines.push("opts.Visitor = visitor".to_string());
+        // `replace_go_options` only replaces an existing `nil` slot in place (no arity
+        // change) when `args` already ends with one; every other case appends `opts` as
+        // a new trailing argument. ~keep
+        if !args.ends_with(", nil") {
+            configured_arg_count += 1;
+        }
         args = replace_go_options(&args);
     }
     if !recipe.extra_args.is_empty() {
-        let extras = recipe.extra_args.join(", ");
-        args = if args.is_empty() {
-            extras
-        } else {
-            format!("{args}, {extras}")
-        };
+        // Bridge/visitor parameters (per `config.trait_bridges`) are real parameters on
+        // the extracted Rust function, but the Go binding backend strips them from its
+        // emitted signature (see `is_bridge_param` in `gen_bindings::functions`) — so
+        // they must not be counted toward the Go-visible arity `extra_args` is clamped
+        // against. Falls back to appending every configured `extra_args` verbatim when
+        // the call has no resolvable `FunctionDef` (unchanged prior behavior). ~keep
+        let bridge_param_names: std::collections::HashSet<String> = config
+            .trait_bridges
+            .iter()
+            .filter_map(|bridge| bridge.param_name.clone())
+            .collect();
+        let bridge_type_aliases: std::collections::HashSet<String> = config
+            .trait_bridges
+            .iter()
+            .filter_map(|bridge| bridge.type_alias.clone())
+            .collect();
+        let real_go_param_count = target_function.map(|function| {
+            function
+                .params
+                .iter()
+                .filter(|param| !go_is_bridge_param(param, &bridge_param_names, &bridge_type_aliases))
+                .count()
+        });
+        let allowed_extra_args = real_go_param_count
+            .map(|limit| limit.saturating_sub(configured_arg_count))
+            .unwrap_or(recipe.extra_args.len());
+        let extras = recipe.extra_args[..allowed_extra_args.min(recipe.extra_args.len())].join(", ");
+        if !extras.is_empty() {
+            args = if args.is_empty() {
+                extras
+            } else {
+                format!("{args}, {extras}")
+            };
+        }
     }
     let client_factory = override_config
         .and_then(|value| value.client_factory.as_deref())
@@ -235,6 +338,26 @@ mod tests {
     }
     use crate::e2e::config::{CallConfig, CallOverride};
 
+    fn make_param(name: &str, ty: TypeRef, optional: bool) -> ParamDef {
+        ParamDef {
+            name: name.to_string(),
+            ty,
+            optional,
+            default: None,
+            sanitized: false,
+            typed_default: None,
+            is_ref: false,
+            is_mut: false,
+            newtype_wrapper: None,
+            original_type: None,
+            map_is_ahash: false,
+            map_key_is_cow: false,
+            vec_inner_is_ref: false,
+            map_is_btree: false,
+            core_wrapper: crate::core::ir::CoreWrapper::None,
+        }
+    }
+
     fn fixture() -> Fixture {
         Fixture {
             docs: None,
@@ -273,7 +396,7 @@ mod tests {
             },
             ..E2eConfig::default()
         };
-        let body = render_snippet_body(&fixture(), &e2e, &ResolvedCrateConfig::default(), &[], &[]);
+        let body = render_snippet_body(&fixture(), &e2e, &ResolvedCrateConfig::default(), &[], &[], &[]);
 
         assert!(body.contains("pkg \"github.com/example/library\""));
         let fmt_position = body.find("\"fmt\"").expect("fmt import");
@@ -291,7 +414,7 @@ mod tests {
         let mut e2e = E2eConfig::default();
         e2e.call.module = "example.com/sample".into();
         e2e.call.returns_result = true;
-        let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[]);
+        let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[], &[]);
 
         assert!(body.contains("_, err := pkg."), "{body}");
         assert!(body.contains("var typedError pkg.Error"), "{body}");
@@ -314,7 +437,7 @@ mod tests {
         e2e.call.module = "github.com/example/library".into();
         e2e.call.returns_void = true;
 
-        let body = render_snippet_body(&fixture(), &e2e, &ResolvedCrateConfig::default(), &[], &[]);
+        let body = render_snippet_body(&fixture(), &e2e, &ResolvedCrateConfig::default(), &[], &[], &[]);
 
         assert!(!body.contains("\"fmt\""), "{body}");
     }
@@ -324,7 +447,7 @@ mod tests {
         let mut e2e = E2eConfig::default();
         e2e.call.module = "example.com/sample".into();
 
-        let body = render_snippet_body(&fixture(), &e2e, &ResolvedCrateConfig::default(), &[], &[]);
+        let body = render_snippet_body(&fixture(), &e2e, &ResolvedCrateConfig::default(), &[], &[], &[]);
 
         assert!(body.starts_with("package main\n\nimport (\n"), "{body}");
         assert!(!body.contains("package main import"), "{body}");
@@ -337,7 +460,7 @@ mod tests {
         e2e.call.function = "process".into();
         e2e.call.result_var = "result".into();
         e2e.call.returns_result = true;
-        let body = render_snippet_body(&fixture(), &e2e, &ResolvedCrateConfig::default(), &[], &[]);
+        let body = render_snippet_body(&fixture(), &e2e, &ResolvedCrateConfig::default(), &[], &[], &[]);
         let Ok(mut child) = std::process::Command::new("gofmt")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -422,12 +545,20 @@ mod tests {
                         crate::core::ir::FieldDef {
                             name: "retry".into(),
                             ty: crate::core::ir::TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool),
+                            // `needs_omitempty_pointer` (backends::go::gen_bindings::types::helpers) requires
+                            // `default.is_some()` — the field's real `#[serde(default)]` attribute, not merely
+                            // the container's `impl Default` — before it will treat a non-zero `typed_default`
+                            // as pointer-worthy. Without this the field is (correctly) rendered as a required,
+                            // non-pointer value and this fixture stops exercising the pointer-cast path it
+                            // exists to pin. ~keep
+                            default: Some("/* serde(default) */".into()),
                             typed_default: Some(crate::core::ir::DefaultValue::BoolLiteral(true)),
                             ..Default::default()
                         },
                         crate::core::ir::FieldDef {
                             name: "timeout".into(),
                             ty: crate::core::ir::TypeRef::Primitive(crate::core::ir::PrimitiveType::I64),
+                            default: Some("/* serde(default) */".into()),
                             typed_default: Some(crate::core::ir::DefaultValue::IntLiteral(30)),
                             ..Default::default()
                         },
@@ -441,11 +572,12 @@ mod tests {
                 },
             ],
             &[],
+            &[],
         );
 
         assert!(
             body.contains(
-                "payload := pkg.SampleInput{\n\t\tKind:    ptr(pkg.SampleKind(`active`)),\n\t\tLabel:   `sample`,\n\t\tRetry:   ptr(true),\n\t\tTimeout: ptr(30),"
+                "payload := pkg.SampleInput{\n\t\tKind:    ptr(pkg.SampleKind(`active`)),\n\t\tLabel:   `sample`,\n\t\tRetry:   ptr(true),\n\t\tTimeout: ptr(int64(30)),"
             ),
             "{body}"
         );
@@ -492,9 +624,205 @@ mod tests {
                 ..TypeDef::default()
             }],
             &[],
+            &[],
         );
 
         assert!(rendered.contains("&options"), "{rendered}");
         assert!(rendered.contains("fmt.Printf(\"%+v\\n\", result)"), "{rendered}");
+    }
+
+    /// Cluster 1 of the htmd defect: 118 fixtures passed a value where the Go binding
+    /// took `*ConversionOptions`. The `options_ptr` config override is hand-authored and
+    /// can go stale; when the real `FunctionDef` for the call is available, its
+    /// `optional` flag on the options parameter — the same fact
+    /// `gen_bindings::functions::gen_function_wrapper` reads to decide `*T` vs `T` — must
+    /// win over a stale `options_ptr = false`. ~keep
+    #[test]
+    fn options_ptr_prefers_the_real_signature_over_a_stale_config_false() {
+        let mut fixture = fixture();
+        fixture.input = serde_json::json!({ "options": {} });
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "convert".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.args = vec![crate::e2e::config::ArgMapping {
+            name: "options".into(),
+            field: "options".into(),
+            arg_type: "json_object".into(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }];
+        e2e.call.overrides.insert(
+            "go".into(),
+            CallOverride {
+                module: Some("github.com/example/sample".into()),
+                options_type: Some("SampleConfig".into()),
+                options_ptr: false,
+                ..Default::default()
+            },
+        );
+        let functions = [FunctionDef {
+            name: "convert".into(),
+            params: vec![
+                make_param("html", TypeRef::String, false),
+                make_param("options", TypeRef::Named("SampleConfig".into()), true),
+            ],
+            ..FunctionDef::default()
+        }];
+        let rendered = render_snippet_body(
+            &fixture,
+            &e2e,
+            &ResolvedCrateConfig::default(),
+            &[TypeDef {
+                name: "SampleConfig".into(),
+                ..TypeDef::default()
+            }],
+            &[],
+            &functions,
+        );
+
+        assert!(
+            rendered.contains("&options"),
+            "the real signature marks the options param `optional`, so the binding backend \
+             emits `*SampleConfig` — the snippet must pass `&options` regardless of the \
+             config's stale `options_ptr = false`: {rendered}"
+        );
+    }
+
+    /// The inverse of the above: a stale `options_ptr = true` must not force a pointer
+    /// when the real signature takes the options struct by value. ~keep
+    #[test]
+    fn options_ptr_prefers_the_real_signature_over_a_stale_config_true() {
+        let mut fixture = fixture();
+        fixture.input = serde_json::json!({ "options": {} });
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "convert".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.args = vec![crate::e2e::config::ArgMapping {
+            name: "options".into(),
+            field: "options".into(),
+            arg_type: "json_object".into(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }];
+        e2e.call.overrides.insert(
+            "go".into(),
+            CallOverride {
+                module: Some("github.com/example/sample".into()),
+                options_type: Some("SampleConfig".into()),
+                options_ptr: true,
+                ..Default::default()
+            },
+        );
+        let functions = [FunctionDef {
+            name: "convert".into(),
+            params: vec![
+                make_param("html", TypeRef::String, false),
+                make_param("options", TypeRef::Named("SampleConfig".into()), false),
+            ],
+            ..FunctionDef::default()
+        }];
+        let rendered = render_snippet_body(
+            &fixture,
+            &e2e,
+            &ResolvedCrateConfig::default(),
+            &[TypeDef {
+                name: "SampleConfig".into(),
+                ..TypeDef::default()
+            }],
+            &[],
+            &functions,
+        );
+
+        assert!(
+            !rendered.contains("&options"),
+            "the real signature's options param is not `optional`, so the binding backend \
+             emits a value `SampleConfig` — the snippet must not take its address just \
+             because the config's stale `options_ptr = true` says so: {rendered}"
+        );
+        assert!(rendered.contains("pkg.Convert(options)"), "{rendered}");
+    }
+
+    /// Cluster 2 of the htmd defect: 53 fixtures called `htmd.Convert` with more
+    /// arguments than the binding accepts. `extra_args` is meant for slots the real
+    /// signature actually has (e.g. a visitor-accepting overload); when the resolved
+    /// call's `FunctionDef` shows no room left, the configured extras must be dropped
+    /// instead of emitted as an argument the binding's `Convert` does not declare. ~keep
+    #[test]
+    fn extra_args_are_clamped_to_the_real_signatures_remaining_arity() {
+        let mut fixture = fixture();
+        fixture.input = serde_json::json!({ "html": "<p>hi</p>", "options": {} });
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "convert".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.args = vec![
+            crate::e2e::config::ArgMapping {
+                name: "html".into(),
+                field: "html".into(),
+                arg_type: "string".into(),
+                optional: false,
+                owned: false,
+                element_type: None,
+                go_type: None,
+                vec_inner_is_ref: false,
+                trait_name: None,
+            },
+            crate::e2e::config::ArgMapping {
+                name: "options".into(),
+                field: "options".into(),
+                arg_type: "json_object".into(),
+                optional: false,
+                owned: false,
+                element_type: None,
+                go_type: None,
+                vec_inner_is_ref: false,
+                trait_name: None,
+            },
+        ];
+        e2e.call.overrides.insert(
+            "go".into(),
+            CallOverride {
+                module: Some("github.com/example/sample".into()),
+                options_type: Some("SampleConfig".into()),
+                options_ptr: true,
+                extra_args: vec!["nil".into()],
+                ..Default::default()
+            },
+        );
+        let functions = [FunctionDef {
+            name: "convert".into(),
+            params: vec![
+                make_param("html", TypeRef::String, false),
+                make_param("options", TypeRef::Named("SampleConfig".into()), true),
+            ],
+            ..FunctionDef::default()
+        }];
+        let rendered = render_snippet_body(
+            &fixture,
+            &e2e,
+            &ResolvedCrateConfig::default(),
+            &[TypeDef {
+                name: "SampleConfig".into(),
+                ..TypeDef::default()
+            }],
+            &[],
+            &functions,
+        );
+
+        assert!(rendered.contains("pkg.Convert("), "{rendered}");
+        assert!(
+            !rendered.contains(", nil)"),
+            "the real `convert` signature has no third parameter, so a configured \
+             trailing `extra_args = [\"nil\"]` (sized for a different, visitor-accepting \
+             overload) must be dropped rather than emitted as a third positional \
+             argument: {rendered}"
+        );
     }
 }

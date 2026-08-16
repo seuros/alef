@@ -10,7 +10,6 @@
      `expectException(\Exception::class)` when no error value is declared, or a
      try/catch checking message-or-class-name when one is)
    - skip_test: boolean (for unskipped non-assertions)
-   - has_usable_assertions: boolean
    - call_expr: the complete function call expression
    - result_var: result variable name
    - field_bindings: string with field binding statements (e.g., $chunks = $result->getChunks();)
@@ -35,9 +34,6 @@
 {%- for line in setup_lines %}
         {{ line }}
 {% endfor %}
-{%- if not has_usable_assertions %}
-        $this->expectNotToPerformAssertions();
-{% endif %}
         ${{ result_var }} = {{ call_expr }};
 {% if collect_snippet %}
         {{ collect_snippet }}

@@ -9,7 +9,10 @@ use crate::e2e::fixture::Fixture;
 
 /// Build setup lines and the argument list for the function call.
 ///
-/// Returns `(setup_lines, args_string)`.
+/// Returns `Ok((setup_lines, args_string))`, or an error when a `test_backend` arg
+/// cannot be rendered as a compilable expression (missing/unregistered trait, or the
+/// resolved backend's stub emitter is unimplemented) — see the `test_backend` branch
+/// below for why this must fail loudly rather than degrade to a placeholder. ~keep
 ///
 /// `kotlin_android_style = true` switches the optional-`json_object` default
 /// from `OptionsType.builder().build()` to `null`. The Java-facade-backed
@@ -41,7 +44,7 @@ pub(super) fn build_args_and_setup(
     input: &serde_json::Value,
     args: &[ArgMapping],
     context: KotlinArgsContext<'_>,
-) -> (Vec<String>, String) {
+) -> anyhow::Result<(Vec<String>, String)> {
     let KotlinArgsContext {
         fixture,
         class_name,
@@ -53,7 +56,7 @@ pub(super) fn build_args_and_setup(
         owner_handle_is_receiver,
     } = context;
     if args.is_empty() {
-        return (Vec::new(), String::new());
+        return Ok((Vec::new(), String::new()));
     }
 
     let mut setup_lines: Vec<String> = Vec::new();
@@ -130,69 +133,86 @@ pub(super) fn build_args_and_setup(
         }
 
         if arg.arg_type == "test_backend" {
-            if let Some(trait_name) = &arg.trait_name
-                && let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name)
-            {
-                // Collect methods from both the main trait and its super-trait (if present).
-                // The super-trait methods are needed so stubs implement the full interface.
-                let mut methods: Vec<&crate::core::ir::MethodDef> = type_defs
-                    .iter()
-                    .find(|t| t.name == *trait_name)
-                    .map(|t| t.methods.iter().collect())
-                    .unwrap_or_default();
-
-                // If there's a super-trait, also collect its methods.
-                if let Some(super_trait) = &trait_bridge.super_trait {
-                    // Extract the simple name from the full path (e.g., "Plugin" from "sample_core::plugins::Plugin").
-                    let super_trait_simple = super_trait.rsplit("::").next().unwrap_or(super_trait.as_str());
-                    if let Some(super_type) = type_defs.iter().find(|t| t.name == super_trait_simple) {
-                        for method in &super_type.methods {
-                            // Only add if not already present (avoid duplicates).
-                            if !methods.iter().any(|m| m.name == method.name) {
-                                methods.push(method);
-                            }
-                        }
-                    }
-                }
-
-                // For kotlin_android, filter out methods whose return type or parameters
-                // reference types in the `exclude_types` list.  The binding generator
-                // omits those methods from the generated interface, so the test stub
-                // must not attempt to implement them.
-                if kotlin_android_style {
-                    let excluded: std::collections::HashSet<&str> = config
-                        .kotlin_android
-                        .as_ref()
-                        .map(|c| c.exclude_types.iter().map(String::as_str).collect())
-                        .unwrap_or_default();
-                    if !excluded.is_empty() {
-                        methods.retain(|m| {
-                            !excluded.iter().any(|ex| m.return_type.references_named(ex))
-                                && m.params
-                                    .iter()
-                                    .all(|p| !excluded.iter().any(|ex| p.ty.references_named(ex)))
-                        });
-                    }
-                }
-
-                let lang = if kotlin_android_style {
-                    "kotlin_android"
-                } else {
-                    "kotlin"
-                };
-                let emission = crate::e2e::codegen::emit_test_backend(lang, trait_bridge, &methods, fixture, &[]);
-                setup_lines.push(emission.setup_block);
-                parts.push(emission.arg_expr);
-                continue;
-            }
             let lang = if kotlin_android_style {
                 "kotlin_android"
             } else {
                 "kotlin"
             };
-            let emission = crate::e2e::codegen::TestBackendEmission::unimplemented(lang);
-            setup_lines.push(format!("// {}", emission.arg_expr));
-            parts.push("null".to_string());
+
+            // A `test_backend` arg fills a non-null `I{TraitName}` interface parameter.
+            // There is no fixture-supplied value to fall back to and no safe default —
+            // unlike every other arg branch above, "the trait isn't configured" and
+            // "the backend can't build a stub" have no compilable positional value.
+            // Fail generation loudly instead of guessing (`null` into a non-null
+            // parameter is itself a compile error, not a safe default). ~keep
+            let Some(trait_name) = &arg.trait_name else {
+                anyhow::bail!(
+                    "e2e fixture `{fixture_id}` declares a `test_backend` arg `{}` with no `trait_name` configured; cannot generate a `{lang}` stub without knowing which trait to implement",
+                    arg.name
+                );
+            };
+            let Some(trait_bridge) = config.trait_bridges.iter().find(|tb| tb.trait_name == *trait_name) else {
+                anyhow::bail!(
+                    "e2e fixture `{fixture_id}` requires trait `{trait_name}` for its `test_backend` arg `{}`, but no `[[crates.trait_bridges]]` entry named `{trait_name}` is configured",
+                    arg.name
+                );
+            };
+
+            // Collect methods from both the main trait and its super-trait (if present).
+            // The super-trait methods are needed so stubs implement the full interface.
+            let mut methods: Vec<&crate::core::ir::MethodDef> = type_defs
+                .iter()
+                .find(|t| t.name == *trait_name)
+                .map(|t| t.methods.iter().collect())
+                .unwrap_or_default();
+
+            // If there's a super-trait, also collect its methods.
+            if let Some(super_trait) = &trait_bridge.super_trait {
+                // Extract the simple name from the full path (e.g., "Plugin" from "sample_core::plugins::Plugin").
+                let super_trait_simple = super_trait.rsplit("::").next().unwrap_or(super_trait.as_str());
+                if let Some(super_type) = type_defs.iter().find(|t| t.name == super_trait_simple) {
+                    for method in &super_type.methods {
+                        // Only add if not already present (avoid duplicates).
+                        if !methods.iter().any(|m| m.name == method.name) {
+                            methods.push(method);
+                        }
+                    }
+                }
+            }
+
+            // For kotlin_android, filter out methods whose return type or parameters
+            // reference types in the `exclude_types` list.  The binding generator
+            // omits those methods from the generated interface, so the test stub
+            // must not attempt to implement them.
+            if kotlin_android_style {
+                let excluded: std::collections::HashSet<&str> = config
+                    .kotlin_android
+                    .as_ref()
+                    .map(|c| c.exclude_types.iter().map(String::as_str).collect())
+                    .unwrap_or_default();
+                if !excluded.is_empty() {
+                    methods.retain(|m| {
+                        !excluded.iter().any(|ex| m.return_type.references_named(ex))
+                            && m.params
+                                .iter()
+                                .all(|p| !excluded.iter().any(|ex| p.ty.references_named(ex)))
+                    });
+                }
+            }
+
+            let emission = crate::e2e::codegen::emit_test_backend(lang, trait_bridge, &methods, fixture, &[]);
+            // `TestBackendEmission::unimplemented(...)`'s `arg_expr` is a bare
+            // `/* ... */` comment, never an expression. Splicing it into `parts`
+            // (the positional argument list) would emit Kotlin that cannot compile —
+            // refuse instead of emitting code we know is broken. ~keep
+            if emission.is_unimplemented() {
+                anyhow::bail!(
+                    "e2e fixture `{fixture_id}` requires a `{lang}` test_backend stub for trait `{trait_name}` (arg `{}`), but the `{lang}` test-backend emitter is unimplemented; refusing to emit a call with a comment where the argument belongs",
+                    arg.name
+                );
+            }
+            setup_lines.push(emission.setup_block);
+            parts.push(emission.arg_expr);
             continue;
         }
 
@@ -493,7 +513,7 @@ pub(super) fn build_args_and_setup(
         }
     }
 
-    (setup_lines, parts.join(", "))
+    Ok((setup_lines, parts.join(", ")))
 }
 
 fn normalize_typed_json(

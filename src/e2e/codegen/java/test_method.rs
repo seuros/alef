@@ -369,6 +369,7 @@ pub(super) fn render_test_method(
             streaming_item_type,
             &effective_enum_fields,
             &assert_enum_types,
+            call_config.returns_void,
         );
         ensure_assertion_line_ending(&mut assertions_body);
     }

@@ -541,7 +541,20 @@ pub(super) fn render_assertion(
                 let _ = writeln!(out, "      assert Regex.match?(~r/{elixir_val}/, {field_expr})");
             }
         }
-        "not_error" => {}
+        "not_error" => {
+            // `test_case.rs` already binds the call result via `{:ok, result} = call(...)`
+            // for `returns_result` calls — a real, meaningful check: an `{:error, _}`
+            // return fails the match with a `MatchError`, failing the test. But before
+            // this fix, rendering nothing here left `result` bound and never
+            // referenced. `actual_result_var` in `test_case.rs` only underscore-
+            // prefixes the binding when `fixture.assertions.is_empty()` — a
+            // `not_error`-only fixture has one (non-empty) assertion, so the binding
+            // stays named and unreferenced, an "unused variable" warning that `mix
+            // compile --warnings-as-errors` (used by downstream consumers of this
+            // generator) promotes to a build failure. Emit a real, visible assertion
+            // that also consumes the variable. ~keep
+            let _ = writeln!(out, "      refute is_nil({result_var})");
+        }
         // ~keep Unreachable by construction: `expects_error` in test_case.rs is true
         // whenever any assertion is type "error", and every such fixture returns early
         // (validation_creation_failure or the plain expects_error branch) before the
@@ -834,5 +847,62 @@ mod tests {
             coerced, "result.content",
             "non-display_as_text field should use bare expression"
         );
+    }
+
+    /// Regression test for the not_error vacuous/unused-variable defect: before this
+    /// fix, `not_error` rendered nothing, leaving `test_case.rs`'s `{:ok, result} =
+    /// call(...)` binding referenced nowhere — an "unused variable" warning that
+    /// `mix compile --warnings-as-errors` promotes to a build failure downstream.
+    /// Must emit a real, variable-consuming assertion instead.
+    #[test]
+    fn not_error_emits_a_real_refute_is_nil_and_consumes_the_binding() {
+        let resolver = empty_resolver();
+        let assertion = Assertion {
+            assertion_type: "not_error".to_string(),
+            field: None,
+            value: None,
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            "Sample",
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            false,
+        );
+        assert_eq!(out, "      refute is_nil(result)\n");
+    }
+
+    /// The caller (`test_case.rs`) already substitutes the collected `chunks`
+    /// variable for `result_var` on streaming fixtures before calling
+    /// `render_assertion` — confirm the not_error arm asserts on whatever
+    /// variable it's given rather than hardcoding "result".
+    #[test]
+    fn not_error_asserts_on_whatever_variable_the_caller_passes() {
+        let resolver = empty_resolver();
+        let assertion = Assertion {
+            assertion_type: "not_error".to_string(),
+            field: None,
+            value: None,
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "chunks",
+            &resolver,
+            "Sample",
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            true,
+        );
+        assert_eq!(out, "      refute is_nil(chunks)\n");
     }
 }

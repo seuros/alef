@@ -203,7 +203,7 @@ impl E2eCodegen for KotlinE2eCodegen {
                 &type_enum_fields,
                 config,
                 type_defs,
-            );
+            )?;
             files.push(GeneratedFile {
                 path: test_base.join(class_file_name),
                 content,
@@ -220,11 +220,9 @@ impl E2eCodegen for KotlinE2eCodegen {
         e2e_config: &E2eConfig,
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
-        _enums: &[crate::core::ir::EnumDef],
+        enums: &[crate::core::ir::EnumDef],
     ) -> Result<String> {
-        Ok(snippet::render_snippet_body(
-            fixture, e2e_config, config, type_defs, false,
-        ))
+        snippet::render_snippet_body(fixture, e2e_config, config, type_defs, enums, false)
     }
 
     fn language_name(&self) -> &'static str {

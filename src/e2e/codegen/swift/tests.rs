@@ -55,10 +55,118 @@ fn not_empty_is_type_aware_for_optional_values() {
             &HashMap::new(),
             &HashSet::new(),
             false,
+            false,
         );
         assert!(out.contains(expected), "field {field}: {out}");
         assert!(!out.contains("toString"), "field {field}: {out}");
     }
+}
+
+fn not_error_assertion() -> Assertion {
+    Assertion {
+        assertion_type: "not_error".to_string(),
+        field: None,
+        value: None,
+        values: None,
+        method: None,
+        check: None,
+        args: None,
+        return_type: None,
+    }
+}
+
+/// Regression test for the not_error vacuous-test defect: before this fix,
+/// `not_error` rendered nothing at all, and `test_method.rs` used a separate
+/// `has_not_error_assertion` flag only to decide whether to bind `let result =
+/// ...` — never to assert on it. A fixture whose only assertion was
+/// `not_error` bound a result that was never referenced by any `XCTAssert*`.
+#[test]
+fn not_error_emits_a_real_xc_tassert_not_nil_on_the_result() {
+    let resolver = FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+    let assertion = not_error_assertion();
+    let mut out = String::new();
+    render_assertion(
+        &mut out,
+        &assertion,
+        "result",
+        &resolver,
+        false,
+        false,
+        false,
+        false,
+        &HashMap::new(),
+        &HashSet::new(),
+        false,
+        false,
+    );
+    assert_eq!(out, "        XCTAssertNotNil(result)\n");
+}
+
+#[test]
+fn not_error_on_a_streaming_fixture_asserts_on_drained_chunks_not_result() {
+    let resolver = FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+    let assertion = not_error_assertion();
+    let mut out = String::new();
+    render_assertion(
+        &mut out,
+        &assertion,
+        "result",
+        &resolver,
+        false,
+        false,
+        false,
+        false,
+        &HashMap::new(),
+        &HashSet::new(),
+        true,
+        false,
+    );
+    assert_eq!(out, "        XCTAssertNotNil(chunks)\n");
+}
+
+/// A `returns_void` call binds no `result` at all — asserting on it would not
+/// compile. The exception path already covers `not_error` there.
+#[test]
+fn not_error_on_a_returns_void_call_emits_nothing() {
+    let resolver = FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+    let assertion = not_error_assertion();
+    let mut out = String::new();
+    render_assertion(
+        &mut out,
+        &assertion,
+        "result",
+        &resolver,
+        false,
+        false,
+        false,
+        false,
+        &HashMap::new(),
+        &HashSet::new(),
+        false,
+        true,
+    );
+    assert!(
+        out.is_empty(),
+        "a returns_void call must not reference an unbound result, got: {out}"
+    );
 }
 
 /// Regression: after the optional `[0]` subscript, the codegen must NOT

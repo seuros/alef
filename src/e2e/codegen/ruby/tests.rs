@@ -332,62 +332,17 @@ mod trait_bridge_tests {
     }
 }
 
+// `render_gemfile` tests used to live here too (as `gemfile_tests`), duplicating
+// `project::tests` (`src/e2e/codegen/ruby/project.rs`) with different fixture
+// literals (`my-gem` vs `my_gem`). The two drifted independently: this module's
+// copies still asserted the old `~>` pessimistic-range behavior after
+// `project::tests` was updated for exact version pinning, and only one side got
+// caught. Consolidated into `project::tests`, the single owner of that
+// function's tests — see `render_gemfile_registry_uses_exact_pin` and friends
+// there. ~keep
 #[cfg(test)]
-mod gemfile_tests {
-    use super::super::project::{render_app_harness, render_gemfile};
-    use crate::e2e::config::DependencyMode;
-
-    #[test]
-    fn render_gemfile_registry_release_uses_tilde_rocket() {
-        let out = render_gemfile("my-gem", "../../packages/ruby", "1.2.3", DependencyMode::Registry);
-        assert!(out.contains("gem 'my-gem', '~> 1.2.3'"), "got: {out}");
-    }
-
-    #[test]
-    fn render_gemfile_registry_prerelease_uses_rubygems_dot_pre_form() {
-        let out = render_gemfile("my-gem", "../../packages/ruby", "3.6.0-rc.1", DependencyMode::Registry);
-        assert!(
-            out.contains("gem 'my-gem', '~> 3.6.0.pre.rc.1'"),
-            "pre-release must use .pre. form, got: {out}"
-        );
-        assert!(
-            !out.contains("3.6.0-rc.1"),
-            "raw semver dash form must not appear in registry Gemfile, got: {out}"
-        );
-    }
-
-    #[test]
-    fn render_gemfile_registry_already_prefixed_passes_through() {
-        // When alef.toml's [crates.e2e.registry.packages.ruby] version field already
-        // includes a rubygems operator (`~> 3.6.0.pre.rc.1`), the codegen must use
-        // it verbatim — wrapping with another `~> ` produces a double-prefix bug.
-        let out = render_gemfile(
-            "my-gem",
-            "../../packages/ruby",
-            "~> 3.6.0.pre.rc.1",
-            DependencyMode::Registry,
-        );
-        assert!(
-            out.contains("gem 'my-gem', '~> 3.6.0.pre.rc.1'"),
-            "already-prefixed input must pass through verbatim, got: {out}"
-        );
-        assert!(!out.contains("~> ~>"), "must not double the `~>` prefix, got: {out}");
-    }
-
-    #[test]
-    fn render_gemfile_local_uses_path() {
-        let out = render_gemfile("my-gem", "../../packages/ruby", "3.6.0-rc.1", DependencyMode::Local);
-        assert!(out.contains("path: '../../packages/ruby'"), "got: {out}");
-        // The target gem line must use path:, not a version constraint.
-        assert!(
-            out.contains("gem 'my-gem', path:"),
-            "local mode must use path: for the target gem, got: {out}"
-        );
-        assert!(
-            !out.contains("gem 'my-gem', '~>"),
-            "local mode must not pin a version for the target gem, got: {out}"
-        );
-    }
+mod app_harness_tests {
+    use super::super::project::render_app_harness;
 
     #[test]
     fn app_harness_rb_contains_eaddrinuse_retry_block() {

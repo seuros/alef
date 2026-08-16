@@ -19,6 +19,7 @@ pub(super) fn render_assertion(
     streaming_item_type: Option<&str>,
     enum_fields: &std::collections::HashSet<String>,
     assert_enum_types: &std::collections::HashMap<String, String>,
+    returns_void: bool,
 ) {
     // Bare-result is_empty / not_empty on Option<T> returns: the Java facade exposes
     // these as `@Nullable T` (via `.orElse(null)`) rather than `Optional<T>`, so the
@@ -91,6 +92,31 @@ pub(super) fn render_assertion(
                 return;
             }
         }
+    }
+
+    // `not_error` never carries a `field` and has no `java/assertion.jinja` branch —
+    // that template's if/elif chain has no `else`, so before this the call silently
+    // rendered nothing. An uncaught exception already fails the `@Test` method, but a
+    // fixture whose only assertion is `not_error` must still leave a real, visible
+    // assertion instead of a vacuous body. Mirrors the `assertNotNull` idiom the
+    // byte[] branch above already uses. For streaming fixtures, assert on the
+    // drained `chunks` list (bound by `collect_snippet` before this runs) rather
+    // than the raw `result_var`, so a lazily-consumed stream that errors only on
+    // iteration is still caught. `returns_void` calls bind no `result_var` at all
+    // (`java/test_method.jinja`'s `{% if returns_void %}` branch calls without
+    // assigning) — asserting on it there would not compile, and the call having
+    // thrown already fails the test, so those are left as-is. ~keep
+    if assertion.assertion_type == "not_error" {
+        if returns_void {
+            // No variable to assert on; the exception path already covers this.
+        } else if is_streaming {
+            out.push_str("        assertNotNull(chunks, \"expected drained chunks list\");\n");
+        } else {
+            out.push_str(&format!(
+                "        assertNotNull({result_var}, \"expected non-null response\");\n"
+            ));
+        }
+        return;
     }
 
     // Handle synthetic/virtual fields that are computed rather than direct record accessors.
@@ -689,6 +715,7 @@ mod tests {
             None,
             &HashSet::new(),
             &HashMap::new(),
+            false,
         );
         assert!(
             out.contains("Objects::toString"),
@@ -725,6 +752,7 @@ mod tests {
             None,
             &HashSet::new(),
             &HashMap::new(),
+            false,
         );
         assert!(
             out.contains(".map(v -> v.text()).orElse(\"\")"),
@@ -733,6 +761,95 @@ mod tests {
         assert!(
             !out.contains("Objects::toString"),
             "display_as_text field must NOT use Objects::toString; got: {out}"
+        );
+    }
+
+    fn make_not_error_assertion() -> Assertion {
+        Assertion {
+            assertion_type: "not_error".to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// Regression test for the not_error vacuous-test defect: `java/assertion.jinja`'s
+    /// if/elif chain has no `not_error` branch and no final `else`, so before this fix
+    /// a fixture whose only assertion was `not_error` rendered nothing at all — not
+    /// even a comment. Must emit a real `assertNotNull` instead.
+    #[test]
+    fn not_error_emits_a_real_assert_not_null_on_the_result() {
+        let resolver = make_resolver(HashSet::new(), HashSet::new());
+        let assertion = make_not_error_assertion();
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            "SampleClass",
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            None,
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+        );
+        assert_eq!(out, "        assertNotNull(result, \"expected non-null response\");\n");
+    }
+
+    #[test]
+    fn not_error_on_a_streaming_fixture_asserts_on_drained_chunks_not_result() {
+        let resolver = make_resolver(HashSet::new(), HashSet::new());
+        let assertion = make_not_error_assertion();
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            "SampleClass",
+            &resolver,
+            false,
+            false,
+            false,
+            true,
+            None,
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+        );
+        assert_eq!(
+            out,
+            "        assertNotNull(chunks, \"expected drained chunks list\");\n"
+        );
+    }
+
+    /// A `returns_void` call binds no `result_var` at all (see
+    /// `java/test_method.jinja`'s `{% if returns_void %}` branch) — asserting on it
+    /// would not compile. The exception path already covers `not_error` there.
+    #[test]
+    fn not_error_on_a_returns_void_call_emits_nothing() {
+        let resolver = make_resolver(HashSet::new(), HashSet::new());
+        let assertion = make_not_error_assertion();
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            "SampleClass",
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            None,
+            &HashSet::new(),
+            &HashMap::new(),
+            true,
+        );
+        assert!(
+            out.is_empty(),
+            "a returns_void call must not reference an unbound result_var, got: {out}"
         );
     }
 }

@@ -192,15 +192,19 @@ pub(super) fn render_gemfile(
 ) -> String {
     let gem_line = match dep_mode {
         crate::e2e::config::DependencyMode::Registry => {
-            // If alef.toml provides the version with a rubygems operator (`~>`, `>=`,
-            // `==`, etc.), the caller has chosen the registry-conventional form already
-            // — use it verbatim. Otherwise apply the rubygems pre-release renderer and
-            // wrap with `~> `.
+            // This manifest exists to verify one specific published artifact, so pin
+            // it exactly rather than a pessimistic `~>` range — a range would let a
+            // later publish silently swap what's under test. A bare version string in
+            // a Gemfile is already an exact RubyGems requirement (`= x.y.z`), so no
+            // operator is needed. If alef.toml already supplies a rubygems operator
+            // (`~>`, `>=`, `==`, etc.) that's an explicit escape hatch and passes
+            // through unchanged. The dash-form prerelease renderer still runs either
+            // way, since RubyGems rejects cargo's `-rc.2` syntax outright. ~keep
             let trimmed = gem_version.trim_start();
             let constraint = if trimmed.starts_with(['~', '>', '<', '=', '!']) {
                 gem_version.to_string()
             } else {
-                format!("~> {}", to_rubygems_prerelease(gem_version))
+                to_rubygems_prerelease(gem_version)
             };
             format!("gem '{gem_name}', '{constraint}'")
         }
@@ -353,4 +357,53 @@ end
 
 pub(super) fn render_rubocop_yaml() -> String {
     crate::e2e::template_env::render("ruby/rubocop.yml.jinja", minijinja::context! {})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::e2e::config::DependencyMode;
+
+    // `render_gemfile` returns the *whole* rendered Gemfile, including dev
+    // dependencies (rspec/rubocop/rubocop-rspec) that legitimately use `~>`
+    // pessimistic ranges from `tv::gem::*_E2E`. Scan for the target gem's own
+    // line rather than the full output, or those dev-dep pins always trip a
+    // whole-file `~>` check regardless of what the target gem's line says. ~keep
+    fn target_gem_line<'a>(out: &'a str, gem_name: &str) -> &'a str {
+        out.lines()
+            .find(|line| line.contains(&format!("'{gem_name}'")))
+            .unwrap_or_else(|| panic!("no line for gem '{gem_name}' in:\n{out}"))
+    }
+
+    #[test]
+    fn render_gemfile_registry_uses_exact_pin() {
+        let out = render_gemfile("my_gem", "", "1.2.3", DependencyMode::Registry);
+        assert_eq!(
+            target_gem_line(&out, "my_gem"),
+            "gem 'my_gem', '1.2.3'",
+            "must not add a pessimistic range, got: {out}"
+        );
+    }
+
+    #[test]
+    fn render_gemfile_registry_prerelease_uses_rubygems_pre_form() {
+        let out = render_gemfile("my_gem", "", "1.8.0-rc.2", DependencyMode::Registry);
+        assert_eq!(
+            target_gem_line(&out, "my_gem"),
+            "gem 'my_gem', '1.8.0.pre.rc.2'",
+            "must not add a pessimistic range, got: {out}"
+        );
+    }
+
+    #[test]
+    fn render_gemfile_registry_already_prefixed_passes_through() {
+        let out = render_gemfile("my_gem", "", "~> 1.2.3", DependencyMode::Registry);
+        assert!(out.contains("gem 'my_gem', '~> 1.2.3'"), "got: {out}");
+    }
+
+    #[test]
+    fn render_gemfile_local_uses_path_dependency() {
+        let out = render_gemfile("my_gem", "../my_gem", "1.2.3", DependencyMode::Local);
+        assert!(out.contains("gem 'my_gem', path: '../my_gem'"), "got: {out}");
+    }
 }

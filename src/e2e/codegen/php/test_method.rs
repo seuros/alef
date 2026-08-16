@@ -9,6 +9,39 @@ use std::fmt::Write as FmtWrite;
 
 use super::{args, assertions, stubs, types, visitor};
 
+/// True when `body` contains at least one line that is not blank and not a
+/// `//`-prefixed comment — i.e. an executable PHPUnit assertion statement.
+/// A body made up only of "// skipped: ..." lines is not executable and
+/// must not be treated as if the fixture asserted something.
+fn has_executable_assertion(body: &str) -> bool {
+    body.lines().any(|line| {
+        let trimmed = line.trim();
+        !trimmed.is_empty() && !trimmed.starts_with("//")
+    })
+}
+
+/// When a fixture's rendered `assertions_body` has no executable statement —
+/// its only assertion was `not_error`, or every field assertion resolved to a
+/// "skipped" comment — inject a real assertion instead of leaving the
+/// PHPUnit test vacuous. Never falls back to `expectNotToPerformAssertions()`:
+/// that only quiets PHPUnit's own risky-test detector without asserting
+/// anything, certifying untested behaviour as green. ~keep
+fn apply_vacuous_assertion_fallback(
+    assertions_body: &mut String,
+    is_streaming: bool,
+    expects_error: bool,
+    result_var: &str,
+) {
+    if expects_error || has_executable_assertion(assertions_body) {
+        return;
+    }
+    if is_streaming {
+        assertions_body.push_str("        $this->assertTrue(is_array($chunks), 'expected drained chunks list');\n");
+    } else {
+        let _ = writeln!(assertions_body, "        $this->assertNotNull(${result_var});");
+    }
+}
+
 /// Render the PHP test-method body for an `error`-asserting fixture.
 ///
 /// ~keep With no declared value this returns output byte-identical to the
@@ -185,7 +218,6 @@ pub(super) fn render_test_method(
                 setup_lines => Vec::<String>::new(),
                 expects_error => false,
                 skip_test => true,
-                has_usable_assertions => false,
                 call_expr => String::new(),
                 result_var => result_var,
                 assertions_body => String::new(),
@@ -210,7 +242,6 @@ pub(super) fn render_test_method(
                         setup_lines => Vec::<String>::new(),
                         expects_error => false,
                         skip_test => true,
-                        has_usable_assertions => false,
                         call_expr => String::new(),
                         result_var => result_var,
                         assertions_body => String::new(),
@@ -288,37 +319,6 @@ pub(super) fn render_test_method(
     let is_streaming =
         crate::e2e::codegen::streaming_assertions::resolve_is_streaming(fixture, call_config.streaming_enabled());
 
-    // Determine if there are usable assertions.
-    // For streaming fixtures: streaming virtual fields count as usable.
-    let has_usable_assertions = fixture.assertions.iter().any(|a| {
-        if a.assertion_type == "error" || a.assertion_type == "not_error" {
-            return false;
-        }
-        match &a.field {
-            Some(f) if !f.is_empty() => {
-                if is_streaming && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(f) {
-                    return true;
-                }
-                // Account for synthetic assertion fields that render_assertion handles
-                let is_synthetic_field = matches!(
-                    f.as_str(),
-                    "chunks_have_content"
-                        | "chunks_have_embeddings"
-                        | "chunks_have_heading_context"
-                        | "first_chunk_starts_with_heading"
-                        | "embeddings"
-                        | "embedding_dimensions"
-                        | "embeddings_valid"
-                        | "embeddings_finite"
-                        | "embeddings_non_zero"
-                        | "embeddings_normalized"
-                );
-                is_synthetic_field || field_resolver.is_valid_for_result(f)
-            }
-            _ => true,
-        }
-    });
-
     // For streaming fixtures, emit collect snippet after the result assignment.
     let collect_snippet = if is_streaming {
         crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::collect_snippet("php", result_var, "chunks")
@@ -384,14 +384,11 @@ pub(super) fn render_test_method(
         );
     }
 
-    // Streaming fixtures whose only assertion is `not_error` produce an empty
-    // assertions_body even though the stream were drained successfully.  PHPUnit
-    // flags such tests as "risky" (no assertions performed).  Emit a minimal
-    // structural assertion against the drained chunk list so the test records
-    // success without false-positive reliance on `expectNotToPerformAssertions`.
-    if is_streaming && !expects_error && assertions_body.trim().is_empty() {
-        assertions_body.push_str("        $this->assertTrue(is_array($chunks), 'expected drained chunks list');\n");
-    }
+    // A fixture whose only assertion is `not_error` (streaming or not), or
+    // whose resolvable field assertions all rendered as "skipped" comments,
+    // leaves assertions_body with no executable statement. Fall back to a
+    // real assertion instead of a vacuous test body.
+    apply_vacuous_assertion_fallback(&mut assertions_body, is_streaming, expects_error, result_var);
 
     let error_test_body = if expects_error {
         render_error_test_body(
@@ -413,7 +410,6 @@ pub(super) fn render_test_method(
             expects_error => expects_error,
             error_test_body => error_test_body,
             skip_test => fixture.assertions.is_empty(),
-            has_usable_assertions => has_usable_assertions || is_streaming,
             call_expr => call_expr,
             result_var => result_var,
             collect_snippet => collect_snippet,
@@ -423,6 +419,89 @@ pub(super) fn render_test_method(
         },
     );
     out.push_str(&rendered);
+}
+
+#[cfg(test)]
+mod vacuous_assertion_fallback_tests {
+    use super::{apply_vacuous_assertion_fallback, has_executable_assertion};
+
+    #[test]
+    fn has_executable_assertion_is_false_for_comment_only_body() {
+        let body = "        // skipped: field 'foo' not available on result type\n";
+        assert!(
+            !has_executable_assertion(body),
+            "comment-only body must not count as asserting"
+        );
+    }
+
+    #[test]
+    fn has_executable_assertion_is_false_for_empty_body() {
+        assert!(!has_executable_assertion(""));
+        assert!(!has_executable_assertion("   \n  \n"));
+    }
+
+    #[test]
+    fn has_executable_assertion_is_true_when_a_real_statement_is_present() {
+        let body =
+            "        // skipped: field 'foo' not available on result type\n        $this->assertTrue($result->ok);\n";
+        assert!(
+            has_executable_assertion(body),
+            "a real assertTrue line must count as asserting"
+        );
+    }
+
+    /// Regression test for the not_error-only vacuous-test defect: a fixture whose
+    /// only assertion is `not_error` renders an empty assertions_body. The fallback
+    /// must emit a real assertion, never `expectNotToPerformAssertions()`.
+    #[test]
+    fn not_error_only_body_gets_a_real_assertion_not_a_framework_suppression() {
+        let mut body = String::new();
+        apply_vacuous_assertion_fallback(&mut body, false, false, "result");
+        assert_eq!(body, "        $this->assertNotNull($result);\n");
+        assert!(!body.contains("expectNotToPerformAssertions"));
+    }
+
+    #[test]
+    fn comment_only_body_also_gets_a_real_assertion() {
+        let mut body = "        // skipped: field 'chunks' not available on result type\n".to_string();
+        apply_vacuous_assertion_fallback(&mut body, false, false, "result");
+        assert!(
+            body.contains("$this->assertNotNull($result);"),
+            "a comment-only body must still get a real fallback assertion, got: {body}"
+        );
+        assert!(!body.contains("expectNotToPerformAssertions"));
+    }
+
+    #[test]
+    fn streaming_vacuous_body_asserts_on_drained_chunks_not_result() {
+        let mut body = String::new();
+        apply_vacuous_assertion_fallback(&mut body, true, false, "result");
+        assert_eq!(
+            body,
+            "        $this->assertTrue(is_array($chunks), 'expected drained chunks list');\n"
+        );
+    }
+
+    #[test]
+    fn error_expecting_fixture_is_left_untouched() {
+        let mut body = String::new();
+        apply_vacuous_assertion_fallback(&mut body, false, true, "result");
+        assert!(
+            body.is_empty(),
+            "error-expecting fixtures render their own error_test_body, not this fallback"
+        );
+    }
+
+    #[test]
+    fn body_with_a_real_assertion_is_left_untouched() {
+        let mut body = "        $this->assertEquals(1, $result->count);\n".to_string();
+        let original = body.clone();
+        apply_vacuous_assertion_fallback(&mut body, false, false, "result");
+        assert_eq!(
+            body, original,
+            "a fixture with a real assertion must not get an extra fallback line"
+        );
+    }
 }
 
 #[cfg(test)]

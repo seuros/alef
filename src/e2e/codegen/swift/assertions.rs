@@ -22,6 +22,7 @@ pub(super) fn render_assertion(
     result_field_accessor: &HashMap<String, String>,
     enum_fields: &HashSet<String>,
     is_streaming: bool,
+    returns_void: bool,
 ) {
     // When the bare result is `Optional<T>` (no field path) the opaque class
     // exposed by swift-bridge has no `.toString()` method, so the usual
@@ -909,7 +910,24 @@ pub(super) fn render_assertion(
             }
         }
         "not_error" => {
-            // Already handled by the call succeeding without exception.
+            // An uncaught exception already fails the test, but `test_method.rs`
+            // only ever used `has_not_error_assertion` to decide whether to BIND
+            // the result (`let result = ...` vs `_ = ...`), never to assert on
+            // it — a fixture whose only assertion was `not_error` bound `result`
+            // and then never referenced it in an `XCTAssert*` call, leaving the
+            // test vacuous. Emit a real assertion instead. `returns_void` calls
+            // bind no `result` at all (see `test_method.rs`'s `if
+            // call_config.returns_void` branch), so there's nothing to assert
+            // on there — the exception path already covers it. For streaming
+            // fixtures, assert on the drained `chunks` array (bound by the
+            // collect snippet before this runs) rather than the raw stream. ~keep
+            if returns_void {
+                // No variable to assert on; the exception path already covers this.
+            } else if is_streaming {
+                let _ = writeln!(out, "        XCTAssertNotNil(chunks)");
+            } else {
+                let _ = writeln!(out, "        XCTAssertNotNil({result_var})");
+            }
         }
         "error" => {
             // ~keep Handled at the test method level, via `render_error_catch_block`

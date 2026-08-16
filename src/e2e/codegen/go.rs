@@ -322,7 +322,26 @@ impl E2eCodegen for GoCodegen {
         enums: &[crate::core::ir::EnumDef],
     ) -> Result<String> {
         Ok(snippet::render_snippet_body(
-            fixture, e2e_config, config, type_defs, enums,
+            fixture,
+            e2e_config,
+            config,
+            type_defs,
+            enums,
+            &[],
+        ))
+    }
+
+    fn render_snippet_body_with_functions(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+        functions: &[crate::core::ir::FunctionDef],
+    ) -> Result<String> {
+        Ok(snippet::render_snippet_body(
+            fixture, e2e_config, config, type_defs, enums, functions,
         ))
     }
 

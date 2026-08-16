@@ -255,12 +255,14 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
     //   fixtures that pre-date the explicit `streaming` flag.
     let is_streaming_error_call = expects_error && (is_streaming || function_name.to_lowercase().contains("stream"));
 
-    // Build assertions body
+    // Build assertions body. Every assertion (including `not_error`) is passed
+    // through — `render_assertion` decides what, if anything, to render for each
+    // type. A prior `!call_config.returns_result` guard here skipped `not_error`
+    // outright for some calls, but `render_assertion`'s own `not_error` arm was
+    // *also* a no-op regardless of that condition, so the guard was a distinction
+    // without a difference: both branches produced the same (vacuous) result.
     let mut assertions_body = String::new();
     for assertion in &fixture.assertions {
-        if assertion.assertion_type == "not_error" && !call_config.returns_result {
-            continue;
-        }
         render_assertion(
             &mut assertions_body,
             assertion,
@@ -273,30 +275,17 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
         );
     }
 
-    let has_usable_assertion = fixture.assertions.iter().any(|a| {
-        if a.assertion_type == "not_error" || a.assertion_type == "error" {
-            return false;
-        }
-        match &a.field {
-            Some(f) if !f.is_empty() => {
-                if is_streaming && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(f) {
-                    return true;
-                }
-                // For plain-result calls, accept assertions on synthetic fields that act on the result itself.
-                let is_synthetic_plain_result_field = matches!(
-                    f.as_str(),
-                    "embeddings"
-                        | "embedding_dimensions"
-                        | "embeddings_valid"
-                        | "embeddings_finite"
-                        | "embeddings_non_zero"
-                        | "embeddings_normalized"
-                );
-                field_resolver.is_valid_for_result(f) || (result_is_simple && is_synthetic_plain_result_field)
-            }
-            _ => true,
-        }
-    });
+    // Whether the call's result is worth binding to `const result = ...` rather
+    // than discarding with a bare `await callExpr();`. Derived from what
+    // `assertions_body` actually contains (a real, non-comment line) instead of a
+    // separately maintained predicate over `fixture.assertions` — the previous
+    // predicate excluded `not_error` from ever counting as "usable" even after
+    // this fix made `render_assertion` emit a real `expect(...).toBeDefined()`
+    // for it, which would have silently reintroduced the same drift this
+    // regression test guards against. ~keep
+    let has_usable_assertion = assertions_body
+        .lines()
+        .any(|line| !line.trim().is_empty() && !line.trim().starts_with("//"));
 
     // For streaming fixtures: capture the stream in `stream`, then collect into `chunks`.
     // Pass the actual `lang` (was hardcoded to "node") so wasm gets the

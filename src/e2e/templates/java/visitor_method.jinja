@@ -2,14 +2,14 @@
 {%- if unsupported_diagnostic %}
         throw new UnsupportedOperationException("{{ unsupported_diagnostic }}");
 {%- elif action_type == "skip" %}
-        return {{ result_type }}.skip();
+        return new {{ result_type }}.Skip();
 {%- elif action_type == "continue" %}
-        return {{ result_type }}.continue_();
+        return new {{ result_type }}.Continue();
 {%- elif action_type == "preserve_html" %}
-        return {{ result_type }}.preserveHtml();
+        return new {{ result_type }}.PreserveHtml();
 {%- elif action_type == "custom_literal" %}
-        return {{ result_type }}.custom("{{ action_value }}");
+        return new {{ result_type }}.Custom("{{ action_value }}");
 {%- elif action_type == "custom_formatted" %}
-        return {{ result_type }}.custom(String.format("{{ action_value }}", {{ format_args|join(", ") }}));
+        return new {{ result_type }}.Custom(String.format("{{ action_value }}", {{ format_args|join(", ") }}));
 {%- endif %}
     }

@@ -44,11 +44,9 @@ impl E2eCodegen for KotlinAndroidE2eCodegen {
         e2e_config: &E2eConfig,
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
-        _enums: &[crate::core::ir::EnumDef],
+        enums: &[crate::core::ir::EnumDef],
     ) -> Result<String> {
-        Ok(crate::e2e::codegen::kotlin::snippet::render_snippet_body(
-            fixture, e2e_config, config, type_defs, true,
-        ))
+        crate::e2e::codegen::kotlin::snippet::render_snippet_body(fixture, e2e_config, config, type_defs, enums, true)
     }
 
     fn language_name(&self) -> &'static str {

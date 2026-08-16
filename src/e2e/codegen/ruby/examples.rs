@@ -421,8 +421,6 @@ pub(super) fn render_example(
     let has_mock = fixture.mock_response.is_some() || fixture.http.is_some();
     let api_key_var = fixture.env.as_ref().and_then(|e| e.api_key_var.as_deref());
     let has_mock_and_key = has_mock && api_key_var.is_some();
-    let has_not_error = fixture.assertions.iter().any(|a| a.assertion_type == "not_error");
-    let is_only_not_error = has_not_error && !has_usable && !expects_error;
 
     let raise_error_clause = render_raise_error_clause(crate::e2e::codegen::declared_error_value(fixture));
 
@@ -454,7 +452,6 @@ pub(super) fn render_example(
             has_mock => has_mock,
             api_key_var => api_key_var,
             has_mock_and_key => has_mock_and_key,
-            is_only_not_error => is_only_not_error,
             is_clear_op => is_clear_op,
             post_clear_list_call => post_clear_list_call,
             teardown_lines => teardown_lines,
