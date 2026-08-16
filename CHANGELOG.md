@@ -61,6 +61,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **go**: stop asserting a wire shape serde does not produce. Go encoded every `std::time::Duration` field with
+  the `DurationMillis` helper, which writes serde's derived `{"secs":_,"nanos":_}` object. A field carrying
+  `#[serde(with = "…")]` has a hand-written codec expecting a bare millisecond integer, so the derived shape is
+  wrong for it and every config construction round-tripping through JSON failed with `invalid type: map, expected
+  u64`. The IR could not tell the two apart — the extractor implemented five serde readers and none read
+  `with`/`serialize_with` — so `FieldDef::serde_with` now records it. Reading all occurrences matters:
+  `deserialize_with = "…"` contains `serialize_with = "…"` as a substring, so a first-match-only scan silently
+  picks the read side. `api_has_duration_field` moves in lockstep, otherwise a crate whose only Duration fields are
+  hand-coded gets an unused helper and an unused `encoding/json` import, which Go rejects.
+- **java**: keep a vtable slot for a trait method returning an excluded type. `api_without_excluded_types` lost its
+  `if !typ.is_trait` guard as incidental cleanup, so a bridge method whose signature named an `exclude_types` entry
+  was pruned from the Java surface while the Rust vtable still declared its slot. Every function pointer after the
+  dropped one then dispatched to the wrong method, with the last read running past the end of the struct. The prune
+  is silent because it removes the method from the interface and adapter too, leaving all three Java files mutually
+  consistent. Both emitters now take the slot list and its ABI order from one function, and generation fails when
+  the declared and emitted layouts disagree. C# has the same unguarded prune and a positional vtable of its own; it
+  is latent only because no consumer sets `[crates.csharp] exclude_types`.
+- **bindings**: restore struct defaults the emitters dropped. Java decided twice, from two independent lists,
+  whether a field carries a literal default — one governed boxing, the other the compact-constructor restore — and
+  only the second was ever extended, so float defaults crossed the wire as `0.0`. Kotlin rendered a `f64` default of
+  `1.0` as `Double = 1`, which does not compile, and emitted bare `NaN`/`inf`. Rustler decided what kind of default
+  it had by sniffing rendered Rust text for `::` or a leading quote, collapsing every string default to `""`. All
+  three now ask `typed_default`, and Java and Kotlin share one float renderer. **Breaking for Java consumers**: a
+  `boolean` component carrying a `true` default becomes `Boolean`, since boxing is the only way to distinguish
+  "not supplied" from the type-zero. Boxing applies only where the default differs from the zero.
+- **e2e (C)**: reject an assertion whose leaf field the IR does not declare. The nested-accessor walk validated
+  every intermediate hop and nothing at the leaf, defaulting to `char*` and synthesising `{parent}_{field}` as the
+  symbol. Generation reported success and the failure surfaced only at `cc` time. Three existing mechanisms could
+  not see it: `is_valid_for_result` is head-only by construction, splitting on `.` and inspecting only the first
+  segment; the unavailable-field scanner looks for a comment this path never writes; and
+  `ALEF_E2E_STRICT_FIELD_AVAILABILITY`, which arms the markers that are written, is set in no repository.
+- **e2e**: resolve call names through the override chain. `CallConfig::function` is legitimately empty when a call
+  names itself only per language, so sixteen sites reading it directly failed silently — adapter and IR lookups,
+  `request_type`/`streaming_item_type` keys, and a `returns_void` classifier that bound a result from a void C#
+  method on every registry call. Two resolvers now cover the two distinct questions, and a structural guard pins
+  every remaining raw read against an allowlist keyed by source text rather than line number.
+- **e2e (C, Zig)**: derive the C export prefix once. cbindgen writes `[export] prefix` as shouty-snake while every
+  C and Zig emitter re-derived it with `to_uppercase`; the two diverge for any prefix with an internal word
+  boundary, naming types absent from the header the snippet compiles against. Zig snippets also ran the closing
+  `std.debug.print` onto the previous line.
+- **snippets**: report per-language failures instead of one number. A run with 1753 failures emitted a start line, a
+  finish line and a summary count, so a language failing every snippet was indistinguishable from one that passed.
+  Java failed for an unrelated reason: session scratch moved outside the Maven source root, but nothing swept what
+  older versions had written, and the leftovers are self-perpetuating — the consumer's own `mvn package` hook hits
+  `duplicate class` and fails preparation for the whole language on every future run. The sweep is unconditional
+  rather than tied to `--clean`, since needing a flag to get a correct run is a workaround.
+- **snippets**: keep the mock harness out of published examples. C streaming and byte-buffer snippets published
+  `create_client("test-key", NULL, …)` — a literal harness credential with no environment read. Unlike the other
+  leaks this one was not blocked, because that string is not in the guard's marker list. Swift emitted the
+  environment-reading constructor only when a fixture named a credential variable, and Elixir snippets called the
+  module directly although the exported arity includes the client, naming a function that does not exist.
+- **docs**: strip every `~keep` spelling. The stripper removed the marker's five bytes then chose between eating
+  the following whitespace or one preceding character, so every variant with attached punctuation stranded it:
+  `~keep:` left `.:`, `~keep,` left `.,`, and `(~keep)` — the most common broken form — left empty parens.
+- **e2e (python)**: define the helpers the generated file calls. `_alef_e2e_text` has two independent callers but a
+  single gate keyed on the second emitted both definitions, so a file whose only caller was the enum equality
+  assertion shipped 22 undefined names.
+- **codegen**: one snake-caser and one attribute scanner, not three. `error_gen` carried a third caser splitting
+  before every uppercase letter, so `GraphQLError` became `graph_q_l_error` in C accessor symbols while the repo's
+  declared derivation produced `graph_ql_error`; a fourth caser for screaming-snake shared the flaw, and one
+  generated snippet pairs the two. `rust_type_kind_hints` reset its state on any line not starting an attribute, so
+  a rustfmt-wrapped `#[derive(…)]` between a `#[repr(…)]` and its struct discarded the hint.
 - **e2e/snippets (wasm)**: stop gating snippet availability on a codegen predicate. `function_is_exported`
   answers "should the plain-function generator emit a wrapper for this?" and returns `false` for trait-bridge
   register/unregister/clear functions precisely because the trait-bridge generator emits them instead. The snippet
