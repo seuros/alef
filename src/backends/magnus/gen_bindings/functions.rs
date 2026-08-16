@@ -6,7 +6,7 @@ mod scan_args_defaults;
 mod serde_bindings;
 mod sync_wrappers;
 
-pub(super) use async_wrappers::gen_async_function;
+pub(super) use async_wrappers::{ASYNC_RETURN_IS_FALLIBLE, gen_async_function};
 pub(super) use module_init::gen_module_init;
 pub(super) use sync_wrappers::{gen_function, gen_magnus_unimplemented_body};
 

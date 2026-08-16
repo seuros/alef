@@ -478,3 +478,61 @@ fn adjacently_tagged_tuple_variant_uses_tuple_form_in_both_definition_and_conver
         "struct-form variants must not be reported as tuple form"
     );
 }
+
+/// alef #102: an async method with no declared `error_type` still opens its delegable body with
+/// `let rt = tokio::runtime::Runtime::new().map_err(...)?;` (building the tokio runtime is itself
+/// fallible, independent of whether the core method's own return type is `Result`). If the
+/// annotation is keyed on `method.error_type.is_some()` instead of that fact, a no-error async
+/// method gets a bare-`T` signature around a body that still has a `?` in it — rustc rejects the
+/// generated Ruby extension with E0277. ~keep
+fn async_method_without_error(name: &str, receiver: ReceiverKind) -> MethodDef {
+    MethodDef {
+        name: name.to_string(),
+        return_type: TypeRef::String,
+        is_async: true,
+        error_type: None,
+        receiver: Some(receiver),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn opaque_async_method_without_error_type_still_returns_result() {
+    let typ = make_typedef("Widget", vec![]);
+    let method = async_method_without_error("process", ReceiverKind::Ref);
+    let mapper = MagnusMapper;
+    let code = gen_opaque_async_instance_method(
+        &typ,
+        &method,
+        &mapper,
+        "Widget",
+        &AHashSet::default(),
+        &AHashSet::default(),
+        "test_lib",
+        false,
+    );
+    assert!(
+        code.contains("fn process_async(&self, ) -> Result<String, Error> {"),
+        "async opaque method must stay Result-shaped even without a declared error type, got: {code}"
+    );
+    assert!(
+        code.contains("tokio::runtime::Runtime::new()"),
+        "delegable async body must build a runtime, got: {code}"
+    );
+}
+
+#[test]
+fn non_opaque_async_method_without_error_type_still_returns_result() {
+    let typ = make_typedef("Widget", vec![]);
+    let method = async_method_without_error("process", ReceiverKind::Ref);
+    let mapper = MagnusMapper;
+    let code = gen_async_instance_method(&method, &mapper, &typ, &AHashSet::default(), "test_lib");
+    assert!(
+        code.contains("fn process_async(&self, ) -> Result<String, Error> {"),
+        "async instance method must stay Result-shaped even without a declared error type, got: {code}"
+    );
+    assert!(
+        code.contains("tokio::runtime::Runtime::new()"),
+        "delegable async body must build a runtime, got: {code}"
+    );
+}

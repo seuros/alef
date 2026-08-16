@@ -10,7 +10,7 @@ use ahash::AHashSet;
 
 use crate::backends::magnus::type_map::MagnusMapper;
 
-use super::functions::gen_magnus_unimplemented_body;
+use super::functions::{ASYNC_RETURN_IS_FALLIBLE, gen_magnus_unimplemented_body};
 use super::method_result_wrap::non_opaque_method_result_wrap;
 
 /// Check whether a struct has a `content` field of type `String` or `Option<String>`.
@@ -317,7 +317,7 @@ fn gen_opaque_async_instance_method(
     use crate::codegen::shared;
     let params = function_params(&method.params, &|ty| magnus_param_signature_type(ty, mapper));
     let return_type = mapper.map_type(&method.return_type);
-    let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
+    let return_annotation = mapper.wrap_return(&return_type, ASYNC_RETURN_IS_FALLIBLE);
 
     let is_ref_mut_receiver = matches!(method.receiver, Some(crate::core::ir::ReceiverKind::RefMut));
     let can_delegate = !method.sanitized
@@ -374,7 +374,7 @@ fn gen_opaque_async_instance_method(
         gen_magnus_unimplemented_body(
             &method.return_type,
             &format!("{}_async", method.name),
-            method.error_type.is_some(),
+            ASYNC_RETURN_IS_FALLIBLE,
         )
     };
     format!(
@@ -617,7 +617,7 @@ fn gen_async_instance_method(
     use crate::codegen::shared;
     let params = function_params(&method.params, &|ty| magnus_param_signature_type(ty, mapper));
     let return_type = mapper.map_type(&method.return_type);
-    let return_annotation = mapper.wrap_return(&return_type, method.error_type.is_some());
+    let return_annotation = mapper.wrap_return(&return_type, ASYNC_RETURN_IS_FALLIBLE);
 
     let can_delegate = !method.sanitized
         && method
@@ -650,7 +650,7 @@ fn gen_async_instance_method(
         gen_magnus_unimplemented_body(
             &method.return_type,
             &format!("{}_async", method.name),
-            method.error_type.is_some(),
+            ASYNC_RETURN_IS_FALLIBLE,
         )
     };
     format!(

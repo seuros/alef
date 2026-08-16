@@ -642,9 +642,15 @@ fn test_opaque_type_stubs() {
         "Should have instance method process"
     );
 
+    // A plain opaque type (not a variant wrapper) never gets a generated Ruby wrapper for its
+    // static `new` — `gen_opaque_struct_methods` (classes/mod.rs) skips every `is_static` method
+    // with no else branch, so `Processor.new` is never registered on the extension. Stubbing it
+    // here would promise a method that raises `NoMethodError` at runtime; see `gen_opaque_type_stub`
+    // (gen_stubs.rs) and its sibling unit test
+    // `non_opaque_static_method_other_than_new_is_never_stubbed`. ~keep
     assert!(
-        content.contains("def self.new: (String config) -> Processor"),
-        "Should have static method new"
+        !content.contains("def self.new"),
+        "A plain opaque type's static `new` has no runtime binding and must not be stubbed"
     );
 }
 

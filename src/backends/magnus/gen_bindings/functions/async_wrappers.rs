@@ -18,7 +18,7 @@ use ahash::AHashSet;
 /// delegable path — the authority on the signature — only compiles inside `Result<T, Error>`. The
 /// unimplemented body must be selected against this same fact, or it emits `compile_error!`/a bare
 /// `()` into a `Result` slot for a non-delegable function with no declared error type.
-const ASYNC_RETURN_IS_FALLIBLE: bool = true;
+pub(in crate::backends::magnus::gen_bindings) const ASYNC_RETURN_IS_FALLIBLE: bool = true;
 
 /// Generate an async free function binding for Magnus (block on runtime).
 pub(in crate::backends::magnus::gen_bindings) fn gen_async_function(

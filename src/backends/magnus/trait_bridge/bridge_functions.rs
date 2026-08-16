@@ -1,6 +1,22 @@
 use crate::core::config::TraitBridgeConfig;
 use crate::core::ir::ApiSurface;
 
+/// A `Named` type, or a `Named` type behind one layer of `Optional`, extracts to its name;
+/// anything else (primitives, `Vec`, opaque handles, deeper nesting) is not a candidate for the
+/// `let {name}_core = ...` binding `gen_bridge_function` emits for non-opaque named params. Shared
+/// by the fallibility check and the binding emission below so the two consult the exact same
+/// notion of "named", instead of two hand-written pattern matches that can drift apart. ~keep
+fn named_type_name(ty: &crate::core::ir::TypeRef) -> Option<&str> {
+    match ty {
+        crate::core::ir::TypeRef::Named(n) => Some(n.as_str()),
+        crate::core::ir::TypeRef::Optional(inner) => match inner.as_ref() {
+            crate::core::ir::TypeRef::Named(n) => Some(n.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Generate a Magnus free function that has one parameter replaced by `magnus::Value` (a trait
 /// bridge). The bridge is constructed before calling the core function.
 #[allow(clippy::too_many_arguments)]
@@ -43,7 +59,30 @@ pub fn gen_bridge_function(
 
     let params_str = sig_parts.join(", ");
     let return_type = mapper.map_type(&func.return_type);
-    let has_error = func.error_type.is_some();
+
+    // Non-bridge params that get a `let {name}_core = ...` binding below: a `Named`/`Optional<Named>`
+    // param that isn't already an opaque handle. Computed once and reused by both the fallibility
+    // check and `serde_bindings` itself, so they can't independently drift the way `has_error` used
+    // to (it used to recompute a lookalike condition that dropped this entirely). ~keep
+    let deser_params: Vec<_> = func
+        .params
+        .iter()
+        .enumerate()
+        .filter(|(idx, p)| {
+            *idx != bridge_param_idx && named_type_name(&p.ty).is_some_and(|n| !opaque_types.contains(n))
+        })
+        .collect();
+
+    // Of those, only a "default type" (`is_dt` below) skips the `?` — it gets a plain `.into()`.
+    // Every other entry goes through a fallible `serde_json::from_str(...)?` / `.transpose()?`, so
+    // the annotation must be `Result`-shaped whenever at least one does, independent of
+    // `func.error_type`. ~keep
+    let params_need_fallible_deser = deser_params
+        .iter()
+        .copied()
+        .any(|(_, p)| !default_types.contains(named_type_name(&p.ty).unwrap_or_default()));
+
+    let has_error = func.error_type.is_some() || params_need_fallible_deser;
     let ret = mapper.wrap_return(&return_type, has_error);
 
     let err_conv = ".map_err(|e| magnus::Error::new(unsafe { magnus::Ruby::get_unchecked() }.exception_runtime_error(), e.to_string()))";
@@ -67,36 +106,11 @@ pub fn gen_bridge_function(
         )
     };
 
-    let serde_bindings: String = func
-        .params
-        .iter()
-        .enumerate()
-        .filter(|(idx, p)| {
-            if *idx == bridge_param_idx {
-                return false;
-            }
-            let named = match &p.ty {
-                TypeRef::Named(n) => Some(n.as_str()),
-                TypeRef::Optional(inner) => {
-                    if let TypeRef::Named(n) = inner.as_ref() {
-                        Some(n.as_str())
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
-            named.is_some_and(|n| !opaque_types.contains(n))
-        })
+    let serde_bindings: String = deser_params
+        .into_iter()
         .map(|(_, p)| {
             let name = &p.name;
-            let named_type = match &p.ty {
-                TypeRef::Named(n) => n.clone(),
-                TypeRef::Optional(inner) => {
-                    if let TypeRef::Named(n) = inner.as_ref() { n.clone() } else { String::new() }
-                }
-                _ => String::new(),
-            };
+            let named_type = named_type_name(&p.ty).unwrap_or_default().to_string();
             let core_path = format!("{core_import}::{named_type}");
             let is_dt = default_types.contains(named_type.as_str());
             if is_dt {
@@ -178,10 +192,22 @@ pub fn gen_bridge_function(
     };
 
     let body = if func.error_type.is_some() {
+        // The core call itself already returns `Result`, so chaining `.map`/`.map_err` directly
+        // onto it is already `Result`-typed — no extra `Ok(..)` wrap needed. ~keep
         if return_wrap == "val" {
             format!("{bridge_wrap}\n    {serde_bindings}{core_call}{err_conv}")
         } else {
             format!("{bridge_wrap}\n    {serde_bindings}{core_call}.map(|val| {return_wrap}){err_conv}")
+        }
+    } else if has_error {
+        // The core call returns a bare value, but `serde_bindings` above used `?` on at least one
+        // param (`params_need_fallible_deser`), which forced the signature to be `Result`-shaped.
+        // The tail expression must match that: wrap the plain call in `Ok(..)` instead of handing
+        // back the bare value the `Result<T, Error>` signature above no longer fits. ~keep
+        if return_wrap == "val" {
+            format!("{bridge_wrap}\n    {serde_bindings}Ok({core_call})")
+        } else {
+            format!("{bridge_wrap}\n    {serde_bindings}let val = {core_call};\n    Ok({return_wrap})")
         }
     } else {
         format!("{bridge_wrap}\n    {serde_bindings}{core_call}")

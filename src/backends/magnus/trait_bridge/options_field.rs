@@ -69,7 +69,15 @@ pub fn gen_options_field_bridge_function(
 
     let _params_str = sig_parts.join(", ");
     let return_type = mapper.map_type(&func.return_type);
-    let has_error = func.error_type.is_some();
+    // This generator always takes `args: &[magnus::Value]` and parses it through
+    // `scan_args::<...>(args)?` (the unconditional `>(args)?;` push below) — a `?` that fires
+    // regardless of `func.error_type`. `visitor_extract`'s JSON (de)serialize arm carries two more
+    // unconditional `?`s of its own (the `to_json` call and the `serde_json::from_str` call), both
+    // always part of `body`. Neither is gated on any per-function shape, so this path's body is
+    // unconditionally fallible; the annotation must stay `Result`-shaped even when
+    // `func.error_type` is `None`, or the `?`s below don't fit a bare-`T` return. ~keep
+    const SCAN_ARGS_PARSE_IS_FALLIBLE: bool = true;
+    let has_error = func.error_type.is_some() || SCAN_ARGS_PARSE_IS_FALLIBLE;
     let ret = mapper.wrap_return(&return_type, has_error);
 
     let err_conv = ".map_err(|e| magnus::Error::new(unsafe { magnus::Ruby::get_unchecked() }.exception_runtime_error(), e.to_string()))";
@@ -184,13 +192,23 @@ pub fn gen_options_field_bridge_function(
     };
 
     let body = if func.error_type.is_some() {
+        // The core call itself already returns `Result`, so chaining `.map`/`.map_err` directly
+        // onto it is already `Result`-typed — no extra `Ok(..)` wrap needed. ~keep
         if return_wrap == "val" {
             format!("{visitor_extract}\n    {core_call}{err_conv}")
         } else {
             format!("{visitor_extract}\n    {core_call}.map(|val| {return_wrap}){err_conv}")
         }
     } else {
-        format!("{visitor_extract}\n    {core_call}")
+        // The core call returns a bare value, but `SCAN_ARGS_PARSE_IS_FALLIBLE` above always makes
+        // the signature `Result`-shaped (this generator's `scan_args::<...>(args)?` and
+        // `visitor_extract`'s own `?`s are unconditional). Wrap the plain call in `Ok(..)` to match
+        // the signature above rather than handing back a bare value. ~keep
+        if return_wrap == "val" {
+            format!("{visitor_extract}\n    Ok({core_call})")
+        } else {
+            format!("{visitor_extract}\n    let val = {core_call};\n    Ok({return_wrap})")
+        }
     };
 
     let func_name = &func.name;
