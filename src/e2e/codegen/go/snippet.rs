@@ -366,7 +366,9 @@ mod tests {
     #[test]
     fn snippet_constructs_known_dto_without_json_round_trip() {
         let mut fixture = fixture();
-        fixture.input = serde_json::json!({"payload": {"kind": "active", "label": "sample"}});
+        fixture.input = serde_json::json!({
+            "payload": {"kind": "active", "label": "sample", "retry": true, "timeout": 30}
+        });
         let mut e2e = E2eConfig::default();
         e2e.call.module = "example.com/sample".into();
         e2e.call.function = "process".into();
@@ -408,14 +410,29 @@ mod tests {
                             name: "kind".into(),
                             ty: crate::core::ir::TypeRef::Named("SampleKind".into()),
                             default: Some("active".into()),
+                            typed_default: Some(crate::core::ir::DefaultValue::EnumVariant("active".into())),
                             ..Default::default()
                         },
                         crate::core::ir::FieldDef {
                             name: "label".into(),
                             ty: crate::core::ir::TypeRef::String,
+                            typed_default: Some(crate::core::ir::DefaultValue::StringLiteral(String::new())),
+                            ..Default::default()
+                        },
+                        crate::core::ir::FieldDef {
+                            name: "retry".into(),
+                            ty: crate::core::ir::TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool),
+                            typed_default: Some(crate::core::ir::DefaultValue::BoolLiteral(true)),
+                            ..Default::default()
+                        },
+                        crate::core::ir::FieldDef {
+                            name: "timeout".into(),
+                            ty: crate::core::ir::TypeRef::Primitive(crate::core::ir::PrimitiveType::I64),
+                            typed_default: Some(crate::core::ir::DefaultValue::IntLiteral(30)),
                             ..Default::default()
                         },
                     ],
+                    has_default: true,
                     ..TypeDef::default()
                 },
                 TypeDef {
@@ -428,7 +445,7 @@ mod tests {
 
         assert!(
             body.contains(
-                "payload := pkg.SampleInput{\n\t\tKind:  ptr(pkg.SampleKind(`active`)),\n\t\tLabel: `sample`,"
+                "payload := pkg.SampleInput{\n\t\tKind:    ptr(pkg.SampleKind(`active`)),\n\t\tLabel:   `sample`,\n\t\tRetry:   ptr(true),\n\t\tTimeout: ptr(30),"
             ),
             "{body}"
         );

@@ -22,7 +22,7 @@ pub(in crate::backends::go::gen_bindings) fn is_tuple_field(field: &FieldDef) ->
 /// - `FloatLiteral(f)` where f != 0.0 — Rust default is f, Go zero is 0.0
 /// - `StringLiteral(s)` where !s.is_empty() — Rust default is s, Go zero is ""
 /// - `EnumVariant(_)` — Rust default is a specific variant, Go zero is ""
-pub(in crate::backends::go::gen_bindings) fn needs_omitempty_pointer(field: &FieldDef) -> bool {
+pub(crate) fn needs_omitempty_pointer(field: &FieldDef) -> bool {
     if matches!(field.ty, TypeRef::Duration) {
         return true;
     }

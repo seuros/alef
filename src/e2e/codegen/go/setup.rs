@@ -53,10 +53,8 @@ fn native_go_dto_literal_at(
             );
             let value = object.get(&wire_name).or_else(|| object.get(&field.name))?;
             let field_pointer = format!("{pointer}/{}", field.name);
-            let optional = matches!(field.ty, crate::core::ir::TypeRef::Optional(_))
-                || field.optional
-                || field.default.is_some()
-                || field.typed_default.is_some();
+            let uses_pointer = field.optional
+                || (!field.optional && definition.has_default && crate::backends::go::needs_omitempty_pointer(field));
             let inner = match &field.ty {
                 crate::core::ir::TypeRef::Optional(inner) => inner.as_ref(),
                 other => other,
@@ -69,7 +67,11 @@ fn native_go_dto_literal_at(
                 match inner {
                     crate::core::ir::TypeRef::String | crate::core::ir::TypeRef::Path => {
                         let literal = value.as_str().map(go_string_literal)?;
-                        if optional { format!("ptr({literal})") } else { literal }
+                        if uses_pointer {
+                            format!("ptr({literal})")
+                        } else {
+                            literal
+                        }
                     }
                     crate::core::ir::TypeRef::Bytes => {
                         let items = value
@@ -86,7 +88,7 @@ fn native_go_dto_literal_at(
                         if let Some(nested) =
                             native_go_dto_literal_at(value, name, import_alias, type_defs, files, &field_pointer)
                         {
-                            if optional { format!("&{nested}") } else { nested }
+                            if uses_pointer { format!("&{nested}") } else { nested }
                         } else {
                             let literal = format!(
                                 "{}.{}({})",
@@ -94,10 +96,21 @@ fn native_go_dto_literal_at(
                                 crate::codegen::naming::go_type_name(name),
                                 json_to_go(value)
                             );
-                            if optional { format!("ptr({literal})") } else { literal }
+                            if uses_pointer {
+                                format!("ptr({literal})")
+                            } else {
+                                literal
+                            }
                         }
                     }
-                    crate::core::ir::TypeRef::Primitive(_) => json_to_go(value),
+                    crate::core::ir::TypeRef::Primitive(_) => {
+                        let literal = json_to_go(value);
+                        if uses_pointer {
+                            format!("ptr({literal})")
+                        } else {
+                            literal
+                        }
+                    }
                     _ => return None,
                 }
             };

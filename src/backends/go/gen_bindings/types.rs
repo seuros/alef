@@ -6,6 +6,7 @@ mod structs;
 
 pub(super) use config_options::gen_config_options;
 pub(super) use enums::{gen_enum_type, is_passthrough_raw_message_enum};
+pub(crate) use helpers::needs_omitempty_pointer;
 pub(super) use helpers::{
     emit_type_doc, gen_last_error_helper, gen_ptr_helper, gen_unmarshal_bytes_helper, is_tuple_field,
 };

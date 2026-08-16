@@ -7,3 +7,4 @@ pub mod trait_bridge;
 pub mod type_map;
 
 pub use gen_bindings::GoBackend;
+pub(crate) use gen_bindings::types::needs_omitempty_pointer;
