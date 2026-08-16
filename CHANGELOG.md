@@ -11,10 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Java service bindings**: retain paired callback response deallocators and registration variant metadata while
   leasing service owners, and omit public functions whose signatures reference excluded types.
-- **C# capsule tests**: declare the validated borrowed-static ABI and destructor contract in capsule generation fixtures.
-- **Host capsule tests**: keep Go and Java integration fixtures aligned with the validated borrowed-static ABI and
-  destructor contract.
-- **Go binding tests**: align opaque, options, and owned-byte regressions with the scalar handle and explicit buffer ABI.
+
+## [0.61.0] - 2026-08-16
 
 ### Added
 
@@ -532,8 +530,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trailing whitespace off the actual value only; both made assertions against expected values with a legitimate
   trailing newline permanently unsatisfiable. `equals` now compares both sides exactly, matching every other
   generated language.
-
-## [0.61.0] - 2026-08-14
 
 ### Changed (BREAKING)
 

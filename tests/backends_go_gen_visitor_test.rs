@@ -171,8 +171,9 @@ fn test_visitor_file_uses_configured_function_options_field_and_result() {
     assert!(output.contains(
         "func renderWithVisitorHelper(document string, settings *RenderOptions, visitor Visitor) (*RenderOutput, error)"
     ));
-    assert!(output.contains("var cOptions *C.KRZRenderOptions"));
+    assert!(output.contains("var cOptions C.KRZAlefHandle"));
     assert!(output.contains("cOptions = C.krz_render_options_from_json(optionsJSON)"));
+    assert!(output.contains("if cOptions == 0"));
     assert!(output.contains("C.krz_options_set_renderer(cOptions"));
     assert!(output.contains("ptr := C.krz_render(cDocument, cOptions)"));
     assert!(output.contains("defer C.krz_render_output_free(ptr)"));
