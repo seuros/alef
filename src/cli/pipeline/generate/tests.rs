@@ -1226,6 +1226,75 @@ mod scaffold_ownership_guard_tests {
         assert_eq!(report.changed_count(), 0, "a refused write must not count as a change");
     }
 
+    /// The narrowest tempting shape for an automatic adoption route, pinned as refused:
+    /// an unmarkable extension whose on-disk bytes are *already identical* to this run's
+    /// output. A content-equivalence predicate would adopt this — it is byte-for-byte the
+    /// case such a predicate is built for — and it must not, because those same bytes are
+    /// equally consistent with a hand-written `pom.xml` that happens to match. Ownership
+    /// is a fact about who authored the file, and content alone cannot recover it.
+    ///
+    /// The remedy is `alef adopt <path>`, which shows a human the diff first. If this test
+    /// ever fails, an automatic adoption predicate has been reintroduced into the write
+    /// path; the fix is to remove it, not to relax this assertion. ~keep
+    #[test]
+    fn converged_unmarked_file_is_still_refused_rather_than_silently_adopted() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let target_relative = PathBuf::from("packages/java/pom.xml");
+        let target = base.join(&target_relative);
+        std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+        let identical = "<project><!-- identical to generated output --></project>\n";
+        std::fs::write(&target, identical).expect("seed converged file");
+
+        let generated = GeneratedFile {
+            path: target_relative,
+            content: identical.to_owned(),
+            generated_header: true,
+        };
+
+        let report = write_scaffold_files_report(&[generated], base, true).expect("write ok");
+
+        let after = std::fs::read_to_string(&target).expect("read after");
+        assert_eq!(
+            after, identical,
+            "content equivalence is not proof of authorship: a converged unmarked file must stay unstamped"
+        );
+        assert!(
+            extract_hash(&after).is_none(),
+            "no automatic route may stamp a file alef cannot prove it wrote, got:\n{after}"
+        );
+        assert_eq!(report.changed_count(), 0);
+    }
+
+    /// The refusal has to be *reported*, not merely performed. `refused_paths` is what
+    /// `log_ownership_residue` turns into an actionable "run `alef adopt <path>`" line;
+    /// a guard that silently declines is the frozen-file failure mode that made a
+    /// permanently-refused `Cargo.toml` invisible in a real consumer tree. ~keep
+    #[test]
+    fn a_refused_write_is_recorded_in_the_report_so_adopt_can_be_pointed_at_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let target_relative = PathBuf::from("crates/sample-ffi/Cargo.toml");
+        let target = base.join(&target_relative);
+        std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&target, "[package]\nname = \"hand-written\"\n").expect("seed");
+
+        let generated = GeneratedFile {
+            path: target_relative,
+            content: "[package]\nname = \"generated\"\n".to_owned(),
+            generated_header: true,
+        };
+
+        let report = write_scaffold_files_report(&[generated], base, true).expect("write ok");
+
+        assert_eq!(
+            report.refused_paths.iter().collect::<Vec<_>>(),
+            vec![&target],
+            "the refused path must be surfaced, not just skipped"
+        );
+        assert_eq!(report.refused_count(), 1);
+    }
+
     /// Happy-path counterpart: a file alef legitimately authored on a prior run
     /// (and therefore already carries the marker on disk) is still updated
     /// normally when its content changes. This proves the ownership guard does

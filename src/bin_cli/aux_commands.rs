@@ -80,6 +80,50 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             }
             Ok(None)
         }
+        Commands::Adopt { target, write } => {
+            let base_dir = std::env::current_dir()?;
+            let (_workspace, resolved) = load_config(config_path)?;
+            let crates_to_process = dispatch::select_crates(&resolved, &context.crate_filter)?;
+
+            // The diff a human consents to has to be against the bytes a real generate
+            // would write, so the same extract/generate/stubs/scaffold sweep `alef diff`
+            // performs is what feeds it -- not a cheaper approximation. ~keep
+            let mut managed = Vec::new();
+            for resolved_cfg in &crates_to_process {
+                let languages = resolve_languages(resolved_cfg, None)?;
+                let api = pipeline::extract(resolved_cfg, config_path, false)?;
+                let bindings = pipeline::generate(&api, resolved_cfg, &languages, true, config_path, true)?;
+                let stubs = pipeline::generate_stubs(&api, resolved_cfg, &languages)?;
+                let scaffold = pipeline::scaffold(&api, resolved_cfg, &languages, config_path)?;
+                for (_language, files) in bindings.iter().chain(stubs.iter()) {
+                    managed.extend(commands::adopt::managed_outputs(files, &base_dir));
+                }
+                managed.extend(commands::adopt::managed_outputs(&scaffold, &base_dir));
+            }
+
+            let options = commands::adopt::AdoptOptions {
+                target,
+                base_dir,
+                write,
+            };
+            let report = commands::adopt::run(&options, &managed)?;
+
+            for diff in &report.diffs {
+                crate::bin_cli::output::fragment(&diff.body);
+                crate::bin_cli::output::blank();
+            }
+            for path in &report.already_owned {
+                tracing::info!("already alef-owned, nothing to adopt: {}", path.display());
+            }
+            if report.preview {
+                crate::bin_cli::output::line(
+                    "Nothing was written. Re-run with --write to stamp these files so alef can regenerate them.",
+                );
+            } else {
+                tracing::info!("Adopted {} file(s)", report.adopted.len());
+            }
+            Ok(None)
+        }
         Commands::Migrate { path, write } => {
             let migrate_path = path.unwrap_or_else(|| context.config_path.clone());
             let options = commands::migrate::MigrateOptions {

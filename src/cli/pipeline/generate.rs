@@ -22,7 +22,7 @@ pub use scaffold::{
     readme, reconcile_managed_scaffold_manifests, scaffold, write_scaffold_files, write_scaffold_files_report,
     write_scaffold_files_with_overwrite,
 };
-pub(crate) use write::apply_shebang_chmod;
+pub(crate) use write::{apply_shebang_chmod, atomic_write, ensure_generated_header, stamp_for_adoption};
 pub use write::{
     finalize_hashes, finalize_hashes_sweeping, managed_generated_files, managed_output_paths, write_files,
     write_files_report,

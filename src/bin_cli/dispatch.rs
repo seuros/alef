@@ -53,6 +53,7 @@ fn command_name(command: &Commands) -> &'static str {
         Commands::All { .. } => "all",
         Commands::Init { .. } => "init",
         Commands::Schema { .. } => "schema",
+        Commands::Adopt { .. } => "adopt",
         Commands::Migrate { .. } => "migrate",
         Commands::E2e { .. } => "e2e",
         Commands::TestApps { .. } => "test-apps",

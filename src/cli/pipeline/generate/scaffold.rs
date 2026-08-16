@@ -69,21 +69,28 @@ pub fn write_scaffold_files(files: &[GeneratedFile], base_dir: &Path) -> anyhow:
     write_scaffold_files_with_overwrite(files, base_dir, false)
 }
 
-/// Reconcile generated TOML manifests needed by generated bindings.
+/// Reconcile generated manifests needed by generated bindings.
 ///
 /// Existing files are eligible only when their embedded marker proves Alef owns
 /// them. Missing manifests may be created because the scaffold declaration itself
 /// marks them as generated; handwritten manifests and non-manifest scaffold files
-/// remain outside this generate-stage repair. ~keep
+/// remain outside this generate-stage repair.
+///
+/// Eligibility is `generated_header` alone. It was additionally gated on
+/// `extension == "toml"`, which silently excluded every non-TOML managed manifest —
+/// `packages/java/pom.xml`, `packages/ruby/*.gemspec`, `packages/ruby/Rakefile`,
+/// `crates/*-ffi/cmake/*-config.cmake`, `packages/elixir/mix.exs` — all of which are
+/// emitted `generated_header: true` and are exactly as managed as the TOML ones. That
+/// made this a *second*, independent reason those manifests never converge, on top of
+/// the write-time ownership guard refusing them: repairing only the guard would have
+/// left them stranded here anyway. Both mechanisms had to fail for the observed
+/// stranding, so both had to be fixed. ~keep
 pub fn reconcile_managed_scaffold_manifests(
     files: &[GeneratedFile],
     base_dir: &Path,
 ) -> anyhow::Result<super::write::WriteReport> {
     let mut manifests = Vec::new();
-    for file in files
-        .iter()
-        .filter(|file| file.generated_header && file.path.extension().is_some_and(|extension| extension == "toml"))
-    {
+    for file in files.iter().filter(|file| file.generated_header) {
         let path = base_dir.join(&file.path);
         if !path.exists() {
             manifests.push(file.clone());
@@ -226,6 +233,10 @@ pub fn write_scaffold_files_report(
                      ownership -- leaving it untouched",
                     full_path.display()
                 );
+                // Counted like any other refusal: a binary target cannot carry a marker, so
+                // it is permanently part of the residue and must not be silently omitted
+                // from the number that reports it. ~keep
+                report.refused_paths.insert(full_path.clone());
                 continue;
             }
             report.expected_paths.insert(full_path.clone());
@@ -291,6 +302,11 @@ pub fn write_scaffold_files_report(
                     .as_deref()
                     .is_some_and(crate::core::hash::content_has_alef_marker);
                 let is_markable = super::write::marker_comment_style(&full_path).is_some();
+                // No third, content-equivalence route is added here on purpose: it cannot
+                // tell an older-release alef file from a hand-written one that coincides,
+                // and the founding incident (`e2e/go/helpers_test.go`) is exactly that
+                // coincidence. Adoption is `alef adopt`'s job, with a diff and a human.
+                // See `super::write::stamp_for_adoption`. ~keep
                 let owned =
                     has_marker || (!is_markable && crate::cli::cache::is_scaffold_owned_path(base_dir, &full_path));
                 if !owned {
@@ -299,6 +315,7 @@ pub fn write_scaffold_files_report(
                          alef has no durable record of ever owning it -- leaving it untouched",
                         full_path.display()
                     );
+                    report.refused_paths.insert(full_path.clone());
                     continue;
                 }
             }
@@ -333,7 +350,10 @@ pub fn write_scaffold_files_report(
     // (html-to-markdown is in exactly that state). Repairing first would leave any run that
     // failed between the two steps pointing at a nonexistent root source file -- trading
     // silent coverage loss for a build graph that will not resolve. ~keep
-    if files.iter().any(|file| file.path == Path::new("packages/zig/build.zig")) {
+    if files
+        .iter()
+        .any(|file| file.path == Path::new("packages/zig/build.zig"))
+    {
         crate::scaffold::migrate_build_zig_test_target(base_dir)
             .context("failed to migrate pre-existing packages/zig/build.zig test target")?;
     }
@@ -388,6 +408,7 @@ pub fn write_scaffold_files_report(
             .context("failed to migrate pre-existing packages/swift/Tests/*Tests.swift placeholder")?;
     }
 
+    report.log_ownership_residue("scaffold");
     Ok(report)
 }
 

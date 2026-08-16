@@ -12,6 +12,13 @@ use tracing::{debug, warn};
 pub struct WriteReport {
     pub expected_paths: std::collections::HashSet<std::path::PathBuf>,
     pub changed_paths: std::collections::HashSet<std::path::PathBuf>,
+    /// Pre-existing files the ownership guard refused to write.
+    ///
+    /// The population that was silently at risk before the guard existed and that
+    /// alef still cannot prove it owns. It has to be visible rather than inferred
+    /// from what did not change, because the remedy — `alef adopt` — is a human
+    /// action and a human cannot act on a number nobody reports. ~keep
+    pub refused_paths: std::collections::HashSet<std::path::PathBuf>,
 }
 
 impl WriteReport {
@@ -21,6 +28,35 @@ impl WriteReport {
 
     pub fn expected_count(&self) -> usize {
         self.expected_paths.len()
+    }
+
+    pub fn refused_count(&self) -> usize {
+        self.refused_paths.len()
+    }
+
+    /// Emit the ownership residue for one write pass: the files alef intended to
+    /// write and declined to, plus the command that resolves them.
+    ///
+    /// `WARN`, not `INFO`, per the level contract: the run continued but produced
+    /// less than it intended, and every refused path is a fix that never reached
+    /// the consumer tree. Silent when there is no residue, so a converged tree
+    /// stays quiet. Naming `alef adopt` here is the point of the message — a bare
+    /// refusal count is the "warning nobody reads during a regen" this guard was
+    /// criticised for; an actionable one is not. ~keep
+    pub fn log_ownership_residue(&self, scope: &str) {
+        if self.refused_paths.is_empty() {
+            return;
+        }
+        tracing::warn!(
+            scope,
+            refused = self.refused_count(),
+            "{} pre-existing file(s) left untouched: alef cannot prove it owns them. \
+             Review and adopt each with `alef adopt <path>`",
+            self.refused_count()
+        );
+        for path in &self.refused_paths {
+            tracing::debug!(scope, path = %path.display(), "left unmarked: ownership unproven");
+        }
     }
 }
 
@@ -134,8 +170,24 @@ pub(super) enum MarkerSyntax {
 /// - `.zon` — Zig Object Notation is read by the Zig tokenizer, so `//` line
 ///   comments apply, as in `.zig`.
 /// - `.gemspec` — evaluated as Ruby, so `#` line comments apply.
+/// - `Rakefile` — evaluated as Ruby, so `#` line comments apply. Matched on file
+///   name; a Rakefile has no extension.
+/// - `Makevars`, `Makevars.in`, `Makevars.win.in` — R's per-package make fragments,
+///   read by make, so `#` line comments apply. Matched on file name: `Path::extension`
+///   yields `in` for `Makevars.in`, which is far too generic to key on.
+///
+/// `Rakefile` and `Makevars*` are emitted `generated_header: true` (`scaffold/languages/ruby.rs`,
+/// `scaffold/languages/r.rs`), so before they were listed here `ensure_generated_header` was
+/// called on them and silently returned the content unchanged — on the marker rail by intent,
+/// off it in fact, with nothing reporting the discrepancy. ~keep
 ///
 /// Deliberately excluded:
+/// - `DESCRIPTION` (R packages) — also emitted `generated_header: true` and therefore
+///   silently unstamped today, but left alone on purpose: it is Debian Control File
+///   format, whose comment support is not the plain `#`-anywhere rule the other `#`
+///   formats have, and this table's standard is a verified per-format grammar rather
+///   than an assumption from adjacency. Stamping it on a guess risks corrupting a file
+///   `R CMD build` parses strictly. Needs a DCF-grammar check before it graduates. ~keep
 /// - `.json` — genuinely has no comment syntax in the spec. Unfixable; these keep
 ///   the `.alef/`-record fallback permanently.
 /// - `.lock` — markability varies by lockfile (`Cargo.lock` is TOML and takes `#`;
@@ -155,6 +207,9 @@ pub(super) fn marker_header_syntax(path: &Path) -> Option<MarkerSyntax> {
     match path.file_name().and_then(|name| name.to_str()) {
         Some("Makefile" | "GNUmakefile" | "makefile") => return Some(MarkerSyntax::Comment(hash::CommentStyle::Hash)),
         Some("go.mod") => return Some(MarkerSyntax::Comment(hash::CommentStyle::DoubleSlash)),
+        Some("Rakefile" | "Makevars" | "Makevars.in" | "Makevars.win.in") => {
+            return Some(MarkerSyntax::Comment(hash::CommentStyle::Hash));
+        }
         _ => {}
     }
     match path.extension().and_then(|extension| extension.to_str()) {
@@ -193,7 +248,7 @@ fn split_xml_declaration(content: &str) -> Option<(&str, &str)> {
     Some((declaration, body.strip_prefix('\n').unwrap_or(body)))
 }
 
-pub(super) fn ensure_generated_header(path: &Path, content: &str) -> String {
+pub(crate) fn ensure_generated_header(path: &Path, content: &str) -> String {
     if hash::content_has_alef_marker(content) {
         return content.to_owned();
     }
@@ -215,6 +270,47 @@ pub(super) fn ensure_generated_header(path: &Path, content: &str) -> String {
         return format!("{declaration}\n{header}\n{body}");
     }
     format!("{header}\n{content}")
+}
+
+/// Stamp `existing` with the provenance marker so a later run's ownership guard
+/// recognises the file as alef's, returning `None` when the format has no marker
+/// syntax at all and the caller must fall back to
+/// [`crate::cli::cache::record_scaffold_owned_path`].
+///
+/// Content is preserved exactly: this only prepends the header
+/// [`ensure_generated_header`] would have added, so adoption is a header-only edit
+/// and the actual content convergence happens on the next ordinary `alef generate`,
+/// through the guard, in full view of `git diff`.
+///
+/// **This is the only adoption route, and it is reachable only from `alef adopt`
+/// ([`crate::cli::commands::adopt`]) — never from a write pass.** The create-once trap
+/// that motivates adoption is real: a file whose type became stampable only after it
+/// was already committed carries no marker, so the guard refuses the write, so the
+/// marker never lands, so the guard refuses forever. `crates/*-ffi/Cargo.toml` in
+/// crawlberg is in exactly that state — `git log -S 'alef:hash'` returns nothing for
+/// its entire history — and three landed fixes are frozen out of that repo by it.
+///
+/// An earlier revision escaped that trap automatically, with a `bootstrap_owned`
+/// predicate that adopted any unmarked file whose bytes already equalled the run's
+/// output minus the header. It was justified on the grounds that a hand-edited file
+/// cannot reproduce the generator's bytes. That claim is false, and the counterexample
+/// is the incident this guard exists for: crawlberg's hand-written
+/// `e2e/go/helpers_test.go` was byte-identical to alef's generated content, which is
+/// exactly why the only visible damage was a stamped header. See
+/// `scaffold_ownership_guard_tests` for the two regressions it caused.
+///
+/// The failure is not a fixable bug in that predicate. Ownership is a fact about
+/// history — who authored these bytes — while a predicate sees only the bytes. "alef
+/// wrote this under an older release" and "a human wrote this and it coincides" are the
+/// same input, so no content test can separate them, however strict. The drifted case
+/// is the same argument one step louder: adopting a drifted file is byte-for-byte
+/// indistinguishable from clobbering a hand-edit, since both are "regenerated content
+/// replaces different existing content". The only thing that separates them is a human
+/// reading the diff, which is why `alef adopt` prints one and refuses to be folded into
+/// `alef all`. Automating this would delete the guard while keeping the warning. ~keep
+pub(crate) fn stamp_for_adoption(path: &Path, existing: &str) -> Option<String> {
+    marker_header_syntax(path)?;
+    Some(ensure_generated_header(path, existing))
 }
 
 /// Apply `0o755` permissions to a file whose content begins with a shebang line.
@@ -339,6 +435,7 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
     }
 
     let changed_paths = std::sync::Mutex::new(std::collections::HashSet::new());
+    let refused_paths = std::sync::Mutex::new(std::collections::HashSet::new());
     prepared
         .par_iter()
         .try_for_each(|(full_path, (content, is_text))| -> anyhow::Result<()> {
@@ -352,6 +449,10 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
                              leaving it untouched",
                             full_path.display()
                         );
+                        refused_paths
+                            .lock()
+                            .expect("refused-path mutex poisoned")
+                            .insert(full_path.clone());
                         return Ok(());
                     };
                     let existing_body = crate::core::hash::strip_hash_line(&existing);
@@ -378,6 +479,10 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
                              alef has no durable record of ever owning it -- leaving it untouched",
                             full_path.display()
                         );
+                        refused_paths
+                            .lock()
+                            .expect("refused-path mutex poisoned")
+                            .insert(full_path.clone());
                         return Ok(());
                     }
                 }
@@ -400,6 +505,10 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
                              alef ownership -- leaving it untouched",
                             full_path.display()
                         );
+                        refused_paths
+                            .lock()
+                            .expect("refused-path mutex poisoned")
+                            .insert(full_path.clone());
                         return Ok(());
                     }
                 }
@@ -414,10 +523,13 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
             Ok(())
         })?;
 
-    Ok(WriteReport {
+    let report = WriteReport {
         expected_paths: prepared.into_keys().collect(),
         changed_paths: changed_paths.into_inner().expect("changed-path mutex poisoned"),
-    })
+        refused_paths: refused_paths.into_inner().expect("refused-path mutex poisoned"),
+    };
+    report.log_ownership_residue("bindings");
+    Ok(report)
 }
 
 /// Inject the per-file `alef:hash:` line into every alef-headered file in

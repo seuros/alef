@@ -249,6 +249,24 @@ pub(crate) enum Commands {
         #[arg(long)]
         check: bool,
     },
+    // Never add this to `alef all`, `alef generate`, or any other command's sequence.
+    // The ownership guard refuses to overwrite a file it cannot prove it authored, and
+    // no predicate over file content can tell "alef wrote this under an older release"
+    // apart from "someone hand-wrote this" -- both are the same bytes. Only a human
+    // reading the diff can, which is why this is a separate command with a `--write`
+    // gate. See `cli::commands::adopt`. ~keep
+    /// Take ownership of a pre-existing generated file so alef can regenerate it.
+    ///
+    /// Prints the full diff between the file on disk and what alef would generate,
+    /// and changes nothing unless --write is given.
+    Adopt {
+        /// Repo-relative path or glob to adopt, e.g. `crates/foo-ffi/Cargo.toml`.
+        #[arg(value_name = "PATH_OR_GLOB")]
+        target: String,
+        /// Stamp the marker. Without this, adopt only prints the diff.
+        #[arg(long)]
+        write: bool,
+    },
     /// Migrate legacy alef.toml schema to new [workspace] / [[crates]] layout.
     Migrate {
         /// Path to alef.toml (default: alef.toml from --config flag).
