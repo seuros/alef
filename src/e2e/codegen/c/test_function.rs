@@ -35,14 +35,27 @@ const SNIPPET_TEST_SKIP_MACRO: &str = concat!(
     "#endif",
 );
 
+const SNIPPET_TEST_PASS_MACRO: &str = concat!(
+    "#ifndef ALEF_TEST_PASS\n",
+    "#define ALEF_TEST_PASS() do { return EXIT_SUCCESS; } while (0)\n",
+    "#endif",
+);
+
 /// File-scope declarations the emitted snippet needs so that every symbol its
 /// body references resolves inside the emitted translation unit.
-fn snippet_declarations(body: &str) -> &'static str {
+fn snippet_declarations(body: &str) -> String {
+    let mut declarations = Vec::new();
     if body.contains("ALEF_TEST_SKIP(") {
-        SNIPPET_TEST_SKIP_MACRO
-    } else {
-        ""
+        declarations.push(SNIPPET_TEST_SKIP_MACRO);
     }
+    if body.contains("ALEF_TEST_PASS()") {
+        declarations.push(SNIPPET_TEST_PASS_MACRO);
+    }
+    declarations.join("\n")
+}
+
+fn is_expected_result_assertion(line: &str, result_var: &str) -> bool {
+    line.trim_start().starts_with("assert(") && line.contains(result_var) && line.contains("expected call to fail")
 }
 
 pub(super) struct SnippetContext<'a> {
@@ -161,7 +174,7 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         type_defs,
         true,
     );
-    let failure_check = format!("if ({result_var} != NULL) {{ return EXIT_FAILURE; }}");
+    let failure_check = format!("if ({result_var} != 0) {{ return EXIT_FAILURE; }}");
     let body_line_count = function.lines().count().saturating_sub(3);
     let body = function
         .lines()
@@ -173,7 +186,7 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         })
         .map(|line| line.strip_prefix("    ").unwrap_or(line))
         .map(|line| {
-            if expects_error && line.trim_start().starts_with("assert(") {
+            if expects_error && is_expected_result_assertion(line, result_var) {
                 failure_check.clone()
             } else {
                 line.to_string()
@@ -185,6 +198,30 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         "c/snippet_body.jinja",
         minijinja::context! { header => header, declarations => snippet_declarations(&body), body => body },
     ))
+}
+
+#[cfg(test)]
+mod snippet_tests {
+    use super::{is_expected_result_assertion, snippet_declarations};
+
+    #[test]
+    fn standalone_snippet_declares_success_guard() {
+        let declarations = snippet_declarations("if (request == 0) { ALEF_TEST_PASS(); }");
+
+        assert!(declarations.contains("return EXIT_SUCCESS"));
+    }
+
+    #[test]
+    fn error_rewrite_only_matches_declared_call_result_assertion() {
+        assert!(!is_expected_result_assertion(
+            "assert(client != 0 && \"failed to create client\");",
+            "result",
+        ));
+        assert!(is_expected_result_assertion(
+            "assert(result == 0 && \"expected call to fail\");",
+            "result",
+        ));
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

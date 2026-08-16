@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Fix WASM manifests to enable configured binding-side feature gates by default, keeping exported factories available in ordinary `wasm-pack` builds.
 
+- **C snippets**: define standalone success guards and only rewrite the expected-result assertion, preventing error
+  snippets from testing a result before its declaration or comparing scalar handles with pointer sentinels.
 - **FFI default constructors**: retain canonical zero-argument `default` exports for lifetime-bearing owned values
   when conservative reference metadata is present, while continuing to exclude other borrowed returns and parameters.
 - **Java visitor handles**: use the imported `List` type in generated cleanup tracking so strict Java lint does not
