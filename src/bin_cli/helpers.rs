@@ -311,18 +311,43 @@ const VERIFY_SKIP_DIRS: &[&str] = &[
 /// `packages/csharp/Directory.Build.props` is the ONLY stamped file in that whole package, so
 /// csharp's freshness claim rested entirely on a file this walk never opened. Any new emitting
 /// backend must add its extension here or its output silently leaves the
-/// freshness claim. ~keep
+/// freshness claim.
+///
+/// This list must stay a **superset** of everything
+/// [`crate::cli::pipeline::generate::write::marker_header_syntax`] can stamp. The walk filters on
+/// extension *before* it reads any content, so an unlisted extension is invisible no matter what
+/// marker the file carries. `xml`/`csproj`/`zon`/`cmake`/`gemspec` were added to that emit table
+/// while missing here, which made their freshness claim unverifiable rather than merely
+/// unverified — a stamped file nothing ever checks. ~keep
 const VERIFY_SCAN_EXTENSIONS: &[&str] = &[
     "rs", "py", "pyi", "ts", "tsx", "js", "mjs", "cjs", "rb", "rbs", "php", "phpstub", "go", "java", "cs", "ex", "exs",
     "R", "r", "toml", "json", "md", "h", "c", "yaml", "yml", "zig", "dart", "kt", "kts", "swift", "gleam",
-    "properties", "pro", "sh", "props",
+    "properties", "pro", "sh", "props", "xml", "csproj", "zon", "cmake", "gemspec",
 ];
 
 /// Dotfiles alef stamps that [`VERIFY_SCAN_EXTENSIONS`] structurally cannot reach: `Path::extension`
 /// returns `None` for a name that is entirely a leading-dot stem, so `.gitignore` has no extension
 /// to match and would stay invisible no matter what is added to that list. Matched on the whole
-/// file name instead. ~keep
-const VERIFY_SCAN_FILENAMES: &[&str] = &[".gitignore", ".gitattributes", ".editorconfig"];
+/// file name instead.
+///
+/// Extensionless *stamped* files belong here for the same structural reason, not just dotfiles:
+/// `Makefile`, `Rakefile` and `Makevars*` carry a `#` marker but have no extension to match, and
+/// `go.mod` is matched by name rather than by its `mod` extension deliberately — `.mod` is shared
+/// with unrelated binary formats (Fortran module files, tracker music), so listing the extension
+/// would pull those into the walk. ~keep
+const VERIFY_SCAN_FILENAMES: &[&str] = &[
+    ".gitignore",
+    ".gitattributes",
+    ".editorconfig",
+    "Makefile",
+    "GNUmakefile",
+    "makefile",
+    "go.mod",
+    "Rakefile",
+    "Makevars",
+    "Makevars.in",
+    "Makevars.win.in",
+];
 
 /// Walk `base_dir` and return every alef-owned file paired with its optional
 /// `alef:hash:<hex>` stamp. Skips build/cache directories and files without the
