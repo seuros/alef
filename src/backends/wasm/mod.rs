@@ -12,4 +12,4 @@ pub mod trait_bridge;
 mod type_map;
 
 pub use gen_bindings::WasmBackend;
-pub(crate) use gen_bindings::function_is_exported;
+pub(crate) use gen_bindings::{WasmCallability, wasm_callability};

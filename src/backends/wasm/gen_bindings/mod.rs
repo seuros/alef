@@ -32,6 +32,116 @@ use types::{
     filter_cfg_fields_for_features, gen_opaque_struct, gen_opaque_struct_methods, gen_struct, gen_struct_methods,
 };
 
+/// Why a symbol is or is not callable from a WASM snippet.
+///
+/// `UnknownSymbol` stays distinct from `NotExported` because collapsing them misdirects the
+/// reader: a typo'd `overrides.wasm.function` then reads as a capability gap in the target,
+/// sending someone to audit the wasm backend for a name that was only ever misspelled in
+/// config. That misdirection already cost one diagnostic cycle on this exact gate. ~keep
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WasmCallability {
+    Callable,
+    /// A symbol by this name exists, but the target does not export it.
+    NotExported,
+    /// Nothing in the API surface or the bridge registry answers to this name under either the
+    /// Rust or the JavaScript spelling.
+    UnknownSymbol,
+}
+
+pub(crate) fn wasm_callability(
+    function_name: &str,
+    functions: &[crate::core::ir::FunctionDef],
+    config: &ResolvedCrateConfig,
+) -> WasmCallability {
+    if function_is_callable(function_name, functions, config) {
+        return WasmCallability::Callable;
+    }
+    match rust_identity_for_wasm_symbol(function_name, functions, config) {
+        Some(_) => WasmCallability::NotExported,
+        None => WasmCallability::UnknownSymbol,
+    }
+}
+
+/// Whether a WASM *snippet* or *test* may call `function_name`.
+///
+/// Deliberately wider than [`function_is_exported`], which answers a codegen question — "should
+/// the plain-function generator emit a wrapper for this?" — and returns `false` for trait-bridge
+/// register/unregister/clear functions precisely because the trait-bridge generator emits them
+/// instead. Those functions are exported all the same, so a caller asking "is this callable?"
+/// must not reuse the codegen predicate.
+///
+/// Prefer [`wasm_callability`] when the answer feeds a diagnostic: this predicate cannot say
+/// whether a `false` means the target dropped the function or the name resolved to nothing.
+pub(crate) fn function_is_callable(
+    function_name: &str,
+    functions: &[crate::core::ir::FunctionDef],
+    config: &ResolvedCrateConfig,
+) -> bool {
+    let Some(identity) = rust_identity_for_wasm_symbol(function_name, functions, config) else {
+        return false;
+    };
+    // An explicit exclusion outranks the bridge: the symbol is not emitted at all.
+    if config
+        .wasm
+        .as_ref()
+        .is_some_and(|wasm| wasm.exclude_functions.iter().any(|name| name == identity))
+    {
+        return false;
+    }
+    if crate::codegen::generators::trait_bridge::is_trait_bridge_managed_fn(identity, &config.trait_bridges) {
+        return true;
+    }
+    function_is_exported(identity, functions, config)
+}
+
+/// Resolve the Rust identity behind a symbol that may be spelled the way JavaScript sees it.
+///
+/// wasm-bindgen exports every symbol under `js_name = to_camel_case(rust_name)`, so a
+/// `[e2e.calls.<name>.overrides.wasm] function` legitimately names `clearRerankerBackends` for a
+/// Rust `clear_reranker_backends`. Every question below is keyed on the Rust identity, so matching
+/// the configured spelling against those keys directly reports a symbol the target does export as
+/// missing. Trait-bridge registry operations are searched alongside `functions` because the
+/// trait-bridge generator emits them and they need not appear in the plain function surface.
+///
+/// Returns `None` when nothing the target could export answers to `symbol` under either spelling.
+fn rust_identity_for_wasm_symbol<'a>(
+    symbol: &str,
+    functions: &'a [crate::core::ir::FunctionDef],
+    config: &'a ResolvedCrateConfig,
+) -> Option<&'a str> {
+    // The Rust spelling is matched first so a crate that happens to export both `foo_bar` and
+    // `fooBar` resolves an exact name to itself rather than to whichever came first. ~keep
+    wasm_export_candidates(functions, config)
+        .find(|candidate| *candidate == symbol)
+        .or_else(|| {
+            wasm_export_candidates(functions, config)
+                .find(|candidate| crate::codegen::generators::trait_bridge::to_camel_case(candidate) == symbol)
+        })
+}
+
+/// Every Rust identity the WASM target could export: the plain function surface plus the
+/// registry operations the trait-bridge generator emits.
+fn wasm_export_candidates<'a>(
+    functions: &'a [crate::core::ir::FunctionDef],
+    config: &'a ResolvedCrateConfig,
+) -> impl Iterator<Item = &'a str> {
+    let bridge_registry_fns = config
+        .trait_bridges
+        .iter()
+        .flat_map(|bridge| {
+            [
+                bridge.register_fn.as_deref(),
+                bridge.unregister_fn.as_deref(),
+                bridge.clear_fn.as_deref(),
+            ]
+        })
+        .flatten();
+    functions
+        .iter()
+        .map(|function| function.name.as_str())
+        .chain(bridge_registry_fns)
+}
+
 pub(crate) fn function_is_exported(
     function_name: &str,
     functions: &[crate::core::ir::FunctionDef],

@@ -192,6 +192,25 @@ pub struct CallConfig {
 }
 
 impl CallConfig {
+    /// The function identity this call names for `language`, or `None` when it names none.
+    ///
+    /// A per-language `[e2e.calls.<name>.overrides.<language>] function` outranks the base
+    /// `function`, and a blank value on either counts as absent rather than as the empty
+    /// symbol: a call may deliberately carry `function = ""` and place the real name in every
+    /// per-language override, because the bindings spell it differently and there is no
+    /// language-neutral name to put at the base.
+    ///
+    /// Every consumer that needs "which function does this call name here" must resolve it
+    /// through this one method. A second resolution that reads `self.function` directly sees
+    /// the empty base and reports the call as nameless.
+    pub fn effective_function(&self, language: &str) -> Option<&str> {
+        self.overrides
+            .get(language)
+            .and_then(|override_config| override_config.function.as_deref())
+            .filter(|function| !function.trim().is_empty())
+            .or_else(|| (!self.function.trim().is_empty()).then_some(self.function.as_str()))
+    }
+
     /// Effective streaming opt-in/out flag, preserving the legacy
     /// `streaming = true/false` behavior while allowing
     /// `streaming = { item_type = "Event" }` recipes.

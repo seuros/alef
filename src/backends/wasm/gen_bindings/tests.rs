@@ -1,6 +1,6 @@
 use super::{
     WasmBackend, cargo::gen_cargo_toml, fix_dropped_payload_enum_option_fields, forward_trait_bridge_builder_fields,
-    function_is_exported, types_needing_self_delegation_reverse_impl,
+    WasmCallability, function_is_exported, types_needing_self_delegation_reverse_impl, wasm_callability,
 };
 use crate::core::backend::Backend;
 use crate::core::config::{BridgeBinding, NewAlefConfig, ResolvedCrateConfig, TraitBridgeConfig};
@@ -749,6 +749,110 @@ fn wasm_function_reachability_follows_target_features() {
 
     assert!(!function_is_exported("download", &functions, &config));
     assert!(function_is_exported("prefetch", &functions, &config));
+}
+
+fn reachability_functions() -> Vec<FunctionDef> {
+    vec![
+        FunctionDef {
+            name: "download_assets".into(),
+            rust_path: "sample::download_assets".into(),
+            ..FunctionDef::default()
+        },
+        FunctionDef {
+            name: "gated_download".into(),
+            rust_path: "sample::gated_download".into(),
+            cfg: Some(r#"feature = "download""#.into()),
+            ..FunctionDef::default()
+        },
+    ]
+}
+
+#[test]
+fn wasm_callability_accepts_the_javascript_spelling_of_an_exported_function() {
+    let functions = reachability_functions();
+    let config = make_config();
+
+    assert_eq!(
+        wasm_callability("downloadAssets", &functions, &config),
+        WasmCallability::Callable,
+        "`overrides.wasm.function` names the symbol the way wasm-bindgen exports it"
+    );
+    assert_eq!(
+        wasm_callability("download_assets", &functions, &config),
+        WasmCallability::Callable,
+        "the Rust spelling must keep working for calls that carry no override"
+    );
+}
+
+#[test]
+fn wasm_callability_accepts_a_bridge_registry_operation_under_either_spelling() {
+    let functions = reachability_functions();
+    let mut config = make_config();
+    config.trait_bridges = vec![TraitBridgeConfig {
+        trait_name: "RerankerBackend".into(),
+        clear_fn: Some("clear_reranker_backends".into()),
+        unregister_fn: Some("unregister_reranker_backend".into()),
+        ..Default::default()
+    }];
+
+    assert_eq!(
+        wasm_callability("clearRerankerBackends", &functions, &config),
+        WasmCallability::Callable
+    );
+    assert_eq!(
+        wasm_callability("unregister_reranker_backend", &functions, &config),
+        WasmCallability::Callable
+    );
+    assert!(
+        !function_is_exported("clear_reranker_backends", &functions, &config),
+        "the codegen predicate must keep answering `false` -- the plain function generator does \
+         not emit bridge-managed functions, the trait-bridge generator does"
+    );
+}
+
+#[test]
+fn wasm_callability_tells_an_unknown_name_apart_from_an_unexported_one() {
+    let functions = reachability_functions();
+    let config = make_config();
+
+    assert_eq!(
+        wasm_callability("gatedDownload", &functions, &config),
+        WasmCallability::NotExported,
+        "a real function the target drops is a capability gap"
+    );
+    assert_eq!(
+        wasm_callability("fetchAssets", &functions, &config),
+        WasmCallability::UnknownSymbol,
+        "a name nothing answers to is a config error and must not be reported as a capability gap"
+    );
+    assert_eq!(
+        wasm_callability("", &functions, &config),
+        WasmCallability::UnknownSymbol,
+        "an unresolved name must never be answered with a confident `not exported`"
+    );
+}
+
+#[test]
+fn wasm_callability_honours_an_exclusion_reached_by_the_javascript_spelling() {
+    let cfg: NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["wasm"]
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+[crates.wasm]
+exclude_functions = ["download_assets"]
+"#,
+    )
+    .expect("an exclusion list must deserialize");
+    let config = cfg.resolve().expect("config must resolve").remove(0);
+
+    assert_eq!(
+        wasm_callability("downloadAssets", &reachability_functions(), &config),
+        WasmCallability::NotExported,
+        "resolving the JavaScript spelling must not route around `exclude_functions`"
+    );
 }
 
 /// Regression test: wasm-pack's own `pkg/nodejs/package.json` (produced by
