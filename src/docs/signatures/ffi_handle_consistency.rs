@@ -104,6 +104,40 @@ fn test_c_signature_and_example_agree_on_named_return_handle_type() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// ~keep The C doc emitter (`render_c_fn_sig` in signatures.rs, not owned by this file --
+// see `type_mapping.rs`'s file-ownership note) builds a signature purely from
+// `FunctionDef.params`/`return_type` via `doc_type`, one C parameter per IR parameter.
+// The real FFI backend does not: `orchestration.rs`'s free-function codegen (mirrored in
+// its method-codegen sibling ~140 lines earlier in the same file) appends a `<name>_len:
+// usize` companion parameter for every `TypeRef::Bytes` parameter, and three extra
+// `out_ptr`/`out_len`/`out_cap` out-parameters whenever the return type resolves to bytes
+// -- neither is IR-visible to `doc_type`, so no formula fix in `type_mapping.rs` alone can
+// close this gap. This test pins the correct, ABI-faithful shape; it is expected to fail
+// until `render_c_fn_sig` reads the emitted binding (cbindgen header) or the same
+// param-shaping logic `orchestration.rs` uses, instead of the bare IR.
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "pins the target shape for task #67 (render_c_fn_sig must read the cbindgen header); \
+            C doc signatures are a documentation defect, deferred as non-blocking for this release"]
+fn test_render_c_fn_sig_bytes_param_gets_length_companion_parameter() {
+    let func = make_function(
+        "ingest",
+        vec![make_param("data", TypeRef::Bytes, false)],
+        TypeRef::Unit,
+        false,
+        None,
+    );
+    let sig = render_c_fn_sig(&func, TEST_PREFIX);
+    assert!(
+        sig.contains("data_len"),
+        "a `Bytes` parameter crosses the C ABI as a pointer plus an explicit length -- the \
+         real FFI backend (orchestration.rs) appends `data_len: usize`, which this \
+         IR-only signature omits entirely: {sig}"
+    );
+}
+
 /// ~keep Same cross-check for a Named parameter, not just a Named return.
 #[test]
 fn test_c_signature_and_example_agree_on_named_param_handle_type() {

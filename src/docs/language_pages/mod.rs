@@ -108,7 +108,7 @@ pub(super) fn generate_lang_doc(
     if !errors_to_doc.is_empty() {
         out.push_str("### Errors\n\n");
         for err in &errors_to_doc {
-            out.push_str(&render_error(err, lang, ffi_prefix));
+            out.push_str(&render_error(err, &api.errors, lang, ffi_prefix));
             out.push_str("\n---\n\n");
         }
     }

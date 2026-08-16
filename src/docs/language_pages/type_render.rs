@@ -1,6 +1,6 @@
 use crate::codegen::shared::binding_fields;
 use crate::core::config::{Language, ResolvedCrateConfig};
-use crate::core::ir::{ApiSurface, TypeDef};
+use crate::core::ir::{ApiSurface, MethodDef, ReceiverKind, TypeDef, TypeRef};
 use crate::docs::descriptions::generate_field_description;
 use crate::docs::doc_cleaning::{clean_doc_inline, demote_headings_to_start_at};
 use crate::docs::formatting::{doc_type_with_optional, escape_table_cell, format_field_default};
@@ -12,6 +12,72 @@ use super::function_render::push_version_annotation;
 use super::streaming::{method_visible_in_lang, render_method};
 
 const TYPE_DOC_FIRST_HEADING_LEVEL: usize = 5;
+
+/// ~keep True when `method` is the synthetic `Default::default()` associated function that
+/// `extract_trait_impl_methods` (`src/extract/extractor/functions/impl_blocks.rs`) deliberately
+/// keeps in `TypeDef::methods` instead of dropping like every other std-trait impl -- with
+/// `trait_source` cleared to `None`, so nothing downstream can tell it apart from a hand-written
+/// inherent method by that field alone. Go's own generator hardcodes the same shape check
+/// (`if method.name == "default" { continue; }` in `gen_bindings/binding_file.rs`) to drop it
+/// before emitting a single symbol; measured docs audits found zero bindings for it across Go,
+/// C#, Elixir and Java. The four-part shape match (name, staticness, arity, return type) keeps
+/// this from ever matching a real, differently-shaped inherent method that happens to be named
+/// `default`.
+fn is_phantom_default_method(ty: &TypeDef, method: &MethodDef, lang: Language) -> bool {
+    // ~keep The Rust page documents the actual Rust crate, not a binding -- `Default::default`
+    // really exists there, so this gate (which exists to stop *bindings* from documenting a
+    // symbol they never emit) must not touch it. `method_visible_in_lang` follows the same
+    // `lang == Rust` carve-out for `binding_excluded`.
+    lang != Language::Rust
+        && ty.has_default
+        && method.name == "default"
+        && method.is_static
+        && method.receiver.is_none()
+        && method.params.is_empty()
+        && matches!(&method.return_type, TypeRef::Named(name) if name == &ty.name)
+}
+
+/// ~keep True when `lang`'s backend can bind at least some of `ty`'s methods. A non-opaque
+/// `TypeDef` (plain fields, no handle) crosses the FFI boundary marshalled by value, and every
+/// backend read while building this gate treats that as fields-only: pyo3 only emits a
+/// `#[pymethods] impl` when `typ.is_opaque` (`gen_bindings/mod.rs`), flutter_rust_bridge mirrors
+/// a non-opaque type as a plain Dart data class with no methods, and Java binds it as a record.
+/// Go is the one exception actually found: `binding_file.rs` skips a type's methods with
+/// `if !typ.is_opaque && !typ.has_serde { continue; }`, i.e. it still binds methods on a
+/// non-opaque type that round-trips through JSON. Backends not directly inspected while tracing
+/// this (Kotlin, Swift, Ruby, PHP, Elixir, Node, WASM, Zig, ...) are conservatively folded into
+/// the opaque-only default rather than left rendering every non-opaque method unconditionally --
+/// suppressing a member some unverified backend does bind is the safer failure than continuing
+/// to fabricate one for the backends this gate did confirm never bind it.
+fn methods_bound_in_lang(ty: &TypeDef, lang: Language) -> bool {
+    // ~keep The Rust page documents the actual Rust crate: every inherent/trait method in
+    // `ty.methods` really exists there, opaque or not, so this binding-availability gate does
+    // not apply to it -- same carve-out `method_visible_in_lang` gives `binding_excluded`.
+    lang == Language::Rust || ty.is_opaque || (lang == Language::Go && ty.has_serde)
+}
+
+/// ~keep The inverse of the two gates above: a member the backend *does* emit that never enters
+/// `ty.methods` because it is not part of the Rust surface at all. `opaque.rs`'s
+/// `render_opaque_class_body` calls `gen_opaque_handle_class` for every `typ.is_opaque` type
+/// unconditionally, appending `opaque_handle_close.jinja` -- a hand-written
+/// `public synchronized void close()` implementing `AutoCloseable`, injected by the Java
+/// template, not derived from any Rust method. Without this, every opaque Java handle type's
+/// reference page omits the one method callers must call to release the native `MemorySegment`,
+/// which teaches a resource leak by omission.
+fn java_opaque_close_method(ty: &TypeDef, lang: Language) -> Option<MethodDef> {
+    if lang != Language::Java || !ty.is_opaque || ty.is_trait {
+        return None;
+    }
+    Some(MethodDef {
+        name: "close".to_string(),
+        receiver: Some(ReceiverKind::RefMut),
+        return_type: TypeRef::Unit,
+        doc: "Releases the native handle backing this instance. Implements `AutoCloseable`; \
+              safe to call more than once."
+            .to_string(),
+        ..Default::default()
+    })
+}
 
 /// ~keep Every `TypeRef::Named` crosses the C ABI as a scalar `AlefHandle` token, not a
 /// pointer to a struct named after the Rust type (see type_mapping.rs's
@@ -98,11 +164,19 @@ pub(super) fn render_type(
         out.push('\n');
     }
 
-    let methods: Vec<_> = ty
-        .methods
-        .iter()
-        .filter(|method| method_visible_in_lang(config, method, &ty.name, lang))
-        .collect();
+    let synthetic_close_method = java_opaque_close_method(ty, lang);
+    let mut methods: Vec<&MethodDef> = if methods_bound_in_lang(ty, lang) {
+        ty.methods
+            .iter()
+            .filter(|method| method_visible_in_lang(config, method, &ty.name, lang))
+            .filter(|method| !is_phantom_default_method(ty, method, lang))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if let Some(close_method) = &synthetic_close_method {
+        methods.push(close_method);
+    }
     if !methods.is_empty() {
         let methods_heading = if lang == Language::Elixir {
             "Functions"
@@ -239,6 +313,179 @@ mod tests {
         assert!(
             rendered.contains(&handle_token),
             "note must name the same handle token doc_type computes ({handle_token}); got:\n{rendered}"
+        );
+    }
+
+    fn opaque_type_with_default_and_real_method(name: &str) -> TypeDef {
+        TypeDef {
+            name: name.to_string(),
+            is_opaque: true,
+            has_default: true,
+            methods: vec![
+                MethodDef {
+                    name: "default".to_string(),
+                    is_static: true,
+                    receiver: None,
+                    params: vec![],
+                    return_type: TypeRef::Named(name.to_string()),
+                    ..Default::default()
+                },
+                MethodDef {
+                    name: "parse".to_string(),
+                    receiver: Some(ReceiverKind::Ref),
+                    return_type: TypeRef::Unit,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_phantom_default_method_is_suppressed_outside_rust() {
+        let ty = opaque_type_with_default_and_real_method("LanguageRegistry");
+        let rendered = render_type(&ty, Language::Java, &ResolvedCrateConfig::default(), &ApiSurface::default(), "Htm");
+        assert!(
+            !rendered.contains("default()") && !rendered.contains("defaultOptions()"),
+            "Default::default() never crosses into any binding -- go's binding_file.rs even \
+             hardcodes `if method.name == \"default\" {{ continue; }}`, and this was measured \
+             fabricating exactly `defaultOptions()` on Java; got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("parse()"),
+            "positive control: a real inherent method on the same type must still render; got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn test_phantom_default_method_still_documented_on_rust_page() {
+        let ty = opaque_type_with_default_and_real_method("LanguageRegistry");
+        let rendered = render_type(&ty, Language::Rust, &ResolvedCrateConfig::default(), &ApiSurface::default(), "Htm");
+        assert!(
+            rendered.contains("default()"),
+            "the Rust page documents the actual crate, where Default::default() genuinely \
+             exists -- the gate must not touch it; got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn test_default_named_method_with_a_parameter_is_not_gated() {
+        let ty = TypeDef {
+            name: "Config".to_string(),
+            is_opaque: true,
+            has_default: true,
+            methods: vec![MethodDef {
+                name: "default".to_string(),
+                is_static: true,
+                receiver: None,
+                params: vec![crate::docs::test_helpers::make_param(
+                    "region",
+                    TypeRef::String,
+                    false,
+                )],
+                return_type: TypeRef::Named("Config".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        // Go, not Java: naming.rs unconditionally renames every Java method literally named
+        // `default` to `defaultOptions` regardless of shape, which would make this assertion
+        // about the *gate* (not about naming.rs's rename table) give a false failure.
+        let rendered = render_type(&ty, Language::Go, &ResolvedCrateConfig::default(), &ApiSurface::default(), "Htm");
+        assert!(
+            rendered.contains("Default("),
+            "a `default`-named method that does not match the exact zero-arg, static, \
+             returns-Self shape of `Default::default()` is a different, real method and must \
+             not be swept up by the gate; got:\n{rendered}"
+        );
+    }
+
+    fn non_opaque_type_with_builder_method(name: &str, has_serde: bool) -> TypeDef {
+        TypeDef {
+            name: name.to_string(),
+            is_opaque: false,
+            has_serde,
+            methods: vec![MethodDef {
+                name: "with_chunking".to_string(),
+                receiver: Some(ReceiverKind::Owned),
+                return_type: TypeRef::Named(name.to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_non_opaque_type_methods_are_suppressed_outside_rust() {
+        let ty = non_opaque_type_with_builder_method("ProcessConfig", false);
+        let rendered = render_type(&ty, Language::Java, &ResolvedCrateConfig::default(), &ApiSurface::default(), "Htm");
+        assert!(
+            !rendered.contains("Methods"),
+            "Java binds a non-opaque type as a record with no methods -- a builder method \
+             extracted from the Rust `impl` block never crosses into the binding; got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn test_non_opaque_type_methods_still_documented_on_rust_page() {
+        let ty = non_opaque_type_with_builder_method("ProcessConfig", false);
+        let rendered = render_type(&ty, Language::Rust, &ResolvedCrateConfig::default(), &ApiSurface::default(), "Htm");
+        assert!(
+            rendered.contains("with_chunking()"),
+            "positive control: the Rust page documents the real Rust builder method; got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn test_go_serde_non_opaque_type_still_binds_methods() {
+        let ty = non_opaque_type_with_builder_method("ProcessConfig", true);
+        let go = render_type(&ty, Language::Go, &ResolvedCrateConfig::default(), &ApiSurface::default(), "Htm");
+        assert!(
+            go.contains("Methods"),
+            "Go's binding_file.rs binds methods on a non-opaque type when it round-trips \
+             through JSON (`has_serde`); got:\n{go}"
+        );
+
+        let java = render_type(&ty, Language::Java, &ResolvedCrateConfig::default(), &ApiSurface::default(), "Htm");
+        assert!(
+            !java.contains("Methods"),
+            "the has_serde carve-out is Go-specific, confirmed only against binding_file.rs -- \
+             it must not also open the gate for Java; got:\n{java}"
+        );
+    }
+
+    #[test]
+    fn test_java_opaque_type_gets_synthetic_close_method() {
+        let ty = TypeDef {
+            name: "DefaultClient".to_string(),
+            is_opaque: true,
+            ..Default::default()
+        };
+        let rendered = render_type(&ty, Language::Java, &ResolvedCrateConfig::default(), &ApiSurface::default(), "Htm");
+        assert!(
+            rendered.contains("close()"),
+            "opaque.rs's `render_opaque_class_body` appends `opaque_handle_close.jinja`'s \
+             `close()` to every opaque Java handle type unconditionally; got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn test_close_method_is_not_synthesized_outside_java() {
+        let ty = TypeDef {
+            name: "DefaultClient".to_string(),
+            is_opaque: true,
+            ..Default::default()
+        };
+        let python = render_type(&ty, Language::Python, &ResolvedCrateConfig::default(), &ApiSurface::default(), "Htm");
+        assert!(
+            !python.contains("Methods"),
+            "close() is a Java `AutoCloseable` template artifact, not part of the Rust surface \
+             -- it must not leak into other languages' pages; got:\n{python}"
+        );
+        let rust = render_type(&ty, Language::Rust, &ResolvedCrateConfig::default(), &ApiSurface::default(), "Htm");
+        assert!(
+            !rust.contains("Methods"),
+            "the Rust struct itself has no close() method; got:\n{rust}"
         );
     }
 }

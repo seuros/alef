@@ -322,7 +322,9 @@ fn test_doc_type_nested_vec_of_optional_string() {
     assert_eq!(doc_type(&ty, Language::Python, TEST_PREFIX), "list[str | None]");
     assert_eq!(doc_type(&ty, Language::Node, TEST_PREFIX), "Array<string | null>");
     assert_eq!(doc_type(&ty, Language::Go, TEST_PREFIX), "[]*string");
-    assert_eq!(doc_type(&ty, Language::Java, TEST_PREFIX), "List<Optional<String>>");
+    // Java never wraps in `Optional` here either -- the inner Optional's boxed/nullable
+    // formula applies at any nesting depth, same as the top-level case.
+    assert_eq!(doc_type(&ty, Language::Java, TEST_PREFIX), "List<@Nullable String>");
     assert_eq!(doc_type(&ty, Language::Rust, TEST_PREFIX), "Vec<Option<String>>");
 }
 
@@ -346,7 +348,9 @@ fn test_doc_type_nested_map_string_to_vec_u32() {
 fn test_doc_type_optional_of_named_all_languages() {
     let ty = TypeRef::Optional(Box::new(TypeRef::Named("ParseOptions".to_string())));
     assert_eq!(doc_type(&ty, Language::Python, TEST_PREFIX), "ParseOptions | None");
-    assert_eq!(doc_type(&ty, Language::Java, TEST_PREFIX), "Optional<ParseOptions>");
+    // Java: the public facade unwraps Optional and annotates with @Nullable -- it never
+    // hands the caller an `Optional<T>` (see the Java-specific regression tests below).
+    assert_eq!(doc_type(&ty, Language::Java, TEST_PREFIX), "@Nullable ParseOptions");
     assert_eq!(doc_type(&ty, Language::Csharp, TEST_PREFIX), "ParseOptions?");
     assert_eq!(doc_type(&ty, Language::Go, TEST_PREFIX), "*ParseOptions");
     assert_eq!(doc_type(&ty, Language::Rust, TEST_PREFIX), "Option<ParseOptions>");
@@ -370,7 +374,8 @@ fn test_doc_type_all_go_primitives() {
         (PrimitiveType::I64, "int64"),
         (PrimitiveType::F32, "float32"),
         (PrimitiveType::F64, "float64"),
-        (PrimitiveType::Usize, "int"),
+        // usize is Go's `uint`, not `int` -- see GoMapper (backends/go/type_map.rs).
+        (PrimitiveType::Usize, "uint"),
         (PrimitiveType::Isize, "int"),
     ];
     for (prim, expected) in cases {
@@ -380,6 +385,21 @@ fn test_doc_type_all_go_primitives() {
             "Go primitive {prim:?}"
         );
     }
+}
+
+#[test]
+fn test_doc_type_go_usize_is_uint_not_int_regression() {
+    // ~keep Regression for the doc emitter documenting a Go `uint` field as `int` --
+    // GoMapper (backends/go/type_map.rs) is the canonical source and disagrees with `int`.
+    assert_eq!(
+        doc_type(&TypeRef::Primitive(PrimitiveType::Usize), Language::Go, TEST_PREFIX),
+        "uint"
+    );
+    // Positive control: isize was already correct and must stay so.
+    assert_eq!(
+        doc_type(&TypeRef::Primitive(PrimitiveType::Isize), Language::Go, TEST_PREFIX),
+        "int"
+    );
 }
 
 #[test]
@@ -420,8 +440,10 @@ fn test_doc_type_all_csharp_primitives() {
         (PrimitiveType::I16, "short"),
         (PrimitiveType::I32, "int"),
         (PrimitiveType::I64, "long"),
-        (PrimitiveType::Usize, "nuint"),
-        (PrimitiveType::Isize, "nint"),
+        // usize/isize are CsharpMapper's `ulong`/`long` (backends/csharp/type_map.rs), not
+        // the native-pointer-width `nuint`/`nint` -- `nuint` is 32-bit on a 32-bit runtime.
+        (PrimitiveType::Usize, "ulong"),
+        (PrimitiveType::Isize, "long"),
         (PrimitiveType::F32, "float"),
         (PrimitiveType::F64, "double"),
     ];
@@ -432,6 +454,24 @@ fn test_doc_type_all_csharp_primitives() {
             "C# primitive {prim:?}"
         );
     }
+}
+
+#[test]
+fn test_doc_type_csharp_usize_is_ulong_not_nuint_regression() {
+    // ~keep Regression: 11 real signatures (LanguageCount, StartByte, EndByte,
+    // ChildCount, ...) were documented as `nuint` while the emitted C# source declares
+    // `ulong` -- a genuine type error, not cosmetic, since `nuint` is 32-bit on a 32-bit
+    // runtime. CsharpMapper (backends/csharp/type_map.rs) is the canonical source.
+    assert_eq!(
+        doc_type(&TypeRef::Primitive(PrimitiveType::Usize), Language::Csharp, TEST_PREFIX),
+        "ulong"
+    );
+    // Positive control: u64 was already correct and must land on the same type usize now
+    // does, since CsharpMapper maps both to `ulong`.
+    assert_eq!(
+        doc_type(&TypeRef::Primitive(PrimitiveType::U64), Language::Csharp, TEST_PREFIX),
+        "ulong"
+    );
 }
 
 #[test]
@@ -569,6 +609,132 @@ fn test_doc_type_all_zig_primitives() {
             "Zig primitive {prim:?}"
         );
     }
+}
+
+#[test]
+fn test_doc_type_all_dart_primitives() {
+    let cases: &[(PrimitiveType, &str)] = &[
+        (PrimitiveType::Bool, "bool"),
+        (PrimitiveType::U8, "int"),
+        (PrimitiveType::I8, "int"),
+        (PrimitiveType::U16, "int"),
+        (PrimitiveType::I16, "int"),
+        (PrimitiveType::U32, "int"),
+        (PrimitiveType::I32, "int"),
+        (PrimitiveType::U64, "int"),
+        (PrimitiveType::I64, "int"),
+        // usize/isize get flutter_rust_bridge's portable `PlatformInt64`, not a bare
+        // `int` -- see the regression test below for why.
+        (PrimitiveType::Usize, "PlatformInt64"),
+        (PrimitiveType::Isize, "PlatformInt64"),
+        (PrimitiveType::F32, "double"),
+        (PrimitiveType::F64, "double"),
+    ];
+    for (prim, expected) in cases {
+        assert_eq!(
+            doc_type(&TypeRef::Primitive(prim.clone()), Language::Dart, TEST_PREFIX),
+            *expected,
+            "Dart primitive {prim:?}"
+        );
+    }
+}
+
+#[test]
+fn test_doc_type_dart_usize_is_platform_int64_not_int_regression() {
+    // ~keep Regression: 6 real fields were documented as `int` while flutter_rust_bridge
+    // actually widens usize/isize to its own `PlatformInt64` typedef -- a portability
+    // hazard identical in kind to C#'s `nuint` bug (Rust's usize/isize vary in width
+    // across compile targets; a bare Dart `int` erases that and silently narrows on some
+    // targets).
+    assert_eq!(
+        doc_type(&TypeRef::Primitive(PrimitiveType::Usize), Language::Dart, TEST_PREFIX),
+        "PlatformInt64"
+    );
+    // Positive control: u64 was already correct (plain `int`) and must not be swept up by
+    // the usize/isize fix -- only the platform-width variants change.
+    assert_eq!(
+        doc_type(&TypeRef::Primitive(PrimitiveType::U64), Language::Dart, TEST_PREFIX),
+        "int"
+    );
+}
+
+#[test]
+fn test_doc_type_all_swift_primitives() {
+    let cases: &[(PrimitiveType, &str)] = &[
+        (PrimitiveType::Bool, "Bool"),
+        (PrimitiveType::U8, "UInt8"),
+        (PrimitiveType::I8, "Int8"),
+        (PrimitiveType::U16, "UInt16"),
+        (PrimitiveType::I16, "Int16"),
+        (PrimitiveType::U32, "UInt32"),
+        (PrimitiveType::I32, "Int32"),
+        (PrimitiveType::U64, "UInt64"),
+        (PrimitiveType::I64, "Int64"),
+        // usize/isize are Swift's platform-width `UInt`/`Int`, distinct from the
+        // fixed-width `UInt64`/`Int64` u64/i64 map to -- see SwiftMapper
+        // (backends/swift/type_map.rs).
+        (PrimitiveType::Usize, "UInt"),
+        (PrimitiveType::Isize, "Int"),
+        (PrimitiveType::F32, "Float"),
+        (PrimitiveType::F64, "Double"),
+    ];
+    for (prim, expected) in cases {
+        assert_eq!(
+            doc_type(&TypeRef::Primitive(prim.clone()), Language::Swift, TEST_PREFIX),
+            *expected,
+            "Swift primitive {prim:?}"
+        );
+    }
+}
+
+#[test]
+fn test_doc_type_swift_usize_is_uint_not_uint64_regression() {
+    // ~keep Regression: collapsing usize into the same bucket as u64 documented a
+    // platform-width Swift `UInt` field as the fixed-width `UInt64` -- same family of
+    // error as C#'s `nuint`/`ulong` mixup, just inverted (fixed-width name for a
+    // platform-width field instead of the other way around).
+    assert_eq!(
+        doc_type(&TypeRef::Primitive(PrimitiveType::Usize), Language::Swift, TEST_PREFIX),
+        "UInt"
+    );
+    // Positive control: u64 was already correct and must stay UInt64, not regress to UInt.
+    assert_eq!(
+        doc_type(&TypeRef::Primitive(PrimitiveType::U64), Language::Swift, TEST_PREFIX),
+        "UInt64"
+    );
+}
+
+#[test]
+fn test_doc_type_java_optional_record_field_shape_is_nullable_not_optional() {
+    // ~keep Regression for 26 record-field errors: Java docs said `Optional<T>`; the
+    // emitted record field is `@Nullable T` (backends/java/gen_bindings/types/records.rs).
+    let ty = TypeRef::Optional(Box::new(TypeRef::String));
+    assert_eq!(doc_type(&ty, Language::Java, TEST_PREFIX), "@Nullable String");
+}
+
+#[test]
+fn test_doc_type_java_optional_boxes_primitive_before_annotating() {
+    // A Java primitive (`int`) cannot itself be `@Nullable` -- the boxed type must be
+    // used, exactly as the real facade/record codegen does via `java_boxed_type`.
+    let ty = TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::I32)));
+    assert_eq!(doc_type(&ty, Language::Java, TEST_PREFIX), "@Nullable Integer");
+}
+
+#[test]
+fn test_doc_type_java_optional_function_return_shape_matches_public_facade_not_internal_rs_layer() {
+    // ~keep Regression for the layer-selection bug: 9 top-level functions were documented
+    // with the internal `...Rs` FFI-adjacent class's real `Optional<String>` return type
+    // instead of the public facade callers actually use, which unwraps to `@Nullable
+    // String` (backends/java/gen_bindings/facade.rs's `return_type` computation, e.g.
+    // TreeSitterLanguagePack.java's unwrap of the Rs layer).
+    let ty = TypeRef::Optional(Box::new(TypeRef::String));
+    let facade_doc = doc_type(&ty, Language::Java, TEST_PREFIX);
+    assert_eq!(facade_doc, "@Nullable String");
+    assert!(
+        !facade_doc.contains("Optional"),
+        "must document the public facade's unwrapped return, not the internal Rs layer's \
+         Optional<T>: {facade_doc}"
+    );
 }
 
 #[test]

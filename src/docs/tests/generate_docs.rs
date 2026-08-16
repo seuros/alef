@@ -284,7 +284,9 @@ fn streaming_adapter_docs_use_language_native_stream_types() {
     assert!(ruby.contains("**Returns:** `ChatStreamIterator`"));
 
     let elixir = doc_content(&files, "api-elixir");
-    assert!(elixir.contains("def chat_stream(client, req)"));
+    // The rustler backend always names the receiver param `obj`, not `client`
+    // (`gen_bindings/helpers/conversions.rs`'s `def_args.push("obj".to_string())`).
+    assert!(elixir.contains("def chat_stream(obj, req)"));
     assert!(elixir.contains("**Returns:** `{:ok, Stream.t()}`"));
 
     let wasm = doc_content(&files, "api-wasm");

@@ -129,11 +129,13 @@ pub(crate) fn render_java_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String
             format!("{pty} {pname}")
         })
         .collect();
-    let throws = func
-        .error_type
-        .as_ref()
-        .map(|e| format!(" throws {}", type_name(e, Language::Java, ffi_prefix)))
-        .unwrap_or_default();
+    // ~keep Every generated Java free function crosses the FFI boundary through
+    // `emit_method_header` (backends/java/gen_bindings/ffi_class/sync_functions.rs), which
+    // renders `ffi_method_signature.jinja` -- `throws {{ exception_class }}` -- unconditionally,
+    // with no `error_type`-gated branch. The FFI crossing itself (marshaling, allocation) can
+    // fail even when the wrapped Rust function is infallible, so `func.error_type` (a fact
+    // about the *core* Rust signature) is the wrong oracle for this clause.
+    let throws = format!(" throws {ffi_prefix}RsException");
     format!("public static {} {}({}){}", ret, name, params.join(", "), throws)
 }
 
@@ -381,11 +383,27 @@ pub(crate) fn render_dart_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String
             format!("{pty}? {pname}")
         })
         .collect();
-    let mut all_params = required;
-    if !optional.is_empty() {
-        all_params.push(format!("[{}]", optional.join(", ")));
-    }
-    format!("{ret} {name}({})", all_params.join(", "))
+    // ~keep Real Dart params are grouped exactly as `emit_function`'s `params_str` match
+    // (backends/dart/gen_bindings/functions.rs) does: required positional params joined with
+    // any optional ones wrapped in `{}` (Dart named-optional syntax), never `[]`
+    // (positional-optional) -- a caller following a `[]`-bracketed doc could not call the
+    // named form the real binding actually exposes.
+    let params_str = match (required.is_empty(), optional.is_empty()) {
+        (_, true) => required.join(", "),
+        (true, false) => format!("{{{}}}", optional.join(", ")),
+        (false, false) => format!("{}, {{{}}}", required.join(", "), optional.join(", ")),
+    };
+    // ~keep Every generated Dart free function is `Future<T>` (`Future<void>` for a `Unit`
+    // return), never a bare `T` -- `emit_function`'s return-type branch
+    // (backends/dart/gen_bindings/functions.rs) is unconditional, with no `is_async` check:
+    // flutter_rust_bridge dispatches every non-`#[frb(sync)]` call across the FFI boundary
+    // asynchronously, regardless of whether the wrapped Rust function is itself `async fn`.
+    let future_ret = if ret == "void" {
+        "Future<void>".to_string()
+    } else {
+        format!("Future<{ret}>")
+    };
+    format!("{future_ret} {name}({params_str})")
 }
 
 pub(crate) fn render_zig_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
@@ -454,8 +472,13 @@ pub(crate) fn render_method_signature_with_override(
     // reserved-word collision (Java/Dart's `new`, etc.) rather than silently document code
     // that would not compile. See formatting.rs's `assert_valid_identifier`.
     crate::docs::formatting::assert_valid_identifier(&name, lang, "a method signature");
-    let ret = signature_override
-        .and_then(|override_| override_.return_type.as_deref())
+    let overridden_ret = signature_override.and_then(|override_| override_.return_type.as_deref());
+    // ~keep An explicitly overridden return type is already the backend-accurate spelling (the
+    // streaming adapters supply Dart `Stream<T>`, Swift `AsyncThrowingStream<T, Error>`, ...), so
+    // the per-language async wrappers below must not re-wrap it into `Future<Stream<T>>`. Only an
+    // IR-derived return type needs that wrapping.
+    let ret_is_overridden = overridden_ret.is_some();
+    let ret = overridden_ret
         .map(str::to_string)
         .unwrap_or_else(|| doc_type(&method.return_type, lang, ffi_prefix));
 
@@ -567,11 +590,19 @@ pub(crate) fn render_method_signature_with_override(
                     format!("{pty} {pname}")
                 })
                 .collect();
-            let throws = method
-                .error_type
-                .as_ref()
-                .map(|e| format!(" throws {}", type_name(e, lang, ffi_prefix)))
-                .unwrap_or_default();
+            // ~keep Every generated Java method -- instance or static factory, fallible or
+            // not -- crosses the FFI boundary through `emit_instance_method_header` /
+            // `emit_static_factory_header` (gen_bindings/types/opaque/{instance,extended}.rs),
+            // which append `throws {main_class}Exception` unconditionally except for `clone`.
+            // The FFI crossing itself (marshaling, allocation) can fail even when the wrapped
+            // Rust method returns a bare `T`, so `method.error_type` (a fact about the *core*
+            // Rust signature) is the wrong oracle here -- it must always be present and must
+            // always name the FFI exception, never the domain error type.
+            let throws = if method.name == "clone" {
+                String::new()
+            } else {
+                format!(" throws {ffi_prefix}RsException")
+            };
             if method.is_static {
                 format!("public static {} {}({}){}", ret, java_name, params.join(", "), throws)
             } else {
@@ -621,7 +652,20 @@ pub(crate) fn render_method_signature_with_override(
             }
         }
         Language::Elixir => {
-            let params: Vec<String> = method.params.iter().map(|p| p.name.to_snake_case()).collect();
+            // ~keep An instance Elixir method takes the struct as an explicit leading `obj`
+            // parameter -- rustler's codegen (`gen_bindings/helpers/conversions.rs`) pushes
+            // `"obj"` onto `def_args` whenever `method.receiver.is_some()`, and the jinja
+            // template emits `def {{ method_name }}({{ def_args }})` from that list verbatim --
+            // there is no implicit `self` the way Ruby/Python have one. `method.is_static` is a
+            // safe proxy for `receiver.is_some()`: both derive from the same `detect_receiver()`
+            // call (extract/extractor/functions/methods.rs), so a static method (no receiver)
+            // must not get the `obj` param, exactly mirroring the real generator.
+            let mut params: Vec<String> = if method.is_static {
+                Vec::new()
+            } else {
+                vec!["obj".to_string()]
+            };
+            params.extend(method.params.iter().map(|p| p.name.to_snake_case()));
             format!("def {}({})", name, params.join(", "))
         }
         Language::R => {
@@ -776,12 +820,27 @@ pub(crate) fn render_method_signature_with_override(
                     format!("{pty}? {pname}")
                 })
                 .collect();
-            let mut all_params = required;
-            if !optional.is_empty() {
-                all_params.push(format!("[{}]", optional.join(", ")));
-            }
+            // ~keep Same real-backend grouping as `render_dart_fn_sig` -- required positional
+            // params, then any optional ones grouped in `{}` (Dart named-optional syntax), not
+            // `[]`. See that function's doc comment for the source citation.
+            let params_str = match (required.is_empty(), optional.is_empty()) {
+                (_, true) => required.join(", "),
+                (true, false) => format!("{{{}}}", optional.join(", ")),
+                (false, false) => format!("{}, {{{}}}", required.join(", "), optional.join(", ")),
+            };
             let static_kw = if method.is_static { "static " } else { "" };
-            format!("{static_kw}{ret} {name}({})", all_params.join(", "))
+            // ~keep Same unconditional `Future<T>` wrap as `render_dart_fn_sig` -- flutter_rust_bridge
+            // dispatches instance and static methods across the FFI boundary the same way it
+            // dispatches free functions, so this is not gated on `method.is_async` or
+            // `method.is_static` either. See that function's doc comment for the source citation.
+            let future_ret = if ret_is_overridden {
+                ret.clone()
+            } else if ret == "void" {
+                "Future<void>".to_string()
+            } else {
+                format!("Future<{ret}>")
+            };
+            format!("{static_kw}{future_ret} {name}({params_str})")
         }
         Language::Zig => {
             let params: Vec<String> = method

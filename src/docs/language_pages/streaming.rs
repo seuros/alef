@@ -141,7 +141,9 @@ fn streaming_method_signature_override(
             first_param_type(method, lang, ffi_prefix),
             return_type
         )),
-        Language::Elixir => Some(format!("def {}(client, req)", adapter.name.to_snake_case())),
+        // ~keep The rustler backend always names the receiver param `obj`, never `client`
+        // (`gen_bindings/helpers/conversions.rs`'s `def_args.push("obj".to_string())`).
+        Language::Elixir => Some(format!("def {}(obj, req)", adapter.name.to_snake_case())),
         Language::Ffi | Language::C | Language::Jni => Some(streaming_c_start_signature(
             adapter,
             method,

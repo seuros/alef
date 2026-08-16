@@ -39,7 +39,11 @@ fn test_render_type_with_multiple_methods_have_same_heading_level() {
                 ),
             ],
             doc: "A trait with multiple methods.".to_string(),
-            is_opaque: false,
+            // ~keep An opaque handle type -- the heading-level assertions below only care that
+            // the three methods render, and a non-opaque type never binds methods outside Rust
+            // (see `methods_bound_in_lang` in `language_pages/type_render.rs`), which would make
+            // this fixture assert on content the doc gate now correctly omits.
+            is_opaque: true,
             cfg: None,
             is_copy: false,
             is_clone: false,

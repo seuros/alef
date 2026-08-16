@@ -416,7 +416,17 @@ pub(crate) fn doc_type_with_optional(ty: &TypeRef, lang: Language, optional: boo
             Language::Python => format!("{inner} | None"),
             Language::Node | Language::Wasm => format!("{inner} | null"),
             Language::Go => format!("*{inner}"),
-            Language::Java => format!("Optional<{}>", java_boxed_type(ty)),
+            // ~keep The public facade unwraps the internal `...Rs` `Optional<T>` and returns
+            // `@Nullable T` instead (backends/java/gen_bindings/facade.rs), and record fields do
+            // the same (gen_bindings/types/records.rs) -- both call `render_nullable_type`
+            // uniformly for params, returns, and fields. Delegating here, the same way
+            // type_mapping.rs's `TypeRef::Optional` arm does, is what makes a third
+            // hand-derived copy of this logic impossible; matching its output by hand is what
+            // produced this copy's drift in the first place.
+            Language::Java => {
+                let boxed = java_boxed_type(ty);
+                crate::backends::java::gen_bindings::helpers::render_nullable_type(&boxed, true)
+            }
             Language::Csharp => format!("{inner}?"),
             Language::Ruby => format!("{inner}?"),
             Language::Php => format!("?{inner}"),
@@ -1336,7 +1346,7 @@ mod tests {
                 true,
                 TEST_PREFIX
             ),
-            "Optional<Integer>"
+            "@Nullable Integer"
         );
     }
 
@@ -1349,7 +1359,7 @@ mod tests {
                 true,
                 TEST_PREFIX
             ),
-            "Optional<Boolean>"
+            "@Nullable Boolean"
         );
     }
 
@@ -1362,7 +1372,7 @@ mod tests {
                 true,
                 TEST_PREFIX
             ),
-            "Optional<Double>"
+            "@Nullable Double"
         );
     }
 
@@ -1370,7 +1380,7 @@ mod tests {
     fn test_doc_type_with_optional_java_non_primitive_not_double_boxed() {
         assert_eq!(
             doc_type_with_optional(&TypeRef::String, Language::Java, true, TEST_PREFIX),
-            "Optional<String>"
+            "@Nullable String"
         );
     }
 

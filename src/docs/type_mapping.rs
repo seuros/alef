@@ -53,9 +53,16 @@ pub fn doc_type(ty: &TypeRef, lang: Language, ffi_prefix: &str) -> String {
                 Language::Python => format!("{inner_ty} | None"),
                 Language::Node | Language::Wasm => format!("{inner_ty} | null"),
                 Language::Go => format!("*{inner_ty}"),
+                // ~keep The internal `...Rs` FFI-adjacent class genuinely returns
+                // `Optional<T>` (see `java_return_type` in backends/java/type_map.rs), but
+                // that is not what a caller sees: the public facade unwraps it and returns
+                // `@Nullable T` instead (backends/java/gen_bindings/facade.rs's `return_type`
+                // computation), and record fields do the same (gen_bindings/types/records.rs).
+                // Documenting `Optional<T>` here was describing the wrong layer. Delegate to
+                // the facade's own `render_nullable_type` so the two can never drift again.
                 Language::Java => {
                     let boxed = java_boxed_type(inner);
-                    format!("Optional<{boxed}>")
+                    crate::backends::java::gen_bindings::helpers::render_nullable_type(&boxed, true)
                 }
                 Language::Csharp => format!("{inner_ty}?"),
                 Language::Ruby => format!("{inner_ty}?"),
@@ -144,12 +151,16 @@ pub fn doc_type(ty: &TypeRef, lang: Language, ffi_prefix: &str) -> String {
                     let trimmed = part.trim();
                     match trimmed {
                         "usize" | "u64" | "u32" | "u16" | "u8" | "i64" | "i32" | "i16" | "i8" | "isize" => {
+                            // ~keep Same usize/isize-vs-u64/i64 distinction as the primary
+                            // `doc_primitive` Swift arm below -- see its comment.
                             let swift_name = match trimmed {
-                                "u64" | "usize" => "UInt64",
+                                "u64" => "UInt64",
+                                "usize" => "UInt",
                                 "u32" => "UInt32",
                                 "u16" => "UInt16",
                                 "u8" => "UInt8",
-                                "i64" | "isize" => "Int64",
+                                "i64" => "Int64",
+                                "isize" => "Int",
                                 "i32" => "Int32",
                                 "i16" => "Int16",
                                 "i8" => "Int8",
@@ -352,7 +363,13 @@ pub(crate) fn doc_primitive(p: &PrimitiveType, lang: Language) -> String {
             PrimitiveType::I64 => "int64".to_string(),
             PrimitiveType::F32 => "float32".to_string(),
             PrimitiveType::F64 => "float64".to_string(),
-            PrimitiveType::Usize | PrimitiveType::Isize => "int".to_string(),
+            // ~keep Matches GoMapper (backends/go/type_map.rs) exactly: usize/isize are
+            // platform-native width in Rust, and Go's own `uint`/`int` are the matching
+            // platform-native-width types -- but the two are not interchangeable with each
+            // other. Collapsing them to a single "int" was documenting `uint` fields as
+            // signed.
+            PrimitiveType::Usize => "uint".to_string(),
+            PrimitiveType::Isize => "int".to_string(),
         },
         Language::Java => match p {
             PrimitiveType::Bool => "boolean".to_string(),
@@ -373,8 +390,13 @@ pub(crate) fn doc_primitive(p: &PrimitiveType, lang: Language) -> String {
             PrimitiveType::I16 => "short".to_string(),
             PrimitiveType::I32 => "int".to_string(),
             PrimitiveType::I64 => "long".to_string(),
-            PrimitiveType::Usize => "nuint".to_string(),
-            PrimitiveType::Isize => "nint".to_string(),
+            // ~keep Matches CsharpMapper (backends/csharp/type_map.rs) exactly. `nuint`/
+            // `nint` are C#'s *native-pointer-width* types -- 32-bit on a 32-bit runtime --
+            // which is not what the emitted binding uses; the real generated source is the
+            // fixed-width `ulong`/`long`, matching Rust's own 64-bit-in-practice usize/isize.
+            // Documenting `nuint` here was a genuine type error, not a cosmetic mismatch.
+            PrimitiveType::Usize => "ulong".to_string(),
+            PrimitiveType::Isize => "long".to_string(),
             PrimitiveType::F32 => "float".to_string(),
             PrimitiveType::F64 => "double".to_string(),
         },
@@ -448,17 +470,30 @@ pub(crate) fn doc_primitive(p: &PrimitiveType, lang: Language) -> String {
             PrimitiveType::U8 => "UInt8".to_string(),
             PrimitiveType::U16 => "UInt16".to_string(),
             PrimitiveType::U32 => "UInt32".to_string(),
-            PrimitiveType::U64 | PrimitiveType::Usize => "UInt64".to_string(),
+            PrimitiveType::U64 => "UInt64".to_string(),
             PrimitiveType::I8 => "Int8".to_string(),
             PrimitiveType::I16 => "Int16".to_string(),
             PrimitiveType::I32 => "Int32".to_string(),
-            PrimitiveType::I64 | PrimitiveType::Isize => "Int64".to_string(),
+            PrimitiveType::I64 => "Int64".to_string(),
+            // ~keep Matches SwiftMapper (backends/swift/type_map.rs) exactly: Swift has a
+            // native platform-width `UInt`/`Int` distinct from the fixed-width
+            // `UInt64`/`Int64` Rust's u64/i64 map to. Collapsing usize/isize into the
+            // fixed-width names was the same family of error as C#'s `nuint`/`ulong` mixup.
+            PrimitiveType::Usize => "UInt".to_string(),
+            PrimitiveType::Isize => "Int".to_string(),
             PrimitiveType::F32 => "Float".to_string(),
             PrimitiveType::F64 => "Double".to_string(),
         },
         Language::Dart => match p {
             PrimitiveType::Bool => "bool".to_string(),
             PrimitiveType::F32 | PrimitiveType::F64 => "double".to_string(),
+            // ~keep flutter_rust_bridge widens usize/isize to its own portable
+            // `PlatformInt64` typedef rather than a bare `int` -- Rust's usize/isize vary in
+            // width across compile targets (32-bit vs 64-bit), the same portability hazard
+            // C#'s `nuint` has. This substitution happens inside frb itself, downstream of
+            // alef's own codegen (DartMapper in backends/dart/type_map.rs has no override
+            // for it either), so there is no in-repo canonical function to delegate to here.
+            PrimitiveType::Usize | PrimitiveType::Isize => "PlatformInt64".to_string(),
             _ => "int".to_string(),
         },
         Language::Gleam => match p {

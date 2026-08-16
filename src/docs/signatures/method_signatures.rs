@@ -453,6 +453,17 @@ fn test_render_method_signature_php_with_error_type() {
     assert_eq!(sig, "public function parse(): string");
 }
 
+/// ~keep Every generated Java instance method -- fallible or not -- crosses the FFI boundary
+/// through `emit_instance_method_header` (`gen_bindings/types/opaque/instance.rs`), which
+/// appends `" throws "` + `symbols.exception_class` (`format!("{main_class}Exception")`)
+/// unconditionally except for `clone` (see the dedicated clone test below). `main_class` is
+/// `resolve_main_class`: the crate name PascalCased, with an `Rs` suffix unless it already
+/// ends in `Rs`. The FFI crossing itself can fail (marshaling, allocation) even when the
+/// wrapped Rust method returns a bare `T`, not a `Result` -- so `method.error_type` (a fact
+/// about the *core* Rust signature) is the wrong oracle for this clause; it must always be
+/// present, and it must always name the FFI exception, never the domain error type. This is
+/// also why every `**Example:**` block that doesn't `try`/`catch` this checked exception
+/// fails to compile -- see the docs-writer report for that half of the fix.
 #[test]
 fn test_render_method_signature_java_sync_with_params_and_return() {
     let method = make_method(
@@ -464,9 +475,13 @@ fn test_render_method_signature_java_sync_with_params_and_return() {
         None,
     );
     let sig = render_method_signature(&method, "Document", Language::Java, TEST_PREFIX);
-    assert_eq!(sig, "public String getText(int page)");
+    assert_eq!(sig, "public String getText(int page) throws HtmRsException");
 }
 
+/// ~keep Static factory methods go through a different emitter
+/// (`emit_static_factory_header`, `gen_bindings/types/opaque/extended.rs`) but declare the
+/// same unconditional `throws {main_class}Exception` -- the `is_static` branch must not be
+/// the thing that turns throws off.
 #[test]
 fn test_render_method_signature_java_static() {
     let method = make_method(
@@ -478,7 +493,7 @@ fn test_render_method_signature_java_static() {
         None,
     );
     let sig = render_method_signature(&method, "Document", Language::Java, TEST_PREFIX);
-    assert_eq!(sig, "public static Document create(String name)");
+    assert_eq!(sig, "public static Document create(String name) throws HtmRsException");
 }
 
 #[test]
@@ -492,16 +507,23 @@ fn test_render_method_signature_java_optional_return() {
         None,
     );
     let sig = render_method_signature(&method, "Corpus", Language::Java, TEST_PREFIX);
-    assert_eq!(sig, "public Optional<String> find()");
+    // ~keep The emitted Java facade renders an `Option<T>` return as `@Nullable T` and unwraps at
+    // the boundary -- only the internal `…Rs` FFI layer returns `Optional<T>`. `doc_type` now
+    // delegates to `render_nullable_type`, the same function the facade codegen calls.
+    assert_eq!(sig, "public @Nullable String find() throws HtmRsException");
 }
 
 #[test]
 fn test_render_method_signature_java_async() {
     let method = make_method("fetch", vec![], TypeRef::String, true, false, None);
     let sig = render_method_signature(&method, "Client", Language::Java, TEST_PREFIX);
-    assert_eq!(sig, "public String fetch()");
+    assert_eq!(sig, "public String fetch() throws HtmRsException");
 }
 
+/// ~keep A domain `error_type` must NOT leak into the throws clause -- the real emitter never
+/// names it. Guards against a fix that reads `throws {}` from `method.error_type` when present
+/// and only falls back to the FFI exception otherwise (still wrong in both directions: it
+/// would have passed the old test's literal string, but not the real generated code).
 #[test]
 fn test_render_method_signature_java_with_error_type() {
     let method = make_method(
@@ -513,7 +535,30 @@ fn test_render_method_signature_java_with_error_type() {
         Some("ParseError"),
     );
     let sig = render_method_signature(&method, "Parser", Language::Java, TEST_PREFIX);
-    assert_eq!(sig, "public Ast parse(String source) throws ParseError");
+    assert_eq!(sig, "public Ast parse(String source) throws HtmRsException");
+}
+
+/// ~keep The one documented exception to the unconditional throws rule: `emit_instance_method_header`
+/// checks `if method.name != "clone"` before appending the throws clause -- `clone()` never
+/// declares it. This is the positive control in the other direction: a fix that adds `throws`
+/// to every method with no exceptions would pass every test above and still document a
+/// non-existent checked exception on `clone()`.
+#[test]
+fn test_render_method_signature_java_clone_has_no_throws() {
+    let method = make_method(
+        "clone",
+        vec![],
+        TypeRef::Named("Document".to_string()),
+        false,
+        false,
+        None,
+    );
+    let sig = render_method_signature(&method, "Document", Language::Java, TEST_PREFIX);
+    assert_eq!(sig, "public Document clone()");
+    assert!(
+        !sig.contains("throws"),
+        "clone() never declares a checked exception: {sig}"
+    );
 }
 
 #[test]
@@ -565,6 +610,13 @@ fn test_render_method_signature_csharp_with_error_type() {
     assert_eq!(sig, "public string Parse()");
 }
 
+/// ~keep An instance Elixir method takes the struct as an explicit leading `obj` parameter --
+/// `conversions.rs`'s rustler codegen (`gen_bindings/helpers/conversions.rs`) pushes
+/// `def_args.push("obj".to_string())` whenever `method.receiver.is_some()`, and
+/// `elixir_opaque_method_wrapper.ex.jinja` emits `def {{ method_name }}({{ def_args }})` from
+/// that list verbatim -- there is no implicit `self` the way Ruby/Python have one. Documenting
+/// `def get_text(page)` for an instance method is not valid Elixir: nothing binds `page` to a
+/// `%Document{}` to dispatch through, and the arity is one lower than the real function.
 #[test]
 fn test_render_method_signature_elixir_sync_with_params() {
     let method = make_method(
@@ -576,14 +628,14 @@ fn test_render_method_signature_elixir_sync_with_params() {
         None,
     );
     let sig = render_method_signature(&method, "Document", Language::Elixir, TEST_PREFIX);
-    assert_eq!(sig, "def get_text(page)");
+    assert_eq!(sig, "def get_text(obj, page)");
 }
 
 #[test]
 fn test_render_method_signature_elixir_async() {
     let method = make_method("fetch", vec![], TypeRef::String, true, false, None);
     let sig = render_method_signature(&method, "Client", Language::Elixir, TEST_PREFIX);
-    assert_eq!(sig, "def fetch()");
+    assert_eq!(sig, "def fetch(obj)");
 }
 
 #[test]
@@ -597,14 +649,60 @@ fn test_render_method_signature_elixir_optional_return() {
         None,
     );
     let sig = render_method_signature(&method, "Corpus", Language::Elixir, TEST_PREFIX);
-    assert_eq!(sig, "def find()");
+    assert_eq!(sig, "def find(obj)");
 }
 
 #[test]
 fn test_render_method_signature_elixir_with_error_type() {
     let method = make_method("parse", vec![], TypeRef::String, false, false, Some("ParseError"));
     let sig = render_method_signature(&method, "Parser", Language::Elixir, TEST_PREFIX);
-    assert_eq!(sig, "def parse()");
+    assert_eq!(sig, "def parse(obj)");
+}
+
+/// ~keep The mirror image of the Go receiver contract test above: a *static* Elixir function
+/// (`method.receiver.is_none()`, e.g. an alternate constructor) never gets the `obj` struct
+/// parameter -- `conversions.rs` only pushes it when `method.receiver.is_some()`. A fix that
+/// adds `obj` unconditionally (rather than gating on `is_static`) would pass every test above
+/// and still document a receiver on a static method that has none.
+#[test]
+fn test_render_method_signature_elixir_static_method_has_no_receiver() {
+    let method = make_method(
+        "create",
+        vec![make_param("name", TypeRef::String, false)],
+        TypeRef::Named("Document".to_string()),
+        false,
+        true,
+        None,
+    );
+    let sig = render_method_signature(&method, "Document", Language::Elixir, TEST_PREFIX);
+    assert_eq!(sig, "def create(name)");
+    assert!(
+        !sig.contains("obj"),
+        "a static Elixir function has no struct receiver: {sig}"
+    );
+}
+
+/// ~keep Same discipline as `test_render_method_signature_go_static_vs_instance_differ_only_in_receiver_clause`:
+/// the static and instance renderings of the *same* method must differ only in whether the
+/// leading `obj` parameter is present -- not in name, remaining params, or return type.
+#[test]
+fn test_render_method_signature_elixir_static_vs_instance_differ_only_in_receiver() {
+    let instance_method = make_method(
+        "get_text",
+        vec![make_param("page", TypeRef::Primitive(PrimitiveType::U32), false)],
+        TypeRef::String,
+        false,
+        false,
+        None,
+    );
+    let mut static_method = instance_method.clone();
+    static_method.is_static = true;
+
+    let instance_sig = render_method_signature(&instance_method, "Document", Language::Elixir, TEST_PREFIX);
+    let static_sig = render_method_signature(&static_method, "Document", Language::Elixir, TEST_PREFIX);
+
+    assert_eq!(instance_sig, "def get_text(obj, page)");
+    assert_eq!(static_sig, "def get_text(page)");
 }
 
 #[test]
