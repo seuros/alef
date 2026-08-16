@@ -431,13 +431,20 @@ pub(super) fn render_test_file_inner(
                 &fixture.tags,
                 &fixture.input,
             );
-            config
-                .adapters
-                .iter()
-                .find(|adapter| {
-                    adapter.name == call.function
-                        && matches!(adapter.pattern, crate::core::config::extras::AdapterPattern::Streaming)
-                        && adapter.owner_type.is_some()
+            let lang_for_recipe = if kotlin_android_style {
+                "kotlin_android"
+            } else {
+                "kotlin"
+            };
+            let adapter_lookup_name = call.core_lookup_name(lang_for_recipe);
+            adapter_lookup_name
+                .as_deref()
+                .and_then(|name| {
+                    config.adapters.iter().find(|adapter| {
+                        adapter.name == name
+                            && matches!(adapter.pattern, crate::core::config::extras::AdapterPattern::Streaming)
+                            && adapter.owner_type.is_some()
+                    })
                 })
                 .and_then(|adapter| adapter.params.first())
                 .map(|param| param.ty.rsplit("::").next().unwrap_or(&param.ty).to_string())

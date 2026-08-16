@@ -467,8 +467,8 @@ fn resolve_call_info(call: &CallConfig, lang: &str, functions: &[crate::core::ir
     let result_type_name = overrides
         .and_then(|o| o.result_type.as_ref())
         .cloned()
-        .or_else(|| resolve_ir_result_type(call, functions))
-        .unwrap_or_else(|| call.function.to_pascal_case());
+        .or_else(|| resolve_ir_result_type(call, lang, functions))
+        .unwrap_or_else(|| fallback_result_type_name(call, lang, functions));
     let options_type_name = overrides
         .and_then(|o| o.options_type.as_deref())
         .or(call.options_type.as_deref())
@@ -477,7 +477,7 @@ fn resolve_call_info(call: &CallConfig, lang: &str, functions: &[crate::core::ir
     let client_factory = overrides.and_then(|o| o.client_factory.as_ref()).cloned();
     let raw_c_result_type = overrides
         .and_then(|o| o.raw_c_result_type.clone())
-        .or_else(|| return_shape::resolve_raw_c_result_type(call, functions));
+        .or_else(|| return_shape::resolve_raw_c_result_type(call, lang, functions));
     let c_free_fn = overrides.and_then(|o| o.c_free_fn.clone());
     let c_engine_factory = overrides.and_then(|o| o.c_engine_factory.clone());
     let result_is_option = overrides
@@ -491,7 +491,16 @@ fn resolve_call_info(call: &CallConfig, lang: &str, functions: &[crate::core::ir
     let result_is_bytes = call.result_is_bytes || overrides.is_some_and(|o| o.result_is_bytes);
     let extra_args = overrides.map(|o| o.extra_args.clone()).unwrap_or_default();
     let mut args = call.args.clone();
-    if let Some(function) = functions.iter().find(|function| function.name == call.function) {
+    // `functions` is the Rust core's IR, so this lookup wants the Rust identity and must NOT
+    // resolve `overrides.c.function` — that names a prefixed C export (`samplellm_chat`), not
+    // the Rust function (`chat`). `core_lookup_name` keeps the base name as the key and only
+    // supplies a fallback when the base names nothing at all, which stops the key degrading
+    // to `""` and silently deriving arg/result types from the empty string. ~keep
+    let core_lookup_name = call.core_lookup_name(lang);
+    if let Some(function) = core_lookup_name
+        .as_deref()
+        .and_then(|name| functions.iter().find(|function| function.name == name))
+    {
         for (index, arg) in args.iter_mut().enumerate() {
             if arg.element_type.is_some() || arg.arg_type != "json_object" {
                 continue;
@@ -531,16 +540,63 @@ fn named_type(type_ref: &crate::core::ir::TypeRef) -> Option<&str> {
     }
 }
 
-fn resolve_ir_result_type(call: &CallConfig, functions: &[crate::core::ir::FunctionDef]) -> Option<String> {
-    let function = functions.iter().find(|function| function.name == call.function)?;
-    match &function.return_type {
-        crate::core::ir::TypeRef::Named(name) => Some(name.clone()),
-        crate::core::ir::TypeRef::Optional(inner) => match inner.as_ref() {
-            crate::core::ir::TypeRef::Named(name) => Some(name.clone()),
-            _ => None,
-        },
-        _ => None,
+/// Name the type a call's result handle points at, read from the core IR.
+///
+/// `FunctionDef::return_type` is already the `Ok` type: the extractor splits `Result<T, E>`
+/// into `return_type = T` plus a separate `error_type`, so a fallible
+/// `fn complete(..) -> Result<CompletionResponse, String>` resolves to `CompletionResponse`.
+///
+/// The named type is reached through [`named_type`], the recursive unwrapper this module
+/// already uses for argument element types — a second, one-level-deep match sitting beside it
+/// answered `None` for `Result<Vec<Model>, E>` and every other nesting, and every `None` here
+/// lands on [`fallback_result_type_name`].
+fn resolve_ir_result_type(call: &CallConfig, lang: &str, functions: &[crate::core::ir::FunctionDef]) -> Option<String> {
+    let lookup_name = call.core_lookup_name(lang)?;
+    let function = functions.iter().find(|function| function.name == *lookup_name)?;
+    named_type(&function.return_type).map(str::to_string)
+}
+
+/// Last-resort result type when neither config nor the IR names one: PascalCase the call's
+/// function name.
+///
+/// This invents a name. When it is wrong the damage surfaces stages later and quietly:
+/// `result_type_name` becomes both the accessor prefix (`{prefix}_{result_snake}_{leaf}`) and
+/// the `parent_is_ir_type` flag, and `ensure_leaf_field_exists` default-allows every leaf whose
+/// parent is not an IR type — so a fabricated type does not fail generation, it *disables* the
+/// nested-field verification for that fixture.
+///
+/// It nonetheless has to stay, because resolution legitimately cannot answer for two shapes:
+///
+/// - `E2eCodegen::generate` carries no `functions` parameter, so `render_test_file` passes an
+///   empty slice and no call on the generated-test-file path can resolve at all. Only the
+///   snippet path (`generate_e2e` → `render_snippet_body_with_functions`) is threaded.
+/// - `ApiSurface::functions` holds free `pub fn`s only; a call naming an inherent or trait
+///   method (a client's `chat`, say) is a `MethodDef` and is never in the slice.
+///
+/// Both are guess-shaped, so it warns when the IR was available and the call still did not
+/// resolve — the actionable case, fixed by setting `result_type` on the call override — and
+/// stays at debug for the structural gap, which is not per-call actionable and would otherwise
+/// warn once for every fixture in the suite.
+fn fallback_result_type_name(call: &CallConfig, lang: &str, functions: &[crate::core::ir::FunctionDef]) -> String {
+    let result_type = call.function.to_pascal_case();
+    if functions.is_empty() {
+        tracing::debug!(
+            call = %call.function,
+            language = %lang,
+            %result_type,
+            "no core IR functions available to this generator; result type derived from the call name"
+        );
+    } else {
+        tracing::warn!(
+            call = %call.function,
+            language = %lang,
+            %result_type,
+            "call did not resolve to a core IR function with a named return type; result type \
+             derived from the call name, which disables nested-field verification if the name is \
+             not a real type — set `result_type` on the call override"
+        );
     }
+    result_type
 }
 
 /// Resolve call info for a fixture, with fallback to default call's client_factory.
@@ -650,7 +706,9 @@ mod test_function;
 mod trait_bridge_snippet;
 mod visitor;
 
-use assertions::{build_args_string_c, emit_nested_accessor, render_assertion};
+use assertions::{
+    LeafFieldCheck, build_args_string_c, emit_nested_accessor, ensure_leaf_field_exists, render_assertion,
+};
 use call_patterns::{render_bytes_test_function, render_engine_factory_test_function};
 use project::{render_download_script, render_gitignore, render_makefile};
 use runner::{render_main_c, render_test_runner_header};
@@ -1337,5 +1395,122 @@ mod snippet_tests {
         assert!(rendered.contains("sample_clear_formats();"), "{rendered}");
         assert!(!rendered.contains("result ="), "{rendered}");
         assert!(!rendered.contains("_free("), "{rendered}");
+    }
+}
+
+#[cfg(test)]
+mod result_type_resolution_tests {
+    use super::*;
+    use crate::core::ir::{FunctionDef, TypeRef};
+
+    fn call_named(function: &str) -> CallConfig {
+        CallConfig {
+            function: function.to_string(),
+            ..CallConfig::default()
+        }
+    }
+
+    fn function_returning(name: &str, return_type: TypeRef, error_type: Option<&str>) -> FunctionDef {
+        FunctionDef {
+            name: name.to_string(),
+            return_type,
+            error_type: error_type.map(str::to_string),
+            ..FunctionDef::default()
+        }
+    }
+
+    /// The case that was silently wrong. The extractor splits `Result<T, E>` into
+    /// `return_type = T` plus a separate `error_type`, so a fallible
+    /// `pub fn complete(..) -> Result<CompletionResponse, String>` must resolve to
+    /// `CompletionResponse` — never to `Complete`, the PascalCased call name, which is not a
+    /// type at all and disables the nested-field walk that reads it.
+    #[test]
+    fn should_resolve_a_fallible_functions_result_type_to_its_ok_type() {
+        let functions = vec![function_returning(
+            "complete",
+            TypeRef::Named("CompletionResponse".to_string()),
+            Some("String"),
+        )];
+
+        assert_eq!(
+            resolve_ir_result_type(&call_named("complete"), "c", &functions),
+            Some("CompletionResponse".to_string())
+        );
+    }
+
+    /// Control: the `Optional(Named)` shape the previous one-level match already handled must
+    /// keep resolving to the same name.
+    #[test]
+    fn should_resolve_an_optional_named_return_type_unchanged() {
+        let functions = vec![function_returning(
+            "find_model",
+            TypeRef::Optional(Box::new(TypeRef::Named("Model".to_string()))),
+            Some("String"),
+        )];
+
+        assert_eq!(
+            resolve_ir_result_type(&call_named("find_model"), "c", &functions),
+            Some("Model".to_string())
+        );
+    }
+
+    /// `Result<Vec<Model>, E>` answered `None` under the one-level match and fell through to
+    /// the call-name fallback, even though the sibling `named_type` in this very module already
+    /// unwrapped `Vec`.
+    #[test]
+    fn should_resolve_through_a_collection_return_type() {
+        let functions = vec![function_returning(
+            "list_models",
+            TypeRef::Vec(Box::new(TypeRef::Named("Model".to_string()))),
+            Some("String"),
+        )];
+
+        assert_eq!(
+            resolve_ir_result_type(&call_named("list_models"), "c", &functions),
+            Some("Model".to_string())
+        );
+    }
+
+    /// A return type with no named type in it has no result type to name; the caller's
+    /// fallback, not a wrong name, is the right answer here.
+    #[test]
+    fn should_not_invent_a_result_type_for_an_unnamed_return() {
+        let functions = vec![function_returning("ping", TypeRef::Unit, None)];
+
+        assert_eq!(resolve_ir_result_type(&call_named("ping"), "c", &functions), None);
+    }
+
+    /// The generated-test-file path passes an empty `functions` slice, and free-function IR
+    /// never contains methods, so resolution cannot answer for either shape. The fallback is
+    /// load-bearing for exactly those cases — this pins that it still produces the documented
+    /// PascalCase name rather than failing generation.
+    #[test]
+    fn should_fall_back_to_the_pascal_cased_call_name_without_ir_functions() {
+        assert_eq!(resolve_ir_result_type(&call_named("complete"), "c", &[]), None);
+        assert_eq!(
+            fallback_result_type_name(&call_named("complete"), "c", &[]),
+            "Complete".to_string(),
+            "the fallback must stay, and its output must stay the documented shape"
+        );
+    }
+
+    /// End to end through `resolve_call_info`: with the IR threaded, the resolved type wins
+    /// over the fallback; with no IR, the fallback still applies.
+    #[test]
+    fn should_prefer_the_resolved_result_type_over_the_call_name_fallback() {
+        let functions = vec![function_returning(
+            "complete",
+            TypeRef::Named("CompletionResponse".to_string()),
+            Some("String"),
+        )];
+
+        assert_eq!(
+            resolve_call_info(&call_named("complete"), "c", &functions).result_type_name,
+            "CompletionResponse".to_string()
+        );
+        assert_eq!(
+            resolve_call_info(&call_named("complete"), "c", &[]).result_type_name,
+            "Complete".to_string()
+        );
     }
 }

@@ -11,7 +11,7 @@ use crate::e2e::escape::{escape_csharp, sanitize_filename};
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::{Fixture, FixtureGroup};
 use anyhow::Result;
-use heck::ToUpperCamelCase;
+use heck::{ToSnakeCase, ToUpperCamelCase};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -552,7 +552,15 @@ fn render_test_method(
     let returns_void = if call_config.returns_void {
         true
     } else {
-        let fn_name = call_config.function.as_str();
+        // Classify on the resolved name, snake-cased. The patterns below are Rust spelling,
+        // but registry calls are exactly the ones that leave the base `function` empty and
+        // carry their only name in `overrides.csharp.function`, spelled `ClearValidators`.
+        // Reading the base matched nothing there and assigned a result from a void C#
+        // method. Same reasoning as `csharp/snippet.rs`. ~keep
+        let fn_name = call_config
+            .effective_function("csharp")
+            .map(|function| function.to_snake_case())
+            .unwrap_or_default();
         fn_name.starts_with("register_")
             || fn_name.starts_with("unregister_")
             || fn_name.starts_with("clear_")
@@ -583,9 +591,10 @@ fn render_test_method(
         .and_then(|o| o.options_via.as_deref())
         .or(top_level_options_via);
 
-    let adapter_request_type_owned: Option<String> = adapters
-        .iter()
-        .find(|a| a.name == call_config.function.as_str())
+    let adapter_lookup_name = call_config.core_lookup_name("csharp");
+    let adapter_request_type_owned: Option<String> = adapter_lookup_name
+        .as_deref()
+        .and_then(|name| adapters.iter().find(|a| a.name == name))
         .and_then(|a| a.request_type.as_deref())
         .map(|rt| rt.rsplit("::").next().unwrap_or(rt).to_string());
 

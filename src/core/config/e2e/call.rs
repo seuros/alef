@@ -1,7 +1,9 @@
 use super::SelectWhen;
 use super::defaults::*;
+use heck::ToSnakeCase;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 /// Configuration for the function call in each test.
@@ -56,7 +58,16 @@ pub struct CallConfig {
     /// require a recipe.
     #[serde(default)]
     pub assertion_recipes: HashSet<String>,
-    /// The function name (alef applies language naming conventions).
+    /// The language-neutral function name (alef applies language naming conventions).
+    ///
+    /// **Do not read this field to decide anything.** It is legitimately empty when a call
+    /// names itself only per language, so a direct read yields `""` and every derived
+    /// decision — adapter lookups, IR lookups, name-prefix classifiers, "does this call
+    /// exist" gates — fails silently rather than loudly. Go through
+    /// [`CallConfig::effective_function`] for the symbol a binding must emit, or
+    /// [`CallConfig::core_lookup_name`] for the key into a Rust-side table. The only reads
+    /// that belong here are those two resolvers and the per-language override chains they
+    /// are replacing.
     #[serde(default)]
     pub function: String,
     /// The module/package where the function lives.
@@ -209,6 +220,29 @@ impl CallConfig {
             .and_then(|override_config| override_config.function.as_deref())
             .filter(|function| !function.trim().is_empty())
             .or_else(|| (!self.function.trim().is_empty()).then_some(self.function.as_str()))
+    }
+
+    /// The name to match this call against tables keyed by the Rust core's own function
+    /// names: `[[crates.adapters]]` (`AdapterConfig::name`) and the IR `FunctionDef` list.
+    ///
+    /// Those tables spell a function the way Rust does, so the base `function` is the key
+    /// whenever it names anything — a populated base resolves exactly as reading the field
+    /// directly did, which is why adopting this method cannot move an existing consumer.
+    /// It is the empty base that needs help: when the name lives only in
+    /// `overrides.<language>.function` that override is the sole name available, and it is
+    /// snake-cased on the way out because an override spells the symbol the way its binding
+    /// does (`ClearValidators`, `clearValidators`) while these tables spell it the Rust way.
+    ///
+    /// `None` means the call names no function at all for `language`. Callers must treat it
+    /// as "no match" rather than looking up `""`, which silently matches nothing and lets
+    /// downstream naming derive types from the empty string.
+    pub fn core_lookup_name(&self, language: &str) -> Option<Cow<'_, str>> {
+        let base = self.function.trim();
+        if !base.is_empty() {
+            return Some(Cow::Borrowed(base));
+        }
+        self.effective_function(language)
+            .map(|function| Cow::Owned(function.to_snake_case()))
     }
 
     /// Effective streaming opt-in/out flag, preserving the legacy

@@ -159,17 +159,16 @@ pub(super) fn render_spec_file(
                 // `[crates.e2e.call.overrides.ruby]` map only carries chat-shape entries.
                 let fixture_enum_fields: &HashMap<String, String> =
                     fixture_call_overrides.map(|o| &o.enum_fields).unwrap_or(enum_fields);
-                let adapter_req_type_owned: Option<String> = adapters
+                let adapter_lookup_name = fixture_call.core_lookup_name("ruby");
+                let adapter_lookup_names: Vec<&str> = adapter_lookup_name.as_deref().into_iter().collect();
+                let adapter_req_type_owned: Option<String> = adapter_lookup_names
                     .iter()
-                    .find(|a| a.name == fixture_call.function.as_str())
+                    .find_map(|name| adapters.iter().find(|a| a.name == *name))
                     .and_then(|a| a.request_type.as_deref())
                     .map(|rt| rt.rsplit("::").next().unwrap_or(rt).to_string());
-                let streaming_item_type_owned = crate::e2e::codegen::recipe::streaming_item_type(
-                    fixture_call,
-                    adapters,
-                    &[fixture_call.function.as_str()],
-                )
-                .map(str::to_string);
+                let streaming_item_type_owned =
+                    crate::e2e::codegen::recipe::streaming_item_type(fixture_call, adapters, &adapter_lookup_names)
+                        .map(str::to_string);
                 let example = if is_streaming {
                     super::examples::render_chat_stream_example(
                         fixture,

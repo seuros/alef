@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Result, bail};
-use heck::ToUpperCamelCase;
+use heck::{ToSnakeCase, ToUpperCamelCase};
 
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::{EnumDef, TypeDef};
@@ -110,11 +110,20 @@ pub(super) fn render_snippet_body(
         .and_then(|value| value.module.clone())
         .or_else(|| config.csharp.as_ref().and_then(|value| value.namespace.clone()))
         .unwrap_or_else(|| config.name.to_upper_camel_case());
+    // Classify on the resolved name, snake-cased: the registry heuristic below is written in
+    // Rust spelling, but a call whose base `function` is empty carries its only name in
+    // `overrides.csharp.function`, spelled the C# way (`ClearValidators`). Reading the raw
+    // base there yields `""`, which matches no prefix and misclassifies every registry call
+    // as value-returning. ~keep
+    let registry_name = call
+        .effective_function("csharp")
+        .map(|function| function.to_snake_case())
+        .unwrap_or_default();
     let returns_void = call.returns_void
-        || matches!(call.function.as_str(), "initialize" | "shutdown")
+        || matches!(registry_name.as_str(), "initialize" | "shutdown")
         || ["register_", "unregister_", "clear_"]
             .iter()
-            .any(|prefix| call.function.starts_with(prefix));
+            .any(|prefix| registry_name.starts_with(prefix));
     let expects_error = fixture
         .assertions
         .iter()
@@ -225,6 +234,77 @@ mod tests {
         assert!(body.contains("Console.WriteLine(document);"));
         assert!(!body.contains("[Fact]"));
         assert!(!body.contains("Assert."));
+    }
+
+    /// Render the C# snippet for a `clear_*` registry call spelled `spelling`, placed either at
+    /// the call's base `function` or only in its `overrides.csharp.function`.
+    fn registry_snippet(base: &str, csharp_override: Option<&str>) -> String {
+        let fixture = Fixture {
+            id: "clear_validators".into(),
+            description: "Clear all validators".into(),
+            input: serde_json::Value::Null,
+            ..Fixture::default()
+        };
+        let mut call = CallConfig {
+            function: base.into(),
+            result_var: "result".into(),
+            ..CallConfig::default()
+        };
+        call.overrides.insert(
+            "csharp".into(),
+            CallOverride {
+                function: csharp_override.map(str::to_string),
+                ..CallOverride::default()
+            },
+        );
+        let config = ResolvedCrateConfig {
+            name: "sample_core".into(),
+            ..ResolvedCrateConfig::default()
+        };
+        render_snippet_body(
+            &fixture,
+            &E2eConfig {
+                call,
+                ..E2eConfig::default()
+            },
+            &config,
+            &[],
+            &[],
+        )
+        .expect("snippet renders")
+    }
+
+    #[test]
+    fn a_registry_call_named_only_by_its_csharp_override_still_reads_as_void_returning() {
+        // `function = ""` plus one override per language is the shape a trait-bridge registry
+        // call takes when the bindings disagree on spelling. Classifying `returns_void` from the
+        // raw base saw `""`, matched no `clear_` prefix, and bound a result from a void method.
+        let body = registry_snippet("", Some("ClearValidators"));
+
+        assert!(body.contains("SampleCoreConverter.ClearValidators();"), "{body}");
+        assert!(
+            !body.contains("var result ="),
+            "a void C# method must not have its return value bound:\n{body}"
+        );
+        assert!(!body.contains("Console.WriteLine(result);"), "{body}");
+    }
+
+    #[test]
+    fn a_registry_call_named_by_its_base_is_classified_exactly_as_before() {
+        let body = registry_snippet("clear_validators", None);
+
+        assert!(body.contains("SampleCoreConverter.ClearValidators();"), "{body}");
+        assert!(!body.contains("var result ="), "{body}");
+    }
+
+    #[test]
+    fn a_value_returning_call_is_not_swept_up_by_the_registry_prefixes() {
+        let body = registry_snippet("", Some("LoadDocument"));
+
+        assert!(
+            body.contains("var result = SampleCoreConverter.LoadDocument();"),
+            "resolving the override must not turn every call into a void one:\n{body}"
+        );
     }
 
     #[test]

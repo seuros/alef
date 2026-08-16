@@ -175,10 +175,10 @@ pub(super) fn render_test_method(
     // call-level default. When set the function returns `T?` and bare-result
     // emptiness assertions must use a null-check instead of `.isEmpty()`.
     let result_is_option = call_overrides.is_some_and(|o| o.result_is_option) || call_config.result_is_option;
-    let adapter = config
-        .adapters
-        .iter()
-        .find(|adapter| adapter.name == call_config.function);
+    let adapter_lookup_name = call_config.core_lookup_name(lang);
+    let adapter = adapter_lookup_name
+        .as_deref()
+        .and_then(|name| config.adapters.iter().find(|adapter| adapter.name == name));
     let streaming_request = adapter.and_then(|adapter| {
         matches!(adapter.pattern, crate::core::config::extras::AdapterPattern::Streaming)
             .then(|| adapter.params.first())

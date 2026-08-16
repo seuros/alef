@@ -66,9 +66,10 @@ pub(super) fn render_test_file(
                 .filter_map(|a| a.element_type.as_ref().map(|t| t.to_string()))
                 .filter(|t| !super::values::is_php_reserved_type(t))
                 .collect();
-            let adapter_request_type: Option<String> = adapters
-                .iter()
-                .find(|a| a.name == call.function.as_str())
+            let adapter_lookup_name = call.core_lookup_name(lang);
+            let adapter_request_type: Option<String> = adapter_lookup_name
+                .as_deref()
+                .and_then(|name| adapters.iter().find(|a| a.name == name))
                 .and_then(|a| a.request_type.as_deref())
                 .map(|rt| rt.rsplit("::").next().unwrap_or(rt).to_string());
             opt_type

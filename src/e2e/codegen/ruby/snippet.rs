@@ -33,10 +33,10 @@ pub(super) fn render_snippet_body(
     let function = override_config
         .and_then(|value| value.function.as_deref())
         .unwrap_or(&call.function);
-    let request_type = config
-        .adapters
-        .iter()
-        .find(|value| value.name == call.function)
+    let adapter_lookup_name = call.core_lookup_name(lang);
+    let request_type = adapter_lookup_name
+        .as_deref()
+        .and_then(|name| config.adapters.iter().find(|value| value.name == name))
         .and_then(|value| value.request_type.as_deref())
         .and_then(|value| value.rsplit("::").next());
     let (mut setup_lines, mut args, _) = super::args::build_args_and_setup(
@@ -139,6 +139,74 @@ mod tests {
     use super::*;
     use crate::e2e::config::StreamingConfig;
     use crate::e2e::config::{ArgMapping, CallOverride};
+
+    /// Render the Ruby snippet for a streaming call whose adapter declares a `request_type`,
+    /// with the call's name placed either at the base `function` or only in its Ruby override.
+    fn streaming_snippet(base: &str, ruby_override: Option<&str>) -> String {
+        let fixture = Fixture {
+            id: "stream_items".into(),
+            description: "Stream items".into(),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = base.into();
+        e2e.call.module = "sample".into();
+        e2e.call.args = vec![
+            serde_json::from_value(serde_json::json!({ "name": "url", "field": "url", "type": "mock_url" }))
+                .expect("arg mapping"),
+        ];
+        if let Some(function) = ruby_override {
+            e2e.call.overrides.insert(
+                "ruby".into(),
+                CallOverride {
+                    function: Some(function.to_string()),
+                    ..CallOverride::default()
+                },
+            );
+        }
+        let config = ResolvedCrateConfig {
+            adapters: vec![
+                serde_json::from_value(serde_json::json!({
+                    "name": "stream_items",
+                    "pattern": "streaming",
+                    "core_path": "sample::stream_items",
+                    "returns": null,
+                    "error_type": null,
+                    "owner_type": null,
+                    "item_type": null,
+                    "request_type": "sample::StreamItemsRequest",
+                }))
+                .expect("adapter config"),
+            ],
+            ..ResolvedCrateConfig::default()
+        };
+        render_snippet_body(&fixture, &e2e, &config, &[], &[]).expect("snippet renders")
+    }
+
+    #[test]
+    fn the_adapter_request_type_is_found_for_a_call_named_only_by_its_ruby_override() {
+        // Adapters are keyed by the Rust name. With `function = ""` the lookup key was `""`,
+        // no adapter matched, and the snippet passed the bare URL where the binding wants a
+        // request object.
+        let body = streaming_snippet("", Some("stream_items"));
+
+        assert!(
+            body.contains("url_req = Sample::StreamItemsRequest.new(url: url)"),
+            "{body}"
+        );
+        assert!(body.contains("Sample.stream_items(url_req)"), "{body}");
+    }
+
+    #[test]
+    fn a_call_named_by_its_base_resolves_the_same_adapter_as_before() {
+        let body = streaming_snippet("stream_items", None);
+
+        assert!(
+            body.contains("url_req = Sample::StreamItemsRequest.new(url: url)"),
+            "{body}"
+        );
+        assert!(body.contains("Sample.stream_items(url_req)"), "{body}");
+    }
 
     #[test]
     fn renders_native_call_without_rspec() {

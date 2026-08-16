@@ -259,6 +259,74 @@ function = ""
 }
 
 #[test]
+fn core_lookup_name_keeps_the_base_so_existing_consumers_do_not_move() {
+    let call: CallConfig = toml::from_str(
+        r#"
+function = "stream_items"
+
+[overrides.csharp]
+function = "StreamItemsAsync"
+"#,
+    )
+    .expect("a call with a per-language function override must deserialize");
+
+    assert_eq!(
+        call.core_lookup_name("csharp").as_deref(),
+        Some("stream_items"),
+        "adapters and the IR are keyed by the Rust name, so a populated base must win over the \
+         binding's own spelling"
+    );
+    assert_eq!(call.core_lookup_name("python").as_deref(), Some("stream_items"));
+}
+
+#[test]
+fn core_lookup_name_falls_back_to_the_override_when_the_base_names_nothing() {
+    let call: CallConfig = toml::from_str(
+        r#"
+function = ""
+
+[overrides.csharp]
+function = "ClearRerankerBackends"
+
+[overrides.ruby]
+function = "clear_reranker_backends"
+"#,
+    )
+    .expect("a call that names itself only per language must deserialize");
+
+    assert_eq!(
+        call.core_lookup_name("csharp").as_deref(),
+        Some("clear_reranker_backends"),
+        "the C# override is the only name there is, and it must be snake-cased back into the \
+         spelling the adapter and IR tables use"
+    );
+    assert_eq!(
+        call.core_lookup_name("ruby").as_deref(),
+        Some("clear_reranker_backends")
+    );
+}
+
+#[test]
+fn core_lookup_name_reports_no_name_rather_than_looking_up_the_empty_string() {
+    let call: CallConfig = toml::from_str(
+        r#"
+function = "  "
+
+[overrides.csharp]
+function = "ClearRerankerBackends"
+"#,
+    )
+    .expect("blank function names must deserialize");
+
+    assert_eq!(
+        call.core_lookup_name("python"),
+        None,
+        "a call that names nothing for this language must return None; looking up `\"\"` matches \
+         no adapter and silently derives names from the empty string"
+    );
+}
+
+#[test]
 fn effective_result_fields_returns_global_when_call_is_empty() {
     let mut global = HashSet::new();
     global.insert("url".to_string());

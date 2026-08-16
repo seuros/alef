@@ -79,6 +79,14 @@ pub(super) fn render_chat_stream_example(
             &fixture.tags,
             &setup_call.input,
         );
+        // Setup calls are overwhelmingly trait-bridge registry operations
+        // (`register_reranker_backend`), which is precisely the shape that carries an empty
+        // base `function` and names itself only per language. Reading the base directly here
+        // rendered `client.()` — invalid Ruby. Nothing has been pushed yet at this point, so
+        // a call that names no Ruby symbol drops out whole rather than emitting a fragment. ~keep
+        let Some(setup_fn) = setup_call_config.effective_function("ruby") else {
+            continue;
+        };
         let setup_args = &setup_call_config.args;
         let (setup_setup_lines, setup_args_str, setup_teardown_lines) = build_args_and_setup(
             &setup_call.input,
@@ -98,7 +106,6 @@ pub(super) fn render_chat_stream_example(
             setup_lines.push(line);
         }
 
-        let setup_fn = &setup_call_config.function;
         let setup_call_expr = if setup_args_str.is_empty() {
             format!("{}.{}()", call_receiver, setup_fn)
         } else {

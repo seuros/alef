@@ -458,7 +458,7 @@
         },
         "function": {
           "default": "",
-          "description": "The function name (alef applies language naming conventions).",
+          "description": "The language-neutral function name (alef applies language naming conventions).\n\n**Do not read this field to decide anything.** It is legitimately empty when a call\nnames itself only per language, so a direct read yields `\"\"` and every derived\ndecision — adapter lookups, IR lookups, name-prefix classifiers, \"does this call\nexist\" gates — fails silently rather than loudly. Go through\n[`CallConfig::effective_function`] for the symbol a binding must emit, or\n[`CallConfig::core_lookup_name`] for the key into a Rust-side table. The only reads\nthat belong here are those two resolvers and the per-language override chains they\nare replacing.",
           "type": "string"
         },
         "method": {

@@ -173,7 +173,10 @@ pub(super) fn render_test_method(
             .and_then(|o| o.options_type.as_deref())
     });
 
-    let call_adapter = adapters.iter().find(|a| a.name == call_config.function.as_str());
+    let adapter_lookup_name = call_config.core_lookup_name(lang);
+    let call_adapter = adapter_lookup_name
+        .as_deref()
+        .and_then(|name| adapters.iter().find(|a| a.name == name));
     let adapter_request_type: Option<String> = call_adapter
         .and_then(|a| a.request_type.as_deref())
         .map(|rt| rt.rsplit("::").next().unwrap_or(rt).to_string());

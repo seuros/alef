@@ -96,9 +96,10 @@ pub(super) fn render_streaming_test_method(
         .and_then(|o| o.options_via.as_deref())
         .or(top_level_options_via);
 
-    let adapter_request_type_cs: Option<String> = adapters
-        .iter()
-        .find(|a| a.name == call_config.function.as_str())
+    let adapter_lookup_name = call_config.core_lookup_name("csharp");
+    let adapter_request_type_cs: Option<String> = adapter_lookup_name
+        .as_deref()
+        .and_then(|name| adapters.iter().find(|a| a.name == name))
         .and_then(|a| a.request_type.as_deref())
         .map(|rt| rt.rsplit("::").next().unwrap_or(rt).to_string());
     let mut _chat_stream_class_decls: Vec<String> = Vec::new();

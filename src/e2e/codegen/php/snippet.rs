@@ -44,7 +44,10 @@ pub(super) fn render_snippet_body(
     if override_config.and_then(|value| value.function.as_ref()).is_none() {
         function_name = function_name.to_lower_camel_case();
     }
-    let adapter = config.adapters.iter().find(|value| value.name == call.function);
+    let adapter_lookup_name = call.core_lookup_name(lang);
+    let adapter = adapter_lookup_name
+        .as_deref()
+        .and_then(|name| config.adapters.iter().find(|value| value.name == name));
     let request_type = adapter
         .and_then(|value| value.request_type.as_deref())
         .and_then(|value| value.rsplit("::").next());
@@ -211,6 +214,54 @@ fn render_http_snippet(fixture: &Fixture) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::e2e::config::CallOverride;
+
+    /// Pins that a `client_factory` docs snippet never points the reader at the e2e
+    /// mock server: no `MOCK_SERVER` env var, no `/fixtures/<id>` route, and no
+    /// inlined `'test-key'` credential (the mock-mode branches the generated
+    /// PHPUnit test takes live in `test_method.rs` around lines 299-314).
+    ///
+    /// PHP diverges from java/csharp/kotlin/zig on the credential: those read it from
+    /// the environment, while `php/snippet_body.jinja` inlines the reader-substitutable
+    /// placeholder `'your-api-key'`. That is a convention difference, not a harness
+    /// leak, so this pins the placeholder rather than asserting an environment read the
+    /// generator does not perform.
+    #[test]
+    fn client_factory_snippet_never_points_the_reader_at_the_mock_server() {
+        let fixture = Fixture {
+            id: "rate_limit_429".into(),
+            description: "Rate limited".into(),
+            input: serde_json::Value::Null,
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "chat".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.overrides.insert(
+            "php".into(),
+            CallOverride {
+                client_factory: Some("createClient".into()),
+                ..CallOverride::default()
+            },
+        );
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+
+        let body = render_snippet_body(&fixture, &e2e, &config, &[], &[]).expect("snippet renders");
+
+        assert!(!body.contains("MOCK_SERVER"), "mock-server env var leaked:\n{body}");
+        assert!(
+            !body.contains("/fixtures/rate_limit_429"),
+            "mock-server fixture route leaked:\n{body}"
+        );
+        assert!(!body.contains("'test-key'"), "literal credential leaked:\n{body}");
+        assert!(
+            body.contains("::createClient('your-api-key');"),
+            "client is not constructed with a reader-substitutable credential:\n{body}"
+        );
+    }
 
     #[test]
     fn documented_presentation_binds_the_result_and_reads_the_shown_fields() {

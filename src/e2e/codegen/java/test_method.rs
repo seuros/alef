@@ -231,7 +231,11 @@ pub(super) fn render_test_method(
         }
     }
 
-    let adapter = adapters.iter().find(|a| a.name == call_config.function.as_str());
+    let adapter_lookup_name = call_config.core_lookup_name(lang);
+    let adapter_lookup_names: Vec<&str> = adapter_lookup_name.as_deref().into_iter().collect();
+    let adapter = adapter_lookup_names
+        .iter()
+        .find_map(|name| adapters.iter().find(|a| a.name == *name));
     let adapter_request_type: Option<String> = adapter
         .and_then(|a| a.request_type.as_deref())
         .map(|rt| rt.rsplit("::").next().unwrap_or(rt).to_string());
@@ -355,7 +359,7 @@ pub(super) fn render_test_method(
     let is_streaming =
         crate::e2e::codegen::streaming_assertions::resolve_is_streaming(fixture, call_config.streaming_enabled());
     let streaming_item_type =
-        crate::e2e::codegen::recipe::streaming_item_type(call_config, adapters, &[call_config.function.as_str()]);
+        crate::e2e::codegen::recipe::streaming_item_type(call_config, adapters, &adapter_lookup_names);
 
     for assertion in &fixture.assertions {
         render_assertion(

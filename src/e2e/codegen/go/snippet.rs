@@ -125,7 +125,10 @@ pub(super) fn render_snippet_body(
     // what the binding backend emits. The override remains the fallback for calls this
     // harness cannot resolve to a `FunctionDef` (e.g. method calls, synthetic call
     // names) — those keep today's config-driven behavior unchanged. ~keep
-    let target_function = functions.iter().find(|value| value.name == call.function);
+    let core_lookup_name = call.core_lookup_name(lang);
+    let target_function = core_lookup_name
+        .as_deref()
+        .and_then(|name| functions.iter().find(|value| value.name == name));
     let opaque_names: std::collections::HashSet<&str> = type_defs
         .iter()
         .filter(|value| value.is_opaque)
@@ -966,6 +969,55 @@ mod tests {
         assert!(
             rendered.contains("type testVisitorVisitorLinkRewrite struct{"),
             "{rendered}"
+        );
+    }
+
+    /// Pins that a `client_factory` documentation snippet never points the reader at the
+    /// mock server (`MOCK_SERVER*` env vars, the `/fixtures/<id>` route, or the literal
+    /// `"test-key"` credential) and does construct a client for the reader.
+    ///
+    /// Go diverges from java/csharp/zig on the credential: those read it from the
+    /// environment, while this file's `client_setup` inlines the reader-substitutable
+    /// placeholder `"your-api-key"`. That is a convention difference, not a harness
+    /// leak, so this pins the placeholder rather than asserting an environment read the
+    /// generator does not perform.
+    #[test]
+    fn client_factory_snippet_never_points_the_reader_at_the_mock_server() {
+        let mut fixture = fixture();
+        fixture.id = "rate_limit_429".into();
+        fixture.description = "Rate limited".into();
+        fixture.mock_response = Some(crate::e2e::fixture::MockResponse {
+            status: 429,
+            body: None,
+            stream_chunks: None,
+            headers: Default::default(),
+        });
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "chat".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.overrides.insert(
+            "go".into(),
+            CallOverride {
+                client_factory: Some("create_client".into()),
+                ..CallOverride::default()
+            },
+        );
+        let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[], &[])
+            .expect("snippet renders");
+
+        assert!(!body.contains("MOCK_SERVER"), "mock-server env var leaked:\n{body}");
+        assert!(
+            !body.contains("/fixtures/rate_limit_429"),
+            "mock-server fixture route leaked:\n{body}"
+        );
+        assert!(!body.contains("\"test-key\""), "literal credential leaked:\n{body}");
+        assert!(
+            body.contains(".CreateClient(\"your-api-key\", nil, nil, nil, nil)"),
+            "client is not constructed with a reader-substitutable credential:\n{body}"
+        );
+        assert!(
+            body.contains("client.Chat("),
+            "the call must go through the constructed client:\n{body}"
         );
     }
 }

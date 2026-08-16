@@ -233,7 +233,10 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
     let is_frb_bridge_call = false;
 
     // Resolve adapter request type for streaming methods.
-    let adapter = adapters.iter().find(|a| a.name == call_config.function.as_str());
+    let adapter_lookup_name = call_config.core_lookup_name(lang);
+    let adapter = adapter_lookup_name
+        .as_deref()
+        .and_then(|name| adapters.iter().find(|a| a.name == name));
     let adapter_request_type: Option<String> = adapter
         .and_then(|a| a.request_type.as_deref())
         .map(|rt| rt.rsplit("::").next().unwrap_or(rt).to_string());

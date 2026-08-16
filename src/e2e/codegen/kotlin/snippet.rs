@@ -65,7 +65,10 @@ pub(crate) fn render_snippet_body(
     // Java e2e backend. The docs snippet must show the same real call shape
     // callers will actually write, so it is wrong here for the same reason it
     // was wrong in the generated tests.
-    let adapter = config.adapters.iter().find(|a| a.name == call.function.as_str());
+    let adapter_lookup_name = call.core_lookup_name(lang);
+    let adapter = adapter_lookup_name
+        .as_deref()
+        .and_then(|name| config.adapters.iter().find(|a| a.name == name));
     let is_streaming_owner_adapter = adapter.is_some_and(|a| {
         matches!(a.pattern, crate::core::config::extras::AdapterPattern::Streaming) && a.owner_type.is_some()
     });
@@ -352,6 +355,61 @@ mod tests {
         assert!(body.contains("fun main()"));
         assert!(!body.contains("@Test"));
         assert!(!body.contains("assert"));
+    }
+
+    /// Pins that a `client_factory` docs snippet reads the credential from the
+    /// environment and never points the reader at the e2e mock server: no
+    /// `MOCK_SERVER` env var, no `mockServer` system property (both used by the
+    /// generated JUnit test's mock-mode branch in `test_method.rs`), no
+    /// `/fixtures/<id>` route, and no inlined `"test-key"` credential.
+    #[test]
+    fn client_factory_snippet_never_points_the_reader_at_the_mock_server() {
+        let fixture = Fixture {
+            id: "rate_limit_429".into(),
+            description: "Rate limited".into(),
+            input: serde_json::Value::Null,
+            ..Fixture::default()
+        };
+        let mut call = CallConfig {
+            function: "chat".into(),
+            result_var: "result".into(),
+            ..CallConfig::default()
+        };
+        call.overrides.insert(
+            "kotlin".into(),
+            CallOverride {
+                client_factory: Some("create_client".into()),
+                ..CallOverride::default()
+            },
+        );
+        let body = render_snippet_body(
+            &fixture,
+            &E2eConfig {
+                call,
+                ..E2eConfig::default()
+            },
+            &ResolvedCrateConfig::default(),
+            &[],
+            &[],
+            false,
+        )
+        .expect("snippet renders");
+
+        assert!(!body.contains("MOCK_SERVER"), "mock-server env var leaked:\n{body}");
+        assert!(!body.contains("mockServer"), "mock-server property leaked:\n{body}");
+        assert!(
+            !body.contains("/fixtures/rate_limit_429"),
+            "mock-server fixture route leaked:\n{body}"
+        );
+        assert!(!body.contains("\"test-key\""), "literal credential leaked:\n{body}");
+        assert!(
+            body.contains("System.getenv(\"API_KEY\")"),
+            "credential is not read from the environment:\n{body}"
+        );
+        assert!(
+            body.contains("createClient(apiKey = apiKey)"),
+            "an unconfigured project must construct the client without a mock base URL:\n{body}"
+        );
     }
 
     #[test]
