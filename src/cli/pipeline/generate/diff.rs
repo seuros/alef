@@ -26,7 +26,8 @@ pub fn diff_files(files: &[(Language, Vec<GeneratedFile>)], base_dir: &Path) -> 
                 && file.path.extension().is_some_and(|extension| extension == "toml")
                 && !existing.is_empty()
             {
-                super::scaffold::merge_managed_toml(&existing, &file.content).unwrap_or_else(|_| file.content.clone())
+                super::scaffold::merge_managed_toml_preview(&existing, &file.content, base_dir, &file.path)
+                    .unwrap_or_else(|_| file.content.clone())
             } else {
                 file.content.clone()
             };

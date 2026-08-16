@@ -595,7 +595,11 @@ pub fn sync_versions(
         }
     }
 
-    for badge_file in sync_docs_version_badges(std::path::Path::new("docs/reference"), &version) {
+    // Resolved from `[docs] reference_output`, not the `docs/reference` default this used to
+    // hardcode: a consumer that publishes its reference pages elsewhere (liter-llm renders them
+    // into `docs-site/src/content/docs/reference`) got its READMEs bumped and its API-reference
+    // badges left pinned to the previous release. ~keep
+    for badge_file in sync_docs_version_badges(&crate::docs::reference_output_dir(config), &version) {
         updated.push(badge_file);
     }
 

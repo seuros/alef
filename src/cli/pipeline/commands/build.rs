@@ -20,17 +20,33 @@ pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool
 
     let mut rust_langs: Vec<Language> = Vec::new();
 
+    // Reconciled against `dispatched_count` at the end of this function: every
+    // announced language must be accounted for as either skipped here or
+    // dispatched below. ~keep
+    let total_announced = languages.len();
+    let mut skipped_count = 0_usize;
+
     for &lang in languages {
         let build_cmd_cfg = config.build_command_config_for_language(lang);
         if !check_precondition(lang, build_cmd_cfg.precondition.as_deref()) {
             observability::skipped(lang, "precondition");
+            skipped_count += 1;
             continue;
         }
         if lang == Language::Rust {
             rust_langs.push(lang);
             continue;
         }
-        let backend = registry::get_backend(lang);
+        // `try_get_backend`, not `get_backend`: the latter panics for docs-only/
+        // consumer-only targets (Rust, C). Rust is already routed above; a
+        // language like C configured in `[workspace] languages` must be skipped
+        // gracefully here rather than crashing the whole build. ~keep
+        let Some(backend) = registry::try_get_backend(lang) else {
+            info!("No binding backend for {lang}, skipping");
+            observability::skipped(lang, "no binding backend");
+            skipped_count += 1;
+            continue;
+        };
         if let Some(bc) = backend.build_config_with_config(config) {
             if bc.depends_on_ffi() {
                 ffi_dependent.push((lang, bc));
@@ -41,11 +57,22 @@ pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool
         } else {
             info!("No build config for {lang}, skipping");
             observability::skipped(lang, "no build config");
+            skipped_count += 1;
         }
     }
+    let dispatched_count = rust_langs.len() + independent.len() + ffi_dependent.len();
+
+    // Every stage below records its own per-language failures into `failures`
+    // instead of bailing out with `?`. ~keep A missing/misconfigured recipe or a
+    // real compile failure in one backend must not erase build signal for every
+    // other, unrelated backend — see the "false" command-substitution incident:
+    // one unconfigured backend used to fail-fast the whole build for languages
+    // that had nothing to do with it. The run still fails overall, but only
+    // after every backend got a chance to run and report its own outcome.
+    let mut failures: Vec<String> = Vec::new();
 
     for &lang in &rust_langs {
-        observability::observe(lang, || {
+        let result = observability::observe(lang, || {
             let build_cmd_cfg = config.build_command_config_for_language(lang);
             run_before(lang, build_cmd_cfg.before.as_ref())?;
             let cmds = if release {
@@ -60,7 +87,10 @@ pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool
                 }
             }
             Ok(())
-        })?;
+        });
+        if let Err(err) = result {
+            failures.push(format!("{lang}: {err:#}"));
+        }
     }
 
     if need_ffi
@@ -78,13 +108,34 @@ pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool
         if release {
             cmd.push_str(" --release");
         }
-        observability::observe(Language::Ffi, || run_command(&cmd).context("failed to build FFI crate"))?;
+        let result = observability::observe(Language::Ffi, || run_command(&cmd).context("failed to build FFI crate"));
+        if let Err(err) = result {
+            failures.push(format!("{}: {err:#}", Language::Ffi));
+        }
     }
 
-    for (lang, _) in &independent {
-        let build_cmd_cfg = config.build_command_config_for_language(*lang);
-        run_before(*lang, build_cmd_cfg.before.as_ref())?;
+    // Before-hooks run sequentially (they may touch shared resources like a
+    // lockfile) but a failing hook only takes its own language out of the
+    // parallel dispatch below — it does not stop the remaining before-hooks
+    // or the rest of the build. `before` is rare in practice, so we only pay
+    // for its own started/completed observability pair when one is actually
+    // configured; the language's real build attempt is observed separately
+    // once it reaches the parallel dispatch. ~keep
+    let mut independent_ready = Vec::with_capacity(independent.len());
+    for (lang, bc) in independent {
+        let build_cmd_cfg = config.build_command_config_for_language(lang);
+        let before = build_cmd_cfg.before;
+        let before_result = if before.is_some() {
+            observability::observe(lang, || run_before(lang, before.as_ref()))
+        } else {
+            Ok(())
+        };
+        match before_result {
+            Ok(()) => independent_ready.push((lang, bc)),
+            Err(err) => failures.push(format!("{lang}: {err:#}")),
+        }
     }
+    let independent = independent_ready;
 
     let build_results: Vec<anyhow::Result<(String, String)>> = independent
         .par_iter()
@@ -118,21 +169,42 @@ pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool
         .collect();
 
     for ((lang, bc), result) in independent.iter().zip(build_results) {
-        let (stdout, stderr) = result?;
-        if !stdout.is_empty() {
-            info!("[{lang} build] {stdout}");
+        match result {
+            Ok((stdout, stderr)) => {
+                if !stdout.is_empty() {
+                    info!("[{lang} build] {stdout}");
+                }
+                if !stderr.is_empty() {
+                    debug!("[{lang} build] {stderr}");
+                }
+                if let Err(err) = run_post_build(*lang, bc, config, &base_dir) {
+                    failures.push(format!("{lang}: post-build failed: {err:#}"));
+                }
+            }
+            Err(err) => failures.push(format!("{lang}: {err:#}")),
         }
-        if !stderr.is_empty() {
-            debug!("[{lang} build] {stderr}");
-        }
-        run_post_build(*lang, bc, config, &base_dir)
-            .with_context(|| format!("failed to run post-build steps for {lang}"))?;
     }
 
-    for (lang, _) in &ffi_dependent {
-        let build_cmd_cfg = config.build_command_config_for_language(*lang);
-        run_before(*lang, build_cmd_cfg.before.as_ref())?;
+    // ffi_dependent backends are attempted unconditionally, even if the FFI
+    // crate build above failed: attempting them still yields a true,
+    // per-backend outcome (they'll fail for a real reason if the FFI crate is
+    // genuinely broken), which is strictly more informative than skipping
+    // them and losing their signal entirely. ~keep
+    let mut ffi_dependent_ready = Vec::with_capacity(ffi_dependent.len());
+    for (lang, bc) in ffi_dependent {
+        let build_cmd_cfg = config.build_command_config_for_language(lang);
+        let before = build_cmd_cfg.before;
+        let before_result = if before.is_some() {
+            observability::observe(lang, || run_before(lang, before.as_ref()))
+        } else {
+            Ok(())
+        };
+        match before_result {
+            Ok(()) => ffi_dependent_ready.push((lang, bc)),
+            Err(err) => failures.push(format!("{lang}: {err:#}")),
+        }
     }
+    let ffi_dependent = ffi_dependent_ready;
 
     let build_results: Vec<anyhow::Result<(String, String)>> = ffi_dependent
         .par_iter()
@@ -166,18 +238,59 @@ pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool
         .collect();
 
     for ((lang, bc), result) in ffi_dependent.iter().zip(build_results) {
-        let (stdout, stderr) = result?;
-        if !stdout.is_empty() {
-            info!("[{lang} build] {stdout}");
+        match result {
+            Ok((stdout, stderr)) => {
+                if !stdout.is_empty() {
+                    info!("[{lang} build] {stdout}");
+                }
+                if !stderr.is_empty() {
+                    debug!("[{lang} build] {stderr}");
+                }
+                if let Err(err) = run_post_build(*lang, bc, config, &base_dir) {
+                    failures.push(format!("{lang}: post-build failed: {err:#}"));
+                }
+            }
+            Err(err) => failures.push(format!("{lang}: {err:#}")),
         }
-        if !stderr.is_empty() {
-            debug!("[{lang} build] {stderr}");
-        }
-        run_post_build(*lang, bc, config, &base_dir)
-            .with_context(|| format!("failed to run post-build steps for {lang}"))?;
     }
 
-    Ok(())
+    // Reconciliation, not just a status line: `dispatched_count` is exactly
+    // `rust_langs.len() + independent.len() + ffi_dependent.len()` captured
+    // right after classification, before any before-hook filtering or `?`
+    // could shrink it — so if this doesn't equal `total_announced -
+    // skipped_count`, some announced language fell through the classification
+    // loop without either a skip or a dispatch, which is a bug in the loop
+    // above, not downstream. Every dispatched language is guaranteed a
+    // terminal observability event by construction: rust_langs, independent,
+    // and ffi_dependent are each fully drained by an unconditional loop or
+    // `.par_iter().collect()` (no `?` early-return anywhere in between), so
+    // silently losing one after this point cannot happen without also
+    // failing this assertion. ~keep
+    debug_assert_eq!(
+        skipped_count + dispatched_count,
+        total_announced,
+        "every announced language must be either skipped or dispatched"
+    );
+    // Not `dispatched_count - failures.len()`: `failures` can also include the
+    // implicit FFI-crate auto-build (see `need_ffi` above), which fires as a
+    // side effect for backends that depend on it and isn't itself one of the
+    // `dispatched_count` entries when "ffi" wasn't explicitly requested — so
+    // that subtraction could under-report. Report what's exact instead. ~keep
+    info!(
+        "Backend build summary: {total_announced} announced, {skipped_count} skipped, \
+         {dispatched_count} dispatched, {} language-level failure(s)",
+        failures.len()
+    );
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "backend build failed for {} language(s): {}",
+            failures.len(),
+            failures.join("; ")
+        );
+    }
 }
 
 /// Resolve the crate directory from the output config path.
@@ -451,7 +564,29 @@ fn build_command_for(
             };
             format!("cd {build_dir} && gradle build{release_property}")
         }
-        _ => "false".to_string(),
+        "swift" => {
+            let package_dir = config.package_dir(lang);
+            let configuration = if release { " --configuration release" } else { "" };
+            format!("swift build --package-path {package_dir}{configuration}")
+        }
+        "zig" => {
+            let package_dir = config.package_dir(lang);
+            let release_flag = if release { " --release=fast" } else { "" };
+            format!("cd {package_dir} && zig build{release_flag}")
+        }
+        "gleam" => {
+            let package_dir = config.package_dir(lang);
+            format!("cd {package_dir} && gleam build")
+        }
+        // Every backend registers a `tool` here from the fixed set matched above (or defines its
+        // own `[build] build`/`build_release` commands, handled by the caller before this
+        // function runs). Reaching this arm means a backend's `BuildConfig.tool` genuinely has no
+        // known default — fail loudly and name the missing tool rather than silently substituting
+        // a bare `false`, which previously reported as an inscrutable "Command failed: false". ~keep
+        _ => format!(
+            "echo 'alef: no default build command for tool \"{}\" (language: {lang}); add [crates.build_commands.{lang}] build = [...] to alef.toml' >&2 && false",
+            bc.tool
+        ),
     }
 }
 
@@ -768,9 +903,221 @@ sources = ["src/lib.rs"]
             post_build: Vec::new(),
         };
 
+        let command = build_command_for(Language::Kotlin, &build_config, &config, false);
+        assert!(
+            command.ends_with("&& false"),
+            "unknown build tool must still exit non-zero: {command}"
+        );
+        assert!(
+            command.contains("no default build command for tool \"unsupported\""),
+            "unknown build tool failure must name the missing tool instead of a bare `false`: {command}"
+        );
+    }
+
+    #[test]
+    fn swift_build_command_uses_swift_build_with_package_path() {
+        let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["swift"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+"#,
+        )
+        .unwrap();
+        let config = alef_cfg.resolve().unwrap().remove(0);
+        let build_config = BuildConfig {
+            tool: "swift",
+            crate_suffix: "-swift",
+            build_dep: BuildDependency::None,
+            post_build: Vec::new(),
+        };
+
         assert_eq!(
-            build_command_for(Language::Kotlin, &build_config, &config, false),
-            "false"
+            build_command_for(Language::Swift, &build_config, &config, false),
+            "swift build --package-path packages/swift"
+        );
+        assert_eq!(
+            build_command_for(Language::Swift, &build_config, &config, true),
+            "swift build --package-path packages/swift --configuration release"
+        );
+    }
+
+    #[test]
+    fn zig_build_command_uses_zig_build() {
+        let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["zig"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+"#,
+        )
+        .unwrap();
+        let config = alef_cfg.resolve().unwrap().remove(0);
+        let build_config = BuildConfig {
+            tool: "zig",
+            crate_suffix: "",
+            build_dep: BuildDependency::Ffi,
+            post_build: Vec::new(),
+        };
+
+        assert_eq!(
+            build_command_for(Language::Zig, &build_config, &config, false),
+            "cd packages/zig && zig build"
+        );
+        assert_eq!(
+            build_command_for(Language::Zig, &build_config, &config, true),
+            "cd packages/zig && zig build --release=fast"
+        );
+    }
+
+    #[test]
+    fn gleam_build_command_uses_gleam_build() {
+        let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["gleam"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+"#,
+        )
+        .unwrap();
+        let config = alef_cfg.resolve().unwrap().remove(0);
+        let build_config = BuildConfig {
+            tool: "gleam",
+            crate_suffix: "",
+            build_dep: BuildDependency::Rustler,
+            post_build: Vec::new(),
+        };
+
+        assert_eq!(
+            build_command_for(Language::Gleam, &build_config, &config, false),
+            "cd packages/gleam && gleam build"
+        );
+        assert_eq!(
+            build_command_for(Language::Gleam, &build_config, &config, true),
+            "cd packages/gleam && gleam build"
+        );
+    }
+
+    // Regression test for a real crash found while investigating the "false"
+    // command-substitution incident: `registry::get_backend` panics for `C`
+    // (it has no binding backend — it's an e2e/consumer-only target), and the
+    // classification loop used to call it unconditionally for every
+    // non-Rust language. A `[workspace] languages` list that includes "c"
+    // (a documented, valid e2e target) would crash the whole build instead
+    // of skipping C gracefully like any other backend-less language. ~keep
+    #[test]
+    fn c_language_is_skipped_gracefully_instead_of_panicking() {
+        let config = ResolvedCrateConfig::default();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| build(&config, &[Language::C], false)));
+
+        match result {
+            Ok(build_result) => assert!(
+                build_result.is_ok(),
+                "C has no binding backend and must be skipped cleanly: {build_result:?}"
+            ),
+            Err(_) => panic!("building an unsupported binding target must not panic"),
+        }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod build_orchestration_tests {
+    use super::*;
+
+    fn hermetic_config(toml: &str) -> ResolvedCrateConfig {
+        let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(toml).unwrap();
+        alef_cfg.resolve().unwrap().remove(0)
+    }
+
+    /// `go` is `ffi_dependent` (`BuildDependency::Ffi`) while `php` and `node`
+    /// are `independent`. `php` fails; the old code's `result?` in the
+    /// `independent` consumption loop returned from `build()` right there,
+    /// before the `ffi_dependent` stage ever ran — silently dropping `go`
+    /// (and every other `ffi_dependent` language) with zero log output. This
+    /// is the "false" command-substitution incident's real blast radius.
+    ///
+    /// `ffi` is included as an independent target purely so `independent`
+    /// already contains a `tool == "cargo" && crate_suffix == "-ffi"` entry:
+    /// that short-circuits `build()`'s auto FFI-crate-build step (which would
+    /// otherwise shell out to a real `cargo build -p <crate>-ffi` against a
+    /// package that doesn't exist in this synthetic config), keeping the test
+    /// hermetic — only `sh -c true`/`sh -c false`/`touch` ever run.
+    ///
+    /// Proof that `node` and `go` were actually dispatched uses marker files
+    /// written by their build commands, not `tracing-test`'s `logs_contain`:
+    /// `node`/`go` build inside `independent`/`ffi_dependent`'s
+    /// `.par_iter()`, which runs on rayon's worker threads. `tracing-test`
+    /// scopes captured logs to a span entered via a thread-local guard on the
+    /// test's own thread — that guard does not propagate to rayon's pool, so
+    /// log lines from those closures would not carry the test's scope prefix
+    /// and `logs_contain` would be unreliable here regardless of whether the
+    /// underlying fix is correct. ~keep
+    #[test]
+    fn one_backend_failure_does_not_block_the_others() {
+        let marker_dir = tempfile::tempdir().expect("failed to create temp dir for build markers");
+        let marker_node = marker_dir.path().join("node.built");
+        let marker_go = marker_dir.path().join("go.built");
+
+        let config = hermetic_config(&format!(
+            r#"
+[workspace]
+languages = ["php", "node", "ffi", "go"]
+
+[workspace.build_commands.php]
+precondition = "true"
+build = "false"
+
+[workspace.build_commands.node]
+precondition = "true"
+build = "touch {node_marker}"
+
+[workspace.build_commands.ffi]
+precondition = "true"
+build = "true"
+
+[workspace.build_commands.go]
+precondition = "true"
+build = "touch {go_marker}"
+
+[[crates]]
+name = "orchestration-test-lib"
+sources = ["src/lib.rs"]
+"#,
+            node_marker = marker_node.display(),
+            go_marker = marker_go.display(),
+        ));
+
+        let result = build(
+            &config,
+            &[Language::Php, Language::Node, Language::Ffi, Language::Go],
+            false,
+        );
+
+        assert!(result.is_err(), "php's failure must surface in the aggregate result");
+        let message = format!("{:#}", result.unwrap_err());
+        assert!(
+            message.contains("php"),
+            "aggregate error must name the failed language: {message}"
+        );
+
+        assert!(
+            marker_node.exists(),
+            "node (independent, ordered after php in the list) must still be attempted and succeed"
+        );
+        assert!(
+            marker_go.exists(),
+            "go (ffi_dependent) must still be attempted and succeed even though the independent \
+             stage had a failure — that's the class of language that used to be silently dropped"
         );
     }
 }

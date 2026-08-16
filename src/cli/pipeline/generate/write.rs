@@ -6,7 +6,7 @@ use anyhow::Context as _;
 use base64::Engine;
 use rayon::prelude::*;
 use std::path::Path;
-use tracing::debug;
+use tracing::{debug, warn};
 
 #[derive(Debug, Default)]
 pub struct WriteReport {
@@ -141,6 +141,36 @@ pub fn write_files(files: &[(Language, Vec<GeneratedFile>)], base_dir: &Path) ->
     Ok(write_files_report(files, base_dir)?.changed_count())
 }
 
+/// Writes binding/stub output for every configured language. Unlike
+/// [`super::scaffold::write_scaffold_files_report`], this writer has no
+/// create-only concept: virtually all of its traffic (FFI glue, service
+/// dispatch, JNI shims, type stubs, ...) is 100% machine-owned and must be
+/// regenerated on every run regardless of `generated_header` or content, so
+/// the guard here never gates on either of those the way the scaffold
+/// writer's `can_skip` does — it only ever asks "did alef write the content
+/// that's already here," exactly like [`super::scaffold::write_scaffold_files_report`]'s
+/// markable/unmarkable split:
+///
+/// - **Markable** ([`marker_comment_style`] is `Some`): the existing content
+///   must already carry the `alef:hash:` marker.
+/// - **Unmarkable** (`.pyi` type stubs, `.cmake` config, ...): proven instead
+///   by [`crate::cli::cache::is_scaffold_owned_path`], the same `base_dir`-scoped
+///   local record `write_scaffold_files_report` populates and consults — no
+///   crate name needed for either writer, since the record is keyed on the
+///   full output path.
+///
+/// This was previously left unguarded for unmarkable extensions specifically
+/// because no incident had been observed for this writer's output; that
+/// premise no longer holds — cross-repo review surfaced this writer emitting
+/// unmarkable, structurally-uncommentable output (`crates/*-ffi/cmake/*-config.cmake`)
+/// alongside markable-but-plausibly-hand-touched FFI headers, and there is no
+/// way to tell an alef-owned `.cmake` file from a foreign one by path or
+/// extension alone — precisely the "known-generated-but-unstampable" gap this
+/// route closes. The guard only ever engages when content would actually
+/// change, so `frb_generated.rs`-style output that legitimately differs on
+/// every run (new API surface, a bumped dependency) keeps regenerating
+/// exactly as before, provided it already carries the marker (markable) or a
+/// local record (unmarkable) from the run that first wrote it. ~keep
 pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &Path) -> anyhow::Result<WriteReport> {
     let mut prepared = std::collections::BTreeMap::<std::path::PathBuf, (Vec<u8>, bool)>::new();
     for file in files.iter().flat_map(|(_, lang_files)| lang_files.iter()) {
@@ -195,22 +225,67 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
         .try_for_each(|(full_path, (content, is_text))| -> anyhow::Result<()> {
             if *is_text {
                 let normalized = std::str::from_utf8(content).context("prepared generated text was not UTF-8")?;
-                if let Ok(existing) = std::fs::read_to_string(full_path) {
+                let is_markable = marker_comment_style(full_path).is_some();
+                if full_path.exists() {
+                    let Ok(existing) = std::fs::read_to_string(full_path) else {
+                        warn!(
+                            "refusing to write {}: pre-existing file could not be read as text -- \
+                             leaving it untouched",
+                            full_path.display()
+                        );
+                        return Ok(());
+                    };
                     let existing_body = crate::core::hash::strip_hash_line(&existing);
                     let normalized_body = crate::core::hash::strip_hash_line(normalized);
                     if existing_body == normalized_body {
                         apply_shebang_chmod(full_path, normalized)?;
                         debug!("  unchanged: {}", full_path.display());
+                        if !is_markable {
+                            crate::cli::cache::record_scaffold_owned_path(base_dir, full_path)?;
+                        }
+                        return Ok(());
+                    }
+                    // Checked unconditionally, not only for markable extensions: content
+                    // can self-mark on any extension (see `scaffold.rs`'s guard doc for the
+                    // docs-page HTML-comment header that is exactly this case). The local
+                    // ownership record is the fallback only for extensions that truly
+                    // cannot carry a marker in any form.
+                    let has_marker = hash::content_has_alef_marker(&existing);
+                    let owned =
+                        has_marker || (!is_markable && crate::cli::cache::is_scaffold_owned_path(base_dir, full_path));
+                    if !owned {
+                        warn!(
+                            "refusing to write {}: pre-existing file carries no alef marker and \
+                             alef has no durable record of ever owning it -- leaving it untouched",
+                            full_path.display()
+                        );
                         return Ok(());
                     }
                 }
                 atomic_write(full_path, content)?;
                 apply_shebang_chmod(full_path, normalized)?;
-            } else if std::fs::read(full_path).is_ok_and(|existing| existing == *content) {
-                debug!("  unchanged: {}", full_path.display());
-                return Ok(());
+                if !is_markable {
+                    crate::cli::cache::record_scaffold_owned_path(base_dir, full_path)?;
+                }
             } else {
+                if full_path.exists() {
+                    let existing_binary = std::fs::read(full_path).ok();
+                    if existing_binary.as_deref() == Some(content.as_slice()) {
+                        debug!("  unchanged: {}", full_path.display());
+                        crate::cli::cache::record_scaffold_owned_path(base_dir, full_path)?;
+                        return Ok(());
+                    }
+                    if existing_binary.is_some() && !crate::cli::cache::is_scaffold_owned_path(base_dir, full_path) {
+                        warn!(
+                            "refusing to write {}: pre-existing file has no durable record of \
+                             alef ownership -- leaving it untouched",
+                            full_path.display()
+                        );
+                        return Ok(());
+                    }
+                }
                 atomic_write(full_path, content)?;
+                crate::cli::cache::record_scaffold_owned_path(base_dir, full_path)?;
             }
             changed_paths
                 .lock()

@@ -137,6 +137,183 @@ file_safety = { exclude = ["target/**"] }
         assert_eq!(count, 0, "merged poly config must converge on a second scaffold pass");
     }
 
+    /// Regression: the array-merge duplicate check used to compare
+    /// `value.to_string().trim()`, which includes each value's decor. A value
+    /// reformatted between runs (different quote style, different surrounding
+    /// whitespace -- exactly what `poly fmt` does to a real consumer's
+    /// `poly.toml` between alef passes) no longer textually matched the freshly
+    /// generated value even though it decodes to the same string, so it got
+    /// re-appended as a "new" entry -- the reported 4x-per-run growth of every
+    /// default exclude. Decoding both sides before comparing must treat them
+    /// as equal regardless of decor.
+    #[test]
+    fn poly_merge_does_not_duplicate_a_value_with_different_decor() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let existing = "[discovery]\nexclude = [ \"target/**\" ]\n";
+        std::fs::write(base.join("poly.toml"), existing).expect("write existing config");
+
+        let generated = GeneratedFile {
+            path: PathBuf::from("poly.toml"),
+            content: "[discovery]\nexclude = [\"target/**\"]\n".to_owned(),
+            generated_header: true,
+        };
+        write_scaffold_files_with_overwrite(&[generated], base, true).expect("merge poly config");
+
+        let merged = std::fs::read_to_string(base.join("poly.toml")).expect("read merged config");
+        let parsed = merged.parse::<toml_edit::DocumentMut>().expect("merged TOML parses");
+        let exclude = parsed["discovery"]["exclude"].as_array().expect("exclude array");
+        assert_eq!(
+            exclude.iter().filter(|v| v.as_str() == Some("target/**")).count(),
+            1,
+            "differently-decorated but identical values must not duplicate; got:\n{merged}"
+        );
+    }
+
+    /// Companion to the decor regression above: a value already duplicated
+    /// several times over on disk (the damage the decor bug already did to a
+    /// consumer's committed `poly.toml` before this fix) must collapse to one
+    /// occurrence on the very next merge. This is unconditionally safe --
+    /// removing a redundant copy of a value that remains present at least
+    /// once never changes the set of values the array represents -- so it
+    /// needs no ownership/provenance information at all, unlike pruning a
+    /// value alef no longer emits.
+    #[test]
+    fn poly_merge_collapses_pre_existing_duplicates() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let existing =
+            "[discovery]\nexclude = [\"target/**\", \"target/**\", \"target/**\", \"target/**\", \"vendor/**\"]\n";
+        std::fs::write(base.join("poly.toml"), existing).expect("write existing config");
+
+        let generated = GeneratedFile {
+            path: PathBuf::from("poly.toml"),
+            content: "[discovery]\nexclude = [\"target/**\"]\n".to_owned(),
+            generated_header: true,
+        };
+        write_scaffold_files_with_overwrite(&[generated], base, true).expect("merge poly config");
+
+        let merged = std::fs::read_to_string(base.join("poly.toml")).expect("read merged config");
+        let parsed = merged.parse::<toml_edit::DocumentMut>().expect("merged TOML parses");
+        let exclude = parsed["discovery"]["exclude"].as_array().expect("exclude array");
+        assert_eq!(
+            exclude.iter().filter(|v| v.as_str() == Some("target/**")).count(),
+            1,
+            "four pre-existing copies must collapse to one; got:\n{merged}"
+        );
+        assert_eq!(
+            exclude.iter().filter(|v| v.as_str() == Some("vendor/**")).count(),
+            1,
+            "an unrelated, non-duplicated value must be left alone; got:\n{merged}"
+        );
+    }
+
+    /// The `merge_managed_toml` prune step: a value alef itself proposed on a
+    /// prior run (recorded in the local `.alef/toml-merge-provenance.json`,
+    /// straight from that run's own generated output) and no longer proposes
+    /// must be removed once a baseline exists to compare against. The first
+    /// run establishes the baseline and cannot prune anything yet (nothing to
+    /// compare against); the second run, once alef's own template has
+    /// stopped emitting the value, removes it.
+    #[test]
+    fn poly_merge_prunes_a_value_alef_stopped_emitting_once_a_baseline_exists() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+
+        let first_generation = GeneratedFile {
+            path: PathBuf::from("poly.toml"),
+            content: "[discovery]\nexclude = [\"docs/assets/**\", \"target/**\"]\n".to_owned(),
+            generated_header: true,
+        };
+        write_scaffold_files_with_overwrite(&[first_generation], base, true).expect("first scaffold run");
+        let after_first = std::fs::read_to_string(base.join("poly.toml")).expect("read after first run");
+        assert!(
+            after_first.contains("docs/assets/**"),
+            "first run has no baseline to prune against; got:\n{after_first}"
+        );
+
+        // Simulate alef dropping `docs/assets/**` from its own EXCLUDES.
+        let second_generation = GeneratedFile {
+            path: PathBuf::from("poly.toml"),
+            content: "[discovery]\nexclude = [\"target/**\"]\n".to_owned(),
+            generated_header: true,
+        };
+        write_scaffold_files_with_overwrite(&[second_generation], base, true).expect("second scaffold run");
+        let after_second = std::fs::read_to_string(base.join("poly.toml")).expect("read after second run");
+        assert!(
+            !after_second.contains("docs/assets/**"),
+            "a value alef itself proposed and then stopped emitting must be pruned; got:\n{after_second}"
+        );
+        assert!(
+            after_second.contains("target/**"),
+            "a value alef still emits must survive; got:\n{after_second}"
+        );
+    }
+
+    /// The critical safety property: a value alef never once generated --
+    /// standing in for a consumer's own `[workspace.poly] exclude` entry --
+    /// must survive indefinitely, across any number of scaffold runs, even
+    /// though it never appears in any of alef's own generated content. The
+    /// prune step only ever removes values recorded straight from a *prior
+    /// run's generated output*, never values merely present in `existing`;
+    /// a value that was never alef's proposal is therefore never a candidate,
+    /// regardless of how many runs pass or what alef's template does next.
+    #[test]
+    fn poly_merge_never_prunes_a_value_alef_never_generated() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let existing = "[discovery]\nexclude = [\"packages/**\"]\n";
+        std::fs::write(base.join("poly.toml"), existing).expect("write existing, consumer-authored config");
+
+        for _ in 0..3 {
+            let generated = GeneratedFile {
+                path: PathBuf::from("poly.toml"),
+                content: "[discovery]\nexclude = [\"target/**\"]\n".to_owned(),
+                generated_header: true,
+            };
+            write_scaffold_files_with_overwrite(&[generated], base, true).expect("scaffold run");
+        }
+
+        let merged = std::fs::read_to_string(base.join("poly.toml")).expect("read merged config");
+        assert!(
+            merged.contains("packages/**"),
+            "a value alef never generated must never be pruned, no matter how many runs pass; got:\n{merged}"
+        );
+    }
+
+    /// Disclosed limitation, made explicit as a test rather than left only in
+    /// prose: pruning only ever prevents *future* drift starting from the
+    /// first run that establishes a baseline in a given working copy. A value
+    /// that went stale *before* alef ever recorded a baseline here -- the
+    /// exact shape of the already-reported damage in existing consumer repos
+    /// -- is not retroactively cleaned up; there is nothing recorded to
+    /// compare against, so nothing is removed, which is the same
+    /// degrade-safely-to-no-op behaviour as the overwrite guard's ownership
+    /// check when no local record exists.
+    #[test]
+    fn poly_merge_does_not_retroactively_prune_pre_existing_staleness_without_a_baseline() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        // A value that leaked in before this mechanism ever ran -- no
+        // `.alef/toml-merge-provenance.json` record exists for it.
+        let existing = "[discovery]\nexclude = [\"docs/assets/**\", \"target/**\"]\n";
+        std::fs::write(base.join("poly.toml"), existing).expect("write existing, already-stale config");
+
+        let generated = GeneratedFile {
+            path: PathBuf::from("poly.toml"),
+            content: "[discovery]\nexclude = [\"target/**\"]\n".to_owned(),
+            generated_header: true,
+        };
+        write_scaffold_files_with_overwrite(&[generated], base, true).expect("scaffold run");
+
+        let merged = std::fs::read_to_string(base.join("poly.toml")).expect("read merged config");
+        assert!(
+            merged.contains("docs/assets/**"),
+            "with no recorded baseline, pre-existing staleness must survive untouched (documented \
+             limitation, not a bug); got:\n{merged}"
+        );
+    }
+
     /// `normalize_content` must strip trailing whitespace from `.rs` files even
     /// when rustfmt rejects them — e.g. cextendr `lib.rs` files use the
     /// `name: T = "default"` parameter-default syntax that rustfmt cannot
@@ -639,41 +816,64 @@ file_safety = { exclude = ["target/**"] }
     /// (Cargo.toml, package.json, gemspec) — user customisations are preserved.
     ///
     /// README files are NOT scaffold-once: they are always regenerated from
-    /// templates.  Using `overwrite=false` for READMEs means a file modified by
-    /// an external tool (e.g. `rumdl-fmt` padding table columns) is silently
-    /// preserved, while `alef readme` (which always uses `overwrite=true`) writes
-    /// fresh compact content.  The two commands then produce different bytes for
-    /// the same README — the root cause of the `alef generate`/`alef readme`
-    /// divergence surfaced during downstream regeneration.
+    /// templates, and `generated_header: true` content is always attempted
+    /// regardless of the `overwrite` flag once alef can prove ownership of the
+    /// path (see `write_scaffold_files_report`'s guard doc) — `overwrite` only
+    /// ever gates `generated_header: false` seeds. This closes the original
+    /// `alef generate`/`alef readme` divergence this test used to document as a
+    /// bug state: before the ownership guard existed, `overwrite: false` used
+    /// to silently preserve externally-reformatted content (e.g. `rumdl-fmt`
+    /// padding table columns) while `overwrite: true` replaced it with compact
+    /// bytes, so the two commands could produce different bytes for the same
+    /// README depending on which flag they happened to pass. That is no longer
+    /// possible: both flags now produce byte-identical output whenever alef can
+    /// prove ownership.
+    ///
+    /// README.md is `generated_header: true` in production (see
+    /// `readme/template.rs`) but `.md` is an unmarkable extension, so the
+    /// initial write below is what establishes alef's ownership record for it
+    /// ([`crate::cli::cache::is_scaffold_owned_path`]); real README output also
+    /// self-embeds an HTML-comment marker (`readme/template.rs`'s `~keep` note)
+    /// so a *committed* README proves ownership from content alone even on a
+    /// fresh clone, but this test constructs its `GeneratedFile` directly
+    /// without going through that real generator, so it still relies on the
+    /// local record here.
     #[test]
-    fn readme_overwrite_false_preserves_existing_content_producing_divergence() {
+    fn readme_overwrite_flag_no_longer_produces_divergent_bytes_once_owned() {
         let dir = tempfile::tempdir().expect("tempdir");
         let base = dir.path();
 
-        let padded_content = "# My README\n\n| Document            | Size  |\n| ------------------- | ----- |\n| Lists (Timeline)    | 129KB |\n";
-        std::fs::write(base.join("README.md"), padded_content).expect("write padded README");
-
         let compact_content = "# My README\n\n| Document | Size |\n|----------|------|\n| Lists (Timeline) | 129KB |\n";
-        let files = vec![make_file("README.md", compact_content)];
+        let generated = GeneratedFile {
+            path: PathBuf::from("README.md"),
+            content: compact_content.to_owned(),
+            generated_header: true,
+        };
+        write_scaffold_files_with_overwrite(&[generated.clone()], base, true)
+            .expect("initial write establishes ownership");
 
-        write_scaffold_files_with_overwrite(&files, base, false).expect("write ok (overwrite=false)");
+        let padded_content = "# My README\n\n| Document            | Size  |\n| ------------------- | ----- |\n| Lists (Timeline)    | 129KB |\n";
+
+        std::fs::write(base.join("README.md"), padded_content).expect("simulate rumdl-fmt padding");
+        write_scaffold_files_with_overwrite(&[generated.clone()], base, false).expect("write ok (overwrite=false)");
         let after_false = std::fs::read_to_string(base.join("README.md")).expect("read");
-        assert_eq!(
-            after_false, padded_content,
-            "overwrite=false must not touch an existing README — padded content preserved (bug state)"
+        assert!(
+            after_false.contains("|----------|") && !after_false.contains("| ------------------- |"),
+            "overwrite=false must replace externally-reformatted content once ownership is \
+             established -- it is no longer a create-only flag for generated_header: true content, \
+             got:\n{after_false}"
         );
 
-        write_scaffold_files_with_overwrite(&files, base, true).expect("write ok (overwrite=true)");
+        std::fs::write(base.join("README.md"), padded_content).expect("simulate rumdl-fmt padding again");
+        write_scaffold_files_with_overwrite(&[generated], base, true).expect("write ok (overwrite=true)");
         let after_true = std::fs::read_to_string(base.join("README.md")).expect("read");
-        assert!(
-            after_true.contains("|----------|"),
-            "overwrite=true must write compact-separator content, got:\n{after_true}"
-        );
-        assert!(
-            !after_true.contains("| ------------------- |"),
-            "overwrite=true must NOT preserve rumdl-fmt-padded separators, got:\n{after_true}"
-        );
 
+        assert_eq!(
+            after_false, after_true,
+            "overwrite=false and overwrite=true must produce byte-identical output for an \
+             alef-owned generated_header: true file -- the divergence this test used to document \
+             is closed"
+        );
         assert_eq!(
             after_true,
             normalize_content(&std::path::PathBuf::from("README.md"), compact_content),
@@ -904,20 +1104,26 @@ mod scaffold_ownership_guard_tests {
         assert_eq!(report.changed_count(), 0);
     }
 
-    /// The ownership guard must not fire on a path alef is physically unable to stamp.
+    /// The ownership guard must not fire on a path alef is physically unable to stamp,
+    /// *provided* alef has a durable local record of having owned it before
+    /// ([`crate::cli::cache::is_scaffold_owned_path`]).
     ///
     /// `ensure_generated_header` only knows a comment syntax for a fixed extension set;
     /// everything else (`.md` above all) is returned unchanged, so an alef-authored
     /// README never carries a marker no matter how many times it is regenerated. Keying
     /// the guard on the marker alone would therefore read every generated README as
-    /// foreign content and freeze it permanently on the first run after this guard ships.
+    /// foreign content and freeze it permanently on the first run after this guard ships
+    /// -- the ownership-manifest record (populated by this write path itself the first
+    /// time it creates or confirms a path) is what lets a genuinely alef-owned unmarkable
+    /// file keep regenerating instead.
     #[test]
-    fn unstampable_generated_file_is_still_regenerated_despite_carrying_no_marker() {
+    fn unstampable_generated_file_is_still_regenerated_when_alef_owns_it() {
         let dir = tempfile::tempdir().expect("tempdir");
         let base = dir.path();
         let target_relative = PathBuf::from("README.md");
         let target = base.join(&target_relative);
         std::fs::write(&target, "# Stale generated README\n").expect("seed previous output");
+        crate::cli::cache::record_scaffold_owned_path(base, &target).expect("seed ownership record");
 
         let regenerated = "# Regenerated README\n";
         let generated = GeneratedFile {
@@ -926,14 +1132,98 @@ mod scaffold_ownership_guard_tests {
             generated_header: true,
         };
 
-        write_scaffold_files_report(&[generated], base, true).expect("write ok");
+        let report = write_scaffold_files_report(&[generated], base, true).expect("write ok");
 
         assert_eq!(
             std::fs::read_to_string(&target).expect("read after"),
             regenerated,
-            "a markdown file alef cannot stamp must still be regenerated -- a missing marker \
-             there is not evidence the file is foreign"
+            "a markdown file alef cannot stamp must still be regenerated once alef has a durable \
+             ownership record for it -- a missing marker there is not evidence the file is foreign"
         );
+        assert_eq!(report.changed_count(), 1);
+    }
+
+    /// A content-embedded marker proves ownership on an unmarkable extension even with
+    /// NO local `.alef/` record at all -- e.g. a fresh clone with `docs/render.rs`-style
+    /// pages, which self-mark with an HTML-comment header (`<!-- ... auto-generated by
+    /// alef ... -->`) outside `ensure_generated_header`/`marker_comment_style`'s
+    /// extension-keyed mechanism entirely. Gating the marker check on "is this a
+    /// markable extension" would misread this exact case as foreign and refuse to
+    /// regenerate a stale reference page forever on a cache-less checkout.
+    #[test]
+    fn unmarkable_extension_with_self_embedded_marker_regenerates_without_local_record() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let target_relative = PathBuf::from("docs-site/api-c.md");
+        let target = base.join(&target_relative);
+        std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+        let stale = "<!-- This file is auto-generated by alef — DO NOT EDIT. -->\n\
+                     <!-- alef:hash:0000000000000000000000000000000000000000000000000000000000000000 -->\n\n\
+                     ## C API Reference v1.16.0\n";
+        std::fs::write(&target, stale).expect("seed stale, self-marked page");
+        assert!(
+            !crate::cli::cache::is_scaffold_owned_path(base, &target),
+            "sanity: no local ownership record must exist for this path"
+        );
+
+        let regenerated = "<!-- This file is auto-generated by alef — DO NOT EDIT. -->\n\n## C API Reference v1.17.1\n";
+        let generated = GeneratedFile {
+            path: target_relative,
+            content: regenerated.to_owned(),
+            generated_header: true,
+        };
+
+        let report = write_scaffold_files_report(&[generated], base, true).expect("write ok");
+
+        let after = std::fs::read_to_string(&target).expect("read after");
+        assert!(
+            after.contains("v1.17.1") && !after.contains("v1.16.0"),
+            "a self-marked unmarkable file must regenerate on content-proven ownership alone, got:\n{after}"
+        );
+        assert_eq!(report.changed_count(), 1);
+    }
+
+    /// Counterpart to the above: an unstampable extension with NO durable ownership
+    /// record must be refused, not clobbered. This is the `packages/java/pom.xml`
+    /// incident -- `generated_header: true`, but `.xml` cannot carry a marker, so the
+    /// old guard exempted it from any check at all and silently overwrote hand-written
+    /// content the very first time alef saw that path.
+    ///
+    /// This is a *live* case, not one the content-marker-first check already covers:
+    /// `src/scaffold/languages/java.rs`'s `pom.xml` generator embeds no
+    /// "auto-generated by alef"/"Generated by alef" text anywhere in its output
+    /// (unlike `docs::render::with_html_header`'s pages or README output, which
+    /// self-mark and so never need this fallback), so `has_marker` is always
+    /// `false` for it and `is_scaffold_owned_path` is the *only* thing standing
+    /// between a pre-existing `pom.xml` and a silent overwrite. It is not dead
+    /// code; removing it would reopen this exact incident. See
+    /// `cache::scaffold_owned_path_key`'s doc for the cross-`base_dir`-spelling
+    /// bug that made this fallback read as inert across real command sequences
+    /// even though it was always this test's guard, correctly, all along.
+    #[test]
+    fn unstampable_generated_file_with_no_ownership_record_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let target_relative = PathBuf::from("packages/java/pom.xml");
+        let target = base.join(&target_relative);
+        std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+        let hand_written = "<project><!-- hand-written, never alef's --></project>\n";
+        std::fs::write(&target, hand_written).expect("seed hand-written pom.xml");
+
+        let generated = GeneratedFile {
+            path: target_relative,
+            content: "<project><!-- alef-generated --></project>\n".to_owned(),
+            generated_header: true,
+        };
+
+        let report = write_scaffold_files_report(&[generated], base, true).expect("write ok");
+
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("read after"),
+            hand_written,
+            "an unstampable extension with no durable ownership record must be left untouched"
+        );
+        assert_eq!(report.changed_count(), 0, "a refused write must not count as a change");
     }
 
     /// Happy-path counterpart: a file alef legitimately authored on a prior run
@@ -1045,6 +1335,41 @@ mod scaffold_ownership_guard_tests {
             1,
             "only the genuinely-owned sibling counts as changed"
         );
+    }
+
+    /// The zig/dart/swift incident: a `generated_header: false` scaffold seed on a
+    /// *markable* extension (`.dart`, `.swift`, `.zig`, ...) must never be silently
+    /// replaced once it exists on disk, even under `overwrite: true` -- not on first
+    /// hand-edit, and not on every subsequent run thereafter. Seeds never carry an
+    /// `alef:hash:` marker by design (see `write_scaffold_files_report`'s doc), so
+    /// "no marker" is the seed's permanent, intentional state, not a transient gap
+    /// that a durable ownership record could paper over the way it does for
+    /// unmarkable extensions.
+    #[test]
+    fn markable_seed_with_local_modifications_is_not_replaced_under_overwrite_true() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let target_relative = PathBuf::from("packages/dart/test/my_lib_test.dart");
+        let target = base.join(&target_relative);
+        std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+
+        let hand_written_test = "import 'package:test/test.dart';\n\nvoid main() {\n  test('really checks something', () {\n    expect(computeAnswer(), equals(42));\n  });\n}\n";
+        std::fs::write(&target, hand_written_test).expect("seed hand-edited test file");
+
+        let placeholder_seed = GeneratedFile {
+            path: target_relative,
+            content: "import 'package:test/test.dart';\n\nvoid main() {\n  test('placeholder', () {\n    expect(1 + 1, equals(2));\n  });\n}\n".to_owned(),
+            generated_header: false,
+        };
+
+        let report = write_scaffold_files_report(&[placeholder_seed], base, true).expect("write ok");
+
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("read after"),
+            hand_written_test,
+            "a generated_header: false seed's local modifications must survive overwrite: true"
+        );
+        assert_eq!(report.changed_count(), 0, "a refused write must not count as a change");
     }
 }
 
@@ -1241,6 +1566,12 @@ mod generated_header_tests {
         assert!(!dir.path().join("new").exists());
     }
 
+    /// `tool.txt` is an unmarkable extension (no comment syntax `marker_comment_style`
+    /// knows), so `write_files_report`'s ownership guard requires a local
+    /// `.alef/scaffold-owned-paths.manifest` record before it may replace pre-existing
+    /// content there. The initial write below establishes that record the same way a
+    /// real first run would, so the second write below exercises the atomic-replace
+    /// path this test actually targets rather than being refused by the guard.
     #[cfg(unix)]
     #[test]
     fn changed_atomic_replacement_preserves_existing_permissions() {
@@ -1248,8 +1579,17 @@ mod generated_header_tests {
 
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("tool.txt");
-        std::fs::write(&path, "old\n").expect("seed file");
+        let seed_files = vec![(
+            crate::core::config::Language::Java,
+            vec![GeneratedFile {
+                path: "tool.txt".into(),
+                content: "old\n".into(),
+                generated_header: false,
+            }],
+        )];
+        write_files_report(&seed_files, dir.path()).expect("initial write establishes ownership");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o744)).expect("seed mode");
+
         let files = vec![(
             crate::core::config::Language::Java,
             vec![GeneratedFile {
@@ -1261,6 +1601,11 @@ mod generated_header_tests {
 
         write_files_report(&files, dir.path()).expect("replacement");
 
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read after replacement"),
+            "new\n",
+            "content must actually be replaced"
+        );
         assert_eq!(
             std::fs::metadata(path).expect("metadata").permissions().mode() & 0o777,
             0o744
@@ -1317,5 +1662,138 @@ mod generated_header_tests {
         assert!(crate::core::hash::extract_hash(&managed).is_some());
         assert!(crate::core::hash::extract_hash(&handwritten).is_none());
         assert!(!handwritten.contains("Generated by alef"));
+    }
+
+    /// `write_files_report`'s narrow ownership guard: a `generated_header: true`
+    /// binding file on a markable extension must not silently claim a path that
+    /// already holds hand-written content the very first time alef ever writes
+    /// there -- the same day-one collision class `write_scaffold_files_report`
+    /// guards against, scoped down to the subset of this writer's output that can
+    /// actually prove authorship (see the guard's doc comment for why the rest of
+    /// this writer, which is always-regenerated by design, is deliberately left
+    /// unguarded).
+    #[test]
+    fn write_files_report_refuses_pre_existing_unmarked_file_on_markable_extension() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let hand_written = "package example;\n\npublic final class Example {\n    // hand-rolled\n}\n";
+        std::fs::write(dir.path().join("Example.java"), hand_written).expect("seed hand-written file");
+
+        let files = vec![(
+            crate::core::config::Language::Java,
+            vec![GeneratedFile {
+                path: "Example.java".into(),
+                content: "package example;\n\npublic final class Example {}\n".into(),
+                generated_header: true,
+            }],
+        )];
+
+        let report = write_files_report(&files, dir.path()).expect("write ok");
+
+        let after = std::fs::read_to_string(dir.path().join("Example.java")).expect("read after");
+        assert_eq!(
+            after, hand_written,
+            "a path with no alef marker must survive a generated_header: true binding write untouched"
+        );
+        assert_eq!(report.changed_count(), 0, "a refused write must not count as a change");
+    }
+
+    /// Counterpart: once a binding file already carries the marker (alef legitimately
+    /// wrote it on a prior run), it must keep regenerating on every subsequent run --
+    /// the guard added above must not degrade binding regeneration into create-once.
+    #[test]
+    fn write_files_report_still_regenerates_a_file_alef_already_owns() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let marked = crate::core::hash::inject_hash_line(
+            &format!(
+                "{}package example;\n\npublic final class Example {{}}\n",
+                crate::core::hash::header(crate::core::hash::CommentStyle::DoubleSlash)
+            ),
+            &"0".repeat(64),
+        );
+        std::fs::write(dir.path().join("Example.java"), &marked).expect("seed prior alef output");
+
+        let files = vec![(
+            crate::core::config::Language::Java,
+            vec![GeneratedFile {
+                path: "Example.java".into(),
+                content: "package example;\n\npublic final class Example {\n    int added;\n}\n".into(),
+                generated_header: true,
+            }],
+        )];
+
+        let report = write_files_report(&files, dir.path()).expect("write ok");
+
+        let after = std::fs::read_to_string(dir.path().join("Example.java")).expect("read after");
+        assert!(
+            after.contains("int added;"),
+            "a file alef already owns must keep regenerating, got:\n{after}"
+        );
+        assert_eq!(report.changed_count(), 1);
+    }
+
+    /// `write_files_report`'s unmarkable-extension route: a `.cmake` config file (no
+    /// comment syntax `marker_comment_style` recognizes) with no local ownership
+    /// record must be refused, not clobbered -- the same class of gap that let
+    /// `packages/java/pom.xml` be silently reclaimed in `write_scaffold_files_report`,
+    /// found in this writer's own output via cross-repo review of
+    /// `crates/*-ffi/cmake/*-config.cmake`.
+    #[test]
+    fn write_files_report_refuses_pre_existing_unmarkable_file_with_no_ownership_record() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let hand_written = "# hand-written, never alef's\nset(FOO_INCLUDE_DIRS \"/usr/local/include\")\n";
+        std::fs::write(dir.path().join("foo-config.cmake"), hand_written).expect("seed hand-written file");
+
+        let files = vec![(
+            crate::core::config::Language::Ffi,
+            vec![GeneratedFile {
+                path: "foo-config.cmake".into(),
+                content: "set(FOO_INCLUDE_DIRS \"${CMAKE_CURRENT_LIST_DIR}/include\")\n".into(),
+                generated_header: true,
+            }],
+        )];
+
+        let report = write_files_report(&files, dir.path()).expect("write ok");
+
+        let after = std::fs::read_to_string(dir.path().join("foo-config.cmake")).expect("read after");
+        assert_eq!(
+            after, hand_written,
+            "an unmarkable extension with no durable ownership record must survive untouched"
+        );
+        assert_eq!(report.changed_count(), 0, "a refused write must not count as a change");
+    }
+
+    /// Counterpart: once alef has a local ownership record for an unmarkable path
+    /// (populated by this writer's own first successful write), it must keep
+    /// regenerating on every subsequent run -- the unmarkable route must not degrade
+    /// into create-once either.
+    #[test]
+    fn write_files_report_regenerates_unmarkable_file_once_it_has_a_local_ownership_record() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let initial = vec![(
+            crate::core::config::Language::Ffi,
+            vec![GeneratedFile {
+                path: "foo-config.cmake".into(),
+                content: "set(FOO_INCLUDE_DIRS \"${CMAKE_CURRENT_LIST_DIR}/include\")\n".into(),
+                generated_header: true,
+            }],
+        )];
+        write_files_report(&initial, dir.path()).expect("initial write establishes ownership");
+
+        let updated = vec![(
+            crate::core::config::Language::Ffi,
+            vec![GeneratedFile {
+                path: "foo-config.cmake".into(),
+                content: "set(FOO_INCLUDE_DIRS \"${CMAKE_CURRENT_LIST_DIR}/include2\")\n".into(),
+                generated_header: true,
+            }],
+        )];
+        let report = write_files_report(&updated, dir.path()).expect("write ok");
+
+        let after = std::fs::read_to_string(dir.path().join("foo-config.cmake")).expect("read after");
+        assert!(
+            after.contains("include2"),
+            "an unmarkable file alef already owns must keep regenerating, got:\n{after}"
+        );
+        assert_eq!(report.changed_count(), 1);
     }
 }

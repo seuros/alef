@@ -278,6 +278,178 @@ pub fn read_scaffold_manifest(crate_name: &str) -> Vec<PathBuf> {
     }
 }
 
+/// Repo-scoped (rooted at `base_dir`, not crate-scoped) durable record of
+/// every path a write pass has confirmed alef legitimately wrote or reused.
+///
+/// Deliberately additive and never replaced wholesale, unlike
+/// [`write_scaffold_manifest`]'s per-crate, per-run snapshot: the write-time
+/// ownership guard in `write_scaffold_files_report` has no crate name in
+/// scope (it writes plain scaffold/readme/e2e/docs output keyed only by
+/// `base_dir`) and is invoked incrementally from many independent commands
+/// (readme, e2e regen, version sync, ...), so each call must extend the
+/// record without erasing paths a different call already proved ownership
+/// of. Rooted at `base_dir` rather than the process CWD so parallel tests
+/// (each with their own tempdir `base_dir`) never share, and race on, the
+/// same manifest file. ~keep
+const SCAFFOLD_OWNED_PATHS_MANIFEST: &str = "scaffold-owned-paths.manifest";
+
+/// Normalize `path` to a `base_dir`-relative key before it is used to read or
+/// write the owned-paths manifest.
+///
+/// Production callers of [`record_scaffold_owned_path`] / [`is_scaffold_owned_path`]
+/// do not agree on how they spell `base_dir`: most `bin_cli` commands pass
+/// `std::env::current_dir()?` (absolute), while `version_regen.rs`'s regen
+/// helpers pass `PathBuf::from(".")` (relative) -- both name the same
+/// directory, but `base_dir.join(&file.path)` produces textually different
+/// strings from each (`/abs/repo/packages/java/pom.xml` vs
+/// `./packages/java/pom.xml`). Storing and looking up that raw joined string
+/// meant a record written by one caller was invisible to a lookup from the
+/// other: `is_scaffold_owned_path` read as permanently `false` for any file
+/// whose write-time caller and check-time caller happened to spell `base_dir`
+/// differently, which in practice is most real cross-command sequences (e.g.
+/// `alef all` establishes ownership, a later `alef version` bump checks it).
+/// Stripping `base_dir` back off before keying makes the record depend only
+/// on `file.path`, which every caller already agrees on. Falls back to the
+/// path as given if it is not actually rooted at `base_dir` (should not
+/// happen in practice, since every caller builds `path` via
+/// `base_dir.join(...)`, but a mismatched pair must degrade to "some key"
+/// rather than panic). ~keep
+fn scaffold_owned_path_key(base_dir: &Path, path: &Path) -> String {
+    path.strip_prefix(base_dir)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Record `path` (relative to `base_dir`, or already `base_dir`-joined -- see
+/// [`scaffold_owned_path_key`]) as alef-owned.
+///
+/// The write-time guard in `write_scaffold_files_report` consults this for
+/// extensions it cannot stamp with an `alef:hash:` marker (`.md`, `.json`,
+/// `.xml`, ...) to distinguish "alef legitimately wrote this before" from
+/// "this pre-existed alef and must not be silently claimed." Idempotent: a
+/// path already present is left alone.
+pub fn record_scaffold_owned_path(base_dir: &Path, path: &Path) -> anyhow::Result<()> {
+    let dir = base_dir.join(CACHE_DIR);
+    fs::create_dir_all(&dir)?;
+    let manifest_path = dir.join(SCAFFOLD_OWNED_PATHS_MANIFEST);
+    let key = scaffold_owned_path_key(base_dir, path);
+    let mut paths = read_scaffold_owned_paths_raw(&manifest_path);
+    if paths.iter().any(|existing| *existing == key) {
+        return Ok(());
+    }
+    paths.push(key);
+    paths.sort_unstable();
+    paths.dedup();
+    let mut content = paths.join("\n");
+    if !content.is_empty() {
+        content.push('\n');
+    }
+    fs::write(&manifest_path, content)?;
+    Ok(())
+}
+
+/// True when `path` was previously recorded by [`record_scaffold_owned_path`]
+/// under this `base_dir`'s local `.alef/` cache.
+///
+/// `.alef/` is gitignored and machine-local, so a fresh clone or a
+/// cache-less CI job always answers `false` here -- the write-time guard
+/// treats that as "no durable evidence," refusing to overwrite rather than
+/// risk clobbering foreign content. ~keep
+pub fn is_scaffold_owned_path(base_dir: &Path, path: &Path) -> bool {
+    let manifest_path = base_dir.join(CACHE_DIR).join(SCAFFOLD_OWNED_PATHS_MANIFEST);
+    let key = scaffold_owned_path_key(base_dir, path);
+    read_scaffold_owned_paths_raw(&manifest_path)
+        .iter()
+        .any(|existing| *existing == key)
+}
+
+fn read_scaffold_owned_paths_raw(manifest_path: &Path) -> Vec<String> {
+    fs::read_to_string(manifest_path)
+        .map(|content| {
+            content
+                .lines()
+                .filter(|line| !line.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Repo-scoped (rooted at `base_dir`) local record of the array *values*
+/// alef's own generator proposed for a TOML merge target, per dotted
+/// key path, on the most recent successful merge -- e.g.
+/// `{"poly.toml": {"discovery.exclude": ["target/**", "docs/snippets/**"]}}`.
+///
+/// This is the provenance data [`merge_managed_toml`]'s prune step needs to
+/// answer "did alef itself, in a past run, propose this exact value" without
+/// guessing from the value's text alone: a value present in `existing` that
+/// merely *equals* something alef's current template happens to emit is not
+/// evidence of authorship (a consumer's own `[workspace.poly] exclude` entry
+/// can coincide), but a value that was captured here -- straight from alef's
+/// own generated output, before any merge with consumer content -- genuinely
+/// was alef's proposal. A value the consumer configures via
+/// `[workspace.poly] exclude` (or `file_safety_exclude`) is echoed back into
+/// the generator's own output on every run for as long as it stays
+/// configured, so it keeps reappearing here too and is never a prune
+/// candidate; it only becomes one if the consumer removes it from their own
+/// config, at which point pruning it matches their own subsequent intent.
+///
+/// Deliberately keyed by the merge target's *relative* path (`"poly.toml"`),
+/// not the `base_dir`-joined absolute one, so the record does not depend on
+/// how a given invocation happened to express `base_dir`.
+///
+/// `.alef/` is gitignored and machine-local: a fresh clone or a wiped cache
+/// has no record for any key path, so [`merge_managed_toml`]'s prune step
+/// finds nothing to compare against and removes nothing -- the same
+/// degrade-safely-to-no-op contract as [`is_scaffold_owned_path`], and for
+/// the same reason: this can only ever prevent *future* drift from
+/// accumulating starting at the first run that establishes a baseline in a
+/// given working copy, never retroactively clean up values that went stale
+/// before that baseline existed. ~keep
+const TOML_MERGE_PROVENANCE_MANIFEST: &str = "toml-merge-provenance.json";
+
+type TomlMergeProvenance = std::collections::BTreeMap<String, std::collections::BTreeMap<String, Vec<String>>>;
+
+fn read_toml_merge_provenance_file(base_dir: &Path) -> TomlMergeProvenance {
+    let manifest_path = base_dir.join(CACHE_DIR).join(TOML_MERGE_PROVENANCE_MANIFEST);
+    fs::read_to_string(manifest_path)
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+        .unwrap_or_default()
+}
+
+/// Read the previously recorded array values for every key path in
+/// `relative_path` (e.g. `"poly.toml"`). Empty when nothing was ever
+/// recorded for this path in this working copy -- callers must treat that as
+/// "no known prior proposal," never as "alef proposed no arrays."
+pub fn read_toml_merge_provenance(
+    base_dir: &Path,
+    relative_path: &Path,
+) -> std::collections::BTreeMap<String, Vec<String>> {
+    read_toml_merge_provenance_file(base_dir)
+        .remove(&relative_path.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// Replace the recorded array values for `relative_path` with
+/// `arrays_by_key_path` -- this run's freshly generated content, captured
+/// before merging with consumer content -- for the next run's comparison.
+/// Other merge targets' records are left untouched.
+pub fn write_toml_merge_provenance(
+    base_dir: &Path,
+    relative_path: &Path,
+    arrays_by_key_path: &std::collections::BTreeMap<String, Vec<String>>,
+) -> anyhow::Result<()> {
+    let dir = base_dir.join(CACHE_DIR);
+    fs::create_dir_all(&dir)?;
+    let mut all = read_toml_merge_provenance_file(base_dir);
+    all.insert(relative_path.to_string_lossy().into_owned(), arrays_by_key_path.clone());
+    let manifest_path = dir.join(TOML_MERGE_PROVENANCE_MANIFEST);
+    fs::write(&manifest_path, serde_json::to_string_pretty(&all)?)?;
+    Ok(())
+}
+
 /// Compute hash for a generation stage (stubs, docs, readme, scaffold, e2e).
 /// `extra` allows including additional content (e.g., fixture files for e2e).
 /// The alef binary's identity is included so that locally rebuilt binaries
@@ -668,5 +840,87 @@ mod tests {
             "composer.json recorded by run 1's manifest must be reclaimed in run 2"
         );
         assert!(!composer_json.exists(), "orphaned composer.json must be deleted");
+    }
+
+    #[test]
+    fn scaffold_owned_path_round_trips_and_is_idempotent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let target = base.join("packages/java/pom.xml");
+
+        assert!(!is_scaffold_owned_path(base, &target), "must start unrecorded");
+
+        record_scaffold_owned_path(base, &target).expect("record");
+        record_scaffold_owned_path(base, &target).expect("record again (idempotent)");
+
+        assert!(is_scaffold_owned_path(base, &target));
+        let manifest =
+            std::fs::read_to_string(base.join(".alef").join(SCAFFOLD_OWNED_PATHS_MANIFEST)).expect("read manifest");
+        assert_eq!(
+            manifest.lines().count(),
+            1,
+            "recording the same path twice must not duplicate it, got:\n{manifest}"
+        );
+    }
+
+    #[test]
+    fn scaffold_owned_path_is_scoped_to_base_dir() {
+        let dir_a = tempfile::tempdir().expect("tempdir a");
+        let dir_b = tempfile::tempdir().expect("tempdir b");
+        let target = std::path::PathBuf::from("packages/java/pom.xml");
+
+        record_scaffold_owned_path(dir_a.path(), &dir_a.path().join(&target)).expect("record in a");
+
+        assert!(!is_scaffold_owned_path(dir_b.path(), &dir_b.path().join(&target)));
+    }
+
+    /// Regression: a record written with an *absolute* `base_dir`
+    /// (`std::env::current_dir()`, what most `bin_cli` commands pass) must
+    /// still be found by a lookup that expresses `base_dir` *relatively*
+    /// (`PathBuf::from(".")`, what `version_regen.rs`'s regen helpers pass)
+    /// when both name the same directory -- and vice versa. Before
+    /// `scaffold_owned_path_key` normalized the stored key back to
+    /// `file.path`, the two representations produced different
+    /// `base_dir.join(path)` strings for the same file, so
+    /// `is_scaffold_owned_path` read as permanently `false` for any path
+    /// whose owning write and later check happened to come from commands
+    /// that spell `base_dir` differently -- which most real multi-command
+    /// sequences do (e.g. `alef all` establishes ownership, a later
+    /// `alef version` bump checks it), making the manifest effectively inert
+    /// even though it was being written and read from the exact same file on
+    /// disk the whole time.
+    #[test]
+    fn scaffold_owned_path_matches_across_absolute_and_relative_base_dir_spellings() {
+        let _guard = CWD_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let original_cwd = std::env::current_dir().expect("cwd");
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::env::set_current_dir(tmp.path()).expect("chdir into tempdir");
+
+        let absolute_base = std::env::current_dir().expect("absolute cwd");
+        let relative_base = Path::new(".");
+        let relative_target = relative_base.join("packages/java/pom.xml");
+
+        let result = (|| -> anyhow::Result<(bool, bool)> {
+            // Written as an absolute-`base_dir` caller (e.g. a `bin_cli` command) would.
+            record_scaffold_owned_path(&absolute_base, &absolute_base.join("packages/java/pom.xml"))?;
+            // Checked as a relative-`base_dir` caller (e.g. `version_regen.rs`) would.
+            let found_from_relative = is_scaffold_owned_path(relative_base, &relative_target);
+            // And the reverse direction: written relatively, checked absolutely.
+            record_scaffold_owned_path(relative_base, &relative_base.join("packages/csharp/foo.csproj"))?;
+            let found_from_absolute =
+                is_scaffold_owned_path(&absolute_base, &absolute_base.join("packages/csharp/foo.csproj"));
+            Ok((found_from_relative, found_from_absolute))
+        })();
+
+        let _ = std::env::set_current_dir(&original_cwd);
+        let (found_from_relative, found_from_absolute) = result.expect("record/check round-trip");
+        assert!(
+            found_from_relative,
+            "a record written with an absolute base_dir must be found by a relative-base_dir lookup"
+        );
+        assert!(
+            found_from_absolute,
+            "a record written with a relative base_dir must be found by an absolute-base_dir lookup"
+        );
     }
 }

@@ -240,10 +240,17 @@ fn path_is_reclaimable(path: &Path) -> bool {
 /// reasons (e.g. `pubspec.yaml`, which is YAML and could carry a `#` marker).
 /// Extend deliberately, one verified format at a time: check the candidate's
 /// actual `generated_header` value and content format in
-/// `src/scaffold/languages/*.rs` before adding it here. ~keep
+/// `src/scaffold/languages/*.rs` before adding it here.
+///
+/// Also consulted by `write.rs`'s `existing_file_is_alef_owned` (the
+/// never-overwrite guard in `write_scaffold_files_report` / `write_files_report`):
+/// a name on this list is allowed to overwrite a pre-existing, unmarked file at
+/// write time for the same reason it is allowed to be reclaimed as an orphan
+/// here -- both routes trust the filename itself as proof, since content can
+/// never carry the marker. `pub(super)` for that second caller. ~keep
 const UNMARKABLE_ALEF_MANIFESTS: &[&str] = &["composer.json", "package.json"];
 
-fn is_unmarkable_alef_manifest(path: &Path) -> bool {
+pub(super) fn is_unmarkable_alef_manifest(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| UNMARKABLE_ALEF_MANIFESTS.contains(&name))

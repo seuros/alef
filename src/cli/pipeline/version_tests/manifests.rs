@@ -272,6 +272,80 @@ fn sync_versions_bumps_kotlin_gradle_nif_lock_and_docs_badges() {
     );
 }
 
+/// The badge sync must follow `[docs] reference_output`, not the `docs/reference` default.
+///
+/// liter-llm renders its reference pages into `docs-site/src/content/docs/reference`; because
+/// the badge sweep hardcoded the default directory, every release bumped the package READMEs
+/// to the new version while the published API-reference pages kept advertising the previous
+/// one. ~keep
+#[test]
+fn sync_versions_bumps_docs_badges_in_configured_reference_output() {
+    use crate::core::config::NewAlefConfig;
+    let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let original_cwd = std::env::current_dir().expect("cwd");
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    let reference_output = "docs-site/src/content/docs/reference";
+
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[workspace.package]\nversion = \"1.17.1\"\n\n[workspace]\nresolver = \"2\"\nmembers = []\n",
+    )
+    .expect("write Cargo.toml");
+
+    std::fs::create_dir_all(root.join(reference_output)).expect("mkdir reference output");
+    std::fs::write(
+        root.join(reference_output).join("api-c.md"),
+        "## C API Reference <span class=\"version-badge\">v1.16.0</span>\n",
+    )
+    .expect("write api-c.md");
+    std::fs::write(
+        root.join(reference_output).join("api-python.md"),
+        "## Python API Reference <span class=\"version-badge\">v1.16.0</span>\n",
+    )
+    .expect("write api-python.md");
+
+    let version_from = root.join("Cargo.toml").display().to_string().replace('\\', "/");
+    let alef_toml = format!(
+        r#"
+[workspace]
+languages = ["python"]
+
+[workspace.docs]
+reference_output = "{reference_output}"
+
+[[crates]]
+name = "example"
+sources = []
+version_from = "{version_from}"
+"#
+    );
+    let alef_toml_path = root.join("alef.toml");
+    std::fs::write(&alef_toml_path, &alef_toml).expect("write alef.toml");
+
+    let cfg: NewAlefConfig = toml::from_str(&alef_toml).expect("parse alef.toml");
+    let mut resolved = cfg.resolve().expect("resolve config");
+    let resolved_cfg = resolved.remove(0);
+
+    std::env::set_current_dir(root).expect("set_current_dir");
+    let sync_result = sync_versions(&resolved_cfg, &alef_toml_path, None, true, true, None);
+    let _ = std::env::set_current_dir(&original_cwd);
+    sync_result.expect("sync_versions ok");
+
+    for page in ["api-c.md", "api-python.md"] {
+        let badge = std::fs::read_to_string(root.join(reference_output).join(page)).expect("read reference page");
+        assert!(
+            badge.contains("<span class=\"version-badge\">v1.17.1</span>"),
+            "{page} badge must match the resolved workspace version:\n{badge}"
+        );
+        assert!(
+            !badge.contains("v1.16.0"),
+            "{page} must not keep the previous version:\n{badge}"
+        );
+    }
+}
+
 #[test]
 fn update_zig_package_hash_rc_prerelease() {
     let existing = "sample_pkg-1.4.0-rc.50-Jfgk_HsxAQAl3_LX7NCs1l27EHcYVF9dieEDCVAwUxK9";

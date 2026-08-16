@@ -116,11 +116,16 @@ pub(super) fn regenerate_test_apps_after_sync(
 /// `config_path` after `sync_versions` has written the bumped version ensures the
 /// IR carries the fresh version string.
 ///
-/// Scaffold files with `generated_header: true` are always overwritten (they are
-/// fully alef-managed, e.g. `.cargo/config.toml`). Scaffold files with
-/// `generated_header: false` (seeds — Cargo.toml templates, gemspec, pubspec.yaml)
-/// are also overwritten here so version strings stay in sync atomically with the
-/// workspace bump. This mirrors what `alef all --clean` would do.
+/// Scaffold files with `generated_header: true` are overwritten here as long as
+/// [`super::generate::write_scaffold_files_report`]'s ownership guard can prove alef
+/// authored the pre-existing content (they are otherwise fully alef-managed, e.g.
+/// `.cargo/config.toml`). Scaffold files with `generated_header: false` (seeds —
+/// Cargo.toml templates, gemspec, pubspec.yaml) are create-once by design: passing
+/// `overwrite: true` here does **not** force their version fields back in sync once
+/// they already exist on disk, since the ownership guard has no marker to check for a
+/// seed and refuses rather than risk clobbering a hand-edit. A seed whose version
+/// string genuinely needs to track the workspace bump on every sync belongs on the
+/// `generated_header: true` rail instead, not on a widened overwrite here.
 ///
 /// Returns the number of scaffold files written (0 when all were already current).
 pub(super) fn regenerate_scaffold_after_sync(
