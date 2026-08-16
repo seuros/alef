@@ -219,8 +219,7 @@ extra_features = ["sceptre-wasm", "", "sceptre-wasm", "telemetry"]
 }
 
 #[test]
-fn cargo_toml_declares_explicit_features_as_passthrough_without_enabling_default() {
-    // binding-side `#[cfg(feature = X)]` items intentionally remain hidden
+fn cargo_toml_enables_configured_binding_features_by_default() {
     use crate::core::ir::TypeDef;
 
     let cfg: NewAlefConfig = toml::from_str(
@@ -264,8 +263,12 @@ features = ["wasm-target"]
         "wasm-target must be declared as passthrough so rustc sees the feature:\n{cargo_toml}"
     );
     assert!(
-        !cargo_toml.contains("default = ["),
-        "no default = [...] line — binding-side cfg items stay hidden:\n{cargo_toml}"
+        cargo_toml.contains(r#"default = ["wasm-target"]"#),
+        "configured core features must also enable matching binding-side cfg gates:\n{cargo_toml}"
+    );
+    assert!(
+        !cargo_toml.contains(r#"default = ["extra"]"#),
+        "unconfigured discovered gates must remain opt-in:\n{cargo_toml}"
     );
     toml::from_str::<toml::Value>(&cargo_toml).expect("generated Cargo.toml must be valid TOML");
 }
