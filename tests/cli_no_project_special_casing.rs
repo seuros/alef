@@ -202,3 +202,46 @@ fn strict_enforced_files(workspace_root: &Path) -> Vec<PathBuf> {
     })
     .collect()
 }
+
+/// The `#[cfg(test)]` exemption tracks nesting by counting braces, and it must count them
+/// in code only.
+///
+/// alef is a template generator, so comments and fixtures are dense with Jinja: `{% endif %}`
+/// alone is one opener and two closers. Counting raw text made the exemption controllable by
+/// prose. Both directions were observed against the real hook before the fix — a comment with
+/// surplus closers ended the region early and reported test fixtures as violations, and a
+/// comment with surplus openers extended a phantom region past the module's closing brace and
+/// silently hid a genuine violation in the production code below it.
+///
+/// The hiding direction is why this test exists: that failure mode leaves the gate reporting
+/// clean, so nothing about the output distinguishes it from a healthy run. ~keep
+#[test]
+fn cfg_test_exemption_is_not_steered_by_braces_inside_comments() {
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let hook = workspace_root.join("hooks/check_project_mentions.py");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let backends = dir.path().join("src/backends");
+    std::fs::create_dir_all(&backends).expect("create src/backends");
+
+    let hides = backends.join("surplus_openers.rs");
+    std::fs::write(
+        &hides,
+        "#[cfg(test)]\nmod tests {\n    // Jinja in a comment: `{{`\n    #[test]\n    fn sample() {}\n}\n\npub fn special_case() -> &'static str {\n    \"liter-llm\"\n}\n",
+    )
+    .expect("write fixture");
+    assert!(
+        run_project_mention_hook(&hook, false, &[hides]).is_err(),
+        "a comment with surplus openers must not extend the cfg(test) region over production code"
+    );
+
+    let terminates_early = backends.join("surplus_closers.rs");
+    std::fs::write(
+        &terminates_early,
+        "#[cfg(test)]\nmod tests {\n    /// Jinja in a doc comment: `{% endif %}`\n    #[test]\n    fn sample() {\n        let fixture = \"liter-llm\";\n    }\n}\n",
+    )
+    .expect("write fixture");
+    assert!(
+        run_project_mention_hook(&hook, false, &[terminates_early]).is_ok(),
+        "a comment with surplus closers must not end the cfg(test) region early"
+    );
+}

@@ -273,6 +273,28 @@ def is_strict_prose_line(path: Path, line: str) -> bool:
     return stripped.startswith(COMMENT_PREFIXES)
 
 
+_LINE_COMMENT = re.compile(r"//.*$")
+_STRING_LITERAL = re.compile(r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'')
+
+
+def brace_delta(line: str) -> int:
+    """Net brace depth contributed by `line`, ignoring comments and string literals.
+
+    Counting braces in raw text makes the `#[cfg(test)]` exemption controllable by prose.
+    This is a template generator, so comments and fixtures are full of Jinja `{%`/`{{`:
+    `{% endif %}` alone is one open and two closes. An unbalanced *comment* inside a test
+    module therefore ends the region early and reports test fixtures as violations, and --
+    the direction that matters -- a comment with surplus openers extends a phantom region
+    past the module's closing brace, silently hiding every real violation in the production
+    code that follows. Verified both ways against this hook before the fix.
+    """
+    return line.count("{") - line.count("}")
+
+
+def _code_only(line: str) -> str:
+    return _LINE_COMMENT.sub("", _STRING_LITERAL.sub("", line))
+
+
 def update_rust_cfg_test_region(
     path: Path,
     line: str,
@@ -280,10 +302,11 @@ def update_rust_cfg_test_region(
     depth: int | None,
 ) -> tuple[bool, int | None, bool, bool]:
     started = False
+    code = _code_only(line)
     if path.suffix == ".rs" and line.strip() == "#[cfg(test)]":
         pending = True
-    elif pending and path.suffix == ".rs" and "{" in line:
-        depth = line.count("{") - line.count("}")
+    elif pending and path.suffix == ".rs" and "{" in code:
+        depth = brace_delta(code)
         pending = False
         started = True
     return pending, depth, depth is not None, started
@@ -292,7 +315,7 @@ def update_rust_cfg_test_region(
 def advance_rust_cfg_test_region(line: str, depth: int | None, started: bool) -> int | None:
     if depth is None or started:
         return depth
-    depth += line.count("{") - line.count("}")
+    depth += brace_delta(_code_only(line))
     return None if depth <= 0 else depth
 
 
