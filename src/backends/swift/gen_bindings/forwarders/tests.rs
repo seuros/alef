@@ -218,7 +218,7 @@ fn make_async_enum_return_fn() -> FunctionDef {
 fn async_forwarder_decodes_unit_enum_return_via_raw_value_not_positional_init() {
     let func = make_async_enum_return_fn();
     let mut known_dto_names: HashSet<String> = HashSet::new();
-    // `known_dto_names` mirrors `compute_first_class_dto_names`, which intentionally ~keep
+    // `known_dto_names` mirrors `compute_first_class_dto_names`, which intentionally
     // includes unit-serde enum names alongside true struct DTOs. ~keep
     known_dto_names.insert("RefreshOutcome".to_string());
     let enum_names: HashSet<String> = known_dto_names.clone();
@@ -291,6 +291,124 @@ fn sync_forwarder_decodes_unit_enum_return_via_raw_value_not_positional_init() {
     );
 }
 
+/// Regression test: `TypeRef::Path` used to fall through to the default match arm in
+/// `forwarder_param_signature`, which returns `setup_line: None`, so a `Path` param was
+/// passed unwrapped as a Swift `String` while a sibling `String` param was wrapped into
+/// `RustString` -- producing "conflicting arguments to generic parameter
+/// 'GenericIntoRustString' ('RustString' vs. 'String')". `Path` must take the same wrapping
+/// arm as `String`. ~keep
+#[test]
+fn string_and_path_params_produce_identical_forwarder_arg_shape() {
+    let known_dto_names: HashSet<String> = HashSet::new();
+    let (string_ty, string_arg) = forwarder_param_signature(&TypeRef::String, "path", false, &known_dto_names);
+    let (path_ty, path_arg) = forwarder_param_signature(&TypeRef::Path, "path", false, &known_dto_names);
+
+    assert_eq!(
+        string_ty, path_ty,
+        "String and Path params must produce the same Swift parameter type"
+    );
+    assert_eq!(
+        path_arg.setup_line, string_arg.setup_line,
+        "Path must wrap into RustString exactly like String, not fall through with setup_line: None"
+    );
+    assert_eq!(path_arg.arg_expr, string_arg.arg_expr);
+    assert_eq!(path_ty, "String");
+    assert_eq!(path_arg.setup_line, Some("let _rb_path = RustString(path)".to_string()));
+    assert_eq!(path_arg.arg_expr, "_rb_path");
+}
+
+#[test]
+fn optional_path_param_wraps_like_optional_string() {
+    let known_dto_names: HashSet<String> = HashSet::new();
+    let ty = TypeRef::Optional(Box::new(TypeRef::Path));
+    let (swift_ty, arg) = forwarder_param_signature(&ty, "path", true, &known_dto_names);
+    assert_eq!(swift_ty, "String?");
+    assert_eq!(
+        arg.setup_line,
+        Some("let _rb_path = path.map { RustString($0) }".to_string())
+    );
+    assert_eq!(arg.arg_expr, "_rb_path");
+}
+
+/// Regression test: `Vec<DTO>` returns must be recognized as throwing conversions so the
+/// forwarder wrapper gets a `throws` clause and the return statement gets `try` -- otherwise
+/// `try Dto(ref)` sits in a non-throwing context and fails to compile. ~keep
+#[test]
+fn vec_dto_return_throws_when_element_type_is_known_dto() {
+    let mut known_dto_names: HashSet<String> = HashSet::new();
+    known_dto_names.insert("PatternMatch".to_string());
+    let ty = TypeRef::Vec(Box::new(TypeRef::Named("PatternMatch".to_string())));
+    assert!(return_value_conversion_throws(&ty, &known_dto_names));
+}
+
+#[test]
+fn vec_dto_return_does_not_throw_when_element_type_is_not_a_known_dto() {
+    let known_dto_names: HashSet<String> = HashSet::new();
+    let ty = TypeRef::Vec(Box::new(TypeRef::Named("PatternMatch".to_string())));
+    assert!(!return_value_conversion_throws(&ty, &known_dto_names));
+}
+
+#[test]
+fn bare_named_dto_return_throws_when_known() {
+    let mut known_dto_names: HashSet<String> = HashSet::new();
+    known_dto_names.insert("PatternMatch".to_string());
+    let ty = TypeRef::Named("PatternMatch".to_string());
+    assert!(return_value_conversion_throws(&ty, &known_dto_names));
+}
+
+#[test]
+fn optional_named_dto_return_throws_when_known() {
+    let mut known_dto_names: HashSet<String> = HashSet::new();
+    known_dto_names.insert("PatternMatch".to_string());
+    let ty = TypeRef::Optional(Box::new(TypeRef::Named("PatternMatch".to_string())));
+    assert!(return_value_conversion_throws(&ty, &known_dto_names));
+}
+
+#[test]
+fn vec_string_return_never_throws() {
+    let known_dto_names: HashSet<String> = HashSet::new();
+    let ty = TypeRef::Vec(Box::new(TypeRef::String));
+    assert!(!return_value_conversion_throws(&ty, &known_dto_names));
+}
+
+/// Regression test: the `Vec<DTO>` return-conversion suffix used to embed a leading `try`
+/// (`RustBridge.func(...)try .map { ... }`), which is a syntax error -- `try` belongs at
+/// the call-site/statement level, not inside the trailing `.map` chain. ~keep
+#[test]
+fn vec_dto_return_suffix_maps_with_try_and_has_no_leading_try() {
+    let mut known_dto_names: HashSet<String> = HashSet::new();
+    known_dto_names.insert("PatternMatch".to_string());
+    let ty = TypeRef::Vec(Box::new(TypeRef::Named("PatternMatch".to_string())));
+    let suffix = forwarder_return_conversion_suffix_with_throws(&ty, &known_dto_names, true);
+    assert_eq!(
+        suffix, ".map { ref in try PatternMatch(ref) }",
+        "Vec<DTO> suffix must map each element with try inside the closure. Got:\n{suffix}"
+    );
+    assert!(
+        suffix.starts_with(".map"),
+        "suffix must start with .map. Got:\n{suffix}"
+    );
+    assert!(
+        !suffix.starts_with("try"),
+        "suffix must not start with a leading try. Got:\n{suffix}"
+    );
+}
+
+#[test]
+fn vec_opaque_return_suffix_uses_ptr_based_reconstruction_and_has_no_leading_try() {
+    let known_dto_names: HashSet<String> = HashSet::new();
+    let ty = TypeRef::Vec(Box::new(TypeRef::Named("Thing".to_string())));
+    let suffix = forwarder_return_conversion_suffix_with_throws(&ty, &known_dto_names, true);
+    assert_eq!(
+        suffix, ".map { ref in var item = try RustBridge.Thing(ptr: ref.ptr); item.isOwned = false; return item }",
+        "Vec<opaque> suffix must reconstruct via ptr-based init. Got:\n{suffix}"
+    );
+    assert!(
+        !suffix.starts_with("try"),
+        "suffix must not start with a leading try. Got:\n{suffix}"
+    );
+}
+
 #[test]
 fn capsule_forwarder_errors_when_host_type_empty() {
     let func = make_capsule_fn();
@@ -310,5 +428,138 @@ fn capsule_forwarder_errors_when_host_type_empty() {
     assert!(
         out.contains("host_type"),
         "error must name the missing field. Got:\n{out}"
+    );
+}
+
+fn make_async_enum_param_fn() -> FunctionDef {
+    let mut func = make_function(
+        "set_region",
+        vec![("region_kind", TypeRef::Named("RegionKind".to_string()))],
+        TypeRef::Unit,
+    );
+    func.is_async = true;
+    func.error_type = Some("String".to_string());
+    func
+}
+
+/// Regression test: an async fn's enum-typed parameter must be JSON-encoded to a String,
+/// then wrapped in `RustString(...)` before being passed to the bridge. The Rust bridge
+/// declares the param as `String` (enums cross the FFI boundary pre-converted), so calling
+/// `.intoRust()` on the high-level enum type -- which returns an opaque type, not a String --
+/// fails to compile. Skipping the `RustString` wrap is also wrong: it collides with sibling
+/// `RustString` args ("conflicting arguments to generic parameter 'GenericIntoRustString'"). ~keep
+#[test]
+fn async_forwarder_json_encodes_enum_param_and_wraps_in_rust_string() {
+    let func = make_async_enum_param_fn();
+    let mut known_dto_names: HashSet<String> = HashSet::new();
+    // Mirrors real generator input: unit-serde enums are also first-class DTOs, so the
+    // enum branch must win over the known-DTO `.intoRust()` branch, not just be untested. ~keep
+    known_dto_names.insert("RegionKind".to_string());
+    let mut enum_names: HashSet<String> = HashSet::new();
+    enum_names.insert("RegionKind".to_string());
+    let unit_enum_names: HashSet<String> = HashSet::new();
+
+    let mut out = String::new();
+    emit_async_free_function_forwarder(
+        &func,
+        "setRegion",
+        &known_dto_names,
+        &enum_names,
+        &unit_enum_names,
+        "MyLibError",
+        &mut out,
+    );
+
+    assert!(
+        out.contains(
+            "let _rb_regionKind = RustString(try String(data: JSONEncoder().encode(regionKind), encoding: .utf8) ?? \"null\")"
+        ),
+        "enum param must be JSON-encoded and the result wrapped in RustString(...). Got:\n{out}"
+    );
+    assert!(
+        !out.contains("regionKind.intoRust()"),
+        "enum param must not be passed via .intoRust() -- that returns an opaque type, not a String. Got:\n{out}"
+    );
+}
+
+fn make_async_unit_return_fn() -> FunctionDef {
+    let mut func = make_function("delete_catalog", vec![("catalog_id", TypeRef::String)], TypeRef::Unit);
+    func.is_async = true;
+    func.error_type = Some("String".to_string());
+    func
+}
+
+/// Regression test: an async fn with a void (`TypeRef::Unit`) return must not emit a
+/// `let result = ...` binding or a `return result`. Before the fix the facade emitted both,
+/// so a local `result` of type `()` shadowed a same-named parameter, producing "constant
+/// 'result' inferred to have type '()', which may be unexpected". The body must be the bare
+/// bridge call with no binding and no return statement. ~keep
+#[test]
+fn async_forwarder_void_return_emits_no_result_binding_or_return() {
+    let func = make_async_unit_return_fn();
+    let known_dto_names: HashSet<String> = HashSet::new();
+    let enum_names: HashSet<String> = HashSet::new();
+    let unit_enum_names: HashSet<String> = HashSet::new();
+
+    let mut out = String::new();
+    emit_async_free_function_forwarder(
+        &func,
+        "deleteCatalog",
+        &known_dto_names,
+        &enum_names,
+        &unit_enum_names,
+        "MyLibError",
+        &mut out,
+    );
+
+    assert!(
+        !out.contains("let result ="),
+        "void async return must not bind an unused `let result`. Got:\n{out}"
+    );
+    assert!(
+        !out.contains("return result"),
+        "void async return must not emit `return result` -- there is nothing to return. Got:\n{out}"
+    );
+    assert!(
+        out.contains("try RustBridge.deleteCatalog(_rb_catalogId)"),
+        "void async body must call the bridge directly with no binding. Got:\n{out}"
+    );
+}
+
+fn make_async_string_return_fn() -> FunctionDef {
+    let mut func = make_function("fetch_status", vec![("catalog_id", TypeRef::String)], TypeRef::String);
+    func.is_async = true;
+    func.error_type = Some("String".to_string());
+    func
+}
+
+/// Regression test: an async fn returning `String` must convert the bridge's `RustString`
+/// result to a native Swift `String` via `.toString()`, not return the opaque bridge type
+/// directly. ~keep
+#[test]
+fn async_forwarder_string_return_converts_via_to_string() {
+    let func = make_async_string_return_fn();
+    let known_dto_names: HashSet<String> = HashSet::new();
+    let enum_names: HashSet<String> = HashSet::new();
+    let unit_enum_names: HashSet<String> = HashSet::new();
+
+    let mut out = String::new();
+    emit_async_free_function_forwarder(
+        &func,
+        "fetchStatus",
+        &known_dto_names,
+        &enum_names,
+        &unit_enum_names,
+        "MyLibError",
+        &mut out,
+    );
+
+    assert!(
+        out.contains("let result = try RustBridge.fetchStatus(_rb_catalogId)"),
+        "String async return must bind the bridge's RustString result. Got:\n{out}"
+    );
+    assert!(
+        out.contains("return result.toString()"),
+        "String async return must convert the RustString result to a native Swift String via .toString(). Got:\n{out}"
     );
 }

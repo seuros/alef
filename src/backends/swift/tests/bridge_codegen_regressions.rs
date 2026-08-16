@@ -1,117 +1,134 @@
-/// Regression tests for Swift trait bridge and service API codegen bugs.
+//! Regression tests for Swift trait bridge codegen bugs.
+//!
+//! B2 (`84eaa503d`) — the bridge adapter silently dropped methods, so a protocol
+//! method had no `…Call` counterpart and every Swift call site failed to compile.
+//! B3 (`428463e86`) — `String` / `Vec<String>` returns were marshalled straight from
+//! `RustString`, so the adapter handed back `RustString` where the declared signature
+//! promised a native Swift `String`.
+//!
+//! B4 (JSON-arg dispatch by parameter type) and B5 (throwing-closure `try` placement)
+//! are pinned in `gen_bindings::overloads` and `gen_bindings::forwarders` instead:
+//! both modules are private to `gen_bindings`, so they are unreachable from here and
+//! their assertions live in those modules' own co-located test modules. ~keep
+
+use crate::backends::swift::gen_bindings::trait_bridge::gen_trait_bridge_files;
+use crate::core::config::TraitBridgeConfig;
+use crate::core::ir::{MethodDef, ParamDef, PrimitiveType, TypeDef, TypeRef};
+use std::collections::HashSet;
+
+fn param(name: &str, ty: TypeRef) -> ParamDef {
+    ParamDef {
+        name: name.to_string(),
+        ty,
+        ..Default::default()
+    }
+}
+
+fn method(name: &str, params: Vec<ParamDef>, return_type: TypeRef, error_type: Option<&str>) -> MethodDef {
+    MethodDef {
+        name: name.to_string(),
+        params,
+        return_type,
+        error_type: error_type.map(|name| name.to_string()),
+        ..Default::default()
+    }
+}
+
+fn make_trait(name: &str, methods: Vec<MethodDef>) -> TypeDef {
+    TypeDef {
+        name: name.to_string(),
+        rust_path: format!("testcrate::{name}"),
+        is_trait: true,
+        methods,
+        ..Default::default()
+    }
+}
+
+/// Render the per-trait bridge file (`Swift{Trait}Bridge.swift`), which carries both the
+/// protocol declarations and the adapter class.
+fn bridge_source(trait_def: &TypeDef) -> String {
+    let bridge_cfg = TraitBridgeConfig {
+        trait_name: trait_def.name.clone(),
+        register_fn: Some(format!("register{}", trait_def.name)),
+        ..Default::default()
+    };
+    let bridges = vec![(trait_def.name.clone(), &bridge_cfg, trait_def)];
+    let files = gen_trait_bridge_files(&bridges, &HashSet::new(), &HashSet::new());
+    let wanted = format!("Swift{}Bridge.swift", trait_def.name);
+    files
+        .into_iter()
+        .find(|(name, _)| *name == wanted)
+        .unwrap_or_else(|| panic!("expected {wanted} among generated trait bridge files"))
+        .1
+}
+
+/// B2: every protocol method must have a matching `…Call` adapter method.
 ///
-/// These tests verify fixes for:
-/// - B2: Bridge adapter methods must register all public-protocol methods
-/// - B3: Return-type conversion must wrap String/Vec<String> from RustString
-/// - B4: JSON-arg dispatch must select by parameter type, not position
-/// - B5: Throwing closure bodies must use try/rethrowing in .map chains
+/// The protocol loop and the adapter loop must walk `trait_def.methods` in lockstep;
+/// when the adapter skipped a method the protocol still declared it, and Swift failed
+/// with "does not conform to protocol" at every registration site.
+#[test]
+fn adapter_emits_a_call_method_for_every_protocol_method() {
+    let source = bridge_source(&make_trait(
+        "TextBackend",
+        vec![
+            method(
+                "find_all",
+                vec![param("text", TypeRef::String)],
+                TypeRef::Vec(Box::new(TypeRef::String)),
+                Some("BackendError"),
+            ),
+            method("scan", vec![], TypeRef::Primitive(PrimitiveType::Bool), None),
+        ],
+    ));
 
-#[cfg(test)]
-mod swift_codegen_regressions {
-    /// B2: Bridge surface emitter — missing adapter methods
-    ///
-    /// Failure scenario: When a user-facing protocol declares method M, and the
-    /// underlying Rust trait lacks M, the bridge adapter should still register M
-    /// (delegating to a protocol default). Currently, methods missing from the Rust
-    /// trait are silently dropped from the adapter, causing Swift compile errors
-    /// at call sites.
-    ///
-    /// Example: Protocol declares `findAll() -> [String]`, but Rust trait impl only
-    /// has `scan()`. The adapter should register `findAll(...)` calling `self.bridge.findAll(...)`,
-    /// NOT omit it.
-    #[test]
-    fn test_b2_bridge_adapter_protocol_parity() {
-        assert!(
-            true,
-            "B2: Protocol and adapter must iterate trait_def.methods in parallel"
-        );
-    }
+    assert!(
+        source.contains("func findAll(text: String) throws -> [String]"),
+        "protocol must declare findAll: {source}"
+    );
+    assert!(
+        source.contains("func findAllCall(text: String) throws -> String {"),
+        "adapter must register findAllCall: {source}"
+    );
+    assert!(
+        source.contains("func scan() -> Bool"),
+        "protocol must declare scan: {source}"
+    );
+    assert!(
+        source.contains("func scanCall() -> Bool {"),
+        "adapter must register scanCall: {source}"
+    );
+}
 
-    /// B3: Return-type conversion — String/Vec<String> not wrapped
-    ///
-    /// Failure scenario: When a method returns String (from Rust), the wrapper
-    /// function receives a RustString. The wrapper must convert to native Swift String
-    /// via `String(rustString)`. Similarly, Vec<String> must element-wise convert
-    /// `[RustString]` to `[String]`.
-    ///
-    /// Currently returns bare RustString/[RustString], breaking the declared signature.
-    ///
-    /// Example:
-    /// ```
-    /// // Rust: fn extract_text(...) -> String
-    /// // Generated Swift (wrong):
-    /// public func extractText(...) throws -> String {
-    ///     return try RustBridge.extractText(...) // Returns RustString, not String!
-    /// }
-    /// // Generated Swift (correct):
-    /// public func extractText(...) throws -> String {
-    ///     return String(try RustBridge.extractText(...)) // Converts RustString->String
-    /// }
-    /// ```
-    #[test]
-    fn test_b3_return_type_string_conversion() {
-        assert!(true, "B3: String returns must use String(...) wrapper");
-    }
+/// B3: a `String` return must be converted to a native Swift `String` before marshalling.
+#[test]
+fn adapter_converts_string_return_to_native_string() {
+    let source = bridge_source(&make_trait(
+        "TextBackend",
+        vec![method("extract_text", vec![], TypeRef::String, Some("BackendError"))],
+    ));
 
-    /// B4: JSON-arg dispatch — second param decodes wrong type
-    ///
-    /// Failure scenario: When a method takes two or more consecutive parameters
-    /// both decoded from JSON (e.g., configA and configB), the decoder mistakenly
-    /// treats the second slot as the first parameter type.
-    ///
-    /// Example:
-    /// ```
-    /// // Rust:
-    /// fn process(configA: ConfigA, configB: ConfigB) -> Result<...>
-    ///
-    /// // Generated Swift (wrong):
-    /// public func process(_ configAJson: String, _ configBJson: String) throws -> ... {
-    ///     let configA = try JSONDecoder().decode(ConfigA.self, from: configAJson.data(...))
-    ///     let configB = try JSONDecoder().decode(ConfigA.self, from: configBJson.data(...)) // Wrong type!
-    /// }
-    ///
-    /// // Generated Swift (correct):
-    /// public func process(_ configAJson: String, _ configBJson: String) throws -> ... {
-    ///     let configA = try JSONDecoder().decode(ConfigA.self, from: configAJson.data(...))
-    ///     let configB = try JSONDecoder().decode(ConfigB.self, from: configBJson.data(...)) // Correct type
-    /// }
-    /// ```
-    #[test]
-    fn test_b4_json_dispatch_by_parameter_type() {
-        assert!(true, "B4: JSON dispatch must use parameter type, not position");
-    }
+    assert!(
+        source.contains("return marshal_ok_result(String(result))"),
+        "String returns must be wrapped via String(result): {source}"
+    );
+}
 
-    /// B5: Throwing closure body — missing try/rethrowing
-    ///
-    /// When a method returns Vec<DTO> where DTO's initializer throws, the .map
-    /// closure contains `try` operations. The wrapper function must declare `throws`
-    /// in its signature and prefix the return statement with `try`.
-    ///
-    /// Example:
-    /// ```
-    /// // Rust: fn extract(...) -> Vec<Dto>
-    /// // Dto::new() throws (initializer is fallible)
-    ///
-    /// // Generated Swift (wrong, compile error):
-    /// public func extract() -> [Dto] {  // Missing throws!
-    ///     return RustBridge.extract().map { ref in try Dto(ref) }  // try without throws
-    /// }
-    ///
-    /// // Generated Swift (correct):
-    /// public func extract() throws -> [Dto] {
-    ///     return try RustBridge.extract().map { ref in try Dto(ref) }  // try statement
-    /// }
-    /// ```
-    ///
-    /// Codegen rule: If return_value_conversion_suffix contains `try`, the wrapper
-    /// function signature must declare `throws` and the return statement must prefix
-    /// the conversion with `try` (statement-level, not method-level rethrowing).
-    /// Existing regression test: `src/backends/swift/tests/vec_dto_throws_regression.rs`.
-    #[test]
-    fn test_b5_throwing_closure_try_placement() {
-        assert!(
-            true,
-            "B5: If return_suffix contains try, wrapper must declare throws and prefix return"
-        );
-    }
+/// B3: a `Vec<String>` return must be converted element-wise, not handed back as `[RustString]`.
+#[test]
+fn adapter_converts_vec_string_return_element_wise() {
+    let source = bridge_source(&make_trait(
+        "TextBackend",
+        vec![method(
+            "find_all",
+            vec![],
+            TypeRef::Vec(Box::new(TypeRef::String)),
+            Some("BackendError"),
+        )],
+    ));
+
+    assert!(
+        source.contains("return marshal_ok_result(result.map { String($0) })"),
+        "Vec<String> returns must be converted element-wise: {source}"
+    );
 }

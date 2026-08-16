@@ -513,7 +513,7 @@ pub(super) fn convenience_name_shadows_bridge(func: &FunctionDef) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::ir::TypeDef;
+    use crate::core::ir::{ParamDef, TypeDef};
 
     /// A non-opaque serde DTO whose fields are not all first-class-supported (e.g. a
     /// `Map` field) is NOT a first-class Codable struct, so its `*FromJson` helper
@@ -612,5 +612,155 @@ mod tests {
         assert!(out.contains("credentialConfigFromJson"), "{out}");
         assert!(out.contains("RustBridge.credentialConfigFromJson"), "{out}");
         assert!(!out.contains("unusedConfigFromJson"), "{out}");
+    }
+
+    /// Regression test: a function with two JSON-decoded params used to decode BOTH via
+    /// the FIRST param's type, and emitted duplicate `configJson` labels/local names. Each
+    /// param must decode via its own type's `*FromJson` helper, keyed by param position, not
+    /// by a single shared type. ~keep
+    #[test]
+    fn json_overload_dispatches_decode_by_param_type_not_position() {
+        let mut api = ApiSurface::default();
+        api.types.push(TypeDef {
+            name: "ConfigA".to_string(),
+            has_serde: true,
+            is_opaque: false,
+            ..TypeDef::default()
+        });
+        api.types.push(TypeDef {
+            name: "ConfigB".to_string(),
+            has_serde: true,
+            is_opaque: false,
+            ..TypeDef::default()
+        });
+        api.functions.push(FunctionDef {
+            name: "process".to_string(),
+            rust_path: "sample::process".to_string(),
+            params: vec![
+                ParamDef {
+                    name: "configA".to_string(),
+                    ty: TypeRef::Named("ConfigA".to_string()),
+                    ..ParamDef::default()
+                },
+                ParamDef {
+                    name: "configB".to_string(),
+                    ty: TypeRef::Named("ConfigB".to_string()),
+                    ..ParamDef::default()
+                },
+            ],
+            return_type: TypeRef::Unit,
+            ..FunctionDef::default()
+        });
+
+        let mut out = String::new();
+        emit_json_string_overloads(&api, &std::collections::HashSet::new(), &mut out);
+
+        assert!(
+            out.contains("let configA = try configAFromJson(configAJson)"),
+            "first param must decode via its own type's *FromJson helper. Got:\n{out}"
+        );
+        assert!(
+            out.contains("let configB = try configBFromJson(configBJson)"),
+            "second param must decode via its own type's *FromJson helper (regression: both \
+             used to decode via the FIRST param's type). Got:\n{out}"
+        );
+        assert!(
+            !out.contains("configAFromJson(configBJson)") && !out.contains("configBFromJson(configAJson)"),
+            "a decode function must never be applied to the wrong param's JSON string. Got:\n{out}"
+        );
+        assert!(
+            out.contains("_ configAJson: String") && out.contains("_ configBJson: String"),
+            "both parameter labels must be distinct, not duplicated. Got:\n{out}"
+        );
+    }
+
+    /// Regression test: the IR carries a `_sync` stub alongside a real `_async` twin (e.g.
+    /// `download_model_sync` / `download_model_async`, where the sync variant is a stub). A
+    /// JSON overload used to be emitted for the sync stub too, calling a typed wrapper that
+    /// does not exist -- "no exact matches in call to global function". The sync stub must
+    /// get no overload while the async twin still gets one. ~keep
+    #[test]
+    fn json_overload_skips_sync_stub_when_async_twin_exists() {
+        let mut api = ApiSurface::default();
+        api.types.push(TypeDef {
+            name: "DownloadConfig".to_string(),
+            has_serde: true,
+            is_opaque: false,
+            ..TypeDef::default()
+        });
+        let param = ParamDef {
+            name: "config".to_string(),
+            ty: TypeRef::Named("DownloadConfig".to_string()),
+            ..ParamDef::default()
+        };
+        api.functions.push(FunctionDef {
+            name: "download_model_sync".to_string(),
+            rust_path: "sample::download_model_sync".to_string(),
+            params: vec![param.clone()],
+            return_type: TypeRef::Unit,
+            ..FunctionDef::default()
+        });
+        api.functions.push(FunctionDef {
+            name: "download_model_async".to_string(),
+            rust_path: "sample::download_model_async".to_string(),
+            params: vec![param],
+            return_type: TypeRef::Unit,
+            is_async: true,
+            ..FunctionDef::default()
+        });
+
+        let mut out = String::new();
+        emit_json_string_overloads(&api, &std::collections::HashSet::new(), &mut out);
+
+        assert!(
+            !out.contains("public func downloadModelSync("),
+            "sync stub must not get a JSON overload when an async twin exists. Got:\n{out}"
+        );
+        assert!(
+            out.contains("public func downloadModelAsync("),
+            "async twin must still get its JSON overload. Got:\n{out}"
+        );
+    }
+
+    /// Regression test: the typed wrapper already converts `RustString` -> `String`, but the
+    /// JSON overload used to append a second `.toString()` -- "value of type 'String' has no
+    /// member 'toString'". The overload's return statement must not append a conversion suffix. ~keep
+    #[test]
+    fn json_overload_for_string_return_does_not_double_convert() {
+        let mut api = ApiSurface::default();
+        api.types.push(TypeDef {
+            name: "GreetConfig".to_string(),
+            has_serde: true,
+            is_opaque: false,
+            ..TypeDef::default()
+        });
+        api.functions.push(FunctionDef {
+            name: "greet".to_string(),
+            rust_path: "sample::greet".to_string(),
+            params: vec![ParamDef {
+                name: "config".to_string(),
+                ty: TypeRef::Named("GreetConfig".to_string()),
+                ..ParamDef::default()
+            }],
+            return_type: TypeRef::String,
+            ..FunctionDef::default()
+        });
+
+        let mut out = String::new();
+        emit_json_string_overloads(&api, &std::collections::HashSet::new(), &mut out);
+
+        assert!(
+            out.contains("public func greet(_ configJson: String) throws -> String {"),
+            "expected a JSON overload to be emitted for greet. Got:\n{out}"
+        );
+        assert!(
+            out.contains("return try greet(config: config)\n}"),
+            "the overload must return the typed wrapper's result verbatim, with no conversion \
+             suffix appended after the call. Got:\n{out}"
+        );
+        assert!(
+            !out.contains(".toString()"),
+            "JSON overload for a String-returning function must not double-convert with .toString(). Got:\n{out}"
+        );
     }
 }

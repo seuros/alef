@@ -13,6 +13,9 @@ pub(crate) mod type_map;
 
 pub use gen_bindings::SwiftBackend;
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) fn signatures_reference_named<'a>(
     types: impl IntoIterator<Item = &'a crate::core::ir::TypeDef>,
     functions: impl IntoIterator<Item = &'a crate::core::ir::FunctionDef>,
