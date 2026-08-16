@@ -481,6 +481,142 @@ fn test_default_readme_path_ffi() {
     assert_eq!(files[0].path, PathBuf::from("crates/my-lib-ffi/README.md"));
 }
 
+/// A templated FFI README with no `output_path` falls through to `paths::default_readme_path`,
+/// a second copy of the FFI directory rule that drifted from the resolved config exactly as
+/// `fallback.rs` did. Both consumer shapes where the crate name differs from the FFI directory
+/// are pinned here, because the case where they agree (liter-llm) cannot distinguish the two
+/// derivations. ~keep
+#[test]
+fn ffi_template_default_path_follows_configured_output_not_the_crate_name() {
+    for (case, crate_name, ffi_output, expected) in [
+        (
+            "html_to_markdown",
+            "html-to-markdown-rs",
+            "crates/html-to-markdown-ffi/src/",
+            "crates/html-to-markdown-ffi/README.md",
+        ),
+        (
+            "tree_sitter_language_pack",
+            "tree-sitter-language-pack",
+            "crates/ts-pack-core-ffi/src/",
+            "crates/ts-pack-core-ffi/README.md",
+        ),
+    ] {
+        let tmp = std::env::temp_dir().join(format!("alef_readme_ffi_default_path_{case}"));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(tmp.join("t.md"), "hello").unwrap();
+
+        let mut config = config_with_ffi_output(crate_name, ffi_output);
+        let mut lang_map = std::collections::HashMap::new();
+        lang_map.insert("ffi".to_string(), serde_json::json!({ "template": "t.md" }));
+        config.readme = Some(ReadmeConfig {
+            template_dir: Some(tmp.clone()),
+            snippets_dir: None,
+            config: None,
+            output_pattern: None,
+            discord_url: None,
+            banner_url: None,
+            languages: lang_map,
+            targets: std::collections::HashMap::new(),
+        });
+        config.workspace_root = Some(tmp.clone());
+
+        let api = test_api();
+        let files = generate_readmes(&api, &config, &[Language::Ffi]).unwrap();
+        assert_eq!(files.len(), 1, "case {case}");
+        assert_eq!(files[0].path, PathBuf::from(expected), "case {case}");
+        assert!(
+            !files[0].path.to_string_lossy().contains(&format!("{crate_name}-ffi")),
+            "case {case}: the crate-name template must not leak back in, got {:?}",
+            files[0].path
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+}
+
+/// The templated route's default path for Node and Wasm must follow `[crates.node]`/
+/// `[crates.wasm] crate_dir` for the same reason FFI must follow `[crates.output] ffi`. Both
+/// discriminating repos set `crate_dir`, and for both the crate-name formula names a directory
+/// that does not exist. ~keep
+#[test]
+fn node_and_wasm_template_default_paths_follow_configured_crate_dir() {
+    for (case, name, stem, node_pkg) in DISCRIMINATING_SHAPES {
+        for (lang, lang_key, suffix) in [(Language::Node, "typescript", "node"), (Language::Wasm, "wasm", "wasm")] {
+            let tmp = std::env::temp_dir().join(format!("alef_readme_default_path_{case}_{suffix}"));
+            let _ = fs::remove_dir_all(&tmp);
+            fs::create_dir_all(&tmp).unwrap();
+            fs::write(tmp.join("t.md"), "hello").unwrap();
+
+            let mut config = consumer_shape(name, stem, node_pkg);
+            let mut lang_map = std::collections::HashMap::new();
+            lang_map.insert(lang_key.to_string(), serde_json::json!({ "template": "t.md" }));
+            config.readme = Some(ReadmeConfig {
+                template_dir: Some(tmp.clone()),
+                snippets_dir: None,
+                config: None,
+                output_pattern: None,
+                discord_url: None,
+                banner_url: None,
+                languages: lang_map,
+                targets: std::collections::HashMap::new(),
+            });
+            config.workspace_root = Some(tmp.clone());
+
+            let api = test_api();
+            let files = generate_readmes(&api, &config, &[lang]).unwrap();
+            assert_eq!(files.len(), 1, "case {case}/{suffix}");
+            assert_eq!(
+                files[0].path,
+                PathBuf::from(format!("crates/{stem}-{suffix}/README.md")),
+                "case {case}/{suffix}"
+            );
+            assert_ne!(
+                files[0].path,
+                PathBuf::from(format!("crates/{name}-{suffix}/README.md")),
+                "case {case}/{suffix}: the crate-name template must not leak back in"
+            );
+
+            let _ = fs::remove_dir_all(&tmp);
+        }
+    }
+}
+
+/// An explicit `output_path` still wins over the derived default — the escape hatch
+/// tree-sitter-language-pack currently uses to work around the defect must keep working. ~keep
+#[test]
+fn ffi_template_explicit_output_path_still_wins_over_the_derived_default() {
+    let tmp = std::env::temp_dir().join("alef_readme_ffi_explicit_output_path");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).unwrap();
+    fs::write(tmp.join("t.md"), "hello").unwrap();
+
+    let mut config = config_with_ffi_output("tree-sitter-language-pack", "crates/ts-pack-core-ffi/src/");
+    let mut lang_map = std::collections::HashMap::new();
+    lang_map.insert(
+        "ffi".to_string(),
+        serde_json::json!({ "template": "t.md", "output_path": "crates/elsewhere/README.md" }),
+    );
+    config.readme = Some(ReadmeConfig {
+        template_dir: Some(tmp.clone()),
+        snippets_dir: None,
+        config: None,
+        output_pattern: None,
+        discord_url: None,
+        banner_url: None,
+        languages: lang_map,
+        targets: std::collections::HashMap::new(),
+    });
+    config.workspace_root = Some(tmp.clone());
+
+    let api = test_api();
+    let files = generate_readmes(&api, &config, &[Language::Ffi]).unwrap();
+    assert_eq!(files[0].path, PathBuf::from("crates/elsewhere/README.md"));
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
 #[test]
 fn test_default_readme_path_wasm() {
     let config = test_config();

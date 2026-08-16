@@ -82,7 +82,9 @@ fn generate_readme(
 /// the generic placeholder README *at a different path* — a legitimate, long-standing
 /// configuration, and one the caller cannot express any other way, since deleting the
 /// entry would also lose the path. Treating any entry as "must render a template"
-/// makes that configuration impossible to write.
+/// makes that configuration impossible to write. Honouring the path is the hardcoded
+/// generator's job, since that entry never reaches a template; it derived its own path
+/// and discarded the configured one until `fallback::configured_output_path`.
 ///
 /// An entry that does name a template is the #555 case: rendering it is the only
 /// reason the entry exists, so failing to render must fail loudly rather than silently
@@ -105,6 +107,10 @@ fn readme_language_declares_a_template(config: &ResolvedCrateConfig, lang_code: 
 /// entry and no legacy YAML `config` fallback), signalling the caller to either fall
 /// back to the hardcoded generator (unconfigured languages) or fail loudly
 /// (explicitly configured languages — see [`readme_language_explicitly_configured`]).
+///
+/// `None` is about the *content*, never the *path*: a configured `output_path` is not a
+/// property of the template and survives every one of these cases, so the fallback must
+/// still honour it (`paths::configured_output_path`). ~keep
 fn try_render_configured_readme(
     api: &ApiSurface,
     config: &ResolvedCrateConfig,

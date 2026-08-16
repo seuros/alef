@@ -34,6 +34,37 @@ impl SnippetMapping {
     }
 }
 
+/// The `crates.readme.languages.<lang_code>` entry for a language, if one is configured.
+///
+/// Prefers the inline TOML `languages` map and falls back to the deprecated external YAML file
+/// named by `crates.readme.config`. Shared with the hardcoded fallback generator, which needs
+/// the very same entry to honour a configured `output_path`: resolving "the language's config
+/// entry" separately in each route is how the fallback came to consult neither source and
+/// silently derive its own path instead. ~keep
+pub(super) fn language_entry(
+    readme_cfg: &crate::core::config::ReadmeConfig,
+    workspace_root: &Path,
+    lang_code: &str,
+) -> anyhow::Result<Option<serde_json::Value>> {
+    if !readme_cfg.languages.is_empty() {
+        return Ok(readme_cfg.languages.get(lang_code).cloned());
+    }
+    let Some(config_path) = &readme_cfg.config else {
+        return Ok(None);
+    };
+    let abs_config = workspace_root.join(config_path);
+    if !abs_config.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(&abs_config)
+        .map_err(|e| anyhow::anyhow!("Failed to read readme config {:?}: {}", abs_config, e))?;
+    let yaml: serde_yaml::Value =
+        serde_yaml::from_str(&content).map_err(|e| anyhow::anyhow!("Failed to parse readme config YAML: {}", e))?;
+    let as_json =
+        serde_json::to_value(&yaml).map_err(|e| anyhow::anyhow!("Failed to convert readme YAML to JSON: {}", e))?;
+    Ok(as_json.get("languages").and_then(|l| l.get(lang_code)).cloned())
+}
+
 /// Attempt to render a README using a minijinja template. Returns `None` when no
 /// language-specific template entry is found in the config (signals caller to fall back).
 pub(super) fn try_template_readme(
@@ -46,26 +77,7 @@ pub(super) fn try_template_readme(
 ) -> anyhow::Result<Option<GeneratedFile>> {
     let lang_code = lang_code(lang);
 
-    let lang_json: Option<serde_json::Value> = if !readme_cfg.languages.is_empty() {
-        readme_cfg.languages.get(lang_code).cloned()
-    } else if let Some(config_path) = &readme_cfg.config {
-        let abs_config = workspace_root.join(config_path);
-        if abs_config.exists() {
-            let content = fs::read_to_string(&abs_config)
-                .map_err(|e| anyhow::anyhow!("Failed to read readme config {:?}: {}", abs_config, e))?;
-            let yaml: serde_yaml::Value = serde_yaml::from_str(&content)
-                .map_err(|e| anyhow::anyhow!("Failed to parse readme config YAML: {}", e))?;
-            let as_json = serde_json::to_value(&yaml)
-                .map_err(|e| anyhow::anyhow!("Failed to convert readme YAML to JSON: {}", e))?;
-            as_json.get("languages").and_then(|l| l.get(lang_code)).cloned()
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    let Some(lang_json) = lang_json else {
+    let Some(lang_json) = language_entry(readme_cfg, workspace_root, lang_code)? else {
         return Ok(None);
     };
 

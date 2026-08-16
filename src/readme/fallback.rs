@@ -147,22 +147,35 @@ pub(super) fn generate_readme_hardcoded(
         }
         Language::Ffi => {
             let header = config.ffi_header_name();
+            // A cargo `staticlib`/`cdylib` is named `lib<lib name>.{a,dylib,so}`, where the lib
+            // name defaults to the FFI crate's OWN package name with `-` mapped to `_` — never
+            // the alef crate name, and never a hyphenated string. `ffi_lib_name()` is that value
+            // (`[crates.ffi] lib_name`, else the configured `[crates.output] ffi` directory), and
+            // is already what the Go/Java/Kotlin/Dart backends link against. ~keep
+            let lib_name = config.ffi_lib_name();
             let example_body = format!("    // {example_pointer}");
             (
                 "FFI (C/C++)",
                 format!(
-                    "Link against `lib{name}_ffi` and include `{header}`.\n\nSee the build instructions in the main repository.",
+                    "Link against `lib{lib_name}` and include `{header}`.\n\nSee the build instructions in the main repository.",
                 ),
                 format!("```c\n#include \"{header}\"\n\nint main(void) {{\n{example_body}\n    return 0;\n}}\n```"),
                 "ffi",
             )
         }
         Language::Wasm => {
+            // The published npm name, not `{crate name}-wasm`. The npm scope is not derivable
+            // from the crate name — `wasm_package_name()` defaults from `node_package_name()`,
+            // so liter-llm resolves to `@xberg-io/liter-llm-wasm` where the crate-name template
+            // gives the unscoped `liter-llm-wasm`, which installs nothing. This is the Wasm
+            // analogue of the `lib{name}_ffi` defect in the FFI arm above: wrong even where the
+            // README path is right by coincidence. ~keep
+            let pkg = config.wasm_package_name();
             let example_body = format!("// {example_pointer}");
             (
                 "WebAssembly",
-                format!("```bash\nnpm install {name}-wasm\n```"),
-                format!("```javascript\nimport init from '{name}-wasm';\n\nawait init();\n{example_body}\n```"),
+                format!("```bash\nnpm install {pkg}\n```"),
+                format!("```javascript\nimport init from '{pkg}';\n\nawait init();\n{example_body}\n```"),
                 "wasm",
             )
         }
@@ -295,13 +308,12 @@ See the [LICENSE]({repository}/blob/main/LICENSE) file in the root repository.
         repository = repository,
     );
 
-    let path = match lang {
-        Language::Ffi => PathBuf::from(format!("crates/{}-ffi/README.md", name)),
-        Language::Wasm => PathBuf::from(format!("crates/{}-wasm/README.md", name)),
-        Language::Node => PathBuf::from(format!("crates/{}-node/README.md", name)),
-        Language::Rust => PathBuf::from(format!("crates/{}/README.md", name)),
-        _ => PathBuf::from(format!("packages/{}/README.md", dir_name)),
-    };
+    // `dir_name` is deliberately not `paths::lang_dir_name(lang)`: this generator files C and JNI
+    // READMEs under `packages/zig/`, which that function maps to `packages/c/`. Only the
+    // crate-hosted languages share their path rule with `paths.rs`. ~keep
+    let derived_path = super::paths::crate_readme_path(config, lang)
+        .unwrap_or_else(|| PathBuf::from(format!("packages/{dir_name}/README.md")));
+    let path = configured_output_path(config, lang)?.unwrap_or(derived_path);
 
     // See the matching `~keep` note in `template.rs` for why README output
     // gets the same self-embedded HTML-comment marker as docs pages: `.md`
@@ -314,6 +326,27 @@ See the [LICENSE]({repository}/blob/main/LICENSE) file in the root repository.
         content,
         generated_header: true,
     })
+}
+
+/// The output path the config asks this README to take, if it asks for one.
+///
+/// A language entry that carries only `output_path` — no `template` — never reaches the
+/// templated route, because `try_render_configured_readme` returns `None` for the whole crate
+/// when `crates.readme.template_dir` is unset (and for a single language when its entry or
+/// template file is missing), which routes the language here. That makes this generator the
+/// only place left that can honour the configured path, and it used to derive one instead:
+/// `crates/{stem}` or `packages/{lang}`, written wherever the derivation happened to land. The
+/// derivation usually agrees with the configured value, which is why the defect survived —
+/// agreement is coincidence, not design, exactly as it was for the FFI directory rule. The
+/// precedence itself stays in `paths.rs` so the templated and fallback routes cannot drift. ~keep
+fn configured_output_path(config: &ResolvedCrateConfig, lang: Language) -> anyhow::Result<Option<PathBuf>> {
+    let Some(readme_cfg) = &config.readme else {
+        return Ok(None);
+    };
+    let workspace_root = config.workspace_root.clone().unwrap_or_else(|| PathBuf::from("."));
+    let entry = super::template::language_entry(readme_cfg, &workspace_root, super::paths::lang_code(lang))?
+        .unwrap_or(serde_json::Value::Null);
+    Ok(super::paths::configured_output_path(readme_cfg, lang, &entry))
 }
 
 /// Convert snake_case to camelCase. Used to format function names in README examples.
