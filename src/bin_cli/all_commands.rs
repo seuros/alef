@@ -101,7 +101,11 @@ fn sync_registry_versions_before_all(
 pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Option<Commands>> {
     let config_path = &context.config_path;
     match command {
-        Commands::All { clean, skip_frb } => {
+        Commands::All {
+            clean,
+            skip_frb,
+            strict,
+        } => {
             if skip_frb {
                 let existing = std::env::var("ALEF_SKIP_COMMANDS").unwrap_or_default();
                 let updated = if existing.is_empty() {
@@ -405,6 +409,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             &cached_paths,
                             &base_dir,
                             e2e_config,
+                            strict,
                         )?);
                         for path in cached_paths {
                             current_gen_paths.insert(path);
@@ -426,7 +431,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             .filter(|file| file.carries_alef_marker())
                             .cloned()
                             .collect();
-                        deferred_formatting.extend(crate::e2e::format::run_formatters(&managed_files, e2e_config)?);
+                        deferred_formatting.extend(crate::e2e::format::run_formatters(
+                            &managed_files,
+                            e2e_config,
+                            strict,
+                        )?);
 
                         let output_paths: Vec<PathBuf> = managed_files.iter().map(|f| base_dir.join(&f.path)).collect();
                         let path_set: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
@@ -455,6 +464,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             &cached_paths,
                             &base_dir,
                             &registry_e2e_config,
+                            strict,
                         )?);
                         for path in cached_paths {
                             current_gen_paths.insert(path);
@@ -481,8 +491,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             .filter(|file| file.carries_alef_marker())
                             .cloned()
                             .collect();
-                        deferred_formatting
-                            .extend(crate::e2e::format::run_formatters(&managed_files, registry_e2e_ref)?);
+                        deferred_formatting.extend(crate::e2e::format::run_formatters(
+                            &managed_files,
+                            registry_e2e_ref,
+                            strict,
+                        )?);
 
                         let output_paths: Vec<PathBuf> = managed_files.iter().map(|f| base_dir.join(&f.path)).collect();
                         let path_set: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();

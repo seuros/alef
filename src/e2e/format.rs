@@ -7,8 +7,10 @@
 //! (Python via ruff, JS/TS/JSON via oxc, Rust via rustfmt, Go via gofmt, …).
 //! Languages are formatted in sorted order, and every language is attempted
 //! before failures are reported, so which languages get formatted never depends
-//! on iteration order or on whether an earlier one failed. Missing or failing
-//! formatters still fail generation, naming every language that failed.
+//! on iteration order or on whether an earlier one failed. A formatter that RUNS
+//! and rejects the code still fails generation, naming every language that failed;
+//! a formatter whose executable is absent is recorded and survived instead, unless
+//! `--strict` asks for the old behaviour (see [`ShellFailure`]).
 //!
 //! Two escape hatches remain:
 //! * a per-language `E2eConfig.format` override (`sh -c`, with `{dir}` expanded)
@@ -75,7 +77,11 @@ const UNPUBLISHED_VERSION_REASON: &str = "registry-mode manifests pin the versio
 /// run, because the version it would resolve is the one this run is producing.
 /// [`DependencyMode::Local`] behaviour is unchanged and always yields an empty
 /// list. ~keep
-pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) -> anyhow::Result<Vec<DeferredFormatting>> {
+pub fn run_formatters(
+    files: &[GeneratedFile],
+    e2e_config: &E2eConfig,
+    strict: bool,
+) -> anyhow::Result<Vec<DeferredFormatting>> {
     let defer_resolution = e2e_config.dep_mode == DependencyMode::Registry;
     let mut deferred = Vec::new();
     let output_prefix = Path::new(e2e_config.effective_output());
@@ -101,7 +107,7 @@ pub fn run_formatters(files: &[GeneratedFile], e2e_config: &E2eConfig) -> anyhow
     // the emitted tree depend on ordering. The run still fails, naming every failure. ~keep
     let mut failures: Vec<String> = Vec::new();
     for lang in &languages {
-        if let Err(error) = format_language(lang, e2e_config, &current_dir, defer_resolution, &mut deferred) {
+        if let Err(error) = format_language(lang, e2e_config, &current_dir, defer_resolution, strict, &mut deferred) {
             failures.push(format!("{lang}: {error:#}"));
         }
     }
@@ -138,6 +144,7 @@ fn format_language(
     e2e_config: &E2eConfig,
     current_dir: &Path,
     defer_resolution: bool,
+    strict: bool,
     deferred: &mut Vec<DeferredFormatting>,
 ) -> anyhow::Result<()> {
     let configured_dir = PathBuf::from(format!("{}/{}", e2e_config.effective_output(), lang));
@@ -151,7 +158,12 @@ fn format_language(
         tracing::debug!("Formatting {lang}: {cmd}");
         return match run_shell(&cmd, lang) {
             Ok(()) => Ok(()),
-            Err(error) if defer_resolution => {
+            // A missing executable is an environment gap in every mode, so it is
+            // resolved first — deferring it as an unpublished-version problem would
+            // record a reason that is simply untrue. ~keep
+            Err(failure) if failure.executable_missing => resolve_shell_failure(failure, lang, &cmd, strict, deferred),
+            Err(failure) if defer_resolution => {
+                let error = failure.error;
                 warn!("deferring {lang} format override until after publish: {error}");
                 deferred.push(DeferredFormatting {
                     language: lang.to_owned(),
@@ -160,7 +172,7 @@ fn format_language(
                 });
                 Ok(())
             }
-            Err(error) => Err(error),
+            Err(failure) => Err(failure.error),
         };
     }
 
@@ -181,7 +193,7 @@ fn format_language(
                 reason: UNPUBLISHED_VERSION_REASON.to_owned(),
             });
         } else {
-            run_go_mod_tidy(&dir)?;
+            run_go_mod_tidy(&dir, lang, strict, deferred)?;
         }
     }
 
@@ -190,7 +202,7 @@ fn format_language(
     // this the generated Elixir suite is never formatted at all and ships with
     // the emitter's unwrapped long lines.
     if lang == "elixir" {
-        run_mix_format(&dir)?;
+        run_mix_format(&dir, lang, strict, deferred)?;
     }
     Ok(())
 }
@@ -216,6 +228,7 @@ pub fn run_formatters_for_cached_paths(
     paths: &[PathBuf],
     base_dir: &Path,
     e2e_config: &E2eConfig,
+    strict: bool,
 ) -> anyhow::Result<Vec<DeferredFormatting>> {
     let output_is_absolute = Path::new(e2e_config.effective_output()).is_absolute();
     let files: Vec<GeneratedFile> = paths
@@ -234,15 +247,73 @@ pub fn run_formatters_for_cached_paths(
             })
         })
         .collect();
-    run_formatters(&files, e2e_config)
+    run_formatters(&files, e2e_config, strict)
 }
 
-fn run_shell(cmd: &str, lang: &str) -> anyhow::Result<()> {
+/// The status a POSIX shell exits with when the command it was asked to run does not
+/// exist. ~keep
+const SHELL_COMMAND_NOT_FOUND: i32 = 127;
+
+/// A shell-invoked formatter that did not succeed, and whether the executable was
+/// even there.
+///
+/// `sh -c` starts fine whether or not the formatter exists, so both cases arrive as a
+/// non-zero exit and the `Err` arm of `Command::status()` is never reached. Only a
+/// formatter that RAN is a verdict on the generated code; a missing one is an
+/// environment gap. Conflating them made the pipeline fresh-clone hostile — `vendor/`
+/// is gitignored in consumers, so a fresh clone has no php-cs-fixer and the run died
+/// before `finalize_hashes`, leaving a correctly generated but entirely unstamped tree:
+/// invisible to `alef verify`, failing the consumer's poly gate, and
+/// byte-indistinguishable from a marker-stripping bug. ~keep
+struct ShellFailure {
+    executable_missing: bool,
+    error: anyhow::Error,
+}
+
+fn run_shell(cmd: &str, lang: &str) -> Result<(), ShellFailure> {
     match std::process::Command::new("sh").args(["-c", cmd]).status() {
         Ok(status) if status.success() => Ok(()),
-        Ok(status) => anyhow::bail!("formatter for {lang} exited with {status}: {cmd}"),
-        Err(error) => Err(error).with_context(|| format!("failed to run formatter for {lang}: {cmd}")),
+        Ok(status) => Err(ShellFailure {
+            executable_missing: status.code() == Some(SHELL_COMMAND_NOT_FOUND),
+            error: anyhow::anyhow!("formatter for {lang} exited with {status}: {cmd}"),
+        }),
+        Err(error) => Err(ShellFailure {
+            executable_missing: error.kind() == std::io::ErrorKind::NotFound,
+            error: anyhow::Error::new(error).context(format!("failed to run formatter for {lang}: {cmd}")),
+        }),
     }
+}
+
+/// Reason recorded when a formatter's executable is not installed on this machine.
+const MISSING_TOOLCHAIN_REASON: &str = "the formatter's executable is not installed on this machine; generation \
+                                        continued so the run still reaches finalisation. Install the toolchain, or \
+                                        re-run with --strict to make this fatal";
+
+/// Decide what an unsuccessful shell formatter means for the run.
+///
+/// A formatter that ran and rejected the code always fails the run — that is what
+/// actually gates correctness, and it is unchanged. A formatter that is simply absent
+/// is recorded and survived, unless `strict` asks for the old behaviour back.
+///
+/// Recording rather than skipping quietly is the whole point: an absent formatter that
+/// nothing reports is the same shape as a check that passes while examining nothing. ~keep
+fn resolve_shell_failure(
+    failure: ShellFailure,
+    lang: &str,
+    step: &str,
+    strict: bool,
+    deferred: &mut Vec<DeferredFormatting>,
+) -> anyhow::Result<()> {
+    if !failure.executable_missing || strict {
+        return Err(failure.error);
+    }
+    warn!("{lang}: `{step}` skipped — executable not found; continuing so the run reaches finalisation");
+    deferred.push(DeferredFormatting {
+        language: lang.to_owned(),
+        step: step.to_owned(),
+        reason: MISSING_TOOLCHAIN_REASON.to_owned(),
+    });
+    Ok(())
 }
 
 /// Step name recorded when `go mod tidy` is deferred.
@@ -259,9 +330,12 @@ pub fn warn_deferred(deferred: &[DeferredFormatting]) {
 }
 
 /// Populate `go.sum` from `go.mod` in the e2e Go directory.
-fn run_go_mod_tidy(dir: &str) -> anyhow::Result<()> {
+fn run_go_mod_tidy(dir: &str, lang: &str, strict: bool, deferred: &mut Vec<DeferredFormatting>) -> anyhow::Result<()> {
     let cmd = format!("(cd {dir} && go mod tidy)");
-    run_shell(&cmd, "go")
+    match run_shell(&cmd, "go") {
+        Ok(()) => Ok(()),
+        Err(failure) => resolve_shell_failure(failure, lang, GO_MOD_TIDY_STEP, strict, deferred),
+    }
 }
 
 /// Format `.ex`/`.exs` in the e2e Elixir directory with `mix format`.
@@ -269,9 +343,12 @@ fn run_go_mod_tidy(dir: &str) -> anyhow::Result<()> {
 /// Must run from `dir` so mix reads that project's own `.formatter.exs` (emitted
 /// alongside `mix.exs`) — a bare `mix format` has no `inputs:` without it. That
 /// file deliberately omits `import_deps`, so this needs no prior `mix deps.get`.
-fn run_mix_format(dir: &str) -> anyhow::Result<()> {
+fn run_mix_format(dir: &str, lang: &str, strict: bool, deferred: &mut Vec<DeferredFormatting>) -> anyhow::Result<()> {
     let cmd = format!("(cd {dir} && mix format)");
-    run_shell(&cmd, "elixir")
+    match run_shell(&cmd, "elixir") {
+        Ok(()) => Ok(()),
+        Err(failure) => resolve_shell_failure(failure, lang, "mix format", strict, deferred),
+    }
 }
 
 #[cfg(test)]
@@ -330,7 +407,7 @@ mod tests {
         }];
 
         assert!(!sentinel.exists());
-        run_formatters(&files, &e2e_config).unwrap();
+        run_formatters(&files, &e2e_config, false).unwrap();
         assert!(
             sentinel.exists(),
             "user override command must run with {{dir}} expanded"
@@ -369,7 +446,7 @@ mod tests {
         std::fs::create_dir_all(out.join("python")).unwrap();
         let config = config_with_override(&out, "python", "exit 3", DependencyMode::Local);
 
-        let error = run_formatters(&one_file_in(&out, "python", "main.py"), &config)
+        let error = run_formatters(&one_file_in(&out, "python", "main.py"), &config, false)
             .expect_err("local mode must abort on a failing formatter");
 
         assert!(
@@ -387,7 +464,7 @@ mod tests {
         std::fs::create_dir_all(out.join("python")).unwrap();
         let config = config_with_override(&out, "python", "exit 3", DependencyMode::Registry);
 
-        let deferred = run_formatters(&one_file_in(&out, "python", "main.py"), &config)
+        let deferred = run_formatters(&one_file_in(&out, "python", "main.py"), &config, false)
             .expect("registry mode must not abort when a resolver cannot run pre-publish");
 
         assert_eq!(deferred.len(), 1, "expected exactly one deferred step: {deferred:?}");
@@ -416,8 +493,8 @@ mod tests {
             DependencyMode::Registry,
         );
 
-        let deferred =
-            run_formatters(&one_file_in(&out, "python", "main.py"), &config).expect("successful override must be Ok");
+        let deferred = run_formatters(&one_file_in(&out, "python", "main.py"), &config, false)
+            .expect("successful override must be Ok");
 
         assert!(sentinel.exists(), "registry mode must still run the formatter");
         assert!(
@@ -464,26 +541,23 @@ mod tests {
         }];
 
         if which::which("poly").is_ok() {
-            run_formatters(&files, &e2e_config).unwrap();
+            run_formatters(&files, &e2e_config, false).unwrap();
             let formatted = std::fs::read_to_string(&py).unwrap();
             assert_eq!(
                 formatted, "x = 1\n",
                 "with poly installed, `poly fmt --fix` must reformat the e2e Python file"
             );
         } else {
-            assert!(run_formatters(&files, &e2e_config).is_err());
+            assert!(run_formatters(&files, &e2e_config, false).is_err());
         }
     }
 
-    #[test]
-    fn unavailable_configured_formatter_aborts_generation() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let out = dir.path().join("e2e-out");
+    /// Config whose python formatter names an executable that cannot exist.
+    fn config_with_absent_formatter(out: &Path) -> (E2eConfig, Vec<GeneratedFile>) {
         std::fs::create_dir_all(out.join("python")).unwrap();
         let py = out.join("python/main.py");
         std::fs::write(&py, "x = 1\n").unwrap();
-
-        let mut e2e_config = e2e_config_for(&out);
+        let mut e2e_config = e2e_config_for(out);
         e2e_config.format.insert(
             "python".to_owned(),
             "alef_formatter_that_does_not_exist {dir}".to_owned(),
@@ -493,9 +567,79 @@ mod tests {
             content: "x = 1\n".to_owned(),
             generated_header: false,
         }];
+        (e2e_config, files)
+    }
 
-        let error = run_formatters(&files, &e2e_config).expect_err("missing formatter must fail generation");
-        assert!(error.to_string().contains("formatter for python exited"));
+    /// `--strict` keeps the original contract: an absent formatter is fatal. The
+    /// contract is preserved rather than deleted — it is now opt-in instead of
+    /// mandatory. ~keep
+    #[test]
+    fn unavailable_configured_formatter_aborts_generation_under_strict() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = dir.path().join("e2e-out");
+        let (e2e_config, files) = config_with_absent_formatter(&out);
+
+        let error = run_formatters(&files, &e2e_config, true).expect_err("strict must fail on a missing formatter");
+        assert!(
+            error.to_string().contains("formatter for python exited"),
+            "got: {error}"
+        );
+    }
+
+    /// THE DEFAULT PATH, and the reason this changed: `vendor/` is gitignored in
+    /// consumers, so a fresh clone has no php-cs-fixer and the run died before
+    /// `finalize_hashes` — leaving a correctly generated but entirely unstamped tree,
+    /// byte-indistinguishable from a marker-stripping bug.
+    ///
+    /// Surviving is only half of it. The step must be RECORDED, naming the language and
+    /// the command, or an absent formatter becomes a check that passed while doing
+    /// nothing — the exact shape this whole class of defect takes. ~keep
+    #[test]
+    fn unavailable_configured_formatter_is_recorded_and_survived_by_default() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = dir.path().join("e2e-out");
+        let (e2e_config, files) = config_with_absent_formatter(&out);
+
+        let deferred = run_formatters(&files, &e2e_config, false).expect("a missing formatter must not abort the run");
+
+        assert_eq!(deferred.len(), 1, "the skip must be recorded, got: {deferred:?}");
+        assert_eq!(deferred[0].language, "python");
+        assert!(
+            deferred[0].step.contains("alef_formatter_that_does_not_exist"),
+            "the record must name the command that could not run, got: {}",
+            deferred[0].step
+        );
+        assert!(
+            deferred[0].reason.contains("not installed"),
+            "the record must say why, got: {}",
+            deferred[0].reason
+        );
+    }
+
+    /// The control that keeps the default honest. A formatter that RUNS and rejects the
+    /// code is a verdict on the generated output and still fails, with no `--strict`
+    /// needed — otherwise the change above would have quietly disabled the thing that
+    /// actually gates correctness. ~keep
+    #[test]
+    fn a_formatter_that_runs_and_fails_still_aborts_without_strict() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = dir.path().join("e2e-out");
+        std::fs::create_dir_all(out.join("python")).unwrap();
+        let py = out.join("python/main.py");
+        std::fs::write(&py, "x = 1\n").unwrap();
+        let mut e2e_config = e2e_config_for(&out);
+        e2e_config.format.insert("python".to_owned(), "exit 3".to_owned());
+        let files = vec![GeneratedFile {
+            path: py,
+            content: "x = 1\n".to_owned(),
+            generated_header: false,
+        }];
+
+        let error = run_formatters(&files, &e2e_config, false).expect_err("a formatter that ran and failed must abort");
+        assert!(
+            error.to_string().contains("formatter for python exited"),
+            "got: {error}"
+        );
     }
 
     #[test]
@@ -508,11 +652,13 @@ mod tests {
 
         let e2e_config = e2e_config_for(&out);
         if which::which("poly").is_ok() {
-            run_formatters_for_cached_paths(std::slice::from_ref(&py), dir.path(), &e2e_config).unwrap();
+            run_formatters_for_cached_paths(std::slice::from_ref(&py), dir.path(), &e2e_config, false).unwrap();
             let formatted = std::fs::read_to_string(&py).unwrap();
             assert_eq!(formatted, "x = 1\n");
         } else {
-            assert!(run_formatters_for_cached_paths(std::slice::from_ref(&py), dir.path(), &e2e_config).is_err());
+            assert!(
+                run_formatters_for_cached_paths(std::slice::from_ref(&py), dir.path(), &e2e_config, false).is_err()
+            );
         }
     }
 
@@ -542,7 +688,7 @@ mod tests {
             generated_header: false,
         }];
 
-        run_formatters(&files, &e2e_config).unwrap();
+        run_formatters(&files, &e2e_config, false).unwrap();
 
         let mode = std::fs::metadata(&script).unwrap().permissions().mode();
         assert!(
@@ -579,7 +725,7 @@ mod tests {
             generated_header: false,
         }];
 
-        let result = run_formatters(&files, &e2e_config);
+        let result = run_formatters(&files, &e2e_config, false);
         let formatted = std::fs::read_to_string(&test_file).unwrap();
         if which::which("poly").is_ok() && which::which("mix").is_ok() {
             result.unwrap();
@@ -614,7 +760,7 @@ mod tests {
             generated_header: false,
         }];
 
-        let result = run_formatters(&files, &e2e_config);
+        let result = run_formatters(&files, &e2e_config, false);
         if which::which("poly").is_ok() {
             result.unwrap();
         } else {
@@ -661,10 +807,10 @@ mod tests {
         let e2e_config = config_recording_order(&out, &log, &languages);
         let files = files_for(&out, &languages);
 
-        run_formatters(&files, &e2e_config).expect("first pass");
+        run_formatters(&files, &e2e_config, false).expect("first pass");
         let first = std::fs::read_to_string(&log).expect("order log");
         std::fs::remove_file(&log).expect("reset log");
-        run_formatters(&files, &e2e_config).expect("second pass");
+        run_formatters(&files, &e2e_config, false).expect("second pass");
         let second = std::fs::read_to_string(&log).expect("order log");
 
         let mut expected = languages.to_vec();
@@ -697,7 +843,7 @@ mod tests {
         e2e_config.format.insert("csharp".to_owned(), "exit 1".to_owned());
         let files = files_for(&out, &languages);
 
-        let error = run_formatters(&files, &e2e_config).expect_err("a failing formatter must fail the run");
+        let error = run_formatters(&files, &e2e_config, false).expect_err("a failing formatter must fail the run");
 
         let recorded = std::fs::read_to_string(&log).unwrap_or_default();
         assert!(
@@ -728,7 +874,7 @@ mod tests {
         e2e_config.format.insert("go".to_owned(), "exit 1".to_owned());
         let files = files_for(&out, &languages);
 
-        let error = run_formatters(&files, &e2e_config).expect_err("failing formatters must fail the run");
+        let error = run_formatters(&files, &e2e_config, false).expect_err("failing formatters must fail the run");
 
         let message = format!("{error:#}");
         assert!(message.contains("csharp"), "got: {message}");
