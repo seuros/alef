@@ -24,6 +24,9 @@ host_type = "TreeSitter.Language"
 package = "TreeSitter.DotNet"
 package_version = "0.8.0"
 construct_expr = "new TreeSitter.Language({ptr})"
+pointer_ownership = "borrowed_static"
+abi_compatible = true
+host_destructor = "none"
 "#;
     let cfg: NewAlefConfig = toml::from_str(toml_str).unwrap();
     cfg.resolve().unwrap().remove(0)
@@ -49,6 +52,9 @@ namespace = "TreeSitter"
 host_type = "TreeSitter.Language"
 package = "TreeSitter.DotNet"
 package_version = "0.8.0"
+pointer_ownership = "borrowed_static"
+abi_compatible = true
+host_destructor = "none"
 "#;
     let cfg: NewAlefConfig = toml::from_str(toml_str).unwrap();
     cfg.resolve().unwrap().remove(0)
@@ -92,7 +98,7 @@ fn test_csharp_capsule_function_generation() {
 
     let config = make_csharp_config_with_capsule();
     let result = backend.generate_bindings(&api, &config);
-    assert!(result.is_ok(), "Failed to generate C# bindings");
+    assert!(result.is_ok(), "Failed to generate C# bindings: {result:?}");
 
     let files = result.unwrap();
 
@@ -160,7 +166,7 @@ fn test_csharp_capsule_requires_construct_expr() {
 
     let config = make_csharp_config_with_default_capsule();
     let result = backend.generate_bindings(&api, &config);
-    assert!(result.is_ok(), "Failed to generate C# bindings");
+    assert!(result.is_ok(), "Failed to generate C# bindings: {result:?}");
 
     let files = result.unwrap();
     let wrapper_file = files

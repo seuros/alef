@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Java service bindings**: retain paired callback response deallocators and registration variant metadata while
   leasing service owners, and omit public functions whose signatures reference excluded types.
+- **C# capsule tests**: declare the validated borrowed-static ABI and destructor contract in capsule generation fixtures.
 
 ### Added
 
