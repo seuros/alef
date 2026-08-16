@@ -190,7 +190,6 @@ public class {{ class_name }} implements AutoCloseable {
 
     private static final Linker LINKER = Linker.nativeLinker();
     private static final SymbolLookup LOOKUP = SymbolLookup.loaderLookup();
-    private static final MethodHandle FREE;
 
     static {
         // Force NativeLib static initialization to load the native library
@@ -202,10 +201,6 @@ public class {{ class_name }} implements AutoCloseable {
         } catch (ClassNotFoundException ignored) {
             // NativeLib not available; native library may be pre-loaded
         }
-        FREE = LINKER.downcallHandle(
-            LOOKUP.find("free").orElseThrow(),
-            FunctionDescriptor.ofVoid(ValueLayout.ADDRESS)
-        );
     }
 
     // Adapter for handler upcalls: marshals C pointers <-> Java strings
@@ -252,7 +247,15 @@ public class {{ class_name }} implements AutoCloseable {
     private static void freeHandlerResponse(MemorySegment responsePtr) {
         try {
             if (responsePtr.address() != 0) {
-                FREE.invokeExact(responsePtr);
+                // Resolved lazily (not at class-init time): "free" only needs to be
+                // reachable through LOOKUP once a handler response is actually
+                // released, so a service that never frees a response never pays for
+                // (or can fail on) this lookup during class initialization.
+                MethodHandle freeHandle = LINKER.downcallHandle(
+                        LOOKUP.find("free").orElseThrow(),
+                        FunctionDescriptor.ofVoid(ValueLayout.ADDRESS)
+                );
+                freeHandle.invokeExact(responsePtr);
             }
         } catch (Throwable error) {
             throw new IllegalStateException("Failed to free handler response", error);

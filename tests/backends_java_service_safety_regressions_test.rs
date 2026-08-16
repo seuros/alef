@@ -75,6 +75,37 @@ fn write_upcall_sources(directory: &std::path::Path, service: &str) {
 }
 
 #[test]
+fn service_free_symbol_is_resolved_lazily_not_at_class_init() {
+    let source = service_source(Vec::new());
+
+    let static_block = source
+        .split("static {")
+        .nth(1)
+        .expect("generated static initializer block")
+        .split("private static MemorySegment invokeHandlerWithMarshal")
+        .next()
+        .expect("static initializer body");
+    assert!(
+        !static_block.contains("LOOKUP.find(\"free\")"),
+        "static initializer must not eagerly resolve \"free\" — a service that never frees a \
+         handler response would otherwise fail to even load: {source}"
+    );
+    assert!(
+        !source.contains("private static final MethodHandle FREE"),
+        "the free downcall handle must not be memoized as a class-init-time static field: {source}"
+    );
+
+    let free_method = source
+        .split("private static void freeHandlerResponse(")
+        .nth(1)
+        .expect("generated freeHandlerResponse method");
+    assert!(
+        free_method.contains("LOOKUP.find(\"free\").orElseThrow()"),
+        "freeHandlerResponse must still resolve \"free\" itself, lazily, on first use: {source}"
+    );
+}
+
+#[test]
 fn service_metadata_uses_exact_c_abi_layouts_and_carriers() {
     let source = service_source(vec![
         primitive_param("flag", PrimitiveType::Bool),

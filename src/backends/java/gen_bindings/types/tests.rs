@@ -2,7 +2,7 @@
 use super::*;
 use crate::core::config::JavaBuilderMode;
 use crate::core::ir::TypeDef;
-use crate::core::ir::{CoreWrapper, DefaultValue, FieldDef, PrimitiveType, TypeRef};
+use crate::core::ir::{CoreWrapper, DefaultValue, EnumDef, EnumVariant, FieldDef, PrimitiveType, TypeRef};
 use ahash::AHashSet;
 use std::collections::HashSet;
 
@@ -522,5 +522,50 @@ fn duration_field_with_builder_annotates_the_setter_too() {
         ),
         "the builder setter must carry the Duration deserializer annotation directly \
          above its declaration:\n{out}"
+    );
+}
+
+/// End-to-end regression for the `ContentPart.ImageUrl` self-shadowing defect: a
+/// `record ImageUrl(...)` nested inside a `sealed interface` whose own field is typed
+/// `ImageUrl` (the sibling top-level struct) used to resolve to the enclosing variant record
+/// itself (JLS member shadowing) rather than the intended type — silent data loss that still
+/// compiled. The colliding field type must be package-qualified in the emitted tagged union. ~keep
+#[test]
+fn tagged_union_field_type_colliding_with_variant_name_is_package_qualified() {
+    let enum_def = EnumDef {
+        name: "ContentPart".to_string(),
+        rust_path: "sample_crate::ContentPart".to_string(),
+        serde_tag: Some("type".to_string()),
+        variants: vec![EnumVariant {
+            name: "ImageUrl".to_string(),
+            fields: vec![
+                FieldDef {
+                    name: "image_url".to_string(),
+                    ty: TypeRef::Named("ImageUrl".to_string()),
+                    ..Default::default()
+                },
+                FieldDef {
+                    name: "metadata".to_string(),
+                    ty: TypeRef::Named("Metadata".to_string()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let out = gen_enum_class("io.xberg.literllm", &enum_def, "SampleCrawler", &[]);
+
+    assert!(
+        out.contains("io.xberg.literllm.ImageUrl imageUrl"),
+        "the field whose type name collides with its own variant name must be package-qualified \
+         to reach the sibling top-level type, not the shadowing nested record, got:\n{out}"
+    );
+    assert!(
+        out.contains("Metadata metadata") && !out.contains("io.xberg.literllm.Metadata"),
+        "positive control: a field type that does NOT collide with any variant name must stay \
+         unqualified -- qualifying it too would make every generated type needlessly verbose, \
+         got:\n{out}"
     );
 }
