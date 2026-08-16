@@ -62,13 +62,14 @@ fn test_opaque_type() {
         "Should define OpaqueHandle struct"
     );
     assert!(
-        content.contains("ptr unsafe.Pointer"),
-        "Should have ptr field of unsafe.Pointer type"
+        content.contains("ptr C.TESTOpaqueHandle"),
+        "Should store the scalar C handle type"
     );
     assert!(
-        content.contains("\"unsafe\""),
-        "Should import unsafe package for opaque types"
+        content.contains("if h.ptr != 0") && content.contains("h.ptr = 0"),
+        "Should use the scalar handle's zero sentinel"
     );
+    assert!(!content.contains("ptr unsafe.Pointer"));
 
     assert!(
         content.contains("func (h *OpaqueHandle) Free()"),
@@ -437,10 +438,8 @@ fn test_opaque_error_type_uses_value_semantics() {
 /// Regression: a type with a `TypeRef::Bytes` return value previously emitted
 /// `unmarshalBytes(ptr)` without ever defining the helper, and tried to free
 /// the byte buffer via `_free_string` (which expects `*C.char`, not
-/// `*C.uint8_t`). Both produced cgo compile errors. The fix emits a single
-/// package-level `unmarshalBytes` helper and stops emitting `_free_string`
-/// for `Bytes` returns (the FFI hands out aliasing pointers into a parent
-/// handle's storage that the caller does not own).
+/// `*C.uint8_t`). Both produced cgo compile errors. The owned-bytes ABI copies
+/// the explicit pointer/length result and releases its full allocation.
 #[test]
 fn test_bytes_return_emits_helper_and_no_string_free() {
     let backend = GoBackend;
@@ -515,11 +514,13 @@ fn test_bytes_return_emits_helper_and_no_string_free() {
         "unmarshalBytes helper must be emitted exactly once per package, got {} occurrences in:\n{}",
         helper_decls, content
     );
-    assert!(
-        content.matches("unmarshalBytes(").count() > helper_decls,
-        "bytes-returning methods must call the package-level helper, got:\n{}",
+    assert_eq!(
         content
+            .matches("C.GoBytes(unsafe.Pointer(outPtr), C.int(outLen))")
+            .count(),
+        2
     );
+    assert_eq!(content.matches("C.test_free_bytes(outPtr, outLen, outCap)").count(), 2);
 
     let bytes_method_block = content
         .split("AsBytes")

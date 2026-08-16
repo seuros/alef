@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **C# capsule tests**: declare the validated borrowed-static ABI and destructor contract in capsule generation fixtures.
 - **Host capsule tests**: keep Go and Java integration fixtures aligned with the validated borrowed-static ABI and
   destructor contract.
+- **Go binding tests**: align opaque, options, and owned-byte regressions with the scalar handle and explicit buffer ABI.
 
 ### Added
 

@@ -272,8 +272,9 @@ fn test_options_field_visitor_wrapper_uses_bridge_config_not_convert_names() {
     assert!(binding.contains("Visitor *json.RawMessage `json:\"visitor,omitempty\"`"));
     assert!(binding.contains("if settings != nil && settings.Renderer != nil"));
     assert!(binding.contains("return renderWithVisitorHelper(document, settings, settings.Renderer)"));
-    assert!(binding.contains("var cOptions *C.KRZRenderOptions"));
+    assert!(binding.contains("var cOptions C.KRZAlefHandle"));
     assert!(binding.contains("cOptions = C.krz_render_options_from_json(tmpStr)"));
+    assert!(binding.contains("if cOptions == 0"));
     assert!(binding.contains("ptr := C.krz_render(cDocument, cOptions)"));
     assert!(binding.contains("defer C.krz_render_output_free(ptr)"));
     assert!(binding.contains("jsonPtr := C.krz_render_output_to_json(ptr)"));
