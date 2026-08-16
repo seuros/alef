@@ -309,12 +309,19 @@ fn bug_c_optional_string_equals_in_vec_result_uses_as_deref_unwrap_or() {
     }];
     let rendered = render_smoke_test(&config, assertions);
     assert!(
-        rendered.contains("as_deref().unwrap_or(\"\").trim()"),
-        "Optional<String> equals in vec loop must use .as_deref().unwrap_or(\"\").trim()\nRendered:\n{rendered}"
+        rendered.contains("as_deref().unwrap_or(\"\")"),
+        "Optional<String> equals in vec loop must use .as_deref().unwrap_or(\"\")\nRendered:\n{rendered}"
     );
     assert!(
-        !rendered.contains("output_format.trim()"),
-        "bare .trim() on Option<String> must not be emitted\nRendered:\n{rendered}"
+        !rendered.contains("output_format,"),
+        "bare Option<String> must not be compared against a &str literal\nRendered:\n{rendered}"
+    );
+    // ~keep: 673e758a3 removed one-sided normalization from equals assertions — the fixture
+    // `expected` literal is emitted verbatim, so trimming only the actual side made
+    // newline-terminated expectations unsatisfiable. Neither side is trimmed.
+    assert!(
+        !rendered.contains(".trim()"),
+        "equals compares both sides exactly; the actual side must not be trimmed\nRendered:\n{rendered}"
     );
 }
 

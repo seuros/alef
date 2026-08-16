@@ -13,7 +13,6 @@ use crate::e2e::fixture::{Fixture, FixtureGroup};
 use anyhow::Result;
 use heck::ToUpperCamelCase;
 use std::collections::HashMap;
-use std::fmt::Write as FmtWrite;
 use std::path::PathBuf;
 
 use super::E2eCodegen;

@@ -490,6 +490,13 @@ fn test_opaque_class_promotes_parameters_after_first_optional() {
     );
 }
 
+/// `gen_stub_return` (`gen_bindings/functions/stubs.rs`) used to fabricate a type-appropriate
+/// default (`None` for `Optional`, `Vec::new()` for `Vec`) for a sanitized, non-fallible function
+/// it cannot auto-delegate. That silently shipped fake data from a function that looks callable —
+/// exactly the placeholder anti-pattern removed repo-wide; PHP's `has_error: false` branch now has
+/// exactly one safe value (`()` for `TypeRef::Unit`) and `compile_error!`s for everything else, so
+/// the generated crate fails to build instead of returning fabricated output at runtime. See the
+/// `gen_stub_return_tests` unit tests next to `gen_stub_return` for the same contract in isolation. ~keep
 #[test]
 fn test_sanitized_function_generates_stub_not_direct_call() {
     let backend = PhpBackend;
@@ -596,13 +603,41 @@ fn test_sanitized_function_generates_stub_not_direct_call() {
         "split_code must not delegate to core (type mismatch); content:\n{content}"
     );
 
+    // ~keep: scope the fabricated-value guards to each stub body. The unconditional
+    // ext-php-rs module-startup boilerplate contains `::std::option::Option::None` and
+    // `None => 1,`, so a whole-file `contains("None")` check matches emitter boilerplate
+    // that has nothing to do with stub returns.
+    let stub_body = |func: &str| -> String {
+        let Some((_, rest)) = content.split_once(&format!("pub fn {func}(")) else {
+            panic!("{func} stub must be emitted; content:\n{content}");
+        };
+        let Some((body, _)) = rest.split_once("\n    }") else {
+            panic!("{func} stub body must be brace-terminated; content:\n{content}");
+        };
+        body.to_string()
+    };
+
+    let ambiguity_body = stub_body("extension_ambiguity");
     assert!(
-        content.contains("None"),
-        "extension_ambiguity (Option<String>, no Result) should emit `None` stub; content:\n{content}"
+        !ambiguity_body.contains("None"),
+        "extension_ambiguity (Option<String>, no Result) has no safe fabricated value and must not \
+         silently return `None`; stub body:\n{ambiguity_body}"
+    );
+    let split_code_body = stub_body("split_code");
+    assert!(
+        !split_code_body.contains("Vec::new()"),
+        "split_code (Vec<String>, no Result) has no safe fabricated value and must not silently \
+         return `Vec::new()`; stub body:\n{split_code_body}"
     );
     assert!(
-        content.contains("Vec::new()"),
-        "split_code (Vec<String>, no Result) should emit `Vec::new()` stub; content:\n{content}"
+        content.contains("alef cannot generate PHP binding for extension_ambiguity;"),
+        "extension_ambiguity (Option<String>, no Result) has no safe fabricated value, so alef must \
+         fail the generated crate's build with compile_error! rather than ship fake data; content:\n{content}"
+    );
+    assert!(
+        content.contains("alef cannot generate PHP binding for split_code;"),
+        "split_code (Vec<String>, no Result) has no safe fabricated value, so alef must fail the \
+         generated crate's build with compile_error! rather than ship fake data; content:\n{content}"
     );
     assert!(
         !content.contains("Err(ext_php_rs::exception::PhpException::default(\"Not implemented: extension_ambiguity"),

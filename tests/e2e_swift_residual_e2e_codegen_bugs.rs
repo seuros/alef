@@ -301,13 +301,21 @@ type = "string"
     let rendered = render_with_config(toml, fixture, vec![]);
 
     assert!(
-        rendered.contains("(result ?? \"\").trimmingCharacters("),
+        rendered.contains("XCTAssertEqual((result ?? \"\"), \"cpp\")"),
         "Optional<String> bare result must be coalesced with `?? \"\"` \
          before string operations. Rendered:\n{rendered}"
     );
     assert!(
-        !rendered.contains("        XCTAssertEqual(result.trimmingCharacters"),
-        "must not call `.trimmingCharacters` on the optional directly. \
+        !rendered.contains("XCTAssertEqual(result,"),
+        "must not compare the bare optional against a String literal. \
+         Rendered:\n{rendered}"
+    );
+    // ~keep: 329d01a9b dropped `.trimmingCharacters(in:)` from equals — the fixture expected
+    // literal is emitted verbatim, so trimming only the actual side hid trailing-whitespace
+    // regressions and made newline-terminated expectations unsatisfiable.
+    assert!(
+        !rendered.contains("trimmingCharacters"),
+        "equals compares both sides exactly; the actual side must not be trimmed. \
          Rendered:\n{rendered}"
     );
 }
