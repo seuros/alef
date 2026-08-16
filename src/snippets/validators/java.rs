@@ -15,7 +15,7 @@ impl JavaValidator {
     ) -> Result<(SnippetStatus, Option<String>)> {
         let temporary_directory = session.is_none().then(TempDir::new).transpose()?;
         let directory = match (session, temporary_directory.as_ref()) {
-            (Some(value), _) => value.workspace_directory()?,
+            (Some(value), _) => value.external_workspace_directory()?,
             (None, Some(value)) => value.path().to_path_buf(),
             (None, None) => unreachable!(),
         };
@@ -234,7 +234,7 @@ mod tests {
         let session = ValidationSession {
             working_directory: root.path().to_path_buf(),
             manifest: Some(classes),
-            fingerprint: "fixture".into(),
+            fingerprint: test_fingerprint(root.path()),
             env: BTreeMap::new(),
             include_paths: Vec::new(),
             rust_features: Vec::new(),
@@ -249,6 +249,57 @@ mod tests {
         )
         .expect("validation runs");
         assert_eq!(status, SnippetStatus::Pass, "{output:?}");
+        cleanup_external_workspace(&session);
+    }
+
+    /// Regression test for the defect this closes: alef's own Java backend sets Maven's
+    /// `<sourceDirectory>` to `${project.basedir}` (see the generated `packages/java/pom.xml`),
+    /// because it emits sources at the package root rather than under `src/main/java/`. That
+    /// makes *everything* under a Java session's `working_directory` a live compiler input for
+    /// `mvn package`/`maven-source-plugin`/javadoc — not just a conventional `src/` subtree.
+    /// Before the fix, `validate_with_context` wrote the scratch `.java` source and its compiled
+    /// `.class` output to `working_directory/.alef/snippets/sessions/<fingerprint>/`, inside that
+    /// globbed tree, so a snippet's throwaway source would have been compiled straight into the
+    /// consumer's shipped artifact. This asserts no file appears anywhere under
+    /// `working_directory` after validation. ~keep
+    #[test]
+    fn session_scratch_is_never_written_under_the_working_directory() {
+        let _toolchain_guard = crate::snippets::validators::jvm_toolchain_test_lock();
+        if which::which("javac").is_err() {
+            return;
+        }
+        let root = tempfile::tempdir().expect("temporary root");
+        let session = ValidationSession {
+            working_directory: root.path().to_path_buf(),
+            manifest: None,
+            fingerprint: test_fingerprint(root.path()),
+            env: BTreeMap::new(),
+            include_paths: Vec::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: BTreeMap::new(),
+        };
+
+        let (status, output) = JavaValidator::validate_with_context(
+            &snippet(
+                "public final class Example { public static void main(String[] args) { System.out.println(\"ok\"); } }",
+            ),
+            ValidationLevel::Compile,
+            30,
+            Some(&session),
+        )
+        .expect("validation runs");
+        assert_eq!(status, SnippetStatus::Pass, "{output:?}");
+
+        let leaked_into_working_directory = walkdir::WalkDir::new(root.path())
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+            .any(|entry| entry.file_type().is_file());
+        assert!(
+            !leaked_into_working_directory,
+            "no scratch file may be written anywhere under a Java session's working_directory: alef's own Java \
+             backend makes the whole directory a Maven source root"
+        );
+        cleanup_external_workspace(&session);
     }
 
     #[test]
@@ -261,6 +312,22 @@ mod tests {
 
         let class_path = JavaValidator::class_path(&manifest).expect("classpath");
         assert_eq!(std::env::split_paths(&class_path).collect::<Vec<_>>(), vec![classes]);
+    }
+
+    /// A fingerprint unique to this test invocation, derived from its already-unique `tempfile`
+    /// root. `external_workspace_directory` is keyed by fingerprint alone (deliberately, so it
+    /// can live outside any per-test tempdir) — a literal fingerprint shared across test runs
+    /// would collide on the real OS temp directory instead of getting the isolation `tempfile`
+    /// normally provides. ~keep
+    fn test_fingerprint(root: &std::path::Path) -> String {
+        root.to_string_lossy().replace(['/', '\\', ':'], "_")
+    }
+
+    fn cleanup_external_workspace(session: &ValidationSession) {
+        let directory = std::env::temp_dir()
+            .join("alef-snippets/sessions")
+            .join(&session.fingerprint);
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     fn snippet(code: &str) -> Snippet {

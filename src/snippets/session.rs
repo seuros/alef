@@ -47,6 +47,25 @@ impl ValidationSession {
         Ok(directory)
     }
 
+    /// The persistent, fingerprint-keyed scratch directory for a session whose build tool globs
+    /// its whole project directory for sources, not just a `src/` subtree — alef's own Java
+    /// backend sets Maven's `<sourceDirectory>` to `${project.basedir}` (see the generated
+    /// `packages/java/pom.xml`) because it emits sources at the package root rather than under
+    /// `src/main/java/`. That means every path under a Java session's `working_directory`,
+    /// `.alef/` included, is a live compiler input: `mvn package` would compile scratch
+    /// `.java` files into the shipped artifact, and `maven-source-plugin`/`javadoc` would bundle
+    /// them too. This directory lives under the OS temp root instead, so it can never be
+    /// swept up by the consumer's own build. Classpath resolution is unaffected because
+    /// `JavaValidator` resolves classpath entries as absolute paths from the manifest,
+    /// independent of where the scratch source and class files are compiled from. ~keep
+    pub fn external_workspace_directory(&self) -> Result<PathBuf> {
+        let directory = std::env::temp_dir()
+            .join("alef-snippets/sessions")
+            .join(&self.fingerprint);
+        std::fs::create_dir_all(&directory)?;
+        Ok(directory)
+    }
+
     pub fn temp_dir(&self) -> Result<tempfile::TempDir> {
         let scratch_root = self.working_directory.join(".alef/snippets/tmp");
         std::fs::create_dir_all(&scratch_root)?;
@@ -126,18 +145,20 @@ fn prepare_session(spec: &SessionSpec, timeout_secs: u64) -> Result<ValidationSe
         )));
     }
     let fingerprint = session_fingerprint(spec)?;
-    // `workspace_directory` (java, csharp, typescript) is a stable directory reused across every
-    // snippet in this session *and* across every future run with an unchanged fingerprint —
-    // deliberately, so compiled-artifact caches in its subdirectories survive between runs. But
-    // the scratch source file each snippet's validate call writes at its top level (`Example.
-    // java`, `Program.cs`, `snippet.ts`, ...) is never removed, so it accumulates one leftover
-    // file per distinct snippet ever validated under this fingerprint. A consumer-configured
-    // `before` command that builds the whole module from `working_directory` (`mvn package`, for
-    // instance) runs once for the whole session, before any of *this* run's snippets are written
-    // — so it can only ever trip over a leftover from a *previous* run, and one bad leftover then
-    // blacks out every snippet in the session. Purging stale top-level files before `before` runs
-    // breaks that cycle without touching cache subdirectories (`target/`, `.nuget/`, ...), which
-    // is why this only removes direct children that are files, never recursing. ~keep
+    // `workspace_directory` (csharp, typescript — java moved to `external_workspace_directory`,
+    // outside `working_directory`, because alef's own Java backend makes the whole project
+    // directory a live Maven source root; see `external_workspace_directory`'s doc comment) is a
+    // stable directory reused across every snippet in this session *and* across every future run
+    // with an unchanged fingerprint — deliberately, so compiled-artifact caches in its
+    // subdirectories survive between runs. But the scratch source file each snippet's validate
+    // call writes at its top level (`Program.cs`, `snippet.ts`, ...) is never removed, so it
+    // accumulates one leftover file per distinct snippet ever validated under this fingerprint. A
+    // consumer-configured `before` command that builds the whole module from `working_directory`
+    // runs once for the whole session, before any of *this* run's snippets are written — so it
+    // can only ever trip over a leftover from a *previous* run, and one bad leftover then blacks
+    // out every snippet in the session. Purging stale top-level files before `before` runs breaks
+    // that cycle without touching cache subdirectories (`target/`, `.nuget/`, ...), which is why
+    // this only removes direct children that are files, never recursing. ~keep
     purge_stale_workspace_scratch_files(&spec.working_directory, &fingerprint)?;
     for command in &spec.before {
         run_before(command, &spec.working_directory, &spec.env, timeout_secs)
@@ -342,6 +363,13 @@ fn shell_command(source: &str) -> std::process::Command {
     command
 }
 
+#[cfg(windows)]
+fn shell_command(source: &str) -> std::process::Command {
+    let mut command = std::process::Command::new("cmd");
+    command.args(["/C", source]);
+    command
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,22 +444,23 @@ mod tests {
     }
 
     /// The regression this closes: a `before` hook that builds the whole module from
-    /// `working_directory` (`mvn package`, for a Java session) runs once, before any of *this*
-    /// run's snippets are written — so the only way it can trip over bad scratch source content
-    /// is a leftover from a *previous* run's per-snippet validate call, which nothing ever
-    /// cleaned up. One bad leftover then failed session preparation and stamped every snippet in
-    /// the session as `SnippetStatus::Error`, turning one bad snippet into a whole language going
-    /// dark. The `before` command below does not know the fingerprint-derived workspace path in
-    /// advance (neither does a real consumer's `mvn package`), so it searches for the leftover
-    /// instead of asserting a literal path — exactly what a stale-content bug would trip over. ~keep
+    /// `working_directory` (`npm run build`, for a TypeScript session — java no longer takes this
+    /// path at all; see `external_workspace_directory`) runs once, before any of *this* run's
+    /// snippets are written — so the only way it can trip over bad scratch source content is a
+    /// leftover from a *previous* run's per-snippet validate call, which nothing ever cleaned up.
+    /// One bad leftover then failed session preparation and stamped every snippet in the session
+    /// as `SnippetStatus::Error`, turning one bad snippet into a whole language going dark. The
+    /// `before` command below does not know the fingerprint-derived workspace path in advance
+    /// (neither does a real consumer's `npm run build`), so it searches for the leftover instead
+    /// of asserting a literal path — exactly what a stale-content bug would trip over. ~keep
     #[test]
     fn stale_workspace_scratch_files_are_purged_before_before_hooks_run() {
         let directory = tempfile::tempdir().expect("temp directory");
         let spec = SessionSpec {
-            language: Language::Java,
+            language: Language::TypeScript,
             working_directory: directory.path().to_path_buf(),
             manifest: None,
-            before: vec!["! find .alef/snippets/sessions -name Example.java | grep -q .".into()],
+            before: vec!["! find .alef/snippets/sessions -name snippet.ts | grep -q .".into()],
             env: BTreeMap::new(),
             include_paths: Vec::new(),
             rust_features: Vec::new(),
@@ -440,16 +469,16 @@ mod tests {
         let fingerprint = session_fingerprint(&spec).expect("fingerprint");
         let workspace = workspace_scratch_directory(directory.path(), &fingerprint);
         std::fs::create_dir_all(&workspace).expect("workspace directory");
-        let stale_file = workspace.join("Example.java");
-        std::fs::write(&stale_file, "public class Example { this does not compile").expect("stale scratch file");
+        let stale_file = workspace.join("snippet.ts");
+        std::fs::write(&stale_file, "this does not compile: :::").expect("stale scratch file");
         // A subdirectory must survive the purge: it stands in for a compiled-artifact cache
         // (`target/classes`, `.nuget/packages`, ...) that is deliberately reused across runs. ~keep
-        let cache_subdir = workspace.join("classes");
+        let cache_subdir = workspace.join("dist");
         std::fs::create_dir_all(&cache_subdir).expect("cache subdirectory");
-        std::fs::write(cache_subdir.join("Example.class"), b"cached").expect("cached artifact");
+        std::fs::write(cache_subdir.join("snippet.js"), b"cached").expect("cached artifact");
 
         let mut specs = HashMap::new();
-        specs.insert("java".to_string(), spec);
+        specs.insert("typescript".to_string(), spec);
         let prepared = prepare_sessions_isolated(&specs, 5);
 
         assert!(
@@ -459,7 +488,7 @@ mod tests {
         );
         assert!(!stale_file.exists(), "the stale scratch file must be purged");
         assert!(
-            cache_subdir.join("Example.class").exists(),
+            cache_subdir.join("snippet.js").exists(),
             "cache subdirectories must survive the purge"
         );
     }
@@ -540,6 +569,50 @@ mod tests {
         );
     }
 
+    /// `external_workspace_directory` exists because alef's own Java backend emits sources at
+    /// the package root and points Maven's `<sourceDirectory>` at `${project.basedir}` (see
+    /// `packages/java/pom.xml`), making every path under a session's `working_directory` a live
+    /// compiler input. Unlike `workspace_directory`, it must never resolve under
+    /// `working_directory` at all, while still being stable and reused across calls for the same
+    /// fingerprint so compiled-artifact caching still works.
+    #[test]
+    fn external_workspace_directory_stays_outside_the_working_directory_and_is_stable() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let fingerprint = format!(
+            "external-workspace-fixture-{}",
+            directory.path().to_string_lossy().replace(['/', '\\', ':'], "_")
+        );
+        let session = ValidationSession {
+            working_directory: directory.path().to_path_buf(),
+            manifest: None,
+            fingerprint,
+            env: BTreeMap::new(),
+            include_paths: Vec::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: BTreeMap::new(),
+        };
+
+        let first = session
+            .external_workspace_directory()
+            .expect("first external workspace");
+        assert!(
+            !first.starts_with(directory.path()),
+            "external workspace must never be nested under working_directory: {}",
+            first.display()
+        );
+        std::fs::write(first.join("compiler-output"), "cached").expect("compiler output");
+        let second = session
+            .external_workspace_directory()
+            .expect("second external workspace");
+
+        assert_eq!(first, second);
+        assert_eq!(
+            std::fs::read_to_string(second.join("compiler-output")).unwrap(),
+            "cached"
+        );
+        let _ = std::fs::remove_dir_all(&first);
+    }
+
     #[test]
     fn provides_absolute_isolated_toolchain_directories() {
         let directory = tempfile::tempdir().expect("temp directory");
@@ -566,11 +639,4 @@ mod tests {
             assert!(std::path::Path::new(&values[name]).is_absolute(), "{name}");
         }
     }
-}
-
-#[cfg(windows)]
-fn shell_command(source: &str) -> std::process::Command {
-    let mut command = std::process::Command::new("cmd");
-    command.args(["/C", source]);
-    command
 }
