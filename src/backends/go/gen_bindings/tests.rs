@@ -694,3 +694,103 @@ fn generate_bindings_skips_method_wrapper_when_struct_field_has_same_name() {
         binding.content
     );
 }
+
+/// Regression (Defect 1): a `Duration`-typed struct field pulls in the package-level
+/// `DurationMillis` wire helper (and, transitively, the `encoding/json` import it needs)
+/// even when the crate has no sync functions or non-static methods — the only prior
+/// triggers for `encoding/json`.
+#[test]
+fn generate_bindings_emits_duration_millis_helper_when_a_duration_field_exists() {
+    use crate::core::ir::{ApiSurface, FieldDef, TypeDef, TypeRef};
+
+    let config = make_config();
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "RateLimitConfig".to_string(),
+            rust_path: "test_lib::RateLimitConfig".to_string(),
+            has_serde: true,
+            fields: vec![FieldDef {
+                name: "window".to_string(),
+                ty: TypeRef::Duration,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+
+    let files = GoBackend.generate_bindings(&api, &config).unwrap();
+    let binding = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().ends_with("binding.go"))
+        .expect("binding.go present");
+
+    assert!(
+        binding.content.contains("type DurationMillis uint64"),
+        "expected the DurationMillis wire helper. Got:\n{}",
+        binding.content
+    );
+    assert!(
+        binding.content.contains("\"encoding/json\""),
+        "DurationMillis's Marshal/UnmarshalJSON need encoding/json imported. Got:\n{}",
+        binding.content
+    );
+    assert!(
+        binding.content.contains("Window DurationMillis `json:\"window\"`"),
+        "expected the field itself to use the wire-safe type. Got:\n{}",
+        binding.content
+    );
+}
+
+/// Counterpart of the above: a crate with no `Duration` field anywhere must not carry the
+/// unused `DurationMillis` helper.
+#[test]
+fn generate_bindings_omits_duration_millis_helper_without_a_duration_field() {
+    use crate::core::ir::{ApiSurface, FieldDef, TypeDef, TypeRef};
+
+    let config = make_config();
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "PlainConfig".to_string(),
+            rust_path: "test_lib::PlainConfig".to_string(),
+            has_serde: true,
+            fields: vec![FieldDef {
+                name: "name".to_string(),
+                ty: TypeRef::String,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+
+    let files = GoBackend.generate_bindings(&api, &config).unwrap();
+    let binding = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().ends_with("binding.go"))
+        .expect("binding.go present");
+
+    assert!(
+        !binding.content.contains("DurationMillis"),
+        "no Duration field exists, so the helper must not be emitted. Got:\n{}",
+        binding.content
+    );
+}

@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use heck::ToSnakeCase;
 use minijinja::context;
 
-use crate::backends::go::type_map::{go_optional_type, go_type};
+use crate::backends::go::type_map::{go_optional_struct_field_type, go_struct_field_type, go_type};
 use crate::codegen::naming::{go_type_name, to_go_name, wire_field_name};
 use crate::codegen::shared::binding_fields;
 use crate::core::config::{BridgeBinding, TraitBridgeConfig};
@@ -107,11 +107,11 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
             continue;
         }
 
-        let use_default_pointer = !field.optional && typ.has_default && needs_omitempty_pointer(field);
+        let use_default_pointer = !field.optional && needs_omitempty_pointer(field);
 
         let is_named_enum = !field.optional
             && !use_default_pointer
-            && typ.has_default
+            && field.default.is_some()
             && matches!(&field.ty, TypeRef::Named(n) if enum_names.contains(n.as_str()));
 
         let is_sealed_interface = matches!(&field.ty, TypeRef::Named(n) if data_enum_names.contains(n.as_str()));
@@ -127,11 +127,11 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
         } else if is_sealed_interface {
             go_type(&field.ty)
         } else if field.optional {
-            go_optional_type(&field.ty)
+            go_optional_struct_field_type(&field.ty)
         } else if use_default_pointer {
-            go_optional_type(&field.ty)
+            go_optional_struct_field_type(&field.ty)
         } else {
-            go_type(&field.ty)
+            go_struct_field_type(&field.ty)
         };
 
         // Per-field `#[serde(rename = "...")]` wins over `rename_all`.
@@ -198,10 +198,10 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
                 field.serde_rename.as_deref(),
                 typ.serde_rename_all.as_deref(),
             );
-            let use_default_pointer = !field.optional && typ.has_default && needs_omitempty_pointer(field);
+            let use_default_pointer = !field.optional && needs_omitempty_pointer(field);
             let is_named_enum = !field.optional
                 && !use_default_pointer
-                && typ.has_default
+                && field.default.is_some()
                 && matches!(&field.ty, TypeRef::Named(n) if enum_names.contains(n.as_str()));
             let is_collection = matches!(&field.ty, TypeRef::Vec(_) | TypeRef::Map(_, _));
             let is_bytes = matches!(&field.ty, TypeRef::Bytes);
@@ -213,9 +213,9 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
             let go_field_type: String = if matches!(&field.ty, TypeRef::Bytes) {
                 "[]int".to_string()
             } else if field.optional || use_default_pointer {
-                go_optional_type(&field.ty).to_string()
+                go_optional_struct_field_type(&field.ty).to_string()
             } else {
-                go_type(&field.ty).to_string()
+                go_struct_field_type(&field.ty).to_string()
             };
             out.push_str(&crate::backends::go::template_env::render(
                 "struct_marshal_aux_field.jinja",
@@ -240,7 +240,7 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
             }
             let go_field = to_go_name(&field.name);
             if matches!(&field.ty, TypeRef::Bytes) {
-                let use_default_pointer = !field.optional && typ.has_default && needs_omitempty_pointer(field);
+                let use_default_pointer = !field.optional && needs_omitempty_pointer(field);
                 let is_pointer = field.optional || use_default_pointer;
                 if is_pointer {
                     out.push_str(&crate::backends::go::template_env::render(
@@ -344,16 +344,16 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
                     },
                 ));
             } else {
-                let use_default_pointer = !field.optional && typ.has_default && needs_omitempty_pointer(field);
+                let use_default_pointer = !field.optional && needs_omitempty_pointer(field);
                 let is_named_enum = !field.optional
                     && !use_default_pointer
-                    && typ.has_default
+                    && field.default.is_some()
                     && matches!(&field.ty, TypeRef::Named(n) if enum_names.contains(n.as_str()));
                 let is_collection = matches!(&field.ty, TypeRef::Vec(_) | TypeRef::Map(_, _));
                 let field_type = if field.optional || use_default_pointer {
-                    go_optional_type(&field.ty)
+                    go_optional_struct_field_type(&field.ty)
                 } else {
-                    go_type(&field.ty)
+                    go_struct_field_type(&field.ty)
                 };
                 let json_tag = if field.optional || is_collection || use_default_pointer || is_named_enum {
                     format!("json:\"{json_name},omitempty\"")

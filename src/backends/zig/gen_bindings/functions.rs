@@ -94,8 +94,12 @@ pub(crate) fn emit_function(
     capsule_types: &std::collections::HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
     out: &mut String,
 ) {
-    if let TypeRef::Named(name) = &f.return_type
-        && let Some(cap) = capsule_types.get(name.as_str())
+    // `opaque_type_name_inner` matches both bare `Named(name)` and `Optional(Named(name))` —
+    // capsule returns share one raw C ABI (`*const T`) in both cases, see
+    // `backends::ffi::gen_bindings::capsule::capsule_c_return_type` and `capsule_return_name`.
+    // ~keep
+    if let Some(name) = opaque_type_name_inner(&f.return_type)
+        && let Some(cap) = capsule_types.get(name)
     {
         emit_capsule_function(f, prefix, struct_names, opaque_creator_map, cap, declared_errors, out);
         return;

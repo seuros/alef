@@ -551,14 +551,18 @@ pub(in crate::backends::go::gen_bindings) fn gen_data_enum_type(enum_def: &EnumD
             variants => variant_names.join(", "),
         },
     ));
-    let first_variant = format!("{}{}", go_enum_name, variant_names.first().unwrap_or(&""));
-    let second_variant = format!("{}{}", go_enum_name, variant_names.get(1).unwrap_or(&""));
+    // Every variant, cased with the same `to_go_name` initialism rule the concrete struct
+    // declarations use below (e.g. `ImageUrl` -> `ImageURL`), so the doc comment names the
+    // real emitted identifiers instead of a raw-cased approximation. ~keep
+    let all_variant_names: Vec<String> = variant_names
+        .iter()
+        .map(|name| format!("{go_enum_name}{}", to_go_name(name)))
+        .collect();
     out.push_str(&crate::backends::go::template_env::render(
         "data_enum_interface.jinja",
         minijinja::context! {
             go_enum_name => &go_enum_name,
-            first_variant => &first_variant,
-            second_variant => &second_variant,
+            variant_names => all_variant_names.join(", "),
         },
     ));
 

@@ -72,6 +72,12 @@ pub(crate) fn gen_record_type(
 
         let needs_bytes_int_serialize = matches!(&resolved_ty, TypeRef::Bytes);
 
+        // `std::time::Duration`'s serde derive produces `{"secs":<u64>,"nanos":<u32>}`, not the
+        // bare millisecond integer this field's Java type (`Long`) would otherwise serialize to
+        // — the FFI layer deserializes struct JSON straight into the real core type, so a plain
+        // integer fails with `invalid type: integer ..., expected struct Duration`. ~keep
+        let needs_duration_serde = matches!(&resolved_ty, TypeRef::Duration);
+
         // 1. The field has an explicit `#[serde(rename = "...")]` attribute.
         let json_property_name = f.serde_rename.clone().unwrap_or_else(|| f.name.clone());
         let needs_builder = should_emit_builder(typ, builder_mode);
@@ -110,6 +116,11 @@ pub(crate) fn gen_record_type(
 
         if needs_bytes_int_serialize {
             decl.push_str("@JsonSerialize(using = ByteArraySerializer.class) ");
+        }
+
+        if needs_duration_serde {
+            decl.push_str("@JsonSerialize(using = DurationMillisSerializer.class) ");
+            decl.push_str("@JsonDeserialize(using = DurationMillisDeserializer.class) ");
         }
 
         let nullable_at_leading_pos = has_nullable && !ftype.contains('.');

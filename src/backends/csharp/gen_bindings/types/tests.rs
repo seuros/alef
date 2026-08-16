@@ -139,3 +139,154 @@ fn record_type_skips_method_whose_name_collides_with_a_property() {
         "the same-named method must be skipped, found {methods}:\n{code}"
     );
 }
+
+/// Regression (Defect 1 / Defect 3): a required `Duration` field — no `#[serde(default)]` —
+/// must be `required ulong`, not a nullable `ulong?` defaulted to `null`. Previously
+/// `Duration` was unconditionally nullable regardless of whether the field was actually
+/// wire-optional, so `new Foo { }` compiled clean and then serialized `null` against a
+/// non-`Option` Rust field.
+#[test]
+fn record_type_required_duration_field_is_required_ulong() {
+    let typ = record_type(vec![field("window", TypeRef::Duration)]);
+
+    let code = gen_record_type(
+        &typ,
+        &[],
+        "Demo",
+        "demo",
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        "snake_case",
+        &HashSet::new(),
+        &[],
+        "DemoException",
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+
+    assert!(
+        code.contains("[JsonConverter(typeof(DurationMillisJsonConverter))]"),
+        "expected the non-nullable Duration converter:\n{code}"
+    );
+    assert!(
+        code.contains("public required ulong Window { get; init; }"),
+        "expected a required, non-nullable ulong property:\n{code}"
+    );
+    assert!(
+        !code.contains("ulong?"),
+        "a required Duration field must not be nullable:\n{code}"
+    );
+}
+
+/// A `Duration` field that genuinely has `#[serde(default...)]` (modeled here via
+/// `field.default`) stays nullable with a `null` default — the Rust side tolerates the key
+/// being absent — but must carry the nullable-safe converter, not the non-nullable one.
+#[test]
+fn record_type_duration_field_with_real_default_is_nullable() {
+    let mut window = field("window", TypeRef::Duration);
+    window.default = Some("/* serde(default) */".to_string());
+    let typ = record_type(vec![window]);
+
+    let code = gen_record_type(
+        &typ,
+        &[],
+        "Demo",
+        "demo",
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        "snake_case",
+        &HashSet::new(),
+        &[],
+        "DemoException",
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+
+    assert!(
+        code.contains("[JsonConverter(typeof(NullableDurationMillisJsonConverter))]"),
+        "expected the nullable Duration converter:\n{code}"
+    );
+    assert!(
+        code.contains("public ulong? Window { get; init; } = null;"),
+        "expected a nullable ulong property defaulted to null:\n{code}"
+    );
+}
+
+/// A genuinely `Option<Duration>` field (not merely defaulted) also uses the nullable
+/// converter and a `ulong?` type, exercising the `field.optional` branch specifically.
+#[test]
+fn record_type_optional_duration_field_is_nullable() {
+    let mut window = field("window", TypeRef::Duration);
+    window.optional = true;
+    let typ = record_type(vec![window]);
+
+    let code = gen_record_type(
+        &typ,
+        &[],
+        "Demo",
+        "demo",
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        "snake_case",
+        &HashSet::new(),
+        &[],
+        "DemoException",
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+
+    assert!(
+        code.contains("[JsonConverter(typeof(NullableDurationMillisJsonConverter))]"),
+        "expected the nullable Duration converter:\n{code}"
+    );
+    assert!(
+        code.contains("public ulong? Window { get; init; } = null;"),
+        "expected a nullable ulong property defaulted to null:\n{code}"
+    );
+}
+
+/// Regression (Defect 2): a required field whose type is a Rust `enum` (e.g. sealed content
+/// union) on a struct that derives `Default` must stay `required`, not nullable — even
+/// though `typ.has_default` is true, the *field* itself carries no `#[serde(default)]`.
+/// Previously any field on a `Default`-deriving struct landed in the defaulted branch,
+/// which resolved enum-typed fields to a `null` default and forced `T?`, so
+/// `new UserMessage { Name = "alice" }` compiled clean and then serialized `"content":null`
+/// against a required Rust field.
+#[test]
+fn record_type_required_enum_field_in_default_struct_stays_required() {
+    let mut typ = record_type(vec![field("content", TypeRef::Named("UserContent".to_string()))]);
+    typ.has_default = true;
+    let enum_names = HashSet::from(["UserContent".to_string()]);
+
+    let code = gen_record_type(
+        &typ,
+        &[],
+        "Demo",
+        "demo",
+        &enum_names,
+        &HashSet::new(),
+        &HashSet::new(),
+        "snake_case",
+        &HashSet::new(),
+        &[],
+        "DemoException",
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+
+    assert!(
+        code.contains("public required UserContent Content { get; init; }"),
+        "expected a required, non-nullable UserContent property:\n{code}"
+    );
+    assert!(
+        !code.contains("UserContent?"),
+        "a required field must not be nullable just because the struct derives Default:\n{code}"
+    );
+}

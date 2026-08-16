@@ -139,14 +139,17 @@ pub(super) fn serde_field_type(ty: &TypeRef, optional: bool) -> String {
 /// `Shape.circle(radius)` / `Shape.rect(width, height)` instead of building a raw Hash. Each
 /// constructor builds the serde-shaped variant directly (`Self::Circle { radius }`).
 ///
-/// Variant selection (skipping unit/tuple/`binding_excluded` variants and yielding to a hand-written
-/// `impl` method of the same name) is shared with pyo3 via `collect_variant_constructors`. The Rust
-/// function name is `_factory_<snake>` to avoid colliding with the variant accessor of the same
-/// snake_case name; Ruby registers it under the bare snake name via `define_singleton_method`.
+/// Variant selection (skipping unit/tuple/`binding_excluded` variants) is shared with pyo3 and
+/// rustler via `collect_all_variant_constructors`. Unlike `collect_variant_constructors`, this does
+/// not yield to a same-named `impl` method: no backend forwards that hand-written method into the
+/// generated binding, so yielding to it used to drop the constructor entirely with nothing to
+/// replace it. The Rust function name is `_factory_<snake>` to avoid colliding with the variant
+/// accessor of the same snake_case name; Ruby registers it under the bare snake name via
+/// `define_singleton_method`.
 ///
 /// Returns an empty string when no variant qualifies (no empty `impl` block).
 pub fn gen_data_enum_variant_constructors(enum_def: &EnumDef) -> String {
-    let constructors = crate::codegen::generators::collect_variant_constructors(enum_def);
+    let constructors = crate::codegen::generators::collect_all_variant_constructors(enum_def);
     if constructors.is_empty() {
         return String::new();
     }
@@ -187,7 +190,7 @@ pub fn gen_data_enum_variant_constructors(enum_def: &EnumDef) -> String {
 /// Ruby method names of the per-variant constructors generated for `enum_def`, paired with their
 /// Rust function names and arity. Used by module-init to register `define_singleton_method`s.
 pub fn data_enum_variant_constructor_registrations(enum_def: &EnumDef) -> Vec<(String, String, i32)> {
-    crate::codegen::generators::collect_variant_constructors(enum_def)
+    crate::codegen::generators::collect_all_variant_constructors(enum_def)
         .into_iter()
         .map(|ctor| {
             let arity = ctor.params.len() as i32;

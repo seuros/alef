@@ -1,7 +1,7 @@
 use super::enums::{gen_data_enum_type, gen_newtype_tuple_enum_type, gen_unit_enum_type};
 use super::*;
 use crate::codegen::naming::apply_serde_rename_all;
-use crate::core::ir::{EnumDef, EnumVariant, FieldDef, PrimitiveType, TypeDef, TypeRef};
+use crate::core::ir::{DefaultValue, EnumDef, EnumVariant, FieldDef, PrimitiveType, TypeDef, TypeRef};
 
 fn simple_field(name: &str, ty: TypeRef) -> FieldDef {
     FieldDef {
@@ -24,6 +24,36 @@ fn simple_field(name: &str, ty: TypeRef) -> FieldDef {
         binding_excluded: false,
         binding_exclusion_reason: None,
         original_type: None,
+    }
+}
+
+/// Build a minimal `TypeDef` for struct-emission tests, varying only `fields` and
+/// `has_default` — the axis these regression tests exercise.
+fn test_struct_type(name: &str, fields: Vec<FieldDef>, has_default: bool) -> TypeDef {
+    TypeDef {
+        name: name.to_string(),
+        rust_path: String::new(),
+        original_rust_path: String::new(),
+        doc: String::new(),
+        cfg: None,
+        fields,
+        is_opaque: false,
+        is_clone: false,
+        is_copy: false,
+        is_trait: false,
+        has_default,
+        has_stripped_cfg_fields: false,
+        is_return_type: false,
+        serde_rename_all: None,
+        has_serde: true,
+        super_traits: vec![],
+        methods: vec![],
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        is_variant_wrapper: false,
+        has_lifetime_params: false,
+        has_private_fields: false,
+        version: Default::default(),
     }
 }
 
@@ -718,5 +748,145 @@ fn gen_newtype_tuple_enum_type_no_serde_keeps_rust_variant_name() {
     assert!(
         out.contains(r#"= "Json""#),
         "no serde attributes must preserve PascalCase; got:\n{out}"
+    );
+}
+
+/// Regression (Defect 1 / Defect 3): a required `Duration` field — no `#[serde(default)]`,
+/// regardless of whether the *struct* derives `Default` — must be emitted as the plain,
+/// non-pointer `DurationMillis` wire type with a required `json` tag. Previously any
+/// `Duration` field was unconditionally pointer+omitempty and typed as bare `uint64`,
+/// which cannot deserialize against Rust's `{"secs":...,"nanos":...}` `Duration` shape.
+#[test]
+fn gen_struct_type_required_duration_field_is_non_pointer_wire_safe_type() {
+    let typ = test_struct_type(
+        "RateLimitConfig",
+        vec![simple_field("window", TypeRef::Duration)],
+        true, // struct derives Default, but the field itself has no serde default
+    );
+    let out = gen_struct_type(
+        &typ,
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &[],
+    );
+    assert!(
+        out.contains("Window DurationMillis `json:\"window\"`"),
+        "expected a required, non-pointer DurationMillis field; got:\n{out}"
+    );
+    assert!(
+        !out.contains("*DurationMillis") && !out.contains(",omitempty"),
+        "a required Duration field must not be a pointer or omitempty; got:\n{out}"
+    );
+}
+
+/// Regression: a `Duration` field that genuinely has `#[serde(default...)]` (modeled here
+/// via `field.default`) still gets pointer+omitempty, since the Rust side tolerates the
+/// key being absent and the Go zero value would not match the real default.
+#[test]
+fn gen_struct_type_optional_duration_field_with_real_default_is_pointer() {
+    let mut window_field = simple_field("window", TypeRef::Duration);
+    window_field.default = Some("/* serde(default) */".to_string());
+    let typ = test_struct_type("RateLimitConfig", vec![window_field], true);
+    let out = gen_struct_type(
+        &typ,
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &[],
+    );
+    assert!(
+        out.contains("Window *DurationMillis `json:\"window,omitempty\"`"),
+        "expected a pointer, omitempty DurationMillis field; got:\n{out}"
+    );
+}
+
+/// Regression (Defect 3): a required `Named` enum-typed field on a struct that derives
+/// `Default` (e.g. `BudgetConfig.enforcement`) must stay a plain, required value — not
+/// pointer, not `omitempty` — when the field itself carries no `#[serde(default)]`.
+/// Previously `is_named_enum`/`use_default_pointer` were gated on the *struct's*
+/// `has_default`, so any enum field of a `Default`-deriving struct was wrongly treated as
+/// wire-optional even when serde would reject the key being missing.
+#[test]
+fn gen_struct_type_required_named_enum_field_in_default_struct_stays_required() {
+    let mut enum_names = std::collections::HashSet::new();
+    enum_names.insert("Enforcement");
+
+    let mut field = simple_field("enforcement", TypeRef::Named("Enforcement".to_string()));
+    // Mirrors a resolved `impl Default` body value — present even though there is no
+    // `#[serde(default)]` on the field (`field.default` stays `None`). ~keep
+    field.typed_default = Some(DefaultValue::EnumVariant("Soft".to_string()));
+
+    let typ = test_struct_type("BudgetConfig", vec![field], true);
+    let out = gen_struct_type(
+        &typ,
+        &enum_names,
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &[],
+    );
+    assert!(
+        out.contains("Enforcement Enforcement `json:\"enforcement\"`"),
+        "expected a required, non-pointer, non-omitempty Enforcement field; got:\n{out}"
+    );
+}
+
+/// Regression (Defect 4): the sealed-interface doc comment lists every variant, cased with
+/// the same `to_go_name` initialism rule as the emitted struct identifiers — not just the
+/// first two, and not the raw Rust variant spelling.
+#[test]
+fn gen_data_enum_sealed_interface_doc_lists_all_variants_with_go_casing() {
+    let make_variant = |name: &str| EnumVariant {
+        name: name.to_string(),
+        doc: String::new(),
+        fields: vec![simple_field("value", TypeRef::String)],
+        is_default: false,
+        serde_rename: None,
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        is_tuple: false,
+        originally_had_data_fields: false,
+        cfg: None,
+        version: Default::default(),
+    };
+    let enum_def = EnumDef {
+        name: "ContentPart".to_string(),
+        rust_path: String::new(),
+        original_rust_path: String::new(),
+        methods: vec![],
+        doc: String::new(),
+        cfg: None,
+        is_copy: false,
+        has_serde: true,
+        has_default: false,
+        serde_content: None,
+        serde_tag: Some("type".to_string()),
+        serde_untagged: false,
+        serde_rename_all: None,
+        variants: vec![
+            make_variant("Text"),
+            make_variant("ImageUrl"),
+            make_variant("Document"),
+            make_variant("InputAudio"),
+        ],
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        excluded_variants: vec![],
+        version: Default::default(),
+    };
+    let out = gen_data_enum_type(&enum_def);
+    assert!(
+        out.contains(
+            "// Sealed interface -- use one of ContentPartText, ContentPartImageURL, \
+             ContentPartDocument, ContentPartInputAudio."
+        ),
+        "expected all four variants, Go-cased (ImageURL, not ImageUrl); got:\n{out}"
+    );
+    assert!(
+        !out.contains("ContentPartImageUrl"),
+        "doc text must use the same casing as the emitted struct name (ImageURL); got:\n{out}"
     );
 }

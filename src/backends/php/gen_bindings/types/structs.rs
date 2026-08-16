@@ -573,16 +573,36 @@ fn gen_struct_methods_impl(
                 .any(|f| !f.optional && php_field_can_be_constructor_param(&f.ty, enum_names, opaque_types));
 
             if has_representable_required {
-                let param_defs: Vec<crate::core::ir::ParamDef> = typ
+                // A `Duration` field on a type with a `Default` impl is widened to an optional,
+                // nullable param below (`optional = f.optional || (has_serde && typ.has_default &&
+                // ...)`) even when the field itself is required, so callers can omit it and get the
+                // default. The stable sort must key on this SAME effective optionality — not the
+                // raw `f.optional` — or a widened field could still land ahead of a genuinely
+                // required one. Mirrors the PHPStan stub's identical widening in `type_stubs.rs`.
+                let effective_optional =
+                    |f: &FieldDef| f.optional || (has_serde && typ.has_default && matches!(f.ty, TypeRef::Duration));
+
+                // Stable sort required-before-optional to match PHP's parameter-order rule — and,
+                // critically, the PHPStan stub's own `ctor_fields.sort_by_key(...)` (`type_stubs.rs`).
+                // Without this, `new`'s parameter order follows raw field declaration order, which
+                // can interleave optional fields ahead of a later required one (e.g. `BatchObject`'s
+                // `output_file_id`/`error_file_id` precede `created_at`); a caller following the
+                // stub's required-first signature then passes positional args into the wrong runtime
+                // slots. ~keep
+                let mut ctor_fields: Vec<&FieldDef> = typ
                     .fields
                     .iter()
                     .filter(|f| !f.binding_excluded)
                     .filter(|f| f.cfg.is_none())
                     .filter(|f| php_field_can_be_constructor_param(&f.ty, enum_names, opaque_types))
+                    .collect();
+                ctor_fields.sort_by_key(|f| effective_optional(f));
+
+                let param_defs: Vec<crate::core::ir::ParamDef> = ctor_fields
+                    .into_iter()
                     .map(|f| {
                         let php_param_name = crate::codegen::naming::to_php_name(&f.name);
-                        let optional =
-                            f.optional || (has_serde && typ.has_default && matches!(f.ty, TypeRef::Duration));
+                        let optional = effective_optional(f);
                         crate::core::ir::ParamDef {
                             name: php_param_name,
                             ty: f.ty.clone(),
@@ -688,11 +708,22 @@ fn gen_struct_methods_impl(
                 impl_builder.add_method(&config_method);
             } else {
                 // decorated with #[php(constructor)] that accepts named parameters.
-                let param_defs: Vec<crate::core::ir::ParamDef> = typ
+                //
+                // Stable sort required-before-optional (see the identical sort — and its
+                // rationale — in the `from_json`-constructor branch above) so this path's
+                // `new(...)` also matches the PHPStan stub's field order, which the stub always
+                // computes regardless of which of these two branches produced the runtime
+                // constructor.
+                let mut ctor_fields: Vec<&FieldDef> = typ
                     .fields
                     .iter()
                     .filter(|f| !f.binding_excluded)
                     .filter(|f| f.cfg.is_none())
+                    .collect();
+                ctor_fields.sort_by_key(|f| f.optional);
+
+                let param_defs: Vec<crate::core::ir::ParamDef> = ctor_fields
+                    .into_iter()
                     .map(|f| crate::core::ir::ParamDef {
                         name: f.name.clone(),
                         ty: f.ty.clone(),

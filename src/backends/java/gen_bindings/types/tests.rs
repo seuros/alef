@@ -426,3 +426,101 @@ fn boxed_long_literal_defaults_compile_without_coercing_zero() {
         );
     }
 }
+
+/// `std::time::Duration`'s serde derive produces `{"secs":<u64>,"nanos":<u32>}`, not a bare
+/// integer. A record component typed `Long requestTimeout` with no converter serializes to a
+/// plain number and the FFI layer's `serde_json::from_str::<RealCoreType>` rejects it with
+/// `invalid type: integer ..., expected struct Duration`. The record component must carry both
+/// converter annotations so the field round-trips against the real wire shape in both directions.
+#[test]
+fn duration_field_gets_wire_safe_converter_annotations() {
+    let typ = make_config_type_with_duration_default();
+    let out = gen_record_type(
+        "dev.sample_crate",
+        &typ,
+        &AHashSet::default(),
+        &AHashSet::default(),
+        "SNAKE_CASE",
+        &[],
+        "SampleCrawler",
+        JavaBuilderMode::Auto,
+        &ahash::AHashMap::default(),
+        &AHashSet::default(),
+        &HashSet::default(),
+    );
+
+    assert!(
+        out.contains("@JsonSerialize(using = DurationMillisSerializer.class)"),
+        "Duration field must serialize through the millis<->Duration converter:\n{out}"
+    );
+    assert!(
+        out.contains("@JsonDeserialize(using = DurationMillisDeserializer.class)"),
+        "Duration field must deserialize through the millis<->Duration converter:\n{out}"
+    );
+    assert!(
+        out.contains("import com.fasterxml.jackson.databind.annotation.JsonSerialize;"),
+        "JsonSerialize import must be present when the Duration serializer annotation is emitted:\n{out}"
+    );
+    assert!(
+        out.contains("import com.fasterxml.jackson.databind.annotation.JsonDeserialize;"),
+        "JsonDeserialize import must be present when the Duration deserializer annotation is emitted:\n{out}"
+    );
+}
+
+/// A type below the Auto builder threshold gets no `@JsonPOJOBuilder`, so deserialization
+/// flows through the record's canonical constructor and the compact-constructor's own
+/// annotations — no separate builder setter exists to carry a Duration converter.
+#[test]
+fn duration_field_without_builder_has_no_builder_setter_annotation() {
+    let typ = make_config_type_with_duration_default();
+    let out = gen_record_type(
+        "dev.sample_crate",
+        &typ,
+        &AHashSet::default(),
+        &AHashSet::default(),
+        "SNAKE_CASE",
+        &[],
+        "SampleCrawler",
+        JavaBuilderMode::Never,
+        &ahash::AHashMap::default(),
+        &AHashSet::default(),
+        &HashSet::default(),
+    );
+
+    assert!(!out.contains("class Builder"), "builder must not be emitted:\n{out}");
+    assert!(
+        out.contains("@JsonSerialize(using = DurationMillisSerializer.class)"),
+        "the record component itself must still carry the converter:\n{out}"
+    );
+}
+
+/// When a `@JsonPOJOBuilder` is emitted, Jackson deserializes exclusively through the
+/// builder's setters (`@JsonDeserialize(builder = ...)` at the type level bypasses the
+/// record's own canonical-constructor annotations entirely) — so the Duration setter needs
+/// its own `@JsonDeserialize` or the field silently reverts to the bare-integer wire shape.
+#[test]
+fn duration_field_with_builder_annotates_the_setter_too() {
+    let typ = make_config_type_with_duration_default();
+    let out = gen_record_type(
+        "dev.sample_crate",
+        &typ,
+        &AHashSet::default(),
+        &AHashSet::default(),
+        "SNAKE_CASE",
+        &[],
+        "SampleCrawler",
+        JavaBuilderMode::Always,
+        &ahash::AHashMap::default(),
+        &AHashSet::default(),
+        &HashSet::default(),
+    );
+
+    assert!(out.contains("class Builder"), "builder must be emitted:\n{out}");
+    assert!(
+        out.contains(
+            "@JsonDeserialize(using = DurationMillisDeserializer.class)\n        public Builder withRequestTimeout("
+        ),
+        "the builder setter must carry the Duration deserializer annotation directly \
+         above its declaration:\n{out}"
+    );
+}

@@ -1,4 +1,5 @@
 use crate::backends::php::gen_bindings::enum_helpers::{php_enum_case_value, sanitize_php_enum_case};
+use crate::backends::php::gen_bindings::functions::has_unsupported_static_params;
 use crate::backends::php::gen_bindings::php_types::{
     php_phpdoc_type, php_phpdoc_type_fq, php_property_phpdoc, php_type, php_type_fq,
 };
@@ -9,7 +10,7 @@ use crate::backends::php::gen_bindings::types::{
 use crate::backends::php::naming::php_autoload_namespace;
 use crate::codegen::doc_emission::{DocTarget, sanitize_rust_idioms};
 use crate::codegen::naming::to_php_name;
-use crate::codegen::shared::binding_fields;
+use crate::codegen::shared::{binding_fields, can_auto_delegate};
 use crate::core::backend::GeneratedFile;
 use crate::core::config::{ResolvedCrateConfig, resolve_output_dir};
 use crate::core::hash::{self, CommentStyle};
@@ -164,37 +165,7 @@ pub(super) fn generate_type_stubs(
             }
         }
 
-        let mut ctor_fields: Vec<&FieldDef> = binding_fields(&typ.fields)
-            .filter(|f| is_constructor_param(f))
-            .collect();
-        ctor_fields.sort_by_key(|f| f.optional);
-
-        let params: Vec<String> = ctor_fields
-            .iter()
-            .map(|f| {
-                let ptype = php_type(&f.ty);
-                let nullable = if f.optional && !ptype.starts_with('?') {
-                    format!("?{ptype}")
-                } else {
-                    ptype
-                };
-                let default = if f.optional { " = null" } else { "" };
-                let php_name = to_php_name(&f.name);
-                if !is_php_prop_scalar(&f.ty, &enum_names) {
-                    // Constructor-representable but not a real PHP property (no `#[php(prop)]`
-                    // on the extension's struct field) — a plain, non-promoted parameter.
-                    return format!("        {nullable} ${php_name}{default}");
-                }
-                let phpdoc_type = php_phpdoc_type(&f.ty);
-                let var_type = if f.optional && !phpdoc_type.starts_with('?') {
-                    format!("?{phpdoc_type}")
-                } else {
-                    phpdoc_type
-                };
-                let phpdoc = php_property_phpdoc(&var_type, &f.doc, "        ");
-                format!("{phpdoc}        public readonly {nullable} ${php_name}{default}",)
-            })
-            .collect();
+        let params = gen_struct_constructor_stub_params(typ, &enum_names, &opaque_types);
         content.push_str(&crate::backends::php::template_env::render(
             "php_constructor_method.jinja",
             context! { params => &params.join(",\n") },
@@ -244,7 +215,7 @@ pub(super) fn generate_type_stubs(
                 "?string".to_string()
             } else {
                 let ptype = php_type(&field.ty);
-                if field.optional && !ptype.starts_with('?') {
+                if php_field_effective_optional(typ, field) && !ptype.starts_with('?') {
                     format!("?{ptype}")
                 } else {
                     ptype
@@ -279,10 +250,22 @@ pub(super) fn generate_type_stubs(
             ));
         }
 
+        // A static method's binding, `gen_static_method` (`functions/methods.rs`), silently
+        // drops the method (`String::new()`, never registered in the `#[php_impl]` block) when
+        // it can't auto-delegate or one of its params has a shape the delegation can't cross
+        // (see `has_unsupported_static_params`). Calling that exact predicate here — rather than
+        // restating it — is what keeps the stub from promising a static method the runtime
+        // extension never defines. Instance methods have no such drop (`gen_instance_method`
+        // always emits a body, adapter-backed or delegated), so only statics are filtered. ~keep
         let non_excluded_methods: Vec<&crate::core::ir::MethodDef> = typ
             .methods
             .iter()
             .filter(|m| !m.binding_excluded && !m.sanitized)
+            .filter(|m| {
+                m.receiver.is_some()
+                    || (can_auto_delegate(m, &opaque_types)
+                        && !has_unsupported_static_params(&m.params, &opaque_types, &enum_names))
+            })
             .collect();
         for method in non_excluded_methods {
             let method_name = method.name.to_lower_camel_case();
@@ -530,6 +513,66 @@ pub(super) fn generate_type_stubs(
     }])
 }
 
+/// Mirrors the runtime constructor's own widening (`gen_bindings/types/structs.rs`'s
+/// `let optional = f.optional || (has_serde && typ.has_default && matches!(f.ty,
+/// TypeRef::Duration));`): a `Duration` field on a type with a `Default` impl becomes an optional,
+/// nullable param at the FFI boundary even when the field itself is required in the IR, so callers
+/// can omit it and get the default. Used for both the constructor stub's param list (order AND
+/// nullability) and each field's getter return type — the two must agree with each other and with
+/// the runtime, or the stub disagrees with what the extension actually does. ~keep
+fn php_field_effective_optional(typ: &crate::core::ir::TypeDef, f: &FieldDef) -> bool {
+    f.optional || (typ.has_serde && typ.has_default && matches!(f.ty, TypeRef::Duration))
+}
+
+/// Build the parameter list (one entry per line) for a struct's PHPStan `#[php(constructor)]`
+/// stub, in the exact order and shape the real extension's `new(...)` declares.
+///
+/// Field selection mirrors `gen_bindings/types/structs.rs`'s own constructor filter
+/// (`php_field_can_be_constructor_param`), and the ordering mirrors its stable
+/// required-before-optional sort — both MUST derive from the same predicate or the stub and the
+/// runtime constructor drift out of positional agreement.
+fn gen_struct_constructor_stub_params(
+    typ: &crate::core::ir::TypeDef,
+    enum_names: &AHashSet<String>,
+    opaque_types: &AHashSet<String>,
+) -> Vec<String> {
+    let is_constructor_param =
+        |f: &FieldDef| f.cfg.is_none() && php_field_can_be_constructor_param(&f.ty, enum_names, opaque_types);
+
+    let mut ctor_fields: Vec<&FieldDef> = binding_fields(&typ.fields)
+        .filter(|f| is_constructor_param(f))
+        .collect();
+    ctor_fields.sort_by_key(|f| php_field_effective_optional(typ, f));
+
+    ctor_fields
+        .iter()
+        .map(|f| {
+            let optional = php_field_effective_optional(typ, f);
+            let ptype = php_type(&f.ty);
+            let nullable = if optional && !ptype.starts_with('?') {
+                format!("?{ptype}")
+            } else {
+                ptype
+            };
+            let default = if optional { " = null" } else { "" };
+            let php_name = to_php_name(&f.name);
+            if !is_php_prop_scalar(&f.ty, enum_names) {
+                // Constructor-representable but not a real PHP property (no `#[php(prop)]`
+                // on the extension's struct field) — a plain, non-promoted parameter.
+                return format!("        {nullable} ${php_name}{default}");
+            }
+            let phpdoc_type = php_phpdoc_type(&f.ty);
+            let var_type = if optional && !phpdoc_type.starts_with('?') {
+                format!("?{phpdoc_type}")
+            } else {
+                phpdoc_type
+            };
+            let phpdoc = php_property_phpdoc(&var_type, &f.doc, "        ");
+            format!("{phpdoc}        public readonly {nullable} ${php_name}{default}",)
+        })
+        .collect()
+}
+
 /// True when the PHPStan stub for `typ` must declare the `from_json(string $json): self` static
 /// constructor, mirroring the exact gate the real extension uses to decide whether to emit
 /// `#[php(name = "from_json")]` (see `gen_bindings/types/structs.rs`'s `use_from_json`).
@@ -555,13 +598,15 @@ pub(super) fn struct_needs_from_json_stub(typ: &crate::core::ir::TypeDef, enum_n
 /// The runtime binding exposes these under the camelCase host name (`to_php_name(<snake>)`), so the
 /// stub declares the same public name. Each param maps through the stub's [`php_type`] mapper — the
 /// same one DTO field/method stubs use — and the return type is the enum class. Optional fields gain
-/// a `?` prefix and a `= null` default, mirroring DTO method stubs. `collect_variant_constructors`
-/// owns the skip rules (unit / tuple / `binding_excluded` / sanitized-field variants and hand-written
-/// method collisions) so the stub and runtime binding stay aligned.
+/// a `?` prefix and a `= null` default, mirroring DTO method stubs. `collect_all_variant_constructors`
+/// owns the skip rules (unit / tuple / `binding_excluded` / sanitized-field variants) so the stub and
+/// runtime binding (`gen_flat_data_enum_variant_constructors` in `gen_bindings/types/enums.rs`) stay
+/// aligned — neither one suppresses a variant on a hand-written-method name collision, since
+/// `enum_def.methods` is never forwarded into the generated `#[php_impl]` block.
 fn gen_data_enum_variant_constructor_stubs(enum_def: &crate::core::ir::EnumDef) -> Vec<String> {
-    use crate::codegen::generators::collect_variant_constructors;
+    use crate::codegen::generators::collect_all_variant_constructors;
 
-    collect_variant_constructors(enum_def)
+    collect_all_variant_constructors(enum_def)
         .iter()
         .map(|ctor| {
             let first_optional_idx = ctor.params.iter().position(|p| p.optional);

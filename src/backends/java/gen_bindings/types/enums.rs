@@ -6,7 +6,7 @@ use heck::ToLowerCamelCase;
 use super::serializers::{gen_sealed_union_deserializer, gen_sealed_union_serializer};
 use crate::backends::java::gen_bindings::helpers::{
     RECORD_LINE_WRAP_THRESHOLD, emit_javadoc, escape_javadoc_line, is_tuple_field_name, java_apply_rename_all,
-    safe_java_field_name,
+    qualify_shadowed_type, safe_java_field_name,
 };
 
 pub(crate) fn gen_enum_class(package: &str, enum_def: &EnumDef, main_class: &str, text_types: &[String]) -> String {
@@ -262,7 +262,10 @@ pub(crate) fn gen_java_tagged_union(package: &str, enum_def: &EnumDef) -> String
                         if variant_names.contains("Map") {
                             inner_qualified = inner_qualified.replace("Map<", "java.util.Map<");
                         }
-                        format!("{optional_type}<{inner_qualified}>")
+                        format!(
+                            "{optional_type}<{}>",
+                            qualify_shadowed_type(&inner_qualified, package, &variant_names)
+                        )
                     } else {
                         let t = java_type(&f.ty);
                         let mut t_str = t.into_owned();
@@ -272,7 +275,7 @@ pub(crate) fn gen_java_tagged_union(package: &str, enum_def: &EnumDef) -> String
                         if variant_names.contains("Map") {
                             t_str = t_str.replace("Map<", "java.util.Map<");
                         }
-                        t_str
+                        qualify_shadowed_type(&t_str, package, &variant_names)
                     };
                     if is_tuple_field_name(&f.name) {
                         format!("{ftype} value")
@@ -331,7 +334,8 @@ pub(crate) fn gen_java_tagged_union(package: &str, enum_def: &EnumDef) -> String
                 continue;
             }
             let method_name = variant.name.to_lower_camel_case();
-            let return_type = java_boxed_type(&variant.fields[0].ty);
+            let boxed_return_type = java_boxed_type(&variant.fields[0].ty);
+            let return_type = qualify_shadowed_type(&boxed_return_type, package, &variant_names);
             let variant_name = &variant.name;
             out.push_str("    /** Returns the ");
             out.push_str(variant_name);
@@ -339,7 +343,7 @@ pub(crate) fn gen_java_tagged_union(package: &str, enum_def: &EnumDef) -> String
             out.push_str(variant_name);
             out.push_str(" variant, otherwise null. */\n");
             out.push_str("    default @Nullable ");
-            out.push_str(return_type.as_ref());
+            out.push_str(&return_type);
             out.push(' ');
             out.push_str(&method_name);
             out.push_str("() {\n");

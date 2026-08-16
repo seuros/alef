@@ -175,24 +175,28 @@ fn extendr_factory_param_is_constructible(ty: &TypeRef) -> bool {
 /// call-arg machinery (with the extendr numeric remapping cast) so DTO fields convert via
 /// `<field>_core` let bindings and primitives are cast back to the core type.
 ///
-/// Variant selection (skipping unit/tuple/`binding_excluded` variants and yielding to a hand-written
-/// `impl` method of the same name) is shared with pyo3/magnus via `collect_variant_constructors`. The
-/// Rust fn is `_factory_<snake>`; the R wrapper (emitted in `r_wrappers`) exposes it under the bare
-/// snake name so callers write `<Name>$<snake>(...)`. Returns one rendered method per qualifying
-/// variant (empty when none qualifies). Variants whose fields cannot cross the extendr input
-/// boundary (see `extendr_factory_param_is_constructible`) are skipped.
+/// Variant selection (skipping unit/tuple/`binding_excluded` variants; *not* skipping a name
+/// collision with a hand-written `impl` method) is shared with pyo3/magnus/rustler via
+/// `collect_all_variant_constructors` — no backend forwards `enum_def.methods` into its generated
+/// output, so a hand-written static method never actually replaces the derived factory; suppressing
+/// it on a name collision dropped the variant constructor with nothing to replace it
+/// (`ContentPart.text(...)`/`.image_url(...)` were unreachable). The Rust fn is `_factory_<snake>`;
+/// the R wrapper (emitted in `r_wrappers`) exposes it under the bare snake name so callers write
+/// `<Name>$<snake>(...)`. Returns one rendered method per qualifying variant (empty when none
+/// qualifies). Variants whose fields cannot cross the extendr input boundary (see
+/// `extendr_factory_param_is_constructible`) are skipped.
 pub(super) fn gen_extendr_enum_variant_constructors(
     enum_def: &EnumDef,
     mapper: &dyn TypeMapper,
     core_path: &str,
 ) -> Vec<String> {
-    use crate::codegen::generators::{collect_variant_constructors, variant_field_init};
+    use crate::codegen::generators::{collect_all_variant_constructors, variant_field_init};
     use crate::codegen::shared::{function_params, is_promoted_optional};
 
     let name = &enum_def.name;
     let map_fn = |ty: &TypeRef| mapper.map_type(ty);
 
-    collect_variant_constructors(enum_def)
+    collect_all_variant_constructors(enum_def)
         .iter()
         .filter(|ctor| {
             ctor.params
@@ -239,7 +243,7 @@ pub(super) fn gen_extendr_enum_variant_constructors(
 /// `(r_name, rust_fn_name, param_names)`. Used by `r_wrappers` to bind
 /// `<Name>$<snake> <- function(<params>) .Call("wrap__<Name>___factory_<snake>", <params>, ...)`.
 pub(super) fn extendr_enum_variant_constructor_registrations(enum_def: &EnumDef) -> Vec<(String, String, Vec<String>)> {
-    crate::codegen::generators::collect_variant_constructors(enum_def)
+    crate::codegen::generators::collect_all_variant_constructors(enum_def)
         .into_iter()
         .filter(|ctor| {
             ctor.params

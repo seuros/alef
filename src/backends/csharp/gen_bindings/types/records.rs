@@ -155,11 +155,14 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_record_type(
             } else {
                 format!("{mapped}?")
             };
+            if matches!(&field.ty, TypeRef::Duration) {
+                out.push_str("    [JsonConverter(typeof(NullableDurationMillisJsonConverter))]\n");
+            }
             out.push_str(&render(
                 "property_with_default.jinja",
                 minijinja::context! { field_type, cs_name, default_val => "null" },
             ));
-        } else if typ.has_default || field.default.is_some() {
+        } else if field.default.is_some() {
             let base_type = if is_complex {
                 "JsonElement".to_string()
             } else {
@@ -172,28 +175,7 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_record_type(
                 } else {
                     format!("{}?", base_type)
                 };
-                out.push_str(&render(
-                    "property_with_default.jinja",
-                    minijinja::context! { field_type => nullable_type, cs_name, default_val => "null" },
-                ));
-                out.push('\n');
-                continue;
-            }
-
-            if typ.has_default
-                && field.typed_default.is_none()
-                && field.default.is_none()
-                && !field.optional
-                && matches!(
-                    &field.ty,
-                    TypeRef::Primitive(_) | TypeRef::String | TypeRef::Char | TypeRef::Path
-                )
-            {
-                let nullable_type = if base_type.ends_with('?') {
-                    base_type
-                } else {
-                    format!("{}?", base_type)
-                };
+                out.push_str("    [JsonConverter(typeof(NullableDurationMillisJsonConverter))]\n");
                 out.push_str(&render(
                     "property_with_default.jinja",
                     minijinja::context! { field_type => nullable_type, cs_name, default_val => "null" },
@@ -301,19 +283,17 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_record_type(
                 TypeRef::Named(_) if !is_complex => true,
                 TypeRef::Vec(_) | TypeRef::Map(_, _) | TypeRef::Bytes => false,
                 TypeRef::Primitive(_) => false,
-                TypeRef::Duration => false,
+                TypeRef::Duration => true,
                 _ => false,
             };
 
             if should_emit_required {
+                if matches!(&field.ty, TypeRef::Duration) {
+                    out.push_str("    [JsonConverter(typeof(DurationMillisJsonConverter))]\n");
+                }
                 out.push_str(&render(
                     "property_required_init.jinja",
                     minijinja::context! { field_type, cs_name },
-                ));
-            } else if matches!(&field.ty, TypeRef::Duration) {
-                out.push_str(&render(
-                    "property_with_default.jinja",
-                    minijinja::context! { field_type, cs_name, default_val => "null" },
                 ));
             } else {
                 let default_val = match &field.ty {

@@ -178,3 +178,48 @@ fn php_self_ref_builder_shares_arc_instead_of_cloning_returned_ref() {
         "self-returning builder must not bind the returned &mut ref, got:\n{code}"
     );
 }
+
+/// Regression: Cargo replaces EVERY hyphen in a crate name with `_` for the cdylib output
+/// filename (crate `liter-llm-php` -> `libliter_llm_php.{dylib,so}`), so the generated
+/// `config.m4` must probe for a fully-underscored stem. It must also keep crate-directory
+/// paths hyphenated (`crates/liter-llm-php/...`) and use the (possibly overridden) extension
+/// name, not the crate name, for the `modules/*.so` output filename.
+#[test]
+fn config_m4_uses_underscored_cdylib_stem_and_hyphenated_crate_dir() {
+    use super::rust_items::generate_config_m4;
+
+    let m4 = generate_config_m4("liter_llm", "liter-llm");
+
+    assert!(
+        m4.contains("crates/liter-llm-php/Cargo.toml"),
+        "crate directory path must keep hyphens, got:\n{m4}"
+    );
+    assert!(
+        m4.contains("cd crates/liter-llm-php"),
+        "cd target must keep hyphens, got:\n{m4}"
+    );
+    assert!(
+        m4.contains("crates/liter-llm-php/target/release/libliter_llm_php.dylib"),
+        "dylib stem must be fully underscored, got:\n{m4}"
+    );
+    assert!(
+        m4.contains("crates/liter-llm-php/target/release/libliter_llm_php.so"),
+        "so stem must be fully underscored, got:\n{m4}"
+    );
+    assert!(
+        !m4.contains("liter-llm_php"),
+        "must never mix a hyphenated crate name with the `_php` suffix, got:\n{m4}"
+    );
+    assert!(
+        m4.contains(r#"cp "$cargo_lib" "modules/liter_llm.so""#),
+        "module output filename must use the extension name, got:\n{m4}"
+    );
+    assert!(
+        m4.contains("crates/liter-llm-php/target/release\" >&2"),
+        "not-found error message must reference the hyphenated crate directory, got:\n{m4}"
+    );
+    assert!(
+        m4.contains("crates/liter-llm-php/Cargo.toml not found"),
+        "missing-Cargo.toml error message must reference the hyphenated crate directory, got:\n{m4}"
+    );
+}

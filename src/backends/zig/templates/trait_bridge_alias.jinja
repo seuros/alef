@@ -1,2 +1,3 @@
 /// Opaque handle for a `{{ alias }}` trait-bridge instance.
-pub const {{ alias }} = *anyopaque;
+/// Backed by the FFI's `AlefHandle` (`u64`), not a pointer. ~keep
+pub const {{ alias }} = u64;

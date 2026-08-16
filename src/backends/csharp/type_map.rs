@@ -11,7 +11,9 @@ use crate::core::ir::{PrimitiveType, TypeRef};
 /// - Optional<T> becomes T? (nullable)
 /// - Vec<T> becomes List<T>
 /// - Map<K,V> becomes Dictionary<K,V>
-/// - Duration maps to ulong? (milliseconds, nullable sentinel)
+/// - Duration maps to ulong (milliseconds); `optional()` wraps it in `?` like any other
+///   type when the field is genuinely `Option<Duration>` — `duration()` itself must stay
+///   non-nullable or `Optional(Duration)` double-wraps into invalid `ulong??` syntax.
 pub struct CsharpMapper;
 
 impl TypeMapper for CsharpMapper {
@@ -54,7 +56,7 @@ impl TypeMapper for CsharpMapper {
     }
 
     fn duration(&self) -> Cow<'static, str> {
-        Cow::Borrowed("ulong?")
+        Cow::Borrowed("ulong")
     }
 
     fn optional(&self, inner: &str) -> String {
@@ -218,7 +220,7 @@ mod tests {
 
     #[test]
     fn test_duration() {
-        assert_eq!(CsharpMapper.map_type(&TypeRef::Duration), "ulong?");
+        assert_eq!(CsharpMapper.map_type(&TypeRef::Duration), "ulong");
     }
 
     #[test]
@@ -231,9 +233,11 @@ mod tests {
 
     #[test]
     fn test_optional_duration() {
+        // A genuine `Option<Duration>` wraps the non-nullable `ulong` mapping in a single
+        // `?`, not `ulong??` — `duration()` must not pre-nullable-ise itself. ~keep
         assert_eq!(
             CsharpMapper.map_type(&TypeRef::Optional(Box::new(TypeRef::Duration))),
-            "ulong??"
+            "ulong?"
         );
     }
 

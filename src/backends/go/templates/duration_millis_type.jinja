@@ -1,0 +1,31 @@
+// DurationMillis is a millisecond count that marshals to and from the same JSON
+// shape Rust's serde derives for std::time::Duration ({"secs":<u64>,"nanos":<u32>}),
+// so a Duration-typed struct field round-trips through the FFI JSON boundary without
+// a bespoke per-struct converter.
+type DurationMillis uint64
+
+// MarshalJSON implements json.Marshaler, encoding the millisecond count as the
+// {"secs":...,"nanos":...} shape Rust's serde derives for std::time::Duration.
+func (d DurationMillis) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Secs  uint64 `json:"secs"`
+		Nanos uint32 `json:"nanos"`
+	}{
+		Secs:  uint64(d) / 1000,
+		Nanos: uint32(uint64(d)%1000) * 1_000_000,
+	})
+}
+
+// UnmarshalJSON implements json.Unmarshaler, decoding the {"secs":...,"nanos":...}
+// shape Rust's serde derives for std::time::Duration back into a millisecond count.
+func (d *DurationMillis) UnmarshalJSON(data []byte) error {
+	var aux struct {
+		Secs  uint64 `json:"secs"`
+		Nanos uint32 `json:"nanos"`
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*d = DurationMillis(aux.Secs*1000 + uint64(aux.Nanos)/1_000_000)
+	return nil
+}

@@ -23,6 +23,51 @@ pub(crate) fn gen_byte_array_serializer(package: &str) -> String {
     out
 }
 
+/// Generate `DurationMillisSerializer.java`: converts the ergonomic millisecond `Long`
+/// used for Rust `Duration` fields into the `{"secs":<u64>,"nanos":<u32>}` object shape
+/// `std::time::Duration`'s serde derive actually produces. See
+/// `duration_millis_serializer.jinja`.
+pub(crate) fn gen_duration_millis_serializer(package: &str) -> String {
+    let header = hash::header(CommentStyle::DoubleSlash);
+    let imports = [
+        "com.fasterxml.jackson.core.JsonGenerator",
+        "com.fasterxml.jackson.databind.SerializerProvider",
+        "com.fasterxml.jackson.databind.JsonSerializer",
+    ];
+    let mut out = crate::backends::java::template_env::render(
+        "java_file_header.jinja",
+        minijinja::context! { header => header, package => package, imports => &imports },
+    );
+    out.push('\n');
+    out.push_str(&crate::backends::java::template_env::render(
+        "duration_millis_serializer.jinja",
+        minijinja::context! {},
+    ));
+    out
+}
+
+/// Generate `DurationMillisDeserializer.java`: the inverse of
+/// [`gen_duration_millis_serializer`]. See `duration_millis_deserializer.jinja`.
+pub(crate) fn gen_duration_millis_deserializer(package: &str) -> String {
+    let header = hash::header(CommentStyle::DoubleSlash);
+    let imports = [
+        "com.fasterxml.jackson.core.JsonParser",
+        "com.fasterxml.jackson.databind.DeserializationContext",
+        "com.fasterxml.jackson.databind.JsonDeserializer",
+        "com.fasterxml.jackson.databind.JsonNode",
+    ];
+    let mut out = crate::backends::java::template_env::render(
+        "java_file_header.jinja",
+        minijinja::context! { header => header, package => package, imports => &imports },
+    );
+    out.push('\n');
+    out.push_str(&crate::backends::java::template_env::render(
+        "duration_millis_deserializer.jinja",
+        minijinja::context! {},
+    ));
+    out
+}
+
 pub(super) fn gen_sealed_union_deserializer(out: &mut String, _package: &str, enum_def: &EnumDef, tag_field: &str) {
     out.push_str("/** Custom deserializer for sealed interface with unwrapped variants. */\n");
     out.push_str("class ");
@@ -198,4 +243,28 @@ pub(super) fn gen_sealed_union_serializer(out: &mut String, _package: &str, enum
             variants => variants,
         },
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{gen_duration_millis_deserializer, gen_duration_millis_serializer};
+
+    #[test]
+    fn duration_millis_serializer_writes_the_real_duration_wire_shape() {
+        let out = gen_duration_millis_serializer("dev.sample_crate");
+        assert!(out.contains("class DurationMillisSerializer extends JsonSerializer<Long>"));
+        assert!(out.contains("gen.writeNumberField(\"secs\", value / 1000L)"));
+        assert!(out.contains("gen.writeNumberField(\"nanos\", (int) ((value % 1000L) * 1_000_000L))"));
+        assert!(out.contains("package dev.sample_crate;"));
+    }
+
+    #[test]
+    fn duration_millis_deserializer_reads_the_real_duration_wire_shape() {
+        let out = gen_duration_millis_deserializer("dev.sample_crate");
+        assert!(out.contains("class DurationMillisDeserializer extends JsonDeserializer<Long>"));
+        assert!(out.contains("node.get(\"secs\")"));
+        assert!(out.contains("node.get(\"nanos\")"));
+        assert!(out.contains("(secs * 1000L) + (nanos / 1_000_000L)"));
+        assert!(out.contains("package dev.sample_crate;"));
+    }
 }

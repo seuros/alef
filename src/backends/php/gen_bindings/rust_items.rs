@@ -95,65 +95,50 @@ pub(crate) fn php_variant_wrapper_constructor_method(
 /// and directs the build to use cargo. This allows PIE to fall back from pre-packaged binaries
 /// to source compilation without errors.
 pub(super) fn generate_config_m4(extension_name: &str, package_name: &str) -> String {
-    let cargo_crate_name = package_name;
-    let lib_name = extension_name.replace('_', "-");
+    // Cargo's cdylib output filename replaces EVERY hyphen in the crate name with `_`
+    // (crate `{package_name}-php` -> `lib{package_name.replace('-', "_")}_php.{dylib,so}`),
+    // independent of `extension_name` (which may be overridden via `[crates.php] extension_name`
+    // and need not match the crate name at all). ~keep
+    let lib_stem = format!("{}_php", package_name.replace('-', "_"));
+    let ext_upper = extension_name.to_uppercase();
 
     format!(
         r#"dnl Configuration for Rust-based PHP extension via ext-php-rs.
 dnl Allows phpize to recognize this extension during source compilation (PIE fallback).
 
-PHP_ARG_ENABLE([{}],
-  [whether to enable the {} extension],
-  [AS_HELP_STRING([--enable-{}],
-    [Enable {} extension support])],
+PHP_ARG_ENABLE([{extension_name}],
+  [whether to enable the {extension_name} extension],
+  [AS_HELP_STRING([--enable-{extension_name}],
+    [Enable {extension_name} extension support])],
   [yes])
 
-if test "$PHP_{}_ENABLED" = "yes"; then
+if test "$PHP_{ext_upper}_ENABLED" = "yes"; then
   dnl Register the extension directory so phpize creates modules/ and sets up build rules.
-  PHP_NEW_EXTENSION({}, [], $ext_shared)
+  PHP_NEW_EXTENSION({extension_name}, [], $ext_shared)
 
   dnl Invoke cargo build to compile the Rust FFI library and copy it to modules/.
   AC_CONFIG_COMMANDS([cargo-build], [
-    if test -f "crates/{}-php/Cargo.toml"; then
-      (cd crates/{}-php && cargo build --release) || exit 1
+    if test -f "crates/{package_name}-php/Cargo.toml"; then
+      (cd crates/{package_name}-php && cargo build --release) || exit 1
 
       dnl Detect output filename based on platform
-      if test -f "crates/{}-php/target/release/lib{}_php.dylib"; then
-        cargo_lib="crates/{}-php/target/release/lib{}_php.dylib"
-      elif test -f "crates/{}-php/target/release/lib{}_php.so"; then
-        cargo_lib="crates/{}-php/target/release/lib{}_php.so"
+      if test -f "crates/{package_name}-php/target/release/lib{lib_stem}.dylib"; then
+        cargo_lib="crates/{package_name}-php/target/release/lib{lib_stem}.dylib"
+      elif test -f "crates/{package_name}-php/target/release/lib{lib_stem}.so"; then
+        cargo_lib="crates/{package_name}-php/target/release/lib{lib_stem}.so"
       else
-        echo "ERROR: cargo build succeeded but .so/.dylib not found in crates/{}-php/target/release" >&2
+        echo "ERROR: cargo build succeeded but .so/.dylib not found in crates/{package_name}-php/target/release" >&2
         exit 1
       fi
 
       mkdir -p modules
-      cp "$cargo_lib" "modules/{}.so" || exit 1
+      cp "$cargo_lib" "modules/{extension_name}.so" || exit 1
     else
-      echo "ERROR: crates/{}-php/Cargo.toml not found" >&2
+      echo "ERROR: crates/{package_name}-php/Cargo.toml not found" >&2
       exit 1
     fi
   ], [])
 fi
 "#,
-        extension_name,
-        extension_name,
-        extension_name,
-        extension_name,
-        extension_name.to_uppercase(),
-        extension_name,
-        cargo_crate_name,
-        cargo_crate_name,
-        cargo_crate_name,
-        lib_name,
-        cargo_crate_name,
-        lib_name,
-        cargo_crate_name,
-        lib_name,
-        cargo_crate_name,
-        cargo_crate_name,
-        extension_name,
-        cargo_crate_name,
-        extension_name,
     )
 }

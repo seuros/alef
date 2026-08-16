@@ -60,6 +60,18 @@ fn vtable_param_type(ty: &TypeRef) -> &'static str {
     }
 }
 
+/// Compose a cbindgen-prefixed C type name: `{PREFIX_UPPER}{PrefixPascal}{suffix}`.
+///
+/// cbindgen's `prefix` setting (the crate's uppercase FFI prefix, e.g. `"HTM"` for a
+/// `"htm"` crate) is prepended verbatim to every Rust type name it emits — including
+/// names that are themselves already prefix-cased, so a Rust `HtmVisitorCallbacks`
+/// becomes the C `HTMHtmVisitorCallbacks`. Every call site that derives one of these
+/// C type names must use this shared rule or two sites can silently disagree.
+/// ~keep
+fn c_prefixed_type_name(prefix: &str, suffix: &str) -> String {
+    format!("{}{}{suffix}", prefix.to_uppercase(), prefix.to_upper_camel_case())
+}
+
 /// Check if a method returns a type that requires out_result wrapping at the FFI boundary.
 ///
 /// Methods that return strings, bytes, or complex types are wrapped with `out_result`
@@ -468,9 +480,8 @@ pub fn emit_trait_bridge(
         let c_register = format!("c.{prefix}_register_{snake}");
         let c_unregister = format!("c.{prefix}_unregister_{snake}");
         let c_vtable_type = format!(
-            "c.struct_{prefix_upper}{prefix_pascal}{trait_name}VTable",
-            prefix_upper = prefix.to_uppercase(),
-            prefix_pascal = prefix.to_upper_camel_case(),
+            "c.struct_{}",
+            c_prefixed_type_name(prefix, &format!("{trait_name}VTable"))
         );
 
         out.push_str(&crate::backends::zig::template_env::render(
@@ -551,8 +562,7 @@ pub fn emit_trait_bridge(
     } else {
         let ctor_fn = format!("c.{prefix}_visitor_create");
         if let Some(handle_type) = bridge_cfg.type_alias.as_deref() {
-            let callbacks_type = format!("c.{}VisitorCallbacks", prefix.to_upper_camel_case());
-            let native_handle_type = format!("c.{}Visitor", prefix.to_upper_camel_case());
+            let callbacks_type = format!("c.{}", c_prefixed_type_name(prefix, "VisitorCallbacks"));
             out.push_str(&crate::backends::zig::template_env::render(
                 "trait_options_handle_from_vtable.jinja",
                 minijinja::context! {
@@ -562,7 +572,6 @@ pub fn emit_trait_bridge(
                     snake => snake,
                     callbacks_type => callbacks_type,
                     ctor_fn => ctor_fn,
-                    native_handle_type => native_handle_type,
                 },
             ));
         }

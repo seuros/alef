@@ -243,30 +243,7 @@ pub(super) fn gen_opaque_struct_methods(
     let (instance, statics) = partition_methods(&typ.methods);
 
     for method in &instance {
-        let adapter_key = format!("{}.{}", typ.name, method.name);
-        if method.sanitized && !adapter_bodies.contains_key(&adapter_key) {
-            continue;
-        }
-        let returns_capsule = match &method.return_type {
-            TypeRef::Named(name) => capsule_type_names.contains(name),
-            TypeRef::Optional(inner) => match inner.as_ref() {
-                TypeRef::Named(name) => capsule_type_names.contains(name),
-                _ => false,
-            },
-            _ => false,
-        };
-        if returns_capsule {
-            continue;
-        }
-        // FromNapiValue and cannot appear as plain `#[napi]` method params. These methods (e.g.
-        let has_opaque_by_value_param = method.params.iter().any(|p| {
-            let inner_ty = match &p.ty {
-                TypeRef::Optional(inner) => inner.as_ref(),
-                other => other,
-            };
-            matches!(inner_ty, TypeRef::Named(name) if opaque_types.contains(name) && !p.is_ref)
-        });
-        if has_opaque_by_value_param && !adapter_bodies.contains_key(&adapter_key) {
+        if opaque_instance_method_is_dropped(method, &typ.name, adapter_bodies, capsule_type_names, opaque_types) {
             continue;
         }
         impl_builder.add_method(&gen_opaque_instance_method(
@@ -283,8 +260,7 @@ pub(super) fn gen_opaque_struct_methods(
         ));
     }
     for method in &statics {
-        let adapter_key = format!("{}.{}", typ.name, method.name);
-        if method.sanitized && !adapter_bodies.contains_key(&adapter_key) {
+        if opaque_static_method_is_dropped(method, &typ.name, adapter_bodies) {
             continue;
         }
         impl_builder.add_method(&gen_static_method(
@@ -299,6 +275,64 @@ pub(super) fn gen_opaque_struct_methods(
     }
 
     impl_builder.build()
+}
+
+/// True when `gen_opaque_struct_methods` drops an opaque instance method entirely — no
+/// `#[napi]` wrapper is generated for it, for any of three reasons: `sanitized` with no adapter
+/// override; a capsule-typed return (an external capsule type can't be constructed from a plain
+/// `#[napi]` return); or an opaque-by-value param with no adapter override (opaque types only
+/// implement `FromNapiValue` by reference, so a plain `#[napi]` method can't take one by value).
+///
+/// `gen_dts` (`errors.rs`) calls this same function to decide whether to declare the method in
+/// `index.d.ts`, so the `.d.ts` can never promise an instance method the runtime binding drops.
+/// ~keep
+pub(super) fn opaque_instance_method_is_dropped(
+    method: &MethodDef,
+    type_name: &str,
+    adapter_bodies: &crate::adapters::AdapterBodies,
+    capsule_type_names: &AHashSet<String>,
+    opaque_types: &AHashSet<String>,
+) -> bool {
+    let adapter_key = format!("{type_name}.{}", method.name);
+    if method.sanitized && !adapter_bodies.contains_key(&adapter_key) {
+        return true;
+    }
+    let returns_capsule = match &method.return_type {
+        TypeRef::Named(name) => capsule_type_names.contains(name),
+        TypeRef::Optional(inner) => match inner.as_ref() {
+            TypeRef::Named(name) => capsule_type_names.contains(name),
+            _ => false,
+        },
+        _ => false,
+    };
+    if returns_capsule {
+        return true;
+    }
+    // FromNapiValue and cannot appear as plain `#[napi]` method params. These methods (e.g.
+    let has_opaque_by_value_param = method.params.iter().any(|p| {
+        let inner_ty = match &p.ty {
+            TypeRef::Optional(inner) => inner.as_ref(),
+            other => other,
+        };
+        matches!(inner_ty, TypeRef::Named(name) if opaque_types.contains(name) && !p.is_ref)
+    });
+    has_opaque_by_value_param && !adapter_bodies.contains_key(&adapter_key)
+}
+
+/// True when `gen_opaque_struct_methods` drops an opaque static method entirely — `sanitized`
+/// with no adapter override is the only reason (unlike instance methods, `gen_static_method`
+/// always emits a real `#[napi]` wrapper, falling back to an unimplemented body rather than
+/// dropping the method, when it can't auto-delegate).
+///
+/// `gen_dts` calls this same function so `index.d.ts` never promises a static method the
+/// runtime binding drops. ~keep
+pub(super) fn opaque_static_method_is_dropped(
+    method: &MethodDef,
+    type_name: &str,
+    adapter_bodies: &crate::adapters::AdapterBodies,
+) -> bool {
+    let adapter_key = format!("{type_name}.{}", method.name);
+    method.sanitized && !adapter_bodies.contains_key(&adapter_key)
 }
 
 /// Generate an opaque instance method that delegates to self.inner.

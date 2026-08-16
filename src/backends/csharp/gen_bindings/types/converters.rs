@@ -87,6 +87,103 @@ pub(crate) fn gen_byte_array_to_int_array_converter(namespace: &str) -> String {
     out
 }
 
+/// Generate `DurationMillisJsonConverter.cs`: converters that round-trip a millisecond
+/// count against the JSON shape Rust's serde derives for `std::time::Duration`
+/// (`{"secs":<u64>,"nanos":<u32>}`).
+///
+/// Two converter classes are needed because `System.Text.Json` requires a
+/// `[JsonConverter]`-attributed converter's generic argument to match the property's
+/// declared type exactly: `JsonConverter<ulong>` cannot be applied to a `ulong?`
+/// property (and vice versa), so a required `Duration` field uses
+/// `DurationMillisJsonConverter` and an optional one uses
+/// `NullableDurationMillisJsonConverter`. ~keep
+pub(crate) fn gen_duration_millis_converter(namespace: &str) -> String {
+    use crate::backends::csharp::template_env::render;
+
+    let mut out = csharp_file_header();
+    out.push_str("using System;\n");
+    out.push_str("using System.Text.Json;\n");
+    out.push_str("using System.Text.Json.Serialization;\n\n");
+
+    out.push_str(&render("namespace_decl.jinja", minijinja::context! { namespace }));
+    out.push('\n');
+
+    out.push_str("/// <summary>\n");
+    out.push_str("/// Converts a millisecond count to and from the JSON shape Rust's serde derives for\n");
+    out.push_str("/// std::time::Duration ({\"secs\":&lt;u64&gt;,\"nanos\":&lt;u32&gt;}).\n");
+    out.push_str("/// </summary>\n");
+    out.push_str("public sealed class DurationMillisJsonConverter : JsonConverter<ulong>\n");
+    out.push_str("{\n");
+    out.push_str("    /// <summary>Reads a {\"secs\":...,\"nanos\":...} object into a millisecond count.</summary>\n");
+    out.push_str(
+        "    public override ulong Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)\n",
+    );
+    out.push_str("    {\n");
+    out.push_str("        using var document = JsonDocument.ParseValue(ref reader);\n");
+    out.push_str("        var root = document.RootElement;\n");
+    out.push_str("        var secs = root.GetProperty(\"secs\").GetUInt64();\n");
+    out.push_str(
+        "        var nanos = root.TryGetProperty(\"nanos\", out var nanosElement) ? nanosElement.GetUInt32() : 0u;\n",
+    );
+    out.push_str("        return (secs * 1000UL) + (nanos / 1_000_000UL);\n");
+    out.push_str("    }\n\n");
+    out.push_str("    /// <summary>Writes a millisecond count as a {\"secs\":...,\"nanos\":...} object.</summary>\n");
+    out.push_str("    public override void Write(Utf8JsonWriter writer, ulong value, JsonSerializerOptions options)\n");
+    out.push_str("    {\n");
+    out.push_str("        writer.WriteStartObject();\n");
+    out.push_str("        writer.WriteNumber(\"secs\", value / 1000UL);\n");
+    out.push_str("        writer.WriteNumber(\"nanos\", (uint)(value % 1000UL) * 1_000_000U);\n");
+    out.push_str("        writer.WriteEndObject();\n");
+    out.push_str("    }\n");
+    out.push_str("}\n\n");
+
+    out.push_str("/// <summary>\n");
+    out.push_str("/// Nullable counterpart of <see cref=\"DurationMillisJsonConverter\"/> for optional\n");
+    out.push_str("/// Duration fields.\n");
+    out.push_str("/// </summary>\n");
+    out.push_str("public sealed class NullableDurationMillisJsonConverter : JsonConverter<ulong?>\n");
+    out.push_str("{\n");
+    out.push_str(
+        "    /// <summary>Reads null or a {\"secs\":...,\"nanos\":...} object into a millisecond count.</summary>\n",
+    );
+    out.push_str(
+        "    public override ulong? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)\n",
+    );
+    out.push_str("    {\n");
+    out.push_str("        if (reader.TokenType == JsonTokenType.Null)\n");
+    out.push_str("        {\n");
+    out.push_str("            return null;\n");
+    out.push_str("        }\n\n");
+    out.push_str("        using var document = JsonDocument.ParseValue(ref reader);\n");
+    out.push_str("        var root = document.RootElement;\n");
+    out.push_str("        var secs = root.GetProperty(\"secs\").GetUInt64();\n");
+    out.push_str(
+        "        var nanos = root.TryGetProperty(\"nanos\", out var nanosElement) ? nanosElement.GetUInt32() : 0u;\n",
+    );
+    out.push_str("        return (secs * 1000UL) + (nanos / 1_000_000UL);\n");
+    out.push_str("    }\n\n");
+    out.push_str(
+        "    /// <summary>Writes null, or a millisecond count as a {\"secs\":...,\"nanos\":...} object.</summary>\n",
+    );
+    out.push_str(
+        "    public override void Write(Utf8JsonWriter writer, ulong? value, JsonSerializerOptions options)\n",
+    );
+    out.push_str("    {\n");
+    out.push_str("        if (value is null)\n");
+    out.push_str("        {\n");
+    out.push_str("            writer.WriteNullValue();\n");
+    out.push_str("            return;\n");
+    out.push_str("        }\n\n");
+    out.push_str("        writer.WriteStartObject();\n");
+    out.push_str("        writer.WriteNumber(\"secs\", value.Value / 1000UL);\n");
+    out.push_str("        writer.WriteNumber(\"nanos\", (uint)(value.Value % 1000UL) * 1_000_000U);\n");
+    out.push_str("        writer.WriteEndObject();\n");
+    out.push_str("    }\n");
+    out.push_str("}\n");
+
+    out
+}
+
 /// Generate `JsonLeniency.cs`: a helper that strips unknown properties from a JSON
 /// object before deserialization, so payloads carrying extra fields still parse into
 /// types that do not declare them.

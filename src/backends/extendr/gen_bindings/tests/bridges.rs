@@ -181,8 +181,13 @@ fn skips_unit_tuple_and_excluded_variants() {
     assert!(code.contains("pub fn _factory_real(value: String) -> Mixed"), "{code}");
 }
 
+/// Regression for the `ContentPart` bug: a hand-written inherent static method
+/// (`enum_def.methods`, extracted from a separate `impl EnumType { .. }` block) is never forwarded
+/// into the generated `#[extendr] impl` block, so suppressing the derived factory on a name
+/// collision used to drop the constructor entirely (`ContentPart$text(...)` was unreachable from R).
+/// Every data-carrying variant must always get a reachable factory.
 #[test]
-fn yields_to_hand_written_method() {
+fn emits_factory_even_with_colliding_hand_written_method() {
     let def = EnumDef {
         methods: vec![MethodDef {
             name: "circle".to_string(),
@@ -193,7 +198,10 @@ fn yields_to_hand_written_method() {
     };
     let methods = gen_extendr_enum_variant_constructors(&def, &ExtendrBackend, "test_lib::Shape");
     let code = methods.join("\n");
-    assert!(!code.contains("_factory_circle"), "consumer method wins: {code}");
+    assert!(
+        code.contains("pub fn _factory_circle(radius: f64) -> Shape"),
+        "Circle factory must stay reachable despite the colliding hand-written method: {code}"
+    );
     assert!(code.contains("pub fn _factory_rect"), "{code}");
 }
 
@@ -233,6 +241,36 @@ fn casts_optional_remapped_primitive_back_to_core() {
 #[test]
 fn registrations_pair_r_name_with_factory_fn() {
     let regs = extendr_enum_variant_constructor_registrations(&shape_enum());
+    assert_eq!(
+        regs,
+        vec![
+            (
+                "circle".to_string(),
+                "_factory_circle".to_string(),
+                vec!["radius".to_string()]
+            ),
+            (
+                "rect".to_string(),
+                "_factory_rect".to_string(),
+                vec!["width".to_string(), "height".to_string()]
+            ),
+        ]
+    );
+}
+
+/// The R wrapper registration list must stay in lockstep with the generated `#[extendr]`
+/// constructors: a colliding hand-written method must not drop the variant from either.
+#[test]
+fn registrations_include_variant_colliding_with_hand_written_method() {
+    let def = EnumDef {
+        methods: vec![MethodDef {
+            name: "circle".to_string(),
+            is_static: true,
+            ..Default::default()
+        }],
+        ..shape_enum()
+    };
+    let regs = extendr_enum_variant_constructor_registrations(&def);
     assert_eq!(
         regs,
         vec![

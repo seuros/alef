@@ -27,21 +27,6 @@ use minijinja::context;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// Prepend an always-true cfg condition that wraps any cfg predicate.
-/// This is used for PHP to work around ext-php-rs's #[php_impl] macro
-/// unconditionally resolving all function signatures even when cfg-gated.
-/// Instead of `#[cfg(feature = "X")]`, we emit `#[cfg(any(feature = "X", not(feature = "X")))]`
-/// which is always true and allows the macro to see the function.
-fn prepend_cfg_for_php(cfg: Option<&str>, item: String) -> String {
-    match cfg {
-        Some(pred) if !pred.is_empty() => {
-            let always_true_cfg = format!("any({pred}, not({pred}))");
-            format!("#[cfg({always_true_cfg})]\n{item}")
-        }
-        _ => item,
-    }
-}
-
 fn binding_config(core_import: &str, has_serde: bool) -> RustBindingConfig<'_> {
     RustBindingConfig {
         struct_attrs: &["php_class"],
@@ -386,6 +371,15 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
         let facade_class_name = extension_name.to_pascal_case();
         // Build each static method body (no #[php_function] attribute — they live inside
         // a #[php_impl] block which handles registration via the class machinery).
+        // Deliberately not cfg-gated: `#[php_impl]`'s derive (ext-php-rs) walks every
+        // `syn::ImplItem::Fn` in this block and unconditionally emits a `FunctionBuilder`
+        // registration entry referencing the method by its Rust identifier — it never inspects
+        // `#[cfg]`. A method cfg'd out here would still be referenced by that generated
+        // registration array, failing the build (E0599/E0425) regardless of whether a
+        // `#[cfg]`-gated *body* itself would have compiled. So facade methods are always
+        // emitted; `scaffold_php_cargo` (src/scaffold/languages/php.rs) compensates by requiring
+        // each function's underlying core feature(s) unconditionally on the core dependency
+        // line, instead of exposing them as togglable `[features]` on the php crate. ~keep
         let mut method_items: Vec<String> = Vec::new();
         for func in included_functions {
             if crate::codegen::generators::trait_bridge::is_trait_bridge_managed_fn(&func.name, &config.trait_bridges) {
@@ -404,7 +398,7 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
                     &core_import,
                     &bridge_handle_path,
                 );
-                method_items.push(prepend_cfg_for_php(func.cfg.as_deref(), item));
+                method_items.push(item);
             } else if func.is_async {
                 let item = gen_async_function_as_static_method(
                     func,
@@ -418,7 +412,7 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
                     &config.trait_bridges,
                     &mutex_types,
                 );
-                method_items.push(prepend_cfg_for_php(func.cfg.as_deref(), item));
+                method_items.push(item);
             } else {
                 let item = gen_function_as_static_method(
                     func,
@@ -433,7 +427,7 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
                     has_serde,
                     &mutex_types,
                 );
-                method_items.push(prepend_cfg_for_php(func.cfg.as_deref(), item));
+                method_items.push(item);
             }
         }
 

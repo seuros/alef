@@ -267,8 +267,14 @@ fn param_after_optional_is_promoted_to_nilable() {
     );
 }
 
+/// Regression for the `ContentPart` bug: the runtime pyo3 binding never forwards
+/// `enum_def.methods` (a hand-written inherent static method from a separate
+/// `impl EnumType { .. }` block) into the generated `#[pymethods]` block, so skipping the derived
+/// factory stub on a name collision matched a runtime binding that also dropped the constructor —
+/// `ContentPart.text(...)` raised `AttributeError`. The stub must keep emitting the derived
+/// factory, matching the now-fixed runtime binding.
 #[test]
-fn yields_to_hand_written_method_of_same_name() {
+fn emits_factory_stub_even_with_colliding_hand_written_method() {
     let def = EnumDef {
         methods: vec![MethodDef {
             name: "circle".to_string(),
@@ -280,7 +286,10 @@ fn yields_to_hand_written_method_of_same_name() {
 
     let stub = gen_enum_stub(&def, false, &no_dtos());
 
-    assert!(!stub.contains("def circle("), "hand-written method wins: {stub}");
+    assert!(
+        stub.contains("    @staticmethod\n    def circle(radius: float) -> Shape: ..."),
+        "circle factory stub must stay reachable despite the colliding hand-written method: {stub}"
+    );
     assert!(
         stub.contains("    @staticmethod\n    def rect(width: int, height: int) -> Shape: ..."),
         "{stub}"

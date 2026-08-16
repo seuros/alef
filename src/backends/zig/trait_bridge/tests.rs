@@ -111,9 +111,38 @@ fn options_visitor_uses_symbols_emitted_by_ffi_backend() {
         &mut out,
     );
 
-    assert!(out.contains("html_visitor_handle_from_callbacks(callbacks: c.SampleVisitorCallbacks)"));
+    // cbindgen prepends its `prefix` setting (the crate's uppercase FFI prefix) to every
+    // emitted C type name, including names that are themselves already prefix-cased — so
+    // the real header declares `SAMPLESampleVisitorCallbacks`, not `SampleVisitorCallbacks`.
+    assert!(
+        out.contains("html_visitor_handle_from_callbacks(callbacks: c.SAMPLESampleVisitorCallbacks) VisitorHandle"),
+        "must use the cbindgen-prefixed struct name and return the VisitorHandle alias. Got:\n{out}"
+    );
     assert!(out.contains("return c.sample_visitor_create(&_cb);"));
     assert!(!out.contains("sample_html_visitor_handle_from_callbacks"));
+    assert!(
+        !out.contains("c.SampleVisitor)") && !out.contains("?*c.SampleVisitor"),
+        "must not reference a `SampleVisitor` C type — visitor_create returns a raw AlefHandle (u64), \
+         and there is no such struct in the generated header. Got:\n{out}"
+    );
+}
+
+#[test]
+fn visitor_handle_alias_is_u64_backed_not_a_pointer() {
+    // `VisitorHandle` wraps the FFI's `AlefHandle`, which is a `u64` handle-registry key,
+    // not a raw pointer — the alias type must match that ABI.
+    let out = crate::backends::zig::template_env::render(
+        "trait_bridge_alias.jinja",
+        minijinja::context! { alias => "VisitorHandle" },
+    );
+    assert!(
+        out.contains("pub const VisitorHandle = u64;"),
+        "VisitorHandle must alias u64 (AlefHandle), not a pointer. Got:\n{out}"
+    );
+    assert!(
+        !out.contains("*anyopaque"),
+        "must not alias a pointer type. Got:\n{out}"
+    );
 }
 
 #[test]

@@ -1,6 +1,6 @@
 use minijinja::context;
 
-use crate::backends::go::type_map::go_type;
+use crate::backends::go::type_map::go_struct_field_type;
 use crate::codegen::naming::{go_type_name, to_go_name};
 use crate::codegen::shared::binding_fields;
 use crate::core::config::TraitBridgeConfig;
@@ -39,7 +39,7 @@ pub(in crate::backends::go::gen_bindings) fn gen_config_options(
         let param_type = if is_visitor_field {
             std::borrow::Cow::Borrowed("Visitor")
         } else {
-            go_type(&field.ty)
+            go_struct_field_type(&field.ty)
         };
 
         out.push_str(&crate::backends::go::template_env::render(

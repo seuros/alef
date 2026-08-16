@@ -81,6 +81,39 @@ impl TypeMapper for GoMapper {
     }
 }
 
+/// Exported Go identifier for the millisecond-based `Duration` wire type (see
+/// `duration_millis_type.jinja`). `std::time::Duration`'s serde representation is
+/// `{"secs":u64,"nanos":u32}`, not a plain number, so a struct field serialized through
+/// `encoding/json` against the real Rust wire shape cannot be a bare `uint64`/`*uint64` —
+/// see [`go_struct_field_type`]. Scalar function/method parameters are unaffected: those
+/// cross the FFI boundary as a direct `uint64` argument that the Rust glue converts with
+/// `Duration::from_millis`, never through JSON, so [`GoMapper::duration`] stays `uint64`. ~keep
+pub const GO_DURATION_MILLIS_TYPE: &str = "DurationMillis";
+
+/// Maps a `TypeRef` to its Go **struct field** type, special-casing `Duration` to
+/// [`GO_DURATION_MILLIS_TYPE`] instead of the bare `uint64` [`go_type`] returns.
+///
+/// Use this (not [`go_type`]) for any field emitted with a `json:"..."` tag — struct
+/// fields round-trip through `encoding/json` against Rust's `serde` shape, which a plain
+/// integer cannot represent for a `Duration`. Scalar FFI parameters should keep using
+/// [`go_type`] directly.
+pub fn go_struct_field_type(ty: &TypeRef) -> Cow<'static, str> {
+    if matches!(ty, TypeRef::Duration) {
+        Cow::Borrowed(GO_DURATION_MILLIS_TYPE)
+    } else {
+        go_type(ty)
+    }
+}
+
+/// Optional/pointer counterpart of [`go_struct_field_type`] — see [`go_optional_type`].
+pub fn go_optional_struct_field_type(ty: &TypeRef) -> Cow<'static, str> {
+    if matches!(ty, TypeRef::Duration) {
+        Cow::Owned(format!("*{GO_DURATION_MILLIS_TYPE}"))
+    } else {
+        go_optional_type(ty)
+    }
+}
+
 /// Returns the emitted C name of alef's scalar generational handle type, as cbindgen names
 /// it in the generated header (e.g. `HTMAlefHandle`).
 ///
@@ -254,5 +287,35 @@ mod tests {
     fn test_go_optional_type_map_not_pointer() {
         let ty = TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String));
         assert_eq!(go_optional_type(&ty), "map[string]string");
+    }
+
+    #[test]
+    fn test_go_struct_field_type_duration_uses_wire_safe_type() {
+        assert_eq!(go_struct_field_type(&TypeRef::Duration), "DurationMillis");
+    }
+
+    #[test]
+    fn test_go_struct_field_type_non_duration_delegates_to_go_type() {
+        assert_eq!(go_struct_field_type(&TypeRef::String), go_type(&TypeRef::String));
+    }
+
+    #[test]
+    fn test_go_optional_struct_field_type_duration_is_pointer_to_wire_safe_type() {
+        assert_eq!(go_optional_struct_field_type(&TypeRef::Duration), "*DurationMillis");
+    }
+
+    #[test]
+    fn test_go_optional_struct_field_type_non_duration_delegates_to_go_optional_type() {
+        assert_eq!(
+            go_optional_struct_field_type(&TypeRef::String),
+            go_optional_type(&TypeRef::String)
+        );
+    }
+
+    #[test]
+    fn test_go_type_duration_unaffected_scalar_param_stays_uint64() {
+        // Scalar FFI parameters must keep the bare `uint64` mapping — only struct fields
+        // (via `go_struct_field_type`) switch to the wire-safe `DurationMillis` type. ~keep
+        assert_eq!(GoMapper.map_type(&TypeRef::Duration), "uint64");
     }
 }

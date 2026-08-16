@@ -76,7 +76,9 @@ pub(super) fn php_type(ty: &TypeRef) -> String {
         TypeRef::Vec(_) | TypeRef::Map(_, _) => "array".to_string(),
         TypeRef::Named(name) => name.clone(),
         TypeRef::Unit => "void".to_string(),
-        TypeRef::Duration => "float".to_string(),
+        // Duration crosses the FFI boundary as milliseconds (Rust `i64`, see `PhpMapper::duration`
+        // in `type_map.rs`), not seconds — the stub type is `int`, not `float`. ~keep
+        TypeRef::Duration => "int".to_string(),
     }
 }
 

@@ -160,7 +160,22 @@ impl Backend for CsharpBackend {
             &filtered_api
         };
         let deduped_api = api.with_deduped_functions();
-        let api = &deduped_api;
+        crate::codegen::cfg::warn_on_ffi_feature_drift(config, Language::Csharp);
+        let enabled_features: HashSet<&str> = config
+            .features_for_language(Language::Csharp)
+            .iter()
+            .map(String::as_str)
+            .collect();
+        // `DllImport` resolves lazily (only when the P/Invoke stub is first called), so an
+        // unconditionally-declared method for a symbol the FFI library dropped under
+        // `#[cfg(feature = "X")]` compiles cleanly and only throws `EntryPointNotFoundException`
+        // at runtime — the failure mode that motivated this filter in the first place. Dropping
+        // the function/type/enum (and cfg-gated fields/variants) up front keeps NativeMethods.cs
+        // and the wrapper class consistent with what the configured C# feature set actually
+        // compiles into the native library. Mirrors `with_cfg_filtered_deep`'s existing use in
+        // Swift, Kotlin Android, and JNI. ~keep
+        let cfg_filtered_api = deduped_api.with_cfg_filtered_deep(&enabled_features);
+        let api = &cfg_filtered_api;
         let namespace = config.csharp_namespace();
         let prefix = config.ffi_prefix();
         let lib_name = config.ffi_lib_name();
@@ -513,6 +528,18 @@ impl Backend for CsharpBackend {
             });
         }
 
+        let needs_duration_converter = api
+            .types
+            .iter()
+            .any(|t| binding_fields(&t.fields).any(|field| matches!(field.ty, TypeRef::Duration)));
+        if needs_duration_converter {
+            files.push(GeneratedFile {
+                path: base_path.join("DurationMillisJsonConverter.cs"),
+                content: types::gen_duration_millis_converter(&namespace),
+                generated_header: true,
+            });
+        }
+
         files.push(GeneratedFile {
             path: base_path.join("JsonLeniency.cs"),
             content: types::gen_json_leniency(&namespace),
@@ -547,7 +574,13 @@ impl Backend for CsharpBackend {
         api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
-        service_api::generate(api, config)
+        let enabled_features: HashSet<&str> = config
+            .features_for_language(Language::Csharp)
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let filtered_api = api.with_cfg_filtered_deep(&enabled_features);
+        service_api::generate(&filtered_api, config)
     }
 
     fn build_config(&self) -> Option<BuildConfig> {

@@ -74,7 +74,21 @@ impl Backend for GoBackend {
             )?;
         }
         let deduped_api = api.with_deduped_functions();
-        let api = &deduped_api;
+        crate::codegen::cfg::warn_on_ffi_feature_drift(config, Language::Go);
+        let enabled_features: HashSet<&str> = config
+            .features_for_language(Language::Go)
+            .iter()
+            .map(String::as_str)
+            .collect();
+        // cgo's `import "C"` binds directly to the symbols the C header declares — an item
+        // dropped under `#[cfg(feature = "X")]` from the built FFI library is a link-time
+        // failure here (no runtime lazy resolution like C#'s DllImport). Omitting the glue for
+        // any function/type/enum (and their cfg-gated fields/variants) that the configured Go
+        // feature set doesn't satisfy keeps `binding.go` consistent with what actually got
+        // compiled and linked. See `with_cfg_filtered_deep` for the precedent (Swift, Kotlin
+        // Android, JNI already apply the same filter before their own codegen). ~keep
+        let filtered_api = deduped_api.with_cfg_filtered_deep(&enabled_features);
+        let api = &filtered_api;
         let module_path = config.go_module();
         let pkg_name = config
             .go
@@ -369,7 +383,14 @@ impl Backend for GoBackend {
             .unwrap_or_else(|| Self::package_name(&module_path));
         let ffi_prefix = config.ffi_prefix();
 
-        service_api::generate(api, config, &pkg_name, &ffi_prefix)
+        let enabled_features: HashSet<&str> = config
+            .features_for_language(Language::Go)
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let filtered_api = api.with_cfg_filtered_deep(&enabled_features);
+
+        service_api::generate(&filtered_api, config, &pkg_name, &ffi_prefix)
     }
 
     fn build_config(&self) -> Option<BuildConfig> {

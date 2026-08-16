@@ -109,17 +109,18 @@ fn gen_data_enum_typeddicts(lines: &mut Vec<String>, enum_def: &EnumDef, coercib
 /// The runtime binding declares these under the bare snake_case host name (via
 /// `#[pyo3(name = "<snake>")]`), so the stub declares the same public name. Each param type maps
 /// through [`python_type`] — the same mapper the surrounding stub uses for fields — and the return
-/// type is the enum itself. `collect_variant_constructors` owns the skip rules (unit / tuple /
-/// `binding_excluded` / sanitized-field variants and hand-written method collisions) so the stub
-/// and runtime binding stay aligned.
+/// type is the enum itself. `collect_all_variant_constructors` owns the skip rules (unit / tuple /
+/// `binding_excluded` / sanitized-field variants) so the stub and runtime binding stay aligned —
+/// including for a variant whose snake_case name collides with a hand-written `impl EnumType { .. }`
+/// method, since the runtime binding never forwards that method either (see its doc comment).
 fn gen_data_enum_variant_constructor_stubs(
     lines: &mut Vec<String>,
     enum_def: &EnumDef,
     coercible_dtos: &AHashSet<&str>,
 ) {
-    use crate::codegen::generators::collect_variant_constructors;
+    use crate::codegen::generators::collect_all_variant_constructors;
 
-    let ctors = collect_variant_constructors(enum_def);
+    let ctors = collect_all_variant_constructors(enum_def);
 
     const SHADOWABLE_BUILTINS: &[&str] = &["list", "dict", "set", "tuple", "frozenset", "type"];
     let shadowed: Vec<&str> = SHADOWABLE_BUILTINS

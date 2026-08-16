@@ -607,12 +607,15 @@ impl Backend for MagnusBackend {
             .map(|a| (a.name.to_string(), a.item_type.to_string()))
             .collect();
 
+        let client_constructor_types: std::collections::HashSet<&str> =
+            config.client_constructors.keys().map(String::as_str).collect();
         let content = crate::backends::magnus::gen_stubs::gen_stubs(
             api,
             &gem_name,
             emit_docstrings,
             &streaming_return_types,
             &config.trait_bridges,
+            &client_constructor_types,
         );
 
         let stubs_path = resolve_output_dir(

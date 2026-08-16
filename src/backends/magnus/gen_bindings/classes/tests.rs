@@ -401,8 +401,13 @@ fn variant_constructors_skip_unit_tuple_and_excluded() {
     assert!(code.contains("pub fn _factory_real(value: String) -> Self"), "{code}");
 }
 
+/// Regression for the `ContentPart` bug: no backend forwards `enum_def.methods` (a hand-written
+/// inherent static method extracted from a separate `impl EnumType { .. }` block) into the
+/// generated Ruby bindings, so suppressing the derived factory on a name collision used to drop
+/// the constructor entirely with nothing to replace it. Every data-carrying variant must always
+/// get a reachable factory.
 #[test]
-fn variant_constructors_yield_to_hand_written_method() {
+fn variant_constructors_emit_factory_even_with_colliding_hand_written_method() {
     let def = EnumDef {
         methods: vec![MethodDef {
             name: "circle".to_string(),
@@ -415,9 +420,10 @@ fn variant_constructors_yield_to_hand_written_method() {
     let code = gen_data_enum_variant_constructors(&def);
 
     assert!(
-        !code.contains("Self::Circle"),
-        "consumer method must win for Circle: {code}"
+        code.contains("pub fn _factory_circle(radius: String) -> Self"),
+        "Circle factory must stay reachable despite the colliding hand-written method: {code}"
     );
+    assert!(code.contains("Self::Circle { radius }"), "{code}");
     assert!(
         code.contains("pub fn _factory_rect(width: String, height: String) -> Self"),
         "{code}"

@@ -268,8 +268,13 @@ mod variant_constructor_tests {
         assert!(code.contains("test_lib::Mixed::Real { value: value }.into()"), "{code}");
     }
 
+    /// Regression for the `ContentPart` bug: a hand-written inherent static method
+    /// (`enum_def.methods`, extracted from a separate `impl EnumType { .. }` block) is never
+    /// forwarded into the generated `#[php_impl]` block, so suppressing the derived factory on a
+    /// name collision used to drop the constructor entirely (`ContentPart.text(...)` was
+    /// unreachable from PHP). Every data-carrying variant must always get a reachable factory.
     #[test]
-    fn yields_to_hand_written_method() {
+    fn emits_factory_even_with_colliding_hand_written_method() {
         let def = EnumDef {
             methods: vec![MethodDef {
                 name: "circle".to_string(),
@@ -280,9 +285,10 @@ mod variant_constructor_tests {
         };
         let code = run(&def, &mapper());
         assert!(
-            !code.contains("test_lib::Shape::Circle"),
-            "consumer method wins for Circle: {code}"
+            code.contains("test_lib::Shape::Circle { radius: radius }.into()"),
+            "Circle factory must stay reachable despite the colliding hand-written method: {code}"
         );
+        assert!(code.contains(r#"#[php(name = "circle")]"#), "{code}");
         assert!(
             code.contains("pub fn _factory_rect(width: f64, height: f64) -> Self"),
             "{code}"

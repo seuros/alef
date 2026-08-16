@@ -450,8 +450,14 @@ mod variant_constructors {
         );
     }
 
+    /// Regression for the `ContentPart` bug: no backend forwards `enum_def.methods` (a
+    /// hand-written inherent static method extracted from a separate `impl EnumType { .. }`
+    /// block) into the generated Elixir module, so suppressing the derived factory on a name
+    /// collision used to drop the constructor entirely with nothing to replace it (this is
+    /// exactly what happened to `ContentPart.text/1` and `ContentPart.image_url/1`). Every
+    /// data-carrying variant must always get a reachable constructor.
     #[test]
-    fn yields_to_hand_written_method() {
+    fn emits_factory_even_with_colliding_hand_written_method() {
         let def = EnumDef {
             methods: vec![MethodDef {
                 name: "circle".to_string(),
@@ -461,7 +467,10 @@ mod variant_constructors {
             ..shape_enum()
         };
         let result = gen_elixir_enum_module(&def, "SampleCrate");
-        assert!(!result.contains("def circle("), "consumer method wins: {result}");
+        assert!(
+            result.contains("def circle(radius), do: {:circle, %{radius: radius}}"),
+            "circle factory must stay reachable despite the colliding hand-written method: {result}"
+        );
         assert!(result.contains("def rect("), "{result}");
     }
 

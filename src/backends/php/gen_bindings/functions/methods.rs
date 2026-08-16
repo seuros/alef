@@ -360,6 +360,33 @@ pub(crate) fn gen_instance_method_non_opaque(
     }
 }
 
+/// True when a static method's params include a shape `gen_static_method` cannot auto-delegate:
+/// a non-opaque, non-string-enum `Named` type (directly, in a `Vec`, or under an `Optional`), or
+/// any `Map`. `gen_static_method` falls back to `String::new()` — no `#[php_impl]` method at all
+/// — whenever this is true (see its `can_delegate && !has_unsupported_static_params(...)` gate).
+///
+/// `type_stubs.rs`'s PHPStan stub generator calls this same function to decide whether to
+/// declare the method, so a stub can never promise a static method the runtime extension drops.
+/// ~keep
+pub(crate) fn has_unsupported_static_params(
+    params: &[crate::core::ir::ParamDef],
+    opaque_types: &AHashSet<String>,
+    string_enum_names: &AHashSet<String>,
+) -> bool {
+    params.iter().any(|p| match &p.ty {
+        TypeRef::Named(n) => !opaque_types.contains(n.as_str()) && !string_enum_names.contains(n.as_str()),
+        TypeRef::Vec(inner) => {
+            matches!(inner.as_ref(), TypeRef::Named(n) if !opaque_types.contains(n.as_str()) && !string_enum_names.contains(n.as_str()))
+        }
+        TypeRef::Map(_, _) => true,
+        TypeRef::Optional(inner) => {
+            matches!(inner.as_ref(), TypeRef::Named(n) if !opaque_types.contains(n.as_str()) && !string_enum_names.contains(n.as_str()))
+                || matches!(inner.as_ref(), TypeRef::Vec(vi) if matches!(vi.as_ref(), TypeRef::Named(n) if !opaque_types.contains(n.as_str()) && !string_enum_names.contains(n.as_str())))
+        }
+        _ => false,
+    })
+}
+
 /// Generate a static method binding.
 pub(crate) fn gen_static_method(
     method: &MethodDef,
@@ -379,21 +406,7 @@ pub(crate) fn gen_static_method(
     let core_type_path = typ.rust_path.replace('-', "_");
     let call_args = gen_php_call_args(&method.params, opaque_types, &mapper.enum_names);
 
-    let string_enum_names_for_params = &mapper.enum_names;
-    let has_unsupported_params = method.params.iter().any(|p| {
-        match &p.ty {
-            TypeRef::Named(n) if !opaque_types.contains(n.as_str()) && !string_enum_names_for_params.contains(n.as_str()) => true,
-            TypeRef::Vec(inner) => matches!(inner.as_ref(), TypeRef::Named(n) if !opaque_types.contains(n.as_str()) && !string_enum_names_for_params.contains(n.as_str())),
-            TypeRef::Map(_, _) => true,
-            TypeRef::Optional(inner) => {
-                matches!(inner.as_ref(), TypeRef::Named(n) if !opaque_types.contains(n.as_str()) && !string_enum_names_for_params.contains(n.as_str()))
-                    || matches!(inner.as_ref(), TypeRef::Vec(vi) if matches!(vi.as_ref(), TypeRef::Named(n) if !opaque_types.contains(n.as_str()) && !string_enum_names_for_params.contains(n.as_str())))
-            }
-            _ => false,
-        }
-    });
-
-    let body = if can_delegate && !has_unsupported_params {
+    let body = if can_delegate && !has_unsupported_static_params(&method.params, opaque_types, &mapper.enum_names) {
         let core_call = format!("{core_type_path}::{}({call_args})", method.name);
         let is_enum_return = matches!(&method.return_type, TypeRef::Named(n) if mapper.enum_names.contains(n.as_str()));
         if method.error_type.is_some() {

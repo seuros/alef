@@ -20,7 +20,27 @@ use facade::gen_facade_class;
 use ffi_class::gen_main_class;
 use helpers::{gen_exception_class, gen_infrastructure_exception_class, gen_json_util_class};
 use native_lib::gen_native_lib;
-use types::{gen_byte_array_serializer, gen_enum_class, gen_opaque_handle_class, gen_record_type};
+use types::{
+    gen_byte_array_serializer, gen_duration_millis_deserializer, gen_duration_millis_serializer, gen_enum_class,
+    gen_opaque_handle_class, gen_record_type,
+};
+
+/// True if any non-opaque type in `api` has a `Duration`-typed struct field.
+///
+/// Decides whether the generated package needs `DurationMillisSerializer.java` /
+/// `DurationMillisDeserializer.java` — the Jackson converters that round-trip the
+/// ergonomic millisecond `Long` used for Java `Duration` fields against the
+/// `{"secs":<u64>,"nanos":<u32>}` shape `std::time::Duration`'s serde derive actually
+/// produces (see `duration_millis_serializer.jinja`). Mirrors the Go backend's
+/// `api_has_duration_field` in `binding_file.rs`, gating the same class of dead code. ~keep
+fn api_has_duration_field(api: &ApiSurface) -> bool {
+    api.types
+        .iter()
+        .filter(|typ| !typ.is_opaque && !typ.is_trait)
+        .any(|typ| {
+            crate::codegen::shared::binding_fields(&typ.fields).any(|field| matches!(field.ty, TypeRef::Duration))
+        })
+}
 
 pub struct JavaBackend;
 
@@ -400,6 +420,19 @@ impl Backend for JavaBackend {
             content: gen_byte_array_serializer(&package),
             generated_header: true,
         });
+
+        if api_has_duration_field(api) {
+            files.push(GeneratedFile {
+                path: base_path.join("DurationMillisSerializer.java"),
+                content: gen_duration_millis_serializer(&package),
+                generated_header: true,
+            });
+            files.push(GeneratedFile {
+                path: base_path.join("DurationMillisDeserializer.java"),
+                content: gen_duration_millis_deserializer(&package),
+                generated_header: true,
+            });
+        }
 
         files.push(GeneratedFile {
             path: base_path.join("JsonUtil.java"),
@@ -835,5 +868,70 @@ mod tests {
         assert!(output.contains("exports \"\n                        + exportedCount + \" of \""));
         assert!(output.contains("Loaded from: "));
         assert!(output.contains("validateRequiredSymbols(loadedLibraryPath)"));
+    }
+
+    #[test]
+    fn generated_package_emits_duration_converters_only_when_a_duration_field_exists() {
+        use crate::core::ir::FieldDef;
+
+        let api_with_duration = ApiSurface {
+            crate_name: "sample".into(),
+            types: vec![TypeDef {
+                name: "RateLimitConfig".into(),
+                has_serde: true,
+                fields: vec![FieldDef {
+                    name: "window".into(),
+                    ty: TypeRef::Duration,
+                    ..FieldDef::default()
+                }],
+                ..TypeDef::default()
+            }],
+            ..ApiSurface::default()
+        };
+        let with_duration = JavaBackend
+            .generate_bindings(&api_with_duration, &ResolvedCrateConfig::default())
+            .expect("Java bindings");
+        assert!(
+            with_duration
+                .iter()
+                .any(|file| file.path.ends_with("DurationMillisSerializer.java")),
+            "a Duration field must trigger the serializer file"
+        );
+        assert!(
+            with_duration
+                .iter()
+                .any(|file| file.path.ends_with("DurationMillisDeserializer.java")),
+            "a Duration field must trigger the deserializer file"
+        );
+
+        let api_without_duration = ApiSurface {
+            crate_name: "sample".into(),
+            types: vec![TypeDef {
+                name: "PlainConfig".into(),
+                has_serde: true,
+                fields: vec![FieldDef {
+                    name: "name".into(),
+                    ty: TypeRef::String,
+                    ..FieldDef::default()
+                }],
+                ..TypeDef::default()
+            }],
+            ..ApiSurface::default()
+        };
+        let without_duration = JavaBackend
+            .generate_bindings(&api_without_duration, &ResolvedCrateConfig::default())
+            .expect("Java bindings");
+        assert!(
+            without_duration
+                .iter()
+                .all(|file| !file.path.ends_with("DurationMillisSerializer.java")),
+            "no Duration field anywhere must not emit dead converter code"
+        );
+        assert!(
+            without_duration
+                .iter()
+                .all(|file| !file.path.ends_with("DurationMillisDeserializer.java")),
+            "no Duration field anywhere must not emit dead converter code"
+        );
     }
 }

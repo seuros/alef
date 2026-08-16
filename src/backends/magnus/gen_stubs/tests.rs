@@ -199,8 +199,13 @@ fn param_after_optional_is_promoted_to_nilable() {
     );
 }
 
+/// Regression for the `ContentPart` bug: the runtime magnus binding never forwards
+/// `enum_def.methods` (a hand-written inherent static method from a separate
+/// `impl EnumType { .. }` block) into the generated singleton methods, so skipping the derived
+/// factory stub on a name collision matched a runtime binding that also dropped the constructor
+/// entirely, with nothing to replace it. The stub must keep emitting the derived factory.
 #[test]
-fn yields_to_hand_written_method_of_same_name() {
+fn emits_factory_stub_even_with_colliding_hand_written_method() {
     let def = EnumDef {
         methods: vec![MethodDef {
             name: "circle".to_string(),
@@ -212,7 +217,10 @@ fn yields_to_hand_written_method_of_same_name() {
 
     let stub = gen_enum_stub(&def, false);
 
-    assert!(!stub.contains("def self.circle"), "hand-written method wins: {stub}");
+    assert!(
+        stub.contains("    def self.circle: (Float radius) -> Shape"),
+        "circle factory stub must stay reachable despite the colliding hand-written method: {stub}"
+    );
     assert!(
         stub.contains("    def self.rect: (Integer width, Integer height) -> Shape"),
         "{stub}"
@@ -398,7 +406,14 @@ fn initialize_keywords_match_the_kwargs_constructor_contract() {
         types: vec![typ],
         ..Default::default()
     };
-    let stub = super::gen_stubs(&api, "test_lib", false, &ahash::AHashMap::new(), &[]);
+    let stub = super::gen_stubs(
+        &api,
+        "test_lib",
+        false,
+        &ahash::AHashMap::new(),
+        &[],
+        &std::collections::HashSet::new(),
+    );
     let initialize = stub
         .lines()
         .find(|line| line.trim_start().starts_with("def initialize:"))
@@ -438,7 +453,14 @@ fn defaulted_struct_attributes_are_read_only() {
         ..Default::default()
     };
 
-    let stub = super::gen_stubs(&api, "test_lib", false, &ahash::AHashMap::new(), &[]);
+    let stub = super::gen_stubs(
+        &api,
+        "test_lib",
+        false,
+        &ahash::AHashMap::new(),
+        &[],
+        &std::collections::HashSet::new(),
+    );
 
     assert!(
         stub.contains("attr_reader retries: Integer"),
@@ -503,7 +525,14 @@ fn attr_types_match_the_accessor_the_binding_emits() {
         ..Default::default()
     };
 
-    let stub = super::gen_stubs(&api, "test_lib", false, &ahash::AHashMap::new(), &[]);
+    let stub = super::gen_stubs(
+        &api,
+        "test_lib",
+        false,
+        &ahash::AHashMap::new(),
+        &[],
+        &std::collections::HashSet::new(),
+    );
     let declared = declared_attr_types(&stub);
 
     for f in &fields {
@@ -568,7 +597,14 @@ fn attr_and_same_named_method_emit_the_name_once() {
         ..Default::default()
     };
 
-    let stub = super::gen_stubs(&api, "test_lib", false, &ahash::AHashMap::new(), &[]);
+    let stub = super::gen_stubs(
+        &api,
+        "test_lib",
+        false,
+        &ahash::AHashMap::new(),
+        &[],
+        &std::collections::HashSet::new(),
+    );
 
     let attrs = stub.matches("attr_reader providers:").count();
     let methods = stub.matches("def providers:").count();
@@ -576,5 +612,175 @@ fn attr_and_same_named_method_emit_the_name_once() {
     assert_eq!(
         methods, 0,
         "the same-named method stub must be dropped, found {methods}:\n{stub}"
+    );
+}
+
+/// Regression for the dropped-static-method bug: `gen_struct_methods` (classes/mod.rs) never
+/// generates a wrapper fn for a non-opaque struct's static method — the loop there skips every
+/// `is_static` method with no else branch, and the type's only static registration (`new`) is a
+/// synthesized kwargs constructor sourced from the struct's fields, not from `typ.methods`. A
+/// stub that still declared `def self.<name>` for an arbitrary static method promised a Ruby
+/// method the runtime never defined (`ConversionOptions.default`, `NodeContext.with_owned_attributes`
+/// in the wild): `undefined method 'default' for class ...`.
+#[test]
+fn non_opaque_static_method_other_than_new_is_never_stubbed() {
+    use crate::core::ir::{ApiSurface, TypeDef};
+
+    let typ = TypeDef {
+        name: "ConversionOptions".to_string(),
+        rust_path: "test_lib::ConversionOptions".to_string(),
+        fields: vec![field("retries", TypeRef::Primitive(PrimitiveType::U32))],
+        methods: vec![MethodDef {
+            name: "default".to_string(),
+            is_static: true,
+            return_type: TypeRef::Named("ConversionOptions".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let api = ApiSurface {
+        types: vec![typ],
+        ..Default::default()
+    };
+
+    let stub = super::gen_stubs(
+        &api,
+        "test_lib",
+        false,
+        &ahash::AHashMap::new(),
+        &[],
+        &std::collections::HashSet::new(),
+    );
+
+    assert!(
+        !stub.contains("def self.default"),
+        "no wrapper fn backs this static method — the stub must not promise it:\n{stub}"
+    );
+}
+
+/// Same bug, opaque side: `gen_opaque_struct_methods` (classes/mod.rs) also skips every
+/// `is_static` method with no else branch, so an opaque type's non-constructor static method
+/// (e.g. `NodeContext.with_owned_attributes`) has no generated wrapper either.
+#[test]
+fn opaque_static_method_other_than_variant_wrapper_new_is_never_stubbed() {
+    use crate::core::ir::{ApiSurface, TypeDef};
+
+    let typ = TypeDef {
+        name: "NodeContext".to_string(),
+        rust_path: "test_lib::NodeContext".to_string(),
+        is_opaque: true,
+        methods: vec![MethodDef {
+            name: "with_owned_attributes".to_string(),
+            is_static: true,
+            return_type: TypeRef::Named("NodeContext".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let api = ApiSurface {
+        types: vec![typ],
+        ..Default::default()
+    };
+
+    let stub = super::gen_stubs(
+        &api,
+        "test_lib",
+        false,
+        &ahash::AHashMap::new(),
+        &[],
+        &std::collections::HashSet::new(),
+    );
+
+    assert!(
+        !stub.contains("def self.with_owned_attributes"),
+        "no wrapper fn backs this static method — the stub must not promise it:\n{stub}"
+    );
+}
+
+/// The one real exception: a variant-wrapper opaque type's `new` constructor gets a genuine
+/// generated wrapper (`magnus_variant_wrapper_constructor` in tagged_enums.rs) and registration
+/// (`has_variant_wrapper_ctor` in module_init.rs), so the stub must keep declaring it.
+#[test]
+fn opaque_variant_wrapper_new_constructor_is_still_stubbed() {
+    use crate::core::ir::{ApiSurface, TypeDef};
+
+    let typ = TypeDef {
+        name: "Circle".to_string(),
+        rust_path: "test_lib::Circle".to_string(),
+        is_opaque: true,
+        is_variant_wrapper: true,
+        methods: vec![MethodDef {
+            name: "new".to_string(),
+            is_static: true,
+            return_type: TypeRef::Named("Circle".to_string()),
+            params: vec![crate::core::ir::ParamDef {
+                name: "radius".to_string(),
+                ty: TypeRef::Primitive(PrimitiveType::F64),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let api = ApiSurface {
+        types: vec![typ],
+        ..Default::default()
+    };
+
+    let stub = super::gen_stubs(
+        &api,
+        "test_lib",
+        false,
+        &ahash::AHashMap::new(),
+        &[],
+        &std::collections::HashSet::new(),
+    );
+
+    assert!(
+        stub.contains("def self.new: (Float radius) -> Circle"),
+        "the variant-wrapper constructor has a real generated+registered wrapper and must stay stubbed:\n{stub}"
+    );
+}
+
+/// When a `[client_constructors]` override claims the type, `module_init`'s
+/// `has_variant_wrapper_ctor` is false (see `functions/module_init.rs`) — the override's own
+/// generator produces the wrapper instead, and nothing in `ruby_init` registers it under
+/// `new`. The stub must mirror that exact exclusion, not just `is_variant_wrapper`.
+#[test]
+fn opaque_variant_wrapper_new_is_not_stubbed_when_client_constructor_overrides_it() {
+    use crate::core::ir::{ApiSurface, TypeDef};
+
+    let typ = TypeDef {
+        name: "Circle".to_string(),
+        rust_path: "test_lib::Circle".to_string(),
+        is_opaque: true,
+        is_variant_wrapper: true,
+        methods: vec![MethodDef {
+            name: "new".to_string(),
+            is_static: true,
+            return_type: TypeRef::Named("Circle".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let api = ApiSurface {
+        types: vec![typ],
+        ..Default::default()
+    };
+    let client_constructor_types: std::collections::HashSet<&str> = ["Circle"].into_iter().collect();
+
+    let stub = super::gen_stubs(
+        &api,
+        "test_lib",
+        false,
+        &ahash::AHashMap::new(),
+        &[],
+        &client_constructor_types,
+    );
+
+    assert!(
+        !stub.contains("def self.new"),
+        "a client-constructor override means `has_variant_wrapper_ctor` is false and nothing \
+         registers `new` — the stub must not promise it:\n{stub}"
     );
 }

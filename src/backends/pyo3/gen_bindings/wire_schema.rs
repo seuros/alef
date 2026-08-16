@@ -11,7 +11,7 @@
 
 use super::errors::is_dataclass_backed_config;
 use crate::codegen::generators::{
-    PYO3_DTO_COERCE_HELPER, coercible_payload, collect_variant_constructors, data_enum_needs_dto_coercion,
+    PYO3_DTO_COERCE_HELPER, coercible_payload, collect_all_variant_constructors, data_enum_needs_dto_coercion,
     enum_has_data_variants, pyo3_wire_schema_const_name,
 };
 use crate::codegen::naming::wire_field_name;
@@ -85,7 +85,7 @@ pub(super) fn gen_wire_schema_consts(api: &ApiSurface, coercible_dto_names: &AHa
         if !enum_has_data_variants(e) {
             continue;
         }
-        for ctor in collect_variant_constructors(e) {
+        for ctor in collect_all_variant_constructors(e) {
             for p in &ctor.params {
                 if let Some((dto, _)) = coercible_payload(&p.ty, coercible_dto_names)
                     && !seeds.iter().any(|s| s == dto)

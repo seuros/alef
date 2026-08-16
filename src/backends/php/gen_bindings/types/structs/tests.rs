@@ -335,3 +335,222 @@ mod optional_named_setter_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod constructor_param_order_tests {
+    use super::*;
+    use crate::backends::php::type_map::PhpMapper;
+    use crate::core::ir::PrimitiveType;
+
+    fn mapper() -> PhpMapper {
+        PhpMapper {
+            enum_names: AHashSet::new(),
+            data_enum_names: AHashSet::new(),
+            untagged_data_enum_names: AHashSet::new(),
+            json_string_enum_names: AHashSet::new(),
+        }
+    }
+
+    /// `optional` is set separately from `ty` — mirroring the real extractor's contract
+    /// (`extract_field`/`unwrap_optional` in `src/extract/extractor/helpers/field_types.rs`),
+    /// which always strips exactly one layer of `Option<T>` into `(T, true)`. A caller must NOT
+    /// pass an already-`TypeRef::Optional`-wrapped `ty` alongside `optional: true` — that shape
+    /// never occurs in real IR and double-wraps the generated param type (`Option<Option<T>>`),
+    /// as `casts_optional_remapped_primitive_back_to_core` in the extendr tests demonstrates for
+    /// the correct convention (bare `ty`, `optional` flag set on the side). ~keep
+    fn field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
+        FieldDef {
+            name: name.to_string(),
+            ty,
+            optional,
+            ..Default::default()
+        }
+    }
+
+    /// Slice out just the `pub fn new(...)` parameter list, not the `Self { ... }` initializer
+    /// that follows it. The two can name fields differently (the initializer uses raw Rust field
+    /// names — `global_limit: globalLimit` — while the signature uses the camelCase PHP param
+    /// name), and struct-literal field order is semantically irrelevant in Rust, so a search over
+    /// the whole rendered block can match the initializer and pass (or fail) without checking the
+    /// signature at all — the actual bug class this file exists to catch. Route every ordering
+    /// assertion through this so the test can't drift onto testing something adjacent to what its
+    /// name claims. ~keep
+    fn constructor_signature(new_fn: &str) -> &str {
+        let after_fn = new_fn
+            .split_once("pub fn new(")
+            .map(|(_, rest)| rest)
+            .unwrap_or_else(|| panic!("no `pub fn new(` found in generated constructor:\n{new_fn}"));
+        after_fn
+            .split_once(") -> Self {")
+            .map(|(sig, _)| sig)
+            .unwrap_or_else(|| panic!("no `) -> Self {{` found in generated constructor:\n{new_fn}"))
+    }
+
+    fn param_index(signature: &str, param_name: &str) -> usize {
+        signature
+            .find(&format!("{param_name}:"))
+            .unwrap_or_else(|| panic!("param `{param_name}` not found in constructor signature:\n{signature}"))
+    }
+
+    /// Regression for the `BudgetConfig` bug: the runtime `#[php(constructor)] fn new(...)` used
+    /// raw field-declaration order, while the PHPStan stub (`type_stubs.rs`) stable-sorts
+    /// required-before-optional. A struct whose declared field order puts an optional field first
+    /// (`global_limit: Option<f64>`, mirroring `BudgetConfig`) used to emit `new(global_limit,
+    /// model_limits, enforcement)` while the stub declared `(model_limits, enforcement,
+    /// global_limit)` — a caller following the stub's signature positionally shipped its budget
+    /// cap into the wrong parameter slot. `new`'s parameter order must match the stub's.
+    #[test]
+    fn required_fields_sort_before_optional_regardless_of_declaration_order() {
+        let typ = TypeDef {
+            name: "BudgetConfig".to_string(),
+            rust_path: "test_lib::BudgetConfig".to_string(),
+            fields: vec![
+                field("global_limit", TypeRef::Primitive(PrimitiveType::F64), true),
+                field("model_limits", TypeRef::String, false),
+                field("enforcement", TypeRef::String, false),
+            ],
+            has_default: true,
+            has_serde: true,
+            ..Default::default()
+        };
+
+        let out = gen_struct_methods_with_exclude(
+            &typ,
+            &mapper(),
+            true,
+            "test_lib",
+            &AHashSet::new(),
+            &AHashSet::new(),
+            &[],
+            &[],
+            &AHashSet::new(),
+            &[],
+            &AHashSet::new(),
+            &[],
+        );
+
+        let new_fn = out
+            .split("#[php(constructor)]")
+            .nth(1)
+            .unwrap_or_else(|| panic!("no #[php(constructor)] fn emitted:\n{out}"));
+        let sig = constructor_signature(new_fn);
+
+        assert!(sig.contains("globalLimit: Option<f64>"), "{sig}");
+
+        let model_limits_idx = param_index(sig, "modelLimits");
+        let enforcement_idx = param_index(sig, "enforcement");
+        let global_limit_idx = param_index(sig, "globalLimit");
+
+        assert!(
+            model_limits_idx < global_limit_idx && enforcement_idx < global_limit_idx,
+            "required fields must precede the optional field despite declaration order: {sig}"
+        );
+    }
+
+    /// Regression for the `RateLimitConfig` bug: a `Duration` field on a type with a `Default`
+    /// impl is widened to an optional `Option<i64>` param (see the `optional =` computation in
+    /// `gen_struct_methods_impl`) even though the field itself is not `Option<_>` in the IR. The
+    /// widened field must sort as optional too — using the raw (pre-widening) `f.optional` for the
+    /// sort key would leave a required-looking `Duration` field ahead of params that are
+    /// genuinely optional in the IR, while the stub (which applies the identical widening) puts it
+    /// last. A genuinely required third field (`name`) is included so the ordering assertion
+    /// actually exercises the sort — with only two fields that both end up "optional", a stable
+    /// sort is a correct no-op that preserves declaration order and proves nothing.
+    #[test]
+    fn duration_field_widened_by_default_impl_sorts_as_optional() {
+        let typ = TypeDef {
+            name: "RateLimitConfig".to_string(),
+            rust_path: "test_lib::RateLimitConfig".to_string(),
+            fields: vec![
+                field("window", TypeRef::Duration, false),
+                field("rpm", TypeRef::Primitive(PrimitiveType::U32), true),
+                field("name", TypeRef::String, false),
+            ],
+            has_default: true,
+            has_serde: true,
+            ..Default::default()
+        };
+
+        let out = gen_struct_methods_with_exclude(
+            &typ,
+            &mapper(),
+            true,
+            "test_lib",
+            &AHashSet::new(),
+            &AHashSet::new(),
+            &[],
+            &[],
+            &AHashSet::new(),
+            &[],
+            &AHashSet::new(),
+            &[],
+        );
+
+        let new_fn = out
+            .split("#[php(constructor)]")
+            .nth(1)
+            .unwrap_or_else(|| panic!("no #[php(constructor)] fn emitted:\n{out}"));
+        let sig = constructor_signature(new_fn);
+
+        assert!(
+            sig.contains("window: Option<i64>"),
+            "Duration field on a Default-impl type must widen to Option<i64>: {sig}"
+        );
+        let name_idx = param_index(sig, "name");
+        let window_idx = param_index(sig, "window");
+        let rpm_idx = param_index(sig, "rpm");
+        assert!(
+            name_idx < window_idx && name_idx < rpm_idx,
+            "the genuinely required field must precede both the raw-optional and the \
+             widened-optional field despite `window` being declared first: {sig}"
+        );
+    }
+
+    /// Same regression as `required_fields_sort_before_optional_regardless_of_declaration_order`,
+    /// but for the plain `#[php(constructor)]` path (no serde, no defaults, no named params) —
+    /// the second, independent code path in `gen_struct_methods_impl` that builds a `new(...)`
+    /// straight from field declaration order.
+    #[test]
+    fn plain_constructor_path_also_sorts_required_before_optional() {
+        let typ = TypeDef {
+            name: "PlainConfig".to_string(),
+            rust_path: "test_lib::PlainConfig".to_string(),
+            fields: vec![
+                field("nickname", TypeRef::String, true),
+                field("host", TypeRef::String, false),
+                field("port", TypeRef::Primitive(PrimitiveType::U32), false),
+            ],
+            has_default: false,
+            has_serde: false,
+            ..Default::default()
+        };
+
+        let out = gen_struct_methods_with_exclude(
+            &typ,
+            &mapper(),
+            false,
+            "test_lib",
+            &AHashSet::new(),
+            &AHashSet::new(),
+            &[],
+            &[],
+            &AHashSet::new(),
+            &[],
+            &AHashSet::new(),
+            &[],
+        );
+
+        let new_fn = out
+            .split("#[php(constructor)]")
+            .nth(1)
+            .unwrap_or_else(|| panic!("no #[php(constructor)] fn emitted:\n{out}"));
+        let sig = constructor_signature(new_fn);
+
+        assert!(sig.contains("nickname: Option<String>"), "{sig}");
+        assert!(
+            param_index(sig, "host") < param_index(sig, "nickname")
+                && param_index(sig, "port") < param_index(sig, "nickname"),
+            "required fields must precede the optional field despite declaration order: {sig}"
+        );
+    }
+}

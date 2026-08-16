@@ -33,6 +33,7 @@ pub(super) fn generate(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow
         .filter(|t| t.has_default)
         .map(|t| t.name.clone())
         .collect();
+    let adapter_bodies = crate::adapters::build_adapter_bodies(config, crate::core::config::Language::Node)?;
     let content = errors::gen_dts(
         api,
         &prefix,
@@ -41,6 +42,7 @@ pub(super) fn generate(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow
         &capsule_types,
         &streaming_item_types,
         &default_types,
+        &adapter_bodies,
     );
     let src_dir = resolve_output_dir(config.output_paths.get("node"), &config.name, "crates/{name}-node/src/");
 

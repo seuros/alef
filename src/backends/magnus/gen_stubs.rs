@@ -10,6 +10,7 @@ pub fn gen_stubs(
     emit_docstrings: bool,
     streaming_return_types: &ahash::AHashMap<String, String>,
     trait_bridges: &[TraitBridgeConfig],
+    client_constructor_types: &std::collections::HashSet<&str>,
 ) -> String {
     let header = hash::header(CommentStyle::Hash);
     let mut lines: Vec<String> = header.lines().map(str::to_string).collect();
@@ -58,6 +59,7 @@ pub fn gen_stubs(
                 streaming_return_types,
                 &excluded,
                 &trait_interfaces,
+                client_constructor_types,
             ));
             lines.push("".to_string());
         } else {
@@ -237,6 +239,7 @@ fn gen_opaque_type_stub(
     streaming_return_types: &ahash::AHashMap<String, String>,
     excluded: &std::collections::HashSet<&str>,
     trait_interfaces: &std::collections::HashSet<&str>,
+    client_constructor_types: &std::collections::HashSet<&str>,
 ) -> String {
     let mut lines = vec![];
 
@@ -265,18 +268,29 @@ fn gen_opaque_type_stub(
         }
     }
 
-    for method in &typ.methods {
-        if method.is_static {
-            lines.push(gen_method_stub(
-                method,
-                true,
-                emit_docstrings,
-                streaming_return_types,
-                excluded,
-                trait_interfaces,
-                &typ.name,
-            ));
-        }
+    // An opaque type's static methods have no generated wrapper fn in general —
+    // `gen_opaque_struct_methods` (classes/mod.rs) skips every `is_static` method with no
+    // else branch. The sole exception is the `new` constructor of a variant-wrapper type:
+    // `magnus_variant_wrapper_constructor` (tagged_enums.rs) emits a real `pub fn new(...)`
+    // for it, and `module_init::gen_module_init`'s `has_variant_wrapper_ctor` branch is the
+    // only path that registers a static method here. Mirror that exact condition — stubbing
+    // any other static method promises a Ruby method the runtime binding never defines
+    // (steep type-checks against a method that raises `NoMethodError` at runtime). ~keep
+    let has_variant_wrapper_ctor = typ.is_variant_wrapper
+        && !client_constructor_types.contains(typ.name.as_str())
+        && typ.methods.iter().any(|m| m.name == "new" && m.receiver.is_none());
+    if has_variant_wrapper_ctor
+        && let Some(ctor_method) = typ.methods.iter().find(|m| m.name == "new" && m.receiver.is_none())
+    {
+        lines.push(gen_method_stub(
+            ctor_method,
+            true,
+            emit_docstrings,
+            streaming_return_types,
+            excluded,
+            trait_interfaces,
+            &typ.name,
+        ));
     }
 
     lines.push("  end".to_string());
@@ -398,19 +412,13 @@ fn gen_type_stub(
         }
     }
 
-    for method in &typ.methods {
-        if method.is_static {
-            lines.push(gen_method_stub(
-                method,
-                true,
-                emit_docstrings,
-                streaming_return_types,
-                excluded,
-                trait_interfaces,
-                &typ.name,
-            ));
-        }
-    }
+    // A non-opaque struct's static methods have no generated wrapper fn: `gen_struct_methods`
+    // (classes/mod.rs) skips every `is_static` method with no else branch. Its `new` is a
+    // synthesized kwargs constructor built from the struct's fields, unconditionally emitted
+    // and already declared above via `def initialize` — it is never sourced from `typ.methods`.
+    // So no static method here is ever backed by a registered runtime binding; stubbing one
+    // would promise a Ruby method the runtime never defines (steep type-checks against a
+    // method that raises `NoMethodError` at runtime). ~keep
 
     lines.push("  end".to_string());
 
@@ -556,13 +564,14 @@ fn gen_enum_stub(enum_def: &EnumDef, emit_docstrings: bool) -> String {
 ///
 /// The runtime binding registers these under the bare snake_case host name, so the stub declares the
 /// same name. Each param type maps through [`rbs_type`] — the same mapper the surrounding stub uses —
-/// and the return type is the enum. `collect_variant_constructors` owns the skip rules (unit / tuple /
-/// `binding_excluded` / sanitized-field variants and hand-written method collisions) so the stub and
-/// runtime binding stay aligned.
+/// and the return type is the enum. `collect_all_variant_constructors` owns the skip rules (unit /
+/// tuple / `binding_excluded` / sanitized-field variants) so the stub and runtime binding stay
+/// aligned — including for a variant whose snake_case name collides with a hand-written
+/// `impl EnumType { .. }` method, since the runtime binding never forwards that method either.
 fn gen_data_enum_variant_constructor_stubs(lines: &mut Vec<String>, enum_def: &EnumDef) {
-    use crate::codegen::generators::collect_variant_constructors;
+    use crate::codegen::generators::collect_all_variant_constructors;
 
-    for ctor in collect_variant_constructors(enum_def) {
+    for ctor in collect_all_variant_constructors(enum_def) {
         let params: Vec<String> = ctor
             .params
             .iter()

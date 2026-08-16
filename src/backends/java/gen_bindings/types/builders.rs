@@ -341,6 +341,14 @@ pub(super) fn gen_builder_nested_class(
             body.push_str(&wire);
             body.push_str("\")\n");
         }
+        // A type-level @JsonDeserialize(builder = ...) routes deserialization through this
+        // setter instead of the record's canonical constructor, so the record component's own
+        // Duration converter annotation (see records.rs) is invisible to Jackson here — the
+        // setter needs its own copy or a Duration field silently reverts to the bare-integer
+        // wire shape the core cannot parse. ~keep
+        if matches!(resolved_field_ty, TypeRef::Duration) {
+            body.push_str("        @JsonDeserialize(using = DurationMillisDeserializer.class)\n");
+        }
         body.push_str("        public Builder with");
         body.push_str(&field_name_pascal);
         body.push_str("(final ");

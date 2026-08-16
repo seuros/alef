@@ -9,20 +9,33 @@ pub(in crate::backends::go::gen_bindings) fn is_tuple_field(field: &FieldDef) ->
 }
 
 /// Returns true if a non-optional struct field should be emitted as a pointer type with
-/// `omitempty` in a struct that has `has_default: true`.
+/// `omitempty`.
 ///
-/// This is necessary when the Go zero value for a field differs from the Rust `Default` value.
-/// Without pointer+omitempty, unset fields serialize as their Go zero value (0, false, ""), which
-/// the Rust FFI layer may reject or misinterpret (e.g., `request_timeout: 0` is invalid).
+/// Gated on `field.default.is_some()` — the field carries an actual `#[serde(default...)]`,
+/// meaning the Rust side genuinely tolerates the key being absent from the JSON payload.
+/// `TypeDef::has_default` (whether the *container* derives `Default`) is NOT a substitute
+/// signal: a struct can implement `Default` while every individual field stays required at
+/// the serde level, and treating `has_default` as if it meant "this field is omittable"
+/// previously caused required fields (no `#[serde(default)]` at all) to be emitted as
+/// pointer+omitempty, silently dropping them from `json.Marshal` output and breaking
+/// deserialization on the Rust side (`missing field`). ~keep
+///
+/// Once a field is confirmed wire-optional, pointer+omitempty is still only needed when the
+/// Go zero value for the field differs from the Rust default — otherwise an unset Go value
+/// already serializes to the same thing the Rust default would produce.
 ///
 /// Cases that require pointer+omitempty:
-/// - `TypeRef::Duration` — Duration zero is always invalid; real defaults are non-zero (e.g., 30s)
+/// - `TypeRef::Duration` — the Go zero (`DurationMillis(0)`) is a valid but essentially never
+///   the real default (defaults are non-zero, e.g. 30s), so always prefer omitting when unset
 /// - `BoolLiteral(true)` — Rust default is `true`, Go zero is `false`
 /// - `IntLiteral(n)` where n != 0 — Rust default is n, Go zero is 0
 /// - `FloatLiteral(f)` where f != 0.0 — Rust default is f, Go zero is 0.0
 /// - `StringLiteral(s)` where !s.is_empty() — Rust default is s, Go zero is ""
 /// - `EnumVariant(_)` — Rust default is a specific variant, Go zero is ""
 pub(crate) fn needs_omitempty_pointer(field: &FieldDef) -> bool {
+    if field.default.is_none() {
+        return false;
+    }
     if matches!(field.ty, TypeRef::Duration) {
         return true;
     }
@@ -49,6 +62,18 @@ pub(crate) fn needs_omitempty_pointer(field: &FieldDef) -> bool {
 /// internal storage; freeing here would corrupt the parent handle.
 pub(in crate::backends::go::gen_bindings) fn gen_unmarshal_bytes_helper() -> String {
     crate::backends::go::template_env::render("unmarshal_bytes_helper.jinja", minijinja::Value::default())
+}
+
+/// Generate the package-level `DurationMillis` type and its `MarshalJSON`/`UnmarshalJSON`
+/// methods (see `duration_millis_type.jinja`).
+///
+/// Emitted exactly once per generated `binding.go`, only when the API surface has at
+/// least one `Duration`-typed struct field (see `binding_file::api_has_duration_field`).
+/// Struct fields use this type (via `type_map::go_struct_field_type`) instead of a bare
+/// `uint64` because `std::time::Duration`'s serde shape is `{"secs":u64,"nanos":u32}`,
+/// not a plain integer.
+pub(in crate::backends::go::gen_bindings) fn gen_duration_millis_helper() -> String {
+    crate::backends::go::template_env::render("duration_millis_type.jinja", minijinja::Value::default())
 }
 
 /// Generate the package-level `Ptr` generic helper.

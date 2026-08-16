@@ -645,10 +645,14 @@ fn flat_enum_binding_to_core_field_expr(f: &crate::core::ir::FieldDef, flat_name
 /// parallel hand-rolled converter. When any param conversion is fallible (a `Vec<NamedStruct>` field
 /// decodes element-by-element and can `return Err`), the method returns `PhpResult<Self>`.
 ///
-/// Variant selection (skipping unit/tuple/`binding_excluded` variants and yielding to a hand-written
-/// `impl` method of the same name) is shared with pyo3/magnus via `collect_variant_constructors`. The
-/// Rust fn is `_factory_<snake>` (exposed to PHP under the camelCase snake name) to mirror the
-/// pyo3/magnus disambiguation against the same-named variant accessor.
+/// Variant selection (skipping unit/tuple/`binding_excluded` variants; *not* skipping a name
+/// collision with a hand-written `impl` method) is shared with pyo3/magnus/rustler via
+/// `collect_all_variant_constructors` — no backend forwards `enum_def.methods` into its generated
+/// output, so a hand-written static method never actually replaces the derived factory; suppressing
+/// it on a name collision dropped the variant constructor with nothing to replace it
+/// (`ContentPart.text(...)`/`.image_url(...)` were unreachable). The Rust fn is `_factory_<snake>`
+/// (exposed to PHP under the camelCase snake name) to mirror the pyo3/magnus disambiguation against
+/// the same-named variant accessor.
 ///
 /// Returns the method bodies to splice into the flat enum's `#[php_impl]` block (empty when no
 /// variant qualifies).
@@ -665,13 +669,13 @@ pub(crate) fn gen_flat_data_enum_variant_constructors(
         gen_php_call_args_with_let_bindings_vec, gen_php_function_params, gen_php_named_let_bindings,
         param_conversion_is_fallible,
     };
-    use crate::codegen::generators::collect_variant_constructors;
+    use crate::codegen::generators::collect_all_variant_constructors;
     use crate::codegen::naming::to_php_name;
 
     let core_path = crate::codegen::conversions::core_enum_path(enum_def, core_import);
     let mutex_types: AHashSet<String> = AHashSet::new();
 
-    let qualifying = collect_variant_constructors(enum_def);
+    let qualifying = collect_all_variant_constructors(enum_def);
     qualifying
         .iter()
         .filter_map(|ctor| {

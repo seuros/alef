@@ -4,8 +4,8 @@ use super::functions::{
 };
 use super::methods::{gen_method_wrapper, gen_streaming_method_wrapper};
 use super::types::{
-    gen_config_options, gen_enum_type, gen_last_error_helper, gen_opaque_type, gen_opaque_type_free_only,
-    gen_ptr_helper, gen_struct_type, gen_unmarshal_bytes_helper, go_struct_field_names,
+    gen_config_options, gen_duration_millis_helper, gen_enum_type, gen_last_error_helper, gen_opaque_type,
+    gen_opaque_type_free_only, gen_ptr_helper, gen_struct_type, gen_unmarshal_bytes_helper, go_struct_field_names,
     is_passthrough_raw_message_enum, is_tuple_field,
 };
 use crate::codegen::naming::{go_type_name, to_go_name};
@@ -95,6 +95,17 @@ fn uses_ffi_enum_type(
         TypeRef::Named(n) => named_is_problem(n),
         TypeRef::Optional(inner) => matches!(inner.as_ref(), TypeRef::Named(n) if named_is_problem(n)),
         _ => false,
+    })
+}
+
+/// True if any non-opaque type in `api` has a `Duration`-typed struct field.
+///
+/// Decides whether the generated file needs the package-level `DurationMillis` wire
+/// helper (see [`gen_duration_millis_helper`]) and, in turn, the `encoding/json` import
+/// it depends on.
+fn api_has_duration_field(api: &ApiSurface) -> bool {
+    api.types.iter().filter(|typ| !typ.is_opaque).any(|typ| {
+        crate::codegen::shared::binding_fields(&typ.fields).any(|field| matches!(field.ty, TypeRef::Duration))
     })
 }
 
@@ -223,6 +234,12 @@ pub(super) fn gen_go_file(
 
     body.push_str(&gen_ptr_helper());
     body.push_str("\n\n");
+
+    let needs_duration_helper = api_has_duration_field(api);
+    if needs_duration_helper {
+        body.push_str(&gen_duration_millis_helper());
+        body.push_str("\n\n");
+    }
 
     if !api.errors.is_empty() {
         body.push_str(&crate::codegen::error_gen::gen_go_sentinel_errors(&api.errors));
@@ -519,7 +536,7 @@ pub(super) fn gen_go_file(
         .iter()
         .filter(|typ| !visitor_types.contains(typ.name.as_str()))
         .any(|typ| typ.methods.iter().any(|method| !method.is_static));
-    let needs_json = has_sync_functions || has_non_static_methods;
+    let needs_json = has_sync_functions || has_non_static_methods || needs_duration_helper;
 
     let mut imports = vec!["fmt"];
     if needs_json {

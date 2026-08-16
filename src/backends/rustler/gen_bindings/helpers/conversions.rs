@@ -563,7 +563,7 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_enum_module_with_kn
             }
         }
 
-        let constructors = crate::codegen::generators::collect_variant_constructors(enum_def);
+        let constructors = crate::codegen::generators::collect_all_variant_constructors(enum_def);
         if !constructors.is_empty() {
             out.push('\n');
             for ctor in &constructors {

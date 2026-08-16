@@ -377,6 +377,46 @@ pub(crate) fn format_optional_value(ty: &TypeRef, default: &str) -> String {
     format!("Optional.of({})", formatted_value)
 }
 
+/// Fully-qualifies any Java type-name token that collides with a variant name of the
+/// same sealed interface.
+///
+/// JLS §6.4.1: a member type declared inside a class/interface body shadows any
+/// same-named top-level type for the rest of that body, including inside sibling
+/// member declarations. Every `record <Variant>(...)` nested inside a
+/// `sealed interface` is such a member, so a field whose Java type happens to share
+/// a variant's simple name resolves to the nested record instead of the intended
+/// sibling top-level type — silently making construction impossible and, on
+/// deserialization, discarding the real payload. Qualifying with the package name
+/// disambiguates in favor of the top-level type, which is always the one Rust meant. ~keep
+pub(crate) fn qualify_shadowed_type(java_type: &str, package: &str, variant_names: &HashSet<&str>) -> String {
+    let mut result = String::with_capacity(java_type.len());
+    let mut chars = java_type.char_indices().peekable();
+    let mut prev_was_dot = false;
+    while let Some((start, ch)) = chars.next() {
+        if ch.is_ascii_alphabetic() || ch == '_' {
+            let mut end = start + ch.len_utf8();
+            while let Some(&(_, next_ch)) = chars.peek() {
+                if !(next_ch.is_ascii_alphanumeric() || next_ch == '_') {
+                    break;
+                }
+                end += next_ch.len_utf8();
+                chars.next();
+            }
+            let ident = &java_type[start..end];
+            if !prev_was_dot && variant_names.contains(ident) {
+                result.push_str(package);
+                result.push('.');
+            }
+            result.push_str(ident);
+            prev_was_dot = false;
+        } else {
+            result.push(ch);
+            prev_was_dot = ch == '.';
+        }
+    }
+    result
+}
+
 /// Generate the JsonUtil class for centralized JSON deserialization.
 pub(crate) fn gen_json_util_class(package: &str, main_class: &str) -> String {
     let header = crate::core::hash::header(crate::core::hash::CommentStyle::DoubleSlash);
@@ -392,7 +432,8 @@ pub(crate) fn gen_json_util_class(package: &str, main_class: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::escape_javadoc_line;
+    use super::{escape_javadoc_line, qualify_shadowed_type};
+    use std::collections::HashSet;
 
     #[test]
     fn escapes_unicode_sequences_before_java_lexing() {
@@ -401,5 +442,50 @@ mod tests {
         assert!(!escaped.contains(r"\u"));
         assert!(escaped.contains("&#92;u{1F600}"));
         assert!(escaped.contains("&#92;u{00A0}"));
+    }
+
+    #[test]
+    fn qualify_shadowed_type_qualifies_a_bare_name_matching_a_variant() {
+        let variants: HashSet<&str> = ["ImageUrl", "Text"].into_iter().collect();
+        assert_eq!(
+            qualify_shadowed_type("ImageUrl", "io.xberg.literllm", &variants),
+            "io.xberg.literllm.ImageUrl"
+        );
+    }
+
+    #[test]
+    fn qualify_shadowed_type_leaves_non_colliding_names_untouched() {
+        let variants: HashSet<&str> = ["ImageUrl", "Text"].into_iter().collect();
+        assert_eq!(
+            qualify_shadowed_type("DocumentContent", "io.xberg.literllm", &variants),
+            "DocumentContent"
+        );
+    }
+
+    #[test]
+    fn qualify_shadowed_type_qualifies_inside_generics() {
+        let variants: HashSet<&str> = ["ImageUrl"].into_iter().collect();
+        assert_eq!(
+            qualify_shadowed_type("List<ImageUrl>", "io.xberg.literllm", &variants),
+            "List<io.xberg.literllm.ImageUrl>"
+        );
+    }
+
+    #[test]
+    fn qualify_shadowed_type_does_not_double_qualify_already_qualified_names() {
+        let variants: HashSet<&str> = ["ImageUrl"].into_iter().collect();
+        assert_eq!(
+            qualify_shadowed_type("io.xberg.literllm.ImageUrl", "io.xberg.literllm", &variants),
+            "io.xberg.literllm.ImageUrl"
+        );
+    }
+
+    #[test]
+    fn qualify_shadowed_type_ignores_names_with_no_collision() {
+        let variants: HashSet<&str> = HashSet::new();
+        assert_eq!(
+            qualify_shadowed_type("ImageUrl", "io.xberg.literllm", &variants),
+            "ImageUrl"
+        );
     }
 }

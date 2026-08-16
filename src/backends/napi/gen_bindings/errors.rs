@@ -1,6 +1,7 @@
 //! TypeScript declaration file (`.d.ts`) generation for NAPI-RS bindings.
 
 use super::enums;
+use super::types::{opaque_instance_method_is_dropped, opaque_static_method_is_dropped};
 use crate::codegen::naming::{to_node_name, wire_variant_value};
 use crate::codegen::shared::{binding_fields, substitute_excluded_types};
 use crate::core::config::NodeCapsuleTypeConfig;
@@ -22,6 +23,7 @@ pub(super) fn gen_dts(
     capsule_types: &HashMap<String, NodeCapsuleTypeConfig>,
     streaming_item_types: &ahash::AHashMap<String, String>,
     default_types: &ahash::AHashSet<String>,
+    adapter_bodies: &crate::adapters::AdapterBodies,
 ) -> String {
     let header = hash::header(CommentStyle::DoubleSlash);
     let mut lines: Vec<String> = header.lines().map(|l| l.to_string()).collect();
@@ -53,6 +55,12 @@ pub(super) fn gen_dts(
         .filter(|t| t.is_opaque && !t.is_trait && !capsule_types.contains_key(&t.name))
         .collect();
     opaque_types.sort_by(|a, b| a.name.cmp(&b.name));
+
+    // Same name sets `gen_opaque_struct_methods` (`types.rs`) builds at its call site — passed to
+    // the two `opaque_*_method_is_dropped` predicates below so a `Decl::Class` method is declared
+    // here only when the binding actually generates a wrapper for it.
+    let opaque_type_names: ahash::AHashSet<String> = opaque_types.iter().map(|t| t.name.clone()).collect();
+    let capsule_type_names: ahash::AHashSet<String> = capsule_types.keys().cloned().collect();
 
     let mut plain_types: Vec<&TypeDef> = api.types.iter().filter(|t| !t.is_opaque && !t.is_trait).collect();
     plain_types.sort_by(|a, b| a.name.cmp(&b.name));
@@ -177,7 +185,25 @@ pub(super) fn gen_dts(
             Decl::Class(typ) => {
                 lines.extend(format_jsdoc(&typ.doc, ""));
                 lines.push(format!("export declare class {} {{", typ.name));
-                for method in &typ.methods {
+                // `gen_opaque_struct_methods` (`types.rs`) silently drops a method that can't
+                // cross into a `#[napi]` wrapper — never registering it in the `#[napi]` impl
+                // block — for the exact reasons these two predicates check. Calling them here
+                // (rather than re-deriving the condition) is what keeps `index.d.ts` from
+                // promising a method the compiled extension does not export. ~keep
+                let declared_methods = typ.methods.iter().filter(|method| {
+                    if method.receiver.is_some() {
+                        !opaque_instance_method_is_dropped(
+                            method,
+                            &typ.name,
+                            adapter_bodies,
+                            &capsule_type_names,
+                            &opaque_type_names,
+                        )
+                    } else {
+                        !opaque_static_method_is_dropped(method, &typ.name, adapter_bodies)
+                    }
+                });
+                for method in declared_methods {
                     let js_name = to_node_name(&method.name);
                     let params = dts_params(&method.params, no_prefix, default_types);
                     let streaming_key = format!("{}.{}", typ.name, method.name);
@@ -453,6 +479,9 @@ pub(super) fn gen_dts(
         let class_name = format!("{}Info", error.name);
         lines.push(String::new());
         lines.push(format!("export declare class {class_name} {{"));
+        // `code` is always present — it doesn't depend on which introspection methods the
+        // error type implements (see `gen_napi_error_class`). (~keep)
+        lines.push("  code(): number".to_string());
         for method in &error.methods {
             let (js_name, ret_type): (&str, &str) = match method.name.as_str() {
                 "status_code" => ("statusCode", "number"),
@@ -865,6 +894,7 @@ mod tests {
             &Default::default(),
             &Default::default(),
             &Default::default(),
+            &Default::default(),
         );
         assert!(dts.contains("| { type: 'custom'; output: string }"));
         assert!(dts.contains("export declare const Action: {"));
@@ -916,6 +946,7 @@ mod tests {
             &Default::default(),
             &Default::default(),
             &Default::default(),
+            &Default::default(),
         );
 
         assert!(
@@ -964,6 +995,7 @@ mod tests {
             "",
             &Default::default(),
             &[],
+            &Default::default(),
             &Default::default(),
             &Default::default(),
             &Default::default(),
@@ -1027,6 +1059,7 @@ mod tests {
             "",
             &Default::default(),
             &[],
+            &Default::default(),
             &Default::default(),
             &Default::default(),
             &Default::default(),
@@ -1101,6 +1134,7 @@ mod tests {
             &Default::default(),
             &Default::default(),
             &Default::default(),
+            &Default::default(),
         );
         assert!(
             dts.contains("export declare function appIntoRouter"),
@@ -1113,6 +1147,151 @@ mod tests {
         assert!(
             dts.contains("Promise<void>"),
             "async into_router entrypoint should return Promise<void>"
+        );
+    }
+
+    /// Regression: `gen_opaque_struct_methods` (`types.rs`) never generates a `#[napi]` wrapper
+    /// for an opaque instance method that takes another opaque type by value — opaque types only
+    /// implement `FromNapiValue` by reference — unless an adapter overrides it. `gen_dts` used to
+    /// iterate every method with no such check, so `index.d.ts` promised a method the compiled
+    /// extension does not export.
+    #[test]
+    fn opaque_by_value_param_without_adapter_is_not_declared_in_dts() {
+        use crate::core::ir::{MethodDef, ReceiverKind};
+
+        let api = ApiSurface {
+            types: vec![
+                TypeDef {
+                    name: "Worker".to_string(),
+                    is_opaque: true,
+                    methods: vec![MethodDef {
+                        name: "process".to_string(),
+                        receiver: Some(ReceiverKind::Ref),
+                        params: vec![ParamDef {
+                            name: "handle".to_string(),
+                            ty: TypeRef::Named("Handle".to_string()),
+                            is_ref: false,
+                            ..Default::default()
+                        }],
+                        return_type: TypeRef::Unit,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                TypeDef {
+                    name: "Handle".to_string(),
+                    is_opaque: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let dts = gen_dts(
+            &api,
+            "",
+            &Default::default(),
+            &[],
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+        );
+
+        assert!(
+            !dts.contains("process("),
+            "no #[napi] wrapper exists for an opaque-by-value param with no adapter override: {dts}"
+        );
+    }
+
+    /// Regression, static side: `gen_static_method` never registers a sanitized static method
+    /// with no adapter override either (see `opaque_static_method_is_dropped`).
+    #[test]
+    fn sanitized_static_method_without_adapter_is_not_declared_in_dts() {
+        use crate::core::ir::MethodDef;
+
+        let api = ApiSurface {
+            types: vec![TypeDef {
+                name: "Config".to_string(),
+                is_opaque: true,
+                methods: vec![MethodDef {
+                    name: "fromRaw".to_string(),
+                    receiver: None,
+                    is_static: true,
+                    sanitized: true,
+                    return_type: TypeRef::Named("Config".to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let dts = gen_dts(
+            &api,
+            "",
+            &Default::default(),
+            &[],
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+        );
+
+        assert!(
+            !dts.contains("static fromRaw"),
+            "gen_static_method also drops a sanitized static method with no adapter override: {dts}"
+        );
+    }
+
+    /// Control for the two regressions above: a delegatable instance method and a non-sanitized
+    /// static method must still be declared, proving the new filter doesn't over-drop.
+    #[test]
+    fn delegatable_methods_are_still_declared_in_dts() {
+        use crate::core::ir::{MethodDef, ReceiverKind};
+
+        let api = ApiSurface {
+            types: vec![TypeDef {
+                name: "Worker".to_string(),
+                is_opaque: true,
+                methods: vec![
+                    MethodDef {
+                        name: "run".to_string(),
+                        receiver: Some(ReceiverKind::Ref),
+                        return_type: TypeRef::Unit,
+                        ..Default::default()
+                    },
+                    MethodDef {
+                        name: "create".to_string(),
+                        receiver: None,
+                        is_static: true,
+                        return_type: TypeRef::Named("Worker".to_string()),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let dts = gen_dts(
+            &api,
+            "",
+            &Default::default(),
+            &[],
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+        );
+
+        assert!(
+            dts.contains("run("),
+            "delegatable instance method must still be declared: {dts}"
+        );
+        assert!(
+            dts.contains("static create("),
+            "non-sanitized static method must still be declared: {dts}"
         );
     }
 }

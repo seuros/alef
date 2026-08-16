@@ -8,5 +8,6 @@ pub(crate) use async_methods::{
 };
 pub(crate) use methods::{
     gen_function_as_static_method, gen_instance_method, gen_instance_method_non_opaque, gen_static_method,
+    has_unsupported_static_params,
 };
 pub(crate) use params::PhpParamTypeSets;
