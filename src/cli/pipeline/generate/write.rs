@@ -74,7 +74,10 @@ pub fn report_refused_writes(report: &WriteReport) {
         "{} file(s) were NOT written: each already exists, carries no alef provenance marker, and \
          alef has no durable record of owning it. This will not resolve on its own — the marker can \
          only be written by writing the file, which is exactly what the guard declines. Review the \
-         diff for each and adopt the ones alef should own with `alef adopt <path>`. If these are \
+         diff for each and adopt the ones alef should own with `alef adopt <path>`. At migration \
+         scale, `alef adopt <glob>` previews the whole set and `alef adopt <glob> --converged-only \
+         --write` clears every file that already matches generated output, leaving the drifted \
+         ones for you to read one at a time. If these are \
          formats that cannot carry a marker (package.json, *.jar) and this is a fresh clone or a CI \
          checkout, check whether .alef-ownership.toml was committed — that file is where their \
          ownership is recorded. Do NOT hand-add the marker line: a refusal can be protecting a \

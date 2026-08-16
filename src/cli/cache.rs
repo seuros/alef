@@ -442,6 +442,20 @@ fn render_ownership_manifest(paths: &[String]) -> String {
 /// see `cli::pipeline::generate::write::stamp_for_adoption` for the incident
 /// that settles why byte-equality is not evidence. ~keep
 pub fn record_scaffold_owned_path(base_dir: &Path, path: &Path) -> anyhow::Result<()> {
+    record_scaffold_owned_paths(base_dir, std::slice::from_ref(&path))
+}
+
+/// Record every path in `paths` as alef-owned in one read-modify-write.
+///
+/// Semantically identical to calling [`record_scaffold_owned_path`] once per path,
+/// which is exactly why it exists: that function reads, parses, re-renders and
+/// rewrites the whole manifest per call, so adopting a batch through it costs
+/// O(n) manifest parses over an O(n)-sized file — quadratic, and `alef adopt`
+/// now has to clear ~12k unmarkable paths in a single consumer-repo migration.
+/// One parse and one write for the whole batch makes that linear. The
+/// per-path entry point delegates here rather than the reverse so there is a
+/// single copy of the locking and rendering logic. ~keep
+pub fn record_scaffold_owned_paths(base_dir: &Path, paths: &[&Path]) -> anyhow::Result<()> {
     // Serialised because this is a read-modify-write of one file and
     // `write_files_report` calls it from a rayon `par_iter`: two threads that both
     // observe the pre-write list and then both write it lose one entry, and a lost
@@ -453,17 +467,21 @@ pub fn record_scaffold_owned_path(base_dir: &Path, path: &Path) -> anyhow::Resul
     static WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = WRITE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
 
+    if paths.is_empty() {
+        return Ok(());
+    }
     fs::create_dir_all(base_dir)?;
-    let key = scaffold_owned_path_key(base_dir, path);
-    let mut paths = read_committed_owned_paths(base_dir);
-    if paths.iter().any(|existing| *existing == key) {
+    let mut recorded: std::collections::BTreeSet<String> = read_committed_owned_paths(base_dir).into_iter().collect();
+    let mut added = false;
+    for path in paths {
+        added |= recorded.insert(scaffold_owned_path_key(base_dir, path));
+    }
+    if !added {
         return Ok(());
     }
     let is_new_manifest = !ownership_manifest_path(base_dir).exists();
-    paths.push(key);
-    paths.sort_unstable();
-    paths.dedup();
-    fs::write(ownership_manifest_path(base_dir), render_ownership_manifest(&paths))?;
+    let ordered: Vec<String> = recorded.into_iter().collect();
+    fs::write(ownership_manifest_path(base_dir), render_ownership_manifest(&ordered))?;
     if is_new_manifest {
         tracing::info!(
             manifest = %OWNERSHIP_MANIFEST,
@@ -979,6 +997,47 @@ mod tests {
         assert!(
             !base.join(".alef").join(LEGACY_SCAFFOLD_OWNED_PATHS_MANIFEST).exists(),
             "the gitignored legacy record must no longer be written, got:\n{manifest}"
+        );
+    }
+
+    /// The batch entry point must be indistinguishable in outcome from the per-path
+    /// one — same entries, same order, same idempotence, and existing entries left
+    /// alone — because it exists purely to collapse N manifest parses into one for a
+    /// bulk `alef adopt`. If it ever diverges in *result*, the fast path is silently
+    /// recording something different from what the reviewed path would have. ~keep
+    #[test]
+    fn batch_recording_matches_per_path_recording_entry_for_entry() {
+        let batched = tempfile::tempdir().expect("tempdir");
+        let one_at_a_time = tempfile::tempdir().expect("tempdir");
+        let relatives = [
+            "docs/snippets/python/api/z.md",
+            "packages/node/package.json",
+            "docs/snippets/python/api/a.md",
+            "packages/java/pom.xml",
+        ];
+
+        record_scaffold_owned_path(batched.path(), &batched.path().join("pre/existing.json")).expect("seed");
+        record_scaffold_owned_path(one_at_a_time.path(), &one_at_a_time.path().join("pre/existing.json"))
+            .expect("seed");
+
+        let joined: Vec<PathBuf> = relatives.iter().map(|rel| batched.path().join(rel)).collect();
+        let refs: Vec<&Path> = joined.iter().map(PathBuf::as_path).collect();
+        record_scaffold_owned_paths(batched.path(), &refs).expect("batch record");
+        record_scaffold_owned_paths(batched.path(), &refs).expect("batch record again (idempotent)");
+        for relative in relatives {
+            record_scaffold_owned_path(one_at_a_time.path(), &one_at_a_time.path().join(relative)).expect("record");
+        }
+
+        assert_eq!(
+            std::fs::read_to_string(batched.path().join(OWNERSHIP_MANIFEST)).expect("batched manifest"),
+            std::fs::read_to_string(one_at_a_time.path().join(OWNERSHIP_MANIFEST)).expect("sequential manifest"),
+        );
+        for relative in relatives {
+            assert!(is_scaffold_owned_path(batched.path(), &batched.path().join(relative)));
+        }
+        assert!(
+            is_scaffold_owned_path(batched.path(), &batched.path().join("pre/existing.json")),
+            "a batch must extend the record, never replace it"
         );
     }
 

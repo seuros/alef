@@ -42,6 +42,26 @@ pub(in crate::e2e::codegen::typescript) fn resolve_node_function_name(
         .unwrap_or_else(|| snake_to_camel(&call_config.function))
 }
 
+/// Resolve the function name for a call config in one of the JavaScript-shaped bindings.
+///
+/// This renderer serves both node and wasm, which import from different packages and may
+/// therefore spell the same call differently. Reading node's override for a wasm snippet emits
+/// node's spelling, and emits an empty identifier outright for a call that keeps its identity
+/// only in per-language overrides — `function = ""` at the base is a legitimate shape. Node
+/// remains the fallback because the two bindings agree on a name far more often than not.
+pub(in crate::e2e::codegen::typescript) fn resolve_js_function_name(
+    lang: &str,
+    call_config: &crate::e2e::config::CallConfig,
+) -> String {
+    call_config
+        .overrides
+        .get(lang)
+        .and_then(|value| value.function.as_deref())
+        .filter(|function| !function.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| resolve_node_function_name(call_config))
+}
+
 /// Return the package-level helper function name to import for a method_result method,
 /// or `None` if the method maps to a property access (no import needed).
 pub(super) fn ts_method_helper_import(method_name: &str) -> Option<String> {

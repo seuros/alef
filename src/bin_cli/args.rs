@@ -266,6 +266,14 @@ pub(crate) enum Commands {
         /// Stamp the marker. Without this, adopt only prints the diff.
         #[arg(long)]
         write: bool,
+        // Subtractive only: it narrows what `--write` adopts, never widens it. There is
+        // deliberately no `--all`/`--yes` counterpart, since the only thing such a flag
+        // could buy is skipping the drifted diffs -- and a drifted file may be a
+        // deliberate hand-edit, which is the content the guard exists to protect. ~keep
+        /// Adopt only files already byte-identical to generated output, leaving every
+        /// drifted match untouched. For large migrations.
+        #[arg(long)]
+        converged_only: bool,
     },
     /// Migrate legacy alef.toml schema to new [workspace] / [[crates]] layout.
     Migrate {

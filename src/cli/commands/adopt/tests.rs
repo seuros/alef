@@ -25,7 +25,31 @@ fn options(base: &Path, target: &str, write: bool) -> AdoptOptions {
         target: target.to_owned(),
         base_dir: base.to_path_buf(),
         write,
+        converged_only: false,
     }
+}
+
+fn converged_only(base: &Path, target: &str) -> AdoptOptions {
+    AdoptOptions {
+        converged_only: true,
+        ..options(base, target, true)
+    }
+}
+
+/// A fixture snippet as `e2e::snippets::render_snippet_markdown` emits it today: YAML
+/// front matter first (Astro/Starlight requires the opening `---` to be the very first
+/// bytes), then the HTML-comment provenance block `docs::render::with_html_header` adds.
+fn snippet_with_marker(body: &str) -> String {
+    crate::docs::with_html_header(
+        format!("---\ntitle: \"Example\"\nid: fixture_python_example\n---\n\n{body}\n"),
+        "alef e2e generate",
+    )
+}
+
+/// The same snippet as consumer repos actually committed it — no marker from any side,
+/// which is what froze 15,677 of them in one repo and 9,139 in another.
+fn snippet_without_marker(body: &str) -> String {
+    format!("---\ntitle: \"Example\"\nid: fixture_python_example\n---\n\n{body}\n")
 }
 
 /// The crawlberg case that motivates the command: a `.toml` manifest that has never
@@ -152,9 +176,14 @@ fn preview_run_prints_a_diff_and_leaves_the_file_completely_untouched() {
 
 /// A converged file — identical to generated output apart from the header — is the case
 /// an automatic predicate used to claim. It is still adoptable, but only here, and only
-/// after the diff has been shown.
+/// under `--write`.
+///
+/// It is reported by path and produces **no** diff: at consumer-repo scale a converged
+/// diff is the whole file echoed back as context lines, 12,000 times over, which buries
+/// the drifted diffs that do carry information. Asserting `diffs` stays empty here is
+/// what fails if converged files are ever folded back onto the diff path. ~keep
 #[test]
-fn converged_file_is_classified_as_converged_and_still_requires_write() {
+fn converged_file_is_summarised_without_a_diff_and_still_requires_write() {
     let dir = tempfile::tempdir().expect("tempdir");
     let base = dir.path();
     let body = "[package]\nname = \"sample-ffi\"\n";
@@ -162,7 +191,12 @@ fn converged_file_is_classified_as_converged_and_still_requires_write() {
     let outputs = managed("crates/sample-ffi/Cargo.toml", body, true, base);
 
     let preview = run(&options(base, "crates/sample-ffi/Cargo.toml", false), &outputs).expect("preview");
-    assert_eq!(preview.diffs[0].state, AdoptionState::Converged);
+    assert_eq!(preview.converged, vec![PathBuf::from("crates/sample-ffi/Cargo.toml")]);
+    assert!(
+        preview.diffs.is_empty(),
+        "a converged file must not require a per-file diff read, got {} diff(s)",
+        preview.diffs.len()
+    );
     assert_eq!(
         std::fs::read_to_string(&target).expect("read after preview"),
         body,
@@ -174,6 +208,225 @@ fn converged_file_is_classified_as_converged_and_still_requires_write() {
     assert!(content_has_alef_marker(
         &std::fs::read_to_string(&target).expect("read after write")
     ));
+}
+
+/// The measured migration blocker, at the file level: a committed e2e snippet `.md`
+/// whose only difference from generated output is the provenance block. It must
+/// classify as converged (not drifted — there is no content to read), and adoption must
+/// put the marker *in the file*, because the write guard reads a marker on any
+/// extension and a marker cannot be separated from the file it describes.
+#[test]
+fn frozen_e2e_snippet_is_converged_and_adopted_by_stamping_not_by_a_record_entry() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dir.path();
+    let relative = "docs/snippets/python/api/example.md";
+    let target = seed(base, relative, &snippet_without_marker("example()"));
+    let outputs = managed(relative, &snippet_with_marker("example()"), false, base);
+
+    let report = run(&options(base, relative, true), &outputs).expect("adopt");
+
+    assert_eq!(report.converged, vec![PathBuf::from(relative)]);
+    assert!(report.diffs.is_empty(), "a marker-only difference is not drift");
+    let after = std::fs::read_to_string(&target).expect("read after");
+    assert!(
+        content_has_alef_marker(&after),
+        "the guard proves ownership from the marker in the file, got:\n{after}"
+    );
+    assert!(
+        after.starts_with("---\n"),
+        "the marker must land after the YAML front matter, not before it, got:\n{after}"
+    );
+    assert!(
+        report.recorded_unstampable.is_empty(),
+        "a stampable snippet must not consume an entry in the committed ownership record"
+    );
+    assert!(
+        !base.join(".alef-ownership.toml").exists(),
+        "12k snippet adoptions must not each take a line in a committed manifest"
+    );
+}
+
+/// The adoption must be exactly what the next generate would write, not merely
+/// marker-bearing: the regenerate command is read back out of the generated bytes
+/// rather than guessed, because guessing `alef docs` for a snippet whose header says
+/// `alef e2e generate` leaves a one-line difference and re-drifts every file.
+#[test]
+fn stamped_snippet_is_byte_identical_to_generated_output() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dir.path();
+    let relative = "docs/snippets/python/api/example.md";
+    let generated = snippet_with_marker("example()");
+    let target = seed(base, relative, &snippet_without_marker("example()"));
+    let outputs = managed(relative, &generated, false, base);
+
+    run(&options(base, relative, true), &outputs).expect("adopt");
+
+    assert_eq!(
+        std::fs::read_to_string(&target).expect("read after"),
+        outputs[0].content,
+        "adoption must land the exact bytes the next generate writes, or the file is still not converged"
+    );
+}
+
+/// THE END-TO-END QUESTION, put to the real guard rather than to a proxy: after
+/// `alef adopt --write`, does an ordinary `alef generate` actually write the file?
+///
+/// Every other assertion here checks a marker or a report field, and a marker in the
+/// right shape is not the same fact as a write the guard permits — the guard also
+/// consults the ownership record, so a test that never ran it could pass for the wrong
+/// reason. The temp dir carries no `.alef/` cache and no `.alef-ownership.toml`, which
+/// is what a fresh clone and CI look like, so the marker adoption just wrote is the only
+/// proof available. The control is the same file without the adoption: it must be
+/// refused, or this test would pass with the guard deleted. ~keep
+#[test]
+fn an_adopted_snippet_is_regenerable_on_a_checkout_with_no_alef_cache_at_all() {
+    let relative = PathBuf::from("docs/snippets/python/api/example.md");
+    let generated = snippet_with_marker("example()");
+    let updated = snippet_with_marker("updated_example()");
+
+    let regenerate_over = |existing: &str, adopt_first: bool| {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let target = seed(base, "docs/snippets/python/api/example.md", existing);
+        if adopt_first {
+            let outputs = managed("docs/snippets/python/api/example.md", &generated, false, base);
+            run(&options(base, "docs/snippets/python/api/example.md", true), &outputs).expect("adopt");
+        }
+        assert!(
+            !base.join(".alef").exists(),
+            "no cache may exist for this to mean anything"
+        );
+        assert!(
+            !base.join(".alef-ownership.toml").exists(),
+            "the marker, not the record, must be what proves ownership here"
+        );
+        let report = crate::cli::pipeline::write_scaffold_files_report(
+            &[GeneratedFile {
+                path: relative.clone(),
+                content: updated.clone(),
+                generated_header: false,
+            }],
+            base,
+            true,
+        )
+        .expect("write report");
+        (
+            report.changed_paths.contains(&target),
+            report.refused_paths.contains(&target),
+            std::fs::read_to_string(&target).expect("still readable"),
+        )
+    };
+
+    let (written, refused, content) = regenerate_over(&snippet_without_marker("example()"), true);
+    assert!(written, "an adopted snippet must be regenerable");
+    assert!(!refused);
+    assert!(content.contains("updated_example()"));
+
+    let (control_written, control_refused, control_content) =
+        regenerate_over(&snippet_without_marker("example()"), false);
+    assert!(!control_written, "without the adoption the guard must still refuse");
+    assert!(control_refused);
+    assert!(
+        control_content.contains("example()") && !control_content.contains("updated_example()"),
+        "a refused write must leave the file untouched"
+    );
+}
+
+/// `--converged-only` is the bulk-migration switch, and it must be incapable of touching
+/// a drifted file. A drifted match is left byte-for-byte alone, reported separately, and
+/// its full diff is still produced — so the reader's next step is reviewing it, not
+/// discovering afterwards that it was swept up.
+#[test]
+fn converged_only_adopts_the_converged_set_and_refuses_to_sweep_a_drifted_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dir.path();
+    let clean = seed(base, "docs/snippets/python/api/a.md", &snippet_without_marker("a()"));
+    let hand_edited = snippet_without_marker("hand_written_by_a_person()");
+    let edited = seed(base, "docs/snippets/python/api/b.md", &hand_edited);
+    let outputs = managed_outputs(
+        &[
+            GeneratedFile {
+                path: PathBuf::from("docs/snippets/python/api/a.md"),
+                content: snippet_with_marker("a()"),
+                generated_header: false,
+            },
+            GeneratedFile {
+                path: PathBuf::from("docs/snippets/python/api/b.md"),
+                content: snippet_with_marker("b()"),
+                generated_header: false,
+            },
+        ],
+        base,
+    );
+
+    let report = run(&converged_only(base, "docs/snippets/**/*.md"), &outputs).expect("adopt");
+
+    assert_eq!(report.converged, vec![PathBuf::from("docs/snippets/python/api/a.md")]);
+    assert_eq!(
+        report.adopted,
+        vec![PathBuf::from("docs/snippets/python/api/a.md")],
+        "only the converged file may be adopted"
+    );
+    assert_eq!(
+        report.skipped_drifted,
+        vec![PathBuf::from("docs/snippets/python/api/b.md")]
+    );
+    assert!(content_has_alef_marker(
+        &std::fs::read_to_string(&clean).expect("read converged")
+    ));
+    assert_eq!(
+        std::fs::read_to_string(&edited).expect("read drifted"),
+        hand_edited,
+        "a drifted file must survive --converged-only untouched -- it may be a deliberate hand-edit"
+    );
+    assert_eq!(report.diffs.len(), 1, "the drifted file still gets its full diff");
+    assert!(
+        report.diffs[0].body.contains("-hand_written_by_a_person()"),
+        "the skipped file's diff must still show what adoption would put at risk, got:\n{}",
+        report.diffs[0].body
+    );
+}
+
+/// NEGATIVE CONTROL for the bulk path: without `--converged-only`, a plain `--write`
+/// over a mixed glob still adopts the drifted file — and must still have produced its
+/// full diff first. There is no flag that adopts a drifted file *without* one; this is
+/// the test that fails if a `--yes`-style bypass is ever added. ~keep
+#[test]
+fn bulk_write_over_a_mixed_glob_never_adopts_a_drifted_file_without_producing_its_diff() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dir.path();
+    seed(base, "docs/snippets/python/api/a.md", &snippet_without_marker("a()"));
+    seed(
+        base,
+        "docs/snippets/python/api/b.md",
+        &snippet_without_marker("hand_written()"),
+    );
+    let outputs = managed_outputs(
+        &[
+            GeneratedFile {
+                path: PathBuf::from("docs/snippets/python/api/a.md"),
+                content: snippet_with_marker("a()"),
+                generated_header: false,
+            },
+            GeneratedFile {
+                path: PathBuf::from("docs/snippets/python/api/b.md"),
+                content: snippet_with_marker("b()"),
+                generated_header: false,
+            },
+        ],
+        base,
+    );
+
+    let report = run(&options(base, "docs/snippets/**/*.md", true), &outputs).expect("adopt");
+
+    assert_eq!(report.adopted.len(), 2);
+    assert!(report.skipped_drifted.is_empty());
+    let drifted: Vec<PathBuf> = report.drifted().map(|diff| diff.relative.clone()).collect();
+    assert_eq!(
+        drifted,
+        vec![PathBuf::from("docs/snippets/python/api/b.md")],
+        "every drifted adoption must be accompanied by its own rendered diff"
+    );
 }
 
 /// Adopt must never become a general-purpose "stamp this file" tool. A path alef does

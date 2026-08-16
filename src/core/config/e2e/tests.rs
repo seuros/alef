@@ -204,6 +204,61 @@ fn resolve_call_for_fixture_routes_by_category_then_falls_back() {
 // --- effective_* resolver helpers ---
 
 #[test]
+fn effective_function_prefers_the_per_language_override_over_the_base() {
+    let call: CallConfig = toml::from_str(
+        r#"
+function = "clear_reranker_backends"
+
+[overrides.wasm]
+function = "clearRerankerBackends"
+"#,
+    )
+    .expect("a call with a per-language function override must deserialize");
+
+    assert_eq!(call.effective_function("wasm"), Some("clearRerankerBackends"));
+    assert_eq!(call.effective_function("python"), Some("clear_reranker_backends"));
+}
+
+#[test]
+fn effective_function_reads_an_override_when_the_base_names_nothing() {
+    let call: CallConfig = toml::from_str(
+        r#"
+function = ""
+
+[overrides.wasm]
+function = "clearRerankerBackends"
+"#,
+    )
+    .expect("a call that names itself only per language must deserialize");
+
+    assert_eq!(call.effective_function("wasm"), Some("clearRerankerBackends"));
+    assert_eq!(
+        call.effective_function("python"),
+        None,
+        "an override for one language says nothing about another"
+    );
+}
+
+#[test]
+fn effective_function_treats_a_blank_name_as_no_name() {
+    let call: CallConfig = toml::from_str(
+        r#"
+function = "   "
+
+[overrides.wasm]
+function = ""
+"#,
+    )
+    .expect("blank function names must deserialize");
+
+    assert_eq!(
+        call.effective_function("wasm"),
+        None,
+        "a blank override must fall through, and a blank base must not become the empty symbol"
+    );
+}
+
+#[test]
 fn effective_result_fields_returns_global_when_call_is_empty() {
     let mut global = HashSet::new();
     global.insert("url".to_string());

@@ -83,7 +83,7 @@ pub(super) fn build_args_string(
 
     let parts: Vec<String> = args
         .iter()
-        .filter_map(|arg| {
+        .map(|arg| {
             // Apply per-language argument renames before emitting the call.
             let arg_name: &str = arg_name_map
                 .and_then(|m| m.get(&arg.name).map(String::as_str))
@@ -115,9 +115,9 @@ pub(super) fn build_args_string(
                 }
                 if arg.arg_type == "json_object" {
                     let r_value = r_default_for_config_arg(arg_name, options_type);
-                    return Some(format!("{arg_name} = {r_value}"));
+                    return format!("{arg_name} = {r_value}");
                 }
-                return Some(format!("{arg_name} = NULL"));
+                return format!("{arg_name} = NULL");
             } else {
                 val
             };
@@ -129,7 +129,7 @@ pub(super) fn build_args_string(
             // resolves to an empty / object-shaped JSON value or NULL.
             if arg.arg_type == "json_object" && (val.is_null() || val.as_object().is_some_and(|m| m.is_empty())) {
                 let r_value = r_default_for_config_arg(arg_name, options_type);
-                return Some(format!("{arg_name} = {r_value}"));
+                return format!("{arg_name} = {r_value}");
             }
             // Non-empty json_object for typed config args: use `TypeName$from_json(jsonlite::toJSON(...))`
             // so the Rust function receives a proper ExternalPtr, not a list.
@@ -162,11 +162,11 @@ pub(super) fn build_args_string(
                         format!("jsonlite::toJSON({r_list}, auto_unbox = TRUE)")
                     };
                     let r_value = format!("{type_name}$from_json({json_expr})");
-                    return Some(format!("{arg_name} = {r_value}"));
+                    return format!("{arg_name} = {r_value}");
                 }
                 // No options_type: emit as plain R list (backward compat for optional-style args).
                 let r_value = json_to_r(val, true);
-                return Some(format!("{arg_name} = {r_value}"));
+                return format!("{arg_name} = {r_value}");
             }
             // `json_object` arrays are passed to extendr functions whose Rust
             // signature is `items: String` (JSON-serialized object items). The
@@ -197,12 +197,12 @@ pub(super) fn build_args_string(
                             "{base_var} <- Sys.getenv(\"{env_key}\", unset = paste0(Sys.getenv(\"MOCK_SERVER_URL\"), \"/fixtures/{}\"))",
                             fixture.id
                         ));
-                        return Some(format!(
+                        return format!(
                             "{arg_name} = gsub(\"{}\", {base_var}, {r_value}, fixed = TRUE)",
                             crate::e2e::codegen::MOCK_URL_PLACEHOLDER
-                        ));
+                        );
                     }
-                    return Some(format!("{arg_name} = {r_value}"));
+                    return format!("{arg_name} = {r_value}");
                 }
                 let json_literal = serde_json::to_string(val).unwrap_or_else(|_| "[]".to_string());
                 let escaped = escape_r(&json_literal);
@@ -213,12 +213,12 @@ pub(super) fn build_args_string(
                         "{base_var} <- Sys.getenv(\"{env_key}\", unset = paste0(Sys.getenv(\"MOCK_SERVER_URL\"), \"/fixtures/{}\"))",
                         fixture.id
                     ));
-                    return Some(format!(
+                    return format!(
                         "{arg_name} = gsub(\"{}\", {base_var}, \"{escaped}\", fixed = TRUE)",
                         crate::e2e::codegen::MOCK_URL_PLACEHOLDER
-                    ));
+                    );
                 }
-                return Some(format!("{arg_name} = \"{escaped}\""));
+                return format!("{arg_name} = \"{escaped}\"");
             }
             // `bytes` arg type: convert string fixture values into runtime
             // `readBin(...)` calls so the wrapper receives raw bytes instead
@@ -227,7 +227,7 @@ pub(super) fn build_args_string(
             if arg.arg_type == "bytes"
                 && let Some(raw) = val.as_str() {
                     let r_value = render_bytes_value(raw);
-                    return Some(format!("{arg_name} = {r_value}"));
+                    return format!("{arg_name} = {r_value}");
                 }
             // `file_path` arg type: fixtures encode relative paths that resolve
             // against the repo's `test_documents/` directory. Using a runtime
@@ -237,7 +237,7 @@ pub(super) fn build_args_string(
                 && let Some(raw) = val.as_str()
                     && !raw.starts_with('/') && !raw.is_empty() {
                         let escaped = escape_r(raw);
-                        return Some(format!("{arg_name} = .resolve_fixture(\"{escaped}\")"));
+                        return format!("{arg_name} = .resolve_fixture(\"{escaped}\")");
                     }
             // `test_backend` arg type: emit a test stub for trait implementations.
             if arg.arg_type == "test_backend" {
@@ -256,7 +256,7 @@ pub(super) fn build_args_string(
                         }
                         // Collect teardown for trait-bridge tests to clean up after assertions.
                         teardown_block.push_str(&emission.teardown_block);
-                        return Some(format!("{arg_name} = {}", emission.arg_expr));
+                        return format!("{arg_name} = {}", emission.arg_expr);
                     }
                 // A `test_backend` arg fills a required R stub parameter — there is no
                 // compilable value to fall back to when the trait isn't configured.
@@ -267,7 +267,7 @@ pub(super) fn build_args_string(
                     fixture.id, arg.trait_name
                 );
             }
-            Some(format!("{arg_name} = {}", json_to_r(val, true)))
+            format!("{arg_name} = {}", json_to_r(val, true))
         })
         .collect();
 

@@ -105,7 +105,7 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
         }
     }
 
-    let function_name = resolve_node_function_name(call);
+    let function_name = resolve_js_function_name(lang, call);
     let effective_factory = override_config
         .and_then(|value| value.client_factory.as_deref())
         .or(client_factory);

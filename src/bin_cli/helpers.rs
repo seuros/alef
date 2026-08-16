@@ -611,13 +611,14 @@ pub(crate) struct MissingAndFrozenFiles {
 /// gaps require knowing what generation would produce, which is IR-derived for
 /// some backends and cannot be answered from `alef.toml` alone; this mirrors
 /// `alef diff`'s approach ([`crate::cli::pipeline::diff_files`],
-/// `src/cli/pipeline/generate/diff.rs`) and pays a comparable cost: bindings,
-/// type stubs, service API, public API, and scaffold are regenerated in memory
-/// (never written to disk) for every configured language — paid once here for
-/// both checks together, since paying it twice (one full regeneration pass per
-/// check) would double the cost of every `alef verify` run for no benefit. ~keep
+/// `src/cli/pipeline/generate/diff.rs`) and pays a comparable cost: every stage
+/// in [`collect_managed_surface`] is regenerated in memory (never written to
+/// disk) for every configured language — paid once here for both checks
+/// together, since paying it twice (one full regeneration pass per check) would
+/// double the cost of every `alef verify` run for no benefit. ~keep
 ///
-/// `clean = false` is passed to [`crate::cli::pipeline::generate`] deliberately,
+/// `clean = false` is what [`collect_managed_surface`] passes to
+/// `crate::cli::pipeline::generate` deliberately,
 /// not to save cost in CI (a fresh checkout's `.alef/` cache is always cold, so
 /// CI always pays full regeneration regardless of this flag) but because it is
 /// free and safe on a warm local machine: `crate::cli::cache::is_lang_cached`
@@ -631,50 +632,127 @@ pub(crate) fn find_missing_and_frozen_generated_files(
     config_path: &std::path::Path,
     base_dir: &std::path::Path,
 ) -> anyhow::Result<MissingAndFrozenFiles> {
-    let mut result = MissingAndFrozenFiles::default();
-
-    let bindings = crate::cli::pipeline::generate(api, config, languages, false, config_path, false)?;
-    for (_, files) in &bindings {
-        result.missing.extend(missing_managed_paths(files, base_dir));
-        result.frozen.extend(frozen_managed_paths(files, base_dir));
-    }
-
-    let stubs = crate::cli::pipeline::generate_stubs(api, config, languages)?;
-    for (_, files) in &stubs {
-        result.missing.extend(missing_managed_paths(files, base_dir));
-        result.frozen.extend(frozen_managed_paths(files, base_dir));
-    }
-
-    // `generate_service_api` already no-ops when `api.services` is empty, so it is
-    // safe to call unconditionally. `generate_public_api` has no such internal
-    // guard — mirror `Commands::Generate`'s `resolved_cfg.generate.public_api` gate
-    // so this stays a pure read matching what `alef generate` would actually
-    // produce, not a superset of it. Both were missing here even though
-    // `Commands::Generate` calls them, so a backend's per-type service/public-API
-    // file (Java, C#) that was never written was invisible to `alef verify`. ~keep
-    let svc_files = crate::cli::pipeline::generate_service_api(api, config, languages)?;
-    for (_, files) in &svc_files {
-        result.missing.extend(missing_managed_paths(files, base_dir));
-        result.frozen.extend(frozen_managed_paths(files, base_dir));
-    }
-
-    if config.generate.public_api {
-        let public_api_files = crate::cli::pipeline::generate_public_api(api, config, languages, config_path)?;
-        for (_, files) in &public_api_files {
-            result.missing.extend(missing_managed_paths(files, base_dir));
-            result.frozen.extend(frozen_managed_paths(files, base_dir));
-        }
-    }
-
-    let scaffold_files = crate::cli::pipeline::scaffold(api, config, languages, config_path)?;
-    result.missing.extend(missing_managed_paths(&scaffold_files, base_dir));
-    result.frozen.extend(frozen_managed_paths(&scaffold_files, base_dir));
-
+    let surface = collect_managed_surface(languages, api, config, config_path, base_dir)?;
+    let mut result = MissingAndFrozenFiles {
+        missing: missing_managed_paths(&surface, base_dir),
+        frozen: frozen_managed_paths(&surface, base_dir),
+    };
     result.missing.sort();
     result.missing.dedup();
     result.frozen.sort_by(|a, b| a.path.cmp(&b.path));
     result.frozen.dedup_by(|a, b| a.path == b.path);
     Ok(result)
+}
+
+/// Insert `files` into `surface`, letting a later stage win the path.
+///
+/// Last-write-wins mirrors disk: `alef all` runs these stages in sequence and each
+/// one overwrites whatever the previous stage left at the same path, so the bytes a
+/// reader is asked to consent to (and the bytes `alef verify` reasons about) must be
+/// the *last* stage's, not the first's. The only stages that actually collide are
+/// local-mode e2e and registry-mode test apps, which share the snippet output root. ~keep
+fn absorb_stage(
+    surface: &mut std::collections::BTreeMap<std::path::PathBuf, crate::core::backend::GeneratedFile>,
+    files: Vec<crate::core::backend::GeneratedFile>,
+) {
+    for file in files {
+        surface.insert(file.path.clone(), file);
+    }
+}
+
+/// Every file this crate's configuration would cause alef to emit, from **all**
+/// generation stages, deduplicated by path.
+///
+/// This is the single answer to "what does alef own here", and it has exactly two
+/// consumers: [`find_missing_and_frozen_generated_files`] (`alef verify`'s report)
+/// and `bin_cli::aux_commands`'s `Commands::Adopt` (the remedy the report points
+/// at). They are the report and the fix for the same fact, so they must not be able
+/// to disagree — and they did. Both were built from hand-maintained stage lists
+/// that each omitted different stages: adopt covered bindings + stubs + scaffold and
+/// verify covered those plus service/public API, and *neither* covered e2e, test
+/// apps, READMEs or docs. Consumer repos then committed regenerated e2e snippet
+/// `.md` files that carried no marker (`e2e::snippets::render_snippet_markdown` did
+/// not route through `docs::render::with_html_header` at the time), so the write
+/// guard froze 15,677 of them in one repo and 9,139 in another, `alef verify` was
+/// structurally blind to every one, and `alef adopt` on a snippet glob bailed with
+/// "no alef-managed output matches" — the designed way out did not reach the files
+/// that needed it. A new emitter added to `alef all` must be added here too, or it
+/// re-opens exactly that hole. ~keep
+///
+/// Every stage below is a pure in-memory render; nothing here writes to disk. Docs
+/// are the one stage whose failure is downgraded: `docs::generate_docs_stage`
+/// deliberately returns the pages it rendered *alongside* an error from a later
+/// sub-step (snippet validation, CLI/MCP extraction), and neither of this function's
+/// consumers should lose the whole managed set — or refuse to unfreeze a binding
+/// file — because a docs sub-step is unhappy. ~keep
+pub(crate) fn collect_managed_surface(
+    languages: &[crate::core::config::Language],
+    api: &crate::core::ir::ApiSurface,
+    config: &crate::core::config::ResolvedCrateConfig,
+    config_path: &std::path::Path,
+    base_dir: &std::path::Path,
+) -> anyhow::Result<Vec<crate::core::backend::GeneratedFile>> {
+    let mut surface = std::collections::BTreeMap::new();
+
+    for (_, files) in crate::cli::pipeline::generate(api, config, languages, false, config_path, false)? {
+        absorb_stage(&mut surface, files);
+    }
+    // `generate_service_api` already no-ops when `api.services` is empty, so it is
+    // safe to call unconditionally. `generate_public_api` has no such internal
+    // guard — mirror `Commands::Generate`'s `config.generate.public_api` gate so
+    // this stays a faithful picture of what `alef generate` would produce, not a
+    // superset of it. ~keep
+    for (_, files) in crate::cli::pipeline::generate_service_api(api, config, languages)? {
+        absorb_stage(&mut surface, files);
+    }
+    absorb_stage(
+        &mut surface,
+        crate::cli::pipeline::scaffold(api, config, languages, config_path)?,
+    );
+    for (_, files) in crate::cli::pipeline::generate_stubs(api, config, languages)? {
+        absorb_stage(&mut surface, files);
+    }
+    if config.generate.public_api {
+        for (_, files) in crate::cli::pipeline::generate_public_api(api, config, languages, config_path)? {
+            absorb_stage(&mut surface, files);
+        }
+    }
+
+    // Both e2e modes, because they emit to different roots (`e2e.output` versus
+    // `e2e.registry.output`) and a file can be frozen under either. An error here is
+    // propagated rather than downgraded: `alef all` calls the same function unguarded,
+    // so a configuration that fails here is one no regeneration could have succeeded
+    // under, and silently returning a short surface would put `alef adopt` back to
+    // "no alef-managed output matches" for exactly the paths that need it. ~keep
+    if let Some(e2e_config) = &config.e2e {
+        absorb_stage(
+            &mut surface,
+            crate::e2e::generate_e2e(config, e2e_config, None, &api.types, &api.enums, &api.functions)
+                .context("failed to render the e2e stage of alef's managed output")?,
+        );
+        let mut registry_config = e2e_config.clone();
+        registry_config.dep_mode = crate::core::config::e2e::DependencyMode::Registry;
+        absorb_stage(
+            &mut surface,
+            crate::e2e::generate_e2e(config, &registry_config, None, &api.types, &api.enums, &api.functions)
+                .context("failed to render the registry-mode test-app stage of alef's managed output")?,
+        );
+    }
+
+    let readme_languages = crate::readme::expand_configured_readme_languages(config, languages);
+    absorb_stage(
+        &mut surface,
+        crate::cli::pipeline::readme(api, config, &readme_languages)?,
+    );
+
+    let doc_languages = resolve_doc_languages(config, None)?;
+    let (doc_files, doc_result) = crate::docs::generate_docs_stage(api, config, &doc_languages, None, base_dir);
+    if let Err(error) = doc_result {
+        tracing::debug!("docs stage reported {error:#}; using the pages it rendered before the failure");
+    }
+    absorb_stage(&mut surface, doc_files);
+
+    Ok(surface.into_values().collect())
 }
 
 /// Multi-crate variant of [`verify_walk`].
@@ -784,6 +862,70 @@ e2e = "cargo test"
             .collect();
         found.sort();
         found
+    }
+
+    /// THE AGREEMENT CANARY. `alef verify`'s frozen-file report and `alef adopt`'s candidate
+    /// set are the report and the remedy for one fact, so a path in one and not the other
+    /// sends a reader to a command that refuses them. They diverged exactly that way: each
+    /// was built from its own hand-maintained stage list, adopt's missing service/public API
+    /// and both missing e2e, test apps, READMEs and docs — which is why `alef adopt` on an
+    /// e2e snippet glob bailed with "no alef-managed output matches" while 15,677 snippets
+    /// sat frozen and unreported.
+    ///
+    /// Asserting on behaviour would need a full extraction + generation pass against a real
+    /// crate, which is what made the divergence invisible to the test suite in the first
+    /// place. This asserts on the structure that produced it instead: each consumer derives
+    /// its set from [`collect_managed_surface`] and enumerates no stage of its own. It fails
+    /// the moment either one grows a private list again, which is the regression. ~keep
+    #[test]
+    fn both_consumers_build_their_managed_set_only_from_the_shared_surface() {
+        // Every stage entry point `collect_managed_surface` composes. A consumer that
+        // names one inside its own region is re-deriving the surface instead of sharing
+        // it. `generate(` carries its parenthesis because `generate_` prefixes several
+        // of the others. ~keep
+        let stage_calls = [
+            "pipeline::generate(",
+            "pipeline::generate_stubs(",
+            "pipeline::generate_service_api(",
+            "pipeline::generate_public_api(",
+            "pipeline::scaffold(",
+            "pipeline::readme(",
+            "e2e::generate_e2e(",
+            "docs::generate_docs_stage(",
+        ];
+        // Each region is the consumer's own code, cut so it excludes the shared collector
+        // itself (which must name every stage) and, for `aux_commands`, the unrelated
+        // `Commands::Init` arm, which legitimately generates and writes. ~keep
+        let regions = [
+            (
+                "alef verify's frozen report",
+                include_str!("helpers.rs")
+                    .split("pub(crate) fn collect_managed_surface")
+                    .next()
+                    .expect("helpers splits on the shared collector"),
+            ),
+            (
+                "alef adopt's candidate set",
+                include_str!("aux_commands.rs")
+                    .split("Commands::Adopt {")
+                    .nth(1)
+                    .and_then(|rest| rest.split("Commands::Migrate {").next())
+                    .expect("aux_commands splits on the adopt arm"),
+            ),
+        ];
+        for (name, region) in regions {
+            for call in stage_calls {
+                assert!(
+                    !region.contains(call),
+                    "{name} calls {call} directly -- the frozen report and the candidate set \
+                     must not enumerate generation stages separately, or they disagree again"
+                );
+            }
+            assert!(
+                region.contains("collect_managed_surface("),
+                "{name} must derive its managed set from the shared surface"
+            );
+        }
     }
 
     /// THE CANARY. Every name here is stamped by `marker_header_syntax` on the emit side, so a

@@ -17,12 +17,25 @@
 //!   into `alef all`, `alef generate`, or any other command, and must not be.
 //! - **Dry-run by default.** A bare `alef adopt <path>` prints the full diff and
 //!   changes nothing; `--write` applies.
-//! - **The full diff, never truncated.** Unlike `alef migrate`'s preview, which caps at
-//!   `MAX_DIFF_LINES` because a config migration is mechanical, adoption is a consent
-//!   decision over content. A truncated diff is a diff the human did not read.
+//! - **The full diff, never truncated, for every file whose content actually differs.**
+//!   Unlike `alef migrate`'s preview, which caps at `MAX_DIFF_LINES` because a config
+//!   migration is mechanical, adoption is a consent decision over content. A truncated
+//!   diff is a diff the human did not read.
 //! - **Adoption stamps the marker onto the bytes already on disk.** It never writes
 //!   generated content. Convergence happens on the next ordinary `alef generate`,
 //!   through the guard, where `git diff` shows it.
+//!
+//! What a diff is *for* splits the two states apart, and only one of them scales.
+//! A [`AdoptionState::Drifted`] file's diff shows content adoption puts at risk, so it is
+//! rendered in full and every route that could adopt one prints it first. A
+//! [`AdoptionState::Converged`] file has no such content: its bytes already equal this
+//! run's output apart from the marker, so its "diff" is the whole file echoed back as
+//! context lines and reading 12,000 of them is not consent, it is noise that hides the
+//! handful of real diffs in the same run. Converged files are therefore summarised by
+//! count and adopted as a group, and `--converged-only` exists so a migration at that
+//! scale can be performed by a command that is *incapable* of touching a drifted file.
+//! Consent for the converged case still lives where it always did — a human typed the
+//! glob and typed `--write` — and that has not been loosened. ~keep
 //!
 //! Why none of this can be automated: an automatic adoption of a drifted file is
 //! byte-for-byte indistinguishable from clobbering a hand-edit — both are "regenerated
@@ -65,6 +78,14 @@ pub struct AdoptCandidate {
     pub existing: String,
     pub generated: String,
     pub state: AdoptionState,
+    /// The exact bytes adoption would put on disk, or `None` when the format cannot
+    /// carry a marker at all and ownership has to go through the committed record.
+    ///
+    /// Computed during classification rather than at apply time because it *is* the
+    /// classification: [`AdoptionState::Converged`] is defined as "once stamped, the
+    /// next generate is a byte no-op", which cannot be decided without the stamped
+    /// bytes in hand. ~keep
+    pub stamped: Option<String>,
 }
 
 pub struct AdoptOptions {
@@ -74,6 +95,15 @@ pub struct AdoptOptions {
     pub base_dir: PathBuf,
     /// `false` (the default) prints the diff and touches nothing.
     pub write: bool,
+    /// Adopt only [`AdoptionState::Converged`] matches, leaving every drifted match
+    /// untouched and reported.
+    ///
+    /// The bulk-migration switch, and deliberately *subtractive*: it can only ever
+    /// adopt a strict subset of what a plain `--write` would. There is no additive
+    /// counterpart — no `--all`, no `--yes` — because the thing such a flag would buy
+    /// is skipping the drifted diffs, and a drifted file may be a deliberate hand-edit,
+    /// which is the exact content the guard exists to protect. ~keep
+    pub converged_only: bool,
 }
 
 /// The rendered diff for one candidate.
@@ -96,13 +126,21 @@ pub struct AdoptReport {
     pub adopted: Vec<PathBuf>,
     /// Paths that already carried a marker; no diff is produced for these.
     pub already_owned: Vec<PathBuf>,
+    /// Matches whose bytes already equal this run's output apart from the marker.
+    ///
+    /// Reported as a set of paths rather than as [`Self::diffs`] entries: their diff
+    /// is the file echoed back, so a per-file read buys the reader nothing and at
+    /// consumer-repo scale actively buries the drifted diffs that do matter. ~keep
+    pub converged: Vec<PathBuf>,
+    /// Drifted matches left untouched because [`AdoptOptions::converged_only`] was set.
+    pub skipped_drifted: Vec<PathBuf>,
     /// Paths adopted through the committed `.alef-ownership.toml` record because their
     /// format cannot carry a marker at all. Reported separately from [`Self::adopted`]
     /// because adopting these leaves the file itself byte-identical: the consent lives
     /// in a *different* file, which the operator has to commit for the adoption to mean
     /// anything anywhere else. ~keep
     pub recorded_unstampable: Vec<PathBuf>,
-    /// Full diffs for every candidate that was not already owned, in path order.
+    /// Full, untruncated diffs for every drifted candidate, in path order.
     pub diffs: Vec<AdoptDiff>,
     /// True when this was a preview; nothing on disk was touched.
     pub preview: bool,
@@ -156,11 +194,80 @@ fn matches_target(target: &str, relative: &Path) -> bool {
     glob::Pattern::new(target).is_ok_and(|pattern| pattern.matches(&spelled))
 }
 
+/// The regenerate command embedded in a self-marking Markdown header, read back out
+/// of the generated bytes.
+///
+/// `docs::render::with_html_header` writes its three comment lines contiguously and
+/// takes the command as a parameter, so the value differs per producer (`alef docs`,
+/// `alef readme`, `alef e2e generate`). Re-deriving it from the generated file rather
+/// than guessing one is what makes a stamped file byte-identical to what the next
+/// generate would emit — guess wrong and every snippet classifies as drifted on a
+/// line the human never wrote. The marker line is located through
+/// `content_has_alef_marker` itself rather than by re-typing the marker text. ~keep
+fn embedded_regenerate_command(generated: &str) -> Option<String> {
+    let lines: Vec<&str> = generated.lines().collect();
+    let marker = lines
+        .iter()
+        .position(|line| crate::core::hash::content_has_alef_marker(line))?;
+    let rest = lines
+        .get(marker + 1)?
+        .trim()
+        .strip_prefix("<!--")?
+        .trim()
+        .strip_prefix("To regenerate:")?;
+    Some(rest.trim().trim_end_matches("-->").trim().to_owned())
+}
+
+/// The bytes adoption would leave on disk, or `None` when nothing can be stamped and
+/// ownership must go through the committed record instead.
+///
+/// Two routes, tried in order:
+///
+/// 1. [`crate::cli::pipeline::stamp_for_adoption`] — the generic path-driven header,
+///    for every format `write::marker_header_syntax` knows a comment syntax for.
+/// 2. **Self-marking Markdown**, driven by the *generated* content rather than the
+///    path. `.md` is deliberately absent from `marker_header_syntax` (see its doc:
+///    listing it would flip `.md` onto the ownership rail and retroactively freeze
+///    every unmarked `.md` in every consumer repo), so route 1 refuses it — yet alef
+///    plainly can mark Markdown, because every generated `.md` it emits already
+///    carries an HTML-comment marker put there by `docs::render::with_html_header`,
+///    and `write_scaffold_files_report`'s guard reads that marker on any extension.
+///    Without this route the ~12k frozen snippet `.md` files would each take an entry
+///    in `.alef-ownership.toml` instead: a 12,000-line committed manifest standing in
+///    for a marker the file can perfectly well hold, on a path where the marker is
+///    strictly better (it cannot be separated from the file it describes). ~keep
+fn stamp_for(full_path: &Path, existing: &str, generated: &str) -> Option<String> {
+    if let Some(stamped) = crate::cli::pipeline::stamp_for_adoption(full_path, existing) {
+        return Some(stamped);
+    }
+    if full_path.extension().and_then(|extension| extension.to_str()) != Some("md") {
+        return None;
+    }
+    if !crate::core::hash::content_has_alef_marker(generated) {
+        return None;
+    }
+    let command = embedded_regenerate_command(generated)?;
+    Some(crate::docs::with_html_header(existing.to_owned(), &command))
+}
+
 /// Classify one pre-existing file against the bytes alef would generate for it.
+///
+/// Convergence is decided on the **stamped** bytes, using the writers' own
+/// unchanged-predicate (`strip_hash_line` on both sides, as in
+/// `write_files_report` and `write_scaffold_files_report`), so `Converged` means
+/// exactly one thing: after this adoption, the next ordinary `alef generate` writes
+/// no byte of this file. Comparing the *unstamped* bytes instead — which is what
+/// this did before self-marking formats were reachable — classifies every one of
+/// the frozen e2e snippets as drifted, because the only difference between them and
+/// generated output is the marker block adoption is about to add. That would have
+/// demanded 12,000 individual diff reads for 12,000 files with nothing to read. ~keep
 pub fn classify(full_path: &Path, relative: &Path, generated: &str, existing: &str) -> AdoptCandidate {
+    let stamped = stamp_for(full_path, existing, generated);
     let state = if crate::core::hash::content_has_alef_marker(existing) {
         AdoptionState::AlreadyOwned
-    } else if crate::cli::pipeline::ensure_generated_header(full_path, existing) == generated {
+    } else if crate::core::hash::strip_hash_line(stamped.as_deref().unwrap_or(existing))
+        == crate::core::hash::strip_hash_line(generated)
+    {
         AdoptionState::Converged
     } else {
         AdoptionState::Drifted
@@ -171,11 +278,15 @@ pub fn classify(full_path: &Path, relative: &Path, generated: &str, existing: &s
         existing: existing.to_owned(),
         generated: generated.to_owned(),
         state,
+        stamped,
     }
 }
 
 /// Render the complete line-by-line diff between what is on disk and what alef would
 /// generate. Never truncated — see this module's header for why.
+///
+/// Called for drifted candidates only. A converged candidate has no divergence to
+/// render, so its diff would be the whole file repeated as context lines.
 pub fn render_diff(candidate: &AdoptCandidate) -> String {
     let spelled = candidate.relative.display();
     let mut body = format!("--- {spelled} (on disk)\n+++ {spelled} (alef generate output)\n");
@@ -247,15 +358,21 @@ fn collect_candidates(options: &AdoptOptions, managed: &[ManagedOutput]) -> Resu
 /// mean the same thing on the machine that performed it and on a fresh clone of the
 /// commit that captured it. This is the *only* way a path enters that record other than
 /// alef creating the file itself — nothing infers ownership from content. ~keep
-fn apply(candidate: &AdoptCandidate, base_dir: &Path, report: &mut AdoptReport) -> Result<()> {
-    match crate::cli::pipeline::stamp_for_adoption(&candidate.full_path, &candidate.existing) {
+///
+/// Unstampable paths are accumulated into `to_record` instead of being written one at
+/// a time: `record_scaffold_owned_path` is a read-modify-write of the entire manifest,
+/// so a per-path call inside this loop is O(n) parses of an O(n)-sized file. A single
+/// batched [`crate::cli::cache::record_scaffold_owned_paths`] at the end of the run
+/// makes a 12k-path migration linear. ~keep
+fn apply(candidate: &AdoptCandidate, report: &mut AdoptReport, to_record: &mut Vec<PathBuf>) -> Result<()> {
+    match &candidate.stamped {
         Some(stamped) => {
             crate::cli::pipeline::atomic_write(&candidate.full_path, stamped.as_bytes())?;
-            crate::cli::pipeline::apply_shebang_chmod(&candidate.full_path, &stamped)?;
+            crate::cli::pipeline::apply_shebang_chmod(&candidate.full_path, stamped)?;
             report.adopted.push(candidate.relative.clone());
         }
         None => {
-            crate::cli::cache::record_scaffold_owned_path(base_dir, &candidate.full_path)?;
+            to_record.push(candidate.full_path.clone());
             report.recorded_unstampable.push(candidate.relative.clone());
             report.adopted.push(candidate.relative.clone());
         }
@@ -276,15 +393,15 @@ pub fn run(options: &AdoptOptions, managed: &[ManagedOutput]) -> Result<AdoptRep
     };
 
     for candidate in &candidates {
-        if candidate.state == AdoptionState::AlreadyOwned {
-            report.already_owned.push(candidate.relative.clone());
-            continue;
+        match candidate.state {
+            AdoptionState::AlreadyOwned => report.already_owned.push(candidate.relative.clone()),
+            AdoptionState::Converged => report.converged.push(candidate.relative.clone()),
+            AdoptionState::Drifted => report.diffs.push(AdoptDiff {
+                relative: candidate.relative.clone(),
+                state: candidate.state,
+                body: render_diff(candidate),
+            }),
         }
-        report.diffs.push(AdoptDiff {
-            relative: candidate.relative.clone(),
-            state: candidate.state,
-            body: render_diff(candidate),
-        });
     }
 
     for diff in report.drifted() {
@@ -298,10 +415,25 @@ pub fn run(options: &AdoptOptions, managed: &[ManagedOutput]) -> Result<AdoptRep
         return Ok(report);
     }
 
+    let mut to_record: Vec<PathBuf> = Vec::new();
     for candidate in candidates.iter().filter(|c| c.state != AdoptionState::AlreadyOwned) {
-        apply(candidate, &options.base_dir, &mut report)?;
-        tracing::info!(path = %candidate.relative.display(), "adopted: marker stamped, content unchanged");
+        if options.converged_only && candidate.state == AdoptionState::Drifted {
+            report.skipped_drifted.push(candidate.relative.clone());
+            continue;
+        }
+        apply(candidate, &mut report, &mut to_record)?;
+        if candidate.state == AdoptionState::Drifted {
+            // Per-file at DEBUG for converged paths and INFO only for drifted ones: a
+            // converged bulk adoption is one event of 12,000 paths, and emitting 12,000
+            // INFO lines for it drowns the drifted adoptions, which are the ones a reader
+            // has to be able to find in the log afterwards. ~keep
+            tracing::info!(path = %candidate.relative.display(), "adopted (drifted): marker stamped, content kept");
+        } else {
+            tracing::debug!(path = %candidate.relative.display(), "adopted (converged): marker stamped");
+        }
     }
+    let record_refs: Vec<&Path> = to_record.iter().map(PathBuf::as_path).collect();
+    crate::cli::cache::record_scaffold_owned_paths(&options.base_dir, &record_refs)?;
     Ok(report)
 }
 

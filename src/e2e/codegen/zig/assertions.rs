@@ -596,7 +596,6 @@ fn render_json_assertion_template(assertion: &Assertion, field_expr: &str, is_le
         })
         .collect();
 
-    
     crate::e2e::template_env::render(
         "zig/json_assertion.jinja",
         minijinja::context! {

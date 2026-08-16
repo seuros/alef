@@ -81,7 +81,9 @@ pub(crate) fn emit_helpers(prefix: &str, declared_errors: &[ErrorDef], out: &mut
     out.push_str("inline fn _error_with_message(comptime E: type) E {\n");
     out.push_str("    _ = _last_error();\n");
     if !dispatching.is_empty() {
-        out.push_str(&format!("    const code = @as(i32, @intCast(c.{error_code_symbol}()));\n"));
+        out.push_str(&format!(
+            "    const code = @as(i32, @intCast(c.{error_code_symbol}()));\n"
+        ));
         for error in dispatching {
             out.push_str(&format!("    if (E == {}) return switch (code) {{\n", error.name));
             for variant in &error.variants {

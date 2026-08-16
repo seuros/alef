@@ -304,6 +304,33 @@ fn find_method_attrs_start(code: &str, fn_idx: usize) -> usize {
     attr_start_byte
 }
 
+/// Find the byte index just after the closing `}` of a Rust method block whose `pub fn`
+/// starts at byte `fn_idx` in `code`.
+fn find_method_end(code: &str, fn_idx: usize) -> Option<usize> {
+    let slice = &code[fn_idx..];
+    let mut depth = 0usize;
+    let mut found_open = false;
+    let mut byte_offset = 0usize;
+    for ch in slice.chars() {
+        match ch {
+            '{' => {
+                depth += 1;
+                found_open = true;
+            }
+            '}' if found_open => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    byte_offset += ch.len_utf8();
+                    return Some(fn_idx + byte_offset);
+                }
+            }
+            _ => {}
+        }
+        byte_offset += ch.len_utf8();
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -400,31 +427,4 @@ mod tests {
             "expected python-side factory import in output: {out}"
         );
     }
-}
-
-/// Find the byte index just after the closing `}` of a Rust method block whose `pub fn`
-/// starts at byte `fn_idx` in `code`.
-fn find_method_end(code: &str, fn_idx: usize) -> Option<usize> {
-    let slice = &code[fn_idx..];
-    let mut depth = 0usize;
-    let mut found_open = false;
-    let mut byte_offset = 0usize;
-    for ch in slice.chars() {
-        match ch {
-            '{' => {
-                depth += 1;
-                found_open = true;
-            }
-            '}' if found_open => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    byte_offset += ch.len_utf8();
-                    return Some(fn_idx + byte_offset);
-                }
-            }
-            _ => {}
-        }
-        byte_offset += ch.len_utf8();
-    }
-    None
 }

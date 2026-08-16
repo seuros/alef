@@ -15,6 +15,13 @@ use std::collections::HashMap;
 /// (unprefixed, e.g. `"ChatCompletionChunk"`). When a class method is identified as a streaming
 /// method, its return type is overridden to `Promise<AsyncGenerator<ItemType, void, undefined>>`
 /// and a matching iterator class declaration is appended.
+// Each parameter is an independent slice of the generation input with no shared owner to group
+// them under; bundling them into a struct would add a type whose only purpose is to satisfy the
+// arity lint, and every call site would construct it inline anyway. ~keep
+#[allow(
+    clippy::too_many_arguments,
+    reason = "independent codegen inputs with no natural grouping"
+)]
 pub(super) fn gen_dts(
     api: &ApiSurface,
     prefix: &str,

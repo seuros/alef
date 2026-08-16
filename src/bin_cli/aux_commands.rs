@@ -80,31 +80,33 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             }
             Ok(None)
         }
-        Commands::Adopt { target, write } => {
+        Commands::Adopt {
+            target,
+            write,
+            converged_only,
+        } => {
             let base_dir = std::env::current_dir()?;
             let (_workspace, resolved) = load_config(config_path)?;
             let crates_to_process = dispatch::select_crates(&resolved, &context.crate_filter)?;
 
             // The diff a human consents to has to be against the bytes a real generate
-            // would write, so the same extract/generate/stubs/scaffold sweep `alef diff`
-            // performs is what feeds it -- not a cheaper approximation. ~keep
+            // would write, so the full managed surface -- every stage `alef all` writes,
+            // not a hand-maintained subset of it -- is what feeds it. Shared verbatim
+            // with `alef verify`'s frozen-file report so the report and the remedy for
+            // the same fact cannot disagree; see `collect_managed_surface`. ~keep
             let mut managed = Vec::new();
             for resolved_cfg in &crates_to_process {
                 let languages = resolve_languages(resolved_cfg, None)?;
                 let api = pipeline::extract(resolved_cfg, config_path, false)?;
-                let bindings = pipeline::generate(&api, resolved_cfg, &languages, true, config_path, true)?;
-                let stubs = pipeline::generate_stubs(&api, resolved_cfg, &languages)?;
-                let scaffold = pipeline::scaffold(&api, resolved_cfg, &languages, config_path)?;
-                for (_language, files) in bindings.iter().chain(stubs.iter()) {
-                    managed.extend(commands::adopt::managed_outputs(files, &base_dir));
-                }
-                managed.extend(commands::adopt::managed_outputs(&scaffold, &base_dir));
+                let surface = collect_managed_surface(&languages, &api, resolved_cfg, config_path, &base_dir)?;
+                managed.extend(commands::adopt::managed_outputs(&surface, &base_dir));
             }
 
             let options = commands::adopt::AdoptOptions {
                 target,
                 base_dir,
                 write,
+                converged_only,
             };
             let report = commands::adopt::run(&options, &managed)?;
 
@@ -112,15 +114,41 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 crate::bin_cli::output::fragment(&diff.body);
                 crate::bin_cli::output::blank();
             }
+            if !report.converged.is_empty() {
+                // Summarised, never diffed. See `cli::commands::adopt`'s header: a
+                // converged file's diff is the file itself echoed back, and printing
+                // 12,000 of them buries the drifted diffs printed just above -- the
+                // only ones with content to read. ~keep
+                crate::bin_cli::output::line(format_args!(
+                    "{} file(s) already match generated output byte-for-byte apart from the marker; \
+                     adopting them changes no content.",
+                    report.converged.len()
+                ));
+            }
             for path in &report.already_owned {
                 tracing::info!("already alef-owned, nothing to adopt: {}", path.display());
             }
             if report.preview {
+                if !report.diffs.is_empty() && !report.converged.is_empty() {
+                    crate::bin_cli::output::line(format_args!(
+                        "Re-run with --converged-only --write to adopt the {} converged file(s) alone, \
+                         then review the {} drifted diff(s) above before adopting those.",
+                        report.converged.len(),
+                        report.diffs.len()
+                    ));
+                }
                 crate::bin_cli::output::line(
                     "Nothing was written. Re-run with --write to stamp these files so alef can regenerate them.",
                 );
             } else {
                 tracing::info!("Adopted {} file(s)", report.adopted.len());
+                if !report.skipped_drifted.is_empty() {
+                    crate::bin_cli::output::line(format_args!(
+                        "Left {} drifted file(s) untouched (--converged-only). Their diffs are above; \
+                         adopt them with an explicit target once you have read each one.",
+                        report.skipped_drifted.len()
+                    ));
+                }
                 if !report.recorded_unstampable.is_empty() {
                     // These adoptions changed no bytes in the files themselves — the whole
                     // consent lives in `.alef-ownership.toml`. Leave it uncommitted and the

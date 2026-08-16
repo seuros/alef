@@ -1037,16 +1037,14 @@ exclude_functions = ["ping"]
 
         let build_zig = &files
             .iter()
-            .find(|f| f.path == PathBuf::from("packages/zig/build.zig"))
+            .find(|f| f.path == *"packages/zig/build.zig")
             .expect("build.zig must be scaffolded")
             .content;
         assert!(!build_zig.contains("test_module"), "got:\n{build_zig}");
         assert!(!build_zig.contains("b.addTest"), "got:\n{build_zig}");
         assert!(!build_zig.contains("b.step(\"test\""), "got:\n{build_zig}");
         assert!(
-            !files
-                .iter()
-                .any(|f| f.path == PathBuf::from("packages/zig/test/my_lib_test.zig")),
+            !files.iter().any(|f| f.path == *"packages/zig/test/my_lib_test.zig"),
             "no test file should be seeded when there is nothing to assert against, got: {:?}",
             files.iter().map(|f| &f.path).collect::<Vec<_>>()
         );
@@ -1066,7 +1064,7 @@ exclude_functions = ["ping"]
 
         let build_zig = &files
             .iter()
-            .find(|f| f.path == PathBuf::from("packages/zig/build.zig"))
+            .find(|f| f.path == *"packages/zig/build.zig")
             .expect("build.zig must be scaffolded")
             .content;
         assert!(
@@ -1084,7 +1082,7 @@ exclude_functions = ["ping"]
 
         let test_file = files
             .iter()
-            .find(|f| f.path == PathBuf::from("packages/zig/test/my_lib_test.zig"))
+            .find(|f| f.path == *"packages/zig/test/my_lib_test.zig")
             .expect("test/my_lib_test.zig must be seeded when the api surface is non-empty");
         assert!(
             test_file.content.contains("test \"my_lib.ping runs\""),
@@ -1097,7 +1095,7 @@ exclude_functions = ["ping"]
         scaffold_zig(&ApiSurface::default(), config)
             .expect("scaffold")
             .into_iter()
-            .find(|f| f.path == PathBuf::from("packages/zig/build.zig"))
+            .find(|f| f.path == *"packages/zig/build.zig")
             .expect("build.zig must be scaffolded")
             .content
     }

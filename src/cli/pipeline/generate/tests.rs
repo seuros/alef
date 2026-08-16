@@ -849,13 +849,14 @@ file_safety = { exclude = ["target/**"] }
             content: compact_content.to_owned(),
             generated_header: true,
         };
-        write_scaffold_files_with_overwrite(&[generated.clone()], base, true)
+        write_scaffold_files_with_overwrite(std::slice::from_ref(&generated), base, true)
             .expect("initial write establishes ownership");
 
         let padded_content = "# My README\n\n| Document            | Size  |\n| ------------------- | ----- |\n| Lists (Timeline)    | 129KB |\n";
 
         std::fs::write(base.join("README.md"), padded_content).expect("simulate rumdl-fmt padding");
-        write_scaffold_files_with_overwrite(&[generated.clone()], base, false).expect("write ok (overwrite=false)");
+        write_scaffold_files_with_overwrite(std::slice::from_ref(&generated), base, false)
+            .expect("write ok (overwrite=false)");
         let after_false = std::fs::read_to_string(base.join("README.md")).expect("read");
         assert!(
             after_false.contains("|----------|") && !after_false.contains("| ------------------- |"),
