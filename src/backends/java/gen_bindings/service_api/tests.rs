@@ -181,6 +181,19 @@ fn make_test_config() -> ResolvedCrateConfig {
     }
 }
 
+/// Assert that `java` emits `expected` as a whole line.
+///
+/// A `contains` on a fragment passes against output that merely embeds it — `contains("New")`
+/// is satisfied by `public DownloadManager New(...)`. Matching a full line pins the indentation,
+/// the modifiers and the argument order the fragment would let drift. ~keep
+#[track_caller]
+fn assert_emits_line(java: &str, expected: &str) {
+    assert!(
+        java.lines().any(|line| line == expected),
+        "expected the generated service to emit exactly this line:\n{expected}\n\ngot:\n{java}"
+    );
+}
+
 #[test]
 fn java_class_uses_panama_ffm() {
     let surface = make_fixture_surface();
@@ -202,9 +215,11 @@ fn java_class_contains_service_class() {
     let config = make_test_config();
     let java = gen_service_class(&surface, &surface.services[0], "com.example", &config);
 
-    assert!(java.contains("public class TestService"));
-    assert!(java.contains("implements AutoCloseable"));
-    assert!(java.contains("private MemorySegment ownerHandle"));
+    assert_emits_line(&java, "public class TestService implements AutoCloseable {");
+    // The owner handle is an `AlefHandle` (a `u64` registry key), not a pointer, so it is
+    // carried as a `long`; commit 1e08f0ac7 "fix(java): align service wrappers with FFI ABI"
+    // migrated it off `MemorySegment`. ~keep
+    assert_emits_line(&java, "    private long ownerHandle;");
 }
 
 #[test]
@@ -270,27 +285,22 @@ fn java_class_close_frees_via_downcall() {
     let java = gen_service_class(&surface, &surface.services[0], "com.example", &config);
 
     assert!(java.contains("@Override"));
-    assert!(java.contains("public void close()"));
     assert!(
         java.contains("test_crate_test_service_free"),
         "close should bind to C symbol"
     );
     assert!(java.contains("LINKER.downcallHandle"), "close should use downcall");
-    assert!(java.contains("arena.close()"), "arena lifetime should be managed");
-    assert!(
-        java.contains("private synchronized OwnerHandleLease borrowOwnerHandle()"),
-        "{java}"
-    );
-    assert!(
-        java.contains("MemorySegment detached = takeOwnerHandleForClose()"),
-        "{java}"
-    );
-    assert!(java.contains("if (!detached.equals(MemorySegment.NULL))"), "{java}");
-    assert!(java.contains("if (markServiceArenaClosed()) arena.close()"), "{java}");
-    assert!(java.contains("freeHandle.invoke(detached)"), "{java}");
-    assert!(!java.contains("freeHandle.invoke(ownerHandle)"), "{java}");
-    assert!(java.contains("while (activeOwnerBorrows != 0)"), "{java}");
-    assert!(java.contains("Thread.currentThread().interrupt()"), "{java}");
+    assert_emits_line(&java, "    private synchronized OwnerHandleLease borrowOwnerHandle() {");
+    // Detach, null-check and free all speak `long` since commit 1e08f0ac7 "fix(java): align
+    // service wrappers with FFI ABI" replaced the `MemorySegment` owner handle with the FFI's
+    // `AlefHandle` (`u64`). `invokeExact` is required: the descriptor declares JAVA_LONG. ~keep
+    assert_emits_line(&java, "        long detached = takeOwnerHandleForClose();");
+    assert_emits_line(&java, "            if (detached != 0) {");
+    assert_emits_line(&java, "                freeHandle.invokeExact(detached);");
+    assert_emits_line(&java, "                if (markServiceArenaClosed()) arena.close();");
+    assert!(!java.contains("freeHandle.invokeExact(ownerHandle)"), "{java}");
+    assert_emits_line(&java, "        while (activeOwnerBorrows != 0) {");
+    assert_emits_line(&java, "        if (interrupted) Thread.currentThread().interrupt();");
     assert!(
         java.contains("public void close() {\n        synchronized (ownerMutationLock)"),
         "{java}"
@@ -302,21 +312,31 @@ fn java_class_leases_owner_for_every_service_downcall() {
     let surface = make_fixture_surface();
     let java = gen_service_class(&surface, &surface.services[0], "com.example", &make_test_config());
 
-    assert!(java.contains("try (var ownerLease = borrowOwnerHandle()"), "{java}");
-    assert!(java.contains("ownerLease.handle(),     // owner"), "{java}");
-    assert!(java.contains("try (var ownerTransfer = takeOwnerHandle())"), "{java}");
-    assert!(java.contains("epHandle.invoke(ownerTransfer.handle()"), "{java}");
-    assert!(java.contains("ownerTransfer.commit();"), "{java}");
+    assert_emits_line(&java, "        try (var ownerLease = borrowOwnerHandle();");
+    assert_emits_line(&java, "                ownerLease.handle(),     // owner");
+    assert_emits_line(&java, "            try (var ownerTransfer = takeOwnerHandle()) {");
+    // `invokeWithArguments` (not `invoke`) since commit 7e44b62f9 "fix(java): harden owned
+    // handle lifecycles": the argument list is built per entrypoint, so the call site cannot
+    // name an exact `MethodType` at compile time. ~keep
+    assert_emits_line(
+        &java,
+        "                int result = (int) epHandle.invokeWithArguments(ownerTransfer.handle()",
+    );
+    assert_emits_line(&java, "                ownerTransfer.commit();");
     assert!(java.find("ownerTransfer.handle()").unwrap() < java.find("ownerTransfer.commit()").unwrap());
-    assert!(!java.contains("epHandle.invoke(ownerHandle"), "{java}");
+    assert!(!java.contains("epHandle.invokeWithArguments(ownerHandle"), "{java}");
     assert!(
         !java.contains("applyHandle.invoke"),
         "unsupported configurators must not be emitted:\n{java}"
     );
+    assert!(
+        !java.contains("public void config(String host, int port)"),
+        "the hardcoded ServerConfig method binds C symbols no surface declares:\n{java}"
+    );
 }
 
 #[test]
-fn java_finalize_returns_opaque_wrapper_and_consumes_owner() {
+fn java_finalize_returns_opaque_handle_and_consumes_owner() {
     let mut surface = make_fixture_surface();
     surface.types.push(crate::core::ir::TypeDef {
         name: "Router".into(),
@@ -329,12 +349,22 @@ fn java_finalize_returns_opaque_wrapper_and_consumes_owner() {
 
     let java = gen_service_class(&surface, &surface.services[0], "com.example", &make_test_config());
 
-    assert!(java.contains("public Router run("), "{java}");
-    assert!(
-        java.contains("MemorySegment result = (MemorySegment) epHandle.invoke(ownerTransfer.handle()"),
-        "{java}"
+    // The FFI returns this entrypoint as `AlefHandle` (`u64`), so the wrapper carries it as a
+    // `long`. It cannot yet be rewrapped as `new Router(...)`: the generated opaque class takes
+    // `Router(MemorySegment)`, and an `AlefHandle` is a registry key, not an address — feeding
+    // one to `MemorySegment.ofAddress` would fabricate a pointer. ~keep
+    assert_emits_line(&java, "    public long run(String addr) {");
+    assert_emits_line(
+        &java,
+        "                long result = (long) epHandle.invokeWithArguments(ownerTransfer.handle()",
     );
-    assert!(java.contains("return new Router(result)"), "{java}");
+    assert_emits_line(&java, "            try (var ownerTransfer = takeOwnerHandle()) {");
+    assert_emits_line(&java, "                ownerTransfer.commit();");
+    assert_emits_line(
+        &java,
+        "                    throw new IllegalStateException(\"Service finalizer returned null\");",
+    );
+    assert_emits_line(&java, "                return result;");
 }
 
 #[test]
@@ -481,31 +511,53 @@ fn generate_rejects_nonopaque_finalize_results() {
 }
 
 #[test]
-fn generated_service_uses_shared_java_primitive_carriers() {
+fn generated_service_uses_native_width_primitive_carriers() {
+    // Every primitive metadata shape, with the `ValueLayout` and argument expression the C ABI
+    // requires. `backends::ffi`'s `typeref_to_rust_ffi_type` declares each parameter at its
+    // native Rust width (`i32` stays `i32`), so widening them all to a shared `long` carrier
+    // would be an ABI mismatch — and `invokeWithArguments` only widens, so a boxed `Long`
+    // against a `JAVA_INT` layout fails at call time rather than compile time. ~keep
+    let carriers: [(&str, PrimitiveType, &str, &str); 13] = [
+        (
+            "flag",
+            PrimitiveType::Bool,
+            "ValueLayout.JAVA_BYTE",
+            "(byte) (flag ? 1 : 0)",
+        ),
+        ("u8_value", PrimitiveType::U8, "ValueLayout.JAVA_BYTE", "u8Value"),
+        ("u16_value", PrimitiveType::U16, "ValueLayout.JAVA_SHORT", "u16Value"),
+        ("u32_value", PrimitiveType::U32, "ValueLayout.JAVA_INT", "u32Value"),
+        ("u64_value", PrimitiveType::U64, "ValueLayout.JAVA_LONG", "u64Value"),
+        ("i8_value", PrimitiveType::I8, "ValueLayout.JAVA_BYTE", "i8Value"),
+        ("i16_value", PrimitiveType::I16, "ValueLayout.JAVA_SHORT", "i16Value"),
+        ("i32_value", PrimitiveType::I32, "ValueLayout.JAVA_INT", "i32Value"),
+        ("i64_value", PrimitiveType::I64, "ValueLayout.JAVA_LONG", "i64Value"),
+        (
+            "usize_value",
+            PrimitiveType::Usize,
+            "ValueLayout.JAVA_LONG",
+            "usizeValue",
+        ),
+        (
+            "isize_value",
+            PrimitiveType::Isize,
+            "ValueLayout.JAVA_LONG",
+            "isizeValue",
+        ),
+        ("f32_value", PrimitiveType::F32, "ValueLayout.JAVA_FLOAT", "f32Value"),
+        ("f64_value", PrimitiveType::F64, "ValueLayout.JAVA_DOUBLE", "f64Value"),
+    ];
+
     let mut surface = make_fixture_surface();
     surface.services[0].registrations[0].variants.clear();
-    surface.services[0].registrations[0].metadata_params = [
-        ("flag", PrimitiveType::Bool),
-        ("u8_value", PrimitiveType::U8),
-        ("u16_value", PrimitiveType::U16),
-        ("u32_value", PrimitiveType::U32),
-        ("u64_value", PrimitiveType::U64),
-        ("i8_value", PrimitiveType::I8),
-        ("i16_value", PrimitiveType::I16),
-        ("i32_value", PrimitiveType::I32),
-        ("i64_value", PrimitiveType::I64),
-        ("usize_value", PrimitiveType::Usize),
-        ("isize_value", PrimitiveType::Isize),
-        ("f32_value", PrimitiveType::F32),
-        ("f64_value", PrimitiveType::F64),
-    ]
-    .into_iter()
-    .map(|(name, primitive)| ParamDef {
-        name: name.into(),
-        ty: TypeRef::Primitive(primitive),
-        ..Default::default()
-    })
-    .collect();
+    surface.services[0].registrations[0].metadata_params = carriers
+        .iter()
+        .map(|(name, primitive, _, _)| ParamDef {
+            name: (*name).into(),
+            ty: TypeRef::Primitive(primitive.clone()),
+            ..Default::default()
+        })
+        .collect();
 
     let files = generate(&surface, &make_test_config()).expect("supported primitive service carriers");
     let java = &files
@@ -514,12 +566,13 @@ fn generated_service_uses_shared_java_primitive_carriers() {
         .expect("service class")
         .content;
 
-    assert!(java.matches("ValueLayout.JAVA_LONG").count() >= 11, "{java}");
-    assert!(java.contains("ValueLayout.JAVA_FLOAT"), "{java}");
-    assert!(java.contains("ValueLayout.JAVA_DOUBLE"), "{java}");
-    assert!(java.contains("(long) ((flag ? 1 : 0))"), "{java}");
-    assert!(java.contains("(long) usizeValue"), "{java}");
-    assert!(java.contains("(long) isizeValue"), "{java}");
+    for (name, _, layout, arg) in &carriers {
+        let camel = name.to_lower_camel_case();
+        assert_emits_line(java, &format!("                , {layout}    // {camel} param"));
+        assert_emits_line(java, &format!("                , {arg}    // metadata"));
+    }
+    assert!(!java.contains("(long) i32Value"), "{java}");
+    assert!(!java.contains("(long) ((flag ? 1 : 0))"), "{java}");
 }
 
 #[test]
@@ -652,16 +705,24 @@ fn java_class_marshals_service_metadata_to_ffi_carriers() {
 
     let java = gen_service_class(&surface, &surface.services[0], "com.example", &make_test_config());
 
-    assert!(
-        java.contains("MemorySegment cPath = callArena.allocateFrom(path)"),
-        "{java}"
-    );
-    assert!(java.contains("TEST_CRATE_REQUEST_OPTIONS_FROM_JSON.invoke"), "{java}");
-    assert!(java.contains("nativeResources.register(cOptions"), "{java}");
-    assert!(java.contains(", (long) priority    // metadata"), "{java}");
+    // Metadata strings are copied into an owned Rust `String` by the FFI before it returns, so
+    // they belong in the per-call confined arena; the class-scoped `Arena.ofShared()` exists for
+    // upcall stubs, which must outlive the call, and allocating there leaks one buffer a call. ~keep
+    assert_emits_line(&java, "            var cpath = callArena.allocateFrom(path);");
+    assert_emits_line(&java, "                , ValueLayout.ADDRESS    // path param");
+    assert_emits_line(&java, "                , ValueLayout.JAVA_INT    // priority param");
+    assert_emits_line(&java, "                , cpath    // metadata");
+    assert_emits_line(&java, "                , priority    // metadata");
+    assert_emits_line(&java, "                , cpath");
     assert!(java.contains("varHandle.invokeWithArguments("), "{java}");
-    assert!(java.contains(", cPath    // variant metadata"), "{java}");
     assert!(!java.contains("invokeExact(args)"), "{java}");
+    // A named metadata parameter has no C carrier the runtime can marshal, so `generate()` refuses
+    // the whole surface (see `generated_java_service_rejects_named_params_until_header_matches_runtime`).
+    // The renderer must therefore not invent a `*_from_json` round trip for it either — that
+    // symbol is never in the generated header. ~keep
+    assert!(!java.contains("TEST_CRATE_REQUEST_OPTIONS_FROM_JSON"), "{java}");
+    assert!(!java.contains("nativeResources.register(cOptions"), "{java}");
+    generate(&surface, &make_test_config()).expect_err("named service metadata must be rejected");
 }
 
 #[test]
@@ -670,14 +731,12 @@ fn java_class_emits_registration_variants() {
     let config = make_test_config();
     let java = gen_service_class(&surface, &surface.services[0], "com.example", &config);
 
-    assert!(
-        java.contains("public int get(Callable handler, String path)"),
-        "should emit get variant method"
-    );
-    assert!(
-        java.contains("public int post(Callable handler, String path)"),
-        "should emit post variant method"
-    );
+    // Variant shortcuts take their metadata first and the handler last, mirroring the Rust
+    // builder they shadow (`app.get("/path", handler)`). Commit ab729d0e3 "fix(java): restore
+    // service registration contracts" put the order back after it had been flipped to
+    // handler-first; the `register*` methods keep handler-first because they are not shortcuts. ~keep
+    assert_emits_line(&java, "    public int get(String path, Callable handler) {");
+    assert_emits_line(&java, "    public int post(String path, Callable handler) {");
 
     assert!(
         java.contains("test_crate_test_service_get"),
@@ -700,4 +759,79 @@ fn java_class_emits_registration_variants() {
         java.contains("FunctionDescriptor.of"),
         "variant methods should build function descriptors"
     );
+}
+
+/// Assert that `file` carries an alef marker, that the bytes the writer would put on disk
+/// still carry it, and that the injected `alef:hash:` line re-verifies the way `alef verify`
+/// derives it. A `.java` file that fails the marker check reaches `finalize_hashes` but
+/// carries no marker. A `.java` file that fails this gets neither provenance nor any
+/// future regeneration, silently. ~keep
+fn assert_pipeline_stamps(file: &GeneratedFile) {
+    use crate::core::hash;
+
+    let path = file.path.display().to_string();
+    assert!(
+        file.carries_alef_marker(),
+        "{path}: emitted without an alef marker and without `generated_header`, so the \
+         path never reaches `finalize_hashes` and the write guard refuses to rewrite it"
+    );
+
+    let on_disk = if hash::content_has_alef_marker(&file.content) {
+        file.content.clone()
+    } else {
+        format!("{}\n{}", hash::header(hash::CommentStyle::DoubleSlash), file.content)
+    };
+    assert!(
+        hash::content_has_alef_marker(&on_disk),
+        "{path}: the bytes the writer puts on disk must carry the marker `finalize_hashes` \
+         searches for, got:\n{on_disk}"
+    );
+
+    let inputs_hash = hash::compute_inputs_hash("sources", b"[workspace]\n");
+    let body = hash::strip_hash_line(&on_disk);
+    let stamped = hash::inject_hash_line(&body, &hash::compute_file_hash(&inputs_hash, &body));
+    assert_eq!(
+        hash::extract_hash(&stamped),
+        Some(hash::compute_file_hash(&inputs_hash, &hash::strip_hash_line(&stamped))),
+        "{path}: the injected alef:hash: line must re-verify the way `alef verify` derives it"
+    );
+}
+
+#[test]
+fn every_emitted_java_service_file_carries_a_hash_line_after_finalize() {
+    let surface = make_fixture_surface();
+    let config = make_test_config();
+
+    let files = generate(&surface, &config).expect("java service api generation");
+
+    let named = |name: &str| {
+        files
+            .iter()
+            .find(|file| file.path.to_string_lossy().ends_with(name))
+            .unwrap_or_else(|| {
+                panic!(
+                    "{name} must be emitted; got {:?}",
+                    files.iter().map(|file| &file.path).collect::<Vec<_>>()
+                )
+            })
+    };
+
+    // Positive control: assert each file actually holds its generated payload, so the
+    // stamping assertions below cannot pass over empty or missing output. ~keep
+    assert!(
+        named("TestService.java")
+            .content
+            .contains("public class TestService implements AutoCloseable"),
+        "TestService.java must hold the real service wrapper, got:\n{}",
+        named("TestService.java").content
+    );
+    assert!(
+        named("Callable.java").content.contains("public interface Callable"),
+        "Callable.java must hold the handler interface, got:\n{}",
+        named("Callable.java").content
+    );
+
+    for file in &files {
+        assert_pipeline_stamps(file);
+    }
 }

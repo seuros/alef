@@ -8,8 +8,8 @@ use alef::backends::kotlin::KotlinBackend;
 use alef::core::backend::Backend;
 use alef::core::config::ResolvedCrateConfig;
 use alef::core::ir::{
-    ApiSurface, EntrypointDef, EntrypointKind, HandlerContractDef, MethodDef, ParamDef, PrimitiveType, RegistrationDef,
-    ServiceDef, TypeRef,
+    ApiSurface, EntrypointDef, EntrypointKind, HandlerContractDef, MethodDef, ParamDef, RegistrationDef, ServiceDef,
+    TypeDef, TypeRef,
 };
 
 /// Build a synthetic [`ApiSurface`] with one service: one constructor, one registration
@@ -70,12 +70,16 @@ fn make_test_surface() -> ApiSurface {
         doc: "Run service.".to_owned(),
     };
 
+    // A `Finalize` return only survives the C ABI as an `AlefHandle`, which the FFI emits for a
+    // surface-wrapped type and nothing else; a primitive return collapses to an `i32` status code
+    // and would be dropped, so both JVM backends now refuse it. `Router` gives this fixture the
+    // one shape that legitimately reaches Java as a `long` and Kotlin as a `Long`. ~keep
     let finalize_ep = EntrypointDef {
         method: "shutdown".to_owned(),
         kind: EntrypointKind::Finalize,
         is_async: true,
         params: vec![],
-        return_type: TypeRef::Primitive(PrimitiveType::I32),
+        return_type: TypeRef::Named("Router".to_owned()),
         error_type: None,
         doc: "Finalize service.".to_owned(),
     };
@@ -134,6 +138,12 @@ fn make_test_surface() -> ApiSurface {
     ApiSurface {
         crate_name: "test_crate".to_owned(),
         version: "0.1.0".to_owned(),
+        types: vec![TypeDef {
+            name: "Router".to_owned(),
+            rust_path: "test_crate::Router".to_owned(),
+            is_opaque: true,
+            ..TypeDef::default()
+        }],
         services: vec![service],
         handler_contracts: vec![contract],
         ..ApiSurface::default()
@@ -208,7 +218,7 @@ fn service_api_jvm_symbol_consistency() {
         kotlin_content.contains("inner.registerApiSurfaceOnRequest(Callable { request -> handler(request) }, pattern)")
     );
     assert!(kotlin_content.contains("suspend fun run(addr: String) = withContext(Dispatchers.IO) { inner.run(addr) }"));
-    assert!(kotlin_content.contains("fun shutdown(): Int = inner.shutdown()"));
+    assert!(kotlin_content.contains("fun shutdown(): Long = inner.shutdown()"));
     assert!(
         !kotlin_content.contains("external fun"),
         "kotlin JVM service wrapper should delegate to Java/Panama, not declare JNI externs:\n{kotlin_content}"

@@ -26,7 +26,7 @@ use alef::core::backend::Backend;
 use alef::core::config::ResolvedCrateConfig;
 use alef::core::ir::{
     ApiSurface, EntrypointDef, EntrypointKind, HandlerContractDef, MethodDef, ParamDef, ReceiverKind, RegistrationDef,
-    ServiceDef, TypeRef,
+    ServiceDef, TypeDef, TypeRef,
 };
 
 /// Markers that must never appear in generated service-API output: each one indicates a
@@ -140,9 +140,19 @@ fn service_surface() -> ApiSurface {
         version: Default::default(),
     };
 
+    // `Router` must be declared, not merely named by the finalize return: a `Finalize` return
+    // crosses the C ABI as an `AlefHandle` only when this surface wraps the type, and otherwise
+    // collapses to an `i32` status code. While it was undeclared the Java backend skipped the
+    // entrypoint outright, so this guard swept output that was missing rather than stubbed. ~keep
     ApiSurface {
         crate_name: "test_crate".to_owned(),
         version: "1.0.0".to_owned(),
+        types: vec![TypeDef {
+            name: "Router".to_owned(),
+            rust_path: "my_crate::Router".to_owned(),
+            is_opaque: true,
+            ..TypeDef::default()
+        }],
         services: vec![ServiceDef {
             name: "TestService".to_owned(),
             rust_path: "my_crate::TestService".to_owned(),

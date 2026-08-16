@@ -16,7 +16,7 @@
 use crate::backends::java::template_env;
 use crate::core::backend::GeneratedFile;
 use crate::core::config::ResolvedCrateConfig;
-use crate::core::ir::{ApiSurface, ParamDef, ServiceDef, TypeRef};
+use crate::core::ir::{ApiSurface, EntrypointKind, ParamDef, RegistrationDef, ServiceDef, TypeRef};
 use heck::{ToLowerCamelCase, ToSnakeCase, ToUpperCamelCase};
 use minijinja::context;
 use std::path::PathBuf;
@@ -98,9 +98,15 @@ fn metadata_setup(param: &ParamDef) -> String {
     template.map_or_else(String::new, |name| {
         template_env::render(
             name,
+            // The service class owns a shared `Arena.ofShared()` for upcall stubs, which must
+            // outlive the call. Metadata strings must not go there: the FFI copies them into an
+            // owned Rust `String` before returning, so allocating them in the shared arena leaks
+            // one buffer per call until `close()`. `callArena` is the per-call confined arena
+            // opened by every service downcall template. ~keep
             context! {
                 cname => format!("c{param_name}"),
                 name => param_name,
+                arena => "callArena",
             },
         )
     })
@@ -119,12 +125,117 @@ fn metadata_arg_expr(param: &ParamDef, api: &ApiSurface) -> String {
     }
 }
 
-fn entrypoint_return_representable(return_type: &TypeRef, api: &ApiSurface) -> bool {
+/// Whether a `Finalize` entrypoint's return value survives the crossing.
+///
+/// The C ABI is the authority here, not this backend: `backends::ffi::gen_bindings::service_api`
+/// picks `AlefHandle` as the entrypoint return type only for a `Named` type this surface wraps,
+/// and renders `i32` for everything else — with `1` on the error path, which is what proves the
+/// `i32` is a *status code* rather than the user's value. A primitive/string/bytes `Finalize`
+/// return is therefore dropped, never carried, so blessing it here would emit a Java method that
+/// hands the caller a status code dressed up as their result. ~keep
+fn finalize_return_representable(return_type: &TypeRef, api: &ApiSurface) -> bool {
     match return_type {
-        TypeRef::Unit | TypeRef::Primitive(_) => true,
+        TypeRef::Unit => true,
         TypeRef::Named(name) => api.types.iter().any(|typ| typ.name == *name),
         _ => false,
     }
+}
+
+/// Reject a service parameter the C ABI cannot carry.
+///
+/// `locator` reads `{Service}.{member}[.{variant}].{param}` so a failure names the declaration.
+fn validate_service_param(locator: &str, param: &ParamDef) -> anyhow::Result<()> {
+    if param.optional {
+        anyhow::bail!("{locator}: optional service parameters are unsupported — the C ABI carries no presence flag");
+    }
+    match &param.ty {
+        TypeRef::Bytes => anyhow::bail!(
+            "{locator}: `bytes` service parameters are unsupported — the C ABI passes `*const u8` \
+             with no length carrier alongside it"
+        ),
+        TypeRef::Named(name) => anyhow::bail!(
+            "{locator}: named parameters are unsupported until the generated C header declares a \
+             `{name}` carrier this runtime can marshal"
+        ),
+        _ => Ok(()),
+    }
+}
+
+/// Reject a callback wire type the handler bridge cannot marshal as JSON.
+fn validate_callback_wire_type(
+    api: &ApiSurface,
+    locator: &str,
+    role: &str,
+    wire_type: Option<&str>,
+) -> anyhow::Result<()> {
+    let Some(name) = wire_type else {
+        anyhow::bail!("{locator}: the callback {role} type is missing, so the handler bridge has nothing to marshal");
+    };
+    if api.types.iter().any(|typ| typ.name == name && !typ.has_serde) {
+        anyhow::bail!(
+            "{locator}: callback {role} type {name} does not derive serde, so the handler bridge \
+             cannot marshal it as JSON"
+        );
+    }
+    Ok(())
+}
+
+fn validate_registration(api: &ApiSurface, service: &ServiceDef, registration: &RegistrationDef) -> anyhow::Result<()> {
+    let locator = format!("{}.{}", service.name, registration.method);
+    let contract = api
+        .handler_contracts
+        .iter()
+        .find(|contract| contract.trait_name == registration.callback_contract)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{locator}: callback contract {} is not declared on this surface",
+                registration.callback_contract
+            )
+        })?;
+    validate_callback_wire_type(api, &locator, "request", contract.wire_request_type.as_deref())?;
+    validate_callback_wire_type(api, &locator, "response", contract.wire_response_type.as_deref())?;
+
+    for param in &registration.metadata_params {
+        validate_service_param(&format!("{locator}.{}", param.name), param)?;
+    }
+
+    for variant in &registration.variants {
+        let variant_locator = format!("{locator}.{}", variant.name);
+        if variant.wrapper_call.is_none() {
+            anyhow::bail!(
+                "{variant_locator}: registration variants without an FFI wrapper constructor are \
+                 unsupported — there is no C symbol to bind"
+            );
+        }
+        for param in &variant.signature_params {
+            validate_service_param(&format!("{variant_locator}.{}", param.name), param)?;
+        }
+    }
+    Ok(())
+}
+
+/// Fail generation loudly for every service shape whose value the C ABI would silently drop.
+fn validate_service_abi(api: &ApiSurface, service: &ServiceDef) -> anyhow::Result<()> {
+    for registration in &service.registrations {
+        validate_registration(api, service, registration)?;
+    }
+
+    for entrypoint in &service.entrypoints {
+        let locator = format!("{}.{}", service.name, entrypoint.method);
+        for param in &entrypoint.params {
+            validate_service_param(&format!("{locator}.{}", param.name), param)?;
+        }
+        if matches!(entrypoint.kind, EntrypointKind::Finalize)
+            && !finalize_return_representable(&entrypoint.return_type, api)
+        {
+            anyhow::bail!(
+                "{locator} return: a Finalize entrypoint may only return `()` or a type this surface \
+                 wraps — every other return crosses the C ABI as an `i32` status code, so the value \
+                 would be dropped without a diagnostic"
+            );
+        }
+    }
+    Ok(())
 }
 
 fn metadata_arg_comment(param: &ParamDef, api: &ApiSurface, default_comment: &str) -> String {
@@ -296,7 +407,7 @@ fn gen_service_class(api: &ApiSurface, service: &ServiceDef, package: &str, conf
     }
 
     for ep in &service.entrypoints {
-        if !entrypoint_return_representable(&ep.return_type, api) {
+        if matches!(ep.kind, EntrypointKind::Finalize) && !finalize_return_representable(&ep.return_type, api) {
             continue;
         }
         let ep_method = &ep.method;
@@ -356,14 +467,6 @@ fn gen_service_class(api: &ApiSurface, service: &ServiceDef, package: &str, conf
     }
 
     out.push_str(&template_env::render(
-        "service_config_method.jinja",
-        context! {
-            ffi_prefix => &ffi_prefix,
-            service_snake => &service_snake,
-        },
-    ));
-
-    out.push_str(&template_env::render(
         "service_close.jinja",
         context! {
             ffi_prefix => &ffi_prefix,
@@ -389,6 +492,9 @@ fn gen_callable_interface(package: &str) -> String {
 pub fn generate(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
     if api.services.is_empty() {
         return Ok(vec![]);
+    }
+    for service in &api.services {
+        validate_service_abi(api, service)?;
     }
     let package = config.java_package();
     let package_path = package.replace('.', "/");
@@ -431,481 +537,4 @@ pub fn generate(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Resul
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::ir::{
-        EntrypointDef, EntrypointKind, HandlerContractDef, MethodDef, ParamDef, RegistrationDef, ServiceDef, TypeRef,
-    };
-
-    /// Construct a minimal but realistic [`ApiSurface`] that exercises:
-    /// - A service with a constructor, one registration, and Run entrypoint
-    /// - One [`HandlerContractDef`] with wire request/response DTO names
-    fn make_fixture_surface() -> ApiSurface {
-        let constructor = MethodDef {
-            name: "new".to_owned(),
-            params: vec![],
-            return_type: TypeRef::Unit,
-            is_async: false,
-            is_static: true,
-            error_type: None,
-            doc: "Create a new service owner.".to_owned(),
-            receiver: None,
-            sanitized: false,
-            trait_source: None,
-            returns_ref: false,
-            returns_cow: false,
-            return_newtype_wrapper: None,
-            has_default_impl: false,
-            binding_excluded: false,
-            binding_exclusion_reason: None,
-            version: Default::default(),
-        };
-
-        let path_param = ParamDef {
-            name: "path".to_owned(),
-            ty: TypeRef::String,
-            optional: false,
-            default: None,
-            ..ParamDef::default()
-        };
-        let registration = RegistrationDef {
-            method: "add_handler".to_owned(),
-            callback_param: "handler".to_owned(),
-            callback_contract: "RequestHandler".to_owned(),
-            metadata_params: vec![path_param.clone()],
-            receiver: Some(crate::core::ir::ReceiverKind::RefMut),
-            return_type: TypeRef::Unit,
-            error_type: None,
-            doc: "Register a request handler.".to_owned(),
-            variants: vec![
-                crate::core::ir::RegistrationVariant {
-                    name: "get".to_owned(),
-                    overrides: vec![],
-                    wrapper_call: Some(crate::core::ir::WrapperConstructorCall {
-                        metadata_param: "path".to_owned(),
-                        wrapper_type_path: "my_crate::Route".to_owned(),
-                        wrapper_type_name: "Route".to_owned(),
-                        constructor_method: "get".to_owned(),
-                        args: vec![crate::core::ir::WrapperConstructorArg::Free {
-                            param: path_param.clone(),
-                        }],
-                    }),
-                    signature_params: vec![path_param.clone()],
-                    doc: Some("Register a GET handler.".to_owned()),
-                    style: Default::default(),
-                    ..Default::default()
-                },
-                crate::core::ir::RegistrationVariant {
-                    name: "post".to_owned(),
-                    overrides: vec![],
-                    wrapper_call: Some(crate::core::ir::WrapperConstructorCall {
-                        metadata_param: "path".to_owned(),
-                        wrapper_type_path: "my_crate::Route".to_owned(),
-                        wrapper_type_name: "Route".to_owned(),
-                        constructor_method: "post".to_owned(),
-                        args: vec![crate::core::ir::WrapperConstructorArg::Free {
-                            param: path_param.clone(),
-                        }],
-                    }),
-                    signature_params: vec![path_param],
-                    doc: Some("Register a POST handler.".to_owned()),
-                    style: Default::default(),
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        };
-
-        let run_ep = EntrypointDef {
-            method: "run".to_owned(),
-            kind: EntrypointKind::Run,
-            is_async: true,
-            params: vec![ParamDef {
-                name: "addr".to_owned(),
-                ty: TypeRef::String,
-                optional: false,
-                default: None,
-                ..ParamDef::default()
-            }],
-            return_type: TypeRef::Unit,
-            error_type: Some("ServiceError".to_owned()),
-            doc: "Run the service.".to_owned(),
-        };
-
-        let service = ServiceDef {
-            name: "TestService".to_owned(),
-            rust_path: "my_crate::TestService".to_owned(),
-            constructor,
-            configurators: vec![],
-            registrations: vec![registration],
-            entrypoints: vec![run_ep],
-            doc: "A test service owner.".to_owned(),
-            cfg: None,
-        };
-
-        let dispatch_method = MethodDef {
-            name: "handle".to_owned(),
-            params: vec![ParamDef {
-                name: "request".to_owned(),
-                ty: TypeRef::Named("RequestData".to_owned()),
-                optional: false,
-                default: None,
-                ..ParamDef::default()
-            }],
-            return_type: TypeRef::Named("ResponseData".to_owned()),
-            is_async: true,
-            is_static: false,
-            error_type: Some("HandlerError".to_owned()),
-            doc: "Dispatch a request.".to_owned(),
-            receiver: Some(crate::core::ir::ReceiverKind::Ref),
-            sanitized: false,
-            trait_source: None,
-            returns_ref: false,
-            returns_cow: false,
-            return_newtype_wrapper: None,
-            has_default_impl: false,
-            binding_excluded: false,
-            binding_exclusion_reason: None,
-            version: Default::default(),
-        };
-
-        let contract = HandlerContractDef {
-            trait_name: "RequestHandler".to_owned(),
-            rust_path: "my_crate::RequestHandler".to_owned(),
-            dispatch: dispatch_method,
-            optional_methods: vec![],
-            wire_request_type: Some("RequestData".to_owned()),
-            wire_response_type: Some("ResponseData".to_owned()),
-            dispatch_extra_params: vec![],
-            wire_param_name: None,
-            dispatch_return_type: None,
-            response_adapter: None,
-            doc: "Async trait for handling requests.".to_owned(),
-        };
-
-        ApiSurface {
-            crate_name: "my_crate".to_owned(),
-            version: "0.1.0".to_owned(),
-            services: vec![service],
-            handler_contracts: vec![contract],
-            ..ApiSurface::default()
-        }
-    }
-
-    fn make_test_config() -> ResolvedCrateConfig {
-        ResolvedCrateConfig {
-            name: "test-crate".to_owned(),
-            ..ResolvedCrateConfig::default()
-        }
-    }
-
-    #[test]
-    fn java_class_uses_panama_ffm() {
-        let surface = make_fixture_surface();
-        let config = make_test_config();
-        let java = gen_service_class(&surface, &surface.services[0], "com.example", &config);
-
-        assert!(java.contains("import java.lang.foreign.*;"), "should import Panama FFM");
-        assert!(java.contains("Linker.nativeLinker()"), "should use Linker");
-        assert!(java.contains("downcallHandle"), "should use downcalls");
-        assert!(java.contains("SymbolLookup"), "should lookup C symbols");
-        assert!(java.contains("FunctionDescriptor"), "should build function descriptors");
-        assert!(java.contains("MemorySegment"), "should use MemorySegment");
-        assert!(java.contains("Arena"), "should use Arena for lifetime management");
-    }
-
-    #[test]
-    fn java_class_contains_service_class() {
-        let surface = make_fixture_surface();
-        let config = make_test_config();
-        let java = gen_service_class(&surface, &surface.services[0], "com.example", &config);
-
-        assert!(java.contains("public class TestService"));
-        assert!(java.contains("implements AutoCloseable"));
-        assert!(java.contains("private long ownerHandle"));
-    }
-
-    #[test]
-    fn java_class_constructor_uses_downcall() {
-        let surface = make_fixture_surface();
-        let config = make_test_config();
-        let java = gen_service_class(&surface, &surface.services[0], "com.example", &config);
-
-        assert!(java.contains("public TestService()"));
-        assert!(
-            java.contains("test_crate_test_service_new"),
-            "constructor should bind to C symbol"
-        );
-        assert!(
-            java.contains("LINKER.downcallHandle"),
-            "constructor should use downcall"
-        );
-    }
-
-    #[test]
-    fn java_class_contains_upcall_stub_for_handler() {
-        let surface = make_fixture_surface();
-        let config = make_test_config();
-        let java = gen_service_class(&surface, &surface.services[0], "com.example", &config);
-
-        assert!(
-            java.contains("LINKER.upcallStub"),
-            "registration should build upcall stub for handler"
-        );
-        assert!(java.contains("MethodHandle"), "should use MethodHandle to wrap handler");
-        assert!(
-            java.contains("responseFreeStub"),
-            "registration should pass a paired response deallocator"
-        );
-        assert!(
-            java.contains("freeHandlerResponse"),
-            "service should release responses with Java's allocator"
-        );
-    }
-
-    #[test]
-    fn java_class_registration_binds_to_c_symbol() {
-        let surface = make_fixture_surface();
-        let config = make_test_config();
-        let java = gen_service_class(&surface, &surface.services[0], "com.example", &config);
-
-        assert!(
-            java.contains("test_crate_test_service_register_add_handler"),
-            "registration should bind to exact C FFI symbol"
-        );
-    }
-
-    #[test]
-    fn java_class_entrypoint_uses_downcall() {
-        let surface = make_fixture_surface();
-        let config = make_test_config();
-        let java = gen_service_class(&surface, &surface.services[0], "com.example", &config);
-
-        assert!(java.contains("public void run(String addr)"));
-        assert!(
-            java.contains("test_crate_test_service_ep_run"),
-            "entrypoint should bind to C symbol"
-        );
-        assert!(java.contains("LINKER.downcallHandle"), "entrypoint should use downcall");
-    }
-
-    #[test]
-    fn java_class_close_frees_via_downcall() {
-        let surface = make_fixture_surface();
-        let config = make_test_config();
-        let java = gen_service_class(&surface, &surface.services[0], "com.example", &config);
-
-        assert!(java.contains("@Override"));
-        assert!(java.contains("public void close()"));
-        assert!(
-            java.contains("test_crate_test_service_free"),
-            "close should bind to C symbol"
-        );
-        assert!(java.contains("LINKER.downcallHandle"), "close should use downcall");
-        assert!(java.contains("arena.close()"), "arena lifetime should be managed");
-    }
-
-    #[test]
-    fn java_class_no_native_method_declarations() {
-        let surface = make_fixture_surface();
-        let config = make_test_config();
-        let java = gen_service_class(&surface, &surface.services[0], "com.example", &config);
-
-        assert!(
-            !java.contains("public native ")
-                && !java.contains("private native ")
-                && !java.contains("protected native ")
-                && !java.contains("static native "),
-            "should not contain JNI native method declarations:\n{java}"
-        );
-        assert!(
-            !java.contains("System.loadLibrary"),
-            "should not load library (Panama manages it)"
-        );
-        assert!(!java.contains("Java_"), "should not contain Java_ JNI symbols");
-    }
-
-    #[test]
-    fn callable_interface_is_functional() {
-        let iface = gen_callable_interface("com.example");
-
-        assert!(iface.contains("@FunctionalInterface"));
-        assert!(iface.contains("public interface Callable"));
-        assert!(iface.contains("String handle(String request)"));
-    }
-
-    #[test]
-    fn generate_returns_service_and_callable() {
-        let surface = make_fixture_surface();
-        let config = make_test_config();
-
-        let files = generate(&surface, &config).expect("generate should not fail");
-        assert!(files.len() >= 2, "expected at least service class + Callable interface");
-
-        let has_service_class = files
-            .iter()
-            .any(|f| f.path.to_string_lossy().contains("TestService.java"));
-        let has_callable = files.iter().any(|f| f.path.to_string_lossy().contains("Callable.java"));
-
-        assert!(has_service_class, "expected TestService.java");
-        assert!(has_callable, "expected Callable.java");
-    }
-
-    #[test]
-    fn generate_returns_empty_for_no_services() {
-        let surface = ApiSurface::default();
-        let config = make_test_config();
-
-        let files = generate(&surface, &config).expect("generate should not fail");
-        assert!(files.is_empty(), "expected no files for surface without services");
-    }
-
-    #[test]
-    fn java_class_passes_all_metadata_params() {
-        let mut surface = make_fixture_surface();
-        let reg = &mut surface.services[0].registrations[0];
-
-        reg.metadata_params.push(ParamDef {
-            name: "method".to_owned(),
-            ty: TypeRef::String,
-            optional: false,
-            default: None,
-            ..ParamDef::default()
-        });
-        reg.metadata_params.push(ParamDef {
-            name: "priority".to_owned(),
-            ty: TypeRef::Primitive(crate::core::ir::PrimitiveType::I32),
-            optional: false,
-            default: None,
-            ..ParamDef::default()
-        });
-
-        let config = make_test_config();
-        let java = gen_service_class(&surface, &surface.services[0], "com.example", &config);
-
-        assert!(
-            java.contains("public int registerTestServiceAddHandler(Callable handler, String path"),
-            "registration method must include all metadata parameters"
-        );
-
-        assert!(
-            java.contains("ValueLayout.ADDRESS") || java.contains("ValueLayout.JAVA_INT"),
-            "registration should build FunctionDescriptor with metadata param layouts"
-        );
-    }
-
-    #[test]
-    fn java_class_emits_registration_variants() {
-        let surface = make_fixture_surface();
-        let config = make_test_config();
-        let java = gen_service_class(&surface, &surface.services[0], "com.example", &config);
-
-        assert!(
-            java.contains("public int get(String path, Callable handler)"),
-            "should emit get variant method"
-        );
-        assert!(
-            java.contains("public int post(String path, Callable handler)"),
-            "should emit post variant method"
-        );
-
-        assert!(
-            java.contains("test_crate_test_service_get"),
-            "should bind get variant to correct C symbol"
-        );
-        assert!(
-            java.contains("test_crate_test_service_post"),
-            "should bind post variant to correct C symbol"
-        );
-
-        assert!(
-            java.contains("LINKER.downcallHandle"),
-            "variant methods should use Panama downcalls"
-        );
-        assert!(
-            java.contains("LINKER.upcallStub"),
-            "variant methods should create upcall stubs"
-        );
-        assert!(
-            java.contains("FunctionDescriptor.of"),
-            "variant methods should build function descriptors"
-        );
-    }
-
-    /// Replay of the write pipeline's stamping contract for a single emitted file.
-    ///
-    /// `core_commands` only inserts a generated path into the set it hands
-    /// `finalize_hashes` when [`GeneratedFile::carries_alef_marker`] holds, and
-    /// `write_files_report` refuses to overwrite an existing markable file whose content
-    /// carries no marker. A `.java` file that fails this gets neither provenance nor any
-    /// future regeneration, silently. ~keep
-    fn assert_pipeline_stamps(file: &GeneratedFile) {
-        use crate::core::hash;
-
-        let path = file.path.display().to_string();
-        assert!(
-            file.carries_alef_marker(),
-            "{path}: emitted without an alef marker and without `generated_header`, so the \
-             path never reaches `finalize_hashes` and the write guard refuses to rewrite it"
-        );
-
-        let on_disk = if hash::content_has_alef_marker(&file.content) {
-            file.content.clone()
-        } else {
-            format!("{}\n{}", hash::header(hash::CommentStyle::DoubleSlash), file.content)
-        };
-        assert!(
-            hash::content_has_alef_marker(&on_disk),
-            "{path}: the bytes the writer puts on disk must carry the marker `finalize_hashes` \
-             searches for, got:\n{on_disk}"
-        );
-
-        let inputs_hash = hash::compute_inputs_hash("sources", b"[workspace]\n");
-        let body = hash::strip_hash_line(&on_disk);
-        let stamped = hash::inject_hash_line(&body, &hash::compute_file_hash(&inputs_hash, &body));
-        assert_eq!(
-            hash::extract_hash(&stamped),
-            Some(hash::compute_file_hash(&inputs_hash, &hash::strip_hash_line(&stamped))),
-            "{path}: the injected alef:hash: line must re-verify the way `alef verify` derives it"
-        );
-    }
-
-    #[test]
-    fn every_emitted_java_service_file_carries_a_hash_line_after_finalize() {
-        let surface = make_fixture_surface();
-        let config = make_test_config();
-
-        let files = generate(&surface, &config).expect("java service api generation");
-
-        let named = |name: &str| {
-            files
-                .iter()
-                .find(|file| file.path.to_string_lossy().ends_with(name))
-                .unwrap_or_else(|| {
-                    panic!(
-                        "{name} must be emitted; got {:?}",
-                        files.iter().map(|file| &file.path).collect::<Vec<_>>()
-                    )
-                })
-        };
-
-        // Positive control: assert each file actually holds its generated payload, so the
-        // stamping assertions below cannot pass over empty or missing output. ~keep
-        assert!(
-            named("TestService.java")
-                .content
-                .contains("public class TestService implements AutoCloseable"),
-            "TestService.java must hold the real service wrapper, got:\n{}",
-            named("TestService.java").content
-        );
-        assert!(
-            named("Callable.java").content.contains("public interface Callable"),
-            "Callable.java must hold the handler interface, got:\n{}",
-            named("Callable.java").content
-        );
-
-        for file in &files {
-            assert_pipeline_stamps(file);
-        }
-    }
-}
+mod tests;

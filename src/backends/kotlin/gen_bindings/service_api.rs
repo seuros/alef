@@ -26,12 +26,16 @@ use heck::{ToLowerCamelCase, ToUpperCamelCase};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-/// Whether an entrypoint's return type can be represented as a Kotlin return
-/// (mirrors the gate in every host backend so non-representable `Finalize`
-/// entrypoints — e.g. one returning an axum `Router` — are skipped).
+/// Whether an entrypoint's return value survives the crossing to Kotlin.
+///
+/// This wrapper delegates to the Java/Panama facade, so it must accept exactly what the Java
+/// backend accepts. A primitive `Finalize` return is not on that list: the FFI renders every
+/// non-opaque entrypoint return as an `i32` status code, Java therefore emits `void`, and a
+/// Kotlin `fun shutdown(): Int = inner.shutdown()` against a `void` will not compile. Java now
+/// fails generation on that shape; this gate keeps the two backends in step. ~keep
 fn entrypoint_return_representable(ep: &EntrypointDef, api: &ApiSurface) -> bool {
     match &ep.return_type {
-        TypeRef::Unit | TypeRef::Primitive(_) => true,
+        TypeRef::Unit => true,
         TypeRef::Named(n) => api.types.iter().any(|t| t.name == *n),
         _ => false,
     }
@@ -73,9 +77,17 @@ fn kotlin_type_for_param(ty: &TypeRef, api: &ApiSurface) -> String {
     }
 }
 
-/// Same mapping for `Finalize` entrypoint return types.
+/// The Kotlin type of a `Finalize` entrypoint's return value.
+///
+/// A `Finalize` body is `= inner.{method}(...)`, so this must be the type *Java* returns, not the
+/// Kotlin wrapper the parameter mapping would pick: Java hands back the raw `AlefHandle` as a
+/// `long`, because an `AlefHandle` is a registry key and the generated opaque class is
+/// constructed from a `MemorySegment`. Declaring the wrapper type here would not compile. ~keep
 fn kotlin_return_type(ty: &TypeRef, api: &ApiSurface) -> String {
-    kotlin_type_for_param(ty, api)
+    match ty {
+        TypeRef::Named(n) if api.types.iter().any(|t| t.name == *n) => "Long".to_owned(),
+        _ => kotlin_type_for_param(ty, api),
+    }
 }
 
 /// Translate a Rust enum path expression to a Kotlin/JVM enum access expression.
@@ -551,12 +563,20 @@ mod tests {
     #[test]
     fn coroutine_wrapper_finalize_representable_uses_return() {
         let mut api = make_fixture_surface();
+        // Only a surface-wrapped type is representable: it is the one shape the FFI returns as an
+        // `AlefHandle` instead of collapsing to an `i32` status code. Java surfaces that handle as
+        // a `long`, so the coroutine wrapper must declare `Long`. ~keep
+        api.types.push(crate::core::ir::TypeDef {
+            name: "Router".to_owned(),
+            is_opaque: true,
+            ..Default::default()
+        });
         api.services[0].entrypoints.push(EntrypointDef {
             method: "shutdown".to_owned(),
             kind: EntrypointKind::Finalize,
             is_async: false,
             params: vec![],
-            return_type: TypeRef::Primitive(crate::core::ir::PrimitiveType::I64),
+            return_type: TypeRef::Named("Router".to_owned()),
             error_type: None,
             doc: "Shutdown the service.".to_owned(),
         });

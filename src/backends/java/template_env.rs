@@ -473,10 +473,6 @@ static TEMPLATES: &[(&str, &str)] = &[
     ),
     ("service_close.jinja", include_str!("templates/service_close.jinja")),
     (
-        "service_config_method.jinja",
-        include_str!("templates/service_config_method.jinja"),
-    ),
-    (
         "service_callable_interface.jinja",
         include_str!("templates/service_callable_interface.jinja"),
     ),

@@ -1,1 +1,1 @@
-            var {{ cname }} = arena.allocateFrom({{ name }});
+            var {{ cname }} = {{ arena | default("arena") }}.allocateFrom({{ name }});
