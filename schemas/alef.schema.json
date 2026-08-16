@@ -1280,7 +1280,7 @@
         },
         "ffi": {
           "default": [],
-          "description": "Hand-written Rust modules to declare in the generated FFI `lib.rs` via\n`pub mod <name>;`. Alef requires `<name>.rs` or `<name>/mod.rs` to already\nexist under the FFI crate's `src/` directory before generation runs, and\nfails with a clear error naming the missing path if neither does — the\nmodule's *contents* are never generated, only the declaration.\n\nDeclarations are emitted at the top of the file, in configured order,\nimmediately after the generated imports. Only `pub mod` is emitted (no\n`pub use <name>::*;` re-export): a `#[no_mangle] extern \"C\" fn` is exported\ninto the compiled artifact, and seen by cbindgen's header generation,\nregardless of the enclosing module's path, so flattening the names into\ncrate-root scope isn't needed and would risk colliding with a generated\nitem of the same name. Contrast with `[crates.wasm].custom_rust_modules`,\nwhich does add `pub use` because wasm-bindgen's glue needs the re-exported\nnames in scope unqualified.\n\nThis is the mechanism for compiling a hand-authored opaque-handle wrapper\n(e.g. around a core type marked `alef(skip)`) into the FFI crate: without\nan entry here, a hand-written sibling `.rs` file under the crate's `src/`\nis never reached from the generated crate root, so its `extern \"C\"`\nfunctions are silently absent from both the cdylib and the header.",
+          "description": "Hand-written Rust modules to declare in the generated FFI `lib.rs` via\n`pub mod <name>;`. Alef requires `<name>.rs` or `<name>/mod.rs` to already\nexist under the FFI crate's `src/` directory before generation runs, and\nfails with a clear error naming the missing path if neither does — the\nmodule's *contents* are never generated, only the declaration.\n\nDeclarations are emitted at the top of the file, in configured order,\nimmediately after the generated imports. Only `pub mod` is emitted (no\n`pub use <name>::*;` re-export): a `#[no_mangle] extern \"C\" fn` is exported\ninto the compiled artifact, and seen by cbindgen's header generation,\nregardless of the enclosing module's path, so flattening the names into\ncrate-root scope isn't needed and would risk colliding with a generated\nitem of the same name. Contrast with `[crates.wasm].custom_rust_modules`,\nwhich does add `pub use` because wasm-bindgen's glue needs the re-exported\nnames in scope unqualified.\n\nThis is the mechanism for compiling a hand-authored opaque-handle wrapper\n(e.g. around a core type marked `alef(skip)`) into the FFI crate: without\nan entry here, a hand-written sibling `.rs` file under the crate's `src/`\nis never reached from the generated crate root, so its `extern \"C\"`\nfunctions are silently absent from both the cdylib and the header. ~keep",
           "items": {
             "type": "string"
           },
@@ -1491,7 +1491,7 @@
         },
         "excluded_default_features": {
           "default": [],
-          "description": "Feature names that should be declared as opt-in flags in the wrapper's\n`[features]` table but excluded from the `default = [...]` array.\n\nThe named features are still emitted as forwarding entries\n(`<name> = [\"<core>/<name>\"]`) so `cargo build -p <crate>-dart --features <name>`\ncontinues to work on desktop targets. They are simply not auto-enabled\nby `cargo build` against default features.\n\nUse this to keep native cross-compile targets (iOS, Android NDK) green\nwhen a feature pulls in a system library (e.g. `libheif-sys` via `heic`)\nwhose `build.rs` cannot satisfy `pkg-config` under cross-compilation.\nThe target-conditional `[target.'cfg(...)'.dependencies]` block alone\nis insufficient because cargo unions feature sets across dep instances.",
+          "description": "Feature names that should be declared as opt-in flags in the wrapper's\n`[features]` table but excluded from the `default = [...]` array.\n\nThe named features are still emitted as forwarding entries\n(`<name> = [\"<core>/<name>\"]`) so `cargo build -p <crate>-dart --features <name>`\ncontinues to work on desktop targets. They are simply not auto-enabled\nby `cargo build` against default features.\n\nUse this to keep native cross-compile targets (iOS, Android NDK) green\nwhen a feature pulls in a system library (e.g. `libheif-sys` via `heic`)\nwhose `build.rs` cannot satisfy `pkg-config` under cross-compilation.\nThe target-conditional `[target.'cfg(...)'.dependencies]` block alone\nis insufficient because cargo unions feature sets across dep instances. ~keep",
           "items": {
             "type": "string"
           },
@@ -1585,7 +1585,7 @@
         },
         "stub_methods": {
           "default": [],
-          "description": "Method names whose Rust bridge body should be emitted as `unimplemented!()`.\n\nUse this when a function's FFI signature (e.g. nested tuples containing\n`Vec<u8>`) cannot be represented across the FRB bridge at all. Consumers must\nlist the method names explicitly — this field has no built-in defaults so the\nknob is library-agnostic.\n\nExample (`alef.toml`):\n```toml\n[crates.dart]\nstub_methods = [\"batch_extract_bytes\", \"batch_extract_bytes_sync\"]\n```",
+          "description": "Method names whose Rust bridge body should be emitted as `unimplemented!()`.\n\nUse this when a function's FFI signature (e.g. nested tuples containing\n`Vec<u8>`) cannot be represented across the FRB bridge at all. Consumers must\nlist the method names explicitly — this field has no built-in defaults so the\nknob is library-agnostic. ~keep\n\nExample (`alef.toml`):\n```toml\n[crates.dart]\nstub_methods = [\"batch_extract_bytes\", \"batch_extract_bytes_sync\"]\n```",
           "items": {
             "type": "string"
           },
@@ -2673,7 +2673,7 @@
         },
         "target_dep_overrides": {
           "default": [],
-          "description": "Per-target overrides for the core-crate dependency emitted into the\ngenerated FFI Cargo.toml. Used when some `cfg(...)` target requires a\nreduced feature set (e.g. the `x86_64-linux-android` emulator cannot\nlink ONNX Runtime, so sample_core ships an `android-target` feature\nflag that drops every ORT-dependent extractor).\n\nWhen this list is non-empty the scaffold emits\n`[target.'cfg(not(<any-cfg>))'.dependencies]` for the default branch\nplus one `[target.'cfg(<cfg>)'.dependencies]` block per override,\ninstead of the unconditional `[dependencies]` block.",
+          "description": "Per-target overrides for the core-crate dependency emitted into the\ngenerated FFI Cargo.toml. Used when some `cfg(...)` target requires a\nreduced feature set (e.g. the `x86_64-linux-android` emulator cannot\nlink ONNX Runtime, so sample_core ships an `android-target` feature\nflag that drops every ORT-dependent extractor). ~keep\n\nWhen this list is non-empty the scaffold emits\n`[target.'cfg(not(<any-cfg>))'.dependencies]` for the default branch\nplus one `[target.'cfg(<cfg>)'.dependencies]` block per override,\ninstead of the unconditional `[dependencies]` block.",
           "items": {
             "$ref": "#/$defs/FfiTargetDepOverride"
           },
@@ -3624,7 +3624,7 @@
         },
         "target_dep_overrides": {
           "default": [],
-          "description": "Per-target overrides for the core-crate dependency emitted into the\ngenerated JNI `Cargo.toml`. Mirrors [`FfiConfig::target_dep_overrides`].\n\nThe JNI shim crate is the unit that gets cross-compiled to Android NDK\n(and potentially iOS) targets, where native-C deps (libheif via `heic`)\nand ONNX Runtime (`ort-sys`, no Android prebuilt) cannot link. Without\nper-target gating the JNI crate pulls the unconditional `[\"full\"]`\nfeature set on every target, breaking the Kotlin-Android build.\n\nWhen this list is non-empty the scaffold emits\n`[target.'cfg(not(<any-cfg>))'.dependencies]` for the default branch\nplus one `[target.'cfg(<cfg>)'.dependencies]` block per override,\ninstead of a single unconditional core-crate dependency line.\n\n[`FfiConfig::target_dep_overrides`]: super::FfiConfig::target_dep_overrides",
+          "description": "Per-target overrides for the core-crate dependency emitted into the\ngenerated JNI `Cargo.toml`. Mirrors [`FfiConfig::target_dep_overrides`].\n\nThe JNI shim crate is the unit that gets cross-compiled to Android NDK\n(and potentially iOS) targets, where native-C deps (libheif via `heic`)\nand ONNX Runtime (`ort-sys`, no Android prebuilt) cannot link. Without\nper-target gating the JNI crate pulls the unconditional `[\"full\"]`\nfeature set on every target, breaking the Kotlin-Android build. ~keep\n\nWhen this list is non-empty the scaffold emits\n`[target.'cfg(not(<any-cfg>))'.dependencies]` for the default branch\nplus one `[target.'cfg(<cfg>)'.dependencies]` block per override,\ninstead of a single unconditional core-crate dependency line.\n\n[`FfiConfig::target_dep_overrides`]: super::FfiConfig::target_dep_overrides",
           "items": {
             "$ref": "#/$defs/FfiTargetDepOverride"
           },
@@ -4178,7 +4178,7 @@
         },
         "tokio_util_features": {
           "default": null,
-          "description": "Features for the auto-emitted `tokio-util` dependency that backs napi trait-bridge\ncancellation tokens. Defaults to `[\"rt\"]` because `tokio_util::sync::CancellationToken`\nis gated behind the `rt` feature in tokio-util 0.7+. Override when a consumer needs\nadditional tokio-util features (e.g. `[\"rt\", \"codec\"]`).",
+          "description": "Features for the auto-emitted `tokio-util` dependency that backs napi trait-bridge\ncancellation tokens. Defaults to `[\"rt\"]` because `tokio_util::sync::CancellationToken`\nis gated behind the `rt` feature in tokio-util 0.7+. Override when a consumer needs\nadditional tokio-util features (e.g. `[\"rt\", \"codec\"]`). ~keep",
           "items": {
             "type": "string"
           },
@@ -5315,7 +5315,8 @@
           "default": {
             "clippy": {},
             "rust": {}
-          }
+          },
+          "description": "Raw `[lints.rust]` / `[lints.clippy]` tables spliced into every generated\nRust binding-crate `Cargo.toml` for this crate — across every backend that\nemits a standalone Rust crate (ffi, jni, node, python, php, wasm, ruby,\nelixir, R, swift, dart). Mirrors [`Self::crate_attributes`]'s placement and\nrationale: `[lints]\\nworkspace = true` cannot be used for this because it is\nall-or-nothing and would also pull in `unsafe_code = \"deny\"`, which breaks\nany FFI crate with legitimate `unsafe` blocks. This is a pure passthrough —\nalef does not validate or interpret lint names, and neither table is emitted\nwhen empty (the default), so output is byte-identical to a crate that does\nnot set this field.\n\nA handful of backends (dart, swift, elixir) already emit their own\n`unexpected_cfgs` check-cfg allowlist into `[lints.rust]`; entries configured\nhere compose with that rather than replacing it, and lose on a key collision\nsince the backend's own entry encodes a compile-correctness requirement.\n\nExample — opt a crate's generated bindings into the workspace's deny-by-default\nlint policy:\n```toml\n[[crates]]\nname = \"sample-core\"\n\n[crates.cargo_lints.rust]\nunused_must_use = \"deny\"\n\n[crates.cargo_lints.clippy]\nprint_stdout = \"deny\"\nprint_stderr = \"deny\"\ndbg_macro = \"deny\"\n```"
         },
         "clean": {
           "additionalProperties": {
@@ -6164,7 +6165,7 @@
         },
         "required_ruby_version": {
           "default": null,
-          "description": "Override the `required_ruby_version` constraint emitted into the gemspec. A single\nRubyGems requirement string (e.g. `\">= 3.2.0\"`). When unset, defaults to `\">= 3.2.0\"`\n(no upper bound, so the gem installs on Ruby 4.x).",
+          "description": "Override the `required_ruby_version` constraint emitted into the gemspec. A single\nRubyGems requirement string (e.g. `\">= 3.2.0\"`). When unset, defaults to `\">= 3.2.0\"`\n(no upper bound, so the gem installs on Ruby 4.x). ~keep",
           "type": [
             "string",
             "null"
@@ -6794,7 +6795,7 @@
         },
         "ffi_target_dep_overrides": {
           "default": [],
-          "description": "Per-target overrides for the injected secondary FFI crate dependency\n(the C-ABI `*-ffi` crate; see [`Self::ffi_features`]). Each entry\nreplaces the default `[dependencies]` entry for that dependency with a\n`[target.'cfg(...)'.dependencies]` block scoped to the cfg predicate.\nWhen non-empty, the default entry (using `ffi_features`, if any) is\ngated on `cfg(not(any(<override cfgs>)))` so exactly one branch\nmatches per build target — mirrors [`Self::target_dep_overrides`], but\nfor the FFI crate dependency instead of the core crate dependency.\n\nNeeded because Cargo unifies feature sets across all dependency edges\nto the same resolved package: an unconditionally-enabled feature set\non the FFI dep (e.g. `full-no-heic`, which pulls in `sceptre-ocr` ->\n`sceptre-ocr-ort`) can activate desktop/server-only code even on\ntargets where the *core* dep only asks for a reduced feature set (e.g.\n`android-target`), tripping `compile_error!` guards meant to keep\nmobile builds from linking incompatible native dependencies. Without\nthis knob, the injected FFI dep has no equivalent to\n[`Self::target_dep_overrides`] / [`Self::excluded_default_features`],\nwhich only govern the primary core dep.\n\nA configuration that sets only `ffi_features` and leaves this list\nempty is unaffected: the FFI dependency is still emitted as a single\n`[dependencies]` line.",
+          "description": "Per-target overrides for the injected secondary FFI crate dependency\n(the C-ABI `*-ffi` crate; see [`Self::ffi_features`]). Each entry\nreplaces the default `[dependencies]` entry for that dependency with a\n`[target.'cfg(...)'.dependencies]` block scoped to the cfg predicate.\nWhen non-empty, the default entry (using `ffi_features`, if any) is\ngated on `cfg(not(any(<override cfgs>)))` so exactly one branch\nmatches per build target — mirrors [`Self::target_dep_overrides`], but\nfor the FFI crate dependency instead of the core crate dependency.\n\nNeeded because Cargo unifies feature sets across all dependency edges\nto the same resolved package: an unconditionally-enabled feature set\non the FFI dep (e.g. `full-no-heic`, which pulls in `sceptre-ocr` ->\n`sceptre-ocr-ort`) can activate desktop/server-only code even on\ntargets where the *core* dep only asks for a reduced feature set (e.g.\n`android-target`), tripping `compile_error!` guards meant to keep\nmobile builds from linking incompatible native dependencies. Without\nthis knob, the injected FFI dep has no equivalent to\n[`Self::target_dep_overrides`] / [`Self::excluded_default_features`],\nwhich only govern the primary core dep.\n\nA configuration that sets only `ffi_features` and leaves this list\nempty is unaffected: the FFI dependency is still emitted as a single\n`[dependencies]` line. ~keep",
           "items": {
             "$ref": "#/$defs/SwiftTargetDepOverride"
           },
@@ -6871,7 +6872,7 @@
         },
         "target_dep_overrides": {
           "default": [],
-          "description": "Per-target overrides for the core Cargo dependency. Each entry replaces\nthe default `[dependencies]` entry with a `[target.'cfg(...)'.dependencies]`\nblock scoped to the cfg predicate. When non-empty, the default entry is\ngated on `cfg(not(any(<override cfgs>)))` so exactly one branch matches\nper build target.\n\nMirrors `DartTargetDepOverride`. Needed because `libheif-sys` (pulled in\nvia the `heic` feature) cannot cross-compile to iOS or Android NDK\ntargets and is not on the Windows runner image's library path.",
+          "description": "Per-target overrides for the core Cargo dependency. Each entry replaces\nthe default `[dependencies]` entry with a `[target.'cfg(...)'.dependencies]`\nblock scoped to the cfg predicate. When non-empty, the default entry is\ngated on `cfg(not(any(<override cfgs>)))` so exactly one branch matches\nper build target.\n\nMirrors `DartTargetDepOverride`. Needed because `libheif-sys` (pulled in\nvia the `heic` feature) cannot cross-compile to iOS or Android NDK\ntargets and is not on the Windows runner image's library path. ~keep",
           "items": {
             "$ref": "#/$defs/SwiftTargetDepOverride"
           },
@@ -7365,7 +7366,7 @@
         },
         "custom_rust_modules": {
           "default": [],
-          "description": "Hand-written Rust modules to declare in the generated lib.rs with `pub mod <name>;`\nand re-export with `pub use <name>::*;`. This is the knob for Rust-side dispatch/glue\nmodules under wasm. Note that `[custom_modules].wasm` is NOT consumed by the wasm\nbackend (no code path reads it) — use this field instead.",
+          "description": "Hand-written Rust modules to declare in the generated lib.rs with `pub mod <name>;`\nand re-export with `pub use <name>::*;`. This is the knob for Rust-side dispatch/glue\nmodules under wasm. Note that `[custom_modules].wasm` is NOT consumed by the wasm\nbackend (no code path reads it) — use this field instead. ~keep",
           "items": {
             "type": "string"
           },
