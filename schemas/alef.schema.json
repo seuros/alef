@@ -1035,6 +1035,25 @@
       ],
       "description": "Configuration for a single capsule type entry in `PythonConfig::capsule_types`.\n\nSupports two TOML forms via `#[serde(untagged)]`:\n\n- String: `Language = \"sample_language.Language\"` → capsule round-trip via `into_raw()`\n- Struct: `Parser = { python_type = \"sample_language.Parser\", construct_from = \"Language\" }` → Python-side construction"
     },
+    "CargoLintsConfig": {
+      "additionalProperties": false,
+      "description": "Raw `[lints.rust]` / `[lints.clippy]` tables for a generated binding-crate\n`Cargo.toml`. Each entry's value may be a bare string (`print_stdout = \"deny\"`)\nor a table (`unexpected_cfgs = { level = \"warn\", check-cfg = [...] }`) — alef\nnever inspects the value, only splices it in verbatim.",
+      "properties": {
+        "clippy": {
+          "additionalProperties": true,
+          "default": {},
+          "description": "Entries for the generated crate's `[lints.clippy]` table.",
+          "type": "object"
+        },
+        "rust": {
+          "additionalProperties": true,
+          "default": {},
+          "description": "Entries for the generated crate's `[lints.rust]` table.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "CitationAuthor": {
       "additionalProperties": false,
       "description": "A person or legal-entity author in a generated `CITATION.cff`. ~keep",
@@ -5290,6 +5309,13 @@
           },
           "default": {},
           "type": "object"
+        },
+        "cargo_lints": {
+          "$ref": "#/$defs/CargoLintsConfig",
+          "default": {
+            "clippy": {},
+            "rust": {}
+          }
         },
         "clean": {
           "additionalProperties": {

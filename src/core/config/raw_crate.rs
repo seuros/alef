@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::SourceCrate;
+use super::cargo_lints::CargoLintsConfig;
 use super::e2e::E2eConfig;
 use super::extras::{AdapterConfig, Language};
 use super::languages::{
@@ -296,6 +297,39 @@ pub struct RawCrateConfig {
     /// ```
     #[serde(default)]
     pub crate_attributes: Vec<String>,
+
+    /// Raw `[lints.rust]` / `[lints.clippy]` tables spliced into every generated
+    /// Rust binding-crate `Cargo.toml` for this crate — across every backend that
+    /// emits a standalone Rust crate (ffi, jni, node, python, php, wasm, ruby,
+    /// elixir, R, swift, dart). Mirrors [`Self::crate_attributes`]'s placement and
+    /// rationale: `[lints]\nworkspace = true` cannot be used for this because it is
+    /// all-or-nothing and would also pull in `unsafe_code = "deny"`, which breaks
+    /// any FFI crate with legitimate `unsafe` blocks. This is a pure passthrough —
+    /// alef does not validate or interpret lint names, and neither table is emitted
+    /// when empty (the default), so output is byte-identical to a crate that does
+    /// not set this field.
+    ///
+    /// A handful of backends (dart, swift, elixir) already emit their own
+    /// `unexpected_cfgs` check-cfg allowlist into `[lints.rust]`; entries configured
+    /// here compose with that rather than replacing it, and lose on a key collision
+    /// since the backend's own entry encodes a compile-correctness requirement.
+    ///
+    /// Example — opt a crate's generated bindings into the workspace's deny-by-default
+    /// lint policy:
+    /// ```toml
+    /// [[crates]]
+    /// name = "sample-core"
+    ///
+    /// [crates.cargo_lints.rust]
+    /// unused_must_use = "deny"
+    ///
+    /// [crates.cargo_lints.clippy]
+    /// print_stdout = "deny"
+    /// print_stderr = "deny"
+    /// dbg_macro = "deny"
+    /// ```
+    #[serde(default)]
+    pub cargo_lints: CargoLintsConfig,
 }
 
 #[cfg(test)]

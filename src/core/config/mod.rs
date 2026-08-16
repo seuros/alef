@@ -2,6 +2,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub mod build_defaults;
+pub mod cargo_lints;
 pub mod clean_defaults;
 pub mod derive;
 pub mod dto;
@@ -31,6 +32,7 @@ pub mod update_defaults;
 pub mod validation;
 pub mod workspace;
 
+pub use cargo_lints::CargoLintsConfig;
 pub use derive::{derive_go_module_from_repo, derive_repo_org, derive_reverse_dns_package};
 pub use dto::{
     CsharpDtoStyle, DtoConfig, ElixirDtoStyle, GoDtoStyle, JavaBuilderMode, JavaDtoConfig, JavaDtoStyle, NodeDtoStyle,

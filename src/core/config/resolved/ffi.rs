@@ -195,18 +195,23 @@ impl ResolvedCrateConfig {
             .unwrap_or_else(|| format!("{}-ffi", self.name))
     }
 
-    /// Get the relative path to the WASM crate's `pkg/` directory from the
-    /// e2e test directory.
+    /// Get the relative path to the WASM crate's `pkg/nodejs/` directory from
+    /// the e2e test directory.
     ///
     /// Used by WASM e2e tests to import the wasm-pack build output when
     /// working against a local checkout rather than a published npm package.
+    /// `wasm-pack build --target nodejs --out-dir pkg/nodejs` (see
+    /// `scaffold_wasm`) is the only target the vitest-based e2e suite loads,
+    /// since it's the one target whose CJS bundle initializes synchronously;
+    /// `pkg/` itself has no `package.json` and cannot be resolved as an npm
+    /// dependency. ~keep
     ///
     /// Resolution order:
     /// 1. Directory name of the user-supplied `[crates.output] wasm` path,
     ///    skipping trailing `src`/`lib`/`include` components, prefixed with
-    ///    `../../` and suffixed with `/pkg`.
-    ///    E.g. `crates/my-lib-wasm/src/` → `../../crates/my-lib-wasm/pkg`.
-    /// 2. `../../crates/{name}-wasm/pkg` fallback derived from the crate name.
+    ///    `../../` and suffixed with `/pkg/nodejs`.
+    ///    E.g. `crates/my-lib-wasm/src/` → `../../crates/my-lib-wasm/pkg/nodejs`.
+    /// 2. `../../crates/{name}-wasm/pkg/nodejs` fallback derived from the crate name.
     pub fn wasm_crate_path(&self) -> String {
         if let Some(wasm_path) = self.explicit_output.wasm.as_ref() {
             let components: Vec<&str> = wasm_path
@@ -224,10 +229,10 @@ impl ResolvedCrateConfig {
                 .rposition(|&s| s != "src" && s != "lib" && s != "include")
             {
                 let meaningful = &components[..=idx];
-                return format!("../../{}/pkg", meaningful.join("/"));
+                return format!("../../{}/pkg/nodejs", meaningful.join("/"));
             }
         }
-        format!("../../crates/{}-wasm/pkg", self.name)
+        format!("../../crates/{}-wasm/pkg/nodejs", self.name)
     }
 
     /// Get the relative path to the JNI crate from the kotlin-android package
@@ -431,5 +436,29 @@ ffi = "crates/sample-markdown-ffi/src/"
 "#,
         );
         assert_eq!(r.ffi_crate_package_name(), "sample-markdown-ffi");
+    }
+
+    #[test]
+    fn wasm_crate_path_falls_back_to_name_derived_dir_with_nodejs_target() {
+        let r = minimal_ffi();
+        assert_eq!(r.wasm_crate_path(), "../../crates/my-lib-wasm/pkg/nodejs");
+    }
+
+    #[test]
+    fn wasm_crate_path_derives_from_explicit_output_path_with_nodejs_target() {
+        let r = resolved_one(
+            r#"
+[workspace]
+languages = ["ffi"]
+
+[[crates]]
+name = "my-lib"
+sources = ["src/lib.rs"]
+
+[crates.output]
+wasm = "crates/sample-markdown-wasm/src/"
+"#,
+        );
+        assert_eq!(r.wasm_crate_path(), "../../crates/sample-markdown-wasm/pkg/nodejs");
     }
 }
