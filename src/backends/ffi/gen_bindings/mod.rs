@@ -70,7 +70,7 @@ impl Backend for FfiBackend {
         let files = vec![
             GeneratedFile {
                 path: PathBuf::from(&output_dir).join("lib.rs"),
-                content: lib_rs::gen_lib_rs(api, &prefix, config),
+                content: lib_rs::gen_lib_rs(api, &prefix, config)?,
                 generated_header: false,
             },
             GeneratedFile {

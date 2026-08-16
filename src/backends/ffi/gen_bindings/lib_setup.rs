@@ -49,6 +49,12 @@ pub(super) fn build_lib_setup_context<'a>(api: &ApiSurface, config: &'a Resolved
         .filter(|t| !t.is_trait && t.is_clone && !t.is_copy)
         .map(|t| t.name.clone())
         .chain(api.enums.iter().filter(|e| !e.is_copy).map(|e| e.name.clone()))
+        .chain(
+            config
+                .trait_bridges
+                .iter()
+                .filter_map(|bridge| bridge.type_alias.clone()),
+        )
         .collect();
 
     let serde_names: AHashSet<String> = api

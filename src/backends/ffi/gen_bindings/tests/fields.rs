@@ -186,21 +186,14 @@ fn test_named_field_non_clone_does_not_return_borrow_as_owned() {
     let config = sample_config();
     let backend = FfiBackend;
 
-    let files = backend.generate_bindings(&api, &config).unwrap();
-    let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
-
-    let accessor = lib
-        .content
-        .split("fn my_lib_holder_inner")
-        .nth(1)
-        .expect("field accessor");
+    let error = backend
+        .generate_bindings(&api, &config)
+        .expect_err("non-Clone named fields cannot produce owned handles");
     assert!(
-        !accessor.contains(".clone()"),
-        "non-Clone opaque Named field must not emit .clone() in accessor:\n{}",
-        lib.content
+        error
+            .to_string()
+            .contains("non-Copy, non-Clone type `LanguageRegistry`")
     );
-    assert!(accessor.contains("return 0;"));
-    assert!(!accessor.contains("as *const _ as *mut _"));
 }
 
 /// Clone-capable Named-type fields must still emit `.clone()` in the accessor.
@@ -218,6 +211,61 @@ fn test_named_field_clone_capable_emits_clone() {
         "Clone-capable Named field must emit .clone() in accessor:\n{}",
         lib.content
     );
+}
+
+#[test]
+fn test_optional_trait_bridge_handle_getter_clones_owned_handle() {
+    let config = resolved_one(
+        r#"
+[workspace]
+languages = ["ffi"]
+
+[[crates]]
+name = "my-lib"
+sources = ["src/lib.rs"]
+
+[crates.ffi]
+prefix = "sample"
+
+[[crates.trait_bridges]]
+trait_name = "DocumentVisitor"
+type_alias = "VisitorHandle"
+bind_via = "options_field"
+options_type = "RenderOptions"
+options_field = "visitor"
+
+"#,
+    );
+    let api = ApiSurface {
+        crate_name: "my-lib".to_string(),
+        version: "1.0.0".to_string(),
+        types: vec![TypeDef {
+            name: "RenderOptions".to_string(),
+            rust_path: "my_lib::RenderOptions".to_string(),
+            fields: vec![FieldDef {
+                name: "visitor".to_string(),
+                ty: TypeRef::Named("VisitorHandle".to_string()),
+                optional: true,
+                ..FieldDef::default()
+            }],
+            ..TypeDef::default()
+        }],
+        ..ApiSurface::default()
+    };
+
+    let files = FfiBackend
+        .generate_bindings(&api, &config)
+        .expect("trait bridge handle getter");
+    let lib = files.iter().find(|file| file.path.ends_with("lib.rs")).unwrap();
+    let accessor = lib
+        .content
+        .split("fn sample_render_options_visitor")
+        .nth(1)
+        .expect("visitor accessor");
+
+    assert!(accessor.contains("Some(val) =>"), "{accessor}");
+    assert!(accessor.contains("insert_handle(val.clone())"), "{accessor}");
+    assert!(!accessor.contains("Some(val) => {\n            0"), "{accessor}");
 }
 
 #[test]

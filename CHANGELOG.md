@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subdirectory.
 - **Go snippets**: construct generated DTO fields with the same optional/default pointer policy as the Go binding
   backend, preventing both pointer-to-value and value-to-pointer struct literal mismatches.
+- Generate owned scalar handles for optional trait-bridge alias fields by cloning the configured handle, and reject
+  non-Copy, non-Clone named field getters instead of silently returning null.
 - Fix WASM manifests to enable configured binding-side feature gates by default, keeping exported factories available in ordinary `wasm-pack` builds.
 
 - **Python snippets**: remove request types supplied by per-call native `from_json` overrides from public imports so

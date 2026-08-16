@@ -1240,7 +1240,8 @@ fn test_optional_bytes_field_accessor_emits_out_len_and_length_writes() {
         &ahash::AHashSet::<String>::new(),
         &ahash::AHashSet::<String>::new(),
         &::std::collections::HashMap::<String, String>::new(),
-    );
+    )
+    .expect("optional bytes accessor");
 
     assert!(
         code.contains("out_len: *mut usize"),
@@ -1288,7 +1289,8 @@ fn overridden_named_field_accessor_returns_handle_token() {
         &ahash::AHashSet::new(),
         &clone_names,
         &fields_c_types,
-    );
+    )
+    .expect("cloneable handle accessor");
 
     assert!(code.contains(") -> AlefHandle"), "{code}");
     assert!(code.contains("catch_ffi_panic(0, ||"), "{code}");

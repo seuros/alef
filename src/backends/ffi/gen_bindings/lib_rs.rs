@@ -22,9 +22,9 @@ use crate::core::config::{AdapterPattern, Language, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
 use heck::ToPascalCase;
 
-pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateConfig) -> String {
+pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateConfig) -> anyhow::Result<String> {
     let mut builder = RustFileBuilder::new().with_generated_header();
-    builder.add_inner_attribute("allow(dead_code, unused_imports, unused_variables, unused_mut, noop_method_call)");
+    builder.add_inner_attribute("allow(dead_code, unused_imports, unused_mut, noop_method_call)");
     builder.add_inner_attribute("allow(missing_docs)");
     builder.add_inner_attribute("allow(unsafe_op_in_unsafe_fn, unsafe_attr_outside_unsafe)");
     builder.add_inner_attribute("allow(clippy::too_many_arguments, clippy::let_unit_value, clippy::needless_borrow, clippy::redundant_locals, dropping_references, clippy::unnecessary_cast, clippy::unused_unit, clippy::unwrap_or_default, clippy::derivable_impls, clippy::needless_borrows_for_generic_args, clippy::unnecessary_fallible_conversions, clippy::useless_conversion, clippy::type_complexity, clippy::clone_on_copy, clippy::collapsible_if)");
@@ -253,7 +253,7 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
                     enum_names,
                     clone_names,
                     fields_c_types,
-                ));
+                )?);
             }
         }
 
@@ -697,5 +697,5 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
         }
     }
 
-    builder.build()
+    Ok(builder.build())
 }

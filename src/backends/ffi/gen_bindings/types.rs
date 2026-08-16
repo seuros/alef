@@ -126,7 +126,7 @@ pub(super) fn gen_field_accessor(
     enum_names: &AHashSet<String>,
     clone_names: &AHashSet<String>,
     fields_c_types: &std::collections::HashMap<String, String>,
-) -> String {
+) -> anyhow::Result<String> {
     let type_snake = c_symbol_component(&typ.name);
     let type_name = &typ.name;
     let qualified_base = core_type_path(typ, core_import);
@@ -193,6 +193,19 @@ pub(super) fn gen_field_accessor(
 
     let needs_len_out = matches!(field.ty, TypeRef::Bytes);
 
+    if let Some(named_type) = underlying_named_type(&effective_ty) {
+        if let Some(override_type) = override_type_name.as_deref() {
+            anyhow::ensure!(
+                named_type == override_type,
+                "cannot generate FFI field accessor `{type_name}.{field_name}`: configured handle type `{override_type}` does not match field type `{named_type}`"
+            );
+        }
+        anyhow::ensure!(
+            enum_names.contains(named_type) || clone_names.contains(named_type),
+            "cannot generate owned FFI field accessor `{type_name}.{field_name}` for non-Copy, non-Clone type `{named_type}`"
+        );
+    }
+
     let body = gen_field_access_body(
         field,
         needs_len_out,
@@ -209,7 +222,7 @@ pub(super) fn gen_field_accessor(
         override_type_name.as_deref(),
     );
 
-    crate::backends::ffi::template_env::render(
+    Ok(crate::backends::ffi::template_env::render(
         "field_accessor_header.jinja",
         context! {
             field_name => field_name,
@@ -225,7 +238,7 @@ pub(super) fn gen_field_accessor(
             source_cfg => typ.cfg.as_deref().unwrap_or(""),
             ownership_lines => ownership_lines,
         },
-    )
+    ))
 }
 
 /// Unwrap a field type to its underlying `Named` type name, peeling an outer
@@ -255,8 +268,7 @@ fn gen_field_access_body(
             .zip(override_type_name)
             .is_some_and(|(field_named, ovr)| field_named == ovr);
         if !field_is_override_type {
-            out.push_str("    0");
-            return out;
+            unreachable!("opaque field override compatibility is validated before body generation");
         }
     }
 
