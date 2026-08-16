@@ -421,10 +421,20 @@ fn test_cfg_gated_async_function() {
 
     let content = &lib_rs.content;
 
-    // so ext-php-rs's #[php_impl] macro can see them unconditionally.
+    // ext-php-rs's `#[php_impl]` derive walks every `syn::ImplItem::Fn` unconditionally and
+    // never inspects `#[cfg]`; a cfg'd-out method here would still be referenced by the
+    // generated registration array, failing the build regardless of a tautology wrapper.
+    // Facade methods are therefore emitted with no cfg attribute at all -- the underlying
+    // core feature is required unconditionally on the core dependency line instead (see
+    // `php_function_gated_core_features_to_add` in src/scaffold/languages/php.rs). ~keep
+    let facade_impl_prelude = content
+        .split("#[php_impl]")
+        .nth(1)
+        .and_then(|body| body.split("pub fn embed_texts_async").next())
+        .expect("facade impl block containing embed_texts_async must be generated");
     assert!(
-        content.contains("#[cfg(any(all(feature = \"embeddings\", feature = \"tokio-runtime\"), not(all(feature = \"embeddings\", feature = \"tokio-runtime\"))))]"),
-        "Should contain always-true cfg condition for ext-php-rs compatibility; content:\n{content}"
+        !facade_impl_prelude.contains("#[cfg("),
+        "cfg-gated async function's facade method must not carry a #[cfg(...)] attribute; content:\n{content}"
     );
 
     assert!(

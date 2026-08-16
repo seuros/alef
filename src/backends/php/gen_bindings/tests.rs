@@ -251,3 +251,88 @@ fn config_m4_underscores_every_hyphen_in_a_multi_hyphen_crate_name() {
         "must never leave a partially-underscored stem, got:\n{m4}"
     );
 }
+
+/// Regression (#103): `gen_flat_data_enum`/`gen_flat_data_enum_methods` hardcode serde derives
+/// and `from_json` on every tagged data enum unconditionally (never gated on `has_serde` — the
+/// PHPStan stub keys the same methods on `is_tagged_data_enum` alone and must not diverge from
+/// the runtime, see commit bb0787c69). Before the fix, `has_serde` was the raw
+/// `php_serde_available` probe alone: a crate whose Cargo.toml the probe reads as serde-less
+/// still emitted the enum's hardcoded serde derives (unavoidable, protected), while every OTHER
+/// type in the same crate was held to a no-serde code path the crate cannot actually honor once
+/// it contains a tagged data enum. The fix folds "does this API surface contain a tagged data
+/// enum" into the crate-level `has_serde` value, so a plain struct in the same crate gets the
+/// same serde-based `from_json` the enum already unconditionally requires.
+///
+/// `gen_struct_methods_impl`'s `use_from_json = has_serde && (has_named_params || ...)`
+/// (types/structs.rs) is a clean, direct gate — unlike the struct-derive path in the shared
+/// `codegen::generators::gen_struct_with_per_field_attrs`, which always derives serde regardless
+/// of `cfg.has_serde` and so cannot distinguish the fix. `PlainStruct`'s one `Bytes` field is not
+/// PHP-prop-representable (`is_php_prop_scalar_with_enums` — see that fn's match arms), which
+/// makes `has_named_params` true independently of `has_serde`, so `from_json`'s presence here
+/// depends on nothing but `has_serde`.
+///
+/// Discriminating because `"my-crate"` resolves to no real Cargo.toml on disk in this test run
+/// (asserted below), so the raw probe alone is false: `use_from_json` would be `false && ...` =
+/// `false` without the fix, and `PlainStruct::from_json` would not be emitted at all.
+#[test]
+fn tagged_data_enum_forces_crate_wide_serde_even_when_probe_finds_none() {
+    use crate::core::config::resolved::ResolvedCrateConfig;
+    use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, FieldDef, PrimitiveType, TypeDef, TypeRef};
+
+    let tagged_enum = EnumDef {
+        name: "Shape".to_string(),
+        rust_path: "test_lib::Shape".to_string(),
+        variants: vec![EnumVariant {
+            name: "Circle".to_string(),
+            fields: vec![FieldDef {
+                name: "radius".to_string(),
+                ty: TypeRef::Primitive(PrimitiveType::F64),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        serde_tag: Some("type".to_string()),
+        ..Default::default()
+    };
+    let plain_struct = TypeDef {
+        name: "PlainStruct".to_string(),
+        rust_path: "test_lib::PlainStruct".to_string(),
+        fields: vec![FieldDef {
+            name: "payload".to_string(),
+            ty: TypeRef::Bytes,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let api = ApiSurface {
+        crate_name: "my-crate".to_string(),
+        version: "1.0.0".to_string(),
+        types: vec![plain_struct],
+        enums: vec![tagged_enum],
+        ..Default::default()
+    };
+    let config = ResolvedCrateConfig {
+        name: "my-crate".to_string(),
+        ..ResolvedCrateConfig::default()
+    };
+    assert!(
+        !super::rust_bindings::php_serde_available(&config),
+        "test fixture must not resolve to a real Cargo.toml with serde -- otherwise this test \
+         cannot distinguish the fix from the pre-fix behavior"
+    );
+
+    let files = super::rust_bindings::generate_bindings(&api, &config).unwrap();
+    let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+    // `PlainStruct`'s own `from_json` body is a bare one-liner (no `let value: Self =` binding,
+    // unlike the tagged enum's templated `from_json`), so this substring cannot accidentally
+    // match `Shape::from_json` instead. The body is indented 8 spaces, not 4 -- matching the
+    // emitted indentation exactly is what keeps this pinned to `PlainStruct`'s own impl block. ~keep
+    assert!(
+        lib.content
+            .contains("pub fn from_json(json: String) -> PhpResult<Self> {\n        serde_json::from_str(&json)"),
+        "PlainStruct must get a serde-based from_json once the crate contains a tagged data \
+         enum, even though the raw Cargo.toml probe alone found no serde, got:\n{}",
+        lib.content
+    );
+}

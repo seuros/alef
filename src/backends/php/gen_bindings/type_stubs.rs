@@ -31,8 +31,11 @@ pub(super) fn generate_type_stubs(
     // helper `rust_bindings.rs` uses for the runtime extension. Keying the stub on the per-type
     // `TypeDef::has_serde` instead routes a type down a different branch than the runtime takes
     // (FromJsonOnly vs Kwargs vs ThrowsNoParams), so the stub's whole declared constructor — not
-    // merely its `from_json` — can be wrong. ~keep
-    let serde_available = super::rust_bindings::php_serde_available(config);
+    // merely its `from_json` — can be wrong. It must be `php_crate_requires_serde` and not the bare
+    // `php_serde_available` probe, because a tagged data enum forces crate-wide serde on the runtime
+    // side; keying the stub on the probe alone reintroduces that same divergence on the
+    // regular-struct axis. ~keep
+    let serde_available = super::rust_bindings::php_crate_requires_serde(api, config);
 
     let extension_name = config.php_extension_name();
     let class_name = extension_name.to_pascal_case();

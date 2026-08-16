@@ -11,6 +11,15 @@ use super::*;
 /// The stub must instead call the SAME `php_field_can_be_constructor_param` predicate the real
 /// extension's constructor uses, omit non-representable fields from the constructor entirely,
 /// and still expose them via a `get<Field>()` stub so PHPStan sees the only working accessor.
+///
+/// This only holds when the binding crate has serde: `structs.rs`'s `use_from_json` gate (and
+/// its mirror, `type_stubs.rs`'s `stub_constructor_shape`) requires `serde_available` before it
+/// will emit a positional `#[php(constructor)]` alongside the fields it can't represent — without
+/// serde, `has_named_params` alone routes the type to a zero-param, unconditionally-throwing
+/// `__construct` (no promoted properties at all, see `structs.rs`'s `has_named_params` branch).
+/// The fixture crate dir must therefore have a real `Cargo.toml` with `serde`/`serde_json`
+/// dependencies, or `php_serde_available` reads `false` and this test would be exercising the
+/// throwing shape instead of the one it names. ~keep
 #[test]
 fn json_field_is_excluded_from_constructor_but_reachable_via_getter() {
     let backend = PhpBackend;
@@ -56,7 +65,15 @@ fn json_field_is_excluded_from_constructor_but_reachable_via_getter() {
         unsupported_public_items: Vec::new(),
     };
 
-    let config = make_config();
+    let root = tempfile::tempdir().expect("tempdir");
+    let output_dir = root.path().join("crates/test-lib-php/src");
+    std::fs::create_dir_all(&output_dir).expect("create output dir");
+    std::fs::write(
+        root.path().join("crates/test-lib-php/Cargo.toml"),
+        "[dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\nserde_json = \"1\"\n",
+    )
+    .expect("write Cargo.toml");
+    let config = make_config_with_php_output(&output_dir);
     let files = backend.generate_type_stubs(&api, &config).unwrap();
     let stubs = files.first().expect("stub file must be generated");
     let content = &stubs.content;
@@ -98,6 +115,11 @@ fn json_field_is_excluded_from_constructor_but_reachable_via_getter() {
 /// property (e.g. `Bytes`, or `Vec<Named>` of an opaque/enum type) must appear as a plain
 /// (non-promoted) constructor parameter — reachable from `new(...)`, but with no matching
 /// `public readonly` property, since the real extension never emits `#[php(prop)]` for it.
+///
+/// Same serde-availability caveat as `json_field_is_excluded_from_constructor_but_reachable_via_getter`
+/// above: `Bytes` fails `is_php_prop_scalar`, so it alone makes `has_named_params` true, and
+/// without a real `serde`-having crate dir the whole type falls through to the zero-param
+/// throwing `__construct` rather than the positional shape this test is named for. ~keep
 #[test]
 fn bytes_field_is_a_plain_constructor_param_without_a_promoted_property() {
     let backend = PhpBackend;
@@ -143,7 +165,15 @@ fn bytes_field_is_a_plain_constructor_param_without_a_promoted_property() {
         unsupported_public_items: Vec::new(),
     };
 
-    let config = make_config();
+    let root = tempfile::tempdir().expect("tempdir");
+    let output_dir = root.path().join("crates/test-lib-php/src");
+    std::fs::create_dir_all(&output_dir).expect("create output dir");
+    std::fs::write(
+        root.path().join("crates/test-lib-php/Cargo.toml"),
+        "[dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\nserde_json = \"1\"\n",
+    )
+    .expect("write Cargo.toml");
+    let config = make_config_with_php_output(&output_dir);
     let files = backend.generate_type_stubs(&api, &config).unwrap();
     let stubs = files.first().expect("stub file must be generated");
     let content = &stubs.content;

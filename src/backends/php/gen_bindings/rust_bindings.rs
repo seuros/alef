@@ -41,6 +41,20 @@ pub(super) fn php_serde_available(config: &ResolvedCrateConfig) -> bool {
     detect_serde_available(&php_output_dir(config))
 }
 
+/// Whether the generated PHP crate *requires* serde, as opposed to merely having it on disk.
+///
+/// `gen_flat_data_enum`/`gen_flat_data_enum_methods` hardcode serde derives and `from_json` on every
+/// tagged data enum with no gate at all, so one such enum forces serde on the crate no matter what
+/// the manifest probe finds. Both the runtime bindings and the PHPStan stub must key on THIS value
+/// rather than on `php_serde_available` alone: keying the stub on the bare probe lets it describe a
+/// regular struct's constructor with the no-serde shape while the runtime — now serde-forced by the
+/// enum — emits the serde shape. That is the same stub/runtime divergence bb0787c69 removed,
+/// reappearing on the regular-struct axis. Deriving both from one function is what keeps them from
+/// drifting; two copies of the same expression would not. ~keep
+pub(super) fn php_crate_requires_serde(api: &ApiSurface, config: &ResolvedCrateConfig) -> bool {
+    php_serde_available(config) || api.enums.iter().any(is_tagged_data_enum)
+}
+
 /// The generated PHP binding crate's source directory. Both the serde probe and the writer that
 /// emits `lib.rs`/`config.m4` must resolve it identically: the probe reads the Cargo manifest one
 /// level above the directory the writer writes into, so a second copy of the default would let
@@ -140,7 +154,15 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
     let exclude_types = php_config.map(|c| c.exclude_types.clone()).unwrap_or_default();
 
     let output_dir = php_output_dir(config);
-    let has_serde = php_serde_available(config);
+    // `gen_flat_data_enum`/`gen_flat_data_enum_methods` hardcode serde derives and `from_json`
+    // unconditionally on every tagged data enum -- deliberately not gated on the probe below,
+    // because the PHPStan stub side keys the same methods on `is_tagged_data_enum` alone and must
+    // not diverge from the runtime (see commit bb0787c69). A tagged data enum's flat-mirror
+    // representation is inherently JSON/serde-shaped (that is the whole point of `from_json`), so
+    // a crate cannot meaningfully bind one without serde; treat any such enum as forcing
+    // crate-wide serde availability rather than leaving the template's unconditional serde
+    // reference unmatched by the crate-wide import/derive gate below. ~keep
+    let has_serde = php_crate_requires_serde(api, config);
 
     // Including them ensures gen_php_struct emits #[serde(skip)] for fields of those types so
     let bridge_type_aliases_php: Vec<String> = config
