@@ -44,26 +44,29 @@ impl SnippetValidator for RubyValidator {
         ValidationLevel::Run
     }
 
-    // `ruby -c` (the only check this validator ever runs below `Run`, see `validate` above) is a
-    // syntax check: it never resolves a constant, method, or class. No real Ruby type-checker is
-    // wired up here — Sorbet and RBS both require project-wide `# typed:` sigils/signatures the
-    // generated snippets don't carry, so pointing either at a lone temp file would either no-op
-    // (untyped files get minimal checking) or hard-error on the missing project setup, neither of
-    // which is an improvement over an honest downgrade. Until that's built, `typecheck` must not
-    // be claimed. ~keep
+    // `ruby -c` (the only check `validate` ever runs below `Run`, see above) is a syntax check: it
+    // never resolves a constant, method, or class, and `run_script` sends it the identical `-c`
+    // invocation for both `Syntax` and `Compile` — there is no separate compile step at all, so a
+    // `Compile` request silently got the same result as `Syntax` while being reported as if it had
+    // validated further. No real Ruby type-checker is wired up here either — Sorbet and RBS both
+    // require project-wide `# typed:` sigils/signatures the generated snippets don't carry, so
+    // pointing either at a lone temp file would either no-op (untyped files get minimal checking)
+    // or hard-error on the missing project setup, neither of which is an improvement over an
+    // honest downgrade. Until that's built, neither `compile` nor `typecheck` may be claimed. ~keep
     fn achievable_level(&self, requested: ValidationLevel) -> ValidationLevel {
-        if requested == ValidationLevel::TypeCheck {
+        if matches!(requested, ValidationLevel::Compile | ValidationLevel::TypeCheck) {
             ValidationLevel::Syntax
         } else {
             ValidationLevel::Run
         }
     }
 
-    // The typecheck gap above is a property of this validator's implementation (no checker is
-    // wired up), not of the machine running it — no environment will ever make `ruby -c` resolve
-    // a constant. Structural, so it's exempted from `Downgraded` the same way `max_level` is. ~keep
+    // The compile/typecheck gap above is a property of this validator's implementation (no
+    // distinct compile step and no checker is wired up), not of the machine running it — no
+    // environment will ever make `ruby -c` resolve a constant. Structural, so it's exempted from
+    // `Downgraded` the same way `max_level` is. ~keep
     fn achievable_level_is_structural(&self, requested: ValidationLevel) -> bool {
-        requested == ValidationLevel::TypeCheck
+        matches!(requested, ValidationLevel::Compile | ValidationLevel::TypeCheck)
     }
 }
 
@@ -98,14 +101,14 @@ mod tests {
     }
 
     #[test]
-    fn achievable_level_caps_typecheck_to_syntax() {
+    fn achievable_level_caps_compile_and_typecheck_to_syntax() {
         assert_eq!(
             RubyValidator.achievable_level(ValidationLevel::TypeCheck),
             ValidationLevel::Syntax
         );
         assert_eq!(
             RubyValidator.achievable_level(ValidationLevel::Compile),
-            ValidationLevel::Run
+            ValidationLevel::Syntax
         );
         assert_eq!(
             RubyValidator.achievable_level(ValidationLevel::Syntax),
@@ -118,9 +121,9 @@ mod tests {
     }
 
     #[test]
-    fn achievable_level_typecheck_gap_is_structural() {
+    fn achievable_level_compile_and_typecheck_gap_is_structural() {
         assert!(RubyValidator.achievable_level_is_structural(ValidationLevel::TypeCheck));
-        assert!(!RubyValidator.achievable_level_is_structural(ValidationLevel::Compile));
+        assert!(RubyValidator.achievable_level_is_structural(ValidationLevel::Compile));
         assert!(!RubyValidator.achievable_level_is_structural(ValidationLevel::Run));
     }
 
@@ -151,6 +154,43 @@ mod tests {
         );
         assert_eq!(result.status, SnippetStatus::Pass);
         assert!(result.capability_capped);
+        assert_eq!(result.effective_level, ValidationLevel::Syntax);
+        assert_eq!(summary.downgraded, 0);
+        assert_eq!(summary.capability_capped, 1);
+    }
+
+    /// The regression this fix closes: before `achievable_level` also capped `Compile`, this
+    /// undefined-symbol snippet passed a `Compile` request as an ordinary, unqualified `Pass` —
+    /// `ruby -c` accepts it, and nothing distinguished `Compile` from `Syntax`, so the result
+    /// carried no `capability_capped` flag and no `downgrade_reason` at all. That is precisely the
+    /// silent downgrade this validator must never produce again. ~keep
+    #[test]
+    fn compile_request_for_an_undefined_symbol_does_not_pass_as_compile() {
+        if !RubyValidator.is_available() {
+            return;
+        }
+        let registry = ValidatorRegistry::new();
+        let config = RunnerConfig {
+            level: ValidationLevel::Compile,
+            parallelism: 1,
+            cache_dir: None,
+            ..RunnerConfig::default()
+        };
+
+        let summary = run_validation(&[undefined_symbol_snippet()], &registry, &config).expect("validation completes");
+
+        let result = &summary.results[0];
+        assert_ne!(
+            (result.status, result.effective_level),
+            (SnippetStatus::Pass, ValidationLevel::Compile),
+            "undefined-symbol snippet must not pass claiming compile: {result:?}"
+        );
+        assert_eq!(result.status, SnippetStatus::Pass);
+        assert!(
+            result.capability_capped,
+            "a Compile request that only ran a syntax check must be flagged, not folded into an \
+             ordinary Pass: {result:?}"
+        );
         assert_eq!(result.effective_level, ValidationLevel::Syntax);
         assert_eq!(summary.downgraded, 0);
         assert_eq!(summary.capability_capped, 1);
