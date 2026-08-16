@@ -3,8 +3,9 @@ use crate::core::config::{KotlinTarget, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
 use crate::core::template_versions::{maven, toolchain};
 use crate::scaffold::{parse_author, scaffold_meta};
+use anyhow::Context as _;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub(crate) fn scaffold_kotlin(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
     if let Some(mode) = config.kotlin.as_ref().and_then(|k| k.mode.as_deref()) {
@@ -329,6 +330,68 @@ object Sample {{
     ])
 }
 
+/// The stale `sourceSets { main { ... } }` sub-block [`scaffold_kotlin_jvm`] emitted before the
+/// fix that dropped it (the alef Kotlin backend already writes binding sources under the
+/// standard `src/main/kotlin/` layout, so this extra root `srcDir(".")` only dragged `build/`
+/// into vanniktech's sources jar, tripping Gradle 9's output-overlap validation and breaking
+/// `publishToMavenCentral`). A fixed, static block with no per-project variables — every
+/// scaffolded Kotlin JVM package got this identical text.
+const STALE_KOTLIN_SRC_DIR_BLOCK: &str = "    kotlin {\n      // The alef Kotlin backend emits binding sources at the project root\n      // (`packages/kotlin/`) rather than the Maven\n      // `src/main/kotlin/` convention. Pull them in explicitly so they end up\n      // in the compiled jar alongside any standard-layout sources.\n      srcDir(\".\")\n    }\n";
+
+/// The stale `configure(KotlinJvm(...))` call [`scaffold_kotlin_jvm`] emitted before the fix
+/// that added a trailing comma after the `KotlinJvm(...)` argument — ktlint enforces a trailing
+/// comma after each multi-line `configure()` argument, so without it every `prek` run added the
+/// comma back, which in turn made `alef sync-versions` regenerate the scaffold file to the
+/// no-comma form: an endless formatter/emitter cycle.
+const STALE_MAVEN_PUBLISHING_COMMA: &str = "      sourcesJar = true,\n    )\n  )\n";
+const FIXED_MAVEN_PUBLISHING_COMMA: &str = "      sourcesJar = true,\n    ),\n  )\n";
+
+/// Repair a pre-existing `packages/kotlin/build.gradle.kts` carrying either (or both) of the two
+/// known-bad shapes above. `build.gradle.kts` is `generated_header: false` (create-only), so a
+/// repo scaffolded before either fix keeps a build file that fails `publishToMavenCentral`
+/// (Gradle 9 output-overlap validation from the stale `srcDir(".")`) or churns forever between
+/// `prek`'s ktlint pass and `alef sync-versions` (the missing trailing comma) — not a
+/// theoretical staleness, an actively broken publish/format loop. Each defect is repaired
+/// independently via an exact substring match-and-replace against its known-bad text: neither
+/// constant carries any per-project variable, so a match is unambiguous, and any consumer edit
+/// inside either block (a reordered line, an added comment) fails the match and that half of the
+/// repair is simply skipped rather than guessed at — the file's Gradle syntax elsewhere,
+/// including any other hand customization, is never touched. Returns `false` (no-op, not an
+/// error) when the file doesn't exist or neither known-bad shape is present. ~keep
+pub(crate) fn migrate_kotlin_build_gradle(base_dir: &Path) -> anyhow::Result<bool> {
+    let path = base_dir.join("packages/kotlin/build.gradle.kts");
+    let Ok(existing) = std::fs::read_to_string(&path) else {
+        return Ok(false);
+    };
+
+    let mut migrated = existing.clone();
+    if migrated.matches(STALE_KOTLIN_SRC_DIR_BLOCK).count() == 1 {
+        migrated = migrated.replacen(STALE_KOTLIN_SRC_DIR_BLOCK, "", 1);
+    }
+    if migrated.matches(STALE_MAVEN_PUBLISHING_COMMA).count() == 1 {
+        migrated = migrated.replacen(STALE_MAVEN_PUBLISHING_COMMA, FIXED_MAVEN_PUBLISHING_COMMA, 1);
+    }
+    if migrated == existing {
+        return Ok(false);
+    }
+
+    let parent = path.parent().context("build.gradle.kts path has no parent directory")?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("failed to create temporary file in {}", parent.display()))?;
+    std::io::Write::write_all(&mut temporary, migrated.as_bytes())
+        .with_context(|| format!("failed to write temporary file for {}", path.display()))?;
+    temporary
+        .persist(&path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("failed to replace {}", path.display()))?;
+    tracing::warn!(
+        path = %path.display(),
+        "repaired pre-existing packages/kotlin/build.gradle.kts: dropped the stale root \
+         kotlin srcDir(\".\") and/or added the missing mavenPublishing trailing comma"
+    );
+    Ok(true)
+}
+
 struct ScmUrls {
     connection: String,
     developer_connection: String,
@@ -524,4 +587,95 @@ kotlin {{
             generated_header: false,
         },
     ])
+}
+
+#[cfg(test)]
+mod migrate_tests {
+    use super::*;
+
+    fn pre_fix_build_gradle() -> String {
+        format!(
+            "sourceSets {{\n  main {{\n    java {{\n      srcDir(\"../java\")\n    }}\n{STALE_KOTLIN_SRC_DIR_BLOCK}  }}\n}}\n\nmavenPublishing {{\n  configure(\n    KotlinJvm(\n      javadocJar = JavadocJar.Empty(),\n{STALE_MAVEN_PUBLISHING_COMMA}\n  publishToMavenCentral()\n}}\n"
+        )
+    }
+
+    #[test]
+    fn should_repair_both_known_bad_shapes_independently() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path().join("packages/kotlin");
+        std::fs::create_dir_all(&pkg_dir).expect("create packages/kotlin");
+        std::fs::write(pkg_dir.join("build.gradle.kts"), pre_fix_build_gradle()).expect("write pre-fix file");
+
+        let changed = migrate_kotlin_build_gradle(dir.path()).expect("migration must not error");
+        assert!(
+            changed,
+            "a build.gradle.kts with both known-bad shapes must be reported as changed"
+        );
+
+        let on_disk = std::fs::read_to_string(pkg_dir.join("build.gradle.kts")).expect("read migrated file");
+        assert!(
+            !on_disk.contains("srcDir(\".\")"),
+            "the stale root kotlin srcDir must be removed"
+        );
+        assert!(
+            on_disk.contains("srcDir(\"../java\")"),
+            "the java srcDir block must survive untouched"
+        );
+        assert!(
+            on_disk.contains("sourcesJar = true,\n    ),\n  )"),
+            "the trailing comma must be added after the KotlinJvm(...) argument"
+        );
+
+        let changed_again = migrate_kotlin_build_gradle(dir.path()).expect("second pass must not error");
+        assert!(
+            !changed_again,
+            "second pass over an already-migrated file must be a no-op"
+        );
+    }
+
+    #[test]
+    fn should_repair_only_the_defect_that_is_present() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path().join("packages/kotlin");
+        std::fs::create_dir_all(&pkg_dir).expect("create packages/kotlin");
+        let only_comma_defect = format!(
+            "mavenPublishing {{\n  configure(\n    KotlinJvm(\n      javadocJar = JavadocJar.Empty(),\n{STALE_MAVEN_PUBLISHING_COMMA}\n  publishToMavenCentral()\n}}\n"
+        );
+        std::fs::write(pkg_dir.join("build.gradle.kts"), &only_comma_defect).expect("write file");
+
+        let changed = migrate_kotlin_build_gradle(dir.path()).expect("migration must not error");
+        assert!(changed);
+
+        let on_disk = std::fs::read_to_string(pkg_dir.join("build.gradle.kts")).expect("read migrated file");
+        assert!(on_disk.contains("sourcesJar = true,\n    ),\n  )"));
+    }
+
+    #[test]
+    fn should_not_touch_a_hand_edited_build_gradle() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path().join("packages/kotlin");
+        std::fs::create_dir_all(&pkg_dir).expect("create packages/kotlin");
+        let hand_written = "sourceSets {\n  main {\n    java {\n      srcDir(\"../java\")\n    }\n    kotlin {\n      // custom hand-written comment, not alef's\n      srcDir(\".\")\n    }\n  }\n}\n";
+        std::fs::write(pkg_dir.join("build.gradle.kts"), hand_written).expect("write hand-edited file");
+
+        let changed = migrate_kotlin_build_gradle(dir.path()).expect("migration must not error");
+        assert!(
+            !changed,
+            "a hand-edited block must never match the exact known-bad text"
+        );
+
+        let on_disk = std::fs::read_to_string(pkg_dir.join("build.gradle.kts")).expect("read file");
+        assert_eq!(
+            on_disk, hand_written,
+            "hand-edited build.gradle.kts must survive byte-for-byte"
+        );
+    }
+
+    #[test]
+    fn migrate_kotlin_build_gradle_is_a_no_op_when_file_does_not_exist() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let changed = migrate_kotlin_build_gradle(dir.path()).expect("must not error");
+        assert!(!changed);
+        assert!(!dir.path().join("packages/kotlin/build.gradle.kts").exists());
+    }
 }

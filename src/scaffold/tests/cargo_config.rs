@@ -268,3 +268,56 @@ fn scaffold_emits_cargo_config_with_env_block_for_sample_markup_style_ruby_path(
             .contains("RUBY = { value = \"scripts/preferred-ruby.sh\", relative = true }")
     );
 }
+
+const FIXED_WASM_CARGO_CONFIG: &str = "[build]\nincremental = true\n\n[target.wasm32-unknown-unknown]\nrustflags = [\"-C\", \"target-feature=+bulk-memory\", \"--cfg\", \"getrandom_backend=\\\"wasm_js\\\"\", \"-C\", \"link-arg=--allow-multiple-definition\"]\n\n[net]\ngit-fetch-with-cli = true\n\n[registries.crates-io]\nprotocol = \"sparse\"\n";
+
+#[test]
+fn should_add_allow_multiple_definition_to_stale_wasm_cargo_config() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cargo_dir = dir.path().join(".cargo");
+    std::fs::create_dir_all(&cargo_dir).expect("create .cargo");
+    std::fs::write(cargo_dir.join("config.toml"), STALE_WASM_CARGO_CONFIG).expect("write stale config.toml");
+
+    let changed = migrate_wasm_cargo_config_allow_multiple_definition(dir.path()).expect("migration must not error");
+    assert!(
+        changed,
+        "the known-stale .cargo/config.toml must be reported as changed"
+    );
+
+    let on_disk = std::fs::read_to_string(cargo_dir.join("config.toml")).expect("read migrated file");
+    assert_eq!(on_disk, FIXED_WASM_CARGO_CONFIG);
+    assert!(on_disk.contains("link-arg=--allow-multiple-definition"));
+
+    let changed_again =
+        migrate_wasm_cargo_config_allow_multiple_definition(dir.path()).expect("second pass must not error");
+    assert!(
+        !changed_again,
+        "second pass over an already-migrated file must be a no-op"
+    );
+}
+
+#[test]
+fn should_not_touch_a_hand_edited_wasm_cargo_config() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cargo_dir = dir.path().join(".cargo");
+    std::fs::create_dir_all(&cargo_dir).expect("create .cargo");
+    let hand_written = "[build]\nincremental = true\n\n[target.wasm32-unknown-unknown]\nrustflags = [\"-C\", \"target-feature=+bulk-memory\"]\n";
+    std::fs::write(cargo_dir.join("config.toml"), hand_written).expect("write hand-edited config.toml");
+
+    let changed = migrate_wasm_cargo_config_allow_multiple_definition(dir.path()).expect("migration must not error");
+    assert!(!changed, "a hand-edited .cargo/config.toml must never be touched");
+
+    let on_disk = std::fs::read_to_string(cargo_dir.join("config.toml")).expect("read file");
+    assert_eq!(
+        on_disk, hand_written,
+        "hand-edited config.toml must survive byte-for-byte"
+    );
+}
+
+#[test]
+fn migrate_wasm_cargo_config_is_a_no_op_when_file_does_not_exist() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let changed = migrate_wasm_cargo_config_allow_multiple_definition(dir.path()).expect("must not error");
+    assert!(!changed);
+    assert!(!dir.path().join(".cargo/config.toml").exists());
+}
