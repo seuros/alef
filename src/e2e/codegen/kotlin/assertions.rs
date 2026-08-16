@@ -250,6 +250,65 @@ pub(super) fn render_assertion(
     } else {
         "kotlin"
     };
+    // Bracket-wildcard traversal (`links[].link_type`) means "any element", so it must
+    // render an `any { … }` quantifier. Falling through to `accessor` would lower the
+    // wildcard to index 0 and silently assert against only the first element. Keyed off
+    // the fixture path alone — config sets (`fields_json_scalar` etc.) also use the `[]`
+    // spelling for fields whose fixture paths carry explicit indices. ~keep
+    if !result_is_simple
+        && let Some(f) = assertion.field.as_deref().filter(|f| !f.is_empty())
+        && let Some((array_part, elem_part)) = field_resolver.wildcard_split(f)
+    {
+        let raw_array_accessor = if array_part.is_empty() {
+            result_var.to_string()
+        } else {
+            field_resolver.accessor(&array_part, accessor_lang, result_var)
+        };
+        // A nullable array receiver cannot take `.any {}` directly; `orEmpty()` yields an
+        // empty list, which makes the quantifier false rather than a null-pointer. ~keep
+        let array_is_nullable =
+            raw_array_accessor.contains("?.") || (!array_part.is_empty() && field_resolver.is_optional(&array_part));
+        let array_accessor = if array_is_nullable {
+            format!("{raw_array_accessor}.orEmpty()")
+        } else {
+            raw_array_accessor
+        };
+        // Passing the lambda parameter as the result var is what lets a nested element
+        // sub-path resolve against the loop variable instead of the result. ~keep
+        let elem_accessor = field_resolver.accessor(&elem_part, accessor_lang, "e");
+        match assertion.assertion_type.as_str() {
+            "contains" | "contains_all" | "not_contains" => {
+                let negated = assertion.assertion_type == "not_contains";
+                let assert_fn = if negated { "assertFalse" } else { "assertTrue" };
+                let expectation = if negated {
+                    "expected NOT to contain: "
+                } else {
+                    "expected to contain: "
+                };
+                for expected in assertion.expected_values() {
+                    let kotlin_val = super::values::json_to_kotlin(expected);
+                    let _ = writeln!(
+                        out,
+                        "        {assert_fn}({array_accessor}.any {{ e -> {elem_accessor}.toString().contains({kotlin_val}) }}, \"{expectation}\" + {kotlin_val})"
+                    );
+                }
+            }
+            "not_empty" => {
+                let _ = writeln!(
+                    out,
+                    "        assertTrue({array_accessor}.any {{ e -> {elem_accessor}.toString().isNotEmpty() }}, \"expected a non-empty element in '{f}'\")"
+                );
+            }
+            other => {
+                let _ = writeln!(
+                    out,
+                    "        // skipped: unsupported traversal assertion '{other}' on '{f}'"
+                );
+            }
+        }
+        return;
+    }
+
     let field_expr = if result_is_simple {
         result_var.to_string()
     } else {

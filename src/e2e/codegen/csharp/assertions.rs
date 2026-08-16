@@ -374,6 +374,26 @@ pub(super) fn render_assertion(
         return;
     }
 
+    // Bracket-wildcard traversal (`links[].link_type`) means "every element". This must run
+    // before `field_expr` is built below, since that path lowers the wildcard to index 0 and
+    // would assert on a single element while reading as whole-array coverage. ~keep
+    if !result_is_simple
+        && let Some(f) = assertion.field.as_deref()
+        && !f.is_empty()
+        && let Some((array_part, elem_part)) = field_resolver.wildcard_split(f)
+    {
+        render_wildcard_assertion(
+            out,
+            assertion,
+            &effective_result_var,
+            field_resolver,
+            f,
+            &array_part,
+            &elem_part,
+        );
+        return;
+    }
+
     let field_expr = if result_is_simple {
         effective_result_var.clone()
     } else {
@@ -1120,5 +1140,205 @@ mod not_error_vacuous_test_fix_tests {
             &std::collections::HashMap::new(),
         );
         assert_eq!(out, "        Assert.NotNull(result);\n");
+    }
+}
+
+/// Lambda-parameter suffix keyed to the assertion.
+///
+/// Generated C# test methods bind locals named after fixture fields, and two wildcard
+/// assertions in one method must not reuse a parameter name that shadows one. Hashing the
+/// assertion's discriminating fields keeps it unique and stable across regenerations. ~keep
+fn wildcard_lambda_param(assertion: &Assertion) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    assertion.assertion_type.hash(&mut hasher);
+    assertion.field.hash(&mut hasher);
+    assertion
+        .value
+        .as_ref()
+        .map(std::string::ToString::to_string)
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    format!("e{:x}", hasher.finish() & 0xffff_ffff)
+}
+
+/// Emit `Assert.True(<array>?.Any(e => …) == true)` for a bracket-wildcard path.
+///
+/// The null-conditional `?.` plus `== true` covers both nullable and non-nullable list
+/// getters without needing the element type name to build an empty-list fallback. ~keep
+fn render_wildcard_assertion(
+    out: &mut String,
+    assertion: &Assertion,
+    result_var: &str,
+    field_resolver: &FieldResolver,
+    field: &str,
+    array_part: &str,
+    elem_part: &str,
+) {
+    let array_accessor = if array_part.is_empty() {
+        result_var.to_string()
+    } else {
+        field_resolver.accessor(array_part, "csharp", result_var)
+    };
+    let param = wildcard_lambda_param(assertion);
+    // Passing the lambda parameter as the result var is what resolves a nested element
+    // sub-path against the loop element instead of the whole result. ~keep
+    let elem_accessor = field_resolver.accessor(elem_part, "csharp", &param);
+
+    let any_expr = |value: &serde_json::Value| -> Option<(String, String)> {
+        let serde_json::Value::String(s) = value else {
+            return None;
+        };
+        let escaped = escape_csharp(s);
+        Some((
+            format!(
+                "{array_accessor}?.Any({param} => Convert.ToString({elem_accessor})!.Contains(\"{escaped}\")) == true"
+            ),
+            escaped,
+        ))
+    };
+
+    match assertion.assertion_type.as_str() {
+        "contains" | "not_contains" if assertion.value.is_some() => {
+            let value = assertion.value.as_ref().expect("guarded by the match arm");
+            let Some((expr, escaped)) = any_expr(value) else {
+                let _ = writeln!(
+                    out,
+                    "        // skipped: non-string value for '{field}' traversal assertion"
+                );
+                return;
+            };
+            let verb = if assertion.assertion_type == "contains" {
+                "True"
+            } else {
+                "False"
+            };
+            let _ = writeln!(
+                out,
+                "        Assert.{verb}({expr}, \"element of '{field}': {escaped}\");"
+            );
+        }
+        "contains" | "contains_all" | "not_contains" => {
+            let Some(values) = &assertion.values else {
+                let _ = writeln!(out, "        // skipped: '{field}' traversal assertion has no values");
+                return;
+            };
+            let verb = if assertion.assertion_type == "not_contains" {
+                "False"
+            } else {
+                "True"
+            };
+            for value in values {
+                let Some((expr, escaped)) = any_expr(value) else {
+                    continue;
+                };
+                let _ = writeln!(
+                    out,
+                    "        Assert.{verb}({expr}, \"element of '{field}': {escaped}\");"
+                );
+            }
+        }
+        "not_empty" => {
+            let _ = writeln!(
+                out,
+                "        Assert.True({array_accessor}?.Any({param} => \
+                 !string.IsNullOrEmpty(Convert.ToString({elem_accessor}))) == true, \
+                 \"expected some element of '{field}' to be non-empty\");"
+            );
+        }
+        other => {
+            let _ = writeln!(
+                out,
+                "        // skipped: unsupported traversal assertion '{other}' on '{field}'"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod wildcard_traversal_tests {
+    use super::render_assertion;
+    use crate::e2e::field_access::FieldResolver;
+    use crate::e2e::fixture::Assertion;
+
+    fn contains_assertion(field: &str, value: &str) -> Assertion {
+        Assertion {
+            assertion_type: "contains".to_string(),
+            field: Some(field.to_string()),
+            value: Some(serde_json::Value::String(value.to_string())),
+            ..Default::default()
+        }
+    }
+
+    fn render_bare(assertion: &Assertion) -> String {
+        let resolver = FieldResolver::new(
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        );
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            assertion,
+            "result",
+            "SampleClass",
+            "SampleException",
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            &std::collections::HashSet::new(),
+            &std::collections::HashMap::new(),
+        );
+        out
+    }
+
+    #[test]
+    fn wildcard_contains_scans_every_element_not_just_index_zero() {
+        let out = render_bare(&contains_assertion("links[].link_type", "external"));
+        assert!(out.contains("?.Any("), "got: {out}");
+        assert!(out.contains("Assert.True("), "got: {out}");
+        assert!(!out.contains("[0]"), "wildcard must not lower to index 0, got: {out}");
+    }
+
+    #[test]
+    fn explicit_numeric_index_still_targets_that_element() {
+        let out = render_bare(&contains_assertion("links[0].link_type", "external"));
+        assert!(out.contains("[0]"), "explicit index must be preserved, got: {out}");
+        assert!(
+            !out.contains(".Any("),
+            "explicit index must not become a scan, got: {out}"
+        );
+    }
+
+    /// Codegen-level canary for the wildcard defect. A fixture array whose only match lives
+    /// in element 1 is caught by `Any` over the whole list and missed by the pre-fix
+    /// single-index accessor, so this fails against the pre-fix renderer. It cannot execute
+    /// the generated C#, so it pins the property structurally. ~keep
+    #[test]
+    fn wildcard_match_in_element_one_is_reachable() {
+        let out = render_bare(&contains_assertion("links[].link_type", "internal"));
+        assert!(
+            out.contains("?.Any("),
+            "an index-0 accessor would miss a match in element 1, got: {out}"
+        );
+        assert!(
+            out.contains("\\\"internal\\\"") || out.contains("\"internal\""),
+            "got: {out}"
+        );
+        assert!(!out.contains("[0]"), "got: {out}");
+    }
+
+    #[test]
+    fn wildcard_lambda_parameter_is_unique_per_assertion() {
+        let first = render_bare(&contains_assertion("links[].link_type", "external"));
+        let second = render_bare(&contains_assertion("links[].link_type", "internal"));
+        let param_of = |s: &str| {
+            let start = s.find("?.Any(").expect("expected an Any call") + "?.Any(".len();
+            s[start..start + s[start..].find(' ').expect("param is space-delimited")].to_string()
+        };
+        assert_ne!(param_of(&first), param_of(&second), "lambda params must not collide");
     }
 }

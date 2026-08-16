@@ -555,6 +555,12 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
             if !result_is_simple && !field_resolver.is_valid_for_result(f) {
                 continue;
             }
+            // Bracket-wildcard paths are rendered by the any-element scan in
+            // `render_assertion`, which ignores `optional_locals`. Binding a local here
+            // would leave it declared and never used — a compile error in Go. ~keep
+            if f.contains("[].") {
+                continue;
+            }
             let resolved = field_resolver.resolve(f);
             if field_resolver.is_optional(resolved) && !optional_locals.contains_key(f.as_str()) {
                 let is_string_field = assertion.value.as_ref().is_some_and(|v| v.is_string());

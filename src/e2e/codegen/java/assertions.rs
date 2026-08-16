@@ -373,6 +373,17 @@ pub(super) fn render_assertion(
         return;
     }
 
+    // Bracket-wildcard traversal (`links[].linkType`) means "every element". This must run
+    // before `field_expr` is built below, since that path lowers the wildcard to index 0 and
+    // would assert on a single element while reading as whole-array coverage. ~keep
+    if let Some(f) = assertion.field.as_deref()
+        && !f.is_empty()
+        && let Some((array_part, elem_part)) = field_resolver.wildcard_split(f)
+    {
+        render_wildcard_assertion(out, assertion, result_var, field_resolver, f, &array_part, &elem_part);
+        return;
+    }
+
     // Determine if this field maps to a sealed-interface type declared in
     // `assert_enum_types`.  When `Some`, the value is the type name (e.g.
     // "FormatMetadata") and the corresponding `{TypeName}Display` helper will
@@ -664,6 +675,122 @@ pub(super) fn build_java_method_call(
     }
 }
 
+/// Lambda-parameter / message suffix keyed to the assertion.
+///
+/// A Java lambda parameter may not shadow an enclosing local, and generated test methods
+/// bind locals named after fixture fields. Hashing the assertion's discriminating fields
+/// keeps the parameter name unique and stable across regenerations. ~keep
+fn wildcard_lambda_param(assertion: &Assertion) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    assertion.assertion_type.hash(&mut hasher);
+    assertion.field.hash(&mut hasher);
+    assertion
+        .value
+        .as_ref()
+        .map(std::string::ToString::to_string)
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    format!("e{:x}", hasher.finish() & 0xffff_ffff)
+}
+
+/// Emit `assertTrue(<array>.stream().anyMatch(e -> …))` for a bracket-wildcard path.
+fn render_wildcard_assertion(
+    out: &mut String,
+    assertion: &Assertion,
+    result_var: &str,
+    field_resolver: &FieldResolver,
+    field: &str,
+    array_part: &str,
+    elem_part: &str,
+) {
+    let array_accessor = if array_part.is_empty() {
+        result_var.to_string()
+    } else {
+        let accessor = field_resolver.accessor(array_part, "java", result_var);
+        // Nullable list getters come back as `@Nullable List<T>`; `.stream()` on null would
+        // NPE, so fall back to an empty list exactly as the count assertions do. ~keep
+        if field_resolver.is_optional(field_resolver.resolve(array_part)) {
+            format!("java.util.Optional.ofNullable({accessor}).orElse(java.util.List.of())")
+        } else {
+            accessor
+        }
+    };
+    let param = wildcard_lambda_param(assertion);
+    // Passing the lambda parameter as the result var is what resolves a nested element
+    // sub-path against the loop element instead of the whole result. ~keep
+    let elem_accessor = field_resolver.accessor(elem_part, "java", &param);
+
+    let any_match = |value: &serde_json::Value| -> Option<(String, String)> {
+        let serde_json::Value::String(s) = value else {
+            return None;
+        };
+        let escaped = escape_java(s);
+        Some((
+            format!(
+                "{array_accessor}.stream().anyMatch({param} -> String.valueOf({elem_accessor}).contains(\"{escaped}\"))"
+            ),
+            escaped,
+        ))
+    };
+
+    match assertion.assertion_type.as_str() {
+        "contains" | "not_contains" if assertion.value.is_some() => {
+            let value = assertion.value.as_ref().expect("guarded by the match arm");
+            let Some((expr, escaped)) = any_match(value) else {
+                out.push_str(&format!(
+                    "        // skipped: non-string value for '{field}' traversal assertion\n"
+                ));
+                return;
+            };
+            if assertion.assertion_type == "contains" {
+                out.push_str(&format!(
+                    "        assertTrue({expr}, \"expected some element of '{field}' to contain: {escaped}\");\n"
+                ));
+            } else {
+                out.push_str(&format!(
+                    "        assertFalse({expr}, \"expected no element of '{field}' to contain: {escaped}\");\n"
+                ));
+            }
+        }
+        "contains" | "contains_all" | "not_contains" => {
+            let Some(values) = &assertion.values else {
+                out.push_str(&format!(
+                    "        // skipped: '{field}' traversal assertion has no values\n"
+                ));
+                return;
+            };
+            let negated = assertion.assertion_type == "not_contains";
+            for value in values {
+                let Some((expr, escaped)) = any_match(value) else {
+                    continue;
+                };
+                if negated {
+                    out.push_str(&format!(
+                        "        assertFalse({expr}, \"expected no element of '{field}' to contain: {escaped}\");\n"
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "        assertTrue({expr}, \"expected some element of '{field}' to contain: {escaped}\");\n"
+                    ));
+                }
+            }
+        }
+        "not_empty" => {
+            out.push_str(&format!(
+                "        assertTrue({array_accessor}.stream().anyMatch({param} -> \
+                 !String.valueOf({elem_accessor}).isEmpty()), \"expected some element of '{field}' to be \
+                 non-empty\");\n"
+            ));
+        }
+        other => {
+            out.push_str(&format!(
+                "        // skipped: unsupported traversal assertion '{other}' on '{field}'\n"
+            ));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
@@ -690,6 +817,87 @@ mod tests {
             value: Some(serde_json::Value::String(value.to_string())),
             ..Default::default()
         }
+    }
+
+    fn make_contains_assertion(field: &str, value: &str) -> Assertion {
+        Assertion {
+            assertion_type: "contains".to_string(),
+            field: Some(field.to_string()),
+            value: Some(serde_json::Value::String(value.to_string())),
+            ..Default::default()
+        }
+    }
+
+    fn render_bare(assertion: &Assertion) -> String {
+        let resolver = make_resolver(HashSet::new(), HashSet::new());
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            assertion,
+            "result",
+            "Result",
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            None,
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+        );
+        out
+    }
+
+    #[test]
+    fn wildcard_contains_scans_every_element_not_just_index_zero() {
+        let out = render_bare(&make_contains_assertion("links[].link_type", "external"));
+        assert!(out.contains(".stream().anyMatch("), "got: {out}");
+        assert!(out.contains("assertTrue("), "got: {out}");
+        assert!(
+            !out.contains(".get(0)"),
+            "wildcard must not lower to index 0, got: {out}"
+        );
+        assert!(!out.contains("[0]"), "wildcard must not lower to index 0, got: {out}");
+    }
+
+    #[test]
+    fn explicit_numeric_index_still_targets_that_element() {
+        let out = render_bare(&make_contains_assertion("links[0].link_type", "external"));
+        assert!(
+            out.contains(".get(0)") || out.contains("[0]"),
+            "explicit index must be preserved, got: {out}"
+        );
+        assert!(
+            !out.contains("anyMatch"),
+            "explicit index must not become a scan, got: {out}"
+        );
+    }
+
+    /// Codegen-level canary for the wildcard defect. A fixture array whose only match lives
+    /// in element 1 is caught by `anyMatch` over the whole stream and missed by the pre-fix
+    /// single-index accessor, so this fails against the pre-fix renderer. It cannot execute
+    /// the generated Java, so it pins the property structurally. ~keep
+    #[test]
+    fn wildcard_match_in_element_one_is_reachable() {
+        let out = render_bare(&make_contains_assertion("links[].link_type", "internal"));
+        assert!(
+            out.contains(".stream().anyMatch("),
+            "an index-0 accessor would miss a match in element 1, got: {out}"
+        );
+        assert!(out.contains("\"internal\""), "got: {out}");
+        assert!(!out.contains(".get(0)"), "got: {out}");
+    }
+
+    #[test]
+    fn wildcard_lambda_parameter_is_unique_per_assertion() {
+        let first = render_bare(&make_contains_assertion("links[].link_type", "external"));
+        let second = render_bare(&make_contains_assertion("links[].link_type", "internal"));
+        let param_of = |s: &str| {
+            let start = s.find("anyMatch(").expect("expected an anyMatch call") + "anyMatch(".len();
+            s[start..start + s[start..].find(' ').expect("param is space-delimited")].to_string()
+        };
+        assert_ne!(param_of(&first), param_of(&second), "lambda params must not collide");
     }
 
     /// IR-oracle wiring regression (alef task #64): a field that is IR-reachable
