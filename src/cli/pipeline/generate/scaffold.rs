@@ -299,6 +299,7 @@ pub fn write_scaffold_files_report(
                          alef has no durable record of ever owning it -- leaving it untouched",
                         full_path.display()
                     );
+                    report.refused_paths.push(full_path.clone());
                     continue;
                 }
             }
@@ -333,7 +334,10 @@ pub fn write_scaffold_files_report(
     // (html-to-markdown is in exactly that state). Repairing first would leave any run that
     // failed between the two steps pointing at a nonexistent root source file -- trading
     // silent coverage loss for a build graph that will not resolve. ~keep
-    if files.iter().any(|file| file.path == Path::new("packages/zig/build.zig")) {
+    if files
+        .iter()
+        .any(|file| file.path == Path::new("packages/zig/build.zig"))
+    {
         crate::scaffold::migrate_build_zig_test_target(base_dir)
             .context("failed to migrate pre-existing packages/zig/build.zig test target")?;
     }
