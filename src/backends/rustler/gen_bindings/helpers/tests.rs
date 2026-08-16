@@ -548,3 +548,57 @@ mod variant_constructors {
         );
     }
 }
+
+#[test]
+fn gen_rustler_unimplemented_body_string_return_fails_loudly() {
+    let body = gen_rustler_unimplemented_body(&TypeRef::String, "extract_text", false);
+    assert!(
+        body.contains("compile_error!"),
+        "non-fallible String return must fail the build: {body}"
+    );
+    assert!(
+        !body.contains("[unimplemented:"),
+        "must not fabricate a placeholder string: {body}"
+    );
+}
+
+#[test]
+fn gen_rustler_unimplemented_body_vec_return_fails_loudly() {
+    let body = gen_rustler_unimplemented_body(&TypeRef::Vec(Box::new(TypeRef::String)), "list_entries", false);
+    assert!(body.contains("compile_error!"), "non-fallible Vec return must fail the build: {body}");
+    assert!(!body.contains("Vec::new()"), "must not fabricate an empty Vec: {body}");
+}
+
+#[test]
+fn gen_rustler_unimplemented_body_optional_return_fails_loudly() {
+    let body = gen_rustler_unimplemented_body(&TypeRef::Optional(Box::new(TypeRef::String)), "find_entry", false);
+    assert!(body.contains("compile_error!"), "non-fallible Optional return must fail the build: {body}");
+    assert!(!body.contains("\"None\""), "must not fabricate a None literal: {body}");
+}
+
+#[test]
+fn gen_rustler_unimplemented_body_primitive_return_fails_loudly() {
+    let body = gen_rustler_unimplemented_body(
+        &TypeRef::Primitive(crate::core::ir::PrimitiveType::I64),
+        "count_entries",
+        false,
+    );
+    assert!(body.contains("compile_error!"), "non-fallible primitive return must fail the build: {body}");
+}
+
+#[test]
+fn gen_rustler_unimplemented_body_unit_return_stays_void() {
+    let body = gen_rustler_unimplemented_body(&TypeRef::Unit, "run_side_effect", false);
+    assert_eq!(body, "()", "Unit return must stay a legitimate void value: {body}");
+}
+
+#[test]
+fn gen_rustler_unimplemented_body_with_error_type_raises_runtime_error() {
+    let body = gen_rustler_unimplemented_body(&TypeRef::String, "extract_text", true);
+    assert_eq!(
+        body,
+        "Err(String::from(\"Not implemented: extract_text\"))",
+        "fallible functions must keep raising a real runtime error: {body}"
+    );
+    assert!(!body.contains("compile_error!"), "fallible path must not also emit compile_error!: {body}");
+}

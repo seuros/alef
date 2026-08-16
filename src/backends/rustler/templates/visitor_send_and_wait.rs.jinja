@@ -5,6 +5,7 @@ where
     let (tx, rx) = std::sync::mpsc::sync_channel::<Option<String>>(1);
     let ref_id = VISITOR_REPLY_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     VISITOR_CHANNELS.lock().unwrap().insert(ref_id, tx);
+    arm_visitor_call_timeout(ref_id);
     let pid = bridge.caller_pid;
     let cb_name = callback_name.to_string();
     let mut msg_env = rustler::OwnedEnv::new();
