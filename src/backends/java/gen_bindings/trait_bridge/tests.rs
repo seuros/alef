@@ -947,3 +947,103 @@ fn bridge_with_fifteen_stubs_keeps_every_init_method_under_eighty_lines() {
         ],
     );
 }
+
+/// Regression: a required trait method whose return type is excluded from the Java
+/// surface still owns a vtable slot. `backend_type` returns an enum that xberg excludes
+/// via `[crates.java].exclude_types`; dropping its slot shifted every later function
+/// pointer one word left, so `supported_languages` was dispatched as `backend_type` and
+/// the final slot read past the allocation.
+#[test]
+fn vtable_keeps_a_slot_for_a_method_returning_an_invisible_type() {
+    let methods = vec![
+        make_method(
+            "process_image",
+            TypeRef::Named("ExtractedDocument".to_string()),
+            vec![ParamDef {
+                name: "image_bytes".to_string(),
+                ty: TypeRef::Bytes,
+                ..ParamDef::default()
+            }],
+        ),
+        make_method("supports_language", TypeRef::Primitive(PrimitiveType::Bool), vec![]),
+        make_method("backend_type", TypeRef::Named("OcrBackendType".to_string()), vec![]),
+        make_method("supported_languages", TypeRef::Vec(Box::new(TypeRef::String)), vec![]),
+    ];
+    let trait_def = make_trait("OcrBackend", methods);
+
+    // Everything except the excluded enum is visible, exactly as the Java backend builds
+    // `visible_type_names` from a surface that no longer contains the excluded type. ~keep
+    let mut visible = all_named_visible(&trait_def.methods);
+    visible.remove("OcrBackendType");
+    let excluded: HashSet<String> = ["OcrBackendType".to_string()].into_iter().collect();
+
+    let files = gen_trait_bridge_files(
+        &trait_def,
+        "krz",
+        "dev.sample_crate",
+        true,
+        None,
+        None,
+        &visible,
+        &excluded,
+        &[],
+    );
+
+    assert_eq!(
+        files.vtable_slot_names,
+        vec![
+            "name_fn",
+            "version_fn",
+            "initialize_fn",
+            "shutdown_fn",
+            "process_image",
+            "supports_language",
+            "backend_type",
+            "supported_languages",
+            "free_string",
+            "free_user_data",
+        ],
+        "Java must claim one slot per Rust vtable field, in Rust declaration order"
+    );
+
+    let stub_writes: Vec<&str> = files
+        .bridge_content
+        .lines()
+        .filter(|line| line.contains("ValueLayout.ADDRESS.byteSize());"))
+        .map(str::trim)
+        .collect();
+    assert_eq!(
+        stub_writes,
+        vec![
+            "initStubName(0L * ValueLayout.ADDRESS.byteSize());",
+            "initStubVersion(1L * ValueLayout.ADDRESS.byteSize());",
+            "initStubInitialize(2L * ValueLayout.ADDRESS.byteSize());",
+            "initStubShutdown(3L * ValueLayout.ADDRESS.byteSize());",
+            "initStubProcessImage(4L * ValueLayout.ADDRESS.byteSize());",
+            "initStubSupportsLanguage(5L * ValueLayout.ADDRESS.byteSize());",
+            "initStubBackendType(6L * ValueLayout.ADDRESS.byteSize());",
+            "initStubSupportedLanguages(7L * ValueLayout.ADDRESS.byteSize());",
+            "initStubFreeString(8L * ValueLayout.ADDRESS.byteSize());",
+            "initStubFreeUserData(9L * ValueLayout.ADDRESS.byteSize());",
+        ],
+        "each stub must be written at its own index, in declaration order"
+    );
+
+    let layout_slots = files
+        .bridge_content
+        .lines()
+        .filter(|line| line.trim() == "ValueLayout.ADDRESS," || line.trim() == "ValueLayout.ADDRESS")
+        .count();
+    assert_eq!(
+        layout_slots, 10,
+        "VTABLE_LAYOUT must be exactly as wide as the number of stubs written into it"
+    );
+
+    assert!(
+        files
+            .interface_content
+            .contains("String backend_type() throws Exception"),
+        "an excluded return type degrades to a JSON String rather than removing the method;\nactual:\n{}",
+        files.interface_content
+    );
+}

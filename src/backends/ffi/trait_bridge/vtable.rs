@@ -25,13 +25,10 @@ impl FfiBridgeGenerator {
             ));
         }
 
-        let skip = &spec.bridge_config.ffi_skip_methods;
-        let own_methods: Vec<_> = spec
-            .trait_def
-            .methods
-            .iter()
-            .filter(|m| m.trait_source.is_none() && !skip.iter().any(|s| s == &m.name))
-            .collect();
+        let own_methods = crate::codegen::generators::trait_bridge::own_vtable_methods(
+            spec.trait_def,
+            &spec.bridge_config.ffi_skip_methods,
+        );
 
         for method in &own_methods {
             if !method.doc.is_empty() {

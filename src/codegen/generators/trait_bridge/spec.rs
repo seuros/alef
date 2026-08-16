@@ -72,6 +72,48 @@ impl<'a> TraitBridgeSpec<'a> {
     }
 }
 
+/// The trait's own methods that each occupy one C vtable slot, in declaration order.
+///
+/// Single source for the predicate every vtable emitter must agree on:
+/// super-trait methods (`trait_source` set) are served by the four fixed leading
+/// plugin slots rather than a per-method slot, and `ffi_skip_methods` are absent
+/// from the C ABI entirely.
+pub fn own_vtable_methods<'a>(trait_def: &'a TypeDef, ffi_skip_methods: &[String]) -> Vec<&'a MethodDef> {
+    trait_def
+        .methods
+        .iter()
+        .filter(|method| method.trait_source.is_none() && !ffi_skip_methods.iter().any(|skip| skip == &method.name))
+        .collect()
+}
+
+/// Field names of the generated Rust vtable struct, in ABI slot order.
+///
+/// Mirrors what `backends::ffi::trait_bridge::vtable::gen_vtable_struct` emits:
+/// the four `Plugin` slots when a super trait is configured, then one slot per
+/// own method, then the two destructors.
+///
+/// Managed-side emitters (Java Panama, C# interop) write their upcall stubs at
+/// `index * pointer_size` into a flat block, so a managed vtable that enumerates a
+/// different method set than this — even one that merely reorders it — silently
+/// dispatches through the wrong slot and reads past the allocation on the last
+/// field. Comparing against this list is the only check that catches an omitted
+/// slot; a null-pointer check on the Rust side cannot, because an omission shifts
+/// a valid neighbouring pointer into the missing field rather than nulling it.
+pub fn vtable_slot_names(trait_def: &TypeDef, has_super_trait: bool, ffi_skip_methods: &[String]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    if has_super_trait {
+        names.extend(["name_fn", "version_fn", "initialize_fn", "shutdown_fn"].map(String::from));
+    }
+    names.extend(
+        own_vtable_methods(trait_def, ffi_skip_methods)
+            .into_iter()
+            .map(|method| method.name.clone()),
+    );
+    names.push("free_string".to_string());
+    names.push("free_user_data".to_string());
+    names
+}
+
 /// Return visitor callback methods configured for visitor-style bridges.
 ///
 /// A visitor callback is an own trait method whose return type is the configured

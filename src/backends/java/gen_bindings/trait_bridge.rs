@@ -85,6 +85,10 @@ fn java_type_visible_boxed(
 pub struct BridgeFiles {
     pub interface_content: String,
     pub bridge_content: String,
+    /// Identity of every vtable slot the bridge class writes, in the order it writes
+    /// them. Named after the corresponding Rust vtable struct field so a caller can
+    /// diff it against [`crate::codegen::generators::trait_bridge::vtable_slot_names`].
+    pub vtable_slot_names: Vec<String>,
 }
 
 /// Generate both the managed interface file and the bridge class file for one trait.
@@ -108,6 +112,17 @@ pub fn gen_trait_bridge_files(
     excluded_types: &HashSet<String>,
     ffi_skip_methods: &[String],
 ) -> BridgeFiles {
+    let (bridge_content, vtable_slot_names) = gen_bridge_file(
+        trait_def,
+        prefix,
+        package,
+        has_super_trait,
+        unregister_fn,
+        clear_fn,
+        visible_type_names,
+        excluded_types,
+        ffi_skip_methods,
+    );
     BridgeFiles {
         interface_content: gen_interface_file(
             trait_def,
@@ -117,17 +132,8 @@ pub fn gen_trait_bridge_files(
             excluded_types,
             ffi_skip_methods,
         ),
-        bridge_content: gen_bridge_file(
-            trait_def,
-            prefix,
-            package,
-            has_super_trait,
-            unregister_fn,
-            clear_fn,
-            visible_type_names,
-            excluded_types,
-            ffi_skip_methods,
-        ),
+        bridge_content,
+        vtable_slot_names,
     }
 }
 
@@ -404,6 +410,9 @@ fn gen_interface_file(
 
 /// Generate the bridge class compilation unit with upcall stubs, registry, and
 /// register/unregister/clear helpers all nested inside the public top-level class.
+///
+/// Returns the file content plus the identity of each vtable slot in write order,
+/// so the caller can prove the emitted layout matches the Rust vtable struct.
 #[allow(clippy::too_many_arguments)]
 fn gen_bridge_file(
     trait_def: &TypeDef,
@@ -415,7 +424,7 @@ fn gen_bridge_file(
     visible_type_names: &HashSet<&str>,
     excluded_types: &HashSet<String>,
     ffi_skip_methods: &[String],
-) -> String {
+) -> (String, Vec<String>) {
     let trait_pascal = trait_def.name.to_pascal_case();
     let trait_snake = trait_def.name.to_snake_case();
     let prefix_upper = prefix.to_uppercase();
@@ -429,12 +438,7 @@ fn gen_bridge_file(
         direct_return_for(&method.return_type)
     };
 
-    let skipped: HashSet<&str> = ffi_skip_methods.iter().map(|s| s.as_str()).collect();
-    let bridge_methods: Vec<&MethodDef> = trait_def
-        .methods
-        .iter()
-        .filter(|m| m.trait_source.is_none() && !skipped.contains(m.name.as_str()))
-        .collect();
+    let bridge_methods = crate::codegen::generators::trait_bridge::own_vtable_methods(trait_def, ffi_skip_methods);
 
     let lifecycle_methods: Vec<Value> = if has_super_trait {
         vec![
@@ -472,6 +476,7 @@ fn gen_bridge_file(
     };
 
     let mut stubs: Vec<Value> = vec![];
+    let mut slot_names: Vec<String> = vec![];
     if has_super_trait {
         let lifecycle_stubs = vec![
             (
@@ -514,6 +519,7 @@ fn gen_bridge_file(
                 descriptor_params => format!("ValueLayout.ADDRESS{extra_descriptor}"),
                 returns_void => false,
             });
+            slot_names.push(format!("{}_fn", pascal.to_snake_case()));
         }
     }
 
@@ -521,6 +527,7 @@ fn gen_bridge_file(
         let method_pascal = method.name.to_pascal_case();
         let handle_name = format!("handle{method_pascal}");
         let stub_name = format!("stub{method_pascal}");
+        slot_names.push(method.name.clone());
 
         let mut method_type_params = vec!["MemorySegment.class".to_string()];
         for param in &method.params {
@@ -739,8 +746,14 @@ fn gen_bridge_file(
         descriptor_params => "ValueLayout.ADDRESS",
         returns_void => true,
     });
+    slot_names.push("free_string".to_string());
+    slot_names.push("free_user_data".to_string());
 
-    let num_vtable_fields = num_super_slots + num_methods + 2;
+    // Size the struct layout from the stubs actually written rather than recomputing
+    // the arithmetic: the template writes stub `i` at `i * ADDRESS.byteSize()`, so a
+    // layout narrower than the stub list would place the final upcall past the
+    // allocation. ~keep
+    let num_vtable_fields = stubs.len();
     let register_takes_name = has_super_trait;
 
     let trait_snake_upper = trait_snake.to_uppercase();
@@ -804,7 +817,7 @@ fn gen_bridge_file(
         clear_method => &clear_method,
     };
 
-    template_env::render("trait_bridge.jinja", ctx)
+    (template_env::render("trait_bridge.jinja", ctx), slot_names)
 }
 
 /// Shape of a direct-value (non-JSON-convention) trait-method return.

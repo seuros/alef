@@ -321,3 +321,110 @@ fn test_format_return_type_vec_no_returns_ref_unchanged() {
         "Vec<String> without returns_ref must stay Vec<String>"
     );
 }
+
+#[test]
+fn vtable_slot_names_follow_rust_declaration_order() {
+    let trait_def = make_type_def(
+        "OcrBackend",
+        "mylib::OcrBackend",
+        vec![
+            make_method(
+                "process_image",
+                vec![],
+                TypeRef::String,
+                false,
+                false,
+                None,
+                Some("Error"),
+            ),
+            make_method(
+                "backend_type",
+                vec![],
+                TypeRef::Named("OcrBackendType".into()),
+                false,
+                false,
+                None,
+                None,
+            ),
+            make_method(
+                "supported_languages",
+                vec![],
+                TypeRef::Vec(Box::new(TypeRef::String)),
+                false,
+                false,
+                None,
+                None,
+            ),
+        ],
+    );
+
+    assert_eq!(
+        vtable_slot_names(&trait_def, true, &[]),
+        vec![
+            "name_fn",
+            "version_fn",
+            "initialize_fn",
+            "shutdown_fn",
+            "process_image",
+            "backend_type",
+            "supported_languages",
+            "free_string",
+            "free_user_data",
+        ],
+        "slots must be the four plugin slots, then own methods in declaration order, then destructors"
+    );
+}
+
+#[test]
+fn vtable_slot_names_omit_only_super_trait_and_skipped_methods() {
+    let trait_def = make_type_def(
+        "OcrBackend",
+        "mylib::OcrBackend",
+        vec![
+            make_method("name", vec![], TypeRef::String, false, false, Some("Plugin"), None),
+            make_method("probe", vec![], TypeRef::String, false, false, None, None),
+            make_method(
+                "backend_type",
+                vec![],
+                TypeRef::Named("OcrBackendType".into()),
+                false,
+                false,
+                None,
+                None,
+            ),
+        ],
+    );
+
+    assert_eq!(
+        vtable_slot_names(&trait_def, false, &["probe".to_string()]),
+        vec!["backend_type", "free_string", "free_user_data"],
+        "a super-trait method and an ffi_skip_methods entry are the only own methods without a slot"
+    );
+}
+
+#[test]
+fn own_vtable_methods_keeps_a_method_returning_any_named_type() {
+    let trait_def = make_type_def(
+        "PostProcessor",
+        "mylib::PostProcessor",
+        vec![make_method(
+            "processing_stage",
+            vec![],
+            TypeRef::Named("ProcessingStage".into()),
+            false,
+            false,
+            None,
+            None,
+        )],
+    );
+
+    let names: Vec<&str> = own_vtable_methods(&trait_def, &[])
+        .iter()
+        .map(|method| method.name.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["processing_stage"],
+        "slot membership must not depend on whether the return type is visible to a binding"
+    );
+}
