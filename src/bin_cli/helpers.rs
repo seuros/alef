@@ -679,6 +679,89 @@ e2e = "cargo test"
         cfg.resolve().unwrap().remove(0)
     }
 
+    /// Seed one stamped file per name and return what the ownership walk actually opened.
+    fn scanned_names(names: &[&str]) -> Vec<String> {
+        let directory = tempfile::tempdir().expect("temporary project");
+        for name in names {
+            let path = directory.path().join(name);
+            let marker = crate::core::hash::header(crate::core::hash::CommentStyle::Hash);
+            std::fs::write(&path, format!("{marker}\nseeded = true\n")).expect("seed stamped file");
+        }
+        let mut found: Vec<String> = collect_alef_hashes(directory.path())
+            .into_iter()
+            .filter_map(|(path, _, _)| path.file_name()?.to_str().map(str::to_owned))
+            .collect();
+        found.sort();
+        found
+    }
+
+    /// THE CANARY. Every name here is stamped by `marker_header_syntax` on the emit side, so a
+    /// file alef wrote carries a hash this walk must be able to re-read. Before the list was
+    /// widened these were stamped and then never opened — which reads as covered rather than as
+    /// missing, and is why the gap survived its own doc comment's warning. ~keep
+    #[test]
+    fn ownership_walk_opens_every_extension_the_emit_side_stamps() {
+        assert_eq!(
+            scanned_names(&[
+                "foo-config.cmake",
+                "app.csproj",
+                "gem.gemspec",
+                "build.zig.zon",
+                "pom.xml"
+            ]),
+            vec![
+                "app.csproj",
+                "build.zig.zon",
+                "foo-config.cmake",
+                "gem.gemspec",
+                "pom.xml"
+            ],
+        );
+    }
+
+    /// The makefiles and `Rakefile` have no extension at all, and `go.mod`'s is the far-too-broad
+    /// `mod` — shared with unrelated binary formats — so all of them are keyed on file name on the
+    /// emit side and must be keyed the same way here.
+    ///
+    /// Every entry of `VERIFY_SCAN_FILENAMES` that is not a dotfile appears below, so an addition
+    /// to that list without a matching read-side check fails here rather than passing quietly.
+    ///
+    /// `makefile` gets its own directory: macOS and Windows resolve it and `Makefile` to the same
+    /// path, so seeding both in one directory silently writes a single file and the lowercase
+    /// entry would look unscanned when it is only unwritten. ~keep
+    #[test]
+    fn ownership_walk_opens_the_filename_keyed_files_the_emit_side_stamps() {
+        assert_eq!(scanned_names(&["makefile"]), vec!["makefile"]);
+        assert_eq!(
+            scanned_names(&[
+                "Makefile",
+                "GNUmakefile",
+                "Rakefile",
+                "Makevars",
+                "Makevars.in",
+                "Makevars.win.in",
+                "go.mod"
+            ]),
+            vec![
+                "GNUmakefile",
+                "Makefile",
+                "Makevars",
+                "Makevars.in",
+                "Makevars.win.in",
+                "Rakefile",
+                "go.mod"
+            ],
+        );
+    }
+
+    /// The other half of the predicate: widening the allowlist must not turn the walk into
+    /// "open everything". Without this, both tests above would still pass if the filter were
+    /// deleted outright. ~keep
+    #[test]
+    fn ownership_walk_still_skips_an_extension_alef_never_stamps() {
+        assert!(scanned_names(&["notes.rtf", "archive.tar"]).is_empty());
+    }
+
     #[test]
     fn default_log_level_maps_verbosity_to_levels() {
         assert_eq!(default_log_level(0, false), "info");
