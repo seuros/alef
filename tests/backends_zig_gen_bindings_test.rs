@@ -2049,3 +2049,6 @@ fn named_json_return_guards_against_null_to_json_pointer() {
         "null-guard must precede sliceTo so the assertion never fires"
     );
 }
+
+#[path = "backends_zig_gen_bindings/cfg_gate.rs"]
+mod cfg_gate;

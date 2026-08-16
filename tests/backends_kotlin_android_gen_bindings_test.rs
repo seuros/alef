@@ -667,13 +667,16 @@ fn handle_only_opaque_returns_wrapper_class_and_accepts_wrapper_params() {
     let handle_content = &handle_kt.content;
 
     assert!(
-        handle_content
-            .contains("class CrawlEngineHandle internal constructor(internal val handle: Long) : AutoCloseable"),
-        "wrapper must implement AutoCloseable with internal val handle: Long, got:\n{handle_content}"
+        handle_content.contains("class CrawlEngineHandle internal constructor(handle: Long) : AutoCloseable"),
+        "wrapper must be an AutoCloseable class taking the raw handle, got:\n{handle_content}"
     );
     assert!(
-        handle_content.contains("DemoBridge.nativeFreeCrawlEngineHandle(handle)"),
-        "wrapper close() must call nativeFreeCrawlEngineHandle(handle), got:\n{handle_content}"
+        handle_content.contains("internal val handle: Long"),
+        "wrapper must expose `internal val handle: Long`, got:\n{handle_content}"
+    );
+    assert!(
+        handle_content.contains("DemoBridge.nativeFreeCrawlEngineHandle(ownedHandle)"),
+        "wrapper close() must free the handle it took ownership of, got:\n{handle_content}"
     );
 }
 

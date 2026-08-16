@@ -343,6 +343,10 @@ fn make_field_with_doc(name: &str, ty: TypeRef, optional: bool, doc: &str) -> Fi
     }
 }
 
+#[path = "backends_php_gen_bindings/cfg_gate.rs"]
+mod cfg_gate;
+#[path = "backends_php_gen_bindings/cfg_gate_scaffold.rs"]
+mod cfg_gate_scaffold;
 #[path = "backends_php_gen_bindings/docs_defaults.rs"]
 mod docs_defaults;
 #[path = "backends_php_gen_bindings/generation.rs"]

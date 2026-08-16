@@ -1700,10 +1700,13 @@ fn wrapper_optional_bytes_param_emits_null_safe_length() {
     );
 }
 
-/// Regression test: Duration field in a has_default struct must emit `ulong?` (single `?`),
-/// not `ulong??`. Reproduces the CS1519 error introduced by commit 9ee50d0.
+/// Regression test: a `Duration` field with no `#[serde(default)]` of its own (`default:
+/// None`) must never emit the invalid `ulong??` double-nullable (the original CS1519 bug
+/// from commit 9ee50d0) — and, per the Defect 1/3 fix, must now be `required ulong`, not
+/// nullable at all: `typ.has_default` (the *struct* deriving `Default`) is not a signal
+/// that this specific field tolerates a missing JSON key.
 #[test]
-fn test_duration_field_emits_single_nullable_not_double() {
+fn test_duration_field_emits_required_ulong_not_double_nullable() {
     let backend = CsharpBackend;
 
     let api = ApiSurface {
@@ -1780,9 +1783,175 @@ fn test_duration_field_emits_single_nullable_not_double() {
         cs_file.content
     );
     assert!(
-        cs_file.content.contains("ulong? Timeout"),
-        "Duration field should emit `ulong? Timeout`; got:\n{}",
+        cs_file.content.contains("public required ulong Timeout { get; init; }"),
+        "a Duration field with no field-level default must be required, non-nullable ulong; got:\n{}",
         cs_file.content
+    );
+    assert!(
+        cs_file
+            .content
+            .contains("[JsonConverter(typeof(DurationMillisJsonConverter))]"),
+        "a required Duration field must carry the non-nullable converter; got:\n{}",
+        cs_file.content
+    );
+}
+
+/// Regression (Defect 1): the generated package must ship `DurationMillisJsonConverter.cs`
+/// whenever any type has a `Duration` field — that converter is what makes the millisecond
+/// `ulong`/`ulong?` property round-trip against Rust's `{"secs":...,"nanos":...}` wire shape.
+#[test]
+fn test_duration_millis_converter_file_emitted_when_duration_field_exists() {
+    let backend = CsharpBackend;
+
+    let api = ApiSurface {
+        crate_name: "test".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "RateLimitConfig".to_string(),
+            rust_path: "test::RateLimitConfig".to_string(),
+            original_rust_path: String::new(),
+            has_default: true,
+            fields: vec![FieldDef {
+                version: Default::default(),
+                name: "window".to_string(),
+                ty: TypeRef::Duration,
+                optional: false,
+                default: None,
+                typed_default: None,
+                doc: String::new(),
+                sanitized: false,
+                is_boxed: false,
+                type_rust_path: None,
+                cfg: None,
+                core_wrapper: alef::core::ir::CoreWrapper::None,
+                vec_inner_core_wrapper: alef::core::ir::CoreWrapper::None,
+                newtype_wrapper: None,
+                serde_rename: None,
+                serde_flatten: false,
+                binding_excluded: false,
+                binding_exclusion_reason: None,
+                original_type: None,
+            }],
+            methods: vec![],
+            is_opaque: false,
+            is_clone: true,
+            is_copy: false,
+            is_trait: false,
+            has_stripped_cfg_fields: false,
+            is_return_type: false,
+            serde_rename_all: None,
+            has_serde: false,
+            super_traits: vec![],
+            doc: String::new(),
+            cfg: None,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            is_variant_wrapper: false,
+            has_lifetime_params: false,
+            has_private_fields: false,
+            version: Default::default(),
+        }],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+
+    let config = minimal_csharp_config("test");
+    let files = backend
+        .generate_bindings(&api, &config)
+        .expect("generation should succeed");
+
+    let converter_file = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().contains("DurationMillisJsonConverter.cs"));
+    assert!(
+        converter_file.is_some(),
+        "expected DurationMillisJsonConverter.cs to be generated when a Duration field exists"
+    );
+    let content = &converter_file.unwrap().content;
+    assert!(content.contains("class DurationMillisJsonConverter : JsonConverter<ulong>"));
+    assert!(content.contains("class NullableDurationMillisJsonConverter : JsonConverter<ulong?>"));
+}
+
+/// Counterpart of the above: a crate with no `Duration` field anywhere must not carry the
+/// unused converter file.
+#[test]
+fn test_duration_millis_converter_file_omitted_without_duration_field() {
+    let backend = CsharpBackend;
+
+    let api = ApiSurface {
+        crate_name: "test".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "PlainConfig".to_string(),
+            rust_path: "test::PlainConfig".to_string(),
+            original_rust_path: String::new(),
+            fields: vec![FieldDef {
+                version: Default::default(),
+                name: "name".to_string(),
+                ty: TypeRef::String,
+                optional: false,
+                default: None,
+                typed_default: None,
+                doc: String::new(),
+                sanitized: false,
+                is_boxed: false,
+                type_rust_path: None,
+                cfg: None,
+                core_wrapper: alef::core::ir::CoreWrapper::None,
+                vec_inner_core_wrapper: alef::core::ir::CoreWrapper::None,
+                newtype_wrapper: None,
+                serde_rename: None,
+                serde_flatten: false,
+                binding_excluded: false,
+                binding_exclusion_reason: None,
+                original_type: None,
+            }],
+            methods: vec![],
+            is_opaque: false,
+            is_clone: true,
+            is_copy: false,
+            is_trait: false,
+            has_default: false,
+            has_stripped_cfg_fields: false,
+            is_return_type: false,
+            serde_rename_all: None,
+            has_serde: false,
+            super_traits: vec![],
+            doc: String::new(),
+            cfg: None,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            is_variant_wrapper: false,
+            has_lifetime_params: false,
+            has_private_fields: false,
+            version: Default::default(),
+        }],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+
+    let config = minimal_csharp_config("test");
+    let files = backend
+        .generate_bindings(&api, &config)
+        .expect("generation should succeed");
+
+    assert!(
+        !files
+            .iter()
+            .any(|f| f.path.to_string_lossy().contains("DurationMillisJsonConverter.cs")),
+        "no Duration field exists, so the converter file must not be emitted"
     );
 }
 
@@ -1871,10 +2040,13 @@ fn test_optional_ulong_field_emits_single_nullable() {
     );
 }
 
-/// Regression test: plain enum field with serde(default) and no explicit variant default
-/// becomes nullable (T?) with null init — must not double-add `?`.
+/// Regression test (Defect 2): a plain enum field with no field-level `#[serde(default)]`
+/// (`default: None`) on a struct that derives `Default` must be `required`, not nullable —
+/// `typ.has_default` alone previously made every field of such a struct take the
+/// "defaulted" branch, which resolved enum-typed fields to a `null` default and forced
+/// `Mode?` even though the field is required at the serde level.
 #[test]
-fn test_plain_enum_with_default_emits_single_nullable() {
+fn test_plain_enum_without_field_default_stays_required() {
     let backend = CsharpBackend;
 
     let api = ApiSurface {
@@ -1982,8 +2154,13 @@ fn test_plain_enum_with_default_emits_single_nullable() {
         cs_file.content
     );
     assert!(
-        cs_file.content.contains("Mode?"),
-        "Enum field with null default should be nullable; got:\n{}",
+        cs_file.content.contains("public required Mode Mode { get; init; }"),
+        "an enum field with no field-level default must be required, not nullable; got:\n{}",
+        cs_file.content
+    );
+    assert!(
+        !cs_file.content.contains("Mode?"),
+        "a required field must not be nullable just because the struct derives Default; got:\n{}",
         cs_file.content
     );
 }
@@ -3733,3 +3910,6 @@ fn test_trait_bridge_clear_method_uses_clear_fn_name_not_trait_name() {
          Method name must derive from clear_fn (clear_post_processors → ClearPostProcessors), not trait name."
     );
 }
+
+#[path = "backends_csharp_gen_bindings/cfg_gate.rs"]
+mod cfg_gate;

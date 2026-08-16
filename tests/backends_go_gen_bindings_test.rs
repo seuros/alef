@@ -944,3 +944,6 @@ mod regressions;
 
 #[path = "backends_go_gen_bindings/trait_bridge.rs"]
 mod trait_bridge;
+
+#[path = "backends_go_gen_bindings/cfg_gate.rs"]
+mod cfg_gate;
