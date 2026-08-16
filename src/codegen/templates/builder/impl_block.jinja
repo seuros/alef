@@ -1,9 +1,0 @@
-{%- for attr in attrs %}
-#[{{ attr }}]
-{%- endfor %}
-impl {{ target }} {
-{%- for method in methods %}
-
-    {{ method.replace('\n', '\n    ') }}
-{%- endfor %}
-}

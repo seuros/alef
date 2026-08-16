@@ -632,3 +632,87 @@ wasm-http = []
         features_block
     );
 }
+
+/// The elixir scaffold already emits its own `unexpected_cfgs` check-cfg allowlist
+/// into `[lints.rust]`. A configured `[crates.cargo_lints]` table must compose with
+/// that single table -- not open a second `[lints.rust]` header, which Cargo
+/// rejects as a duplicate table -- and the builtin `unexpected_cfgs` entry must
+/// survive even if the user also sets that key.
+#[test]
+fn test_scaffold_elixir_cargo_lints_merges_with_builtin_unexpected_cfgs() {
+    let config = test_config_from_toml(
+        r#"
+[crates.cargo_lints.rust]
+unexpected_cfgs = "warn"
+unused_must_use = "deny"
+
+[crates.cargo_lints.clippy]
+print_stdout = "deny"
+"#,
+    );
+    let api = test_api();
+    let all_files = scaffold(&api, &config, &[Language::Elixir]).unwrap();
+    let files = language_files(&all_files);
+    let cargo_toml = files
+        .iter()
+        .find(|f| f.path.ends_with("Cargo.toml"))
+        .expect("Cargo.toml must be generated");
+
+    assert_eq!(
+        cargo_toml.content.matches("[lints.rust]").count(),
+        1,
+        "must not emit a second [lints.rust] table; content:\n{}",
+        cargo_toml.content
+    );
+    assert!(
+        cargo_toml
+            .content
+            .contains("unexpected_cfgs = { level = \"warn\", check-cfg ="),
+        "the builtin unexpected_cfgs entry must survive the user's colliding key; content:\n{}",
+        cargo_toml.content
+    );
+    assert!(
+        cargo_toml.content.contains("unused_must_use = \"deny\""),
+        "non-colliding configured rust lints must be spliced in; content:\n{}",
+        cargo_toml.content
+    );
+    assert!(
+        cargo_toml.content.contains("[lints.clippy]\nprint_stdout = \"deny\""),
+        "configured clippy lints must be spliced in; content:\n{}",
+        cargo_toml.content
+    );
+    toml::from_str::<toml::Value>(&cargo_toml.content).expect("generated Cargo.toml must be valid TOML");
+}
+
+/// Absence of `[crates.cargo_lints]` must leave the pre-existing builtin
+/// `[lints.rust]` block exactly as it was: a single table containing only the
+/// `unexpected_cfgs` entry, with no `[lints.clippy]` table appended.
+#[test]
+fn test_scaffold_elixir_cargo_lints_unset_leaves_builtin_block_unchanged() {
+    let config = test_config();
+    let api = test_api();
+    let all_files = scaffold(&api, &config, &[Language::Elixir]).unwrap();
+    let files = language_files(&all_files);
+    let cargo_toml = files
+        .iter()
+        .find(|f| f.path.ends_with("Cargo.toml"))
+        .expect("Cargo.toml must be generated");
+
+    let lints_start = cargo_toml
+        .content
+        .find("[lints.rust]")
+        .expect("builtin [lints.rust] block must still be emitted");
+    let lints_block = &cargo_toml.content[lints_start..];
+    assert_eq!(
+        lints_block.matches("unexpected_cfgs").count(),
+        1,
+        "content:\n{}",
+        cargo_toml.content
+    );
+    assert!(
+        !lints_block.contains("[lints.clippy]"),
+        "no [lints.clippy] table should appear when cargo_lints is unset; content:\n{}",
+        cargo_toml.content
+    );
+    toml::from_str::<toml::Value>(&cargo_toml.content).expect("generated Cargo.toml must be valid TOML");
+}

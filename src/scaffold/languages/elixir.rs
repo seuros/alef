@@ -184,9 +184,21 @@ pub(crate) fn scaffold_elixir_cargo(
             .map(|f| format!("\"{f}\""))
             .collect::<Vec<_>>()
             .join(", ");
-        format!(
-            "\n[lints.rust]\nunexpected_cfgs = {{ level = \"warn\", check-cfg = ['cfg(feature, values({csv}))'] }}\n"
-        )
+        // The `unexpected_cfgs` line stays a hand-written literal rather than routing
+        // through `CargoLintsConfig::render` -- Cargo allows only one `[lints.rust]`
+        // table per manifest, so a configured `[crates.cargo_lints.rust]` entry has
+        // to become an extra sibling line under this same header, not a second one. ~keep
+        let mut rust_lines = vec![format!(
+            "unexpected_cfgs = {{ level = \"warn\", check-cfg = ['cfg(feature, values({csv}))'] }}"
+        )];
+        rust_lines.extend(config.cargo_lints.extra_rust_lines(&["unexpected_cfgs"]));
+        let clippy_block = config.cargo_lints.clippy_block();
+        let clippy_section = if clippy_block.is_empty() {
+            String::new()
+        } else {
+            format!("\n\n{clippy_block}")
+        };
+        format!("\n[lints.rust]\n{}{clippy_section}\n", rust_lines.join("\n"))
     };
 
     let content = format!(
@@ -600,7 +612,9 @@ fn get_core_crate_features(config: &ResolvedCrateConfig, core_crate_dir: &str) -
         return features;
     };
 
-    let Ok(manifest) = content.parse::<toml::Value>() else {
+    // `toml` 1.x's `FromStr for Value` parses a bare value, not a document; use `from_str`
+    // or every real Cargo.toml silently yields an empty feature list. ~keep
+    let Ok(manifest) = toml::from_str::<toml::Value>(&content) else {
         return features;
     };
     let Some(feature_table) = manifest.get("features").and_then(toml::Value::as_table) else {

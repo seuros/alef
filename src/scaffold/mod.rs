@@ -39,7 +39,10 @@ pub(crate) fn detect_workspace_inheritance(workspace_root: Option<&std::path::Pa
     let Ok(contents) = std::fs::read_to_string(&cargo_toml_path) else {
         return WorkspacePackageInheritance::default();
     };
-    let Ok(doc) = contents.parse::<toml::Value>() else {
+    // `toml` 1.x's `FromStr for Value` parses a bare *value*, not a document, so
+    // `contents.parse::<toml::Value>()` fails at `[workspace]` on every real Cargo.toml
+    // and silently yields an all-false result. `from_str` is the document entry point. ~keep
+    let Ok(doc) = toml::from_str::<toml::Value>(&contents) else {
         return WorkspacePackageInheritance::default();
     };
     let Some(workspace) = doc.get("workspace") else {
@@ -372,6 +375,23 @@ pub(crate) fn render_workspace_dep_or(config: &ResolvedCrateConfig, name: &str, 
 /// Checks for per-language feature overrides first, then falls back to `[crate] features`.
 /// Returns an empty string if no features are configured, otherwise returns
 /// `, features = ["feat1", "feat2"]`.
+/// Render `config.cargo_lints` for splicing into a generated Cargo.toml
+/// immediately after the `[package]` header, with its own leading blank-line
+/// separator already applied. Returns an empty string when no lints are
+/// configured, so callers can splice the result in unconditionally: `{pkg_header}
+/// {lints_section}\n\n# next section...` reproduces the pre-existing single
+/// blank line before the next section when `lints_section` is empty, and adds a
+/// blank-line-delimited `[lints.rust]` / `[lints.clippy]` block between them
+/// otherwise.
+pub(crate) fn cargo_lints_section(config: &ResolvedCrateConfig) -> String {
+    let rendered = config.cargo_lints.render();
+    if rendered.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{rendered}")
+    }
+}
+
 pub(crate) fn core_dep_features(config: &ResolvedCrateConfig, lang: Language) -> String {
     let features = config.features_for_language(lang);
     if features.is_empty() {
@@ -440,6 +460,45 @@ fn resolve_core_aggregate_features(
         }
     }
     Some(reachable)
+}
+
+/// Read the core crate's own `[features]` table and resolve `requested` (the literal feature
+/// names on the core dependency line, e.g. `["native-http", "full"]`) into the full transitive
+/// set of features that ends up active, plus the core crate's own declared `default` feature
+/// list. Each name in `requested` that is itself an aggregate in the core crate's `[features]`
+/// table (e.g. `full`) is expanded via [`resolve_core_aggregate_features`]; plain leaf names are
+/// kept as-is. Falls back to `requested` verbatim as the active set (and an empty default list)
+/// when the core manifest can't be located, read, or parsed — the same permissive fallback
+/// [`android_target_feature_line_for_dep`] uses.
+pub(crate) fn core_feature_closure(
+    config: &ResolvedCrateConfig,
+    requested: &[String],
+) -> (std::collections::BTreeSet<String>, std::collections::BTreeSet<String>) {
+    let mut active: std::collections::BTreeSet<String> = requested.iter().cloned().collect();
+    let no_defaults = std::collections::BTreeSet::new();
+    let Some(manifest_path) = core_crate_manifest_path(config) else {
+        return (active, no_defaults);
+    };
+    let Ok(contents) = std::fs::read_to_string(&manifest_path) else {
+        return (active, no_defaults);
+    };
+    let Ok(doc) = toml::from_str::<toml::Value>(&contents) else {
+        return (active, no_defaults);
+    };
+    let Some(features_table) = doc.get("features").and_then(|v| v.as_table()) else {
+        return (active, no_defaults);
+    };
+    for name in requested {
+        if let Some(members) = resolve_core_aggregate_features(features_table, name) {
+            active.extend(members);
+        }
+    }
+    let defaults: std::collections::BTreeSet<String> = features_table
+        .get("default")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str()).map(String::from).collect())
+        .unwrap_or_default();
+    (active, defaults)
 }
 
 /// Compute the binding-crate `android-target` aggregate feature line, if applicable.
