@@ -115,6 +115,7 @@ fn test_gen_magnus_kwargs_constructor_hash_path_for_many_fields() {
             newtype_wrapper: None,
             serde_rename: None,
             serde_flatten: false,
+            serde_with: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             original_type: None,
@@ -274,6 +275,7 @@ fn test_gen_php_kwargs_constructor_optional_field_passthrough() {
         newtype_wrapper: None,
         serde_rename: None,
         serde_flatten: false,
+        serde_with: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         original_type: None,
@@ -306,6 +308,7 @@ fn test_gen_php_kwargs_constructor_unwrap_or_default_for_primitive() {
         newtype_wrapper: None,
         serde_rename: None,
         serde_flatten: false,
+        serde_with: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         original_type: None,
@@ -357,6 +360,7 @@ fn test_gen_rustler_kwargs_constructor_optional_field() {
         newtype_wrapper: None,
         serde_rename: None,
         serde_flatten: false,
+        serde_with: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         original_type: None,
@@ -388,6 +392,7 @@ fn test_gen_rustler_kwargs_constructor_skips_binding_excluded_fields() {
         newtype_wrapper: None,
         serde_rename: None,
         serde_flatten: false,
+        serde_with: None,
         binding_excluded: true,
         binding_exclusion_reason: Some("internal implementation detail".to_string()),
         original_type: None,
@@ -421,6 +426,7 @@ fn test_gen_rustler_kwargs_constructor_named_type_uses_unwrap_or_default() {
         newtype_wrapper: None,
         serde_rename: None,
         serde_flatten: false,
+        serde_with: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         original_type: None,
@@ -432,13 +438,23 @@ fn test_gen_rustler_kwargs_constructor_named_type_uses_unwrap_or_default() {
     );
 }
 
+/// A `String` field's own default must be spelled out; a `String` field with no default falls
+/// back to the type's.
+///
+/// The first half previously asserted the opposite, because the branch decided what kind of
+/// default it was looking at by sniffing the *rendered Rust* for a leading quote — and
+/// `StringLiteral("default")` renders as `"default".to_string()`, which starts with one. An
+/// ordinary `String` field was therefore misread as an enum-variant default and collapsed to
+/// `.unwrap_or_default()`, so `Config.new(%{})` produced `""` where the source crate says
+/// `"default"`. The old assertion named the mechanism ("quoted default") rather than the
+/// contract, which is why it read as correct.
 #[test]
-fn test_gen_rustler_kwargs_constructor_string_field_uses_unwrap_or_default() {
+fn test_gen_rustler_kwargs_constructor_string_field_keeps_its_literal_default() {
     let mut typ = make_test_type();
     let output = gen_rustler_kwargs_constructor(&typ, &simple_type_mapper);
     assert!(
-        output.contains("name: opts.get(\"name\").and_then(|t| t.decode().ok()).unwrap_or_default(),"),
-        "String field with quoted default should use unwrap_or_default"
+        output.contains("name: opts.get(\"name\").and_then(|t| t.decode().ok()).unwrap_or(\"default\".to_string()),"),
+        "a String field's own default must survive into the constructor; got:\n{output}"
     );
     typ.fields.push(FieldDef {
         version: Default::default(),
@@ -457,6 +473,7 @@ fn test_gen_rustler_kwargs_constructor_string_field_uses_unwrap_or_default() {
         newtype_wrapper: None,
         serde_rename: None,
         serde_flatten: false,
+        serde_with: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         original_type: None,
@@ -465,5 +482,27 @@ fn test_gen_rustler_kwargs_constructor_string_field_uses_unwrap_or_default() {
     assert!(
         output2.contains("label: opts.get(\"label\").and_then(|t| t.decode().ok()).unwrap_or_default(),"),
         "String field with no default should use unwrap_or_default"
+    );
+}
+
+/// The branch's real purpose, pinned so it survives the string-sniff removal. An `EnumVariant`
+/// default on a `String`-typed field renders as the variant's *wire* string, which is not a value
+/// the binding struct's field can be initialised from here, so it defers to the type's `Default`.
+/// Without this test, `defers_to_field_type_default` reads as if only the `Named` arm mattered.
+#[test]
+fn test_gen_rustler_kwargs_constructor_enum_variant_on_string_field_defers_to_default() {
+    let mut typ = make_test_type();
+    typ.fields.push(FieldDef {
+        name: "mode".to_string(),
+        ty: TypeRef::String,
+        typed_default: Some(DefaultValue::EnumVariant("Fast".to_string())),
+        ..Default::default()
+    });
+
+    let output = gen_rustler_kwargs_constructor(&typ, &simple_type_mapper);
+
+    assert!(
+        output.contains("mode: opts.get(\"mode\").and_then(|t| t.decode().ok()).unwrap_or_default(),"),
+        "an enum-variant default on a String field has no literal here; got:\n{output}"
     );
 }

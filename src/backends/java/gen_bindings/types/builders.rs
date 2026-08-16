@@ -121,7 +121,7 @@ pub(super) fn gen_builder_nested_class(
             java_boxed_type(&resolved_field_ty).to_string()
         } else if matches!(resolved_field_ty, TypeRef::Duration) {
             java_boxed_type(&resolved_field_ty).to_string()
-        } else if has_serde_default || boxes_to_carry_literal_default(field.typed_default.as_ref()) {
+        } else if has_serde_default || boxes_to_carry_literal_default(&field.ty, field.typed_default.as_ref()) {
             // Non-optional fields with #[serde(default)] or a literal default use boxed types
             // so null can represent "not set"
             java_boxed_type(&resolved_field_ty).to_string()
@@ -307,7 +307,7 @@ pub(super) fn gen_builder_nested_class(
             java_boxed_type(&resolved_field_ty).to_string()
         } else if has_serde_default
             || matches!(resolved_field_ty, TypeRef::Duration)
-            || boxes_to_carry_literal_default(field.typed_default.as_ref())
+            || boxes_to_carry_literal_default(&field.ty, field.typed_default.as_ref())
         {
             // Non-optional fields with #[serde(default)], Duration, or a literal default
             // must box the parameter type
@@ -355,7 +355,7 @@ pub(super) fn gen_builder_nested_class(
         let needs_nullable_on_param = (field.optional
             || has_serde_default
             || matches!(field.ty, TypeRef::Duration)
-            || boxes_to_carry_literal_default(field.typed_default.as_ref()))
+            || boxes_to_carry_literal_default(&field.ty, field.typed_default.as_ref()))
             && !is_visitor_field;
         if needs_nullable_on_param {
             if let Some(idx) = field_type.rfind('.') {

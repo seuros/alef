@@ -212,10 +212,16 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_method(
         if let Some(body) = adapter_bodies.get(&adapter_key) {
             body.clone()
         } else {
+            // Locks the body's fallibility to the same expression as `return_annotation` above.
+            // Vacuous today — `method_deserialization_introduces_result` is itself gated on
+            // `can_delegate`, which is false on this branch — but the two must not drift: were
+            // they to disagree, the NIF would be declared `-> Result<_, _>` while the body was
+            // generated as infallible, putting `compile_error!` in the consumer's NIF crate for
+            // a method that could have returned a plain `Err`. ~keep
             crate::backends::rustler::gen_bindings::helpers::gen_rustler_unimplemented_body(
                 &method.return_type,
                 &method_fn_name,
-                method.error_type.is_some(),
+                method.error_type.is_some() || deserialization_introduces_result,
             )
         }
     };

@@ -201,12 +201,16 @@ fn render_kotlin_default(
                 Some(n.to_string())
             }
         }
+        // `{f}` on a whole-valued f64 prints `1`, and `val ratio: Double = 1` is an *integer*
+        // literal Kotlin refuses to widen; NaN and the infinities print as `NaN`/`inf`, which
+        // name nothing. Both are handled once in `float_literal_digits`. ~keep
         DefaultValue::FloatLiteral(f) => {
             use crate::core::ir::PrimitiveType;
+            let digits = crate::codegen::shared::float_literal_digits(*f)?;
             if matches!(ty, TypeRef::Primitive(PrimitiveType::F32)) {
-                Some(format!("{f}f"))
+                Some(format!("{digits}f"))
             } else {
-                Some(f.to_string())
+                Some(digits)
             }
         }
         DefaultValue::StringLiteral(s) => Some(format!("\"{}\"", escape_kotlin_string(s))),

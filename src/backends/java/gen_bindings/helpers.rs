@@ -1,6 +1,6 @@
 use crate::codegen::naming::to_java_name;
 use crate::core::hash::{self, CommentStyle};
-use crate::core::ir::{PrimitiveType, TypeRef};
+use crate::core::ir::{DefaultValue, PrimitiveType, TypeRef};
 use heck::{ToKebabCase, ToLowerCamelCase, ToPascalCase};
 use std::collections::HashSet;
 
@@ -21,17 +21,61 @@ pub(crate) fn is_serde_default_marker(default: Option<&str>) -> bool {
     matches!(default, Some(s) if s == SERDE_DEFAULT_PLACEHOLDER || s.starts_with("serde(default = \""))
 }
 
+/// The Java literal that restores a non-optional field's Rust default, or `None` when this
+/// backend has no primitive literal to restore.
+///
+/// Every emitter that touches defaults asks one of two questions — "must this component be
+/// boxed?" and "what does the compact constructor assign?" — and they are the same question:
+/// a component is boxed precisely so a literal can be restored into it. Both answers come from
+/// here so they cannot drift apart, which is how the `float` default below was lost: the boxing
+/// predicate and the compact-constructor match were separate lists and only the latter was ever
+/// extended.
+///
+/// Only a default that differs from the Java type-zero qualifies. A default equal to the zero
+/// needs no restore, and boxing for it would widen the record's public API for nothing.
+///
+/// Reference-typed defaults (`StringLiteral`, `EnumVariant`, `ListLiteral`, `Empty`) are excluded
+/// deliberately, not overlooked: those components are already nullable, the record's
+/// `@JsonInclude(NON_ABSENT)` drops a null key from the wire entirely, and Rust's own `Default`
+/// then supplies the value — so the binding is correct with no initializer at all. An unboxed
+/// primitive has no null to drop, which is the whole reason it is the one shape where a missing
+/// restore ships the type-zero to Rust as though the caller had chosen it. ~keep
+pub(crate) fn java_literal_default(ty: &TypeRef, typed_default: Option<&DefaultValue>) -> Option<String> {
+    match typed_default? {
+        DefaultValue::BoolLiteral(true) => Some("true".to_string()),
+        DefaultValue::IntLiteral(n) if *n != 0 => Some(match ty {
+            TypeRef::Duration
+            | TypeRef::Primitive(
+                PrimitiveType::U64 | PrimitiveType::I64 | PrimitiveType::Usize | PrimitiveType::Isize,
+            ) => format!("{n}L"),
+            _ => n.to_string(),
+        }),
+        // `float_literal_digits` rejects NaN and the infinities, which have no Java literal, so
+        // those fall through to "no restore" rather than to source that does not parse. It also
+        // keeps the decimal point on a whole-valued default: `Double d = 2` is an int literal
+        // and does not compile in the boxing position the compact constructor assigns through. ~keep
+        DefaultValue::FloatLiteral(f) if *f != 0.0 => {
+            let digits = crate::codegen::shared::float_literal_digits(*f)?;
+            Some(match ty {
+                TypeRef::Primitive(PrimitiveType::F32) => format!("{digits}f"),
+                _ => digits,
+            })
+        }
+        _ => None,
+    }
+}
+
 /// Whether a non-optional field must be boxed so `null` can mean "not supplied".
 ///
 /// Java records have no per-component defaults, so a default is restored in the compact
 /// constructor by testing the incoming value. That test needs a value meaning "nothing was
 /// supplied". `Duration` and `#[serde(default)]` fields already box for exactly this reason;
 /// a field carrying a plain literal default must join them, because on an unboxed primitive
-/// the only available sentinel is `0` — and then a caller passing an explicit `0` is silently
-/// given the default instead. Every other language emits per-field initializers and needs no
-/// sentinel, which is why this is Java-local. ~keep
-pub(crate) fn boxes_to_carry_literal_default(typed_default: Option<&crate::core::ir::DefaultValue>) -> bool {
-    matches!(typed_default, Some(crate::core::ir::DefaultValue::IntLiteral(n)) if *n != 0)
+/// the only available sentinel is the type-zero — and then a caller passing an explicit `0`,
+/// `0.0` or `false` is silently given the default instead. Every other language emits per-field
+/// initializers and needs no sentinel, which is why this is Java-local. ~keep
+pub(crate) fn boxes_to_carry_literal_default(ty: &TypeRef, typed_default: Option<&DefaultValue>) -> bool {
+    java_literal_default(ty, typed_default).is_some()
 }
 
 /// Names that conflict with methods on `java.lang.Object` and are therefore

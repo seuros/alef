@@ -38,6 +38,7 @@ fn make_config_type_with_duration_default() -> TypeDef {
             newtype_wrapper: None,
             serde_rename: None,
             serde_flatten: false,
+            serde_with: None,
             binding_excluded: false,
             binding_exclusion_reason: None,
             original_type: None,
@@ -87,6 +88,7 @@ fn make_request_type_with_multiword_fields() -> TypeDef {
                 newtype_wrapper: None,
                 serde_rename: None,
                 serde_flatten: false,
+                serde_with: None,
                 binding_excluded: false,
                 binding_exclusion_reason: None,
                 original_type: None,
@@ -108,6 +110,7 @@ fn make_request_type_with_multiword_fields() -> TypeDef {
                 newtype_wrapper: None,
                 serde_rename: None,
                 serde_flatten: false,
+                serde_with: None,
                 binding_excluded: false,
                 binding_exclusion_reason: None,
                 original_type: None,
@@ -129,6 +132,7 @@ fn make_request_type_with_multiword_fields() -> TypeDef {
                 newtype_wrapper: None,
                 serde_rename: None,
                 serde_flatten: false,
+                serde_with: None,
                 binding_excluded: false,
                 binding_exclusion_reason: None,
                 original_type: None,
@@ -270,6 +274,7 @@ fn flatten_json_field_forces_builder_emission_below_auto_threshold() {
                 newtype_wrapper: None,
                 serde_rename: Some("type".to_string()),
                 serde_flatten: false,
+                serde_with: None,
                 binding_excluded: false,
                 binding_exclusion_reason: None,
                 original_type: None,
@@ -291,6 +296,7 @@ fn flatten_json_field_forces_builder_emission_below_auto_threshold() {
                 newtype_wrapper: None,
                 serde_rename: None,
                 serde_flatten: true,
+                serde_with: None,
                 binding_excluded: false,
                 binding_exclusion_reason: None,
                 original_type: None,
@@ -567,5 +573,346 @@ fn tagged_union_field_type_colliding_with_variant_name_is_package_qualified() {
         "positive control: a field type that does NOT collide with any variant name must stay \
          unqualified -- qualifying it too would make every generated type needlessly verbose, \
          got:\n{out}"
+    );
+}
+
+/// A record whose defaults come from an `impl Default` body: `field.default` is `None` and
+/// `typed_default` is the only carrier of the value.
+fn impl_default_record(fields: Vec<FieldDef>) -> TypeDef {
+    TypeDef {
+        name: "HeuristicsConfig".to_string(),
+        rust_path: "sample_crate::HeuristicsConfig".to_string(),
+        original_rust_path: "sample_crate::HeuristicsConfig".to_string(),
+        fields,
+        has_default: true,
+        has_serde: true,
+        ..Default::default()
+    }
+}
+
+fn impl_default_field(name: &str, ty: TypeRef, value: DefaultValue) -> FieldDef {
+    FieldDef {
+        name: name.to_string(),
+        ty,
+        typed_default: Some(value),
+        ..Default::default()
+    }
+}
+
+fn render_impl_default_record(typ: &TypeDef) -> String {
+    gen_record_type(
+        "dev.sample_crate",
+        typ,
+        &AHashSet::default(),
+        &AHashSet::default(),
+        "SNAKE_CASE",
+        &[],
+        "SampleCrawler",
+        JavaBuilderMode::Auto,
+        &ahash::AHashMap::default(),
+        &AHashSet::default(),
+        &HashSet::default(),
+    )
+}
+
+/// The defect: a `f32` field carrying a `0.7` default from `impl Default` was emitted as an
+/// unboxed `private float textLayerThreshold;` with no compact-constructor assignment. An
+/// unboxed primitive has no `null`, so `@JsonInclude(NON_ABSENT)` cannot drop it from the wire
+/// — every builder-constructed instance shipped `"text_layer_threshold": 0.0` to Rust, which
+/// reads it as a deliberate caller choice and overrides its own `0.7`. That is a live value
+/// change across the FFI, not a missing convenience.
+#[test]
+fn float_literal_default_is_boxed_and_restored_in_compact_ctor() {
+    let typ = impl_default_record(vec![impl_default_field(
+        "text_layer_threshold",
+        TypeRef::Primitive(PrimitiveType::F32),
+        DefaultValue::FloatLiteral(0.7),
+    )]);
+
+    let out = render_impl_default_record(&typ);
+
+    assert!(
+        out.contains("textLayerThreshold == null"),
+        "absence must select the Rust default:\n{out}"
+    );
+    assert!(
+        out.contains("textLayerThreshold = 0.7f;"),
+        "the f32 default must be restored with a Java float literal:\n{out}"
+    );
+    assert!(
+        !out.contains("float textLayerThreshold"),
+        "an unboxed float has no sentinel for 'not supplied', so the component must be boxed:\n{out}"
+    );
+}
+
+/// An explicit `0.0` is a caller decision and must survive: boxing is what lets the compact
+/// constructor tell it apart from "not supplied". Without boxing the only sentinel is the
+/// type-zero, which silently overwrites exactly this value.
+#[test]
+fn explicit_zero_float_is_not_coerced_to_the_default() {
+    let typ = impl_default_record(vec![impl_default_field(
+        "text_layer_threshold",
+        TypeRef::Primitive(PrimitiveType::F32),
+        DefaultValue::FloatLiteral(0.7),
+    )]);
+
+    let out = render_impl_default_record(&typ);
+
+    assert!(
+        !out.contains("textLayerThreshold == 0"),
+        "explicit zero must remain meaningful:\n{out}"
+    );
+}
+
+/// `Float` and `Double` take different literal suffixes, and a Java `double` initialiser written
+/// without a decimal point (`2`) is an `int` literal — legal in an assignment but not in the
+/// `Double` boxing position the compact constructor uses.
+#[test]
+fn float_default_literals_carry_the_suffix_their_java_type_requires() {
+    for (primitive, value, expected) in [
+        (PrimitiveType::F32, 0.7_f64, "0.7f"),
+        (PrimitiveType::F64, 0.7_f64, "0.7"),
+        (PrimitiveType::F32, 2.0_f64, "2.0f"),
+        (PrimitiveType::F64, 2.0_f64, "2.0"),
+    ] {
+        let primitive_label = format!("{primitive:?}");
+        let typ = impl_default_record(vec![impl_default_field(
+            "ratio",
+            TypeRef::Primitive(primitive),
+            DefaultValue::FloatLiteral(value),
+        )]);
+
+        let out = render_impl_default_record(&typ);
+
+        assert!(
+            out.contains(&format!("ratio = {expected};")),
+            "{primitive_label} default {value} must render as `{expected}`:\n{out}"
+        );
+    }
+}
+
+/// A NaN or infinite default has no Java literal. Emitting one produces source that does not
+/// parse, so the field must fall back to "no restore" rather than to broken code.
+#[test]
+fn non_finite_float_default_emits_no_compact_ctor_line() {
+    for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let typ = impl_default_record(vec![impl_default_field(
+            "ratio",
+            TypeRef::Primitive(PrimitiveType::F64),
+            DefaultValue::FloatLiteral(value),
+        )]);
+
+        let out = render_impl_default_record(&typ);
+
+        assert!(
+            !out.contains("ratio == null"),
+            "with no literal to restore there is nothing for a compact constructor to do:\n{out}"
+        );
+        assert!(
+            !out.contains("NaN") && !out.contains("Infinity") && !out.contains("inf"),
+            "Rust's Display for a non-finite f64 is not a Java literal:\n{out}"
+        );
+    }
+}
+
+/// A `bool` default of `true` needs the same boxing as a numeric one, and for a sharper reason:
+/// the unboxed sentinel would be `false`, which is itself a legitimate caller value. Before this,
+/// only a field that additionally carried `#[serde(default)]` was restored, so a `true` coming
+/// from a plain `impl Default` body reached the consumer as `false`.
+#[test]
+fn bool_true_default_from_impl_default_is_boxed_and_restored() {
+    let typ = impl_default_record(vec![impl_default_field(
+        "enable_pdf_text_heuristics",
+        TypeRef::Primitive(PrimitiveType::Bool),
+        DefaultValue::BoolLiteral(true),
+    )]);
+
+    let out = render_impl_default_record(&typ);
+
+    assert!(
+        out.contains("enablePdfTextHeuristics == null"),
+        "absence must select the Rust default:\n{out}"
+    );
+    assert!(
+        out.contains("enablePdfTextHeuristics = true;"),
+        "the bool default must be restored:\n{out}"
+    );
+    assert!(
+        !out.contains("boolean enablePdfTextHeuristics"),
+        "an unboxed boolean's only sentinel is `false`, which is a real caller value:\n{out}"
+    );
+}
+
+/// The negative control. A default equal to the Java type-zero needs no restore — the component
+/// already holds that value — and boxing for it would widen the record's public API for nothing.
+/// Without this, "box everything that has a default" would pass every other test here.
+#[test]
+fn defaults_equal_to_the_java_type_zero_stay_unboxed() {
+    for (name, ty, value) in [
+        (
+            "retries",
+            TypeRef::Primitive(PrimitiveType::U32),
+            DefaultValue::IntLiteral(0),
+        ),
+        (
+            "ratio",
+            TypeRef::Primitive(PrimitiveType::F32),
+            DefaultValue::FloatLiteral(0.0),
+        ),
+        (
+            "enabled",
+            TypeRef::Primitive(PrimitiveType::Bool),
+            DefaultValue::BoolLiteral(false),
+        ),
+    ] {
+        let typ = impl_default_record(vec![impl_default_field(name, ty, value)]);
+
+        let out = render_impl_default_record(&typ);
+
+        assert!(
+            !out.contains(&format!("{name} == null")),
+            "a zero-valued default needs no sentinel:\n{out}"
+        );
+        assert!(
+            !out.contains("@Nullable"),
+            "a zero-valued default must not widen the component to nullable:\n{out}"
+        );
+    }
+}
+
+/// Not a defect: a `String` or enum component is already a reference type. It is `null` when the
+/// caller does not set it, `@JsonInclude(NON_ABSENT)` drops a null key from the JSON handed to
+/// Rust, and Rust's own `Default` then supplies the value. Restoring it in the compact
+/// constructor would only duplicate a value Rust already owns, and boxing is a no-op. This test
+/// pins that omission as deliberate so a later "make every default render" change has to argue
+/// with it rather than silently churn every DTO.
+#[test]
+fn reference_typed_defaults_are_left_to_the_rust_side() {
+    let typ = impl_default_record(vec![
+        impl_default_field(
+            "label",
+            TypeRef::String,
+            DefaultValue::StringLiteral("balanced".to_string()),
+        ),
+        impl_default_field(
+            "mode",
+            TypeRef::Named("Mode".to_string()),
+            DefaultValue::EnumVariant("Fast".to_string()),
+        ),
+    ]);
+
+    let out = render_impl_default_record(&typ);
+
+    assert!(
+        !out.contains("label == null") && !out.contains("mode == null"),
+        "reference components need no compact-constructor restore:\n{out}"
+    );
+    assert!(
+        out.contains("@JsonInclude(JsonInclude.Include.NON_ABSENT)"),
+        "the omission is only sound because a null key never reaches Rust:\n{out}"
+    );
+}
+
+/// A `#[alef(skip)]`ped field is not a record component, so a compact-constructor line naming it
+/// would not compile. The old loop read `typ.fields` directly and only escaped this because the
+/// single variant it handled rarely coincided with an excluded field.
+#[test]
+fn binding_excluded_field_with_a_default_emits_no_compact_ctor_line() {
+    let mut excluded = impl_default_field(
+        "internal_ratio",
+        TypeRef::Primitive(PrimitiveType::F32),
+        DefaultValue::FloatLiteral(0.7),
+    );
+    excluded.binding_excluded = true;
+    let typ = impl_default_record(vec![
+        excluded,
+        impl_default_field(
+            "text_layer_threshold",
+            TypeRef::Primitive(PrimitiveType::F32),
+            DefaultValue::FloatLiteral(0.7),
+        ),
+    ]);
+
+    let out = render_impl_default_record(&typ);
+
+    assert!(
+        !out.contains("internalRatio"),
+        "an excluded field is not a record component:\n{out}"
+    );
+    assert!(
+        out.contains("textLayerThreshold = 0.7f;"),
+        "positive control: the visible field is still restored:\n{out}"
+    );
+}
+
+/// Java's half of the cross-language default control. The C# emitter carries the same comparison
+/// against the same oracle (`backends::csharp::gen_bindings::types::tests`), and Kotlin's lives in
+/// `backends::kotlin::gen_bindings::object_wrapper::tests`, so all four backends agree
+/// transitively on the value while each keeps its own spelling. See
+/// `backends::default_agreement_tests` for why a single-backend test cannot catch this class of
+/// defect: a backend that stops consuming `typed_default` emits its type's zero, which is
+/// indistinguishable from a real initializer until something compares it to another backend.
+#[test]
+fn java_literal_defaults_agree_with_the_swift_renderer() {
+    use crate::backends::java::gen_bindings::helpers::java_literal_default;
+    use crate::backends::swift::gen_bindings::dto::swift_typed_default_literal;
+
+    let fixture = [
+        (
+            "bool true",
+            TypeRef::Primitive(PrimitiveType::Bool),
+            DefaultValue::BoolLiteral(true),
+        ),
+        (
+            "fractional f32",
+            TypeRef::Primitive(PrimitiveType::F32),
+            DefaultValue::FloatLiteral(0.7),
+        ),
+        (
+            "whole-valued f64",
+            TypeRef::Primitive(PrimitiveType::F64),
+            DefaultValue::FloatLiteral(2.0),
+        ),
+        (
+            "large integer",
+            TypeRef::Primitive(PrimitiveType::U64),
+            DefaultValue::IntLiteral(10_485_760),
+        ),
+    ];
+
+    for (label, ty, value) in fixture {
+        let swift = swift_typed_default_literal(&value).expect("the oracle renders every fixture value");
+        let java = java_literal_default(&ty, Some(&value))
+            .unwrap_or_else(|| panic!("java dropped the default for `{label}` entirely"));
+
+        // A Java numeric literal carries a width suffix its Swift counterpart does not; the value
+        // either side of it is what the two languages have to agree on. Normalising rather than
+        // skipping the suffixed cases is deliberate — excluding them is how a backend drifts. ~keep
+        let normalized = java.trim_end_matches(['f', 'L']);
+        assert_eq!(
+            normalized, swift,
+            "Java and Swift disagree on the default for `{label}`: java `{java}`, swift `{swift}`"
+        );
+    }
+}
+
+/// The apparatus check for the test above. If `java_literal_default` started returning `None` for
+/// everything, every agreement assertion would fail loudly — but if the *oracle* started returning
+/// `None`, the `expect` would fire on the fixture rather than on a real disagreement. Pin that the
+/// two disagree when they should, so a passing comparison means something.
+#[test]
+fn the_java_swift_comparison_can_still_fail() {
+    use crate::backends::java::gen_bindings::helpers::java_literal_default;
+    use crate::backends::swift::gen_bindings::dto::swift_typed_default_literal;
+
+    let dropped = DefaultValue::FloatLiteral(0.0);
+    assert!(
+        java_literal_default(&TypeRef::Primitive(PrimitiveType::F32), Some(&dropped)).is_none(),
+        "a zero-valued default is deliberately not restored"
+    );
+    assert_eq!(
+        swift_typed_default_literal(&dropped).as_deref(),
+        Some("0.0"),
+        "the oracle still renders it, so the two genuinely differ here and the comparison is live"
     );
 }

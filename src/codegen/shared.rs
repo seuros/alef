@@ -394,6 +394,36 @@ pub fn function_sig_defaults(params: &[ParamDef]) -> String {
         .join(", ")
 }
 
+/// The digits of a `DefaultValue::FloatLiteral` as a floating-point literal, or `None` when the
+/// value has no literal form at all.
+///
+/// Two failure modes are shared by every curly-brace target language and were, until this
+/// existed, re-derived independently in each backend — which is how Kotlin came to emit
+/// `val ratio: Double = 1` for a Rust `1.0_f64`:
+///
+/// - Rust's `Display` for `f64` prints a whole number with no decimal point, and `1` is an
+///   *integer* literal in Java, Kotlin, C#, Swift and TypeScript alike. In a boxed or explicitly
+///   typed floating-point position that is a type error, not a widening conversion.
+/// - `NaN` and the infinities print as `NaN`/`inf`, which name nothing in any of those
+///   languages. `None` here means "this default has no literal", which is strictly better than
+///   source that does not parse; callers fall back to leaving the field required.
+///
+/// Type suffixes (`f`, `F`, `d`) stay with the caller: they depend on the target language *and*
+/// on whether the field is `f32` or `f64`, which this function deliberately does not know.
+/// `src/backends/swift/gen_bindings/dto.rs` still carries its own copy of this rule and should
+/// adopt this one; it is the oracle the cross-language default control compares against, so the
+/// two must not drift. ~keep
+pub fn float_literal_digits(value: f64) -> Option<String> {
+    if value.is_nan() || value.is_infinite() {
+        return None;
+    }
+    Some(if value.fract() == 0.0 {
+        format!("{value:.1}")
+    } else {
+        value.to_string()
+    })
+}
+
 /// Format a field's `DefaultValue` as Rust code for the target language.
 /// Used by backends generating config constructors with defaults.
 ///

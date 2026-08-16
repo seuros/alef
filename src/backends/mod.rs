@@ -1,5 +1,8 @@
 //! Language-specific binding-generator backends.
 
+#[cfg(test)]
+mod default_agreement_tests;
+
 pub mod csharp;
 pub mod dart;
 pub mod extendr;

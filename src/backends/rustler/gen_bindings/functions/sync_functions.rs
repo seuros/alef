@@ -429,10 +429,16 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_function(
         let wrap = gen_rustler_wrap_return("result", &func.return_type, "", opaque_types, func.returns_ref);
         render_result_body(&preamble, &core_call, &wrap)
     } else {
+        // Locks the body's fallibility to the same expression as `return_annotation` above.
+        // Vacuous today — `function_deserialization_introduces_result` is itself gated on
+        // `can_delegate`, which is false on this branch — but the two must not drift: were
+        // they to disagree, the NIF would be declared `-> Result<_, _>` while the body was
+        // generated as infallible, putting `compile_error!` in the consumer's NIF crate for
+        // a function that could have returned a plain `Err`. ~keep
         crate::backends::rustler::gen_bindings::helpers::gen_rustler_unimplemented_body(
             &func.return_type,
             &func.name,
-            func.error_type.is_some(),
+            func.error_type.is_some() || deserialization_introduces_result,
         )
     };
     let mut out = String::new();

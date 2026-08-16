@@ -19,6 +19,7 @@ fn make_field(name: &str, ty: TypeRef) -> FieldDef {
         newtype_wrapper: None,
         serde_rename: None,
         serde_flatten: false,
+        serde_with: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         original_type: None,
@@ -834,4 +835,116 @@ fn default_constructible_propagates_removal_to_dependent_types() {
         !constructible.contains("Outer"),
         "Outer defaulted to `Inner()`, so dropping Inner must drop Outer too; got {constructible:?}",
     );
+}
+
+/// Kotlin's half of the cross-language default control, against the same oracle C# and Java use
+/// (`backends::csharp::gen_bindings::types::tests`,
+/// `backends::java::gen_bindings::types::tests`). See `backends::default_agreement_tests` for the
+/// argument: a backend that stops consuming `typed_default` renders its type's zero, which looks
+/// exactly like a real initializer until another backend is asked the same question.
+///
+/// `kotlin_field_default` returns the whole ` = <literal>` suffix, so the comparison strips the
+/// assignment as well as the width suffix.
+#[test]
+fn kotlin_field_defaults_agree_with_the_swift_renderer() {
+    use crate::backends::swift::gen_bindings::dto::swift_typed_default_literal;
+    use crate::core::ir::{DefaultValue, PrimitiveType};
+    use std::collections::{HashMap, HashSet};
+
+    let fixture = [
+        (
+            "bool true",
+            TypeRef::Primitive(PrimitiveType::Bool),
+            DefaultValue::BoolLiteral(true),
+        ),
+        (
+            "fractional f32",
+            TypeRef::Primitive(PrimitiveType::F32),
+            DefaultValue::FloatLiteral(0.7),
+        ),
+        (
+            "whole-valued f64",
+            TypeRef::Primitive(PrimitiveType::F64),
+            DefaultValue::FloatLiteral(2.0),
+        ),
+        (
+            "large integer",
+            TypeRef::Primitive(PrimitiveType::U64),
+            DefaultValue::IntLiteral(10_485_760),
+        ),
+        (
+            "string",
+            TypeRef::String,
+            DefaultValue::StringLiteral("balanced".to_string()),
+        ),
+    ];
+
+    let enum_defaults = HashMap::new();
+    let constructible = HashSet::new();
+
+    for (label, ty, value) in fixture {
+        let swift = swift_typed_default_literal(&value).expect("the oracle renders every fixture value");
+        let kotlin = super::types::kotlin_field_default(&ty, false, Some(&value), &enum_defaults, &constructible);
+        let literal = kotlin
+            .strip_prefix(" = ")
+            .unwrap_or_else(|| panic!("kotlin dropped the default for `{label}`, rendering `{kotlin}`"));
+
+        // Kotlin suffixes a `Float` with `f` and a 64-bit integer with `L`; Swift suffixes
+        // neither. Normalising rather than skipping those cases keeps every fixture value inside
+        // the comparison. ~keep
+        assert_eq!(
+            literal.trim_end_matches(['f', 'L']),
+            swift,
+            "Kotlin and Swift disagree on the default for `{label}`: kotlin `{literal}`, swift `{swift}`"
+        );
+    }
+}
+
+/// The regression this control was extended for: `{f}` on a whole-valued `f64` prints `1`, and
+/// `val ratio: Double = 1` is an integer literal Kotlin refuses to widen. NaN and the infinities
+/// print as `NaN`/`inf`, which name nothing — those must drop to "no default" rather than to
+/// source that does not parse.
+#[test]
+fn whole_valued_and_non_finite_float_defaults_stay_valid_kotlin() {
+    use crate::core::ir::{DefaultValue, PrimitiveType};
+    use std::collections::{HashMap, HashSet};
+
+    let enum_defaults = HashMap::new();
+    let constructible = HashSet::new();
+
+    assert_eq!(
+        super::types::kotlin_field_default(
+            &TypeRef::Primitive(PrimitiveType::F64),
+            false,
+            Some(&DefaultValue::FloatLiteral(1.0)),
+            &enum_defaults,
+            &constructible,
+        ),
+        " = 1.0",
+        "a Double initializer needs a decimal point"
+    );
+    assert_eq!(
+        super::types::kotlin_field_default(
+            &TypeRef::Primitive(PrimitiveType::F32),
+            false,
+            Some(&DefaultValue::FloatLiteral(1.0)),
+            &enum_defaults,
+            &constructible,
+        ),
+        " = 1.0f"
+    );
+
+    for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let rendered = super::types::kotlin_field_default(
+            &TypeRef::Primitive(PrimitiveType::F64),
+            false,
+            Some(&DefaultValue::FloatLiteral(value)),
+            &enum_defaults,
+            &constructible,
+        );
+        assert_eq!(
+            rendered, "",
+            "a non-finite default has no Kotlin literal and must leave the parameter required"
+        );
+    }
 }

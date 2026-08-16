@@ -2,14 +2,14 @@ use crate::backends::java::type_map::{java_boxed_type, java_type};
 use crate::codegen::shared::binding_fields;
 use crate::core::config::{JavaBuilderMode, TraitBridgeConfig};
 use crate::core::hash::{self, CommentStyle};
-use crate::core::ir::{DefaultValue, MethodDef, PrimitiveType, TypeDef, TypeRef};
+use crate::core::ir::{MethodDef, TypeDef, TypeRef};
 use ahash::AHashSet;
 
 use super::builders::{gen_builder_nested_class, should_emit_builder};
 use super::shared::{options_field_bridge_trait_name, resolve_field_type};
 use crate::backends::java::gen_bindings::helpers::{
     RECORD_LINE_WRAP_THRESHOLD, boxes_to_carry_literal_default, emit_javadoc, is_serde_default_marker,
-    safe_java_field_name,
+    java_literal_default, safe_java_field_name,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -58,7 +58,7 @@ pub(crate) fn gen_record_type(
             java_boxed_type(&resolved_ty).to_string()
         } else if has_serde_default
             || matches!(resolved_ty, TypeRef::Duration)
-            || boxes_to_carry_literal_default(f.typed_default.as_ref())
+            || boxes_to_carry_literal_default(&f.ty, f.typed_default.as_ref())
         {
             // Non-optional fields with #[serde(default)], Duration, or a literal default
             // use boxed types so the compact constructor can tell "unset" from a real value
@@ -87,7 +87,7 @@ pub(crate) fn gen_record_type(
         let has_nullable = f.optional
             || has_serde_default
             || matches!(resolved_ty, TypeRef::Duration)
-            || boxes_to_carry_literal_default(f.typed_default.as_ref());
+            || boxes_to_carry_literal_default(&f.ty, f.typed_default.as_ref());
 
         let mut decl = String::new();
 
@@ -226,38 +226,16 @@ pub(crate) fn gen_record_type(
         ));
     }
 
-    let compact_ctor_lines: Vec<String> = typ
-        .fields
-        .iter()
+    // Only binding-visible fields are record components, so only they can be assigned here — a
+    // line naming a `#[alef(skip)]`ped field would not compile. ~keep
+    let compact_ctor_lines: Vec<String> = binding_fields(&typ.fields)
         .filter(|f| !f.optional)
         .filter_map(|f| {
+            // `java_literal_default` returning `Some` is also what boxed the component, so the
+            // sentinel this tests against is guaranteed to be `null`. ~keep
+            let literal = java_literal_default(&f.ty, f.typed_default.as_ref())?;
             let jname = safe_java_field_name(&f.name);
-            let has_serde_default = is_serde_default_marker(f.default.as_deref());
-            match &f.typed_default {
-                Some(DefaultValue::IntLiteral(n)) if *n != 0 => {
-                    let is_boxed = matches!(f.ty, TypeRef::Duration)
-                        || has_serde_default
-                        || boxes_to_carry_literal_default(f.typed_default.as_ref());
-                    let needs_long_suffix = matches!(
-                        f.ty,
-                        TypeRef::Duration
-                            | TypeRef::Primitive(
-                                PrimitiveType::U64 | PrimitiveType::I64 | PrimitiveType::Usize | PrimitiveType::Isize
-                            )
-                    );
-                    let suffix = if needs_long_suffix { "L" } else { "" };
-                    let cond = if is_boxed {
-                        format!("{jname} == null")
-                    } else {
-                        format!("{jname} == 0")
-                    };
-                    Some(format!("        if ({cond}) {{ {jname} = {n}{suffix}; }}"))
-                }
-                Some(DefaultValue::BoolLiteral(true)) if has_serde_default => {
-                    Some(format!("        if ({jname} == null) {{ {jname} = true; }}"))
-                }
-                _ => None,
-            }
+            Some(format!("        if ({jname} == null) {{ {jname} = {literal}; }}"))
         })
         .collect();
 
