@@ -213,9 +213,9 @@ fn rust_source_files(source_root: &Path) -> anyhow::Result<Vec<PathBuf>> {
 /// Walk every generated `.rs` file once, collecting both the exported-symbol
 /// map (name -> its source `#[cfg(...)]`, if any) and the typedef-kind hints
 /// (Rust type name -> struct or scalar) in the same pass. ~keep
-fn scan_generated_ffi_source(
-    source_root: &Path,
-) -> anyhow::Result<(BTreeMap<String, Option<String>>, BTreeMap<String, TypedefKind>)> {
+type FfiSourceScan = (BTreeMap<String, Option<String>>, BTreeMap<String, TypedefKind>);
+
+fn scan_generated_ffi_source(source_root: &Path) -> anyhow::Result<FfiSourceScan> {
     let mut exports = BTreeMap::new();
     let mut type_hints = BTreeMap::new();
     for source_path in rust_source_files(source_root)? {
@@ -240,6 +240,15 @@ fn exported_symbols_in_dir(source_root: &Path) -> anyhow::Result<BTreeSet<String
 /// `#[unsafe(no_mangle)]` in every alef FFI template — see
 /// `backends/ffi/templates/free_function_header.jinja` and the sibling
 /// `_len` companion in `backends/ffi/gen_bindings/functions/signatures.rs`.
+///
+/// An attribute is accumulated across lines until its delimiters balance
+/// before being interpreted, because rustfmt wraps a long predicate
+/// (`any(all(...), all(...))`) over several lines and only the first of those
+/// lines starts with `#[`. Reading each line in isolation dropped the
+/// predicate *and* let the continuation lines fall through to the state reset
+/// below, recording a gated export as if it carried no cfg at all — which
+/// then reported the correctly-guarded header as drifted.
+///
 /// A hand-written `[crates.custom_modules] ffi` file that instead wraps a
 /// whole `mod`/`impl` block in `#[cfg(...)]` is invisible to this per-fn
 /// scan — same blind spot the original name-only scanner already had. ~keep
@@ -247,18 +256,28 @@ fn scan_exported_symbols(source: &str) -> BTreeMap<String, Option<String>> {
     let mut exports = BTreeMap::new();
     let mut no_mangle_seen = false;
     let mut pending_cfg: Option<String> = None;
+    let mut open_attribute: Option<String> = None;
 
     for line in source.lines() {
         let trimmed = line.trim();
+        if let Some(mut attribute) = open_attribute.take() {
+            attribute.push(' ');
+            attribute.push_str(trimmed);
+            if delimiter_balance(&attribute) > 0 {
+                open_attribute = Some(attribute);
+            } else {
+                apply_attribute(&attribute, &mut no_mangle_seen, &mut pending_cfg);
+            }
+            continue;
+        }
         if trimmed.is_empty() || trimmed.starts_with("//") {
             continue;
         }
         if trimmed.starts_with("#[") {
-            if trimmed.contains("no_mangle") {
-                no_mangle_seen = true;
-            }
-            if let Some(cfg) = extract_cfg_attribute(trimmed) {
-                pending_cfg = Some(cfg);
+            if delimiter_balance(trimmed) > 0 {
+                open_attribute = Some(trimmed.to_owned());
+            } else {
+                apply_attribute(trimmed, &mut no_mangle_seen, &mut pending_cfg);
             }
             continue;
         }
@@ -277,10 +296,118 @@ fn scan_exported_symbols(source: &str) -> BTreeMap<String, Option<String>> {
     exports
 }
 
-fn extract_cfg_attribute(trimmed_line: &str) -> Option<String> {
-    let rest = trimmed_line.strip_prefix("#[cfg(")?;
-    let rest = rest.strip_suffix(")]")?;
-    Some(rest.to_string())
+fn apply_attribute(attribute: &str, no_mangle_seen: &mut bool, pending_cfg: &mut Option<String>) {
+    if attribute.contains("no_mangle") {
+        *no_mangle_seen = true;
+    }
+    match extract_cfg_attribute(attribute) {
+        CfgAttribute::NotCfg => {}
+        CfgAttribute::Predicate(predicate) => *pending_cfg = Some(predicate),
+        CfgAttribute::Unparsed(raw) => {
+            tracing::warn!(
+                attribute = %attribute,
+                "could not delimit a #[cfg(...)] predicate in the generated FFI source; \
+                 guard parity for the export below it is checked against the raw text"
+            );
+            *pending_cfg = Some(raw);
+        }
+    }
+}
+
+/// The three outcomes of reading one whole attribute. `Unparsed` exists so a
+/// cfg this scanner cannot delimit never collapses into the same `None` that
+/// means "this export is genuinely unconditional" — that conflation is what
+/// turned a wrapped predicate into a spurious guard-drift report, and it would
+/// do so again for any future attribute shape the parser does not anticipate.
+/// Its raw text still feeds `required_feature_macros`, whose `feature = "..."`
+/// scan is substring-based and so degrades gracefully. ~keep
+enum CfgAttribute {
+    NotCfg,
+    Predicate(String),
+    Unparsed(String),
+}
+
+fn extract_cfg_attribute(attribute: &str) -> CfgAttribute {
+    let Some(rest) = attribute.strip_prefix("#[cfg(") else {
+        return CfgAttribute::NotCfg;
+    };
+    match rest.strip_suffix(")]") {
+        Some(predicate) => CfgAttribute::Predicate(normalize_cfg_predicate(predicate)),
+        None => CfgAttribute::Unparsed(normalize_cfg_predicate(rest)),
+    }
+}
+
+/// Net nesting depth contributed by one chunk of attribute text. Delimiters
+/// inside a string literal are ignored so a feature value that happens to
+/// contain a bracket cannot unbalance the count. ~keep
+fn delimiter_balance(text: &str) -> i32 {
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for character in text.chars() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match character {
+            '"' => in_string = true,
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            _ => {}
+        }
+    }
+
+    depth
+}
+
+/// Collapse the line breaks and indentation rustfmt introduces when it wraps a
+/// long predicate, so a wrapped `#[cfg(...)]` yields byte-for-byte the same
+/// string as its single-line equivalent. The result is both the key the guard
+/// comparison reasons over and the text quoted back in the failure message, so
+/// it must not carry newlines. Whitespace inside string literals is preserved
+/// verbatim — only the predicate's own layout is normalised. ~keep
+fn normalize_cfg_predicate(predicate: &str) -> String {
+    let mut normalized = String::with_capacity(predicate.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut pending_space = false;
+
+    for character in predicate.chars() {
+        if in_string {
+            normalized.push(character);
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if character.is_whitespace() {
+            pending_space = !normalized.is_empty();
+            continue;
+        }
+        let closes_group = matches!(character, ')' | ']' | '}' | ',');
+        let opens_group = normalized.ends_with(['(', '[', '{']);
+        if pending_space && !closes_group && !opens_group {
+            normalized.push(' ');
+        }
+        pending_space = false;
+        if character == '"' {
+            in_string = true;
+        }
+        normalized.push(character);
+    }
+
+    normalized
 }
 
 /// Test-only convenience wrapper around `scan_exported_symbols` for tests
@@ -1232,5 +1359,123 @@ void sample_options_default_suffix(void);
     #[test]
     fn required_feature_macros_ignores_non_feature_predicates() {
         assert!(required_feature_macros(r#"target_os = "windows""#, "SAMPLE").is_empty());
+    }
+
+    const WRAPPED_CFG_SOURCE: &str = r#"
+#[cfg(any(
+    all(feature = "native-http", not(target_os = "windows")),
+    all(feature = "native-http", target_os = "windows")
+))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sample_ensure_crypto_provider() {}
+"#;
+
+    const NESTED_CFG_PREDICATE: &str = concat!(
+        "any(all(feature = \"native-http\", not(target_os = \"windows\")), ",
+        "all(feature = \"native-http\", target_os = \"windows\"))"
+    );
+
+    const SINGLE_LINE_CFG_SOURCE: &str = concat!(
+        "#[cfg(any(all(feature = \"native-http\", not(target_os = \"windows\")), ",
+        "all(feature = \"native-http\", target_os = \"windows\")))]\n",
+        "#[unsafe(no_mangle)]\n",
+        "pub unsafe extern \"C\" fn sample_ensure_crypto_provider() {}\n"
+    );
+
+    #[test]
+    fn should_read_a_single_line_nested_cfg_predicate_verbatim() {
+        let exports = scan_exported_symbols(SINGLE_LINE_CFG_SOURCE);
+        assert_eq!(
+            exports.get("sample_ensure_crypto_provider"),
+            Some(&Some(NESTED_CFG_PREDICATE.to_owned())),
+            "a nested single-line predicate must survive normalisation unchanged"
+        );
+    }
+
+    #[test]
+    fn should_parse_a_rustfmt_wrapped_cfg_like_its_single_line_equivalent() {
+        let wrapped = scan_exported_symbols(WRAPPED_CFG_SOURCE);
+        let single_line = scan_exported_symbols(SINGLE_LINE_CFG_SOURCE);
+        assert_eq!(
+            wrapped, single_line,
+            "line wrapping is layout, not meaning: a wrapped predicate must normalise to its single-line form"
+        );
+        assert_eq!(
+            wrapped.get("sample_ensure_crypto_provider"),
+            Some(&Some(NESTED_CFG_PREDICATE.to_owned())),
+            "the recorded predicate is quoted back in the failure message and must stay on one line"
+        );
+    }
+
+    #[test]
+    fn should_not_leak_a_wrapped_cfg_onto_the_next_unconditional_export() {
+        let source = format!(
+            "{WRAPPED_CFG_SOURCE}\n\
+             #[unsafe(no_mangle)]\n\
+             pub unsafe extern \"C\" fn sample_ping() {{}}\n"
+        );
+        assert_eq!(
+            scan_exported_symbols(&source).get("sample_ping"),
+            Some(&None),
+            "an export following a wrapped cfg is still unconditional"
+        );
+    }
+
+    #[test]
+    fn should_not_read_an_undelimited_cfg_attribute_as_an_absent_cfg() {
+        let source = "#[cfg(feature = \"document-render\")] // reformatted by hand\n\
+                      #[unsafe(no_mangle)]\n\
+                      pub unsafe extern \"C\" fn sample_render() {}\n";
+        let cfg = scan_exported_symbols(source)
+            .remove("sample_render")
+            .expect("the export is still collected");
+        let cfg = cfg.expect("an unparseable cfg must never collapse into 'no cfg' — that is the false-positive path");
+        assert_eq!(
+            required_feature_macros(&cfg, "SAMPLE"),
+            BTreeSet::from(["SAMPLE_FEATURE_DOCUMENT_RENDER".to_owned()]),
+            "the raw text must still yield its feature macros"
+        );
+    }
+
+    #[test]
+    fn should_pass_when_a_wrapped_cfg_matches_the_headers_compound_guard() {
+        let directory = tempfile::tempdir().expect("temporary project");
+        let (config, crate_root) = sample_config(directory.path());
+
+        std::fs::write(crate_root.join("src/lib.rs"), WRAPPED_CFG_SOURCE).expect("write generated FFI source");
+        // The guard cbindgen actually emits for this predicate: both arms of the
+        // `any(...)` expand, and the `target_os` half maps to a non-feature macro
+        // the parity check must ignore rather than demand. ~keep
+        std::fs::write(
+            crate_root.join("include/sample.h"),
+            "#if ((defined(SAMPLE_FEATURE_NATIVE_HTTP) && !defined(SKIF_WINDOWS)) || \
+             (defined(SAMPLE_FEATURE_NATIVE_HTTP) && defined(SKIF_WINDOWS)))\n\
+             void sample_ensure_crypto_provider(void);\n\
+             #endif\n",
+        )
+        .expect("write correctly guarded header");
+
+        check_ffi_header_freshness(&config, directory.path())
+            .expect("a wrapped cfg matching its header guard must not be reported as drift");
+    }
+
+    #[test]
+    fn should_still_fail_when_a_wrapped_cfg_export_is_declared_without_its_guard() {
+        let directory = tempfile::tempdir().expect("temporary project");
+        let (config, crate_root) = sample_config(directory.path());
+
+        std::fs::write(crate_root.join("src/lib.rs"), WRAPPED_CFG_SOURCE).expect("write generated FFI source");
+        std::fs::write(
+            crate_root.join("include/sample.h"),
+            "void sample_ensure_crypto_provider(void);\n",
+        )
+        .expect("write unguarded header");
+
+        let error = check_ffi_header_freshness(&config, directory.path())
+            .expect_err("reading the wrapped cfg must strengthen the gate, not disable it");
+        assert!(
+            error.to_string().contains("SAMPLE_FEATURE_NATIVE_HTTP"),
+            "message must name the guard macro the header is missing, got:\n{error}"
+        );
     }
 }
