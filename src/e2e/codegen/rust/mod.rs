@@ -946,7 +946,10 @@ options_type = "ChatRequest"
 
         assert!(rendered.contains("let result = chat()"), "{rendered}");
         assert!(rendered.contains("match result {"), "{rendered}");
-        assert!(rendered.contains("Ok(value) => println!(\"{:?}\", value),"), "{rendered}");
+        assert!(
+            rendered.contains("Ok(value) => println!(\"{:?}\", value),"),
+            "{rendered}"
+        );
         assert!(rendered.contains("Err(error) => println!(\"{error}\"),"), "{rendered}");
         assert!(
             !rendered.contains(".expect(\"call failed\")"),

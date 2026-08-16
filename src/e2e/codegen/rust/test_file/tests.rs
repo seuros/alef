@@ -90,7 +90,16 @@ fn fields_array_binding_emitted_before_count_min_assertion_for_non_streaming_fix
     )
     .unwrap();
     let test_config = cfg.resolve().unwrap().remove(0);
-    render_test_function(&mut out, &fixture, &e2e_config, &test_config, &[], "my_crate", None, false);
+    render_test_function(
+        &mut out,
+        &fixture,
+        &e2e_config,
+        &test_config,
+        &[],
+        "my_crate",
+        None,
+        false,
+    );
 
     assert!(
         out.contains("let chunks = &result.chunks"),
@@ -175,7 +184,16 @@ fn dropped_field_assertion_carries_the_marker_that_arms_the_strict_mode() {
     )
     .unwrap();
     let test_config = cfg.resolve().unwrap().remove(0);
-    render_test_function(&mut out, &fixture, &e2e_config, &test_config, &[], "my_crate", None, false);
+    render_test_function(
+        &mut out,
+        &fixture,
+        &e2e_config,
+        &test_config,
+        &[],
+        "my_crate",
+        None,
+        false,
+    );
 
     assert!(
         out.contains("field 'nonexistent_field' not available on result type"),
@@ -231,7 +249,16 @@ fn unregistered_test_backend_trait_fails_loudly_instead_of_falling_back() {
     .unwrap();
     // No `[[crates.trait_bridges]]` entries declared — `SampleBackend` is unregistered.
     let test_config = cfg.resolve().unwrap().remove(0);
-    render_test_function(&mut out, &fixture, &e2e_config, &test_config, &[], "my_crate", None, false);
+    render_test_function(
+        &mut out,
+        &fixture,
+        &e2e_config,
+        &test_config,
+        &[],
+        "my_crate",
+        None,
+        false,
+    );
 }
 
 /// Regression test: a `result_is_simple` call with a `count_equals` assertion whose
@@ -310,7 +337,16 @@ fn result_is_simple_count_assertion_binds_to_result_variable() {
     )
     .unwrap();
     let test_config = cfg.resolve().unwrap().remove(0);
-    render_test_function(&mut out, &fixture, &e2e_config, &test_config, &[], "my_crate", None, false);
+    render_test_function(
+        &mut out,
+        &fixture,
+        &e2e_config,
+        &test_config,
+        &[],
+        "my_crate",
+        None,
+        false,
+    );
 
     assert!(
         out.contains("let result = embed_texts"),

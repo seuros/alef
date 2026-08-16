@@ -224,11 +224,17 @@ mod tests {
 
         let presentation = docs.presentation.expect("presentation");
         assert!(
-            matches!(presentation.operations[0], FixtureDocsOperation::Show { display: false, .. }),
+            matches!(
+                presentation.operations[0],
+                FixtureDocsOperation::Show { display: false, .. }
+            ),
             "an existing `show` without the flag must keep debug formatting"
         );
         assert!(
-            matches!(presentation.operations[1], FixtureDocsOperation::Show { display: true, .. }),
+            matches!(
+                presentation.operations[1],
+                FixtureDocsOperation::Show { display: true, .. }
+            ),
             "`display: true` must survive deserialization"
         );
     }
