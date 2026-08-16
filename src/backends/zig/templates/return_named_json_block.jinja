@@ -1,9 +1,9 @@
 blk: {
-        if ({{ raw }} == 0) return {% if error_type %}_first_error({{ error_type }}){% else %}error.OutOfMemory{% endif %};
+        if ({{ raw }} == 0) return {% if error_type %}error.UnknownFfiError{% else %}error.OutOfMemory{% endif %};
         const value = {{ raw }};
         defer c.{{ prefix }}_{{ snake }}_free(value);
         const _json_ptr = c.{{ prefix }}_{{ snake }}_to_json(value);
-        if (_json_ptr == null) return {% if error_type %}_first_error({{ error_type }}){% else %}error.OutOfMemory{% endif %};
+        if (_json_ptr == null) return {% if error_type %}error.UnknownFfiError{% else %}error.OutOfMemory{% endif %};
         defer _free_string(_json_ptr);
         const slice = std.mem.sliceTo(_json_ptr, 0);
         const owned = try std.heap.c_allocator.dupe(u8, slice);

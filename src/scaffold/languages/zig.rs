@@ -458,7 +458,7 @@ fn repair_build_zig_test_target(content: &str) -> Option<String> {
 ///
 /// Every tier draws its candidate from `api` (the parsed Rust surface) and never from the
 /// generated `.zig` file's declaration list. That is why the Zig binding generator's synthetic
-/// helpers — `_last_error`, `_free_string`, `_first_error`, emitted directly as text by
+/// helpers — `_last_error`, `_free_string`, `_error_with_message`, emitted directly as text by
 /// `backends::zig::gen_bindings::helpers` with no backing `FunctionDef` — can never be picked as
 /// the seed subject: they are structurally invisible here, not filtered out by name.
 ///
@@ -851,7 +851,7 @@ sources = []
         }
     }
 
-    /// The Zig binding generator emits `_last_error`, `_free_string` and `_first_error` directly
+    /// The Zig binding generator emits `_last_error`, `_free_string` and `_error_with_message` directly
     /// as text (`backends::zig::gen_bindings::helpers`) with no backing `FunctionDef`, so they
     /// exist as public declarations in the generated module but not in `ApiSurface`. Exclusion
     /// from the seed is therefore structural — every tier draws only from `api` — rather than a
@@ -870,7 +870,7 @@ sources = []
             ..Default::default()
         };
         let out = scaffold_zig_test(&api, &minimal_config(), "my_lib").expect("a visible item must produce a seed");
-        for helper in ["_last_error", "_free_string", "_first_error"] {
+        for helper in ["_last_error", "_free_string", "_error_with_message"] {
             assert!(
                 !out.contains(helper),
                 "synthetic helper `{helper}` must never be the seed subject, got:\n{out}"

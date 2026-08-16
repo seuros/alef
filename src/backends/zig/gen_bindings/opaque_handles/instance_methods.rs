@@ -65,11 +65,11 @@ pub(super) fn emit_opaque_method(
     out.push_str("        const handle = self._handle;\n");
     out.push_str("        if (handle == 0) return error.HandleClosed;\n");
 
-    let json_error_return = zig_error_type
-        .as_ref()
-        .map_or("return error.InvalidJson;".to_string(), |err| {
-            format!("return _first_error({err});")
-        });
+    let json_error_return = if zig_error_type.is_some() {
+        "return error.UnknownFfiError;".to_string()
+    } else {
+        "return error.InvalidJson;".to_string()
+    };
     for p in effective_params {
         emit_method_param_conversion(p, prefix, struct_names, enum_names, &json_error_return, out);
     }

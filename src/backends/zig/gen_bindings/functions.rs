@@ -851,10 +851,11 @@ fn unwrap_return_expr(
             )
         }
         TypeRef::Named(name) => {
-            let fallback = error_type.map_or_else(
-                || "error.OutOfMemory".to_string(),
-                |error| format!("_first_error({error})"),
-            );
+            let fallback = if error_type.is_some() {
+                "error.UnknownFfiError"
+            } else {
+                "error.OutOfMemory"
+            };
             format!("blk: {{ if ({raw} == 0) return {fallback}; break :blk {name}{{ ._handle = {raw} }}; }}")
         }
         TypeRef::Optional(inner) => match inner.as_ref() {

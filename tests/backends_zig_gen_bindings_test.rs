@@ -1101,6 +1101,129 @@ fn error_set_includes_out_of_memory_and_return_type_is_single_error_set() {
     );
 }
 
+/// Build a one-function surface whose `DemoError` declares `NotFound` then `Timeout`, with or
+/// without stable FFI taxonomy codes. Declaration order matters: `NotFound` is what the removed
+/// `_first_error` fallback would have returned for every failure.
+fn demo_api_with_error_codes(codes: Option<(u32, u32)>) -> ApiSurface {
+    let (not_found_code, timeout_code) = match codes {
+        Some((first, second)) => (Some(first), Some(second)),
+        None => (None, None),
+    };
+    ApiSurface {
+        crate_name: "demo".into(),
+        version: "0.1.0".into(),
+        types: vec![],
+        functions: vec![FunctionDef {
+            name: "fetch".into(),
+            rust_path: "demo::fetch".into(),
+            original_rust_path: String::new(),
+            params: vec![make_param("url", TypeRef::String)],
+            return_type: TypeRef::String,
+            is_async: false,
+            error_type: Some("DemoError".into()),
+            doc: String::new(),
+            cfg: None,
+            sanitized: false,
+            return_sanitized: false,
+            returns_ref: false,
+            returns_cow: false,
+            return_newtype_wrapper: None,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }],
+        enums: vec![],
+        errors: vec![ErrorDef {
+            name: "DemoError".into(),
+            rust_path: "demo::DemoError".into(),
+            original_rust_path: String::new(),
+            variants: vec![
+                ErrorVariant {
+                    name: "NotFound".into(),
+                    error_code: not_found_code,
+                    is_unit: true,
+                    ..Default::default()
+                },
+                ErrorVariant {
+                    name: "Timeout".into(),
+                    error_code: timeout_code,
+                    is_unit: true,
+                    ..Default::default()
+                },
+            ],
+            doc: String::new(),
+            methods: vec![],
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    }
+}
+
+/// `error_code` is populated only from an explicit `#[alef(error_code = N)]` (hash-derived
+/// codes were deliberately removed in `f0ea5f6e3`), and no consumer in the polyrepo carries one
+/// — so the uncoded surface below is the live shape of every generated Zig binding today. The C
+/// layer handles it honestly, sending `ALEF_FFI_UNKNOWN_ERROR` across the boundary. Zig used to
+/// convert that honest "unknown" into a wrong-but-specific value: `_first_error(E)` returns
+/// `@field(E, fields[0].name)`, so every failure — including the unknown code — surfaced as
+/// `error.NotFound` purely because `NotFound` is declared first. ~keep
+#[test]
+fn uncoded_error_variants_never_dispatch_to_the_first_declared_variant() {
+    let api = demo_api_with_error_codes(None);
+
+    let files = ZigBackend.generate_bindings(&api, &make_config()).unwrap();
+    let content = &files[0].content;
+
+    assert!(
+        content.contains("UnknownFfiError,"),
+        "DemoError must declare the opaque unknown member the helpers return: {content}"
+    );
+    assert!(
+        !content.contains("error.NotFound"),
+        "the first declared variant must never be produced from an unsubstantiated failure: {content}"
+    );
+    assert!(
+        !content.contains("_first_error"),
+        "the first-declared-variant fallback must not be emitted at all: {content}"
+    );
+    assert!(
+        !content.contains("fields[0].name"),
+        "no helper may resolve an FFI failure by declaration order: {content}"
+    );
+    assert!(
+        content.contains("    return error.UnknownFfiError;\n"),
+        "_error_with_message must surface the opaque unknown error: {content}"
+    );
+}
+
+/// The honest-unknown fix must not cost the coded case its dispatch: each declared code still
+/// maps to its own variant, and only a code matching none of them falls through.
+#[test]
+fn coded_error_variants_still_dispatch_each_code_to_its_own_variant() {
+    let api = demo_api_with_error_codes(Some((7, 9)));
+
+    let files = ZigBackend.generate_bindings(&api, &make_config()).unwrap();
+    let content = &files[0].content;
+
+    assert!(
+        content.contains("        7 => error.NotFound,\n"),
+        "code 7 must map to NotFound: {content}"
+    );
+    assert!(
+        content.contains("        9 => error.Timeout,\n"),
+        "code 9 must map to Timeout: {content}"
+    );
+    assert!(
+        content.contains("        else => error.UnknownFfiError,\n"),
+        "an unmatched code must fall through to the opaque unknown error: {content}"
+    );
+}
+
 /// A fallible function with a String parameter must also defer the free, so
 /// the sentinel buffer is alive across the C call AND the error-code check.
 #[test]
@@ -1448,8 +1571,13 @@ type = "*const std::ffi::c_char"
         "should call FFI constructor: {content}"
     );
     assert!(
-        content.contains("_first_error(anyerror)"),
-        "should return error on null handle: {content}"
+        content.contains("if (_handle == 0) return error.UnknownFfiError;"),
+        "should return the opaque unknown error on null handle: {content}"
+    );
+    assert!(
+        !content.contains("_first_error"),
+        "a null handle substantiates no specific variant, so the first-declared-variant \
+         fallback must not be emitted: {content}"
     );
 }
 
@@ -1596,7 +1724,7 @@ type = "CrawlStreamRequest"
         "next() must call _next to fetch the next chunk: {content}"
     );
     assert!(
-        content.contains("if (c.demo_last_error_code() != 0) return _first_error(DemoError);"),
+        content.contains("if (c.demo_last_error_code() != 0) return error.UnknownFfiError;"),
         "next() must check error state on null chunk via last_error_code: {content}"
     );
     assert!(
@@ -2054,11 +2182,12 @@ fn named_json_return_guards_against_null_to_json_pointer() {
     let files = ZigBackend.generate_bindings(&api, &make_config()).unwrap();
     let content = &files[0].content;
     assert!(
-        content.contains("if (_json_ptr == null) return _first_error(anyerror);"),
-        "named struct return must guard against NULL to_json pointer with _first_error(<ErrorSet>): {content}"
+        content.contains("if (_json_ptr == null) return error.UnknownFfiError;"),
+        "named struct return must guard against NULL to_json pointer with the opaque \
+         unknown error: {content}"
     );
     let guard_pos = content
-        .find("if (_json_ptr == null) return _first_error(anyerror);")
+        .find("if (_json_ptr == null) return error.UnknownFfiError;")
         .expect("guard line present");
     let slice_pos = content
         .find("std.mem.sliceTo(_json_ptr, 0)")

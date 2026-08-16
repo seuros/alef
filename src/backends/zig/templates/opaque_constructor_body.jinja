@@ -1,4 +1,4 @@
     const _handle = c.{{ prefix }}_{{ type_snake }}_new({{ c_args }});
-    if (_handle == 0) return _first_error(anyerror);
+    if (_handle == 0) return error.UnknownFfiError;
     return .{ ._handle = _handle };
 }

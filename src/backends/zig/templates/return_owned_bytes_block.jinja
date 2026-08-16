@@ -1,6 +1,6 @@
 blk: {
 {% if error_type %}
-        if ({{ raw }} == null) return _first_error({{ error_type }});
+        if ({{ raw }} == null) return error.UnknownFfiError;
 {% endif %}
         const slice = {{ raw }}[0.._result_len];
         defer _free_string({{ raw }});

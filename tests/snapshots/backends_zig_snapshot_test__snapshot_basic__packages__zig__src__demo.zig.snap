@@ -26,23 +26,13 @@ pub fn _last_error() ?[]const u8 {
     return std.mem.sliceTo(_ctx, 0);
 }
 
-/// Map the last FFI error to a typed error from the given error set.
-/// Generic-code fallback returns the first declared variant.
-inline fn _first_error(comptime E: type) E {
-    const fields = @typeInfo(E).error_set orelse unreachable;
-    if (fields.len == 0) unreachable;
-    return @field(E, fields[0].name);
-}
-
 /// Map the last FFI error to a typed error.
-/// Dispatches exclusively on the stable numeric FFI taxonomy code.
+/// No declared variant carries a stable numeric FFI taxonomy code
+/// (`#[alef(error_code = N)]`), so no specific variant can be
+/// substantiated: every failure maps to `error.UnknownFfiError`.
 inline fn _error_with_message(comptime E: type) E {
     _ = _last_error();
-    const code = @as(i32, @intCast(c.demo_last_error_code()));
-    if (E == DemoError) return switch (code) {
-        else => _first_error(E),
-    };
-    return _first_error(E);
+    return error.UnknownFfiError;
 }
 
 /// Errors emitted by demo operations.
@@ -50,6 +40,7 @@ pub const DemoError = error{
     InvalidInput,
     ProcessingFailed,
     OutOfMemory,
+    UnknownFfiError,
 };
 
 /// A demo configuration struct.
@@ -81,7 +72,7 @@ pub fn process(input: []const u8, count: u32) DemoError![]u8 {
     }
     const _result_len = c.demo_process_len(input_z, count);
     return blk: {
-        if (_result == null) return _first_error(DemoError);
+        if (_result == null) return error.UnknownFfiError;
         const slice = _result[0.._result_len];
         defer _free_string(_result);
         const owned = try std.heap.c_allocator.dupe(u8, slice);

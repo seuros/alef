@@ -15,11 +15,13 @@ use crate::docs::clean_doc;
 ///   layer. Returns a Zig slice pointing into thread-local storage; the
 ///   pointer is valid until the next FFI call.
 ///
-/// `declared_errors` is the list of error-set type names declared in the
-/// module (in declaration order). `_error_with_message` uses this list to
-/// dispatch to a per-error message-prefix matcher (`_from_ffi_msg_<name>`)
-/// emitted by `emit_error_set`. Without this, every FFI failure returned the
-/// first declared variant — masking the real error and confusing diagnostics.
+/// `declared_errors` is the list of error sets declared in the module (in
+/// declaration order). `_error_with_message` dispatches on the stable numeric
+/// FFI taxonomy code carried by `#[alef(error_code = N)]`. A failure that no
+/// declared code substantiates maps to `error.UnknownFfiError` — the member
+/// `emit_error_set` injects into every generated error set — mirroring how the
+/// C FFI layer surfaces `ALEF_FFI_UNKNOWN_ERROR`. It must never resolve to an
+/// arbitrary declared variant, which would report a specific, wrong error.
 pub(crate) fn emit_helpers(prefix: &str, declared_errors: &[ErrorDef], out: &mut String) {
     let free_symbol = c_consumer::free_string_symbol(prefix);
     let error_code_symbol = c_consumer::last_error_code_symbol(prefix);
@@ -62,37 +64,41 @@ pub(crate) fn emit_helpers(prefix: &str, declared_errors: &[ErrorDef], out: &mut
     out.push_str("    return std.mem.sliceTo(_ctx, 0);\n");
     out.push_str("}\n\n");
 
-    out.push_str("/// Map the last FFI error to a typed error from the given error set.\n");
-    out.push_str("/// Generic-code fallback returns the first declared variant.\n");
-    out.push_str("inline fn _first_error(comptime E: type) E {\n");
-    out.push_str("    const fields = @typeInfo(E).error_set orelse unreachable;\n");
-    out.push_str("    if (fields.len == 0) unreachable;\n");
-    out.push_str("    return @field(E, fields[0].name);\n");
-    out.push_str("}\n\n");
+    let dispatching: Vec<&ErrorDef> = declared_errors
+        .iter()
+        .filter(|error| error.variants.iter().any(|variant| variant.error_code.is_some()))
+        .collect();
 
     out.push_str("/// Map the last FFI error to a typed error.\n");
-    out.push_str("/// Dispatches exclusively on the stable numeric FFI taxonomy code.\n");
+    if dispatching.is_empty() {
+        out.push_str("/// No declared variant carries a stable numeric FFI taxonomy code\n");
+        out.push_str("/// (`#[alef(error_code = N)]`), so no specific variant can be\n");
+        out.push_str("/// substantiated: every failure maps to `error.UnknownFfiError`.\n");
+    } else {
+        out.push_str("/// Dispatches exclusively on the stable numeric FFI taxonomy code.\n");
+        out.push_str("/// A code matching no declared variant maps to `error.UnknownFfiError`.\n");
+    }
     out.push_str("inline fn _error_with_message(comptime E: type) E {\n");
     out.push_str("    _ = _last_error();\n");
-    out.push_str(&format!(
-        "    const code = @as(i32, @intCast(c.{error_code_symbol}()));\n"
-    ));
-    for error in declared_errors {
-        out.push_str(&format!("    if (E == {}) return switch (code) {{\n", error.name));
-        for variant in &error.variants {
-            let Some(error_code) = variant.error_code else {
-                continue;
-            };
-            let variant_name = crate::codegen::naming::public_host_identifier(
-                Language::Zig,
-                crate::codegen::naming::PublicIdentifierKind::Type,
-                &variant.name,
-            );
-            out.push_str(&format!("        {error_code} => error.{variant_name},\n"));
+    if !dispatching.is_empty() {
+        out.push_str(&format!("    const code = @as(i32, @intCast(c.{error_code_symbol}()));\n"));
+        for error in dispatching {
+            out.push_str(&format!("    if (E == {}) return switch (code) {{\n", error.name));
+            for variant in &error.variants {
+                let Some(error_code) = variant.error_code else {
+                    continue;
+                };
+                let variant_name = crate::codegen::naming::public_host_identifier(
+                    Language::Zig,
+                    crate::codegen::naming::PublicIdentifierKind::Type,
+                    &variant.name,
+                );
+                out.push_str(&format!("        {error_code} => error.{variant_name},\n"));
+            }
+            out.push_str("        else => error.UnknownFfiError,\n    };\n");
         }
-        out.push_str("        else => _first_error(E),\n    };\n");
     }
-    out.push_str("    return _first_error(E);\n");
+    out.push_str("    return error.UnknownFfiError;\n");
     out.push_str("}\n");
 }
 
@@ -111,13 +117,12 @@ pub(crate) fn emit_cleaned_zig_doc(out: &mut String, doc: &str, indent: &str) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn error_with_message_dispatches_to_each_declared_error() {
-        let errors = vec![ErrorDef {
+    fn request_error(error_code: Option<u32>) -> ErrorDef {
+        ErrorDef {
             name: "RequestError".to_string(),
             rust_path: "sample::RequestError".to_string(),
             variants: vec![crate::core::ir::ErrorVariant {
-                error_code: Some(100),
+                error_code,
                 name: "InvalidInput".to_string(),
                 is_unit: true,
                 ..Default::default()
@@ -128,7 +133,12 @@ mod tests {
             binding_excluded: false,
             binding_exclusion_reason: None,
             version: Default::default(),
-        }];
+        }
+    }
+
+    #[test]
+    fn error_with_message_dispatches_to_each_declared_error() {
+        let errors = vec![request_error(Some(100))];
         let mut out = String::new();
         emit_helpers("example_pack", &errors, &mut out);
 
@@ -141,38 +151,56 @@ mod tests {
             "FFI helpers must not write to stderr:\n{out}"
         );
         assert!(
-            out.contains("return _first_error(E);"),
-            "missing _first_error fallback:\n{out}"
+            out.contains("        else => error.UnknownFfiError,\n"),
+            "a code matching no declared variant must resolve to the opaque unknown error:\n{out}"
+        );
+        assert!(
+            out.contains("    return error.UnknownFfiError;\n"),
+            "an error set with no dispatch block must resolve to the opaque unknown error:\n{out}"
         );
     }
 
+    /// A variant with no `#[alef(error_code = N)]` cannot be substantiated from the FFI
+    /// taxonomy code, so it must not appear in the switch — and, critically, the arm it does
+    /// not fill must not be back-filled with some other declared variant. Zig used to emit
+    /// `_first_error(E)` here, which returns `@field(E, fields[0].name)` — the *first declared*
+    /// variant — so every failure was reported as a specific, wrong error rather than an
+    /// unknown one. See `ALEF_FFI_UNKNOWN_ERROR` in the C layer for the honest equivalent. ~keep
     #[test]
-    fn unnumbered_error_variants_use_the_unknown_fallback() {
-        let errors = vec![ErrorDef {
-            name: "RequestError".to_string(),
-            rust_path: "sample::RequestError".to_string(),
-            variants: vec![crate::core::ir::ErrorVariant {
-                name: "InvalidInput".to_string(),
-                is_unit: true,
-                ..Default::default()
-            }],
-            original_rust_path: String::new(),
-            doc: String::new(),
-            methods: Vec::new(),
-            binding_excluded: false,
-            binding_exclusion_reason: None,
-            version: Default::default(),
-        }];
+    fn unnumbered_error_variants_never_resolve_to_a_declared_variant() {
+        let errors = vec![request_error(None)];
         let mut out = String::new();
 
         emit_helpers("example_pack", &errors, &mut out);
 
-        assert!(!out.contains("=> error.InvalidInput"));
-        assert!(out.contains("else => _first_error(E)"));
+        assert!(
+            !out.contains("error.InvalidInput"),
+            "an uncoded variant must never be named by the dispatcher:\n{out}"
+        );
+        assert!(
+            !out.contains("_first_error"),
+            "the first-declared-variant fallback must not be emitted at all:\n{out}"
+        );
+        assert!(
+            !out.contains("fields[0].name"),
+            "nothing may resolve an FFI failure by declaration order:\n{out}"
+        );
+        assert!(
+            !out.contains("switch (code)"),
+            "with no coded variant there is nothing to dispatch on:\n{out}"
+        );
+        assert!(
+            out.contains("    return error.UnknownFfiError;\n"),
+            "every failure must surface as the opaque unknown error:\n{out}"
+        );
+        assert!(
+            !out.contains("Dispatches exclusively on the stable numeric FFI taxonomy code"),
+            "the emitted doc must not claim a dispatch that does not exist:\n{out}"
+        );
     }
 
     #[test]
-    fn error_with_message_falls_back_to_first_error_when_no_errors_declared() {
+    fn error_with_message_returns_unknown_when_no_errors_declared() {
         let mut out = String::new();
         emit_helpers("crate", &[], &mut out);
         assert!(
@@ -184,8 +212,16 @@ mod tests {
             "no per-error matcher should be referenced when none are declared:\n{out}"
         );
         assert!(
-            out.contains("return _first_error(E);"),
-            "fallback to _first_error required:\n{out}"
+            !out.contains("_first_error"),
+            "the first-declared-variant fallback must not be emitted at all:\n{out}"
+        );
+        assert!(
+            out.contains("    return error.UnknownFfiError;\n"),
+            "unknown-error fallback required:\n{out}"
+        );
+        assert!(
+            !out.contains("const code ="),
+            "no taxonomy code is read when nothing dispatches on it (unused local):\n{out}"
         );
     }
 }

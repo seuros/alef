@@ -43,6 +43,22 @@ pub(crate) fn emit_error_set(error: &ErrorDef, out: &mut String) {
             },
         ));
     }
+    // The generated helpers return `error.UnknownFfiError` whenever the FFI layer reports a
+    // failure that no declared `#[alef(error_code = N)]` substantiates (the Zig mirror of
+    // `ALEF_FFI_UNKNOWN_ERROR`). Zig coerces that only into a set that declares the member, and
+    // the helpers are instantiated with every declared set, so it must be injected here. ~keep
+    if !error
+        .variants
+        .iter()
+        .any(|v| zig_error_variant_component(&v.name) == "UnknownFfiError")
+    {
+        out.push_str(&crate::backends::zig::template_env::render(
+            "error_set_variant.jinja",
+            minijinja::context! {
+                variant_name => "UnknownFfiError",
+            },
+        ));
+    }
     out.push_str("};\n");
 }
 
@@ -111,6 +127,39 @@ mod tests {
             !out.contains("_from_ffi_msg_"),
             "message-prefix dispatch was replaced by numeric taxonomy-code dispatch \
              in helpers::_error_with_message and must not be emitted here:\n{out}"
+        );
+        assert!(
+            out.contains("UnknownFfiError,"),
+            "expected implicit UnknownFfiError variant:\n{out}"
+        );
+    }
+
+    /// `helpers::emit_helpers` emits `return error.UnknownFfiError;` inside a function whose
+    /// return type is a caller-supplied `comptime E`. Zig only coerces that literal into `E`
+    /// when `E` declares the member, and `E` is instantiated with every generated error set —
+    /// so a set missing the member is a compile error in the emitted binding, not a runtime
+    /// nicety. Injected exactly once even if the Rust enum already spells it. ~keep
+    #[test]
+    fn emit_error_set_never_duplicates_an_explicit_unknown_ffi_error_variant() {
+        let error = ErrorDef {
+            name: "MyError".into(),
+            rust_path: "x::MyError".into(),
+            original_rust_path: String::new(),
+            variants: vec![variant("UnknownFfiError", None), variant("Boom", None)],
+            doc: String::new(),
+            methods: vec![],
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        };
+
+        let mut out = String::new();
+        emit_error_set(&error, &mut out);
+
+        assert_eq!(
+            out.matches("UnknownFfiError,").count(),
+            1,
+            "the unknown-error member must be declared exactly once:\n{out}"
         );
     }
 }

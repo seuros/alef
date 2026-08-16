@@ -50,16 +50,17 @@ pub(super) fn emit_opaque_static_method(
         .iter()
         .any(|p| method_param_needs_from_json(p, struct_names));
 
-    let return_ty = if body_needs_try || body_needs_invalid_json {
-        let err_set = if body_needs_invalid_json {
-            "error{OutOfMemory,InvalidJson}"
-        } else {
-            "error{OutOfMemory}"
-        };
-        format!("{err_set}!{}", ty.name)
+    // `opaque_static_body.jinja` unconditionally returns `error.UnknownFfiError` on a null
+    // handle, so the declared set must carry that member even when nothing else can fail —
+    // otherwise the signature and the body disagree and the emitted Zig does not compile. ~keep
+    let err_set = if body_needs_invalid_json {
+        "error{OutOfMemory,InvalidJson,UnknownFfiError}"
+    } else if body_needs_try {
+        "error{OutOfMemory,UnknownFfiError}"
     } else {
-        ty.name.clone()
+        "error{UnknownFfiError}"
     };
+    let return_ty = format!("{err_set}!{}", ty.name);
 
     out.push_str(&render(
         "opaque_static_signature.jinja",
