@@ -422,6 +422,10 @@ impl SnippetValidator for RustValidator {
             .then(|| Self::validate_batch_with_context(snippets, level, timeout_secs, session))
     }
 
+    fn supports_batching(&self) -> bool {
+        true
+    }
+
     fn max_level(&self) -> ValidationLevel {
         ValidationLevel::Run
     }

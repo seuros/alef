@@ -2,7 +2,8 @@ use crate::snippets::cache::ValidationCache;
 use crate::snippets::error::Result;
 use crate::snippets::session::{SessionSpec, prepare_sessions_isolated};
 use crate::snippets::types::{
-    RunSummary, SideEffectClass, Snippet, SnippetAnnotationKind, SnippetStatus, ValidationLevel, ValidationResult,
+    DowngradeReason, RunSummary, SideEffectClass, Snippet, SnippetAnnotationKind, SnippetStatus, ValidationLevel,
+    ValidationResult,
 };
 use crate::snippets::validators::ValidatorRegistry;
 use rayon::prelude::*;
@@ -61,40 +62,128 @@ pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config
         .map_err(|err| crate::snippets::error::Error::Other(format!("failed to build thread pool: {err}")))?;
 
     let fail_fast = config.fail_fast;
+    // `rayon::ThreadPool::install` always runs its closure on a pool worker thread, never on the
+    // calling thread itself, and `tracing::Span::enter` sets the "current span" through
+    // thread-local state that a raw OS thread switch does not inherit. Every `tracing::info!` in
+    // `fail_fast_results`/`parallel_results`/`validate_batches` therefore ran with no span
+    // context at all unless the caller's span is captured and re-entered here explicitly. ~keep
+    let calling_span = tracing::Span::current();
     let results: Vec<ValidationResult> = pool.install(|| {
+        let _entered = calling_span.enter();
         if fail_fast {
-            let mut results = Vec::with_capacity(snippets.len());
-            for snippet in snippets {
-                let preparation_error = session_preparation_error(snippet, &sessions, &session_errors);
-                let session = session_for(snippet, &sessions);
-                let lock = session_key(snippet, &sessions).and_then(|key| session_locks.get(key));
-                let result = validate_one(snippet, registry, config, session, lock, preparation_error);
-                let should_stop =
-                    preparation_error.is_none() && matches!(result.status, SnippetStatus::Fail | SnippetStatus::Error);
-                results.push(result);
-                if should_stop {
-                    break;
-                }
-            }
-            results
+            fail_fast_results(snippets, registry, config, &sessions, &session_errors, &session_locks)
         } else {
-            let batched = validate_batches(snippets, registry, config, &sessions, &session_errors, &session_locks);
-            snippets
-                .par_iter()
-                .enumerate()
-                .map(|(index, snippet)| {
-                    if let Some(result) = batched[index].clone() {
-                        return result;
-                    }
-                    let session = session_for(snippet, &sessions);
-                    let lock = session_key(snippet, &sessions).and_then(|key| session_locks.get(key));
-                    validate_one(snippet, registry, config, session, lock, None)
-                })
-                .collect()
+            parallel_results(snippets, registry, config, &sessions, &session_errors, &session_locks)
         }
     });
 
     Ok(RunSummary::from_results(results))
+}
+
+fn fail_fast_results(
+    snippets: &[Snippet],
+    registry: &ValidatorRegistry,
+    config: &RunnerConfig,
+    sessions: &HashMap<String, crate::snippets::session::ValidationSession>,
+    session_errors: &HashMap<String, String>,
+    session_locks: &HashMap<String, Mutex<()>>,
+) -> Vec<ValidationResult> {
+    tracing::info!(
+        snippet_count = snippets.len(),
+        timeout_secs = config.timeout_secs,
+        "Starting fail-fast snippet validation"
+    );
+    let started = Instant::now();
+    let mut results = Vec::with_capacity(snippets.len());
+    for snippet in snippets {
+        let preparation_error = session_preparation_error(snippet, sessions, session_errors);
+        let session = session_for(snippet, sessions);
+        let lock = session_key(snippet, sessions).and_then(|key| session_locks.get(key));
+        let result = validate_one(snippet, registry, config, session, lock, preparation_error);
+        let should_stop =
+            preparation_error.is_none() && matches!(result.status, SnippetStatus::Fail | SnippetStatus::Error);
+        results.push(result);
+        if should_stop {
+            break;
+        }
+    }
+    let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    tracing::info!(
+        snippet_count = results.len(),
+        duration_ms,
+        "Finished fail-fast snippet validation"
+    );
+    results
+}
+
+/// Dispatches every snippet a real batch validator didn't already claim through
+/// `validate_batches` to `validate_one`. That fallback previously had no tracing of its own: for
+/// every language without batching support (all but rust), a snippet's entire validation happened
+/// here invisibly, with only the misleading `Starting batched...` log from `validate_batches`
+/// (see `batch_level`) hinting anything ran at all. This wraps the fallback with its own
+/// Starting/Finished pair so it is never silent. Logged per language, matching
+/// `validate_batches`'s own granularity: a consumer correlating `Starting`/`Finished` pairs by
+/// name needs every language that did work to name itself on both sides, not just the ones that
+/// happened to go through a real batch. ~keep
+fn parallel_results(
+    snippets: &[Snippet],
+    registry: &ValidatorRegistry,
+    config: &RunnerConfig,
+    sessions: &HashMap<String, crate::snippets::session::ValidationSession>,
+    session_errors: &HashMap<String, String>,
+    session_locks: &HashMap<String, Mutex<()>>,
+) -> Vec<ValidationResult> {
+    let batched = validate_batches(snippets, registry, config, sessions, session_errors, session_locks);
+    let fallback_counts = fallback_counts_by_language(snippets, &batched);
+    for (language, count) in &fallback_counts {
+        tracing::info!(
+            language = %language,
+            snippet_count = count,
+            timeout_secs = config.timeout_secs,
+            "Starting per-snippet validation"
+        );
+    }
+    let started = Instant::now();
+    let results = snippets
+        .par_iter()
+        .enumerate()
+        .map(|(index, snippet)| {
+            if let Some(result) = batched[index].clone() {
+                return result;
+            }
+            let session = session_for(snippet, sessions);
+            let lock = session_key(snippet, sessions).and_then(|key| session_locks.get(key));
+            validate_one(snippet, registry, config, session, lock, None)
+        })
+        .collect();
+    let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    for (language, count) in &fallback_counts {
+        tracing::info!(
+            language = %language,
+            snippet_count = count,
+            duration_ms,
+            "Finished per-snippet validation"
+        );
+    }
+    results
+}
+
+/// Per-language snippet counts among the entries `validate_batches` left unclaimed (`None`) —
+/// the ones `parallel_results` dispatches to `validate_one`. `duration_ms` on the resulting
+/// `Finished` events is the whole parallel fallback pass, not a per-language measurement (every
+/// language's snippets run concurrently, not one language at a time), but the language name
+/// itself is exact, which is what a `Starting`/`Finished` correlation by name needs. ~keep
+fn fallback_counts_by_language(
+    snippets: &[Snippet],
+    batched: &[Option<ValidationResult>],
+) -> BTreeMap<crate::snippets::types::Language, usize> {
+    let mut counts = BTreeMap::new();
+    for (snippet, entry) in snippets.iter().zip(batched) {
+        if entry.is_none() {
+            *counts.entry(snippet.language).or_insert(0_usize) += 1;
+        }
+    }
+    counts
 }
 
 type BatchKey = (crate::snippets::types::Language, Option<String>, ValidationLevel);
@@ -154,7 +243,17 @@ fn validate_batches(
             Some(lock) => lock.lock().ok().and_then(|_guard| validation()),
             None => validation(),
         };
+        // `supports_batching` only screens out languages that never batch; a validator that
+        // does support it (rust) can still decline a specific group — e.g. `Run` snippets, which
+        // must execute one at a time — and return `None` here. Every `Starting` above must reach
+        // a matching resolution, so this is logged explicitly instead of silently falling through
+        // to the per-snippet path the caller reports on separately. ~keep
         let Some(batch) = batch else {
+            tracing::info!(
+                language = %language,
+                snippet_count = batch_snippets.len(),
+                "Batch validation declined for this group; falling back to per-snippet validation"
+            );
             continue;
         };
         let values = match batch {
@@ -209,12 +308,26 @@ fn batch_level(
         return None;
     }
     let validator = registry.get(snippet.language)?;
+    // A validator that never overrides `validate_batch_in_session` always returns `None` from it,
+    // so grouping its snippets here just logged a `Starting batched snippet validation` event
+    // with no matching `Finished` — the group silently fell through to the per-snippet fallback
+    // in `run_validation`, a codepath this function's caller never observed. Checking
+    // `supports_batching` upfront skips the batch path (and its logging) entirely for a language
+    // that was never going to use it. ~keep
+    if !validator.supports_batching() {
+        return None;
+    }
     let level = capped_level(snippet, config, validator);
     validator.is_available_at(level).then_some(level)
 }
 
-fn effective_validation_level(snippet: &Snippet, requested: ValidationLevel) -> ValidationLevel {
-    let limit = snippet
+/// The ceiling imposed by a `<!-- snippet:*-only -->` comment annotation, if any. Distinct from
+/// `snippet.metadata.level` (a front-matter `level:` contract): an annotation is the author
+/// suppressing validation below what the run requested, so `finalize_result` keeps it a
+/// `Downgraded` cause, while `snippet.metadata.level` is read directly wherever the contract
+/// counterpart is needed. ~keep
+fn annotation_level_limit(snippet: &Snippet) -> Option<ValidationLevel> {
+    snippet
         .annotation
         .as_ref()
         .and_then(|annotation| match annotation.kind {
@@ -222,17 +335,25 @@ fn effective_validation_level(snippet: &Snippet, requested: ValidationLevel) -> 
             SnippetAnnotationKind::CompileOnly => Some(ValidationLevel::Compile),
             SnippetAnnotationKind::TypeCheckOnly => Some(ValidationLevel::TypeCheck),
             SnippetAnnotationKind::Skip => None,
-        });
-    limit.map_or(requested, |level| requested.min(level))
+        })
 }
 
-/// The level a validator will actually be invoked at: the requested level, narrowed by an
-/// annotation, by the validator's permanent `max_level` ceiling, and by `achievable_level` —
-/// this run's environment-dependent limit (e.g. no real type-checker binary on `PATH`). The
-/// last is deliberately a separate input from `max_level`: `finalize_result`'s
-/// `capability_capped` exemption reads only `max_level`, so an environment-driven reduction
-/// still surfaces as a genuine `Downgraded` result instead of being waved through as a
-/// language ceiling. ~keep
+/// The level implied by the snippet's own declarations, independent of the validator or
+/// environment: an annotation lowers it as a downgrade; a front-matter `level:` lowers it as a
+/// contract instead. Both narrow the level actually attempted the same way here — only
+/// `finalize_result` tells the two apart, to decide whether hitting this level is a violation or
+/// a satisfied request. ~keep
+fn effective_validation_level(snippet: &Snippet, requested: ValidationLevel) -> ValidationLevel {
+    [annotation_level_limit(snippet), snippet.metadata.level]
+        .into_iter()
+        .flatten()
+        .fold(requested, ValidationLevel::min)
+}
+
+/// The level a validator will actually be invoked at: the requested level, narrowed by the
+/// snippet's own declarations (`effective_validation_level`), by the validator's permanent
+/// `max_level` ceiling, and by `achievable_level` — this run's environment-dependent limit (e.g.
+/// no real type-checker binary on `PATH`). ~keep
 fn capped_level(
     snippet: &Snippet,
     config: &RunnerConfig,
@@ -241,6 +362,19 @@ fn capped_level(
     effective_validation_level(snippet, config.level)
         .min(validator.max_level())
         .min(validator.achievable_level(config.level))
+}
+
+/// Whether the validator can never reach `requested` for this snippet's language, in any
+/// environment: either its permanent `max_level` sits below it, or its `achievable_level` gap is
+/// declared structural (see `SnippetValidator::achievable_level_is_structural`). Both make a
+/// strict request for `requested` unsatisfiable for this language regardless of the user's
+/// environment, so `finalize_result` treats them the same way. ~keep
+fn structurally_unreachable(
+    validator: &dyn crate::snippets::validators::SnippetValidator,
+    requested: ValidationLevel,
+) -> bool {
+    validator.max_level() < requested
+        || (validator.achievable_level(requested) < requested && validator.achievable_level_is_structural(requested))
 }
 
 fn session_for<'a>(
@@ -401,6 +535,69 @@ fn validate_one(
     )
 }
 
+struct ResultClassification {
+    status: SnippetStatus,
+    capability_capped: bool,
+    downgrade_reason: Option<DowngradeReason>,
+}
+
+/// Decides, for a `Pass` outcome that landed below `config.level`, whether that gap is: fully
+/// explained by the snippet's own front-matter `level:` contract (`Declared`, still `Pass`);
+/// unsatisfiable for this language regardless of environment (`ValidatorCapability`,
+/// `capability_capped` and still `Pass`); or a real degradation (`Downgraded`, caused by a
+/// suppression `Annotation` or by the current `Environment`). A non-`Pass` outcome, or one that
+/// already reached `config.level`, needs none of this and passes through unchanged. ~keep
+fn classify_result(
+    snippet: &Snippet,
+    validator: &dyn crate::snippets::validators::SnippetValidator,
+    config: &RunnerConfig,
+    effective_level: ValidationLevel,
+    status: SnippetStatus,
+) -> ResultClassification {
+    if status != SnippetStatus::Pass || effective_level >= config.level {
+        return ResultClassification {
+            status,
+            capability_capped: false,
+            downgrade_reason: None,
+        };
+    }
+
+    let annotated_level = effective_validation_level(snippet, config.level);
+    let structural = structurally_unreachable(validator, config.level);
+    if annotated_level >= config.level && structural {
+        return ResultClassification {
+            status,
+            capability_capped: true,
+            downgrade_reason: Some(DowngradeReason::ValidatorCapability),
+        };
+    }
+
+    let declared_binds = snippet
+        .metadata
+        .level
+        .is_some_and(|level| config.level.min(level) == annotated_level);
+    if effective_level == annotated_level && annotated_level < config.level && declared_binds {
+        return ResultClassification {
+            status,
+            capability_capped: false,
+            downgrade_reason: Some(DowngradeReason::Declared),
+        };
+    }
+
+    let reason = if effective_level < annotated_level && structural {
+        DowngradeReason::ValidatorCapability
+    } else if effective_level < annotated_level {
+        DowngradeReason::Environment
+    } else {
+        DowngradeReason::Annotation
+    };
+    ResultClassification {
+        status: SnippetStatus::Downgraded,
+        capability_capped: false,
+        downgrade_reason: Some(reason),
+    }
+}
+
 fn finalize_result(
     snippet: &Snippet,
     validator: &dyn crate::snippets::validators::SnippetValidator,
@@ -422,34 +619,37 @@ fn finalize_result(
         status = SnippetStatus::Pass;
     }
 
-    // A reduction caused only by the validator's declared `max_level` is a capability ceiling,
-    // not a degraded run: that level was never reachable for this language, so counting it as a
-    // downgrade makes a strict request for it unsatisfiable however healthy the environment is.
-    // Annotation-driven reductions and environmental failures are deliberately unaffected. ~keep
-    let annotated_level = effective_validation_level(snippet, config.level);
-    let capability_capped = status == SnippetStatus::Pass
-        && effective_level < config.level
-        && annotated_level >= config.level
-        && validator.max_level() < config.level;
-
-    if status == SnippetStatus::Pass && effective_level < config.level && !capability_capped {
-        status = SnippetStatus::Downgraded;
-    }
-    let message = if status == SnippetStatus::Downgraded {
+    let classification = classify_result(snippet, validator, config, effective_level, status);
+    let status = classification.status;
+    let message = if classification.downgrade_reason == Some(DowngradeReason::Declared) {
+        Some(format!("validated at declared level {effective_level}"))
+    } else if status == SnippetStatus::Downgraded {
         Some(format!("requested {}, validated at {}", config.level, effective_level))
-    } else if capability_capped {
+    } else if classification.capability_capped {
         Some(format!(
             "requested {}, validated at {} ({} validator caps at {})",
-            config.level,
-            effective_level,
-            snippet.language,
-            validator.max_level()
+            config.level, effective_level, snippet.language, effective_level
         ))
     } else {
         message
     };
+    // `downgrade_reason` is `Option` because most results (an ordinary `Pass`, any `Fail`,
+    // `Skip`, `Error`, or `Unavailable`) have no reason in this taxonomy at all — that is a real
+    // "not applicable", not a degraded default, so a required enum would need its own sentinel
+    // variant and would not remove the risk of a construction site passing it by mistake. What
+    // does remove that risk: `classify_result` is exhaustive over every case that produces
+    // `Downgraded` or a `capability_capped` `Pass`, and is the only place that sets this field to
+    // anything other than `None` — asserted here so a future change to `classify_result` that
+    // silently drops the reason on one of those paths fails loudly instead of quietly degrading
+    // attribution. ~keep
+    debug_assert!(
+        classification.downgrade_reason.is_some()
+            || !(classification.status == SnippetStatus::Downgraded || classification.capability_capped),
+        "a Downgraded or capability_capped result must always carry a downgrade_reason"
+    );
     let mut result = result(snippet, status, config.level, effective_level, message, duration_ms);
-    result.capability_capped = capability_capped;
+    result.capability_capped = classification.capability_capped;
+    result.downgrade_reason = classification.downgrade_reason;
     if let Some(cache) = config.cache_dir.clone().map(ValidationCache::new)
         && let Err(error) = cache.store(
             snippet,
@@ -512,6 +712,7 @@ fn result(
         message,
         duration_ms,
         capability_capped: false,
+        downgrade_reason: None,
     }
 }
 
@@ -528,6 +729,7 @@ mod tests {
     use crate::snippets::types::{SnippetMetadata, SourceOrigin};
     use crate::snippets::validators::SnippetValidator;
     use std::sync::Arc;
+    use tracing_test::traced_test;
 
     struct RecordingValidator {
         language: crate::snippets::types::Language,
@@ -624,6 +826,10 @@ mod tests {
         fn max_level(&self) -> ValidationLevel {
             ValidationLevel::Run
         }
+
+        fn supports_batching(&self) -> bool {
+            self.supports_batching
+        }
     }
 
     impl SnippetValidator for RecordingValidator {
@@ -661,6 +867,10 @@ mod tests {
 
         fn max_level(&self) -> ValidationLevel {
             ValidationLevel::Run
+        }
+
+        fn supports_batching(&self) -> bool {
+            true
         }
     }
 
@@ -1075,6 +1285,10 @@ mod tests {
         assert_eq!(summary.downgraded, 0);
         assert_eq!(summary.capability_capped, 1);
         assert_eq!(summary.results[0].effective_level, ValidationLevel::Syntax);
+        assert_eq!(
+            summary.results[0].downgrade_reason,
+            Some(DowngradeReason::ValidatorCapability)
+        );
     }
 
     /// The exemption is narrow: an annotation that lowers the level is the author's choice,
@@ -1105,6 +1319,7 @@ mod tests {
         assert!(!summary.results[0].capability_capped);
         assert_eq!(summary.downgraded, 1);
         assert_eq!(summary.capability_capped, 0);
+        assert_eq!(summary.results[0].downgrade_reason, Some(DowngradeReason::Annotation));
     }
 
     /// A validator whose `max_level` never moves but whose current environment can't back a
@@ -1169,6 +1384,144 @@ mod tests {
         assert_eq!(summary.results[0].effective_level, ValidationLevel::Syntax);
         assert_eq!(summary.downgraded, 1);
         assert_eq!(summary.capability_capped, 0);
+        assert_eq!(summary.results[0].downgrade_reason, Some(DowngradeReason::Environment));
+    }
+
+    /// A validator whose `achievable_level` gap is declared structural — see
+    /// `achievable_level_is_structural` — is exempted from `Downgraded` the same way a
+    /// `max_level` ceiling is, mirroring `validator_ceiling_passes_instead_of_downgrading` but
+    /// through the `achievable_level` input instead. This is the generic form of what
+    /// `php`/`ruby`/`elixir`/`bash`/`r`'s own tests pin, without depending on a real toolchain.
+    struct StructurallyCappedAchievableValidator {
+        language: crate::snippets::types::Language,
+    }
+
+    impl SnippetValidator for StructurallyCappedAchievableValidator {
+        fn language(&self) -> crate::snippets::types::Language {
+            self.language
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn validate(
+            &self,
+            _snippet: &Snippet,
+            _level: ValidationLevel,
+            _timeout_secs: u64,
+        ) -> Result<(SnippetStatus, Option<String>)> {
+            Ok((SnippetStatus::Pass, None))
+        }
+
+        fn max_level(&self) -> ValidationLevel {
+            ValidationLevel::Run
+        }
+
+        fn achievable_level(&self, requested: ValidationLevel) -> ValidationLevel {
+            if requested == ValidationLevel::TypeCheck {
+                ValidationLevel::Syntax
+            } else {
+                ValidationLevel::Run
+            }
+        }
+
+        fn achievable_level_is_structural(&self, requested: ValidationLevel) -> bool {
+            requested == ValidationLevel::TypeCheck
+        }
+    }
+
+    #[test]
+    fn structural_achievable_level_gap_is_capability_capped_not_downgraded() {
+        let mut registry = ValidatorRegistry::new();
+        registry.register(Box::new(StructurallyCappedAchievableValidator {
+            language: crate::snippets::types::Language::Rust,
+        }));
+        let config = RunnerConfig {
+            level: ValidationLevel::TypeCheck,
+            parallelism: 1,
+            cache_dir: None,
+            allowed_side_effects: vec![SideEffectClass::Network],
+            ..RunnerConfig::default()
+        };
+
+        let summary = run_validation(&[network_snippet()], &registry, &config).expect("validation completes");
+
+        assert_eq!(summary.results[0].status, SnippetStatus::Pass);
+        assert!(summary.results[0].capability_capped);
+        assert_eq!(summary.results[0].effective_level, ValidationLevel::Syntax);
+        assert_eq!(summary.downgraded, 0);
+        assert_eq!(summary.capability_capped, 1);
+        assert_eq!(
+            summary.results[0].downgrade_reason,
+            Some(DowngradeReason::ValidatorCapability)
+        );
+    }
+
+    /// The regression this whole change fixes: a front-matter `level:` is a validation contract,
+    /// not a suppression. Before this, `discovery::extract_snippets_from_file` collapsed
+    /// `metadata.level` into the same `annotation` field a `<!-- snippet:*-only -->` comment
+    /// uses, so an author who declared exactly the level they wanted was charged a `Downgraded`
+    /// violation identical to one who suppressed validation below what was requested. No test
+    /// exercised this end to end through `run_validation` — every prior downgrade test
+    /// constructed `snippet.annotation` directly, which is exactly why the collapse went
+    /// unnoticed. ~keep
+    #[test]
+    fn declared_level_contract_passes_instead_of_downgrading() {
+        let mut registry = ValidatorRegistry::new();
+        registry.register(Box::new(CappedValidator {
+            language: crate::snippets::types::Language::Rust,
+            ceiling: ValidationLevel::Run,
+        }));
+        let mut snippet = network_snippet();
+        snippet.metadata.level = Some(ValidationLevel::Syntax);
+        let config = RunnerConfig {
+            level: ValidationLevel::TypeCheck,
+            parallelism: 1,
+            cache_dir: None,
+            allowed_side_effects: vec![SideEffectClass::Network],
+            ..RunnerConfig::default()
+        };
+
+        let summary = run_validation(&[snippet], &registry, &config).expect("validation completes");
+
+        assert_eq!(summary.results[0].status, SnippetStatus::Pass);
+        assert!(!summary.results[0].capability_capped);
+        assert_eq!(summary.results[0].effective_level, ValidationLevel::Syntax);
+        assert_eq!(summary.downgraded, 0);
+        assert_eq!(summary.capability_capped, 0);
+        assert_eq!(summary.results[0].downgrade_reason, Some(DowngradeReason::Declared));
+        assert_eq!(
+            summary.results[0].message.as_deref(),
+            Some("validated at declared level syntax")
+        );
+    }
+
+    /// A declared `level:` is a contract for what was requested, not a guarantee the environment
+    /// or validator can honor it: when the actual outcome lands below even the declared level,
+    /// that is a real downgrade, not a satisfied contract.
+    #[test]
+    fn declared_level_the_validator_cannot_reach_still_downgrades() {
+        let mut registry = ValidatorRegistry::new();
+        registry.register(Box::new(EnvironmentLimitedValidator {
+            language: crate::snippets::types::Language::Rust,
+        }));
+        let mut snippet = network_snippet();
+        snippet.metadata.level = Some(ValidationLevel::Compile);
+        let config = RunnerConfig {
+            level: ValidationLevel::TypeCheck,
+            parallelism: 1,
+            cache_dir: None,
+            allowed_side_effects: vec![SideEffectClass::Network],
+            ..RunnerConfig::default()
+        };
+
+        let summary = run_validation(&[snippet], &registry, &config).expect("validation completes");
+
+        assert_eq!(summary.results[0].status, SnippetStatus::Downgraded);
+        assert!(!summary.results[0].capability_capped);
+        assert_eq!(summary.results[0].effective_level, ValidationLevel::Syntax);
+        assert_eq!(summary.results[0].downgrade_reason, Some(DowngradeReason::Environment));
     }
 
     /// A validator that can reach the requested level must not be flagged at all.
@@ -1192,5 +1545,103 @@ mod tests {
         assert_eq!(summary.results[0].status, SnippetStatus::Pass);
         assert!(!summary.results[0].capability_capped);
         assert_eq!(summary.capability_capped, 0);
+    }
+
+    /// A validator that doesn't support batching at all (every language but rust) must never log
+    /// `Starting batched snippet validation` — it never enters that codepath — and its work must
+    /// still be observable through the per-snippet fallback's own Starting/Finished pair. Before
+    /// `batch_level` checked `supports_batching`, every language was grouped and logged as a
+    /// batch regardless, then silently fell through to `validate_one` with no further trace at
+    /// all: a `Starting` with no matching `Finished`, and the *real* work invisible. ~keep
+    #[traced_test]
+    #[test]
+    fn non_batching_validator_skips_the_batch_log_and_uses_the_fallback_log() {
+        let mut registry = ValidatorRegistry::new();
+        registry.register(Box::new(CappedValidator {
+            language: crate::snippets::types::Language::Rust,
+            ceiling: ValidationLevel::Run,
+        }));
+        let config = RunnerConfig {
+            level: ValidationLevel::Syntax,
+            parallelism: 1,
+            cache_dir: None,
+            allowed_side_effects: vec![SideEffectClass::Network],
+            ..RunnerConfig::default()
+        };
+
+        let summary =
+            run_validation(&[network_snippet(), network_snippet()], &registry, &config).expect("validation completes");
+
+        assert_eq!(summary.passed, 2);
+        assert!(!logs_contain("Starting batched snippet validation"));
+        assert!(logs_contain("Starting per-snippet validation"));
+        assert!(logs_contain("Finished per-snippet validation"));
+    }
+
+    /// A validator that supports batching in general (rust) can still decline a specific group —
+    /// `validate_batch_in_session` returning `None` even though `supports_batching` is `true`,
+    /// mirroring rust declining to batch `Run`-level snippets. That group's `Starting batched...`
+    /// must resolve to an explicit fallback notice, not a silent `continue` with no matching
+    /// `Finished` at all. ~keep
+    struct DecliningBatchValidator;
+
+    impl SnippetValidator for DecliningBatchValidator {
+        fn language(&self) -> crate::snippets::types::Language {
+            crate::snippets::types::Language::Rust
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn validate(
+            &self,
+            _snippet: &Snippet,
+            _level: ValidationLevel,
+            _timeout_secs: u64,
+        ) -> Result<(SnippetStatus, Option<String>)> {
+            Ok((SnippetStatus::Pass, None))
+        }
+
+        fn validate_batch_in_session(
+            &self,
+            _snippets: &[&Snippet],
+            _level: ValidationLevel,
+            _timeout_secs: u64,
+            _session: Option<&crate::snippets::session::ValidationSession>,
+        ) -> Option<Result<Vec<(SnippetStatus, Option<String>)>>> {
+            None
+        }
+
+        fn max_level(&self) -> ValidationLevel {
+            ValidationLevel::Run
+        }
+
+        fn supports_batching(&self) -> bool {
+            true
+        }
+    }
+
+    #[traced_test]
+    #[test]
+    fn batching_validator_that_declines_a_group_logs_the_fallback_explicitly() {
+        let mut registry = ValidatorRegistry::new();
+        registry.register(Box::new(DecliningBatchValidator));
+        let config = RunnerConfig {
+            level: ValidationLevel::Syntax,
+            parallelism: 1,
+            cache_dir: None,
+            allowed_side_effects: vec![SideEffectClass::Network],
+            ..RunnerConfig::default()
+        };
+
+        let summary = run_validation(&[network_snippet()], &registry, &config).expect("validation completes");
+
+        assert_eq!(summary.results[0].status, SnippetStatus::Pass);
+        assert!(logs_contain("Starting batched snippet validation"));
+        assert!(logs_contain(
+            "Batch validation declined for this group; falling back to per-snippet validation"
+        ));
+        assert!(logs_contain("Starting per-snippet validation"));
     }
 }

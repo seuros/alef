@@ -58,6 +58,13 @@ impl SnippetValidator for RubyValidator {
             ValidationLevel::Run
         }
     }
+
+    // The typecheck gap above is a property of this validator's implementation (no checker is
+    // wired up), not of the machine running it — no environment will ever make `ruby -c` resolve
+    // a constant. Structural, so it's exempted from `Downgraded` the same way `max_level` is. ~keep
+    fn achievable_level_is_structural(&self, requested: ValidationLevel) -> bool {
+        requested == ValidationLevel::TypeCheck
+    }
 }
 
 fn is_api_signature(code: &str) -> bool {
@@ -110,9 +117,17 @@ mod tests {
         );
     }
 
+    #[test]
+    fn achievable_level_typecheck_gap_is_structural() {
+        assert!(RubyValidator.achievable_level_is_structural(ValidationLevel::TypeCheck));
+        assert!(!RubyValidator.achievable_level_is_structural(ValidationLevel::Compile));
+        assert!(!RubyValidator.achievable_level_is_structural(ValidationLevel::Run));
+    }
+
     /// Mirrors the php.rs regression: `ruby -c` accepts this file (it never resolves constants),
-    /// so before `achievable_level` capped the level, the runner reported it Pass at
-    /// `effective_level: typecheck` — the false green this test pins shut. ~keep
+    /// so `achievable_level` caps it to `syntax`; because that gap is structural, it is exempted
+    /// from `Downgraded` the same way a `max_level` ceiling is — a capability-capped `Pass`, not
+    /// a claim of `typecheck`. ~keep
     #[test]
     fn typecheck_request_for_an_undefined_symbol_does_not_pass_as_typecheck() {
         if !RubyValidator.is_available() {
@@ -134,8 +149,10 @@ mod tests {
             (SnippetStatus::Pass, ValidationLevel::TypeCheck),
             "undefined-symbol snippet must not pass claiming typecheck: {result:?}"
         );
-        assert_eq!(result.status, SnippetStatus::Downgraded);
+        assert_eq!(result.status, SnippetStatus::Pass);
+        assert!(result.capability_capped);
         assert_eq!(result.effective_level, ValidationLevel::Syntax);
-        assert_eq!(summary.downgraded, 1);
+        assert_eq!(summary.downgraded, 0);
+        assert_eq!(summary.capability_capped, 1);
     }
 }

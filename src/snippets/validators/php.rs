@@ -49,6 +49,13 @@ impl SnippetValidator for PhpValidator {
             ValidationLevel::Run
         }
     }
+
+    // The typecheck gap above is a property of this validator's implementation (no checker is
+    // wired up), not of the machine running it — no environment will ever make `php -l` resolve a
+    // class. Structural, so it's exempted from `Downgraded` the same way `max_level` is. ~keep
+    fn achievable_level_is_structural(&self, requested: ValidationLevel) -> bool {
+        requested == ValidationLevel::TypeCheck
+    }
 }
 
 #[cfg(test)]
@@ -97,11 +104,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn achievable_level_typecheck_gap_is_structural() {
+        assert!(PhpValidator.achievable_level_is_structural(ValidationLevel::TypeCheck));
+        assert!(!PhpValidator.achievable_level_is_structural(ValidationLevel::Compile));
+        assert!(!PhpValidator.achievable_level_is_structural(ValidationLevel::Run));
+    }
+
     /// A snippet that is syntactically valid but references a symbol that cannot exist must not
-    /// come back as a `typecheck` pass. Before `achievable_level`, `php -l` accepted this file
-    /// (it never resolves classes) and the runner reported it Pass at `effective_level: typecheck`
-    /// because `max_level` was `Run` and nothing downgraded it — the exact false green this test
-    /// pins shut. ~keep
+    /// come back as a `typecheck` pass. `php -l` accepts this file (it never resolves classes),
+    /// so `achievable_level` caps it to `syntax`; because that gap is structural (see
+    /// `achievable_level_is_structural`), it is exempted from `Downgraded` the same way a
+    /// `max_level` ceiling is — a capability-capped `Pass`, not a claim of `typecheck`. ~keep
     #[test]
     fn typecheck_request_for_an_undefined_symbol_does_not_pass_as_typecheck() {
         if !PhpValidator.is_available() {
@@ -123,8 +137,10 @@ mod tests {
             (SnippetStatus::Pass, ValidationLevel::TypeCheck),
             "undefined-symbol snippet must not pass claiming typecheck: {result:?}"
         );
-        assert_eq!(result.status, SnippetStatus::Downgraded);
+        assert_eq!(result.status, SnippetStatus::Pass);
+        assert!(result.capability_capped);
         assert_eq!(result.effective_level, ValidationLevel::Syntax);
-        assert_eq!(summary.downgraded, 1);
+        assert_eq!(summary.downgraded, 0);
+        assert_eq!(summary.capability_capped, 1);
     }
 }

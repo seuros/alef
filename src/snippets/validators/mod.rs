@@ -84,7 +84,33 @@ pub trait SnippetValidator: Send + Sync {
         ValidationLevel::Run
     }
 
+    /// Whether the gap `achievable_level` reports for `requested` is structural — no check for
+    /// that level is wired up in this validator at all, on any machine — as opposed to
+    /// `achievable_level`'s default meaning of a real tool that merely happens to be missing from
+    /// this run's environment. The runner exempts a structural gap from `Downgraded` the same way
+    /// it exempts `max_level`, because it is unsatisfiable however healthy the environment is; an
+    /// environmental gap keeps its `Downgraded` status so a genuinely broken environment is never
+    /// silently waved through. Default: environmental, not structural. ~keep
+    fn achievable_level_is_structural(&self, _requested: ValidationLevel) -> bool {
+        false
+    }
+
     fn is_dependency_error(&self, _error_output: &str) -> bool {
+        false
+    }
+
+    /// Whether `validate_batch_in_session` is genuinely wired up to run one process for many
+    /// snippets, as opposed to the default trait implementation, which always returns `None` and
+    /// lets the runner fall back to one process per snippet. The runner uses this to decide
+    /// upfront whether a group is a real batch — and should be logged and dispatched as one — or
+    /// should skip the batch path entirely and go straight to the per-snippet fallback. Without
+    /// this, every language was logged as `Starting batched snippet validation` regardless of
+    /// batching support, and a validator that doesn't support it silently fell through to a
+    /// codepath that log line never covered, leaving no matching `Finished` event. That is purely
+    /// an observability gap in the batch/fallback dispatch path, not a signal about whether the
+    /// validator itself ran or hung — a healthy, fully-passing language is just as silent there as
+    /// a broken one. ~keep
+    fn supports_batching(&self) -> bool {
         false
     }
 }

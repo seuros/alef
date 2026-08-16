@@ -151,13 +151,16 @@ fn extract_snippets_from_file(path: &Path, base_dir: &Path) -> Result<Vec<Snippe
 
         let annotation = block.preceding_comment.as_deref().and_then(parse_annotation);
         let title = metadata.title.clone().or(block.title);
+        // A front-matter `level:` is a contract (see `snippet.metadata.level`), not a suppression
+        // annotation — collapsing it into `annotation` made it indistinguishable from a `<!--
+        // snippet:syntax-only -->` comment, so the runner charged an author who declared exactly
+        // the level they wanted as if they had asked for less than the run requested. Only an
+        // explicit `skip` still synthesizes an annotation here. ~keep
         let annotation = if metadata.skip {
             Some(SnippetAnnotation {
                 kind: SnippetAnnotationKind::Skip,
                 reason: metadata.reason.clone(),
             })
-        } else if let Some(level) = metadata.level {
-            level_annotation(level, metadata.reason.clone()).or(annotation)
         } else {
             annotation
         };
@@ -209,19 +212,6 @@ pub fn parse_annotation(comment: &str) -> Option<SnippetAnnotation> {
     };
     let reason = parse_reason_attr(inner);
 
-    Some(SnippetAnnotation { kind, reason })
-}
-
-fn level_annotation(
-    level: crate::snippets::types::ValidationLevel,
-    reason: Option<String>,
-) -> Option<SnippetAnnotation> {
-    let kind = match level {
-        crate::snippets::types::ValidationLevel::Syntax => SnippetAnnotationKind::SyntaxOnly,
-        crate::snippets::types::ValidationLevel::Compile => SnippetAnnotationKind::CompileOnly,
-        crate::snippets::types::ValidationLevel::TypeCheck => SnippetAnnotationKind::TypeCheckOnly,
-        crate::snippets::types::ValidationLevel::Run => return None,
-    };
     Some(SnippetAnnotation { kind, reason })
 }
 
@@ -332,8 +322,13 @@ mod tests {
         assert_eq!(snippets[0].annotation, None);
     }
 
+    /// A front-matter `level:` is a validation contract tracked on `metadata.level`; a `<!--
+    /// snippet:*-only -->` comment is a separate suppression tracked on `annotation`. The two
+    /// used to collapse into the same field, which made an author who declared exactly the level
+    /// they wanted indistinguishable from one who suppressed validation below what was
+    /// requested — see `runner::finalize_result` for how the distinction is used downstream.
     #[test]
-    fn frontmatter_level_overrides_inline_annotation() {
+    fn frontmatter_level_is_independent_of_inline_annotation() {
         let directory = tempfile::tempdir().expect("temporary snippet directory");
         let path = directory.path().join("example.md");
         std::fs::write(
@@ -346,7 +341,28 @@ mod tests {
 
         assert_eq!(
             snippets[0].annotation.as_ref().map(|value| value.kind),
-            Some(SnippetAnnotationKind::TypeCheckOnly)
+            Some(SnippetAnnotationKind::SyntaxOnly)
+        );
+        assert_eq!(
+            snippets[0].metadata.level,
+            Some(crate::snippets::types::ValidationLevel::TypeCheck)
+        );
+    }
+
+    /// A bare front-matter `level:` with no inline comment must not synthesize an annotation —
+    /// only `metadata.level` carries the declared contract.
+    #[test]
+    fn frontmatter_level_alone_does_not_synthesize_an_annotation() {
+        let directory = tempfile::tempdir().expect("temporary snippet directory");
+        let path = directory.path().join("example.md");
+        std::fs::write(&path, "---\nlevel: syntax\n---\n```rust\nlet value = 1;\n```\n").expect("write snippet");
+
+        let snippets = discover_snippets(&[directory.path().to_path_buf()], None).expect("discover snippet");
+
+        assert_eq!(snippets[0].annotation, None);
+        assert_eq!(
+            snippets[0].metadata.level,
+            Some(crate::snippets::types::ValidationLevel::Syntax)
         );
     }
 

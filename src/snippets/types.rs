@@ -303,6 +303,28 @@ pub struct SourceOrigin {
     pub block_index: usize,
 }
 
+/// Why a result's effective level fell below the requested level, or why a `Pass` needed a
+/// caveat at all. Distinct from `SnippetStatus`: a `capability_capped` `Pass` and a `Downgraded`
+/// result can share a reason (`ValidatorCapability`), and two `Downgraded` results can differ
+/// (`Annotation` vs `Environment`) — attribution needs the reason, not just the status, to tell a
+/// consumer what to actually do about it. ~keep
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DowngradeReason {
+    /// A front-matter `level:` contract was requested and fully satisfied — reported for
+    /// attribution even though the status is `Pass`, not a violation. ~keep
+    Declared,
+    /// A `<!-- snippet:*-only -->` suppression annotation lowered the ceiling below what was
+    /// requested; the author's choice, so it still fails strict.
+    Annotation,
+    /// The validator can never reach the requested level for this language (`max_level`, or a
+    /// structural `achievable_level` gap) — unsatisfiable in any environment.
+    ValidatorCapability,
+    /// This run's environment could not back the requested level, but a different environment
+    /// could (e.g. a real type-checker binary happens to be missing).
+    Environment,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationResult {
     pub snippet: Snippet,
@@ -319,6 +341,15 @@ pub struct ValidationResult {
     /// cause leave this false and still fail strict. ~keep
     #[serde(default)]
     pub capability_capped: bool,
+    /// Populated whenever the effective level differs from the requested level for a reason
+    /// worth naming — `None` for an ordinary, unqualified `Pass`, and equally for `Fail`, `Skip`,
+    /// `Error`, or `Unavailable`, none of which have a reason in this taxonomy at all. `None` is
+    /// deliberately a real "not applicable" here rather than a degraded default: the only writer
+    /// that ever sets this to `Some` is `runner::finalize_result` (via `classify_result`), which
+    /// is exhaustive over every path that produces `Downgraded` or a `capability_capped` `Pass`
+    /// — see the `debug_assert!` there. ~keep
+    #[serde(default)]
+    pub downgrade_reason: Option<DowngradeReason>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -129,7 +129,8 @@ fn apply_include_paths(command: &mut std::process::Command, include_paths: &[std
 /// Include directories the build manifest declares for its module, in declaration order. ~keep
 ///
 /// A `build.zig` is a program rather than a manifest, so this reads back only the shape Alef's own
-/// `build_zig.jinja` emits: `addIncludePath(.{ .cwd_relative = <expr> })`, where `<expr>` is either
+/// scaffold (`scaffold::languages::zig::scaffold_zig`) emits:
+/// `addIncludePath(.{ .cwd_relative = <expr> })`, where `<expr>` is either
 /// a string literal or an identifier bound by `const <expr> = b.option(...) orelse "<default>";`.
 /// Any other expression is skipped rather than guessed at — a wrong `-I` is worse than none.
 ///
@@ -211,7 +212,12 @@ fn write_snippet_build(
     module_name: &str,
     package_root: &std::path::Path,
 ) -> Result<std::path::PathBuf> {
-    let package_root = package_root
+    // Zig 0.16 requires `.path` dependencies in `build.zig.zon` to be relative to the build
+    // root (the manifest's own directory, i.e. `directory` here) — an absolute path is a hard
+    // `zig build` error (`expected path relative to build root; found absolute path`), not a
+    // lint warning. `package_root` arrives absolute (from `zig_package_root`, which walks up
+    // from an absolute manifest path), so it must be rebased here rather than written as-is. ~keep
+    let package_root = relative_path(directory, package_root)?
         .to_string_lossy()
         .replace('\\', "\\\\")
         .replace('"', "\\\"");
@@ -219,12 +225,107 @@ fn write_snippet_build(
         "const std = @import(\"std\");\n\npub fn build(b: *std.Build) void {{\n    const target = b.standardTargetOptions(.{{}});\n    const optimize = b.standardOptimizeOption(.{{}});\n    const binding = b.dependency(\"binding\", .{{ .target = target, .optimize = optimize }});\n    const root = b.createModule(.{{\n        .root_source_file = b.path(\"snippet.zig\"),\n        .target = target,\n        .optimize = optimize,\n    }});\n    root.addImport(\"{module_name}\", binding.module(\"{module_name}\"));\n    const executable = b.addExecutable(.{{ .name = \"snippet\", .root_module = root }});\n    b.default_step.dependOn(&executable.step);\n}}\n"
     );
     let zon = format!(
-        ".{{\n    .name = .alef_snippet,\n    .version = \"0.0.0\",\n    .dependencies = .{{ .binding = .{{ .path = \"{package_root}\" }} }},\n    .paths = .{{ \"build.zig\", \"build.zig.zon\", \"snippet.zig\" }},\n}}\n"
+        ".{{\n    .name = .alef_snippet,\n    .version = \"0.0.0\",\n    .fingerprint = 0x{fingerprint:016x},\n    .dependencies = .{{ .binding = .{{ .path = \"{package_root}\" }} }},\n    .paths = .{{ \"build.zig\", \"build.zig.zon\", \"snippet.zig\" }},\n}}\n",
+        fingerprint = snippet_package_fingerprint(),
     );
     let build_file = directory.join("build.zig");
     std::fs::write(&build_file, build)?;
     std::fs::write(directory.join("build.zig.zon"), zon)?;
     Ok(build_file)
+}
+
+/// Express `target` as a path relative to `base`, purely lexically (no filesystem access, so
+/// it works even when `target` does not exist yet — unlike `Path::canonicalize`-based
+/// approaches, which also risk silently resolving macOS's `/tmp` → `/private/tmp` symlink and
+/// producing a technically-different-but-equivalent root).
+///
+/// Errors instead of falling back to an absolute path when no relative path can be expressed —
+/// e.g. `base` and `target` disagree on being absolute, or (Windows) sit on different drive
+/// prefixes. Emitting an absolute path anyway would just move the failure from loud, at
+/// generation time, to a `zig build` error a consumer has to reverse-engineer — the same
+/// silence-vs-loudness principle the rest of this fix applies. ~keep
+fn relative_path(base: &std::path::Path, target: &std::path::Path) -> Result<std::path::PathBuf> {
+    use std::path::Component;
+
+    if base.is_absolute() != target.is_absolute() {
+        return Err(crate::snippets::error::Error::Other(format!(
+            "cannot express {} relative to {}: one is absolute and the other is not",
+            target.display(),
+            base.display()
+        )));
+    }
+
+    let base_components: Vec<Component> = base.components().collect();
+    let target_components: Vec<Component> = target.components().collect();
+    let first_pair = (base_components.first(), target_components.first());
+    if let (Some(Component::Prefix(a)), Some(Component::Prefix(b))) = first_pair
+        && a.as_os_str() != b.as_os_str()
+    {
+        return Err(crate::snippets::error::Error::Other(format!(
+            "cannot express {} relative to {}: no common root",
+            target.display(),
+            base.display()
+        )));
+    }
+
+    let common = base_components
+        .iter()
+        .zip(target_components.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+
+    let mut relative = std::path::PathBuf::new();
+    for _ in common..base_components.len() {
+        relative.push("..");
+    }
+    for component in &target_components[common..] {
+        relative.push(component.as_os_str());
+    }
+
+    Ok(if relative.as_os_str().is_empty() {
+        std::path::PathBuf::from(".")
+    } else {
+        relative
+    })
+}
+
+/// Deterministic fingerprint for the synthetic `.alef_snippet` scratch package every
+/// session-scoped Zig snippet build writes to a temp dir. Zig 0.16 rejects a `build.zig.zon`
+/// with no top-level `.fingerprint` (`(crc32_ieee(name) << 32) | id`, `id` never `0`/`0xffff_ffff`)
+/// — without one, every session-scoped snippet failed during manifest parsing, before any
+/// snippet code was read. `alef.toml`'s `minimum_zig_version` floor is 0.16.0
+/// (`toolchain::MIN_ZIG_VERSION`), so this is unconditional, matching
+/// `scaffold::languages::zig::zig_fingerprint`'s same choice for real scaffolded packages.
+///
+/// Duplicated rather than shared across the `scaffold`/`snippets` module boundary: this
+/// scratch package's identity is unrelated to any scaffolded crate's and is derived from the
+/// fixed name below, so the value is always the same — intentional, since this package is
+/// never published or fetched, only compiled locally for validation. ~keep
+fn snippet_package_fingerprint() -> u64 {
+    const NAME: &[u8] = b"alef_snippet";
+    let name_crc = crc32_ieee(NAME);
+    let mut id: u32 = 0x811c_9dc5;
+    for byte in NAME {
+        id ^= *byte as u32;
+        id = id.wrapping_mul(0x0100_0193);
+    }
+    if id == 0 || id == 0xffff_ffff {
+        id = 0x1;
+    }
+    ((name_crc as u64) << 32) | (id as u64)
+}
+
+/// IEEE CRC-32, the half of the Zig fingerprint scheme `crc32_ieee(name)` needs.
+fn crc32_ieee(bytes: &[u8]) -> u32 {
+    let mut crc: u32 = 0xffff_ffff;
+    for byte in bytes {
+        crc ^= *byte as u32;
+        for _ in 0..8 {
+            let mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+        }
+    }
+    !crc
 }
 
 #[cfg(test)]
@@ -324,10 +425,151 @@ mod tests {
 
         assert!(build.contains("binding.module(\"sample_binding\")"), "{build}");
         assert!(build.contains("root.addImport(\"sample_binding\""), "{build}");
-        assert!(zon.contains(&format!(".path = \"{}\"", package.display())), "{zon}");
+        // `scratch` and `package` are siblings under `directory`, so `package` relative to
+        // `scratch` is `../package` — not the absolute `package` path. Zig 0.16 rejects an
+        // absolute `.path` dependency outright (`expected path relative to build root; found
+        // absolute path`), so this pins the regression, not just the presence of a `.path` key.
+        assert!(zon.contains(".path = \"../package\""), "{zon}");
+        assert!(
+            !zon.contains(&format!(".path = \"{}\"", package.display())),
+            "dependency .path must be relative to the manifest's own directory, not absolute; got:\n{zon}"
+        );
+        assert!(
+            zon.contains(".fingerprint = 0x"),
+            "Zig 0.16 rejects a build.zig.zon with no top-level .fingerprint field; got:\n{zon}"
+        );
     }
 
-    /// Alef's own `build_zig.jinja` binds the include directory through a `b.option(...) orelse`
+    /// Regression: Zig 0.16 rejects an absolute `.path` dependency in `build.zig.zon` outright
+    /// (`expected path relative to build root; found absolute path`) — this is a real `zig
+    /// build` error, not a style nit, and it fired on every session-scoped snippet whose package
+    /// root was written verbatim (always absolute — `zig_package_root` walks up from an
+    /// absolute manifest path).
+    #[test]
+    fn relative_path_rebases_a_deeper_absolute_target_onto_a_shallower_base() {
+        let base = PathBuf::from("/tmp/session/scratch");
+        let target = PathBuf::from("/tmp/session/package/nested");
+
+        let relative = relative_path(&base, &target).unwrap();
+
+        assert_eq!(relative, PathBuf::from("../package/nested"));
+    }
+
+    #[test]
+    fn relative_path_is_dot_when_base_and_target_are_the_same_directory() {
+        let dir = PathBuf::from("/tmp/session/scratch");
+
+        let relative = relative_path(&dir, &dir).unwrap();
+
+        assert_eq!(relative, PathBuf::from("."));
+    }
+
+    /// A silently-wrong absolute path is exactly the failure mode being fixed — if no relative
+    /// path can be expressed, generation must fail loudly instead of falling back to one.
+    #[test]
+    fn relative_path_errors_rather_than_falling_back_to_absolute() {
+        let absolute = PathBuf::from("/tmp/session/package");
+        let relative = PathBuf::from("package");
+
+        let err = relative_path(&absolute, &relative).unwrap_err();
+
+        assert!(
+            err.to_string().contains("absolute"),
+            "error should explain the absolute/relative mismatch; got: {err}"
+        );
+    }
+
+    /// Regression: without a `.fingerprint` field, Zig 0.16 fails every session-scoped snippet
+    /// during manifest parsing, before any snippet code is read — this is the exact shape of
+    /// bug the vacuous-target defect hunt was about, just one level down in the toolchain rather
+    /// than in generated bindings. Pins the field's shape and the value's determinism, since a
+    /// randomly-generated fingerprint would churn the manifest (irrelevant for this scratch file,
+    /// which is never committed, but the algorithm is shared in spirit with
+    /// `scaffold::languages::zig::zig_fingerprint`, which does need determinism for committed
+    /// output — so this also guards against the two silently diverging).
+    #[test]
+    fn snippet_package_fingerprint_is_deterministic_and_zig_valid() {
+        let first = snippet_package_fingerprint();
+        let second = snippet_package_fingerprint();
+        assert_eq!(first, second, "fingerprint must be stable across calls, not random");
+
+        let id = (first & 0xffff_ffff) as u32;
+        assert_ne!(id, 0, "Zig rejects id == 0");
+        assert_ne!(id, 0xffff_ffff, "Zig rejects id == 0xffffffff");
+    }
+
+    /// The strongest available proof the manifest is well-formed: actually run `zig build`
+    /// against it, rather than `zig ast-check` on a single unrelated file (which does not parse
+    /// `build.zig.zon` at all and would pass green even with a missing `.fingerprint`).
+    #[test]
+    fn snippet_build_zon_parses_under_real_zig() {
+        if which::which("zig").is_err() {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let package = directory.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        let package_fingerprint = {
+            const NAME: &[u8] = b"binding_pkg";
+            let name_crc = crc32_ieee(NAME);
+            let mut id: u32 = 0x811c_9dc5;
+            for byte in NAME {
+                id ^= *byte as u32;
+                id = id.wrapping_mul(0x0100_0193);
+            }
+            if id == 0 || id == 0xffff_ffff {
+                id = 0x1;
+            }
+            ((name_crc as u64) << 32) | (id as u64)
+        };
+        std::fs::write(
+            package.join("build.zig"),
+            "const std = @import(\"std\");\n\npub fn build(b: *std.Build) void {\n    \
+             const target = b.standardTargetOptions(.{});\n    \
+             const optimize = b.standardOptimizeOption(.{});\n    \
+             _ = b.addModule(\"binding_pkg\", .{\n        \
+                 .root_source_file = b.path(\"root.zig\"),\n        \
+                 .target = target,\n        \
+                 .optimize = optimize,\n    \
+             });\n}\n",
+        )
+        .unwrap();
+        std::fs::write(package.join("root.zig"), "pub const ok = true;\n").unwrap();
+        std::fs::write(
+            package.join("build.zig.zon"),
+            format!(
+                ".{{\n    .name = .binding_pkg,\n    .version = \"0.0.0\",\n    \
+                 .fingerprint = 0x{package_fingerprint:016x},\n    \
+                 .minimum_zig_version = \"0.16.0\",\n    \
+                 .paths = .{{ \"build.zig\", \"build.zig.zon\", \"root.zig\" }},\n}}\n"
+            ),
+        )
+        .unwrap();
+
+        let scratch = directory.path().join("scratch");
+        std::fs::create_dir(&scratch).unwrap();
+        let build_file = write_snippet_build(&scratch, "binding_pkg", &package).unwrap();
+        std::fs::write(
+            scratch.join("snippet.zig"),
+            "const binding_pkg = @import(\"binding_pkg\");\npub fn main() void {\n    _ = binding_pkg.ok;\n}\n",
+        )
+        .unwrap();
+
+        let mut command = std::process::Command::new("zig");
+        command
+            .args(["build", "--summary", "none", "--build-file"])
+            .arg(&build_file);
+        apply_cache_dirs(&mut command, &scratch);
+        let output = command.output().expect("zig must be installed to verify this test");
+
+        assert!(
+            output.status.success(),
+            "zig build failed against the generated snippet manifest:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// Alef's own scaffold binds the include directory through a `b.option(...) orelse`
     /// default, so reading only string literals finds nothing in the manifest Alef itself writes.
     #[test]
     fn manifest_include_paths_resolve_through_the_build_option_default() {

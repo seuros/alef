@@ -90,6 +90,14 @@ impl SnippetValidator for RValidator {
             ValidationLevel::Run
         }
     }
+
+    // The typecheck gap above is a property of this validator's implementation (no checker is
+    // wired up), not of the machine running it — no environment will ever make `parse(file = ...)`
+    // resolve a function. Structural, so it's exempted from `Downgraded` the same way `max_level`
+    // is. ~keep
+    fn achievable_level_is_structural(&self, requested: ValidationLevel) -> bool {
+        requested == ValidationLevel::TypeCheck
+    }
 }
 
 #[cfg(test)]
@@ -135,11 +143,18 @@ mod tests {
         assert_eq!(RValidator.achievable_level(ValidationLevel::Run), ValidationLevel::Run);
     }
 
+    #[test]
+    fn achievable_level_typecheck_gap_is_structural() {
+        assert!(RValidator.achievable_level_is_structural(ValidationLevel::TypeCheck));
+        assert!(!RValidator.achievable_level_is_structural(ValidationLevel::Compile));
+        assert!(!RValidator.achievable_level_is_structural(ValidationLevel::Run));
+    }
+
     /// A snippet that is syntactically valid but references a function that cannot resolve must
-    /// not come back as a `typecheck` pass. Before `achievable_level`, `parse(file = ...)`
-    /// accepted this file (it never resolves functions) and the runner reported it Pass at
-    /// `effective_level: typecheck` because `max_level` was `Run` and nothing downgraded it — the
-    /// exact false green this test pins shut. ~keep
+    /// not come back as a `typecheck` pass. `parse(file = ...)` accepts this file (it never
+    /// resolves functions), so `achievable_level` caps it to `syntax`; because that gap is
+    /// structural, it is exempted from `Downgraded` the same way a `max_level` ceiling is — a
+    /// capability-capped `Pass`, not a claim of `typecheck`. ~keep
     #[test]
     fn typecheck_request_for_an_undefined_function_does_not_pass_as_typecheck() {
         if !RValidator.is_available() {
@@ -162,8 +177,10 @@ mod tests {
             (SnippetStatus::Pass, ValidationLevel::TypeCheck),
             "undefined-function snippet must not pass claiming typecheck: {result:?}"
         );
-        assert_eq!(result.status, SnippetStatus::Downgraded);
+        assert_eq!(result.status, SnippetStatus::Pass);
+        assert!(result.capability_capped);
         assert_eq!(result.effective_level, ValidationLevel::Syntax);
-        assert_eq!(summary.downgraded, 1);
+        assert_eq!(summary.downgraded, 0);
+        assert_eq!(summary.capability_capped, 1);
     }
 }
