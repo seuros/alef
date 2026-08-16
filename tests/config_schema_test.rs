@@ -1,5 +1,5 @@
 use alef::core::config::{
-    alef_config_schema, check_alef_config_schema, render_alef_config_schema, write_alef_config_schema,
+    NewAlefConfig, alef_config_schema, check_alef_config_schema, render_alef_config_schema, write_alef_config_schema,
 };
 
 #[test]
@@ -57,4 +57,48 @@ fn committed_schema_matches_current_package_version() {
     let actual = include_str!("../schemas/alef.schema.json");
 
     assert_eq!(actual, expected);
+}
+
+/// A `[crates.cargo_lints]` table with both string- and table-valued entries must
+/// validate against the generated schema and deserialize into `NewAlefConfig`,
+/// pinning the `CargoLintsConfig` schema entry to the type it describes rather
+/// than to hand-edited JSON. ~keep
+#[test]
+fn cargo_lints_config_matches_schema_and_rust_type() {
+    let toml_src = r#"
+[workspace]
+languages = ["ffi"]
+
+[[crates]]
+name = "sample"
+sources = ["src/lib.rs"]
+
+[crates.cargo_lints.rust]
+unused_must_use = "deny"
+
+[crates.cargo_lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = ["cfg(docsrs)"]
+
+[crates.cargo_lints.clippy]
+print_stdout = "deny"
+print_stderr = "deny"
+"#;
+
+    let schema = alef_config_schema(env!("CARGO_PKG_VERSION")).expect("schema generation succeeds");
+    let validator = jsonschema::validator_for(&schema).expect("schema compiles");
+    let toml_value: toml::Value = toml::from_str(toml_src).expect("toml parses");
+    let json_value = serde_json::to_value(&toml_value).expect("TOML value converts to JSON");
+    assert!(
+        validator.is_valid(&json_value),
+        "cargo_lints TOML must validate against the generated schema: {:?}",
+        validator.iter_errors(&json_value).collect::<Vec<_>>()
+    );
+
+    let config: NewAlefConfig = toml::from_str(toml_src).expect("toml deserializes into NewAlefConfig");
+    let lints = &config.crates[0].cargo_lints;
+    assert_eq!(lints.rust["unused_must_use"].as_str(), Some("deny"));
+    assert_eq!(lints.clippy["print_stdout"].as_str(), Some("deny"));
+    assert_eq!(lints.clippy["print_stderr"].as_str(), Some("deny"));
+    assert!(lints.rust["unexpected_cfgs"].is_table());
 }

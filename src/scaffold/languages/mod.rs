@@ -38,4 +38,4 @@ pub(crate) use r::{scaffold_r, scaffold_r_cargo};
 pub(crate) use ruby::{scaffold_ruby, scaffold_ruby_cargo};
 pub(crate) use swift::scaffold_swift;
 pub(crate) use wasm::scaffold_wasm;
-pub(crate) use zig::scaffold_zig;
+pub(crate) use zig::{migrate_build_zig_test_target, scaffold_zig};

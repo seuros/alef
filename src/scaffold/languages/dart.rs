@@ -1,9 +1,13 @@
+use crate::backends::dart::ident::dart_safe_ident;
 use crate::backends::dart::naming::{dart_frb_version, dart_style};
+use crate::codegen::shared::binding_fields;
 use crate::core::backend::GeneratedFile;
 use crate::core::config::{DartStyle, ResolvedCrateConfig};
-use crate::core::ir::ApiSurface;
+use crate::core::ir::{ApiSurface, PrimitiveType, TypeDef, TypeRef};
 use crate::core::template_versions::{pub_dev, toolchain};
 use crate::scaffold::{readme_language_configured, scaffold_meta};
+use heck::ToLowerCamelCase;
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 pub(crate) fn scaffold_dart(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
@@ -192,27 +196,7 @@ linter:
         DartStyle::Ffi => format!("{pubspec_name}/src/{module_name}.dart"),
     };
 
-    // Importing the package (rather than only `package:test`) means a placeholder
-    // test still fails to compile if the generated bindings themselves fail to
-    // compile, catching a total API break instead of passing green while linking
-    // nothing. `{module_name}` is a library prefix, not a value — the API surface
-    // is not knowable at scaffold time, so there is nothing on it a generic seed
-    // can assert against; the import alone is what forces resolution, hence the
-    // explicit `unused_import` suppression rather than a fabricated call. ~keep
-    let test_dart = format!(
-        r#"import 'package:test/test.dart';
-// ignore: unused_import
-import 'package:{package_import_path}' as {module_name};
-
-void main() {{
-  test('placeholder', () {{
-    expect(1 + 1, equals(2));
-  }});
-}}
-"#,
-        package_import_path = package_import_path,
-        module_name = module_name,
-    );
+    let test_dart = scaffold_dart_test(api, config, &module_name, &package_import_path);
 
     let crate_name = &api.crate_name;
     let build_commands = match style {
@@ -411,4 +395,439 @@ io.Directory _findRepoRoot(io.Directory start) {{
     }
 
     Ok(files)
+}
+
+/// Build the seed content for `test/{module_name}_test.dart`.
+///
+/// `write_scaffold_files_report` treats `generated_header: false` as create-only, so once
+/// a real suite exists at this path alef never overwrites it; this only ever seeds a fresh
+/// project. The seed must not be vacuous — `expect(1 + 1, equals(2))` compiles and passes
+/// no matter what the generated API looks like, exactly the "0 assertions, silently green"
+/// defect the zig test-module fix (`scaffold_zig_test`) and the Swift seed
+/// (`scaffold_swift_test`) already closed one layer down. So, mirroring `scaffold_swift_test`'s
+/// approach, this asserts against the *real*, currently-generated API surface (`api`), in
+/// order of how strong a check is safely synthesizable without duplicating the Dart binding
+/// emitter's full type-mapping surface:
+///
+/// 1. A visible, non-opaque DTO (`has_serde`, struct, all fields plain primitives/`String`,
+///    no optional/cfg-gated fields) is literal-constructed twice with identical field values
+///    and compared for equality — it fails to compile if the generated constructor drops or
+///    renames a field, and fails at runtime if the generated (freezed) value-equality stops
+///    being field-based, not just on a missing symbol.
+/// 2. Otherwise, any other visible type or enum is referenced bare (`{module}.Name`), forcing
+///    the analyzer to resolve it — weaker than the round trip (construction/field shape isn't
+///    checked) but still a real, falsifiable fact about the generated output.
+/// 3. Only when the API surface is genuinely empty (e.g. scaffolding before any Rust code
+///    exists) does this fall back to the harmless `1 + 1 == 2` placeholder that merely forces
+///    the package import to resolve — there is nothing else to assert against yet, and once
+///    real items exist this file is never regenerated over. ~keep
+fn scaffold_dart_test(
+    api: &ApiSurface,
+    config: &ResolvedCrateConfig,
+    module_name: &str,
+    package_import_path: &str,
+) -> String {
+    let exclude_types = dart_binding_exclusions(config);
+
+    let round_trip_candidate = api
+        .types
+        .iter()
+        .filter(|t| dart_type_is_visible(t, &exclude_types))
+        .filter(|t| !t.is_opaque && t.has_serde && !t.has_stripped_cfg_fields)
+        .find_map(|t| simple_dart_fields(t).map(|fields| (t, fields)));
+    if let Some((ty, fields)) = round_trip_candidate {
+        return dart_equality_round_trip_test(module_name, package_import_path, &ty.name, &fields);
+    }
+
+    let visible_type_name = api
+        .types
+        .iter()
+        .filter(|t| dart_type_is_visible(t, &exclude_types))
+        .map(|t| t.name.clone())
+        .next();
+    let visible_enum_name = || {
+        api.enums
+            .iter()
+            .filter(|e| !e.binding_excluded && !exclude_types.contains(&e.name))
+            .map(|e| e.name.clone())
+            .next()
+    };
+    if let Some(name) = visible_type_name.or_else(visible_enum_name) {
+        return dart_type_reference_test(module_name, package_import_path, &name);
+    }
+
+    dart_placeholder_test(module_name, package_import_path)
+}
+
+/// Names excluded from Dart binding generation, mirroring `[crates.dart] exclude_types` plus
+/// `[crates.ffi] exclude_types` that the real Dart binding emitter honors. Kept in sync
+/// deliberately rather than shared, since this seed-picker only needs *a* safe, visible name,
+/// not the emitter's exhaustive filtered set. Unlike the Swift seed's equivalent, there is no
+/// `[crates.dart] exclude_fields` knob to fold in — Dart has no per-field exclusion config.
+fn dart_binding_exclusions(config: &ResolvedCrateConfig) -> HashSet<String> {
+    let mut exclude_types: HashSet<String> = config
+        .dart
+        .as_ref()
+        .map(|c| c.exclude_types.iter().cloned().collect())
+        .unwrap_or_default();
+    if let Some(ffi) = &config.ffi {
+        exclude_types.extend(ffi.exclude_types.iter().cloned());
+    }
+    exclude_types
+}
+
+/// A visible (non-trait, non-`binding_excluded`, not config-excluded) candidate type for the
+/// scaffold seed to reference.
+fn dart_type_is_visible(ty: &TypeDef, exclude_types: &HashSet<String>) -> bool {
+    !ty.is_trait && !ty.binding_excluded && !exclude_types.contains(&ty.name)
+}
+
+/// A field simple enough to synthesize a literal Dart value for: a primitive or `String`,
+/// never optional, never `#[cfg(...)]`-gated (whether it exists depends on active features,
+/// which this scaffold-time seed cannot know).
+struct SimpleDartField {
+    label: String,
+    literal: String,
+}
+
+/// Compute a literal-constructible field list for `ty`, or `None` when any visible field
+/// falls outside the safely synthesizable subset (optional, cfg-gated, or a type other than
+/// a primitive/`String` — `Named`/`Vec`/`Map`/etc. would need recursive construction this
+/// seed does not attempt). Bails on the *whole type* rather than partially constructing it,
+/// since the real generated constructor requires every non-optional named parameter.
+fn simple_dart_fields(ty: &TypeDef) -> Option<Vec<SimpleDartField>> {
+    let mut fields = Vec::new();
+    for field in binding_fields(&ty.fields) {
+        if field.optional || field.cfg.is_some() {
+            return None;
+        }
+        let literal = match &field.ty {
+            TypeRef::Primitive(primitive) => dart_primitive_literal(primitive),
+            TypeRef::String => "'alef-scaffold'".to_string(),
+            _ => return None,
+        };
+        fields.push(SimpleDartField {
+            label: dart_safe_ident(&field.name.to_lower_camel_case()),
+            literal,
+        });
+    }
+    if fields.is_empty() { None } else { Some(fields) }
+}
+
+/// A literal Dart value for a primitive type. `bool` gets a non-default `true` and floats a
+/// non-integral `1.5` so a constructor that silently drops or zeroes a field is still caught
+/// by the equality check.
+fn dart_primitive_literal(primitive: &PrimitiveType) -> String {
+    match primitive {
+        PrimitiveType::Bool => "true".to_string(),
+        PrimitiveType::F32 | PrimitiveType::F64 => "1.5".to_string(),
+        _ => "1".to_string(),
+    }
+}
+
+/// The strongest safe check: literal-construct a visible DTO twice with identical field
+/// values and assert the two instances are equal, so a generated constructor that drops or
+/// renames a field, or a value-equality (`==`) implementation that stops being field-based,
+/// fails `dart test` immediately instead of shipping green with a suite that asserts nothing.
+fn dart_equality_round_trip_test(
+    module_name: &str,
+    package_import_path: &str,
+    type_name: &str,
+    fields: &[SimpleDartField],
+) -> String {
+    let init_args = fields
+        .iter()
+        .map(|f| format!("{}: {}", f.label, f.literal))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        r#"import 'package:test/test.dart';
+import 'package:{package_import_path}' as {module_name};
+
+void main() {{
+  test('{type_name} equality holds for identical field values', () {{
+    // Literal-constructs the generated `{type_name}` DTO twice with identical field
+    // values and compares them for equality, so a constructor that drops/renames a
+    // field, or generated equality that stops being field-based, fails `dart test`
+    // immediately instead of shipping green with a suite that asserts nothing about
+    // the generated API. Create-only scaffold seed. ~keep
+    final a = {module_name}.{type_name}({init_args});
+    final b = {module_name}.{type_name}({init_args});
+    expect(a, equals(b));
+  }});
+}}
+"#,
+        package_import_path = package_import_path,
+        module_name = module_name,
+        type_name = type_name,
+        init_args = init_args,
+    )
+}
+
+/// `name` isn't a literal-constructible DTO this seed can safely construct generically, so
+/// this checks the generated type or enum exists and is referenceable at compile time
+/// instead.
+fn dart_type_reference_test(module_name: &str, package_import_path: &str, name: &str) -> String {
+    format!(
+        r#"import 'package:test/test.dart';
+import 'package:{package_import_path}' as {module_name};
+
+void main() {{
+  test('{module_name} exposes `{name}`', () {{
+    // `{name}` isn't a literal-constructible DTO this seed can safely construct
+    // generically, so this checks the generated type exists and is referenceable at
+    // compile time instead. Create-only scaffold seed. ~keep
+    expect({module_name}.{name}, isNotNull);
+  }});
+}}
+"#,
+        package_import_path = package_import_path,
+        module_name = module_name,
+        name = name,
+    )
+}
+
+/// No generated API surface exists yet for this crate, so there is nothing to assert against
+/// beyond the package import resolving. Once real types exist, alef never regenerates over
+/// this file — it is a create-only scaffold seed.
+fn dart_placeholder_test(module_name: &str, package_import_path: &str) -> String {
+    format!(
+        r#"import 'package:test/test.dart';
+// ignore: unused_import
+import 'package:{package_import_path}' as {module_name};
+
+void main() {{
+  test('placeholder', () {{
+    // No generated API surface exists yet for this crate, so there is nothing to assert
+    // against beyond the module resolving. Once real types exist, alef never regenerates
+    // over this file -- it is a create-only scaffold seed. ~keep
+    expect(1 + 1, equals(2));
+  }});
+}}
+"#,
+        package_import_path = package_import_path,
+        module_name = module_name,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::config::NewAlefConfig;
+    use crate::core::ir::{EnumDef, FieldDef};
+
+    fn resolve_config(toml_text: &str) -> ResolvedCrateConfig {
+        let cfg: NewAlefConfig = toml::from_str(toml_text).expect("valid config");
+        cfg.resolve().expect("resolve").remove(0)
+    }
+
+    fn minimal_config() -> ResolvedCrateConfig {
+        resolve_config(
+            r#"
+[workspace]
+languages = ["dart"]
+[[crates]]
+name = "my-lib"
+sources = []
+"#,
+        )
+    }
+
+    fn find_file<'a>(files: &'a [GeneratedFile], path: &str) -> &'a GeneratedFile {
+        files
+            .iter()
+            .find(|f| f.path == std::path::Path::new(path))
+            .unwrap_or_else(|| panic!("missing scaffolded file: {path}"))
+    }
+
+    fn simple_type(name: &str) -> TypeDef {
+        TypeDef {
+            name: name.to_string(),
+            has_serde: true,
+            fields: vec![
+                FieldDef {
+                    name: "count".to_string(),
+                    ty: TypeRef::Primitive(PrimitiveType::U32),
+                    ..Default::default()
+                },
+                FieldDef {
+                    name: "label".to_string(),
+                    ty: TypeRef::String,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    /// A visible DTO whose fields are all plain primitives/`String` is literal-constructed
+    /// twice and compared for equality — the strongest safe check, since it fails to
+    /// compile on a dropped/renamed field and fails at runtime on broken equality, not
+    /// just on a missing symbol.
+    #[test]
+    fn scaffold_test_round_trips_a_simple_dto() {
+        let api = ApiSurface {
+            types: vec![simple_type("Widget")],
+            ..Default::default()
+        };
+        let out = scaffold_dart_test(&api, &minimal_config(), "my_lib", "my_lib/my_lib.dart");
+
+        assert!(out.contains("import 'package:my_lib/my_lib.dart' as my_lib;"), "got:\n{out}");
+        assert!(
+            out.contains("test('Widget equality holds for identical field values'"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("final a = my_lib.Widget(count: 1, label: 'alef-scaffold');"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("final b = my_lib.Widget(count: 1, label: 'alef-scaffold');"),
+            "got:\n{out}"
+        );
+        assert!(out.contains("expect(a, equals(b));"), "got:\n{out}");
+        assert!(
+            !out.contains("expect(1 + 1, equals(2));"),
+            "must not be the vacuous placeholder, got:\n{out}"
+        );
+        assert!(
+            !out.contains("ignore: unused_import"),
+            "the import is actually used here, got:\n{out}"
+        );
+    }
+
+    /// An opaque type has no client-constructible representation, so it can't be literal
+    /// -constructed; the seed falls back to a compile-time existence check on the type
+    /// name instead of skipping straight to the vacuous placeholder.
+    #[test]
+    fn scaffold_test_falls_back_to_existence_check_for_an_opaque_type() {
+        let api = ApiSurface {
+            types: vec![TypeDef {
+                name: "Client".to_string(),
+                is_opaque: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let out = scaffold_dart_test(&api, &minimal_config(), "my_lib", "my_lib/my_lib.dart");
+
+        assert!(out.contains("test('my_lib exposes `Client`'"), "got:\n{out}");
+        assert!(out.contains("expect(my_lib.Client, isNotNull);"), "got:\n{out}");
+        assert!(!out.contains("equals(b)"), "got:\n{out}");
+    }
+
+    /// A DTO with an unsupported field shape (e.g. `Optional<T>`) can't be literal
+    /// -constructed safely by this seed either — it also falls back to the existence
+    /// check rather than emitting a construction call with a guessed value.
+    #[test]
+    fn scaffold_test_falls_back_to_existence_check_for_unsupported_field_shape() {
+        let api = ApiSurface {
+            types: vec![TypeDef {
+                name: "Config".to_string(),
+                has_serde: true,
+                fields: vec![FieldDef {
+                    name: "nickname".to_string(),
+                    ty: TypeRef::Optional(Box::new(TypeRef::String)),
+                    optional: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let out = scaffold_dart_test(&api, &minimal_config(), "my_lib", "my_lib/my_lib.dart");
+
+        assert!(out.contains("test('my_lib exposes `Config`'"), "got:\n{out}");
+        assert!(out.contains("expect(my_lib.Config, isNotNull);"), "got:\n{out}");
+    }
+
+    /// With no visible struct at all, a visible enum is checked for existence instead.
+    #[test]
+    fn scaffold_test_falls_back_to_existence_check_for_an_enum_when_no_types_exist() {
+        let api = ApiSurface {
+            enums: vec![EnumDef {
+                name: "Color".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let out = scaffold_dart_test(&api, &minimal_config(), "my_lib", "my_lib/my_lib.dart");
+
+        assert!(out.contains("test('my_lib exposes `Color`'"), "got:\n{out}");
+        assert!(out.contains("expect(my_lib.Color, isNotNull);"), "got:\n{out}");
+    }
+
+    /// `binding_excluded` types were never emitted into the generated Dart module, so the
+    /// seed must skip them rather than asserting against a type that doesn't exist.
+    #[test]
+    fn scaffold_test_skips_binding_excluded_types() {
+        let api = ApiSurface {
+            types: vec![
+                TypeDef {
+                    name: "Hidden".to_string(),
+                    is_opaque: true,
+                    binding_excluded: true,
+                    ..Default::default()
+                },
+                TypeDef {
+                    name: "Visible".to_string(),
+                    is_opaque: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let out = scaffold_dart_test(&api, &minimal_config(), "my_lib", "my_lib/my_lib.dart");
+
+        assert!(out.contains("Visible"), "got:\n{out}");
+        assert!(!out.contains("Hidden"), "got:\n{out}");
+    }
+
+    /// A genuinely empty API surface (no Rust code written yet) has nothing to assert
+    /// against beyond the import resolving — the only honest seed content, and the only
+    /// case where the placeholder assertion is legitimate.
+    #[test]
+    fn scaffold_test_falls_back_to_placeholder_when_api_surface_is_empty() {
+        let out = scaffold_dart_test(&ApiSurface::default(), &minimal_config(), "my_lib", "my_lib/my_lib.dart");
+
+        assert!(out.contains("import 'package:my_lib/my_lib.dart' as my_lib;"), "got:\n{out}");
+        assert!(out.contains("test('placeholder', () {"), "got:\n{out}");
+        assert!(out.contains("expect(1 + 1, equals(2));"), "got:\n{out}");
+        assert!(
+            out.contains("ignore: unused_import"),
+            "placeholder never references the import, got:\n{out}"
+        );
+    }
+
+    /// End-to-end through `scaffold_dart`: the emitted test file at
+    /// `test/{module}_test.dart` must carry a real assertion against the generated API
+    /// (not the vacuous `expect(1 + 1, equals(2))` placeholder) whenever the API surface
+    /// has something to assert against, and must be `generated_header: false` so the
+    /// create-only write-path guard (`write_scaffold_files_report`'s `can_skip`) never
+    /// overwrites a real hand-written suite once one exists at that path.
+    #[test]
+    fn scaffold_dart_emits_real_test_assertions_and_is_create_only() {
+        let api = ApiSurface {
+            crate_name: "my-lib".to_string(),
+            types: vec![simple_type("Widget")],
+            ..Default::default()
+        };
+        let files = scaffold_dart(&api, &minimal_config()).expect("scaffold");
+        let test_file = find_file(&files, "packages/dart/test/my_lib_test.dart");
+
+        assert!(
+            !test_file.generated_header,
+            "test seed must be generated_header: false (create-only)"
+        );
+        assert!(
+            test_file.content.contains("equals(b)"),
+            "got:\n{}",
+            test_file.content
+        );
+        assert!(
+            !test_file.content.contains("expect(1 + 1, equals(2));"),
+            "must not emit the old vacuous placeholder test, got:\n{}",
+            test_file.content
+        );
+    }
 }

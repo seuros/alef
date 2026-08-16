@@ -188,6 +188,21 @@ pub fn write_scaffold_files_report(
     base_dir: &Path,
     overwrite: bool,
 ) -> anyhow::Result<super::write::WriteReport> {
+    // `packages/zig/build.zig` is a `generated_header: false` seed on a markable (`.zig`)
+    // extension, so the ownership guard below permanently refuses to overwrite it once it
+    // exists on disk -- by design, since consumers legitimately hand-edit it (see
+    // `migrate_build_zig_test_target`'s doc for the evidence). That means a generator fix to
+    // its content can never reach an existing repo through the normal write path at all, no
+    // matter what `overwrite` is. Run first, before the create-only/ownership logic below
+    // even sees this run's `build.zig` entry, so it can repair the one specific known-bad
+    // shape (test module compiling zero `test` blocks) in place without going through -- or
+    // being blocked by -- that guard. A no-op when zig isn't part of this run, the file
+    // doesn't exist yet, or it does not match the known-bad shape. ~keep
+    if files.iter().any(|file| file.path == Path::new("packages/zig/build.zig")) {
+        crate::scaffold::migrate_build_zig_test_target(base_dir)
+            .context("failed to migrate pre-existing packages/zig/build.zig test target")?;
+    }
+
     let mut report = super::write::WriteReport::default();
     let mut prepared = std::collections::BTreeMap::new();
     for file in files {

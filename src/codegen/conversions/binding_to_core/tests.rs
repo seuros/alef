@@ -1,8 +1,9 @@
 use super::gen_from_binding_to_core;
 use super::gen_from_binding_to_core_cfg;
+use super::gen_from_lifetime_type_constructor;
 use crate::codegen::conversions::ConversionConfig;
-use crate::core::ir::{CoreWrapper, DefaultValue, FieldDef, TypeDef, TypeRef};
-use ahash::AHashSet;
+use crate::core::ir::{CoreWrapper, DefaultValue, FieldDef, MethodDef, TypeDef, TypeRef};
+use ahash::{AHashMap, AHashSet};
 
 fn type_with_field(field: FieldDef) -> TypeDef {
     TypeDef {
@@ -555,5 +556,165 @@ fn boxed_opaque_no_wrapper_trait_bridge_field_reboxes_clone() {
     assert!(
         out.contains("child: val.child.map(|v| Box::new((*v.inner).clone()))"),
         "expected the trait-bridge clone to be reboxed for a Box<T> field, got:\n{out}"
+    );
+}
+
+fn enum_named_field(name: &str, type_name: &str, optional: bool) -> FieldDef {
+    FieldDef {
+        version: Default::default(),
+        name: name.to_string(),
+        ty: TypeRef::Named(type_name.to_string()),
+        optional,
+        default: None,
+        doc: String::new(),
+        sanitized: false,
+        is_boxed: false,
+        type_rust_path: None,
+        cfg: None,
+        typed_default: None,
+        core_wrapper: CoreWrapper::None,
+        vec_inner_core_wrapper: CoreWrapper::None,
+        newtype_wrapper: None,
+        serde_rename: None,
+        serde_flatten: false,
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        original_type: None,
+    }
+}
+
+/// A `has_lifetime_params` type (private fields, constructed via a static method) with a
+/// single field, matching the shape `gen_from_lifetime_type_constructor` targets.
+fn lifetime_type_with_enum_field(field: FieldDef) -> TypeDef {
+    let mut typ = type_with_field(field.clone());
+    typ.has_lifetime_params = true;
+    typ.methods.push(MethodDef {
+        name: "with_owned".to_string(),
+        params: vec![crate::core::ir::ParamDef {
+            name: field.name.clone(),
+            ty: field.ty.clone(),
+            optional: field.optional,
+            ..crate::core::ir::ParamDef::default()
+        }],
+        return_type: TypeRef::Named(typ.name.clone()),
+        is_static: true,
+        receiver: None,
+        ..MethodDef::default()
+    });
+    typ
+}
+
+/// Regression for a PHP process crash: a PHP-facing enum-as-`String` field can hold any value
+/// a script assigns before the binding->core conversion re-parses it, and `.expect()` on a
+/// bad value used to panic *inside* a `From` impl called from generated FFI code -- unwinding
+/// across the boundary into Zend's C frames (undefined behaviour, not a catchable PHP
+/// exception). The conversion must now report the failure via `PhpException::throw()` and
+/// fall back to a known-safe variant instead of panicking. ~keep
+#[test]
+fn lifetime_type_enum_string_field_reports_php_exception_instead_of_panicking() {
+    let field = enum_named_field("node_type", "NodeType", false);
+    let typ = lifetime_type_with_enum_field(field);
+
+    let mut enum_names = AHashSet::new();
+    enum_names.insert("NodeType".to_string());
+    let mut fallback = AHashMap::new();
+    fallback.insert("NodeType".to_string(), "Text".to_string());
+    let config = ConversionConfig {
+        enum_string_names: Some(&enum_names),
+        enum_string_fallback_variant: Some(&fallback),
+        ..ConversionConfig::default()
+    };
+
+    let out = gen_from_lifetime_type_constructor(
+        &typ,
+        "html_to_markdown_rs::NodeContext",
+        "NodeContext",
+        "html_to_markdown_rs",
+        &config,
+    )
+    .expect("constructor call must be generated");
+
+    assert!(
+        !out.contains(".expect(\"valid NodeType\")"),
+        "a bad PHP-assigned enum string must no longer panic across the FFI boundary, got:\n{out}"
+    );
+    assert!(
+        out.contains("ext_php_rs::exception::PhpException::default") && out.contains(".throw()"),
+        "the parse failure must be reported to PHP as a catchable exception, got:\n{out}"
+    );
+    assert!(
+        out.contains("html_to_markdown_rs::NodeType::Text"),
+        "the conversion must still return a valid Self via the known fallback variant, got:\n{out}"
+    );
+}
+
+/// Companion regression, optional-field shape: `None` is always a valid fallback for an
+/// `Option<Enum>` field, so this path never needs a known fallback variant at all -- but a
+/// parse failure must still be surfaced to PHP rather than silently discarded.
+#[test]
+fn lifetime_type_optional_enum_string_field_falls_back_to_none_and_reports_exception() {
+    let field = enum_named_field("node_type", "NodeType", true);
+    let typ = lifetime_type_with_enum_field(field);
+
+    let mut enum_names = AHashSet::new();
+    enum_names.insert("NodeType".to_string());
+    let config = ConversionConfig {
+        enum_string_names: Some(&enum_names),
+        ..ConversionConfig::default()
+    };
+
+    let out = gen_from_lifetime_type_constructor(
+        &typ,
+        "html_to_markdown_rs::NodeContext",
+        "NodeContext",
+        "html_to_markdown_rs",
+        &config,
+    )
+    .expect("constructor call must be generated");
+
+    assert!(
+        !out.contains(".expect(\"valid NodeType\")"),
+        "an optional field never needs the panicking path -- None is always a valid fallback, got:\n{out}"
+    );
+    assert!(
+        out.contains("ext_php_rs::exception::PhpException::default") && out.contains(".throw()"),
+        "a parse failure on an optional field must still be reported to PHP, not silently dropped, got:\n{out}"
+    );
+    assert!(
+        out.contains("None"),
+        "the optional field must fall back to None on a parse failure, got:\n{out}"
+    );
+}
+
+/// Positive control: when no fallback variant is known for the colliding enum (absent from
+/// `enum_string_fallback_variant`), the generator must not fabricate an unsound placeholder --
+/// it keeps the original panicking expression rather than reference a variant name it cannot
+/// verify exists.
+#[test]
+fn lifetime_type_enum_string_field_without_known_fallback_keeps_original_panic() {
+    let field = enum_named_field("node_type", "NodeType", false);
+    let typ = lifetime_type_with_enum_field(field);
+
+    let mut enum_names = AHashSet::new();
+    enum_names.insert("NodeType".to_string());
+    let config = ConversionConfig {
+        enum_string_names: Some(&enum_names),
+        enum_string_fallback_variant: None,
+        ..ConversionConfig::default()
+    };
+
+    let out = gen_from_lifetime_type_constructor(
+        &typ,
+        "html_to_markdown_rs::NodeContext",
+        "NodeContext",
+        "html_to_markdown_rs",
+        &config,
+    )
+    .expect("constructor call must be generated");
+
+    assert!(
+        out.contains(".expect(\"valid NodeType\")"),
+        "without a known fallback variant, the original (panicking) expression must be kept \
+         rather than fabricate an unsound placeholder, got:\n{out}"
     );
 }

@@ -347,6 +347,74 @@ fn collect_alef_hashes(base_dir: &std::path::Path) -> Vec<(std::path::PathBuf, O
     found
 }
 
+/// Display paths (joined onto `base_dir`, matching `StaleMismatch::path`'s
+/// convention) of every alef-owned file in `files` that is entirely absent
+/// from disk.
+///
+/// Ownership is decided by [`crate::core::backend::GeneratedFile::carries_alef_marker`]
+/// via [`crate::cli::pipeline::managed_generated_files`] — the same predicate
+/// [`collect_alef_hashes`] uses to select existing files for the hash walk.
+/// A file without the marker (scaffold-once `Cargo.toml`/`package.json`/gemspec
+/// templates, lockfiles) is outside alef's freshness claim and is never
+/// reported missing here, even when absent — matching [`verify_walk`]'s scope
+/// so a clean repo whose scaffold hasn't been (re-)run never fails verify. ~keep
+fn missing_managed_paths(files: &[crate::core::backend::GeneratedFile], base_dir: &std::path::Path) -> Vec<String> {
+    crate::cli::pipeline::managed_generated_files(files)
+        .into_iter()
+        .filter(|file| !base_dir.join(&file.path).exists())
+        .map(|file| base_dir.join(&file.path).display().to_string())
+        .collect()
+}
+
+/// Display paths of every alef-owned generated file that generation would now
+/// produce for `config` but that does not exist on disk at all.
+///
+/// `verify_walk`/`verify_walk_multi` only ever see files that already exist and
+/// carry an `alef:hash:` header, so a file generation would emit but that was
+/// never written — a new API item a backend maps to a brand-new per-type file
+/// (`src/backends/java/gen_bindings/mod.rs`, `src/backends/csharp/gen_bindings/mod.rs`
+/// both emit one file per public type), forgotten after adding the item — is
+/// invisible to a pure disk walk. Closing that gap requires knowing what
+/// generation would produce, which is IR-derived for those backends and cannot
+/// be answered from `alef.toml` alone; this mirrors `alef diff`'s approach
+/// ([`crate::cli::pipeline::diff_files`], `src/cli/pipeline/generate/diff.rs`)
+/// and pays a comparable cost: bindings, type stubs, and scaffold are
+/// regenerated in memory (never written to disk) for every configured language.
+///
+/// `clean = false` is passed to [`crate::cli::pipeline::generate`] deliberately,
+/// not to save cost in CI (a fresh checkout's `.alef/` cache is always cold, so
+/// CI always pays full regeneration regardless of this flag) but because it is
+/// free and safe on a warm local machine: `crate::cli::cache::is_lang_cached`
+/// only reports a cache hit when the IR+config hash still matches *and* every
+/// previously recorded output path still exists on disk, so skipping a
+/// cache-hit language can never hide a genuinely missing file. ~keep
+pub(crate) fn find_missing_generated_files(
+    languages: &[crate::core::config::Language],
+    api: &crate::core::ir::ApiSurface,
+    config: &crate::core::config::ResolvedCrateConfig,
+    config_path: &std::path::Path,
+    base_dir: &std::path::Path,
+) -> anyhow::Result<Vec<String>> {
+    let mut missing = Vec::new();
+
+    let bindings = crate::cli::pipeline::generate(api, config, languages, false, config_path)?;
+    for (_, files) in &bindings {
+        missing.extend(missing_managed_paths(files, base_dir));
+    }
+
+    let stubs = crate::cli::pipeline::generate_stubs(api, config, languages)?;
+    for (_, files) in &stubs {
+        missing.extend(missing_managed_paths(files, base_dir));
+    }
+
+    let scaffold_files = crate::cli::pipeline::scaffold(api, config, languages, config_path)?;
+    missing.extend(missing_managed_paths(&scaffold_files, base_dir));
+
+    missing.sort();
+    missing.dedup();
+    Ok(missing)
+}
+
 /// Multi-crate variant of [`verify_walk`].
 ///
 /// Walk the repo from `base_dir`, find every alef-headered file, and return the
@@ -531,6 +599,53 @@ e2e = "cargo test"
         let dir = tempfile::tempdir().unwrap();
         let files = vec![gen_file("binding.go", "package x\n")];
         assert!(!generated_files_match_disk(&files, dir.path()));
+    }
+
+    fn gen_file_unheadered(rel: &str, content: &str) -> crate::core::backend::GeneratedFile {
+        crate::core::backend::GeneratedFile {
+            path: std::path::PathBuf::from(rel),
+            content: content.to_string(),
+            generated_header: false,
+        }
+    }
+
+    /// The defect this closes: a backend that would produce a file (e.g. one
+    /// Java/C# file per public type) is invisible to a pure disk walk when the
+    /// file was never written — `alef verify` must catch that, not just an
+    /// existing file whose hash drifted.
+    #[test]
+    fn missing_managed_paths_reports_an_absent_headered_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let files = vec![gen_file("SomeType.java", "final class SomeType {}\n")];
+
+        let missing = missing_managed_paths(&files, dir.path());
+
+        assert_eq!(missing, vec![dir.path().join("SomeType.java").display().to_string()]);
+    }
+
+    /// Positive control: an up-to-date tree (every generated path already
+    /// present on disk) must report nothing missing, regardless of the file's
+    /// actual content — content drift is `verify_walk`'s job, not this check's.
+    #[test]
+    fn missing_managed_paths_reports_nothing_when_every_headered_file_exists() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("SomeType.java"), "final class SomeType { /* stale */ }\n").unwrap();
+        let files = vec![gen_file("SomeType.java", "final class SomeType {}\n")];
+
+        assert!(missing_managed_paths(&files, dir.path()).is_empty());
+    }
+
+    /// The required negative control: a legitimately user-owned, unheadered
+    /// scaffold-once file (`Cargo.toml`, `package.json`, gemspec, lockfiles —
+    /// see `verify_walk`'s doc comment) that is absent must NOT be reported
+    /// missing. Getting this wrong would fail verify on every clean repo whose
+    /// scaffold-once files simply haven't been (re-)generated locally.
+    #[test]
+    fn missing_managed_paths_ignores_an_absent_unheadered_scaffold_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let files = vec![gen_file_unheadered("Cargo.toml", "[package]\nname = \"demo\"\n")];
+
+        assert!(missing_managed_paths(&files, dir.path()).is_empty());
     }
 
     #[test]

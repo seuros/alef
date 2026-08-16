@@ -56,7 +56,9 @@ pub fn gen_from_binding_to_core_cfg(typ: &TypeDef, core_import: &str, config: &C
     }
 
     if typ.has_lifetime_params {
-        if let Some(constructor_call) = gen_from_lifetime_type_constructor(typ, &core_path, &binding_name, config) {
+        if let Some(constructor_call) =
+            gen_from_lifetime_type_constructor(typ, &core_path, &binding_name, core_import, config)
+        {
             return constructor_call;
         }
         return crate::codegen::template_env::render(
@@ -571,6 +573,7 @@ pub fn gen_from_lifetime_type_constructor(
     typ: &TypeDef,
     core_path: &str,
     binding_name: &str,
+    core_import: &str,
     config: &ConversionConfig,
 ) -> Option<String> {
     let field_names: std::collections::HashSet<&str> = typ
@@ -617,16 +620,37 @@ pub fn gen_from_lifetime_type_constructor(
                     )
                 }
                 TypeRef::Named(type_name) => {
-                    // `.expect(...)` because an unrecognised variant name indicates a bug
+                    // A PHP-facing enum-as-String field can hold anything a script assigned
+                    // before this conversion runs -- it is a public property, not something
+                    // this generator controls -- so a bad value is a genuine runtime
+                    // possibility, not just an internal-bug signal. `.expect()` panicking here
+                    // unwinds across the FFI boundary into Zend's C frames: undefined
+                    // behaviour and a process crash, not a catchable PHP exception. A parse
+                    // failure is now reported via `PhpException::throw()` (which sets the
+                    // pending Zend exception directly, without needing this `From` impl to
+                    // return early) and the conversion still yields a valid `Self` so the
+                    // surrounding constructor call type-checks -- a fieldless fallback variant
+                    // supplied by the caller via `enum_string_fallback_variant`, when one is
+                    // known for this enum. ~keep
                     let is_enum_string = config
                         .enum_string_names
                         .is_some_and(|names| names.contains(type_name.as_str()));
                     if is_enum_string {
+                        let fallback_variant = config
+                            .enum_string_fallback_variant
+                            .and_then(|variants| variants.get(type_name.as_str()));
                         if field.optional {
                             format!(
-                                "val.{binding_field}.map(|s| serde_json::from_value(serde_json::Value::String(s)).expect(\"valid {type_name}\"))"
+                                "val.{binding_field}.and_then(|s| serde_json::from_value(serde_json::Value::String(s)).map_or_else(|e| {{ let _ = ext_php_rs::exception::PhpException::default(format!(\"invalid {type_name}: {{e}}\")).throw(); None }}, Some))"
+                            )
+                        } else if let Some(variant) = fallback_variant {
+                            format!(
+                                "serde_json::from_value(serde_json::Value::String(val.{binding_field}.clone())).unwrap_or_else(|e| {{ let _ = ext_php_rs::exception::PhpException::default(format!(\"invalid {type_name}: {{e}}\")).throw(); {core_import}::{type_name}::{variant} }})"
                             )
                         } else {
+                            // No known fallback variant (should not happen -- populated 1:1
+                            // with `enum_string_names`); fabricating an unsound placeholder
+                            // would be worse than the original panic, so this keeps it. ~keep
                             format!(
                                 "serde_json::from_value(serde_json::Value::String(val.{binding_field}.clone())).expect(\"valid {type_name}\")"
                             )

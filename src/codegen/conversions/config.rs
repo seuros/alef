@@ -1,4 +1,4 @@
-use ahash::AHashSet;
+use ahash::{AHashMap, AHashSet};
 
 /// Backend-specific configuration for From/field conversion generation.
 /// Enables shared code to handle all backend differences via parameters.
@@ -11,6 +11,16 @@ pub struct ConversionConfig<'a> {
     /// Enum names mapped to String in the binding layer (PHP only).
     /// Named fields referencing these use `format!("{:?}")` in core→binding.
     pub enum_string_names: Option<&'a AHashSet<String>>,
+    /// A known fieldless (unit) variant name for entries in `enum_string_names` that have
+    /// one, keyed by enum type name (PHP only).
+    ///
+    /// A PHP-facing `String` field can hold any value a script assigns before the
+    /// binding→core conversion re-parses it into the real enum. On a bad value, the
+    /// non-optional binding→core conversion needs *some* valid `Self` to return -- `From`
+    /// cannot bail out early -- so it falls back to this variant (safe to reference by
+    /// bare name precisely because it is fieldless) after reporting the real failure to
+    /// PHP as a catchable exception. Absent for an enum with no fieldless variant. ~keep
+    pub enum_string_fallback_variant: Option<&'a AHashMap<String, String>>,
     /// Map types use JsValue in the binding layer (WASM only).
     /// When true, Map fields use `serde_wasm_bindgen` for conversion instead of
     /// iterator-based collect patterns (JsValue is not iterable).

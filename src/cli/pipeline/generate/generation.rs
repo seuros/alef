@@ -38,6 +38,17 @@ pub fn generate(
         .par_iter()
         .filter_map(|&lang| {
             let lang_str = lang.to_string();
+
+            // `try_get_backend`, not `get_backend`: the latter panics for docs-only/
+            // consumer-only targets (Rust, C). A language like C configured in
+            // `[workspace] languages` (e.g. as an e2e consumer target) must be skipped
+            // gracefully here rather than crashing generation — mirrors the same guard
+            // in the build pipeline (`build.rs`). ~keep
+            if registry::try_get_backend(lang).is_none() {
+                info!("No binding backend for {lang_str}, skipping");
+                return None;
+            }
+
             let lang_hash = cache::compute_lang_hash(&ir_json, &lang_str, &config_toml);
 
             if !clean && cache::is_lang_cached(&config.name, &lang_str, &lang_hash) {
@@ -52,6 +63,7 @@ pub fn generate(
     let results: Vec<(Language, Vec<GeneratedFile>)> = to_generate
         .par_iter()
         .map(|(lang, lang_str, lang_hash)| {
+            // Guarded above: every entry in `to_generate` already passed `try_get_backend`.
             let backend = registry::get_backend(*lang);
             info!("  {}: generating...", lang_str);
 
@@ -448,5 +460,33 @@ mod tests {
         let cfg = ExtensionConfig::empty();
         let out = Noop.public_api_additions(&api, &cfg, Language::Python).unwrap();
         assert!(out.is_empty());
+    }
+
+    // Regression test mirroring `c_language_is_skipped_gracefully_instead_of_panicking`
+    // in the build pipeline: `registry::get_backend` panics for `C` (it has no binding
+    // backend — it's an e2e/consumer-only target). `generate()`'s `to_generate` filter
+    // used to call `get_backend` unconditionally for every language reaching the second
+    // pass, so a `[workspace] languages` list including "c" (a documented, valid e2e
+    // target) would crash generation instead of skipping C gracefully. ~keep
+    #[test]
+    fn c_language_is_skipped_gracefully_instead_of_panicking() {
+        let api = ApiSurface::default();
+        let config = test_cfg();
+        let config_path = std::path::Path::new("does-not-exist-alef.toml");
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            generate(&api, &config, &[Language::C], true, config_path)
+        }));
+
+        match result {
+            Ok(generate_result) => match generate_result {
+                Ok(files) => assert!(
+                    files.is_empty(),
+                    "C has no binding backend and must be skipped cleanly: {files:?}"
+                ),
+                Err(e) => panic!("generating for an unsupported binding target must not error: {e}"),
+            },
+            Err(_) => panic!("generating for an unsupported binding target must not panic"),
+        }
     }
 }

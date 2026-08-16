@@ -839,11 +839,27 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             let stale = verify_walk_multi(&base_dir, &all_inputs_hashes)?;
 
             let mut snippet_coverage_issues = Vec::new();
+            // `verify_walk_multi` only sees files that already exist on disk; a file
+            // generation would now produce but that was never written (a backend
+            // that emits one file per public type, an item added since the last
+            // regen) is invisible to it. Closing that requires knowing what
+            // generation would produce, so every crate pays a regeneration pass
+            // here (mirrors `alef diff`) to find files entirely absent from disk. ~keep
+            let mut missing_generated_files: Vec<String> = Vec::new();
             for resolved_cfg in &crates_to_process {
+                let languages = resolve_languages(resolved_cfg, None)?;
+                let api = pipeline::extract(resolved_cfg, config_path, false)?;
+                missing_generated_files.extend(find_missing_generated_files(
+                    &languages,
+                    &api,
+                    resolved_cfg,
+                    config_path,
+                    &base_dir,
+                )?);
+
                 let Some(e2e_config) = &resolved_cfg.e2e else {
                     continue;
                 };
-                let api = pipeline::extract(resolved_cfg, config_path, false)?;
                 if let Err(error) = crate::e2e::verify_fresh_snippet_coverage(
                     &base_dir,
                     resolved_cfg,
@@ -855,6 +871,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     snippet_coverage_issues.push(format!("[{}] {error:#}", resolved_cfg.name));
                 }
             }
+            missing_generated_files.sort();
+            missing_generated_files.dedup();
+            let has_missing_files = !missing_generated_files.is_empty();
 
             let mut all_version_mismatches: Vec<String> = Vec::new();
             for resolved_cfg in &crates_to_process {
@@ -875,7 +894,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 }
             }
 
-            if stale.is_empty() && !has_version_issues && snippet_coverage_issues.is_empty() {
+            if stale.is_empty() && !has_missing_files && !has_version_issues && snippet_coverage_issues.is_empty() {
                 crate::bin_cli::output::line("All bindings and versions are up to date.");
             } else {
                 if !stale.is_empty() {
@@ -889,9 +908,15 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         }
                     }
                 }
+                if has_missing_files {
+                    crate::bin_cli::output::line("Missing generated files detected:");
+                    for path in &missing_generated_files {
+                        crate::bin_cli::output::line(format_args!("  {path}"));
+                    }
+                }
             }
             super::verify_outcome::ensure_success(
-                !stale.is_empty(),
+                !stale.is_empty() || has_missing_files,
                 has_version_issues,
                 snippet_coverage_issues.len(),
                 report_only,

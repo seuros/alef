@@ -66,26 +66,6 @@ impl ErrorTaxonomy {
     }
 }
 
-#[cfg(test)]
-mod error_taxonomy_tests {
-    use super::ErrorTaxonomy;
-
-    #[test]
-    fn explicit_variant_code_is_preserved() {
-        let taxonomy = ErrorTaxonomy::for_variant(101, "sample::RequestError", "InvalidInput");
-        assert_eq!(taxonomy.code, 101);
-        assert_eq!(taxonomy.error_type, "sample::RequestError");
-        assert_eq!(taxonomy.variant, "InvalidInput");
-    }
-
-    #[test]
-    fn legacy_serialized_taxonomy_defaults_compatibly() {
-        let taxonomy: ErrorTaxonomy = serde_json::from_str("{}").expect("legacy metadata deserializes");
-
-        assert_eq!(taxonomy, ErrorTaxonomy::default());
-    }
-}
-
 /// Deprecation metadata extracted from `#[deprecated(...)]`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct DeprecationInfo {
@@ -106,4 +86,24 @@ pub struct VersionAnnotation {
     /// Deprecation info (from `#[deprecated(...)]`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deprecated: Option<DeprecationInfo>,
+}
+
+#[cfg(test)]
+mod error_taxonomy_tests {
+    use super::ErrorTaxonomy;
+
+    #[test]
+    fn explicit_variant_code_is_preserved() {
+        let taxonomy = ErrorTaxonomy::for_variant(101, "sample::RequestError", "InvalidInput");
+        assert_eq!(taxonomy.code, 101);
+        assert_eq!(taxonomy.error_type, "sample::RequestError");
+        assert_eq!(taxonomy.variant, "InvalidInput");
+    }
+
+    #[test]
+    fn legacy_serialized_taxonomy_defaults_compatibly() {
+        let taxonomy: ErrorTaxonomy = serde_json::from_str("{}").expect("legacy metadata deserializes");
+
+        assert_eq!(taxonomy, ErrorTaxonomy::default());
+    }
 }
