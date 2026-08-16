@@ -1,0 +1,21 @@
+---
+source: tests/backends_kotlin_android_snapshot_test.rs
+expression: "&file.content"
+---
+package dev.sample_crate
+
+import org.junit.Assert.assertEquals
+import org.junit.Test
+
+class DemoScaffoldTest {
+    // No generated data class is literal-constructible by a seed that cannot synthesize
+    // values for its fields, so this asserts the generated `Status` wire mapping
+    // instead: `toWire()` must return exactly the serde discriminator the Rust attributes
+    // declare, so a changed `rename_all` strategy or a renamed variant fails here. It says
+    // nothing about the rest of the enum, and nothing about the native library. Seeded once
+    // and never regenerated over, so replace it with a real suite. ~keep
+    @Test
+    fun statusExposesItsGeneratedWireValue() {
+        assertEquals("Active", Status.ACTIVE.toWire())
+    }
+}

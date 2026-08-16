@@ -74,23 +74,7 @@ pub(crate) fn emit_bridge_fn(
     };
 
     if f.return_sanitized {
-        let suppress = if f.params.is_empty() {
-            String::new()
-        } else {
-            let names: Vec<&str> = f.params.iter().map(|p| p.name.as_str()).collect();
-            if names.len() == 1 {
-                format!("    let _ = {};\n", names[0])
-            } else {
-                format!("    let _ = ({});\n", names.join(", "))
-            }
-        };
-        let default_value = sanitized_return_default(&f.return_type);
-        let body = if has_error {
-            format!("{suppress}    Ok({default_value})\n")
-        } else {
-            format!("{suppress}    {default_value}\n")
-        };
-        out.push_str(&body);
+        out.push_str(&sanitized_return_body(&f.return_type, fn_name, has_error, &f.params));
         out.push_str("}\n");
         return;
     }
@@ -545,29 +529,59 @@ fn return_transform(
     }
 }
 
-/// Build a Rust default-value expression for a type sanitized from a core Named type.
+/// Build the body of a bridge fn whose return type was sanitized away.
 ///
-/// Mirrors `gen_unimplemented_body` in `alef-codegen` for primitive/string returns: a
-/// sanitized return collapses the core Named type to `String`/`Option<String>`/etc., and
-/// the dart bridge stubs the body because the core value cannot be expressed in the
-/// sanitized type without `serde_json::to_string` (which requires Serialize bounds the
-/// extract pass cannot verify here).
-fn sanitized_return_default(ty: &TypeRef) -> String {
+/// ~keep A sanitized return means the core function's real return type could not be
+/// mirrored into the frb crate, so the bridge has no way to call the core function and
+/// convert its value. This used to emit a fabricated default (`String::new()`, `0`,
+/// `None`, `Vec::new()`, `Default::default()`, wrapped in `Ok(..)` when fallible), which
+/// produced a binding that compiles, never calls the core function, and hands every
+/// caller a value indistinguishable from a genuine empty result — a Dart e2e fixture
+/// asserting empty/null/false then passes while exercising nothing. Two facts make the
+/// fabrication indefensible rather than a tolerated degradation: `validate_api_surface`
+/// already reports a sanitized return as a `LossySanitizedSurface` **error**, and the
+/// very loop that reaches here already drops functions with an unbridgeable *parameter*
+/// (`opaque::has_unbridgeable_param`) instead of faking them, so the return side was the
+/// odd one out. Fail the way the sibling emitters this function used to mirror now do
+/// (`gen_magnus_unimplemented_body`, `php_stub_unsupported_return`): `compile_error!` in
+/// the generated crate for an infallible function, and a real `Err` for a fallible one so
+/// the crate still builds and the failure surfaces — catchably — at the call site that
+/// needs it (alef task #83).
+fn sanitized_return_body(ty: &TypeRef, fn_name: &str, has_error: bool, params: &[ParamDef]) -> String {
+    let suppress = if params.is_empty() {
+        String::new()
+    } else {
+        let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+        if names.len() == 1 {
+            format!("    let _ = {};\n", names[0])
+        } else {
+            format!("    let _ = ({});\n", names.join(", "))
+        }
+    };
+
+    if has_error {
+        let message = format!(
+            "alef: the Dart binding for `{fn_name}` is unavailable because its return type was \
+             sanitized away and cannot be mirrored into the flutter_rust_bridge crate; configure \
+             `dart.exclude_functions`, or expose a return type alef can mirror"
+        );
+        return format!("{suppress}    Err({message:?}.to_string())\n");
+    }
+
     match ty {
-        TypeRef::Unit => "()".to_string(),
-        TypeRef::String | TypeRef::Char | TypeRef::Path => "String::new()".to_string(),
-        TypeRef::Bytes => "Vec::new()".to_string(),
-        TypeRef::Primitive(p) => match p {
-            crate::core::ir::PrimitiveType::Bool => "false".to_string(),
-            crate::core::ir::PrimitiveType::F32 => "0.0f32".to_string(),
-            crate::core::ir::PrimitiveType::F64 => "0.0f64".to_string(),
-            _ => "0".to_string(),
-        },
-        TypeRef::Optional(_) => "None".to_string(),
-        TypeRef::Vec(_) => "Vec::new()".to_string(),
-        TypeRef::Map(_, _) => "Default::default()".to_string(),
-        TypeRef::Duration => "0".to_string(),
-        TypeRef::Named(_) | TypeRef::Json => "Default::default()".to_string(),
+        // ~keep A unit return carries no value to fabricate, so an empty body is honest
+        // rather than vacuous. The sanitizer never marks a `()` return lossy today; this
+        // arm keeps the genuinely-void case working if it ever does, and matches the
+        // `TypeRef::Unit` arm `gen_magnus_unimplemented_body` kept for the same reason.
+        TypeRef::Unit => format!("{suppress}    ()\n"),
+        _ => {
+            let message = format!(
+                "alef cannot generate the Dart flutter_rust_bridge binding for `{fn_name}`: its \
+                 return type was sanitized away, so the bridge cannot call the core function. \
+                 Configure `dart.exclude_functions`, or expose a return type alef can mirror"
+            );
+            format!("{suppress}    compile_error!({message:?})\n")
+        }
     }
 }
 

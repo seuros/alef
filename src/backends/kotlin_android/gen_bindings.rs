@@ -32,15 +32,13 @@ use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::ApiSurface;
 use crate::core::jni::bridge_class_name;
 
-/// Emit all Kotlin source files for the AAR module.
+/// Type names this emitter drops from the AAR's public surface: `[crates.kotlin_android]
+/// exclude_types`, trait-bridge aliases excluded for this language (or whose bridging
+/// function is excluded), and generic opaque types.
 ///
-/// `kotlin_source_dir` is the resolved Kotlin source destination —
-/// `<project_root>/src/main/kotlin/<dotted_package_as_path>/` in the Gradle
-/// Android source-set layout.
-pub fn emit(api: &ApiSurface, config: &ResolvedCrateConfig, kotlin_source_dir: &Path) -> Vec<GeneratedFile> {
-    let package = kotlin_package(config);
-    let mut files = Vec::new();
-
+/// Shared with [`super::gen_seed_test`] rather than duplicated, so the scaffolded unit test
+/// can never name a type this emitter refuses to emit. ~keep
+pub(super) fn effective_excluded_type_names(config: &ResolvedCrateConfig) -> std::collections::HashSet<String> {
     let kotlin_android_excluded_function_names: std::collections::HashSet<&str> = config
         .kotlin_android
         .as_ref()
@@ -69,6 +67,19 @@ pub fn emit(api: &ApiSurface, config: &ResolvedCrateConfig, kotlin_source_dir: &
             effective_excluded_types.insert(name.clone());
         }
     }
+    effective_excluded_types
+}
+
+/// Emit all Kotlin source files for the AAR module.
+///
+/// `kotlin_source_dir` is the resolved Kotlin source destination —
+/// `<project_root>/src/main/kotlin/<dotted_package_as_path>/` in the Gradle
+/// Android source-set layout.
+pub fn emit(api: &ApiSurface, config: &ResolvedCrateConfig, kotlin_source_dir: &Path) -> Vec<GeneratedFile> {
+    let package = kotlin_package(config);
+    let mut files = Vec::new();
+
+    let effective_excluded_types = effective_excluded_type_names(config);
 
     // Enums without a declared `#[default]` variant map to an empty string;
     let enum_defaults: std::collections::HashMap<String, String> = api

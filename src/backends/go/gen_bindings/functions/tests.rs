@@ -444,3 +444,104 @@ fn gen_convert_with_visitor_wrapper_uses_scalar_handle_not_opaque_pointer() {
         "expected a scalar handle nil-check for the convert result, got:\n{out}"
     );
 }
+
+/// `Optional<Bytes>` shares one C signature with bare `Bytes`
+/// (`(args…, uint8_t **out_ptr, uintptr_t *out_len, uintptr_t *out_cap) -> int32_t`), with
+/// absence carried by `*out_ptr == NULL`. Modelling it as a direct `*mut u8` return links
+/// fine against that signature and only misreads at run time, so the Go wrapper must go
+/// through the byte-buffer out-param path exactly as bare `Bytes` does.
+#[test]
+fn optional_bytes_return_reads_the_three_out_params_and_maps_null_to_nil() {
+    let mut func = make_bytes_result_func("thumbnail", true);
+    func.return_type = TypeRef::Optional(Box::new(TypeRef::Bytes));
+
+    assert!(
+        is_bytes_result_func(&func),
+        "Optional<Bytes> must use the same owned-byte-buffer ABI as bare Bytes"
+    );
+
+    let empty_refs = HashSet::new();
+    let empty_strings = HashSet::new();
+    let out = gen_function_wrapper(
+        &func,
+        "krz",
+        &empty_refs,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+    );
+
+    // Positive control: the fixture must actually render a wrapper body for this function,
+    // so the ABI assertions below cannot pass over empty output. ~keep
+    assert!(
+        out.contains("func Thumbnail(") && out.contains("C.krz_thumbnail("),
+        "fixture must emit a real wrapper calling the C symbol, got:\n{out}"
+    );
+
+    assert!(out.contains("([]byte, error)"), "missing bytes return type in:\n{out}");
+    assert!(out.contains("var outPtr"), "missing outPtr declaration in:\n{out}");
+    assert!(out.contains("var outLen, outCap"), "missing outLen/outCap in:\n{out}");
+    assert!(
+        out.contains("&outPtr, &outLen, &outCap"),
+        "the C call must pass all three out-params in:\n{out}"
+    );
+    assert!(
+        out.contains("if outPtr == nil"),
+        "absence is carried by a NULL out_ptr and must map to Go's nil slice, got:\n{out}"
+    );
+    assert!(out.contains("C.GoBytes"), "missing C.GoBytes in:\n{out}");
+    assert!(out.contains("krz_free_bytes"), "missing krz_free_bytes in:\n{out}");
+    assert!(
+        !out.contains("ptr :="),
+        "Optional<Bytes> must not fall through to the direct-pointer return path in:\n{out}"
+    );
+}
+
+/// Control for the fix above: widening the predicate must not make every optional return
+/// take the byte-buffer path. `Optional<String>` is a nullable `*mut c_char` on the C side
+/// and must keep the direct-pointer shape — without this a predicate that answered `true`
+/// for any `Optional` would still pass the test above.
+#[test]
+fn optional_string_return_keeps_the_direct_pointer_shape() {
+    let mut func = make_bytes_result_func("caption", false);
+    func.return_type = TypeRef::Optional(Box::new(TypeRef::String));
+
+    assert!(
+        !is_bytes_result_func(&func),
+        "only Bytes / Optional<Bytes> use the owned-byte-buffer ABI"
+    );
+
+    let empty_refs = HashSet::new();
+    let empty_strings = HashSet::new();
+    let out = gen_function_wrapper(
+        &func,
+        "krz",
+        &empty_refs,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+    );
+
+    assert!(
+        out.contains("func Caption(") && out.contains("C.krz_caption("),
+        "fixture must emit a real wrapper calling the C symbol, got:\n{out}"
+    );
+    assert!(
+        !out.contains("outPtr"),
+        "no byte out-params for Optional<String> in:\n{out}"
+    );
+    assert!(
+        !out.contains("outCap"),
+        "no byte out-params for Optional<String> in:\n{out}"
+    );
+    assert!(
+        !out.contains("([]byte, error)"),
+        "Optional<String> must not be typed as []byte in:\n{out}"
+    );
+}

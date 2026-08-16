@@ -11,7 +11,7 @@ pub(super) fn method_unwrap_return_expr(
 ) -> String {
     match ty {
         TypeRef::Primitive(PrimitiveType::Bool) => format!("{raw} != 0"),
-        TypeRef::String | TypeRef::Path | TypeRef::Json | TypeRef::Vec(_) | TypeRef::Map(_, _) => {
+        TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json | TypeRef::Vec(_) | TypeRef::Map(_, _) => {
             format!(
                 "blk: {{\n            const value = {raw} orelse return error.OutOfMemory;\n            defer c.{prefix}_free_string(value);\n            const slice = std.mem.span(value);\n            const owned = try std.heap.c_allocator.dupe(u8, slice);\n            break :blk owned;\n        }}"
             )
@@ -35,7 +35,7 @@ pub(super) fn method_unwrap_return_expr(
 /// error paths the non-optional variants take. ~keep
 fn optional_unwrap_return_expr(raw: &str, inner: &TypeRef, prefix: &str, struct_names: &HashSet<String>) -> String {
     match inner {
-        TypeRef::String | TypeRef::Path | TypeRef::Json | TypeRef::Vec(_) | TypeRef::Map(_, _) => {
+        TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json | TypeRef::Vec(_) | TypeRef::Map(_, _) => {
             format!(
                 "blk: {{\n            const value = {raw} orelse break :blk null;\n            defer c.{prefix}_free_string(value);\n            const slice = std.mem.span(value);\n            const owned = try std.heap.c_allocator.dupe(u8, slice);\n            break :blk owned;\n        }}"
             )
@@ -96,7 +96,10 @@ mod tests {
         );
 
         assert!(expr.contains("if (_result == 0) break :blk null;"), "{expr}");
-        assert!(!expr.contains("return error.OutOfMemory;\n            const value"), "{expr}");
+        assert!(
+            !expr.contains("return error.OutOfMemory;\n            const value"),
+            "{expr}"
+        );
     }
 
     #[test]
@@ -126,5 +129,30 @@ mod tests {
         );
 
         assert_eq!(expr, "_result");
+    }
+
+    /// Regression test: a method returning `Char` must copy and free like `String` (both cross
+    /// the C ABI as `*mut c_char`, freed via the same `_free_string`), not fall through to a
+    /// bare passthrough of a pointer the declared `[]u8` return type cannot represent.
+    #[test]
+    fn char_return_copies_and_frees_like_string_instead_of_bare_passthrough() {
+        let expr = method_unwrap_return_expr("_result", &TypeRef::Char, "sample", &HashSet::new());
+
+        assert!(expr.contains("orelse return error.OutOfMemory"), "{expr}");
+        assert!(expr.contains("defer c.sample_free_string(value)"), "{expr}");
+        assert_ne!(expr, "_result");
+    }
+
+    #[test]
+    fn optional_char_returns_null_instead_of_erroring_on_absence() {
+        let expr = method_unwrap_return_expr(
+            "_result",
+            &TypeRef::Optional(Box::new(TypeRef::Char)),
+            "sample",
+            &HashSet::new(),
+        );
+
+        assert!(expr.contains("orelse break :blk null;"), "{expr}");
+        assert!(!expr.contains("orelse return error.OutOfMemory"), "{expr}");
     }
 }

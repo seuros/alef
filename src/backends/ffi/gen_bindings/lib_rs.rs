@@ -1,7 +1,7 @@
 use crate::adapters::AdapterBodies;
 use crate::backends::ffi::gen_bindings::functions::{
     gen_free_function, gen_free_function_len_companion, gen_method_wrapper, gen_streaming_method_wrapper,
-    is_owned_default_constructor, returns_c_char, should_skip_method_wrapper,
+    is_owned_default_constructor, returns_bytes_out_params, returns_c_char, should_skip_method_wrapper,
 };
 use crate::backends::ffi::gen_bindings::helpers;
 use crate::backends::ffi::gen_bindings::helpers::{
@@ -102,11 +102,11 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
     let has_bytes_results = api
         .functions
         .iter()
-        .any(|function| matches!(function.return_type, crate::core::ir::TypeRef::Bytes))
+        .any(|function| returns_bytes_out_params(&function.return_type))
         || api.types.iter().any(|typ| {
             typ.methods
                 .iter()
-                .any(|method| matches!(method.return_type, crate::core::ir::TypeRef::Bytes))
+                .any(|method| returns_bytes_out_params(&method.return_type))
         });
     if has_bytes_results {
         builder.add_item(&gen_free_bytes(prefix));
@@ -697,5 +697,13 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
         }
     }
 
-    Ok(builder.build())
+    // This is the authoritative opaque-handle ABI artifact: `handle_registry.rs.jinja` defines
+    // the representation every other backend hand-copies. Stamped here, inside the backend, so
+    // the marker is part of the file body the pipeline's `finalize_hashes` pass later hashes —
+    // stamping after `inject_hash_line` would make every stamped file read as stale. ~keep
+    Ok(crate::core::hash::inject_stamp_line(
+        &builder.build(),
+        crate::core::hash::HANDLE_ABI_STAMP_KEY,
+        crate::core::template_versions::abi::HANDLE_ABI_VERSION,
+    ))
 }

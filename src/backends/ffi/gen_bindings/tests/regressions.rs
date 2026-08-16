@@ -380,6 +380,90 @@ prefix = "sample"
     );
 }
 
+/// Regression: `catch_ffi_panic`/`catch_ffi_panic_preserving_error` unconditionally stamped
+/// the generic panic marker on its `Err` branch, clobbering a more specific error a body may
+/// have already reported via `set_last_error`/`set_handle_error` moments before an unrelated
+/// panic later in the same call. Compiles and runs the emitted `last_error.jinja` module
+/// standalone to prove the specific error now survives, while an unmarked panic still gets
+/// the generic marker (the guard must not suppress it unconditionally). ~keep
+#[test]
+fn catch_ffi_panic_preserves_a_more_specific_error_set_before_an_unrelated_panic() {
+    let module = crate::backends::ffi::template_env::render(
+        "last_error.jinja",
+        minijinja::context! {
+            prefix => "sample",
+            builtin_prefix => "",
+            error_code_impls => Vec::<String>::new(),
+            taxonomy => Vec::<String>::new(),
+            no_error_code => 0,
+            conversion_error_code => 1,
+            unknown_error_code => 2,
+            panic_error_code => 3,
+            invalid_handle_error_code => 4,
+        },
+    );
+
+    let source = format!(
+        r#"
+use std::cell::RefCell;
+use std::ffi::{{c_char, CString}};
+
+{module}
+
+fn main() {{
+    std::panic::set_hook(Box::new(|_| {{}}));
+
+    let result = catch_ffi_panic(0, || {{
+        set_last_error(7, "a specific domain error");
+        panic!("unrelated internal bug");
+    }});
+    assert_eq!(result, 0);
+    assert_eq!(
+        LAST_ERROR_CODE.with_borrow(|c| *c),
+        7,
+        "the specific error code must survive the panic"
+    );
+    let ctx = LAST_ERROR_CONTEXT.with_borrow(std::clone::Clone::clone);
+    assert_eq!(
+        ctx.as_deref().map(|s| s.to_str().unwrap()),
+        Some("a specific domain error"),
+        "the specific error message must survive the panic"
+    );
+
+    let result = catch_ffi_panic(0, || {{
+        panic!("no prior error was recorded");
+    }});
+    assert_eq!(result, 0);
+    assert_eq!(
+        LAST_ERROR_CODE.with_borrow(|c| *c),
+        3,
+        "an unmarked panic must still be reported via the generic panic marker"
+    );
+}}
+"#
+    );
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let source_path = directory.path().join("catch_ffi_panic_preserving_error.rs");
+    let binary_path = directory.path().join("catch-ffi-panic-preserving-error-test");
+    std::fs::write(&source_path, &source).expect("write compile harness");
+    let compile = std::process::Command::new("rustc")
+        .args(["--edition=2024", "-o"])
+        .arg(&binary_path)
+        .arg(&source_path)
+        .output()
+        .expect("run rustc");
+    assert!(
+        compile.status.success(),
+        "{}\n---source---\n{source}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let run = std::process::Command::new(&binary_path)
+        .output()
+        .expect("run compiled harness");
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+}
+
 #[test]
 fn test_legacy_visitor_callbacks_use_configured_function_signature() {
     let config = resolved_one(
@@ -1645,4 +1729,161 @@ fn instance_method_void_non_error_return_binds_no_result_variable() {
     );
 
     syn::parse_file(&lib.content).expect("void instance method body must parse as valid Rust");
+}
+
+/// `Optional<Bytes>` must ride the same byte-buffer out-param convention as bare `Bytes`
+/// rather than the `*mut c_char` + `_len()` companion convention `Optional<String>` uses:
+/// bytes carry no NUL terminator, so a companion has no length to recover. Absence is
+/// encoded as a null `*out_ptr` with a zero length, which keeps `-1` the only error signal
+/// a C caller has to test and leaves `Some(&[])` — a non-null pointer with a zero length —
+/// distinguishable from `None`. ~keep
+#[test]
+fn optional_bytes_return_uses_bytes_out_params_with_null_ptr_for_none() {
+    let api = optional_bytes_api(TypeRef::Optional(Box::new(TypeRef::Bytes)), Some("MyError".to_string()));
+    let files = FfiBackend.generate_bindings(&api, &sample_config()).unwrap();
+    let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+    assert!(
+        lib.content.contains("out_ptr: *mut *mut u8"),
+        "Optional<Bytes> must declare the out_ptr out-param;\n{}",
+        lib.content
+    );
+    assert!(
+        lib.content.contains("out_len: *mut usize"),
+        "Optional<Bytes> must declare the out_len out-param;\n{}",
+        lib.content
+    );
+    assert!(
+        lib.content.contains("out_cap: *mut usize"),
+        "Optional<Bytes> must declare the out_cap out-param;\n{}",
+        lib.content
+    );
+    assert!(
+        lib.content.contains("fn my_lib_maybe_thumbnail("),
+        "Optional<Bytes> function must be emitted under its FFI name;\n{}",
+        lib.content
+    );
+    assert!(
+        !lib.content.contains("fn my_lib_maybe_thumbnail_len("),
+        "Optional<Bytes> must not get a `_len()` companion — bytes have no NUL terminator;\n{}",
+        lib.content
+    );
+    assert!(
+        lib.content.contains("fn my_lib_free_bytes("),
+        "an Optional<Bytes>-only surface must still emit the free_bytes companion;\n{}",
+        lib.content
+    );
+
+    assert!(
+        lib.content.contains("Ok(Some(val)) => {"),
+        "present arm must match `Ok(Some(val))`;\n{}",
+        lib.content
+    );
+    assert!(
+        lib.content
+            .contains("unsafe { *out_ptr = ptr; *out_len = len; *out_cap = len; }"),
+        "present arm must publish the boxed-slice pointer and its length;\n{}",
+        lib.content
+    );
+    assert!(
+        lib.content.contains("Ok(None) => {"),
+        "absent arm must match `Ok(None)`;\n{}",
+        lib.content
+    );
+    assert!(
+        lib.content
+            .contains("unsafe { *out_ptr = std::ptr::null_mut(); *out_len = 0; *out_cap = 0; }"),
+        "absent arm must publish a null pointer with a zero length;\n{}",
+        lib.content
+    );
+
+    syn::parse_file(&lib.content).expect("Optional<Bytes> wrapper must parse as valid Rust");
+}
+
+/// Present-but-empty is the case a length-plus-null scheme most easily conflates with
+/// absent. The emitted code must distinguish them structurally: the `Some` arm always runs
+/// `Box::into_raw` (non-null even for an empty boxed slice) and never writes a null pointer,
+/// so `*out_ptr != NULL && *out_len == 0` can only mean `Some(&[])`. ~keep
+#[test]
+fn optional_bytes_present_arm_never_writes_null_so_empty_is_not_absent() {
+    let api = optional_bytes_api(TypeRef::Optional(Box::new(TypeRef::Bytes)), None);
+    let files = FfiBackend.generate_bindings(&api, &sample_config()).unwrap();
+    let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+    let some_arm_start = lib.content.find("Some(val) => {").expect("infallible present arm");
+    let none_arm_offset = lib.content[some_arm_start..]
+        .find("None => {")
+        .expect("infallible absent arm must follow the present arm");
+    let some_arm = &lib.content[some_arm_start..some_arm_start + none_arm_offset];
+
+    assert!(
+        some_arm.contains("let buffer = Vec::<u8>::from(val).into_boxed_slice();"),
+        "present arm must box the bytes so even an empty value yields a non-null pointer;\n{some_arm}"
+    );
+    assert!(
+        some_arm.contains("let ptr = Box::into_raw(buffer).cast::<u8>();"),
+        "present arm must take the boxed-slice pointer;\n{some_arm}"
+    );
+    assert!(
+        !some_arm.contains("std::ptr::null_mut()"),
+        "present arm must never write a null pointer — that is the `None` encoding;\n{some_arm}"
+    );
+    assert!(
+        lib.content
+            .contains("unsafe { *out_ptr = std::ptr::null_mut(); *out_len = 0; *out_cap = 0; }"),
+        "absent arm must be the only writer of a null pointer;\n{}",
+        lib.content
+    );
+
+    syn::parse_file(&lib.content).expect("infallible Optional<Bytes> wrapper must parse as valid Rust");
+}
+
+fn optional_bytes_api(return_type: TypeRef, error_type: Option<String>) -> ApiSurface {
+    ApiSurface {
+        crate_name: "my-lib".to_string(),
+        version: "1.0.0".to_string(),
+        types: vec![],
+        functions: vec![FunctionDef {
+            name: "maybe_thumbnail".to_string(),
+            rust_path: "my_lib::maybe_thumbnail".to_string(),
+            original_rust_path: String::new(),
+            params: vec![ParamDef {
+                name: "page_index".to_string(),
+                ty: TypeRef::Primitive(PrimitiveType::U32),
+                optional: false,
+                default: None,
+                sanitized: false,
+                typed_default: None,
+                is_ref: false,
+                is_mut: false,
+                newtype_wrapper: None,
+                original_type: None,
+                map_is_ahash: false,
+                map_key_is_cow: false,
+                vec_inner_is_ref: false,
+                map_is_btree: false,
+                core_wrapper: crate::core::ir::CoreWrapper::None,
+            }],
+            return_type,
+            is_async: false,
+            error_type,
+            doc: "Render a page thumbnail when one exists.".to_string(),
+            cfg: None,
+            sanitized: false,
+            return_sanitized: false,
+            returns_ref: false,
+            returns_cow: false,
+            return_newtype_wrapper: None,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    }
 }

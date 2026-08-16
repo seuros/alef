@@ -27,6 +27,28 @@ use minijinja::context;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+/// Whether the generated PHP binding crate can use serde, and therefore whether `gen_php_struct`
+/// puts `#[derive(serde::Serialize, serde::Deserialize)]` on the mirror structs it emits.
+///
+/// This is deliberately a CRATE-level question, not a per-type one. The `from_json` constructor
+/// `gen_struct_methods_impl` emits is `serde_json::from_str::<Self>(..)` where `Self` is alef's own
+/// generated mirror struct — never the core type — and that mirror's serde derives come from this
+/// same probe. A core type that derives nothing (`TypeDef::has_serde == false`) therefore still gets
+/// a working `from_json`, and a core type that derives everything still cannot have one in a crate
+/// without serde. Both the runtime bindings and the PHPStan stub must key on this single value or
+/// they select different constructor shapes for the same type. ~keep
+pub(super) fn php_serde_available(config: &ResolvedCrateConfig) -> bool {
+    detect_serde_available(&php_output_dir(config))
+}
+
+/// The generated PHP binding crate's source directory. Both the serde probe and the writer that
+/// emits `lib.rs`/`config.m4` must resolve it identically: the probe reads the Cargo manifest one
+/// level above the directory the writer writes into, so a second copy of the default would let
+/// them disagree about which crate is being inspected. ~keep
+fn php_output_dir(config: &ResolvedCrateConfig) -> String {
+    resolve_output_dir(config.output_paths.get("php"), &config.name, "crates/{name}-php/src/")
+}
+
 fn binding_config(core_import: &str, has_serde: bool) -> RustBindingConfig<'_> {
     RustBindingConfig {
         struct_attrs: &["php_class"],
@@ -117,8 +139,8 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
     let exclude_functions = php_config.map(|c| c.exclude_functions.clone()).unwrap_or_default();
     let exclude_types = php_config.map(|c| c.exclude_types.clone()).unwrap_or_default();
 
-    let output_dir = resolve_output_dir(config.output_paths.get("php"), &config.name, "crates/{name}-php/src/");
-    let has_serde = detect_serde_available(&output_dir);
+    let output_dir = php_output_dir(config);
+    let has_serde = php_serde_available(config);
 
     // Including them ensures gen_php_struct emits #[serde(skip)] for fields of those types so
     let bridge_type_aliases_php: Vec<String> = config

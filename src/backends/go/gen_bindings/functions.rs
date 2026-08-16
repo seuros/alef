@@ -46,15 +46,32 @@ pub(super) fn is_bridge_param(
 
 /// Returns true when the function uses the owned byte-buffer return ABI.
 ///
-/// Every `TypeRef::Bytes` return uses the out-param convention:
-/// `(args..., **uint8_t, *uintptr_t, *uintptr_t) -> i32`.
+/// `Bytes` and `Optional<Bytes>` alike use the out-param convention:
+/// `(args..., **uint8_t, *uintptr_t, *uintptr_t) -> i32`. Mirrors
+/// `backends::ffi::gen_bindings::functions::returns_bytes_out_params`, which carries the
+/// full rationale. Matching only bare `Bytes` here would model `Optional<Bytes>` as a
+/// direct `*mut u8` return and call the C symbol without its three out-params, against a
+/// header that declares them — the binding and the header disagreeing about one symbol.
+///
+/// Absence rides on `*out_ptr == NULL` with `*out_len == *out_cap == 0`, which maps to
+/// Go's `nil` slice. `Some(&[])` is a distinct, non-null value: presence always runs
+/// `Box::into_raw`, so `outPtr != nil && outLen == 0` is an empty present value and must
+/// not be collapsed into absence. ~keep
 fn is_bytes_result_func(func: &FunctionDef) -> bool {
-    matches!(func.return_type, TypeRef::Bytes)
+    returns_bytes_out_params(&func.return_type)
 }
 
 /// Same check for MethodDef — needed by methods.rs.
 pub(super) fn is_bytes_result_method(method: &MethodDef) -> bool {
-    matches!(method.return_type, TypeRef::Bytes)
+    returns_bytes_out_params(&method.return_type)
+}
+
+fn returns_bytes_out_params(ty: &TypeRef) -> bool {
+    match ty {
+        TypeRef::Bytes => true,
+        TypeRef::Optional(inner) => matches!(inner.as_ref(), TypeRef::Bytes),
+        _ => false,
+    }
 }
 
 /// Generate a wrapper function for a free function.

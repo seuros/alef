@@ -395,3 +395,20 @@ fn owned_receiver_alias_check_has_concrete_request_type() {
         "{source}"
     );
 }
+
+#[test]
+fn generated_ffi_lib_rs_carries_the_handle_abi_stamp() {
+    let files = super::super::FfiBackend
+        .generate_bindings(&super::common::sample_api(), &super::common::sample_config())
+        .expect("FFI generation");
+    let lib = files
+        .iter()
+        .find(|file| file.path.ends_with("lib.rs"))
+        .expect("generated Rust library");
+
+    assert!(
+        lib.content.contains("type AlefHandle = u64"),
+        "fixture must actually contain the handle representation being stamped"
+    );
+    crate::backends::ffi::handle_abi_stamp::assert_stamped_before_hashing(&lib.content, "ffi lib.rs");
+}

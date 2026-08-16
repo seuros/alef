@@ -8,7 +8,9 @@ use super::super::helpers::{
     ffi_null_return_value, gen_ffi_unimplemented_body, gen_owned_value_to_c, null_return_value,
 };
 use super::params::{ParamConversionContext, gen_param_conversion_with_enums};
-use super::return_handling::{gen_owned_c_char_to_c_with_len, return_type_needs_non_serde_named, returns_c_char};
+use super::return_handling::{
+    gen_owned_c_char_to_c_with_len, return_type_needs_non_serde_named, returns_bytes_out_params, returns_c_char,
+};
 use super::signatures::{c_symbol_component, internal_class_component, is_owned_default_constructor};
 use super::support::{ffi_doxygen_block, method_sanitized_recoverable, sanitized_recoverable};
 
@@ -79,7 +81,8 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
 
     let has_error = method.error_type.is_some();
 
-    let is_bytes_result = matches!(method.return_type, TypeRef::Bytes);
+    let is_bytes_result = returns_bytes_out_params(&method.return_type);
+    let is_optional_bytes_result = is_bytes_result && matches!(method.return_type, TypeRef::Optional(_));
 
     let ffi_param_count = (if method.is_static { 0 } else { 1 })
         + method.params.len()
@@ -509,7 +512,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
     if is_bytes_result {
         out.push_str(&crate::backends::ffi::template_env::render(
             "bytes_result_match.jinja",
-            context! { has_error },
+            context! { has_error, is_optional => is_optional_bytes_result },
         ));
     } else {
         let result_expr =
@@ -612,14 +615,18 @@ pub(super) fn gen_function_wrapper_footer(
     rust_return_type: &TypeRef,
     has_status_return: bool,
 ) -> String {
-    let panic_return = if has_status_return && matches!(rust_return_type, TypeRef::Unit | TypeRef::Bytes) {
-        "-1".to_string()
-    } else {
-        return_type.as_ref().map_or_else(
-            || "()".to_string(),
-            |ffi_return_type| ffi_null_return_value(rust_return_type, Some(ffi_return_type)).to_string(),
-        )
-    };
+    // ~keep Every byte-buffer out-param return — `Bytes` and `Optional<Bytes>` alike —
+    // declares an `i32` status in C, so its panic fallback must be `-1`, not the
+    // null pointer `null_return_value` would hand back for the Rust type.
+    let panic_return =
+        if has_status_return && (is_void_return(rust_return_type) || returns_bytes_out_params(rust_return_type)) {
+            "-1".to_string()
+        } else {
+            return_type.as_ref().map_or_else(
+                || "()".to_string(),
+                |ffi_return_type| ffi_null_return_value(rust_return_type, Some(ffi_return_type)).to_string(),
+            )
+        };
     crate::backends::ffi::template_env::render(
         "function_wrapper_footer.jinja",
         context! { panic_return => panic_return },
@@ -653,7 +660,8 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
 
     let has_error = func.error_type.is_some();
 
-    let is_bytes_result = matches!(func.return_type, TypeRef::Bytes);
+    let is_bytes_result = returns_bytes_out_params(&func.return_type);
+    let is_optional_bytes_result = is_bytes_result && matches!(func.return_type, TypeRef::Optional(_));
 
     let ffi_param_count = func.params.len()
         + func.params.iter().filter(|p| matches!(p.ty, TypeRef::Bytes)).count()
@@ -984,7 +992,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
     if is_bytes_result {
         out.push_str(&crate::backends::ffi::template_env::render(
             "bytes_result_match.jinja",
-            context! { has_error },
+            context! { has_error, is_optional => is_optional_bytes_result },
         ));
     } else {
         let result_expr = if func.return_newtype_wrapper.is_some() && matches!(func.return_type, TypeRef::Primitive(_))

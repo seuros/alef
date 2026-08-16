@@ -12,6 +12,14 @@ use crate::codegen::type_mapper::TypeMapper;
 use crate::core::ir::{ApiSurface, FunctionDef, TypeRef};
 use ahash::AHashSet;
 
+/// ~keep The async wrapper's return type is fallible unconditionally, independent of whether the
+/// core function declares an error type: every emitted body opens by building a tokio runtime with
+/// `Runtime::new()...?` and closes with `Ok(..)` (see `function_async_body.rs.jinja`), so the
+/// delegable path — the authority on the signature — only compiles inside `Result<T, Error>`. The
+/// unimplemented body must be selected against this same fact, or it emits `compile_error!`/a bare
+/// `()` into a `Result` slot for a non-delegable function with no declared error type.
+const ASYNC_RETURN_IS_FALLIBLE: bool = true;
+
 /// Generate an async free function binding for Magnus (block on runtime).
 pub(in crate::backends::magnus::gen_bindings) fn gen_async_function(
     func: &FunctionDef,
@@ -37,7 +45,7 @@ pub(in crate::backends::magnus::gen_bindings) fn gen_async_function(
         })
     };
     let return_type = mapper.map_type(&func.return_type);
-    let return_annotation = mapper.wrap_return(&return_type, true);
+    let return_annotation = mapper.wrap_return(&return_type, ASYNC_RETURN_IS_FALLIBLE);
 
     let can_delegate = crate::codegen::shared::can_auto_delegate_function(func, opaque_types);
     let serde_recoverable = !can_delegate && magnus_serde_recoverable(func, opaque_types, true);
@@ -183,7 +191,7 @@ pub(in crate::backends::magnus::gen_bindings) fn gen_async_function(
         gen_magnus_unimplemented_body(
             &func.return_type,
             &format!("{}_async", func.name),
-            func.error_type.is_some(),
+            ASYNC_RETURN_IS_FALLIBLE,
         )
     };
     // Add #[allow(unused_variables)] to functions with unimplemented bodies to suppress warnings for unused params
@@ -205,4 +213,135 @@ pub(in crate::backends::magnus::gen_bindings) fn gen_async_function(
             body => &body,
         },
     )
+}
+
+#[cfg(test)]
+mod unimplemented_body_matches_signature_tests {
+    use super::gen_async_function;
+    use crate::backends::magnus::type_map::MagnusMapper;
+    use crate::core::ir::{ApiSurface, CoreWrapper, FunctionDef, ParamDef, TypeRef};
+
+    fn empty_api() -> ApiSurface {
+        ApiSurface {
+            crate_name: "test_lib".to_string(),
+            version: "0.1.0".to_string(),
+            types: vec![],
+            functions: vec![],
+            enums: vec![],
+            errors: vec![],
+            excluded_type_paths: ::std::collections::HashMap::new(),
+            excluded_trait_names: ::std::collections::HashSet::new(),
+            services: vec![],
+            handler_contracts: vec![],
+            unsupported_public_items: Vec::new(),
+        }
+    }
+
+    /// A function the auto-delegation check rejects: the single param is `sanitized`, which fails
+    /// `can_auto_delegate_function` and — because it is not a `Vec<String>` — also fails
+    /// `magnus_serde_recoverable`, so generation falls through to the unimplemented body. ~keep
+    fn non_delegable_async_func(name: &str, return_type: TypeRef, error: bool) -> FunctionDef {
+        FunctionDef {
+            name: name.to_string(),
+            rust_path: format!("test_lib::{name}"),
+            original_rust_path: String::new(),
+            params: vec![ParamDef {
+                name: "input".to_string(),
+                ty: TypeRef::String,
+                optional: false,
+                default: None,
+                sanitized: true,
+                typed_default: None,
+                is_ref: false,
+                is_mut: false,
+                newtype_wrapper: None,
+                original_type: Some("Secret".to_string()),
+                map_is_ahash: false,
+                map_key_is_cow: false,
+                vec_inner_is_ref: false,
+                map_is_btree: false,
+                core_wrapper: CoreWrapper::None,
+            }],
+            return_type,
+            is_async: true,
+            error_type: if error { Some("Error".to_string()) } else { None },
+            doc: String::new(),
+            cfg: None,
+            sanitized: false,
+            return_sanitized: false,
+            returns_ref: false,
+            returns_cow: false,
+            return_newtype_wrapper: None,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }
+    }
+
+    fn generate(func: &FunctionDef) -> String {
+        gen_async_function(
+            func,
+            &MagnusMapper,
+            &Default::default(),
+            &Default::default(),
+            "test_lib",
+            &empty_api(),
+        )
+    }
+
+    const EXPECTED_ERR_BODY: &str = concat!(
+        "Err(magnus::Error::new(unsafe { Ruby::get_unchecked() }.exception_runtime_error(), ",
+        "\"Not implemented: process_async\"))"
+    );
+
+    #[test]
+    fn unit_return_without_error_type_emits_err_not_bare_unit() {
+        let code = generate(&non_delegable_async_func("process", TypeRef::Unit, false));
+        assert!(
+            code.contains("fn process_async(input: String) -> Result<(), Error> {"),
+            "async wrapper signature must stay fallible, got: {code}"
+        );
+        assert!(
+            code.contains(EXPECTED_ERR_BODY),
+            "body must be the Err arm that fits `Result<(), Error>`, got: {code}"
+        );
+        assert!(
+            !code.contains("compile_error!"),
+            "an Err arm fits this signature, so compile_error! must not be selected: {code}"
+        );
+    }
+
+    #[test]
+    fn value_return_without_error_type_emits_err_not_compile_error() {
+        let code = generate(&non_delegable_async_func("process", TypeRef::String, false));
+        assert!(
+            code.contains("fn process_async(input: String) -> Result<String, Error> {"),
+            "async wrapper signature must stay fallible, got: {code}"
+        );
+        assert!(
+            code.contains(EXPECTED_ERR_BODY),
+            "body must be the Err arm that fits `Result<String, Error>`, got: {code}"
+        );
+        assert!(
+            !code.contains("compile_error!"),
+            "an Err arm fits this signature, so compile_error! must not be selected: {code}"
+        );
+    }
+
+    #[test]
+    fn value_return_with_error_type_still_emits_err() {
+        let code = generate(&non_delegable_async_func("process", TypeRef::String, true));
+        assert!(
+            code.contains("fn process_async(input: String) -> Result<String, Error> {"),
+            "async wrapper signature must stay fallible, got: {code}"
+        );
+        assert!(
+            code.contains(EXPECTED_ERR_BODY),
+            "declared-error case must keep emitting the Err arm, got: {code}"
+        );
+        assert!(
+            !code.contains("compile_error!"),
+            "declared-error case must not regress into compile_error!: {code}"
+        );
+    }
 }

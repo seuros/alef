@@ -138,6 +138,13 @@ pub(super) fn gen_async_free_function(
                 format!("{prefixed} {{ inner: Arc::new(result) }}")
             }
         }
+        // `{T}::from(result)` exists only when the mapper gave this return type a binding
+        // wrapper. A `type_overrides` entry can redirect it to the opaque `JsValue`, which
+        // implements no `From<CoreType>` — an E0277 against the signature written from that same
+        // mapper. Mirrors the instance-method path in `gen_bindings::methods`. ~keep
+        TypeRef::Named(_) if crate::codegen::shared::maps_to_js_value(return_type) => {
+            "serde_wasm_bindgen::to_value(&result).unwrap_or(wasm_bindgen::JsValue::NULL)".to_string()
+        }
         TypeRef::Named(_) => {
             format!("{}::from(result)", to_turbofish_from(return_type))
         }

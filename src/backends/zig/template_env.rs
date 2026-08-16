@@ -505,3 +505,71 @@ mod template_registration_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod collapsed_doc_comment_tests {
+    use super::TEMPLATES;
+
+    /// A `.jinja` template reflowed by a line-wrapping formatter loses the newlines between
+    /// consecutive `///` doc lines, folding a whole declaration onto one comment line and
+    /// leaving the remainder as bare code. Zig then fails to parse the emitted module
+    /// outright (`error: expected ',' after field`), and because `e2e/zig/build.zig` points
+    /// its module root at the same emitted file, one damaged template also takes out the
+    /// entire e2e/zig fixture lane — surfacing in a directory that looks unrelated to the
+    /// template at fault. This actually happened and was repaired wholesale in
+    /// `cac280e66 fix(codegen): restore damaged templates`; the signature is a second `///`
+    /// appearing *within* a line that already opened a doc comment. ~keep
+    fn first_collapsed_doc_line(content: &str) -> Option<(usize, String)> {
+        content.lines().enumerate().find_map(|(index, line)| {
+            let trimmed = line.trim_start();
+            let after_marker = trimmed.strip_prefix("///")?;
+            after_marker
+                .contains("///")
+                .then(|| (index + 1, line.to_string()))
+        })
+    }
+
+    /// Proves the detector can actually fire, using the verbatim pre-repair content of
+    /// `trait_options_handle_from_vtable.jinja` (the `-` side of `cac280e66`'s diff). Without
+    /// this, a detector that silently matched nothing would look identical to a clean tree.
+    #[test]
+    fn detector_fires_on_the_historical_damaged_template() {
+        let damaged = "/// Create the native visitor accepted by the generated options-field setter. \
+                       /// Passing the returned handle to that\n\
+                       setter transfers ownership. pub fn {{ snake }}_handle_from_callbacks(callbacks: {{ \
+                       callbacks_type }}) ?*{{\n  native_handle_type\n}} { var _cb = callbacks; return {{ ctor_fn \
+                       }}(&_cb); }\n";
+
+        let (line_number, line) = first_collapsed_doc_line(damaged).expect("detector must flag the damaged template");
+
+        assert_eq!(line_number, 1);
+        assert!(line.contains("setter. /// Passing"), "{line}");
+    }
+
+    /// A well-formed multi-line doc block — the repaired form of the same template — must not
+    /// trip the detector, or it would fire on every healthy template and be worthless.
+    #[test]
+    fn detector_ignores_a_well_formed_multi_line_doc_block() {
+        let healthy = "/// Create the native visitor accepted by the generated options-field setter.\n\
+                       /// Passing the returned handle to that setter transfers ownership.\n\
+                       pub fn {{ snake }}_handle_from_callbacks() void {}\n";
+
+        assert_eq!(first_collapsed_doc_line(healthy), None);
+    }
+
+    #[test]
+    fn no_registered_zig_template_has_a_collapsed_doc_comment() {
+        let damaged: Vec<String> = TEMPLATES
+            .iter()
+            .filter_map(|(name, content)| {
+                first_collapsed_doc_line(content).map(|(line_number, line)| format!("{name}:{line_number}: {line}"))
+            })
+            .collect();
+
+        assert!(
+            damaged.is_empty(),
+            "zig template(s) carry a collapsed doc comment, which makes the emitted module fail \
+             to parse: {damaged:#?}"
+        );
+    }
+}

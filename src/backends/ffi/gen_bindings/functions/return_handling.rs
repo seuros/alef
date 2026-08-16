@@ -43,6 +43,30 @@ pub(in crate::backends::ffi::gen_bindings) fn returns_c_char(ty: &TypeRef) -> bo
     }
 }
 
+/// Returns true when a return type crosses the C boundary through the byte-buffer
+/// out-param convention — `(uint8_t **out_ptr, uintptr_t *out_len, uintptr_t *out_cap)`
+/// trailing parameters plus an `int32_t` status return — rather than as a direct
+/// return value.
+///
+/// `Optional<Bytes>` shares one C signature with bare `Bytes` and encodes `None` as
+/// `*out_ptr == NULL` with `*out_len == *out_cap == 0`. Absence rides on the pointer
+/// (the same null-means-`None` idiom `Optional<String>` already uses) rather than on a
+/// sentinel length or a status code, so `status == -1` stays the sole error signal a C
+/// caller has to test. `Some(&[])` is still distinguishable from `None`: `Box::into_raw`
+/// of an empty boxed slice is a non-null dangling-but-aligned pointer, so
+/// `*out_ptr != NULL && *out_len == 0` is unambiguously an empty present value.
+///
+/// `Bytes` has no `_len()` companion (see `returns_c_char`) because it carries no NUL
+/// terminator — the length arrives in `*out_len`, which is why the `Char` treatment
+/// does not transfer here. ~keep
+pub(in crate::backends::ffi::gen_bindings) fn returns_bytes_out_params(ty: &TypeRef) -> bool {
+    match ty {
+        TypeRef::Bytes => true,
+        TypeRef::Optional(inner) => matches!(inner.as_ref(), TypeRef::Bytes),
+        _ => false,
+    }
+}
+
 /// Generate a C-string return expression that records the byte length before
 /// transferring ownership to the caller.
 ///

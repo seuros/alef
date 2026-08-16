@@ -161,3 +161,95 @@ fn convert_constructor_params_renames_multi_word_field() {
 
     assert_eq!(assignments, "chunk_size: chunkSize");
 }
+
+/// A mapper whose `named` for `Modality` is redirected by a `wasm.type_overrides` entry — the
+/// documented way a consumer replaces a generated wrapper with another binding type.
+fn mapper_with_override(name: &str, mapped: &str) -> WasmMapper {
+    let mut overrides = HashMap::new();
+    overrides.insert(name.to_string(), mapped.to_string());
+    WasmMapper::new(overrides, "Wasm".to_string())
+}
+
+/// `to_api_str` exists only on the generated `Wasm{Enum}`. When the mapper redirects the enum to
+/// another binding type, `gen_struct` types the field from that mapper while the getter would
+/// still emit the wrapper's inherent call against it — an `E0599` on a field the same backend
+/// declared. Only the mapper knows which type the name resolves to, so the enum-shaped getter
+/// must be conditional on it.
+#[test]
+fn gen_getter_named_enum_mapped_to_js_value_skips_to_api_str() {
+    let field = FieldDef {
+        name: "modality".to_string(),
+        ty: TypeRef::Named("Modality".to_string()),
+        ..Default::default()
+    };
+    let enums = enum_names(&["Modality"]);
+    let tagged: AHashSet<String> = AHashSet::new();
+
+    let out = gen_getter(
+        &field,
+        &mapper_with_override("Modality", "JsValue"),
+        &enums,
+        &tagged,
+        false,
+    );
+    assert!(
+        !out.contains("to_api_str"),
+        "an overridden enum is not stored as the wrapper, so to_api_str does not exist: {out}"
+    );
+    assert!(out.contains("-> JsValue"), "getter must return the mapped type: {out}");
+    assert!(
+        out.contains("self.modality.clone()"),
+        "a non-Copy mapped type must be cloned out of &self, not moved: {out}"
+    );
+}
+
+/// Positive control for the above: with no override the mapper still renders `WasmModality`, so
+/// the enum-shaped getter is correct and must be unchanged.
+#[test]
+fn gen_getter_named_enum_without_override_still_uses_to_api_str() {
+    let field = FieldDef {
+        name: "modality".to_string(),
+        ty: TypeRef::Named("Modality".to_string()),
+        ..Default::default()
+    };
+    let enums = enum_names(&["Modality"]);
+    let tagged: AHashSet<String> = AHashSet::new();
+
+    let out = gen_getter(&field, &mapper(), &enums, &tagged, false);
+    assert!(out.contains("-> String"), "getter must expose the wire string: {out}");
+    assert!(
+        out.contains("self.modality.to_api_str().to_owned()"),
+        "wrapper-backed enum getter must keep using to_api_str: {out}"
+    );
+}
+
+/// The setter's mirror image: `from_api_str` is a `Wasm{Enum}` associated function, and naming
+/// `WasmModality` at all is an `E0433` once the mapper resolved `Modality` to something else.
+#[test]
+fn gen_setter_vec_enum_mapped_to_js_value_skips_from_api_str() {
+    let field = FieldDef {
+        name: "modalities".to_string(),
+        ty: TypeRef::Vec(Box::new(TypeRef::Named("Modality".to_string()))),
+        ..Default::default()
+    };
+    let enums = enum_names(&["Modality"]);
+    let tagged: AHashSet<String> = AHashSet::new();
+
+    let out = gen_setter(
+        &field,
+        &mapper_with_override("Modality", "JsValue"),
+        &enums,
+        false,
+        &tagged,
+    );
+    assert!(
+        !out.contains("from_api_str") && !out.contains("WasmModality"),
+        "an overridden enum has no generated wrapper to parse into: {out}"
+    );
+
+    let control = gen_setter(&field, &mapper(), &enums, false, &tagged);
+    assert!(
+        control.contains("WasmModality::from_api_str"),
+        "wrapper-backed enum setter must keep parsing wire strings: {control}"
+    );
+}

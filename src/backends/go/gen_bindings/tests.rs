@@ -794,3 +794,101 @@ fn generate_bindings_omits_duration_millis_helper_without_a_duration_field() {
         binding.content
     );
 }
+
+/// Replay of the write pipeline's stamping contract for a single emitted file.
+///
+/// `core_commands` only inserts a generated path into the set it hands
+/// `finalize_hashes` when [`GeneratedFile::carries_alef_marker`] holds, and
+/// `write_files_report` refuses to overwrite an existing markable file whose content
+/// carries no marker. A `.go` file that fails this therefore gets neither provenance
+/// nor future regeneration, silently. ~keep
+fn assert_pipeline_stamps(file: &crate::core::backend::GeneratedFile) {
+    use crate::core::hash;
+
+    let path = file.path.display().to_string();
+    assert!(
+        file.carries_alef_marker(),
+        "{path}: emitted without an alef marker and without `generated_header`, so the \
+         path never reaches `finalize_hashes` and the write guard will refuse to rewrite it"
+    );
+
+    let on_disk = if hash::content_has_alef_marker(&file.content) {
+        file.content.clone()
+    } else {
+        format!("{}\n{}", hash::header(hash::CommentStyle::DoubleSlash), file.content)
+    };
+    assert!(
+        hash::content_has_alef_marker(&on_disk),
+        "{path}: the bytes the writer puts on disk must carry the marker `finalize_hashes` \
+         searches for, got:\n{on_disk}"
+    );
+
+    let inputs_hash = hash::compute_inputs_hash("sources", b"[workspace]\n");
+    let body = hash::strip_hash_line(&on_disk);
+    let stamped = hash::inject_hash_line(&body, &hash::compute_file_hash(&inputs_hash, &body));
+    assert_eq!(
+        hash::extract_hash(&stamped),
+        Some(hash::compute_file_hash(&inputs_hash, &hash::strip_hash_line(&stamped))),
+        "{path}: the injected alef:hash: line must re-verify the way `alef verify` derives it"
+    );
+}
+
+#[test]
+fn every_emitted_go_file_carries_a_hash_line_after_finalize() {
+    use crate::core::ir::ApiSurface;
+
+    let config = make_config();
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "1.2.3".to_string(),
+        ..ApiSurface::default()
+    };
+
+    let files = GoBackend.generate_bindings(&api, &config).unwrap();
+
+    let named = |name: &str| {
+        files
+            .iter()
+            .find(|file| file.path.to_string_lossy().ends_with(name))
+            .unwrap_or_else(|| {
+                panic!(
+                    "{name} must be emitted; got {:?}",
+                    files.iter().map(|file| &file.path).collect::<Vec<_>>()
+                )
+            })
+    };
+
+    // Positive control: assert each file actually holds its generated payload, so the
+    // stamping assertions below cannot pass over empty or missing output. ~keep
+    assert!(
+        named("binding.go").content.contains("package testlib"),
+        "binding.go must hold real bindings, got:\n{}",
+        named("binding.go").content
+    );
+    assert!(
+        named("native_setup.go")
+            .content
+            .contains("RequireNativeSetup_1_2_3 = \"1.2.3\""),
+        "native_setup.go must hold the version sentinel that changes on every release, got:\n{}",
+        named("native_setup.go").content
+    );
+    assert!(
+        named("embed_ffi.go").content.contains("//go:embed"),
+        "embed_ffi.go must hold its embed directive, got:\n{}",
+        named("embed_ffi.go").content
+    );
+    assert!(
+        named("generate.go").content.contains("//go:generate"),
+        "generate.go must hold its generate directive, got:\n{}",
+        named("generate.go").content
+    );
+    assert!(
+        named("cmd/setup/main.go").content.contains("func main()"),
+        "cmd/setup/main.go must hold the setup tool, got:\n{}",
+        named("cmd/setup/main.go").content
+    );
+
+    for file in &files {
+        assert_pipeline_stamps(file);
+    }
+}

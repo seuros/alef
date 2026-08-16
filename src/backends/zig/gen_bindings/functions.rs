@@ -74,10 +74,25 @@ fn needs_from_json_param(
 
 fn return_type_can_be_null(ty: &TypeRef, _struct_names: &std::collections::HashSet<String>) -> bool {
     match ty {
-        TypeRef::String | TypeRef::Path | TypeRef::Json | TypeRef::Bytes | TypeRef::Vec(_) | TypeRef::Map(_, _) => true,
+        TypeRef::String
+        | TypeRef::Char
+        | TypeRef::Path
+        | TypeRef::Json
+        | TypeRef::Bytes
+        | TypeRef::Vec(_)
+        | TypeRef::Map(_, _) => true,
+        // `Bytes` is deliberately absent here: unlike String/Path/Json/Vec/Map, an
+        // `Optional<Bytes>` return gets no `_len()` companion (see `returns_c_char` in the
+        // FFI backend) and its `None` case never sets the FFI last-error state — so treating
+        // a null as an error here would misclassify a legitimate `None` as a failure.
+        // `Optional<Bytes>` instead rides the byte-buffer out-param convention (see
+        // `return_uses_bytes_out_params`), where the C function returns an `i32` status and
+        // absence arrives as a null `_out_ptr`; that makes `result_is_pointer` false, so this
+        // predicate is never consulted for it. It stays excluded as a guard against a future
+        // change routing it back through the pointer-return path. ~keep
         TypeRef::Optional(inner) => matches!(
             inner.as_ref(),
-            TypeRef::String | TypeRef::Path | TypeRef::Json | TypeRef::Bytes | TypeRef::Vec(_) | TypeRef::Map(_, _)
+            TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json | TypeRef::Vec(_) | TypeRef::Map(_, _)
         ),
         _ => false,
     }
@@ -138,8 +153,15 @@ pub(crate) fn emit_function(
     let body_needs_try = f.params.iter().any(needs_alloc_param)
         || matches!(
             &f.return_type,
-            TypeRef::String | TypeRef::Path | TypeRef::Json | TypeRef::Bytes | TypeRef::Vec(_) | TypeRef::Map(_, _)
+            TypeRef::String
+                | TypeRef::Char
+                | TypeRef::Path
+                | TypeRef::Json
+                | TypeRef::Bytes
+                | TypeRef::Vec(_)
+                | TypeRef::Map(_, _)
         )
+        || return_uses_bytes_out_params(&f.return_type)
         || matches!(&f.return_type, TypeRef::Named(name) if struct_names.contains(name));
     let body_needs_invalid_json = f
         .params
@@ -177,7 +199,8 @@ pub(crate) fn emit_function(
         emit_param_conversion(p, prefix, struct_names, opaque_creator_map, &json_error_return, out);
     }
 
-    let returns_bytes = matches!(f.return_type, TypeRef::Bytes);
+    let returns_bytes = return_uses_bytes_out_params(&f.return_type);
+    let returns_optional_bytes = returns_bytes && matches!(f.return_type, TypeRef::Optional(_));
     if returns_bytes {
         out.push_str("    var _out_ptr: [*c]u8 = undefined;\n");
         out.push_str("    var _out_len: usize = 0;\n");
@@ -273,6 +296,9 @@ pub(crate) fn emit_function(
         }
 
         if returns_bytes {
+            if returns_optional_bytes {
+                out.push_str("    if (_out_ptr == null) return null;\n");
+            }
             out.push_str("    const _owned = try std.heap.c_allocator.dupe(u8, _out_ptr[0.._out_len]);\n");
             out.push_str(&crate::backends::zig::template_env::render(
                 "function_free_bytes.jinja",
@@ -309,6 +335,9 @@ pub(crate) fn emit_function(
                     c_call => &c_call,
                 },
             ));
+            if returns_optional_bytes {
+                out.push_str("    if (_out_ptr == null) return null;\n");
+            }
             out.push_str("    const _owned = try std.heap.c_allocator.dupe(u8, _out_ptr[0.._out_len]);\n");
             out.push_str(&crate::backends::zig::template_env::render(
                 "function_free_bytes.jinja",
@@ -633,17 +662,37 @@ fn unwrap_optional(ty: &TypeRef) -> &TypeRef {
     }
 }
 
+/// Returns true when a return type crosses the C boundary via the byte-buffer out-param
+/// convention (`&_out_ptr, &_out_len, &_out_cap` trailing args, `i32` status return)
+/// instead of as a direct C return value.
+///
+/// `Optional<Bytes>` shares the convention with bare `Bytes`; `None` arrives as a null
+/// `_out_ptr` with `_out_len == _out_cap == 0`, while `Some(&[])` arrives as a non-null
+/// `_out_ptr` with `_out_len == 0`. This is why `Bytes` cannot use the `_len()` companion
+/// the `Char`/`String` path uses: `Bytes` carries no NUL terminator, so its length only
+/// ever exists in `*_out_len`.
+///
+/// Must mirror `crate::backends::ffi::gen_bindings::functions::returns_bytes_out_params`.
+/// ~keep
+pub(crate) fn return_uses_bytes_out_params(ty: &TypeRef) -> bool {
+    match ty {
+        TypeRef::Bytes => true,
+        TypeRef::Optional(inner) => matches!(inner.as_ref(), TypeRef::Bytes),
+        _ => false,
+    }
+}
+
 /// Returns true when a return type maps to `*mut c_char` and therefore has a
 /// matching `_len()` companion in alef-backend-ffi.
 ///
 /// Must mirror `crate::backends::ffi::gen_bindings::functions::returns_c_char`.
 pub(crate) fn return_uses_len_companion(ty: &TypeRef) -> bool {
     match ty {
-        TypeRef::String | TypeRef::Path | TypeRef::Json => true,
+        TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json => true,
         TypeRef::Vec(_) | TypeRef::Map(_, _) => true,
         TypeRef::Optional(inner) => matches!(
             inner.as_ref(),
-            TypeRef::String | TypeRef::Path | TypeRef::Json | TypeRef::Vec(_) | TypeRef::Map(_, _)
+            TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json | TypeRef::Vec(_) | TypeRef::Map(_, _)
         ),
         _ => false,
     }
@@ -764,8 +813,9 @@ fn c_arg_names(
 ///
 /// Bool: the C ABI represents `bool` as `i32`; Zig rejects an implicit `i32→bool`
 /// coercion, so emit `_result != 0`.
-/// String/Path/Json/Vec/Map: copy the C string to an owned Zig slice, then free
-/// the FFI allocation via `_free_string`.
+/// String/Char/Path/Json/Vec/Map: copy the C string to an owned Zig slice, then free
+/// the FFI allocation via `_free_string`. `Char` takes the same `*mut c_char` +
+/// `_len()` convention as `String` on the FFI side, so it shares this arm.
 /// Named struct (has_serde): serialize to JSON via `<prefix>_<snake>_to_json`,
 /// copy the JSON string to an owned Zig slice, then free both the JSON string and
 /// the opaque handle.
@@ -779,7 +829,7 @@ fn unwrap_return_expr(
 ) -> String {
     match ty {
         TypeRef::Primitive(PrimitiveType::Bool) => format!("{raw} != 0"),
-        TypeRef::String | TypeRef::Path | TypeRef::Json | TypeRef::Vec(_) | TypeRef::Map(_, _) => {
+        TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json | TypeRef::Vec(_) | TypeRef::Map(_, _) => {
             crate::backends::zig::template_env::render(
                 "return_owned_bytes_block.jinja",
                 minijinja::context! {
@@ -808,7 +858,7 @@ fn unwrap_return_expr(
             format!("blk: {{ if ({raw} == 0) return {fallback}; break :blk {name}{{ ._handle = {raw} }}; }}")
         }
         TypeRef::Optional(inner) => match inner.as_ref() {
-            TypeRef::String | TypeRef::Path | TypeRef::Json | TypeRef::Vec(_) | TypeRef::Map(_, _) => {
+            TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json | TypeRef::Vec(_) | TypeRef::Map(_, _) => {
                 crate::backends::zig::template_env::render(
                     "return_optional_owned_bytes_block.jinja",
                     minijinja::context! {
@@ -840,22 +890,35 @@ fn unwrap_return_expr(
 
 /// Build the Zig return type for a function (not for struct fields).
 ///
-/// Owned string/JSON/collection returns are `[]u8` (allocated slice).
+/// Owned string/char/JSON/collection returns are `[]u8` (allocated slice) — `Char`
+/// crosses the FFI exactly like `String` (see `returns_c_char` in the FFI backend),
+/// so it takes the same owned-slice shape rather than the `[]const u8` a struct
+/// field would get.
 /// `Bytes` returns are `[]u8` — the FFI uses the out-param convention
 /// (`uint8_t **out_ptr, uintptr_t *out_len, uintptr_t *out_cap`) and the
-/// wrapper copies the bytes into a caller-owned heap allocation.
+/// wrapper copies the bytes into a caller-owned heap allocation. `Optional<Bytes>`
+/// is `?[]u8` (owned, not the `[]const u8` a struct field would get) and rides the
+/// same out-param convention with a null `out_ptr` standing for `None`.
 /// Named struct returns (opaque C handles) are also serialized to `[]u8` (JSON).
 /// Everything else matches the struct-field mapping.
 pub(crate) fn zig_return_type(ty: &TypeRef, struct_names: &std::collections::HashSet<String>) -> String {
     match ty {
-        TypeRef::String | TypeRef::Path | TypeRef::Json | TypeRef::Bytes | TypeRef::Vec(_) | TypeRef::Map(_, _) => {
-            "[]u8".to_string()
-        }
+        TypeRef::String
+        | TypeRef::Char
+        | TypeRef::Path
+        | TypeRef::Json
+        | TypeRef::Bytes
+        | TypeRef::Vec(_)
+        | TypeRef::Map(_, _) => "[]u8".to_string(),
         TypeRef::Named(name) if struct_names.contains(name) => "[]u8".to_string(),
         TypeRef::Optional(inner) => match inner.as_ref() {
-            TypeRef::String | TypeRef::Path | TypeRef::Json | TypeRef::Vec(_) | TypeRef::Map(_, _) => {
-                "?[]u8".to_string()
-            }
+            TypeRef::String
+            | TypeRef::Char
+            | TypeRef::Path
+            | TypeRef::Json
+            | TypeRef::Bytes
+            | TypeRef::Vec(_)
+            | TypeRef::Map(_, _) => "?[]u8".to_string(),
             TypeRef::Named(name) if struct_names.contains(name) => "?[]u8".to_string(),
             other => zig_field_type(other, true),
         },
@@ -897,5 +960,296 @@ mod tests {
         );
 
         assert_eq!(expr, "_result");
+    }
+
+    /// Regression test: `Char` crosses the C ABI exactly like `String` (a `*mut c_char` +
+    /// `_len()` companion, see `returns_c_char` in the FFI backend), so the wrapper must copy
+    /// and free it the same way instead of falling through to a bare passthrough of a pointer
+    /// the declared `[]u8` return type cannot represent. ~keep
+    #[test]
+    fn char_return_copies_and_frees_like_string_instead_of_bare_passthrough() {
+        let expr = unwrap_return_expr(
+            "_result",
+            &TypeRef::Char,
+            "sample",
+            &std::collections::HashSet::new(),
+            None,
+        );
+
+        assert!(expr.contains("_free_string(_result)"), "{expr}");
+        assert!(expr.contains("std.heap.c_allocator.dupe(u8, slice)"), "{expr}");
+        assert_ne!(expr, "_result");
+    }
+
+    #[test]
+    fn optional_char_return_degrades_to_null_instead_of_bare_passthrough() {
+        let expr = unwrap_return_expr(
+            "_result",
+            &TypeRef::Optional(Box::new(TypeRef::Char)),
+            "sample",
+            &std::collections::HashSet::new(),
+            None,
+        );
+
+        assert!(expr.contains("if (_result == null) break :blk null;"), "{expr}");
+        assert!(expr.contains("_free_string(_result)"), "{expr}");
+        assert_ne!(expr, "_result");
+    }
+
+    #[test]
+    fn zig_return_type_char_is_owned_slice_not_field_style_const_slice() {
+        assert_eq!(
+            zig_return_type(&TypeRef::Char, &std::collections::HashSet::new()),
+            "[]u8"
+        );
+        assert_eq!(
+            zig_return_type(
+                &TypeRef::Optional(Box::new(TypeRef::Char)),
+                &std::collections::HashSet::new()
+            ),
+            "?[]u8"
+        );
+    }
+
+    #[test]
+    fn return_uses_len_companion_covers_char_like_string() {
+        assert!(return_uses_len_companion(&TypeRef::Char));
+        assert!(return_uses_len_companion(&TypeRef::Optional(Box::new(TypeRef::Char))));
+    }
+
+    /// `Optional<Bytes>` gets no `_len()` companion (unlike Optional<String/Char/Path/Json/Vec/Map>)
+    /// and its `None` case never sets the FFI last-error state, so treating its null as an
+    /// FFI-call error here would misclassify a legitimate `None` as failure. This must stay
+    /// `false` even though bare `Bytes` (routed entirely through the separate out-param
+    /// convention) is `true`. ~keep
+    #[test]
+    fn return_type_can_be_null_excludes_optional_bytes_but_includes_optional_char() {
+        assert!(!return_type_can_be_null(
+            &TypeRef::Optional(Box::new(TypeRef::Bytes)),
+            &std::collections::HashSet::new()
+        ));
+        assert!(return_type_can_be_null(
+            &TypeRef::Optional(Box::new(TypeRef::Char)),
+            &std::collections::HashSet::new()
+        ));
+    }
+
+    fn char_return_fn() -> FunctionDef {
+        FunctionDef {
+            name: "first_char".to_string(),
+            rust_path: "sample::first_char".to_string(),
+            original_rust_path: String::new(),
+            params: vec![],
+            return_type: TypeRef::Char,
+            is_async: false,
+            error_type: None,
+            doc: String::new(),
+            cfg: None,
+            sanitized: false,
+            return_sanitized: false,
+            returns_ref: false,
+            returns_cow: false,
+            return_newtype_wrapper: None,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }
+    }
+
+    /// End-to-end regression: every piece touched by the `Char` return-shape fix must agree —
+    /// the `_len()` companion call, the `[]u8` declared type, the `OutOfMemory` error set (the
+    /// generated body's `try std.heap.c_allocator.dupe` requires it even with no declared Rust
+    /// error type), and the owned-copy-then-free body. Each was a separate missing arm before
+    /// this fix; asserting them together in one generated function is what proves the whole
+    /// pipeline — not just one function in isolation — now agrees for `Char`. ~keep
+    #[test]
+    fn emit_function_char_return_wires_len_companion_error_set_and_owned_copy_together() {
+        let f = char_return_fn();
+        let mut out = String::new();
+        emit_function(
+            &f,
+            "sample",
+            &[],
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+            &mut out,
+        );
+
+        assert!(
+            out.contains("error{OutOfMemory}![]u8"),
+            "Char return must declare an owned []u8 in an OutOfMemory-capable error set. Got:\n{out}"
+        );
+        assert!(
+            out.contains("c.sample_first_char_len("),
+            "Char return must call its FFI _len() companion. Got:\n{out}"
+        );
+        assert!(
+            out.contains("_free_string(_result)"),
+            "Char return must free the FFI allocation. Got:\n{out}"
+        );
+        assert!(
+            out.contains("std.heap.c_allocator.dupe(u8, slice)"),
+            "Char return must copy into an owned, caller-freed slice. Got:\n{out}"
+        );
+        assert!(
+            !out.contains("return _result;"),
+            "Char return must not fall through to a bare pointer passthrough. Got:\n{out}"
+        );
+    }
+
+    fn bytes_return_fn(return_type: TypeRef) -> FunctionDef {
+        FunctionDef {
+            name: "maybe_thumbnail".to_string(),
+            rust_path: "sample::maybe_thumbnail".to_string(),
+            original_rust_path: String::new(),
+            params: vec![],
+            return_type,
+            is_async: false,
+            error_type: None,
+            doc: String::new(),
+            cfg: None,
+            sanitized: false,
+            return_sanitized: false,
+            returns_ref: false,
+            returns_cow: false,
+            return_newtype_wrapper: None,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }
+    }
+
+    fn emit_bytes_fn(return_type: TypeRef) -> String {
+        let f = bytes_return_fn(return_type);
+        let mut out = String::new();
+        emit_function(
+            &f,
+            "sample",
+            &[],
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+            &mut out,
+        );
+        out
+    }
+
+    #[test]
+    fn zig_return_type_optional_bytes_is_an_owned_optional_slice() {
+        assert_eq!(
+            zig_return_type(
+                &TypeRef::Optional(Box::new(TypeRef::Bytes)),
+                &std::collections::HashSet::new()
+            ),
+            "?[]u8"
+        );
+    }
+
+    /// The `Char` fix routed through the `_len()` companion because a NUL-terminated
+    /// `c_char` has a recoverable length. `Bytes` has no terminator, so `Optional<Bytes>`
+    /// must take the out-param convention instead — and must specifically NOT acquire a
+    /// `_len()` companion, which the FFI backend does not emit for it. ~keep
+    #[test]
+    fn optional_bytes_takes_out_params_not_the_len_companion_char_uses() {
+        assert!(return_uses_bytes_out_params(&TypeRef::Bytes));
+        assert!(return_uses_bytes_out_params(&TypeRef::Optional(Box::new(
+            TypeRef::Bytes
+        ))));
+        assert!(!return_uses_bytes_out_params(&TypeRef::Optional(Box::new(
+            TypeRef::Char
+        ))));
+        assert!(!return_uses_len_companion(&TypeRef::Optional(Box::new(TypeRef::Bytes))));
+    }
+
+    /// End-to-end: the declared `?[]u8` and the emitted body must agree. The body reads the
+    /// length from `_out_len` (there is no `_result_len` to read — `Optional<Bytes>` has no
+    /// `_len()` companion) and treats a null `_out_ptr` as the `None` encoding. ~keep
+    #[test]
+    fn emit_function_optional_bytes_return_reads_out_len_and_maps_null_ptr_to_null() {
+        let out = emit_bytes_fn(TypeRef::Optional(Box::new(TypeRef::Bytes)));
+
+        assert!(
+            out.contains("error{OutOfMemory}!?[]u8"),
+            "Optional<Bytes> must declare an owned ?[]u8. Got:\n{out}"
+        );
+        assert!(
+            out.contains("    var _out_ptr: [*c]u8 = undefined;\n"),
+            "Optional<Bytes> must declare the byte-buffer out-param locals. Got:\n{out}"
+        );
+        assert!(
+            out.contains("    _ = c.sample_maybe_thumbnail(&_out_ptr, &_out_len, &_out_cap);\n"),
+            "Optional<Bytes> must pass the three out-params and discard the status. Got:\n{out}"
+        );
+        assert!(
+            out.contains("    if (_out_ptr == null) return null;\n"),
+            "Optional<Bytes> must map a null out_ptr to Zig null. Got:\n{out}"
+        );
+        assert!(
+            out.contains("    const _owned = try std.heap.c_allocator.dupe(u8, _out_ptr[0.._out_len]);\n"),
+            "Optional<Bytes> must copy _out_len bytes into an owned slice. Got:\n{out}"
+        );
+        assert!(
+            out.contains("    c.sample_free_bytes(_out_ptr, _out_len, _out_cap);\n"),
+            "Optional<Bytes> must release the FFI buffer via free_bytes. Got:\n{out}"
+        );
+        assert!(
+            !out.contains("_result_len"),
+            "Optional<Bytes> must not reference the _len() companion's _result_len. Got:\n{out}"
+        );
+        assert!(
+            !out.contains("c.sample_maybe_thumbnail_len("),
+            "Optional<Bytes> must not call a _len() companion the FFI side never emits. Got:\n{out}"
+        );
+        assert!(
+            !out.contains("return _result;"),
+            "Optional<Bytes> must not fall through to a bare pointer passthrough. Got:\n{out}"
+        );
+    }
+
+    /// Present-but-empty (`Some(&[])`) must not be read as absent. The only absence test in
+    /// the emitted body is the null-pointer check, which runs before the slice is taken; a
+    /// zero `_out_len` simply yields an empty owned slice. ~keep
+    #[test]
+    fn emit_function_optional_bytes_treats_zero_length_as_present_not_absent() {
+        let out = emit_bytes_fn(TypeRef::Optional(Box::new(TypeRef::Bytes)));
+
+        assert!(
+            !out.contains("_out_len == 0"),
+            "a zero length must never be read as absence — only a null pointer is. Got:\n{out}"
+        );
+        let null_check = out
+            .find("if (_out_ptr == null) return null;")
+            .expect("null check must be emitted");
+        let slice_copy = out
+            .find("std.heap.c_allocator.dupe(u8, _out_ptr[0.._out_len])")
+            .expect("owned copy must be emitted");
+        assert!(
+            null_check < slice_copy,
+            "the null check must precede the slice so an empty present value still copies. Got:\n{out}"
+        );
+    }
+
+    /// Positive control: bare `Bytes` has no absent case, so it must NOT gain the null check.
+    /// Without this, the assertions above would pass for a fix that emitted the check
+    /// unconditionally for every byte-buffer return. ~keep
+    #[test]
+    fn emit_function_bare_bytes_return_keeps_no_absence_check() {
+        let out = emit_bytes_fn(TypeRef::Bytes);
+
+        assert!(
+            out.contains("error{OutOfMemory}![]u8"),
+            "bare Bytes must still declare a non-optional []u8. Got:\n{out}"
+        );
+        assert!(
+            !out.contains("if (_out_ptr == null) return null;"),
+            "bare Bytes has no absent case and must not emit the null check. Got:\n{out}"
+        );
+        assert!(
+            out.contains("    const _owned = try std.heap.c_allocator.dupe(u8, _out_ptr[0.._out_len]);\n"),
+            "bare Bytes must keep its owned copy. Got:\n{out}"
+        );
     }
 }

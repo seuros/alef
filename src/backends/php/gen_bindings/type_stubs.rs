@@ -4,8 +4,8 @@ use crate::backends::php::gen_bindings::php_types::{
     php_phpdoc_type, php_phpdoc_type_fq, php_property_phpdoc, php_type, php_type_fq,
 };
 use crate::backends::php::gen_bindings::types::{
-    is_php_prop_scalar, is_tagged_data_enum, is_untagged_data_enum, php_field_can_be_constructor_param,
-    ty_is_or_wraps_json, ty_references_untagged_data_enum,
+    flat_field_name, is_php_prop_scalar, is_tagged_data_enum, is_untagged_data_enum,
+    php_field_can_be_constructor_param, ty_is_or_wraps_json, ty_references_untagged_data_enum,
 };
 use crate::backends::php::naming::php_autoload_namespace;
 use crate::codegen::doc_emission::{DocTarget, sanitize_rust_idioms};
@@ -14,7 +14,7 @@ use crate::codegen::shared::{binding_fields, can_auto_delegate};
 use crate::core::backend::GeneratedFile;
 use crate::core::config::{ResolvedCrateConfig, resolve_output_dir};
 use crate::core::hash::{self, CommentStyle};
-use crate::core::ir::{ApiSurface, FieldDef, TypeRef};
+use crate::core::ir::{ApiSurface, EnumDef, FieldDef, TypeRef};
 use ahash::AHashSet;
 use heck::{ToLowerCamelCase, ToPascalCase};
 use minijinja::context;
@@ -26,6 +26,13 @@ pub(super) fn generate_type_stubs(
 ) -> anyhow::Result<Vec<GeneratedFile>> {
     let deduped_api = api.with_deduped_functions();
     let api = &deduped_api;
+
+    // The single signal that selects a struct's constructor SHAPE, resolved through the same
+    // helper `rust_bindings.rs` uses for the runtime extension. Keying the stub on the per-type
+    // `TypeDef::has_serde` instead routes a type down a different branch than the runtime takes
+    // (FromJsonOnly vs Kwargs vs ThrowsNoParams), so the stub's whole declared constructor — not
+    // merely its `from_json` — can be wrong. ~keep
+    let serde_available = super::rust_bindings::php_serde_available(config);
 
     let extension_name = config.php_extension_name();
     let class_name = extension_name.to_pascal_case();
@@ -152,7 +159,12 @@ pub(super) fn generate_type_stubs(
         let is_constructor_param =
             |f: &FieldDef| f.cfg.is_none() && php_field_can_be_constructor_param(&f.ty, &enum_names, &opaque_types);
 
-        if !typ.has_serde {
+        // A field that fails `php_field_can_be_constructor_param` also fails `is_php_prop_scalar`,
+        // so in a serde-capable crate its struct always qualifies for `from_json` — the field is
+        // reachable after all and there is nothing to warn about. Only when the crate has no serde
+        // is such a field genuinely write-unreachable, which is why this keys on the crate-level
+        // signal rather than on the core type's own derives. ~keep
+        if !serde_available {
             for excluded in binding_fields(&typ.fields).filter(|f| !is_constructor_param(f)) {
                 tracing::warn!(
                     "php backend stub: {}.{} cannot be represented as a #[php(constructor)] parameter \
@@ -165,11 +177,50 @@ pub(super) fn generate_type_stubs(
             }
         }
 
-        let params = gen_struct_constructor_stub_params(typ, &enum_names, &opaque_types);
-        content.push_str(&crate::backends::php::template_env::render(
-            "php_constructor_method.jinja",
-            context! { params => &params.join(",\n") },
-        ));
+        match stub_constructor_shape(typ, &enum_names, &opaque_types, serde_available) {
+            // The runtime's `use_from_json` branch (structs.rs) only ALSO emits a positional
+            // `#[php(constructor)]` when at least one representable field is required; when
+            // every representable field is optional, `from_json` (rendered below) is the only
+            // constructor the extension actually has. Declaring a positional one here would be
+            // pure fiction: PHPStan/IDE users would be told they can call `new Type(...)` when
+            // the real extension has no such symbol. ~keep
+            StubConstructorShape::FromJsonOnly => {}
+            // The runtime's `has_named_params && !use_from_json` branch emits a real,
+            // zero-param `__construct` that unconditionally throws (a field needs a named/
+            // complex param this shape can't represent, and the type doesn't qualify for
+            // `from_json` either) -- not the full field-derived parameter list every other
+            // shape gets. ~keep
+            StubConstructorShape::ThrowsNoParams => {
+                content.push_str(&crate::backends::php::template_env::render(
+                    "php_constructor_method.jinja",
+                    context! { params => "" },
+                ));
+            }
+            // `config_gen::gen_php_kwargs_constructor` derives its parameter list from a
+            // DIFFERENT algorithm than the positional shape: `constructor_fields` (only
+            // `binding_excluded` is filtered — no `cfg` filter, no representability filter), in
+            // raw declaration order, with EVERY param `Option<T>`. ext-php-rs treats every
+            // `Option<T>` arg as nullable-and-omittable (`Function::split_args`), so the whole
+            // list is optional and PHP's required-before-optional rule imposes no reordering —
+            // declaration order IS the positional order callers must use. ~keep
+            StubConstructorShape::Kwargs => {
+                for declaration in gen_kwargs_property_declarations(typ, &enum_names, serde_available) {
+                    content.push_str(&declaration);
+                }
+                let params = gen_kwargs_constructor_stub_params(typ);
+                content.push_str(&crate::backends::php::template_env::render(
+                    "php_constructor_method.jinja",
+                    context! { params => &params.join(",\n") },
+                ));
+            }
+            StubConstructorShape::Positional => {
+                let params = gen_struct_constructor_stub_params(typ, &enum_names, &opaque_types, serde_available);
+                content.push_str(&crate::backends::php::template_env::render(
+                    "php_constructor_method.jinja",
+                    context! { params => &params.join(",\n") },
+                ));
+            }
+        }
 
         // The real extension additionally emits a `#[php(name = "from_json")]` static
         // constructor (structs.rs's `use_from_json` gate) whenever the struct has a field the
@@ -177,7 +228,7 @@ pub(super) fn generate_type_stubs(
         // or a field with a default. That is the ONLY way to build such a type's nested/complex
         // fields from PHP — ext-php-rs exposes them read-only — so the stub must declare it or
         // the method is invisible to editors and PHPStan. Mirror the exact same gate here.
-        if struct_needs_from_json_stub(typ, &enum_names) {
+        if struct_needs_from_json_stub(typ, &enum_names, serde_available) {
             content.push_str(
                 "    /**\n     * Construct from a JSON string — the only way to build this \
                  type's nested/complex fields from PHP, since ext-php-rs exposes them read-only.\n     */\n",
@@ -215,7 +266,7 @@ pub(super) fn generate_type_stubs(
                 "?string".to_string()
             } else {
                 let ptype = php_type(&field.ty);
-                if php_field_effective_optional(typ, field) && !ptype.starts_with('?') {
+                if php_field_effective_optional(typ, field, serde_available) && !ptype.starts_with('?') {
                     format!("?{ptype}")
                 } else {
                     ptype
@@ -318,44 +369,7 @@ pub(super) fn generate_type_stubs(
     }
 
     for enum_def in &api.enums {
-        if is_tagged_data_enum(enum_def) {
-            if !enum_def.doc.is_empty() {
-                content.push_str("/**\n");
-                let sanitized = sanitize_rust_idioms(&enum_def.doc, DocTarget::PhpDoc);
-                content.push_str(&crate::backends::php::template_env::render(
-                    "php_phpdoc_lines.jinja",
-                    context! {
-                        doc_lines => sanitized.lines().collect::<Vec<_>>(),
-                        indent => "",
-                    },
-                ));
-                content.push_str(" */\n");
-            }
-            content.push_str(&crate::backends::php::template_env::render(
-                "php_record_class_stub_declaration.jinja",
-                context! { class_name => &enum_def.name },
-            ));
-            for ctor in gen_data_enum_variant_constructor_stubs(enum_def) {
-                content.push_str(&ctor);
-            }
-            content.push_str("}\n\n");
-        } else {
-            content.push_str(&crate::backends::php::template_env::render(
-                "php_tagged_enum_declaration.jinja",
-                context! { enum_name => &enum_def.name },
-            ));
-            for variant in &enum_def.variants {
-                let case_name = sanitize_php_enum_case(&variant.name);
-                content.push_str(&crate::backends::php::template_env::render(
-                    "php_enum_variant_stub.jinja",
-                    context! {
-                        variant_name => case_name,
-                        value => &php_enum_case_value(enum_def, variant),
-                    },
-                ));
-            }
-            content.push_str("}\n\n");
-        }
+        content.push_str(&gen_enum_stub(enum_def, &enum_names));
     }
 
     // issue on macOS (cdylib builds do not collect `#[php_function]` entries there).
@@ -513,15 +527,86 @@ pub(super) fn generate_type_stubs(
     }])
 }
 
+/// Which shape of runtime constructor `gen_bindings/types/structs.rs` emits for a struct.
+/// Mirrors its own branching (`use_from_json`, whether a representable required field
+/// exists, `has_named_params`, `typ.has_default`) so the stub can match what the extension
+/// actually exposes instead of assuming every struct gets the common positional shape.
+#[derive(Debug, PartialEq, Eq)]
+enum StubConstructorShape {
+    /// `#[php(constructor)] pub fn new(...)`, built from representable non-cfg fields,
+    /// required-before-optional — the shape `gen_struct_constructor_stub_params` computes.
+    Positional,
+    /// The `use_from_json` branch with no representable *required* field: the extension
+    /// emits only `#[php(name = "from_json")]`, no positional constructor at all.
+    FromJsonOnly,
+    /// A real, zero-param `__construct` that always throws. Two runtime paths produce it:
+    /// `structs.rs`'s explicit `pub fn __construct() -> PhpResult<Self> { Err(...) }` (a field
+    /// needs a named/complex param the positional shape can't represent and the type doesn't
+    /// qualify for `from_json`), and a type with a hand-written static `new`, for which
+    /// `structs.rs` emits no constructor at all and ext-php-rs's `ClassBuilder` registers its
+    /// own zero-arg `__construct` throwing "You cannot instantiate this class from PHP."
+    ThrowsNoParams,
+    /// A `#[derive(Default)]` type routed through `config_gen::gen_php_kwargs_constructor`:
+    /// every non-`binding_excluded` field in declaration order (no `cfg` filter, no
+    /// representability filter), each param `Option<T>` and therefore nullable-and-omittable.
+    /// Derived by [`gen_kwargs_constructor_stub_params`], NOT by the positional shape's
+    /// required-before-optional derivation. ~keep
+    Kwargs,
+}
+
+fn stub_constructor_shape(
+    typ: &crate::core::ir::TypeDef,
+    enum_names: &AHashSet<String>,
+    opaque_types: &AHashSet<String>,
+    serde_available: bool,
+) -> StubConstructorShape {
+    // `gen_struct_methods_impl` (structs.rs) gates its ENTIRE constructor block on
+    // `!has_explicit_static_new`: a type with a hand-written static `new` gets no
+    // `#[php(constructor)]`, no `from_json`, and no explicit `__construct` — the static `new`
+    // reaches the stub through the ordinary method loop instead. ext-php-rs still registers a
+    // public zero-arg `__construct` for every `#[php_class]` (the `else` arm of
+    // `T::constructor()` in `builders/class.rs`) whose body throws "You cannot instantiate this
+    // class from PHP.", so the accurate stub is the zero-param throwing shape — not the
+    // field-derived parameter list every branch below would otherwise produce. ~keep
+    if typ.methods.iter().any(|m| m.is_static && m.name == "new") {
+        return StubConstructorShape::ThrowsNoParams;
+    }
+    if struct_needs_from_json_stub(typ, enum_names, serde_available) {
+        let has_representable_required = typ
+            .fields
+            .iter()
+            .filter(|f| !f.binding_excluded)
+            .any(|f| !f.optional && php_field_can_be_constructor_param(&f.ty, enum_names, opaque_types));
+        return if has_representable_required {
+            StubConstructorShape::Positional
+        } else {
+            StubConstructorShape::FromJsonOnly
+        };
+    }
+    let has_named_params = typ.fields.iter().any(|f| !is_php_prop_scalar(&f.ty, enum_names));
+    if has_named_params {
+        StubConstructorShape::ThrowsNoParams
+    } else if typ.has_default {
+        StubConstructorShape::Kwargs
+    } else {
+        StubConstructorShape::Positional
+    }
+}
+
 /// Mirrors the runtime constructor's own widening (`gen_bindings/types/structs.rs`'s
 /// `let optional = f.optional || (has_serde && typ.has_default && matches!(f.ty,
 /// TypeRef::Duration));`): a `Duration` field on a type with a `Default` impl becomes an optional,
 /// nullable param at the FFI boundary even when the field itself is required in the IR, so callers
 /// can omit it and get the default. Used for both the constructor stub's param list (order AND
 /// nullability) and each field's getter return type — the two must agree with each other and with
-/// the runtime, or the stub disagrees with what the extension actually does. ~keep
-fn php_field_effective_optional(typ: &crate::core::ir::TypeDef, f: &FieldDef) -> bool {
-    f.optional || (typ.has_serde && typ.has_default && matches!(f.ty, TypeRef::Duration))
+/// the runtime, or the stub disagrees with what the extension actually does.
+///
+/// `serde_available` is the runtime's `has_serde` — the crate-level probe, not `TypeDef::has_serde`.
+/// The widening exists because the mirror struct carries `#[serde(skip_serializing_if)]` /
+/// `#[serde(default)]` only when the binding crate has serde, so it is the crate-level signal that
+/// decides it. ~keep
+fn php_field_effective_optional(typ: &crate::core::ir::TypeDef, f: &FieldDef, serde_available: bool) -> bool {
+    f.optional || (serde_available && typ.has_default && matches!(f.ty, TypeRef::Duration))
 }
 
 /// Build the parameter list (one entry per line) for a struct's PHPStan `#[php(constructor)]`
@@ -535,6 +620,7 @@ fn gen_struct_constructor_stub_params(
     typ: &crate::core::ir::TypeDef,
     enum_names: &AHashSet<String>,
     opaque_types: &AHashSet<String>,
+    serde_available: bool,
 ) -> Vec<String> {
     let is_constructor_param =
         |f: &FieldDef| f.cfg.is_none() && php_field_can_be_constructor_param(&f.ty, enum_names, opaque_types);
@@ -542,12 +628,12 @@ fn gen_struct_constructor_stub_params(
     let mut ctor_fields: Vec<&FieldDef> = binding_fields(&typ.fields)
         .filter(|f| is_constructor_param(f))
         .collect();
-    ctor_fields.sort_by_key(|f| php_field_effective_optional(typ, f));
+    ctor_fields.sort_by_key(|f| php_field_effective_optional(typ, f, serde_available));
 
     ctor_fields
         .iter()
         .map(|f| {
-            let optional = php_field_effective_optional(typ, f);
+            let optional = php_field_effective_optional(typ, f, serde_available);
             let ptype = php_type(&f.ty);
             let nullable = if optional && !ptype.starts_with('?') {
                 format!("?{ptype}")
@@ -573,6 +659,82 @@ fn gen_struct_constructor_stub_params(
         .collect()
 }
 
+/// Build the parameter list (one entry per line) for the `Kwargs` constructor shape, mirroring
+/// `codegen::config_gen::php::gen_php_kwargs_constructor` — the function that renders the runtime
+/// `pub fn __construct(...)` — parameter for parameter.
+///
+/// That generator maps `constructor_fields(typ)` (`!binding_excluded`, nothing else) in raw
+/// declaration order to `name: Option<{mapped_ty}>`. Three consequences the positional shape's
+/// derivation gets wrong here, each of which desynchronises positional slots:
+///
+/// * No `cfg` filter and no `php_field_can_be_constructor_param` filter — every non-excluded field
+///   is a parameter, so dropping any of them shifts every later argument by one slot.
+/// * Every parameter is `Option<T>`, which ext-php-rs turns into a nullable, omittable arg
+///   (`Function::split_args`: "an argument is optional if it's nullable or has a default"). No
+///   parameter is required, so PHP's required-before-optional rule constrains nothing and the
+///   required-first sort the positional shape applies is pure divergence, not a PHP necessity.
+/// * The PHP-visible parameter name is the raw Rust field ident verbatim (ext-php-rs's
+///   `ident_to_php_name` only strips an `r#` prefix), NOT `to_php_name`. Named arguments therefore
+///   use the snake_case field name even though the `#[php(prop)]` property is camelCase.
+///
+/// Constructor-property promotion is unusable for this shape and deliberately not emitted: a
+/// promoted parameter must share its name AND its type with the property, but here the parameter is
+/// nullable (`?T`) under the snake_case name while the backing field is non-nullable `T` (the
+/// runtime body applies `.unwrap_or(default)`) under the camelCase property name. The properties are
+/// declared separately by [`gen_kwargs_property_declarations`]. ~keep
+fn gen_kwargs_constructor_stub_params(typ: &crate::core::ir::TypeDef) -> Vec<String> {
+    binding_fields(&typ.fields)
+        .map(|f| {
+            let ptype = php_type(&f.ty);
+            let nullable = if ptype.starts_with('?') {
+                ptype
+            } else {
+                format!("?{ptype}")
+            };
+            format!("        {nullable} ${} = null", f.name)
+        })
+        .collect()
+}
+
+/// Declare the `#[php(prop)]` properties of a `Kwargs`-shaped struct, which the constructor stub
+/// cannot express through property promotion (see [`gen_kwargs_constructor_stub_params`]).
+///
+/// Naming and eligibility mirror `gen_php_struct`'s own field-attribute pass exactly: a field gets
+/// `#[php(prop, name = to_php_name(field))]` precisely when it is [`is_php_prop_scalar`]. The
+/// property type is the field's own type (non-nullable for a required field — the runtime
+/// constructor stores `param.unwrap_or(default)`), and the property is writable rather than
+/// `readonly`, because the ext-php-rs derive registers a setter alongside the getter for every
+/// `#[php(prop)]` field. ~keep
+fn gen_kwargs_property_declarations(
+    typ: &crate::core::ir::TypeDef,
+    enum_names: &AHashSet<String>,
+    serde_available: bool,
+) -> Vec<String> {
+    binding_fields(&typ.fields)
+        .filter(|f| is_php_prop_scalar(&f.ty, enum_names))
+        .map(|f| {
+            // `f.optional` is carried on the FIELD, not always on its `TypeRef`, so `php_type`
+            // alone under-reports nullability — the same widening the positional shape and the
+            // getters apply.
+            let optional = php_field_effective_optional(typ, f, serde_available);
+            let ptype = php_type(&f.ty);
+            let nullable = if optional && !ptype.starts_with('?') {
+                format!("?{ptype}")
+            } else {
+                ptype
+            };
+            let phpdoc_type = php_phpdoc_type(&f.ty);
+            let var_type = if optional && !phpdoc_type.starts_with('?') {
+                format!("?{phpdoc_type}")
+            } else {
+                phpdoc_type
+            };
+            let phpdoc = php_property_phpdoc(&var_type, &f.doc, "    ");
+            format!("{phpdoc}    public {nullable} ${};\n", to_php_name(&f.name))
+        })
+        .collect()
+}
+
 /// True when the PHPStan stub for `typ` must declare the `from_json(string $json): self` static
 /// constructor, mirroring the exact gate the real extension uses to decide whether to emit
 /// `#[php(name = "from_json")]` (see `gen_bindings/types/structs.rs`'s `use_from_json`).
@@ -580,9 +742,21 @@ fn gen_struct_constructor_stub_params(
 /// `from_json` is the only way to build a type's nested/complex fields from PHP — ext-php-rs
 /// exposes such fields read-only — so a stub that omits it hides a real, callable method from
 /// editors and static analysis (PHPStan reports a false "undefined method").
-pub(super) fn struct_needs_from_json_stub(typ: &crate::core::ir::TypeDef, enum_names: &AHashSet<String>) -> bool {
+///
+/// `serde_available` is the runtime's own `has_serde` argument: the crate-level
+/// `detect_serde_available` probe (see [`super::rust_bindings::php_serde_available`]), NOT the
+/// per-type `TypeDef::has_serde`. The emitted body is `serde_json::from_str::<Self>` over alef's
+/// generated MIRROR struct, whose `Deserialize` derive `gen_php_struct` attaches under that same
+/// crate-level probe — so a core type with no derives of its own still gets a working `from_json`,
+/// and a core type that derives both still cannot have one in a crate without serde. Keying this on
+/// `TypeDef::has_serde` made the stub disagree with the runtime in both directions. ~keep
+pub(super) fn struct_needs_from_json_stub(
+    typ: &crate::core::ir::TypeDef,
+    enum_names: &AHashSet<String>,
+    serde_available: bool,
+) -> bool {
     let has_explicit_static_new = typ.methods.iter().any(|m| m.is_static && m.name == "new");
-    if has_explicit_static_new || typ.fields.is_empty() || !typ.has_serde {
+    if has_explicit_static_new || typ.fields.is_empty() || !serde_available {
         return false;
     }
     let has_named_params = typ.fields.iter().any(|f| !is_php_prop_scalar(&f.ty, enum_names));
@@ -591,6 +765,171 @@ pub(super) fn struct_needs_from_json_stub(typ: &crate::core::ir::TypeDef, enum_n
         .iter()
         .any(|f| f.default.is_some() || f.typed_default.is_some());
     has_named_params || typ.has_default || has_field_defaults
+}
+
+/// Render the complete stub declaration for one enum, dispatching on the very predicate
+/// `rust_bindings.rs` dispatches on ([`is_tagged_data_enum`]): a tagged data enum becomes a flat
+/// `#[php_class]` via `gen_flat_data_enum` + `gen_flat_data_enum_methods`, anything else becomes a
+/// constants-only class via `gen_enum_constants`. Both arms live here so "which enum shapes get a
+/// `from_json`?" has exactly one answer site — the runtime emits it for the flat class and for
+/// nothing else, and an enum branch that answered that question independently of the runtime is what
+/// left `Message::from_json(..)` declared nowhere while the extension defined it. ~keep
+fn gen_enum_stub(enum_def: &EnumDef, enum_names: &AHashSet<String>) -> String {
+    let mut content = String::new();
+    if !is_tagged_data_enum(enum_def) {
+        content.push_str(&crate::backends::php::template_env::render(
+            "php_tagged_enum_declaration.jinja",
+            context! { enum_name => &enum_def.name },
+        ));
+        for variant in &enum_def.variants {
+            let case_name = sanitize_php_enum_case(&variant.name);
+            content.push_str(&crate::backends::php::template_env::render(
+                "php_enum_variant_stub.jinja",
+                context! {
+                    variant_name => case_name,
+                    value => &php_enum_case_value(enum_def, variant),
+                },
+            ));
+        }
+        content.push_str("}\n\n");
+        return content;
+    }
+
+    if !enum_def.doc.is_empty() {
+        content.push_str("/**\n");
+        let sanitized = sanitize_rust_idioms(&enum_def.doc, DocTarget::PhpDoc);
+        content.push_str(&crate::backends::php::template_env::render(
+            "php_phpdoc_lines.jinja",
+            context! {
+                doc_lines => sanitized.lines().collect::<Vec<_>>(),
+                indent => "",
+            },
+        ));
+        content.push_str(" */\n");
+    }
+    content.push_str(&crate::backends::php::template_env::render(
+        "php_record_class_stub_declaration.jinja",
+        context! { class_name => &enum_def.name },
+    ));
+
+    for declaration in gen_data_enum_property_declarations(enum_def, enum_names) {
+        content.push_str(&declaration);
+    }
+
+    content.push_str(
+        "    /**\n     * Construct from a JSON string — the flat class's only whole-value \
+         constructor. The payload's tag field selects the variant; an unrecognised tag throws.\n     */\n",
+    );
+    content.push_str(&crate::backends::php::template_env::render(
+        "php_stub_method_definition.jinja",
+        context! {
+            static_kw => "static ",
+            method_name => "from_json",
+            params => "string $json",
+            return_type => "self",
+            stub_body => "{ throw new \\RuntimeException('Not implemented — provided by the native extension.'); }",
+        },
+    ));
+
+    for ctor in gen_data_enum_variant_constructor_stubs(enum_def) {
+        content.push_str(&ctor);
+    }
+    content.push_str("}\n\n");
+    content
+}
+
+/// Declare the read-only properties the flat enum class exposes, mirroring
+/// `gen_flat_data_enum_methods`'s `#[php(getter)]` methods one for one.
+///
+/// `#[php(getter)]` does NOT register a PHP method. ext-php-rs's derive intercepts the method
+/// (`impl_.rs::parse_property_method`), strips the literal `get_` prefix off the RAW Rust ident with
+/// no case conversion, and registers a `PropertyDescriptor` under that snake_case name — `readonly`
+/// whenever there is no paired setter, which for a flat enum is always. So `get_image_url` is
+/// `$part->image_url`, not `$part->getImageUrl()`. That is the opposite of the struct path, which
+/// deliberately emits PLAIN methods (see `structs.rs`'s historical note) precisely so they land as
+/// camelCase `getImageUrl()`; the stub must therefore declare properties here and methods there. ~keep
+fn gen_data_enum_property_declarations(enum_def: &EnumDef, enum_names: &AHashSet<String>) -> Vec<String> {
+    let tag_field = enum_def.serde_tag.as_deref().unwrap_or("type");
+    let mut declarations = vec![format!(
+        "    /** @var string The variant discriminator carried by the `{tag_field}` JSON field. */\n    \
+         public readonly string ${tag_field}_tag;\n"
+    )];
+
+    let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for variant in &enum_def.variants {
+        for (idx, field) in variant.fields.iter().enumerate() {
+            let flat_name = flat_field_name(variant, idx);
+            if !seen.insert(flat_name.clone()) {
+                continue;
+            }
+            // Every flat field is `Option<T>` on the binding struct regardless of the variant
+            // field's own optionality — only one variant's fields are populated at a time — so
+            // every property is nullable.
+            let ptype = flat_enum_property_php_type(&field.ty, enum_names);
+            let nullable = if ptype.starts_with('?') {
+                ptype
+            } else {
+                format!("?{ptype}")
+            };
+            let phpdoc_type = flat_enum_property_phpdoc_type(&field.ty, enum_names);
+            let var_type = if phpdoc_type.starts_with('?') {
+                phpdoc_type
+            } else {
+                format!("?{phpdoc_type}")
+            };
+            let phpdoc = php_property_phpdoc(&var_type, &field.doc, "    ");
+            declarations.push(format!("{phpdoc}    public readonly {nullable} ${flat_name};\n"));
+        }
+    }
+    declarations
+}
+
+/// PHP type hint for a flat-enum property, mirroring the type the runtime getter actually returns.
+///
+/// The getter's Rust return type is `Option<PhpMapper::map_type(field.ty)>`, so the mapping is
+/// [`php_type`]'s EXCEPT for one case `php_type` gets wrong here: `PhpMapper::named` lowers a
+/// unit-variant enum to `String` (ext-php-rs cannot carry a Rust enum), so such a field reads back
+/// from PHP as a plain `string`, not as the `enum <Name>: string` the stub declares elsewhere.
+/// Declaring the enum class name would type the property as something the extension never returns.
+///
+/// The other `PhpMapper` divergence — an untagged data enum lowering to `serde_json::Value` — is
+/// deliberately not modelled: ext-php-rs has no serde integration at all, so `Option<serde_json::Value>`
+/// has no `IntoZval` and a flat enum carrying such a field cannot compile in the first place. ~keep
+fn flat_enum_property_php_type(ty: &TypeRef, enum_names: &AHashSet<String>) -> String {
+    match ty {
+        TypeRef::Named(name) if enum_names.contains(name.as_str()) => "string".to_string(),
+        TypeRef::Optional(inner) => {
+            let inner_type = flat_enum_property_php_type(inner, enum_names);
+            if inner_type.starts_with('?') {
+                inner_type
+            } else {
+                format!("?{inner_type}")
+            }
+        }
+        _ => php_type(ty),
+    }
+}
+
+/// PHPDoc counterpart of [`flat_enum_property_php_type`], keeping the generic value types PHPStan
+/// needs on `array` properties (level max rejects a bare `array`).
+fn flat_enum_property_phpdoc_type(ty: &TypeRef, enum_names: &AHashSet<String>) -> String {
+    match ty {
+        TypeRef::Vec(inner) => format!("array<{}>", flat_enum_property_phpdoc_type(inner, enum_names)),
+        TypeRef::Map(key, value) => format!(
+            "array<{}, {}>",
+            flat_enum_property_phpdoc_type(key, enum_names),
+            flat_enum_property_phpdoc_type(value, enum_names)
+        ),
+        TypeRef::Optional(inner) => {
+            let inner_type = flat_enum_property_phpdoc_type(inner, enum_names);
+            if inner_type.starts_with('?') {
+                inner_type
+            } else {
+                format!("?{inner_type}")
+            }
+        }
+        _ => flat_enum_property_php_type(ty, enum_names),
+    }
 }
 
 /// Emit a static-factory stub for each per-variant constructor the flat PHP enum class exposes.

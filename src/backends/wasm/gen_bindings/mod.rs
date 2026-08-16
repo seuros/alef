@@ -13,7 +13,7 @@ mod cargo;
 use crate::backends::wasm::type_map::WasmMapper;
 use crate::codegen::builder::RustFileBuilder;
 use crate::codegen::{generators, shared};
-use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile};
+use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, PostBuildStep};
 use crate::core::config::{Language, ResolvedCrateConfig, resolve_output_dir};
 use crate::core::ir::{ApiSurface, ReceiverKind, TypeRef};
 use ahash::{AHashMap, AHashSet};
@@ -914,6 +914,47 @@ impl Backend for WasmBackend {
             build_dep: BuildDependency::None,
             post_build: vec![],
         })
+    }
+
+    fn build_config_with_config(&self, config: &ResolvedCrateConfig) -> Option<BuildConfig> {
+        let mut build_config = self.build_config()?;
+
+        // `wasm-pack build --target nodejs --out-dir pkg/nodejs` (see `build_command_for`'s
+        // "wasm-pack" arm) writes its own `package.json` derived from the wasm crate's
+        // `Cargo.toml`, not from `config.wasm_package_name()`. Every `file:` dependency and
+        // `require()`/`import` specifier the wasm e2e codegen emits uses
+        // `wasm_package_name()` (see `ResolvedCrateConfig::wasm_crate_path`), so rewrite the
+        // built artifact's declared name to match after every build — otherwise the
+        // specifier names a package the directory does not declare. Verified against
+        // liter-llm, whose e2e manifest depends on `"@xberg-io/liter-llm-wasm":
+        // "file:../../crates/liter-llm-wasm/pkg/nodejs"` while that directory declares the
+        // bare crate name `liter-llm-wasm`.
+        //
+        // This must resolve the crate directory exactly as `build_command_for` does —
+        // `[crates.output] wasm` first (minus a trailing `src`, which is where the *generated
+        // sources* land, not the crate root), then the `package_dir` default formula. Deriving
+        // it any other way lets the build write `pkg/nodejs` under one directory while this
+        // step looks under another, and a missing file is only debug-logged, so the rewrite
+        // would silently never fire. ~keep
+        let wasm_crate_dir = config
+            .explicit_output
+            .wasm
+            .as_deref()
+            .map(|output| {
+                if output.file_name().is_some_and(|name| name == "src") {
+                    output.parent().unwrap_or(output)
+                } else {
+                    output
+                }
+            })
+            .map_or_else(|| PathBuf::from(config.package_dir(Language::Wasm)), PathBuf::from);
+        let package_json_path = wasm_crate_dir.join("pkg/nodejs/package.json");
+        build_config.post_build.push(PostBuildStep::RewriteWasmPackageName {
+            package_json_path,
+            package_name: config.wasm_package_name(),
+        });
+
+        Some(build_config)
     }
 }
 

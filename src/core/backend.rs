@@ -114,6 +114,27 @@ pub enum PostBuildStep {
         /// File to rewrite with the gates carried over (the generated `frb_generated.rs`).
         target_path: PathBuf,
     },
+    /// Rewrite the `"name"` field of a wasm-pack-generated `package.json` to the
+    /// alef-configured WASM npm package name.
+    ///
+    /// wasm-pack derives that file's own `name` from the crate's `Cargo.toml`, which alef
+    /// does not (and should not) control — so after a fresh `wasm-pack build --target nodejs`,
+    /// the generated `pkg/nodejs/package.json` disagrees with the name every e2e-generated
+    /// `file:` dependency and `require()`/`import` specifier uses
+    /// ([`ResolvedCrateConfig::wasm_package_name`]) unless something patches it. Neither
+    /// `find`/`replace` in [`PostBuildStep::PatchFile`] can express this: the current name is
+    /// unknown until wasm-pack writes it, so both the search and replacement text must be
+    /// computed at build time rather than fixed at compile time. ~keep
+    RewriteWasmPackageName {
+        /// Path to the wasm-pack-generated `package.json`, relative to the workspace base
+        /// dir (*not* the binding crate dir, unlike every other step above) — the wasm crate
+        /// directory itself may come from `config.package_dir(Language::Wasm)`'s
+        /// default-formula fallback rather than the language's `explicit_output`, so the
+        /// caller resolves the full path once at construction time.
+        package_json_path: PathBuf,
+        /// The desired `"name"` field value (`config.wasm_package_name()`).
+        package_name: String,
+    },
 }
 
 /// A generated file to write to disk.

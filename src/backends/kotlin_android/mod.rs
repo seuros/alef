@@ -31,6 +31,7 @@ pub mod gen_gradle_properties;
 pub mod gen_jni_skeleton;
 pub mod gen_manifest;
 pub mod gen_proguard;
+pub mod gen_seed_test;
 pub mod gen_settings_gradle;
 pub mod gradle_wrapper;
 pub mod naming;
@@ -160,6 +161,9 @@ impl Backend for KotlinAndroidBackend {
         files.extend(gen_jni_skeleton::emit(config, &layout.package_root));
         let deduped_api = effective_codegen_api(api, config);
         files.extend(gen_bindings::emit(&deduped_api, config, &layout.kotlin_source_dir));
+        // Built from `deduped_api` — the exact surface the Kotlin emitter above just wrote —
+        // so the seed can never assert against a declaration that was filtered out. ~keep
+        files.push(gen_seed_test::emit(&deduped_api, config, &layout.package_root));
 
         apply_kotlin_post_processing(&mut files);
         Ok(files)

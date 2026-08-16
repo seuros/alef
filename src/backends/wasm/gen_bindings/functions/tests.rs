@@ -553,3 +553,78 @@ fn gen_wasm_unimplemented_body_with_error_type_raises_runtime_error() {
     );
     assert!(!body.contains("compile_error!"), "fallible path must not also emit compile_error!: {body}");
 }
+
+/// Fixture for the return-conversion tests below: an async free function whose return type is a
+/// `Named` the mapper may or may not back with a generated wrapper.
+fn async_function_returning(name: &str) -> FunctionDef {
+    FunctionDef {
+        return_type: TypeRef::Named(name.to_string()),
+        ..async_function(vec![])
+    }
+}
+
+fn empty_surface() -> crate::core::ir::ApiSurface {
+    crate::core::ir::ApiSurface {
+        crate_name: "sample_fixture".to_string(),
+        version: "0.1.0".to_string(),
+        ..Default::default()
+    }
+}
+
+/// The async wrapper converts its result with `{mapped}::from(result)`, which only compiles when
+/// the mapped type has a `From<CoreType>`. A `wasm.type_overrides` entry can redirect the return
+/// type to the opaque `JsValue`, which implements no such conversion — the signature and the body
+/// are both written from the mapper, so the body must follow it into the serde bridge.
+#[test]
+fn async_free_function_returning_js_value_mapped_type_uses_serde() {
+    let mut overrides = HashMap::new();
+    overrides.insert("Report".to_string(), "JsValue".to_string());
+    let mapper = WasmMapper::new(overrides, "Wasm".to_string());
+
+    let out = gen_function_with_emitted_dtos(
+        &async_function_returning("Report"),
+        &mapper,
+        "sample_fixture",
+        &AHashSet::new(),
+        "Wasm",
+        &AHashSet::new(),
+        &empty_surface(),
+        &AHashSet::new(),
+    );
+
+    assert!(
+        out.contains("serde_wasm_bindgen::to_value(&result)"),
+        "a JsValue-mapped return must be serialized:\n{out}"
+    );
+    assert!(
+        !out.contains("JsValue::from(result)"),
+        "JsValue implements no From<Report>:\n{out}"
+    );
+}
+
+/// Positive control: with no override the mapper renders `WasmReport`, whose `From<core::Report>`
+/// alef generates itself, so the direct conversion must be unchanged.
+#[test]
+fn async_free_function_returning_wrapper_mapped_type_keeps_from() {
+    let mapper = WasmMapper::new(HashMap::new(), "Wasm".to_string());
+
+    let out = gen_function_with_emitted_dtos(
+        &async_function_returning("Report"),
+        &mapper,
+        "sample_fixture",
+        &AHashSet::new(),
+        "Wasm",
+        &AHashSet::new(),
+        &empty_surface(),
+        &AHashSet::new(),
+    );
+
+    assert!(
+        out.contains("WasmReport::from(result)"),
+        "a wrapper-mapped return must keep the direct From conversion:\n{out}"
+    );
+    assert!(
+        !out.contains("serde_wasm_bindgen::to_value(&result)"),
+        "a wrapper-mapped return must not detour through serde:\n{out}"
+    );
+}

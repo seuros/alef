@@ -459,3 +459,41 @@ pub mod precommit {
     /// change that does not affect `compute_inputs_hash` output.
     pub const CODEGEN_FORMAT_VERSION: &str = "2";
 }
+
+/// Wire-representation generations for the FFI ABI surfaces that binding
+/// backends hand-declare rather than derive from the cbindgen header.
+pub mod abi {
+    /// Generation of the opaque-handle wire representation that the FFI glue
+    /// and every hand-declaring binding backend currently agree on.
+    ///
+    /// Stamped into generated files under
+    /// [`crate::core::hash::HANDLE_ABI_STAMP_KEY`] so
+    /// `crate::bin_cli::helpers::find_stamp_disagreement` can fail `alef
+    /// verify` when one tree contains artifacts from two different handle
+    /// generations. The value itself carries no meaning beyond "artifacts
+    /// bearing the same value speak the same handle ABI".
+    ///
+    /// # Bump policy
+    ///
+    /// Increment **only** when the handle's wire representation changes —
+    /// its C-level kind (opaque `struct X *` vs. scalar `uint64_t`), its
+    /// width, or its encoding (e.g. adding a generation counter to the
+    /// packed bits). Nothing else bumps it: not codegen refactors, not
+    /// template edits, not new handle-taking functions, not alef releases.
+    ///
+    /// # Why not `CODEGEN_FORMAT_VERSION`
+    ///
+    /// That constant is deliberately NOT reused here, and is verifiably
+    /// unusable for this job: it is `"2"` and only two commits in alef's
+    /// entire history touch it (its introduction in 0.34.0 and a lint sweep
+    /// in 0.34.7). Artifacts generated on *both* sides of the pointer→`u64`
+    /// handle migration therefore carry the identical value, so comparing it
+    /// across a straddled tree can never detect the straddle. It also has the
+    /// opposite blast radius: it feeds `compute_inputs_hash`, so bumping it
+    /// re-stamps every generated file in every consumer repo — a cost that
+    /// must not be coupled to an ABI change that affects only the handle-
+    /// carrying subset, and a mass-invalidation that must not be triggered by
+    /// one. The two versions answer different questions and move on different
+    /// schedules; keep them independent. ~keep
+    pub const HANDLE_ABI_VERSION: &str = "1";
+}

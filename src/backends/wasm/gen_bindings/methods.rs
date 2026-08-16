@@ -164,8 +164,18 @@ pub(super) fn gen_method(
                 method_name = method.name
             )
         };
-        let return_type_tf = to_turbofish_from(&return_type);
-        let return_expr = format!("{return_type_tf}::from(result)");
+        // `return_type` is what the mapper rendered, and `{T}::from(result)` is only valid when
+        // that `T` has a `From<CoreType>`. The wasm mapper degrades whole families of return
+        // types to the opaque `JsValue` — every `Map`, every `Json`, and any `Named` a
+        // `type_overrides` entry redirects — and `JsValue` implements no such conversion, so the
+        // turbofish `from` is an E0277 there. serde is the bridge, matching the generated
+        // `From<CoreType> for WasmType` bodies. ~keep
+        let return_expr = if shared::maps_to_js_value(&return_type) {
+            "serde_wasm_bindgen::to_value(&result).unwrap_or(wasm_bindgen::JsValue::NULL)".to_string()
+        } else {
+            let return_type_tf = to_turbofish_from(&return_type);
+            format!("{return_type_tf}::from(result)")
+        };
         let body = crate::backends::wasm::template_env::render(
             "gen_result_body",
             minijinja::context! {

@@ -345,6 +345,42 @@ fn is_external_crate_type(rust_path: &str, core_import: &str) -> bool {
     crate_seg.replace('-', "_") != core_seg
 }
 
+/// Render the binding→core expression for a field the tagged-enum struct stores as
+/// `Option<JsValue>` because its type differs between variants (see `mixed_type_fields`).
+///
+/// Shared by the tuple- and named-field variant arms so the two cannot disagree about the
+/// field's binding representation. `gen_tagged_enum_as_struct` applies the `mixed` degradation
+/// to *every* variant field, tuple or named; `JsValue` implements no `From<CoreType>` in either
+/// direction, so the `.into()` that `tagged_enum_binding_to_core_expr` writes for a
+/// `TypeRef::Named` is an `E0277` against such a field — serde is the only bridge. ~keep
+fn mixed_field_binding_to_core_expr(field: &FieldDef, field_ident: &str, core_import: &str) -> String {
+    let is_external = field
+        .type_rust_path
+        .as_deref()
+        .is_some_and(|path| is_external_crate_type(path, core_import));
+    let expr = if is_external {
+        // The type is not in the wasm crate's dependency graph, so naming it in a
+        // `from_value::<T>()` turbofish would be an E0433. ~keep
+        "Default::default()".to_string()
+    } else {
+        let core_inner = match field.type_rust_path.as_deref() {
+            Some(path) => path.replace('-', "_"),
+            None => match &field.ty {
+                TypeRef::Named(n) => format!("{core_import}::{n}"),
+                _ => "serde_json::Value".to_string(),
+            },
+        };
+        format!(
+            "val.{field_ident}.as_ref().and_then(|v| serde_wasm_bindgen::from_value::<{core_inner}>(v.clone()).ok()).unwrap_or_default()"
+        )
+    };
+    if field.is_boxed {
+        format!("Box::new({expr})")
+    } else {
+        expr
+    }
+}
+
 pub(super) fn gen_tagged_enum_binding_to_core(enum_def: &EnumDef, core_import: &str, prefix: &str) -> String {
     let core_path = crate::codegen::conversions::core_enum_path(enum_def, core_import);
     let binding_name = format!("{prefix}{}", enum_def.name);
@@ -381,27 +417,7 @@ pub(super) fn gen_tagged_enum_binding_to_core(enum_def: &EnumDef, core_import: &
                 .map(|f| {
                     let f_ident = escape_rust_keyword(&f.name);
                     if mixed.contains(&f.name) {
-                        let external = f
-                            .type_rust_path
-                            .as_deref()
-                            .is_some_and(|p| is_external_crate_type(p, core_import));
-                        if external {
-                            let expr = "Default::default()".to_string();
-                            if f.is_boxed { format!("Box::new({expr})") } else { expr }
-                        } else {
-                            let core_inner = if let Some(ref path) = f.type_rust_path {
-                                path.replace('-', "_")
-                            } else {
-                                match &f.ty {
-                                    TypeRef::Named(n) => format!("{core_import}::{n}"),
-                                    _ => "serde_json::Value".to_string(),
-                                }
-                            };
-                            let expr = format!(
-                                "val.{f_ident}.as_ref().and_then(|v| serde_wasm_bindgen::from_value::<{core_inner}>(v.clone()).ok()).unwrap_or_default()"
-                            );
-                            if f.is_boxed { format!("Box::new({expr})") } else { expr }
-                        }
+                        mixed_field_binding_to_core_expr(f, &f_ident, core_import)
                     } else if tuple_vec_fields.contains(&f.name) {
                         let orig = f.original_type.as_deref().unwrap_or("Vec<(String, String)>");
                         format!(
@@ -423,7 +439,9 @@ pub(super) fn gen_tagged_enum_binding_to_core(enum_def: &EnumDef, core_import: &
                 .iter()
                 .map(|f| {
                     let f_ident = escape_rust_keyword(&f.name);
-                    if tuple_vec_fields.contains(&f.name) {
+                    if mixed.contains(&f.name) {
+                        format!("{}: {}", f.name, mixed_field_binding_to_core_expr(f, &f_ident, core_import))
+                    } else if tuple_vec_fields.contains(&f.name) {
                         let orig = f.original_type.as_deref().unwrap_or("Vec<(String, String)>");
                         format!(
                             "{}: val.{f_ident}.as_ref().and_then(|v| serde_wasm_bindgen::from_value::<{orig}>(v.clone()).ok()).unwrap_or_default()",
@@ -562,7 +580,11 @@ pub(super) fn gen_tagged_enum_core_to_binding(enum_def: &EnumDef, core_import: &
             for name in &all_field_names {
                 let n_ident = escape_rust_keyword(name);
                 if variant_field_names.contains(name) {
-                    let init = if tuple_vec_fields.contains(name) {
+                    // `mixed` degrades the struct field to `Option<JsValue>` for named-field
+                    // variants exactly as it does for tuple variants, so this arm must take the
+                    // same serde bridge — `tagged_enum_core_to_binding_expr` would write
+                    // `Some({local}.into())`, an E0277 against `JsValue`. ~keep
+                    let init = if mixed.contains(name) || tuple_vec_fields.contains(name) {
                         format!("                {n_ident}: serde_wasm_bindgen::to_value(&{n_ident}).ok()")
                     } else if let Some(field) = variant.fields.iter().find(|f| &f.name == name) {
                         tagged_enum_core_to_binding_expr(&n_ident, &n_ident, &field.ty, field.optional, field.is_boxed)

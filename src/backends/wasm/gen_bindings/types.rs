@@ -691,6 +691,26 @@ fn gen_default_method(typ: &TypeDef, prefix: &str) -> String {
     )
 }
 
+/// The subset of `enum_names` the mapper still renders as this backend's generated wrapper.
+///
+/// Every enum-shaped accessor below emits something only the generated `{prefix}{Enum}` has —
+/// `to_api_str`, `from_api_str`, or the `Copy` its derive provides. A `type_overrides` entry
+/// replaces that wrapper with an arbitrary binding type (`JsValue`, `String`, anything the
+/// consumer configured), for which none of those exist, while `gen_struct` types the field from
+/// the same mapper — so an unfiltered name list makes the accessor and the field it reads
+/// disagree. The mapper is the only authority on which type a name resolves to; ask it rather
+/// than assuming a `TypeRef::Named` that is an enum is stored as the wrapper. ~keep
+fn wrapper_backed_enum_names(mapper: &WasmMapper, enum_names: &AHashSet<String>) -> AHashSet<String> {
+    enum_names
+        .iter()
+        .filter(|name| {
+            let name = name.as_str();
+            mapper.named(name).as_ref() == format!("{}{name}", mapper.prefix).as_str()
+        })
+        .cloned()
+        .collect()
+}
+
 /// Generate a getter method for a field.
 fn gen_getter(
     field: &FieldDef,
@@ -717,19 +737,21 @@ fn gen_getter(
         String::new()
     };
 
+    let wrapper_enum_names = wrapper_backed_enum_names(mapper, enum_names);
     let inner_ty = optional_inner(&field.ty);
     let is_optional_enum = field.optional
-        && matches!(inner_ty, TypeRef::Named(n) if enum_names.contains(n) && !tagged_data_enum_names.contains(n));
+        && matches!(inner_ty, TypeRef::Named(n) if wrapper_enum_names.contains(n) && !tagged_data_enum_names.contains(n));
     let is_required_enum = !field.optional
-        && matches!(field.ty, TypeRef::Named(ref n) if enum_names.contains(n) && !tagged_data_enum_names.contains(n));
+        && matches!(field.ty, TypeRef::Named(ref n) if wrapper_enum_names.contains(n) && !tagged_data_enum_names.contains(n));
     let is_required_vec_tagged_enum = !field.optional && is_vec_of_tagged_data_enum(&field.ty, tagged_data_enum_names);
     let is_required_bare_tagged_enum = !field.optional && is_bare_tagged_data_enum(&field.ty, tagged_data_enum_names);
     let is_optional_tagged_enum = field.optional
         && (is_option_of_tagged_data_enum(&field.ty, tagged_data_enum_names)
             || is_bare_tagged_data_enum(&field.ty, tagged_data_enum_names));
-    let is_vec_unit_enum = !field.optional && is_vec_of_unit_enum(&field.ty, enum_names, tagged_data_enum_names);
+    let is_vec_unit_enum =
+        !field.optional && is_vec_of_unit_enum(&field.ty, &wrapper_enum_names, tagged_data_enum_names);
     let is_optional_vec_unit_enum =
-        field.optional && is_vec_of_unit_enum(&field.ty, enum_names, tagged_data_enum_names);
+        field.optional && is_vec_of_unit_enum(&field.ty, &wrapper_enum_names, tagged_data_enum_names);
     let is_optional_vec_of_struct = field.optional
         && matches!(
             inner_ty,
@@ -771,7 +793,7 @@ fn gen_getter(
         );
         ("Option<js_sys::Array>".to_string(), expr)
     } else {
-        let copy_enum_names: AHashSet<String> = enum_names
+        let copy_enum_names: AHashSet<String> = wrapper_enum_names
             .iter()
             .filter(|n| !tagged_data_enum_names.contains(*n))
             .cloned()
@@ -805,9 +827,11 @@ fn gen_setter(
             || (field.optional && is_bare_tagged_data_enum(&field.ty, tagged_data_enum_names)));
     let is_bare_tagged_enum =
         !is_vec_tagged_enum && !is_option_tagged_enum && is_bare_tagged_data_enum(&field.ty, tagged_data_enum_names);
-    let is_vec_unit_enum = !field.optional && is_vec_of_unit_enum(&field.ty, enum_names, tagged_data_enum_names);
+    let wrapper_enum_names = wrapper_backed_enum_names(mapper, enum_names);
+    let is_vec_unit_enum =
+        !field.optional && is_vec_of_unit_enum(&field.ty, &wrapper_enum_names, tagged_data_enum_names);
     let is_optional_vec_unit_enum =
-        field.optional && is_vec_of_unit_enum(&field.ty, enum_names, tagged_data_enum_names);
+        field.optional && is_vec_of_unit_enum(&field.ty, &wrapper_enum_names, tagged_data_enum_names);
 
     let js_name = to_node_name(&field.name);
     let js_name_attr = if js_name != field.name {
@@ -817,7 +841,7 @@ fn gen_setter(
     };
 
     if is_vec_unit_enum {
-        let inner = vec_unit_enum_inner_name(&field.ty, enum_names, tagged_data_enum_names, &mapper.prefix)
+        let inner = vec_unit_enum_inner_name(&field.ty, &wrapper_enum_names, tagged_data_enum_names, &mapper.prefix)
             .expect("is_vec_of_unit_enum implied inner is a named unit enum");
         return format!(
             "#[wasm_bindgen(setter{js_name_attr})]\npub fn set_{name}(&mut self, value: Vec<String>) {{\n    \
@@ -828,7 +852,7 @@ fn gen_setter(
     }
 
     if is_optional_vec_unit_enum {
-        let inner = vec_unit_enum_inner_name(&field.ty, enum_names, tagged_data_enum_names, &mapper.prefix)
+        let inner = vec_unit_enum_inner_name(&field.ty, &wrapper_enum_names, tagged_data_enum_names, &mapper.prefix)
             .expect("is_vec_of_unit_enum implied inner is a named unit enum");
         return format!(
             "#[wasm_bindgen(setter{js_name_attr})]\npub fn set_{name}(&mut self, value: Option<Vec<String>>) {{\n    \

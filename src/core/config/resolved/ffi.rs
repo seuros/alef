@@ -129,7 +129,15 @@ impl ResolvedCrateConfig {
     ///    skipping trailing `src`/`lib`/`include` components.
     ///    E.g. `crates/my-lib-ffi/src/` → `crates/my-lib-ffi`.
     /// 2. `crates/{name}-ffi` fallback derived from the crate name.
-    fn ffi_crate_relative_dir(&self) -> String {
+    ///
+    /// Public because a workspace-relative directory — with no `../` ascent — is what a
+    /// README path needs, and the three wrappers above each bake in the ascent their own
+    /// consumer requires. `ffi_crate_package_name` is not a substitute: it returns only the
+    /// last component, so re-adding a `crates/` prefix would re-hardcode the parent segment
+    /// and break a config like `ffi = "ffi/src/"`. Every caller must route through this or a
+    /// wrapper — the `crates/{name}-ffi` template written out by hand is exactly the bug that
+    /// put an FFI README into a directory that was not the FFI crate. ~keep
+    pub fn ffi_crate_relative_dir(&self) -> String {
         if let Some(ffi_path) = self.explicit_output.ffi.as_ref() {
             let components: Vec<&str> = ffi_path
                 .components()

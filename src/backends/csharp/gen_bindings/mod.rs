@@ -243,7 +243,7 @@ impl Backend for CsharpBackend {
                 &exclude_functions,
                 &config.client_constructors,
                 &config.adapters,
-            )),
+            )?),
             generated_header: true,
         });
 

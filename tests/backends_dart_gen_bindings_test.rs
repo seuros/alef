@@ -2198,6 +2198,7 @@ fn build_config_for_frb_run_command_precedes_post_process_file() {
             PostBuildStep::CarryFrbCfgGates { .. } => "CarryFrbCfgGates",
             PostBuildStep::StageDartNatives { .. } => "StageDartNatives",
             PostBuildStep::MaterializeSwiftBridge { .. } => "MaterializeSwiftBridge",
+            PostBuildStep::RewriteWasmPackageName { .. } => "RewriteWasmPackageName",
         })
         .collect();
 
@@ -2331,6 +2332,7 @@ skip_frb = true
                 PostBuildStep::MaterializeSwiftBridge { binding_crate_name, .. } => {
                     format!("MaterializeSwiftBridge({binding_crate_name})")
                 }
+                PostBuildStep::RewriteWasmPackageName { .. } => "RewriteWasmPackageName".to_string(),
             })
             .collect::<Vec<_>>()
     );

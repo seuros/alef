@@ -682,7 +682,25 @@ pub fn gen_bridge_function(
                     _ => String::new(),
                 }
             );
-            if p.optional || matches!(&p.ty, TypeRef::Optional(_)) {
+            // `{core}::from({name})` is only valid when the mapper gave `{name}` a binding
+            // wrapper that converts into the core type. A `type_overrides` entry can map the
+            // same `TypeRef::Named` to the opaque `JsValue`, which no core type implements
+            // `From` for, making the conversion an E0277 — serde is the bridge there. ~keep
+            let mapped_inner = match &p.ty {
+                TypeRef::Optional(inner) => mapper.map_type(inner),
+                other => mapper.map_type(other),
+            };
+            if crate::codegen::shared::maps_to_js_value(&mapped_inner) {
+                if p.optional || matches!(&p.ty, TypeRef::Optional(_)) {
+                    format!(
+                        "let {name}_core: Option<{core_path}> = {name}.and_then(|v| serde_wasm_bindgen::from_value(v).ok());\n    "
+                    )
+                } else {
+                    format!(
+                        "let {name}_core: {core_path} = serde_wasm_bindgen::from_value({name}).unwrap_or_default();\n    "
+                    )
+                }
+            } else if p.optional || matches!(&p.ty, TypeRef::Optional(_)) {
                 format!("let {name}_core: Option<{core_path}> = {name}.map({core_path}::from);\n    ")
             } else {
                 format!("let {name}_core: {core_path} = {core_path}::from({name});\n    ")
@@ -744,6 +762,12 @@ pub fn gen_bridge_function(
     let return_wrap = match &func.return_type {
         TypeRef::Named(name) if opaque_types.contains(name.as_str()) => {
             format!("{prefix}{name} {{ inner: std::sync::Arc::new(val) }}")
+        }
+        // The declared return type is `return_type` — whatever the mapper rendered — so the
+        // conversion has to match that, not the `TypeRef`. `JsValue` has no `From<CoreType>`,
+        // so `.into()` would be an E0277 against the very signature emitted above. ~keep
+        TypeRef::Named(_) if crate::codegen::shared::maps_to_js_value(&return_type) => {
+            "serde_wasm_bindgen::to_value(&val).unwrap_or(wasm_bindgen::JsValue::NULL)".to_string()
         }
         TypeRef::Named(_) => "val.into()".to_string(),
         TypeRef::String | TypeRef::Bytes => "val.into()".to_string(),
@@ -854,11 +878,19 @@ pub fn gen_options_field_bridge_function(
                             format!("&{}.inner", p.name)
                         }
                     }
+                    // `.into()` reaches the core type only from a binding wrapper. When the
+                    // mapper rendered this parameter as the opaque `JsValue` no such impl
+                    // exists (E0277), so the value crosses back through serde. ~keep
+                    TypeRef::Named(_) if crate::codegen::shared::maps_to_js_value(&mapper.map_type(&p.ty)) => {
+                        format!("serde_wasm_bindgen::from_value({}).unwrap_or_default()", p.name)
+                    }
                     TypeRef::Named(_) => format!("{}.into()", p.name),
                     TypeRef::Optional(inner) => {
                         if let TypeRef::Named(n) = inner.as_ref() {
                             if opaque_types.contains(n.as_str()) {
                                 format!("{}.as_ref().map(|v| &v.inner)", p.name)
+                            } else if crate::codegen::shared::maps_to_js_value(&mapper.map_type(inner)) {
+                                format!("{}.and_then(|v| serde_wasm_bindgen::from_value(v).ok())", p.name)
                             } else {
                                 format!("{}.map(Into::into)", p.name)
                             }
@@ -893,6 +925,11 @@ pub fn gen_options_field_bridge_function(
     let return_wrap = match &func.return_type {
         TypeRef::Named(name) if opaque_types.contains(name.as_str()) => {
             format!("{prefix}{name} {{ inner: std::sync::Arc::new(val) }}")
+        }
+        // Same rule as `gen_bridge_function`: the mapper's rendering of the return type, not the
+        // `TypeRef`, decides whether `.into()` exists. ~keep
+        TypeRef::Named(_) if crate::codegen::shared::maps_to_js_value(&return_type) => {
+            "serde_wasm_bindgen::to_value(&val).unwrap_or(wasm_bindgen::JsValue::NULL)".to_string()
         }
         TypeRef::Named(_) => "val.into()".to_string(),
         TypeRef::String | TypeRef::Bytes => "val.into()".to_string(),
@@ -1026,5 +1063,124 @@ mod tests {
             "wasm presence check must use Reflect: {check}"
         );
         assert!(check.contains("supports_table_detection"));
+    }
+
+    /// A `type_overrides` entry can redirect a bridge function's `Named` parameter and return
+    /// type to the opaque `JsValue`. The signature is written from the mapper, so the body has to
+    /// be too: `sample_core::RenderOptions::from(options)` wants `From<JsValue>` and
+    /// `val.into()` wants `JsValue: From<RenderOutput>` — neither exists, both are E0277. serde
+    /// is the bridge across an opaque passthrough.
+    #[test]
+    fn bridge_function_uses_serde_when_mapper_degrades_named_types() {
+        let func = crate::core::ir::FunctionDef {
+            name: "render".to_string(),
+            rust_path: "sample_core::render".to_string(),
+            params: vec![
+                crate::core::ir::ParamDef {
+                    name: "options".to_string(),
+                    ty: TypeRef::Named("RenderOptions".to_string()),
+                    ..Default::default()
+                },
+                crate::core::ir::ParamDef {
+                    name: "renderer".to_string(),
+                    ty: TypeRef::Named("Renderer".to_string()),
+                    ..Default::default()
+                },
+            ],
+            return_type: TypeRef::Named("RenderOutput".to_string()),
+            error_type: Some("RenderError".to_string()),
+            ..Default::default()
+        };
+        let bridge = TraitBridgeConfig {
+            trait_name: "Renderer".to_string(),
+            ..TraitBridgeConfig::default()
+        };
+        let mut overrides = HashMap::new();
+        overrides.insert("RenderOptions".to_string(), "JsValue".to_string());
+        overrides.insert("RenderOutput".to_string(), "JsValue".to_string());
+        let mapper = crate::backends::wasm::type_map::WasmMapper::new(overrides, "Wasm".to_string());
+
+        let out = gen_bridge_function(
+            &ApiSurface::default(),
+            &func,
+            1,
+            &bridge,
+            &mapper,
+            &Default::default(),
+            "sample_core",
+            "Wasm",
+        );
+
+        assert!(
+            out.contains("let options_core: sample_core::RenderOptions = serde_wasm_bindgen::from_value(options)"),
+            "a JsValue-mapped param must be deserialized, not `::from`:\n{out}"
+        );
+        assert!(
+            !out.contains("sample_core::RenderOptions::from(options)"),
+            "no core type implements From<JsValue>:\n{out}"
+        );
+        assert!(
+            out.contains("serde_wasm_bindgen::to_value(&val)"),
+            "a JsValue-mapped return must be serialized:\n{out}"
+        );
+        assert!(
+            !out.contains(".map(|val| val.into())"),
+            "JsValue implements no From<RenderOutput>:\n{out}"
+        );
+    }
+
+    /// Positive control: with no override the mapper renders the generated wrappers, whose
+    /// `From` impls alef emits itself — the direct conversions must be unchanged.
+    #[test]
+    fn bridge_function_keeps_direct_conversions_for_wrapper_mapped_types() {
+        let func = crate::core::ir::FunctionDef {
+            name: "render".to_string(),
+            rust_path: "sample_core::render".to_string(),
+            params: vec![
+                crate::core::ir::ParamDef {
+                    name: "options".to_string(),
+                    ty: TypeRef::Named("RenderOptions".to_string()),
+                    ..Default::default()
+                },
+                crate::core::ir::ParamDef {
+                    name: "renderer".to_string(),
+                    ty: TypeRef::Named("Renderer".to_string()),
+                    ..Default::default()
+                },
+            ],
+            return_type: TypeRef::Named("RenderOutput".to_string()),
+            error_type: Some("RenderError".to_string()),
+            ..Default::default()
+        };
+        let bridge = TraitBridgeConfig {
+            trait_name: "Renderer".to_string(),
+            ..TraitBridgeConfig::default()
+        };
+        let mapper = crate::backends::wasm::type_map::WasmMapper::new(HashMap::new(), "Wasm".to_string());
+
+        let out = gen_bridge_function(
+            &ApiSurface::default(),
+            &func,
+            1,
+            &bridge,
+            &mapper,
+            &Default::default(),
+            "sample_core",
+            "Wasm",
+        );
+
+        assert!(
+            out.contains("let options_core: sample_core::RenderOptions = sample_core::RenderOptions::from(options)"),
+            "wrapper-mapped param must keep the direct From conversion:\n{out}"
+        );
+        assert!(
+            out.contains(".map(|val| val.into())"),
+            "wrapper-mapped return must keep .into():\n{out}"
+        );
+        assert!(
+            !out.contains("serde_wasm_bindgen::from_value(options)")
+                && !out.contains("serde_wasm_bindgen::to_value(&val)"),
+            "no serde detour for wrapper-mapped types:\n{out}"
+        );
     }
 }

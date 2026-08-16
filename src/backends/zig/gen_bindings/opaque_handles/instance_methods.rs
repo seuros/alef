@@ -1,5 +1,5 @@
 use crate::backends::zig::gen_bindings::errors::resolve_zig_error_type;
-use crate::backends::zig::gen_bindings::functions::zig_return_type;
+use crate::backends::zig::gen_bindings::functions::{return_uses_bytes_out_params, zig_return_type};
 use crate::backends::zig::gen_bindings::helpers::emit_cleaned_zig_doc;
 use crate::core::ir::{MethodDef, ParamDef, ReceiverKind, TypeDef, TypeRef};
 use heck::AsSnakeCase;
@@ -74,7 +74,7 @@ pub(super) fn emit_opaque_method(
         emit_method_param_conversion(p, prefix, struct_names, enum_names, &json_error_return, out);
     }
 
-    let returns_bytes = matches!(method.return_type, TypeRef::Bytes);
+    let returns_bytes = return_uses_bytes_out_params(&method.return_type);
     if returns_bytes {
         out.push_str(&render("opaque_bytes_out_vars.jinja", minijinja::context! {}));
     }
@@ -158,8 +158,15 @@ fn method_return_type(
     let body_needs_try = params.iter().any(method_param_needs_alloc)
         || matches!(
             &method.return_type,
-            TypeRef::String | TypeRef::Path | TypeRef::Json | TypeRef::Bytes | TypeRef::Vec(_) | TypeRef::Map(_, _)
+            TypeRef::String
+                | TypeRef::Char
+                | TypeRef::Path
+                | TypeRef::Json
+                | TypeRef::Bytes
+                | TypeRef::Vec(_)
+                | TypeRef::Map(_, _)
         )
+        || return_uses_bytes_out_params(&method.return_type)
         || matches!(&method.return_type, TypeRef::Named(name) if struct_names.contains(name));
     let body_needs_invalid_json = params.iter().any(|p| method_param_needs_from_json(p, struct_names));
 
@@ -192,7 +199,7 @@ fn method_c_call(
     for p in params {
         c_args.extend(method_c_arg_names(p, struct_names, enum_names));
     }
-    if matches!(method.return_type, TypeRef::Bytes) {
+    if return_uses_bytes_out_params(&method.return_type) {
         c_args.push("&_out_ptr".to_string());
         c_args.push("&_out_len".to_string());
         c_args.push("&_out_cap".to_string());
@@ -268,6 +275,7 @@ fn emit_fallible_method_body(
             "opaque_bytes_return.jinja",
             minijinja::context! {
                 prefix => prefix,
+                is_optional => matches!(method.return_type, TypeRef::Optional(_)),
             },
         ));
     } else if !matches!(method.return_type, TypeRef::Unit) {
@@ -305,6 +313,7 @@ fn emit_infallible_method_body(
             "opaque_bytes_return.jinja",
             minijinja::context! {
                 prefix => prefix,
+                is_optional => matches!(method.return_type, TypeRef::Optional(_)),
             },
         ));
     } else if matches!(method.return_type, TypeRef::Unit) {
@@ -339,5 +348,32 @@ fn emit_consumed_receiver_invalidation(method: &MethodDef, out: &mut String) {
             "opaque_consumed_handle_invalidate.jinja",
             minijinja::context! {},
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test: an infallible method (no declared Rust error type) returning `Char`
+    /// generates a body that copies via `try std.heap.c_allocator.dupe` (see
+    /// `method_unwrap_return_expr`'s owned-copy arm), so the declared error set must include
+    /// `OutOfMemory` — matching how `String` is already covered — or the generated method
+    /// signature and body disagree on whether the call can fail. ~keep
+    #[test]
+    fn method_return_type_includes_out_of_memory_for_infallible_char_return() {
+        let method = MethodDef {
+            name: "first_char".to_string(),
+            return_type: TypeRef::Char,
+            ..MethodDef::default()
+        };
+
+        let return_ty = method_return_type(&method, &[], &HashSet::new(), None);
+
+        assert!(
+            return_ty.contains("OutOfMemory"),
+            "Char return must need OutOfMemory in the error set. Got: {return_ty}"
+        );
+        assert_eq!(return_ty, "error{OutOfMemory,HandleClosed}![]u8");
     }
 }

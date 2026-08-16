@@ -532,3 +532,118 @@ fn gen_tagged_enum_binding_to_core_matches_camel_case_tags() {
         "binding→core must dispatch on tag field string value;\nactual:\n{result}"
     );
 }
+
+/// Build a serde-tagged enum with two *named-field* (struct-like) variants that share a field
+/// name at different `Named` types (`model`), alongside a field whose type is identical in both
+/// (`meta`). `mixed_type_fields` degrades only `model` to `Option<JsValue>`, so one generated
+/// enum carries both representations at once — the exact shape that exposes an emitter deciding
+/// a conversion from the `TypeRef` instead of the binding type.
+fn make_tagged_struct_enum_with_mixed_field() -> EnumDef {
+    let make_variant = |variant_name: &str, tag: &str, model_ty: &str| EnumVariant {
+        name: variant_name.to_string(),
+        fields: vec![
+            FieldDef {
+                name: "model".to_string(),
+                ty: TypeRef::Named(model_ty.to_string()),
+                ..Default::default()
+            },
+            FieldDef {
+                name: "meta".to_string(),
+                ty: TypeRef::Named("MetaInfo".to_string()),
+                ..Default::default()
+            },
+        ],
+        is_tuple: false,
+        doc: String::new(),
+        is_default: false,
+        serde_rename: Some(tag.to_string()),
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        originally_had_data_fields: true,
+        cfg: None,
+        version: Default::default(),
+    };
+
+    EnumDef {
+        name: "Retrieval".to_string(),
+        rust_path: "test_lib::Retrieval".to_string(),
+        variants: vec![
+            make_variant("Sparse", "sparse", "SparseModelType"),
+            make_variant("Dense", "dense", "DenseModelType"),
+        ],
+        has_serde: true,
+        serde_tag: Some("kind".to_string()),
+        ..Default::default()
+    }
+}
+
+/// The binding struct stores a mixed-type variant field as `Option<JsValue>` for *named*-field
+/// variants exactly as it does for tuple variants — assert that first, because it is what makes
+/// the two `From` impls below wrong if they choose `.into()`.
+#[test]
+fn gen_tagged_enum_as_struct_degrades_mixed_named_field_to_js_value() {
+    use super::gen_tagged_enum_as_struct;
+
+    let e = make_tagged_struct_enum_with_mixed_field();
+    let result = gen_tagged_enum_as_struct(&e, "Wasm");
+
+    assert!(
+        result.contains("pub(crate) model: Option<JsValue>,"),
+        "a field with a different Named type per variant must degrade to Option<JsValue>;\nactual:\n{result}"
+    );
+    assert!(
+        result.contains("pub(crate) meta: Option<WasmMetaInfo>,"),
+        "a field with one type across variants must keep its wrapper;\nactual:\n{result}"
+    );
+}
+
+/// Regression test: `From<core::Enum> for Wasm{Enum}` must bridge a mixed named-variant field
+/// through serde. `JsValue` implements no `From<CoreType>`, so `Some(model.into())` — what the
+/// `TypeRef::Named` arm writes — is an `E0277` against the `Option<JsValue>` field the same
+/// generator declared. The positive control is `meta`, which really does hold a wrapper and must
+/// keep using `.into()`.
+#[test]
+fn gen_tagged_enum_core_to_binding_uses_serde_for_mixed_named_field() {
+    use super::gen_tagged_enum_core_to_binding;
+
+    let e = make_tagged_struct_enum_with_mixed_field();
+    let result = gen_tagged_enum_core_to_binding(&e, "test_lib", "Wasm");
+
+    assert!(
+        result.contains("model: serde_wasm_bindgen::to_value(&model).ok()"),
+        "mixed named-variant field must cross through serde;\nactual:\n{result}"
+    );
+    assert!(
+        !result.contains("model: Some(model.into())"),
+        "mixed named-variant field must not use .into() into a JsValue field;\nactual:\n{result}"
+    );
+    assert!(
+        result.contains("meta: Some(meta.into())"),
+        "a wrapper-typed field must still use .into();\nactual:\n{result}"
+    );
+}
+
+/// Regression test: the reverse direction. `val.model.clone().map(Into::into)` asks for
+/// `SparseModelType: From<JsValue>`, which does not exist either — the value must be
+/// deserialized. `meta` is the positive control for the unchanged wrapper path.
+#[test]
+fn gen_tagged_enum_binding_to_core_uses_serde_for_mixed_named_field() {
+    use super::gen_tagged_enum_binding_to_core;
+
+    let e = make_tagged_struct_enum_with_mixed_field();
+    let result = gen_tagged_enum_binding_to_core(&e, "test_lib", "Wasm");
+
+    assert!(
+        result.contains("serde_wasm_bindgen::from_value::<test_lib::SparseModelType>")
+            && result.contains("serde_wasm_bindgen::from_value::<test_lib::DenseModelType>"),
+        "mixed named-variant field must be deserialized per variant;\nactual:\n{result}"
+    );
+    assert!(
+        !result.contains("model: val.model.clone().map(Into::into)"),
+        "mixed named-variant field must not use Into::into from a JsValue field;\nactual:\n{result}"
+    );
+    assert!(
+        result.contains("meta: val.meta.clone().map(Into::into).unwrap_or_default()"),
+        "a wrapper-typed field must still use Into::into;\nactual:\n{result}"
+    );
+}

@@ -1,4 +1,52 @@
-{% if has_error %}
+{% if has_error and is_optional %}
+    match result {
+        Ok(Some(val)) => {
+            // Convert via Vec<u8> so the path works for both Vec<u8> and bytes::Bytes
+            // (and any other type that implements Into<Vec<u8>>).
+            let buffer = Vec::<u8>::from(val).into_boxed_slice();
+            let len = buffer.len();
+            let ptr = Box::into_raw(buffer).cast::<u8>();
+            // SAFETY: out_ptr/out_len/out_cap were null-checked above.
+            unsafe { *out_ptr = ptr; *out_len = len; *out_cap = len; }
+            0
+        }
+        Ok(None) => {
+            // A null out_ptr is the `None` encoding. `Some(&[])` still writes the
+            // non-null dangling-but-aligned pointer of an empty boxed slice, so an
+            // absent value never collides with a present-but-empty one.
+            // SAFETY: out_ptr/out_len/out_cap were null-checked above.
+            unsafe { *out_ptr = std::ptr::null_mut(); *out_len = 0; *out_cap = 0; }
+            0
+        }
+        Err(e) => {
+            set_last_error(alef_ffi_error_code(&e), &e.to_string());
+            // SAFETY: out_ptr/out_len/out_cap were null-checked above.
+            unsafe { *out_ptr = std::ptr::null_mut(); *out_len = 0; *out_cap = 0; }
+            -1
+        }
+    }
+{% elif is_optional %}
+    match result {
+        Some(val) => {
+            // Convert via Vec<u8> so the path works for both Vec<u8> and bytes::Bytes
+            // (and any other type that implements Into<Vec<u8>>).
+            let buffer = Vec::<u8>::from(val).into_boxed_slice();
+            let len = buffer.len();
+            let ptr = Box::into_raw(buffer).cast::<u8>();
+            // SAFETY: out_ptr/out_len/out_cap were null-checked above.
+            unsafe { *out_ptr = ptr; *out_len = len; *out_cap = len; }
+            0
+        }
+        None => {
+            // A null out_ptr is the `None` encoding. `Some(&[])` still writes the
+            // non-null dangling-but-aligned pointer of an empty boxed slice, so an
+            // absent value never collides with a present-but-empty one.
+            // SAFETY: out_ptr/out_len/out_cap were null-checked above.
+            unsafe { *out_ptr = std::ptr::null_mut(); *out_len = 0; *out_cap = 0; }
+            0
+        }
+    }
+{% elif has_error %}
     match result {
         Ok(val) => {
             // Convert via Vec<u8> so the path works for both Vec<u8> and bytes::Bytes

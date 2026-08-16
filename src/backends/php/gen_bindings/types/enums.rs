@@ -147,7 +147,12 @@ pub(crate) fn ty_references_untagged_data_enum(ty: &TypeRef, untagged_data_enum_
 /// - Multi-field tuple variant `Foo(_0, _1)` → `foo_0`, `foo_1`
 ///
 /// For struct variants (named fields), the field's own name is used unchanged.
-fn flat_field_name(variant: &EnumVariant, field_index: usize) -> String {
+///
+/// `pub(crate)` because the PHPStan stub must name the flat enum's `#[php(getter)]`-backed
+/// properties identically to the runtime (`get_<flat_name>` registers the property `<flat_name>`);
+/// re-deriving the tuple-variant collision rule in `type_stubs.rs` is exactly how the two paths
+/// drift apart. ~keep
+pub(crate) fn flat_field_name(variant: &EnumVariant, field_index: usize) -> String {
     if crate::codegen::conversions::is_tuple_variant(&variant.fields) {
         let base = crate::codegen::naming::pascal_to_snake(&variant.name);
         if variant.fields.len() == 1 {

@@ -1,4 +1,8 @@
-use super::{gen_data_enum_variant_constructor_stubs, gen_struct_constructor_stub_params, struct_needs_from_json_stub};
+use super::{
+    StubConstructorShape, gen_data_enum_property_declarations, gen_data_enum_variant_constructor_stubs, gen_enum_stub,
+    gen_kwargs_constructor_stub_params, gen_kwargs_property_declarations, gen_struct_constructor_stub_params,
+    struct_needs_from_json_stub, stub_constructor_shape,
+};
 use crate::backends::php::gen_bindings::functions::has_unsupported_static_params;
 use crate::core::ir::{
     CoreWrapper, EnumDef, EnumVariant, FieldDef, MethodDef, ParamDef, PrimitiveType, TypeDef, TypeRef,
@@ -236,10 +240,13 @@ fn emits_factory_stub_even_with_colliding_hand_written_method() {
 }
 
 /// Regression: the real extension (`gen_bindings/types/structs.rs`'s `use_from_json` gate)
-/// emits `#[php(name = "from_json")]` for a serde struct with a non-scalar (named/complex)
-/// field, since `#[php(constructor)]` can't represent that field. The PHPStan stub must declare
-/// the same static constructor or the method is invisible to editors and static analysis even
-/// though it's the only way to build the type's nested config from PHP.
+/// emits `#[php(name = "from_json")]` for a struct with a non-scalar (named/complex) field in a
+/// serde-capable binding crate, since `#[php(constructor)]` can't represent that field. The PHPStan
+/// stub must declare the same static constructor or the method is invisible to editors and static
+/// analysis even though it's the only way to build the type's nested config from PHP.
+///
+/// Positive control for the common case — crate serde AND the core type's own derives both present,
+/// which is every real consumer crate today.
 #[test]
 fn needs_from_json_stub_for_struct_with_named_field() {
     let typ = TypeDef {
@@ -249,7 +256,39 @@ fn needs_from_json_stub_for_struct_with_named_field() {
         ..Default::default()
     };
 
-    assert!(struct_needs_from_json_stub(&typ, &ahash::AHashSet::new()));
+    assert!(struct_needs_from_json_stub(&typ, &ahash::AHashSet::new(), true));
+}
+
+/// Direction 1 of the crate-probe/per-type disagreement: the binding crate HAS serde but the core
+/// type derives nothing. `gen_php_struct` still stamps `#[derive(serde::Serialize,
+/// serde::Deserialize)]` on the generated MIRROR struct (it gates that derive on the crate-level
+/// probe alone), and `from_json` deserializes the mirror — never the core type — so the extension
+/// really does expose `from_json` here. Keying the stub on `TypeDef::has_serde` hid it.
+#[test]
+fn needs_from_json_stub_when_only_the_crate_has_serde() {
+    let typ = TypeDef {
+        name: "Wrapper".to_string(),
+        has_serde: false,
+        fields: vec![field("inner", TypeRef::Named("Nested".to_string()), false)],
+        ..Default::default()
+    };
+
+    assert!(struct_needs_from_json_stub(&typ, &ahash::AHashSet::new(), true));
+}
+
+/// Direction 2: the core type derives `Serialize`/`Deserialize` but the binding crate has no serde
+/// dependency, so `gen_php_struct` emits a mirror with no `Deserialize` and
+/// `gen_struct_methods_impl` emits no `from_json` at all. The type's own derives cannot conjure one.
+#[test]
+fn does_not_need_from_json_stub_when_only_the_type_has_serde() {
+    let typ = TypeDef {
+        name: "Wrapper".to_string(),
+        has_serde: true,
+        fields: vec![field("inner", TypeRef::Named("Nested".to_string()), false)],
+        ..Default::default()
+    };
+
+    assert!(!struct_needs_from_json_stub(&typ, &ahash::AHashSet::new(), false));
 }
 
 /// A struct with only scalar fields, no `Default` impl, and no field defaults is fully
@@ -267,7 +306,123 @@ fn does_not_need_from_json_stub_for_plain_scalar_struct() {
         ..Default::default()
     };
 
-    assert!(!struct_needs_from_json_stub(&typ, &ahash::AHashSet::new()));
+    assert!(!struct_needs_from_json_stub(&typ, &ahash::AHashSet::new(), true));
+}
+
+/// Regression for the enum-branch copy of the stub/runtime disagreement: `gen_flat_data_enum_methods`
+/// adds a `#[php(name = "from_json")]` to EVERY flat data enum's `#[php_impl]` block, unconditionally
+/// — the flat mirror struct's `serde::Serialize`/`Deserialize` derives are stamped by
+/// `php_flat_enum_struct_start.jinja` itself, not by the crate-level `php_serde_available` probe the
+/// struct path keys on, so there is no serde gate to mirror here. The stub's own enum loop rendered
+/// only per-variant factories, leaving `Message::from_json(..)` and `ResponseFormat::from_json(..)`
+/// undefined for PHPStan while the extension defined them.
+#[test]
+fn data_enum_stub_declares_from_json_like_the_runtime() {
+    let stub = gen_enum_stub(&shape_enum(), &AHashSet::new());
+
+    assert!(
+        stub.contains("public static function from_json(string $json): self"),
+        "{stub}"
+    );
+}
+
+/// Positive control for the gate above: `rust_bindings.rs` routes a non-tagged enum to
+/// `gen_enum_constants`, which emits class constants and NO `from_json`. Without this the fix could
+/// have been "emit `from_json` for every enum" and still passed.
+#[test]
+fn unit_variant_enum_stub_declares_no_from_json() {
+    let def = enum_def("Level", vec![variant("Low", vec![]), variant("High", vec![])]);
+
+    let stub = gen_enum_stub(&def, &AHashSet::new());
+
+    assert!(!stub.contains("from_json"), "{stub}");
+    assert!(stub.contains("enum Level: string"), "{stub}");
+    assert!(stub.contains("case Low = 'Low';"), "{stub}");
+}
+
+/// `#[php(getter)] pub fn get_<flat>(&self)` registers a read-only PHP PROPERTY named `<flat>`
+/// (ext-php-rs strips the raw `get_` prefix, no case conversion) — not a `getFlat()` method. Every
+/// flat field is `Option<T>` on the binding struct because only one variant is populated at a time,
+/// so every property is nullable; the tag discriminator is the one non-nullable `string`.
+#[test]
+fn data_enum_stub_declares_a_readonly_property_per_flat_field() {
+    let declarations = gen_data_enum_property_declarations(&shape_enum(), &AHashSet::new()).join("");
+
+    assert!(
+        declarations.contains("public readonly string $type_tag;"),
+        "{declarations}"
+    );
+    assert!(
+        declarations.contains("public readonly ?float $radius;"),
+        "{declarations}"
+    );
+    assert!(declarations.contains("public readonly ?int $width;"), "{declarations}");
+    assert!(declarations.contains("public readonly ?int $height;"), "{declarations}");
+}
+
+/// A tuple variant's flat field is named after the VARIANT (`flat_field_name`), not after the
+/// positional `_0` ident, so two tuple variants do not collide on `_0`. The stub must reuse that
+/// exact derivation — the runtime getter it mirrors is `get_text`, i.e. property `$text`.
+#[test]
+fn data_enum_property_uses_variant_derived_name_for_tuple_variants() {
+    let mut text = variant("Text", vec![field("_0", TypeRef::String, false)]);
+    text.is_tuple = true;
+    let def = enum_def("Content", vec![text]);
+
+    let declarations = gen_data_enum_property_declarations(&def, &AHashSet::new()).join("");
+
+    assert!(
+        declarations.contains("public readonly ?string $text;"),
+        "{declarations}"
+    );
+    assert!(!declarations.contains("$_0"), "{declarations}");
+}
+
+/// `PhpMapper::named` lowers a unit-variant enum to `String` (ext-php-rs cannot carry a Rust enum),
+/// so the runtime getter returns a plain PHP string. Typing the property as the `enum <Name>: string`
+/// the stub declares elsewhere would promise a value the extension never returns.
+#[test]
+fn data_enum_property_types_a_string_enum_field_as_string() {
+    let def = enum_def(
+        "Part",
+        vec![variant(
+            "Image",
+            vec![field("detail", TypeRef::Named("ImageDetail".to_string()), false)],
+        )],
+    );
+    let enum_names: AHashSet<String> = ["ImageDetail".to_string()].into_iter().collect();
+
+    let declarations = gen_data_enum_property_declarations(&def, &enum_names).join("");
+
+    assert!(
+        declarations.contains("public readonly ?string $detail;"),
+        "{declarations}"
+    );
+    assert!(!declarations.contains("ImageDetail"), "{declarations}");
+}
+
+/// PHPStan at level max rejects a bare `array`, so map/vec properties carry a generic `@var`.
+#[test]
+fn data_enum_property_emits_generic_phpdoc_for_array_fields() {
+    let def = enum_def(
+        "CacheBackend",
+        vec![variant(
+            "OpenDal",
+            vec![field(
+                "config",
+                TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String)),
+                false,
+            )],
+        )],
+    );
+
+    let declarations = gen_data_enum_property_declarations(&def, &AHashSet::new()).join("");
+
+    assert!(declarations.contains("@var ?array<string, string>"), "{declarations}");
+    assert!(
+        declarations.contains("public readonly ?array $config;"),
+        "{declarations}"
+    );
 }
 
 /// A struct with an explicit hand-written static `new` constructor keeps its own constructor
@@ -286,7 +441,7 @@ fn does_not_need_from_json_stub_when_explicit_static_new_exists() {
         ..Default::default()
     };
 
-    assert!(!struct_needs_from_json_stub(&typ, &ahash::AHashSet::new()));
+    assert!(!struct_needs_from_json_stub(&typ, &ahash::AHashSet::new(), true));
 }
 
 /// A `#[derive(Default)]` struct needs `from_json` even if every field is scalar, because the
@@ -301,7 +456,7 @@ fn needs_from_json_stub_when_struct_has_default_impl() {
         ..Default::default()
     };
 
-    assert!(struct_needs_from_json_stub(&typ, &ahash::AHashSet::new()));
+    assert!(struct_needs_from_json_stub(&typ, &ahash::AHashSet::new(), true));
 }
 
 /// Regression for the `BudgetConfig` bug: the stub's constructor param list must sort
@@ -322,7 +477,7 @@ fn required_fields_sort_before_optional_regardless_of_declaration_order() {
         ..Default::default()
     };
 
-    let params = gen_struct_constructor_stub_params(&typ, &AHashSet::new(), &AHashSet::new());
+    let params = gen_struct_constructor_stub_params(&typ, &AHashSet::new(), &AHashSet::new(), true);
     let joined = params.join("\n");
 
     let model_limits_idx = joined.find("$modelLimits").expect("modelLimits param present");
@@ -342,6 +497,8 @@ fn required_fields_sort_before_optional_regardless_of_declaration_order() {
 /// `f.optional` (false) for both the type/nullability AND the sort key, so `window` rendered as
 /// `public readonly float $window` (required, wrong type) and sorted ahead of the genuinely
 /// optional fields — disagreeing with the runtime constructor on type, nullability, AND position.
+///
+/// Positive control for the widening: crate serde AND the type's own derives both present.
 #[test]
 fn duration_field_widened_by_default_impl_is_optional_int_and_sorts_last() {
     let typ = TypeDef {
@@ -356,7 +513,7 @@ fn duration_field_widened_by_default_impl_is_optional_int_and_sorts_last() {
         ..Default::default()
     };
 
-    let params = gen_struct_constructor_stub_params(&typ, &AHashSet::new(), &AHashSet::new());
+    let params = gen_struct_constructor_stub_params(&typ, &AHashSet::new(), &AHashSet::new(), true);
     let joined = params.join("\n");
 
     assert!(
@@ -366,6 +523,38 @@ fn duration_field_widened_by_default_impl_is_optional_int_and_sorts_last() {
     let rpm_idx = joined.find("$rpm").expect("rpm param present");
     let window_idx = joined.find("$window").expect("window param present");
     assert!(rpm_idx < window_idx, "{joined}");
+}
+
+/// The same `Duration` widening keys on the CRATE probe, exactly as the runtime does
+/// (`structs.rs`: `f.optional || (has_serde && typ.has_default && matches!(f.ty, Duration))`).
+/// Without crate serde the mirror struct carries no `#[serde(default)]`/`skip_serializing_if`, the
+/// runtime does not widen, and neither may the stub — the type takes the `Kwargs` shape here, so
+/// the widening is observable on the separately-declared properties rather than on promoted params.
+/// The core type's own derives (`has_serde: true` below) must not resurrect the widening.
+#[test]
+fn duration_field_is_not_widened_when_the_crate_has_no_serde() {
+    let typ = TypeDef {
+        name: "RateLimitConfig".to_string(),
+        has_serde: true,
+        has_default: true,
+        fields: vec![
+            field("rpm", TypeRef::Primitive(PrimitiveType::U32), true),
+            field("window", TypeRef::Duration, false),
+        ],
+        ..Default::default()
+    };
+
+    assert_eq!(
+        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), false),
+        StubConstructorShape::Kwargs
+    );
+
+    let joined = gen_kwargs_property_declarations(&typ, &AHashSet::new(), false).join("");
+    assert!(
+        joined.contains("public int $window;"),
+        "an un-widened Duration property stays non-nullable: {joined}"
+    );
+    assert!(joined.contains("public ?int $rpm;"), "{joined}");
 }
 
 fn param(name: &str, ty: TypeRef) -> ParamDef {
@@ -414,5 +603,282 @@ fn opaque_or_string_enum_named_params_are_supported_for_static_delegation() {
     assert!(
         !has_unsupported_static_params(&params, &opaque_types, &string_enum_names),
         "opaque and string-enum Named params are exactly what gen_static_method can delegate"
+    );
+}
+
+/// Regression: the PHPStan stub unconditionally emitted a full field-derived
+/// `#[php(constructor)]` parameter list, even for the shapes where the real extension emits
+/// something else entirely -- a field needing a named/complex param, with the type not
+/// qualifying for `from_json`, gets a real, zero-param constructor that always throws
+/// (`structs.rs`'s `has_named_params && !use_from_json` branch), not the field list.
+///
+/// "Without serde" here means the BINDING CRATE has none — the signal the runtime's `use_from_json`
+/// actually reads. The fixture deliberately sets `has_serde: true` on the type: a core type that
+/// derives `Serialize`/`Deserialize` still gets no `from_json` in a crate that cannot derive them on
+/// the mirror struct, so the per-type flag must not rescue it out of this shape. ~keep
+#[test]
+fn stub_constructor_shape_is_throws_no_params_when_field_needs_named_param_without_serde() {
+    let typ = TypeDef {
+        name: "Wrapper".to_string(),
+        has_serde: true,
+        fields: vec![field("inner", TypeRef::Named("Nested".to_string()), false)],
+        ..Default::default()
+    };
+
+    assert_eq!(
+        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), false),
+        StubConstructorShape::ThrowsNoParams
+    );
+}
+
+/// The inverse direction, and the reason this mismatch was worth fixing properly: a crate WITH
+/// serde holding a type that derives none. The runtime's `use_from_json` is true (crate serde plus
+/// `has_default`), every field is optional so no positional `#[php(constructor)]` is emitted, and
+/// `from_json` is the extension's only constructor — `FromJsonOnly`. Keying on `TypeDef::has_serde`
+/// instead produced `Kwargs`: a full list of nullable positional parameters for a `__construct` the
+/// extension never defines. The wrong signal did not drop a method, it invented a constructor.
+#[test]
+fn stub_constructor_shape_is_from_json_only_when_only_the_crate_has_serde() {
+    let typ = TypeDef {
+        name: "Config".to_string(),
+        has_serde: false,
+        has_default: true,
+        fields: vec![field("timeout", TypeRef::Primitive(PrimitiveType::U32), true)],
+        ..Default::default()
+    };
+
+    assert_eq!(
+        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), true),
+        StubConstructorShape::FromJsonOnly
+    );
+}
+
+/// Companion regression: `use_from_json` true (via `has_default`) with every field optional
+/// means no field is a representable *required* one, so `structs.rs`'s
+/// `has_representable_required` gate suppresses the positional `#[php(constructor)]`
+/// entirely -- `from_json` is the extension's only constructor, and the stub must not
+/// declare a positional one that doesn't exist.
+#[test]
+fn stub_constructor_shape_is_from_json_only_when_no_representable_required_field() {
+    let typ = TypeDef {
+        name: "Config".to_string(),
+        has_serde: true,
+        has_default: true,
+        fields: vec![field("timeout", TypeRef::Primitive(PrimitiveType::U32), true)],
+        ..Default::default()
+    };
+
+    assert_eq!(
+        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), true),
+        StubConstructorShape::FromJsonOnly
+    );
+}
+
+/// Same `use_from_json` gate as above, but with a representable required field present --
+/// `structs.rs` emits both `from_json` AND the positional constructor, so the stub must
+/// still declare the field-derived parameter list.
+#[test]
+fn stub_constructor_shape_is_positional_when_a_required_field_is_representable() {
+    let typ = TypeDef {
+        name: "Config".to_string(),
+        has_serde: true,
+        has_default: true,
+        fields: vec![
+            field("name", TypeRef::String, false),
+            field("timeout", TypeRef::Primitive(PrimitiveType::U32), true),
+        ],
+        ..Default::default()
+    };
+
+    assert_eq!(
+        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), true),
+        StubConstructorShape::Positional
+    );
+}
+
+/// Positive control: the common case (crate serde and the type's own derives both present, no
+/// named-param field, no `Default` impl) must stay `Positional` -- the shape most structs actually
+/// use, and the one `gen_struct_constructor_stub_params`'s own tests already cover in detail.
+#[test]
+fn stub_constructor_shape_is_positional_for_the_plain_scalar_case() {
+    let typ = TypeDef {
+        name: "Point".to_string(),
+        has_serde: true,
+        fields: vec![
+            field("x", TypeRef::Primitive(PrimitiveType::F64), false),
+            field("y", TypeRef::Primitive(PrimitiveType::F64), false),
+        ],
+        ..Default::default()
+    };
+
+    assert_eq!(
+        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), true),
+        StubConstructorShape::Positional
+    );
+}
+
+/// A `Default` type whose binding CRATE has no serde takes `structs.rs`'s final `else` branch and
+/// is built by `config_gen::gen_php_kwargs_constructor` -- neither the positional
+/// `#[php(constructor)]` nor `from_json`. The fixture's own `has_serde: true` must not divert it.
+#[test]
+fn stub_constructor_shape_is_kwargs_for_default_impl_without_serde() {
+    let typ = kwargs_config_type();
+
+    assert_eq!(
+        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), false),
+        StubConstructorShape::Kwargs
+    );
+}
+
+/// A type with a hand-written static `new` gets NO generated constructor at all: `structs.rs`
+/// gates its whole constructor block on `!has_explicit_static_new`. What PHP still sees is
+/// ext-php-rs's own zero-arg `__construct`, which throws -- so the stub must declare the
+/// zero-param throwing shape, not a field-derived parameter list for a `new(...)` that the
+/// extension never defines.
+#[test]
+fn stub_constructor_shape_is_throws_no_params_when_type_has_explicit_static_new() {
+    let typ = TypeDef {
+        name: "Custom".to_string(),
+        has_serde: true,
+        has_default: true,
+        fields: vec![
+            field("name", TypeRef::String, false),
+            field("timeout", TypeRef::Primitive(PrimitiveType::U32), true),
+        ],
+        methods: vec![MethodDef {
+            name: "new".to_string(),
+            is_static: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    assert_eq!(
+        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), true),
+        StubConstructorShape::ThrowsNoParams
+    );
+}
+
+/// `RetryConfig`-shaped fixture for the `Kwargs` branch: a `#[derive(Default)]` type whose binding
+/// crate has no serde (the shape's precondition, passed explicitly as `serde_available: false`).
+/// `has_serde: true` on the type itself is deliberate — the per-type flag is not the signal, and a
+/// fixture that set it to `false` would agree with the crate probe by accident and stop testing
+/// anything. Deliberately mixes an optional field declared FIRST (so a required-before-optional
+/// sort would move it), a required multi-word field (so a `to_php_name` rename would be visible),
+/// and a `cfg`-gated field (which the positional shape filters out but
+/// `gen_php_kwargs_constructor` keeps).
+fn kwargs_config_type() -> TypeDef {
+    TypeDef {
+        name: "RetryConfig".to_string(),
+        has_serde: true,
+        has_default: true,
+        fields: vec![
+            field("jitter", TypeRef::Primitive(PrimitiveType::Bool), true),
+            field("max_retries", TypeRef::Primitive(PrimitiveType::U32), false),
+            FieldDef {
+                cfg: Some("feature = \"metrics\"".to_string()),
+                ..field("metrics_label", TypeRef::String, false)
+            },
+        ],
+        ..Default::default()
+    }
+}
+
+/// The runtime constructor is `pub fn __construct(jitter: Option<bool>, max_retries: Option<u32>,
+/// metrics_label: Option<String>) -> Self`, and ext-php-rs makes every `Option<T>` arg nullable
+/// and omittable. The stub must reproduce that signature exactly: declaration order (NOT
+/// required-first), the `cfg`-gated field included, every param `?T = null`, and the raw
+/// snake_case parameter names ext-php-rs registers verbatim.
+#[test]
+fn kwargs_constructor_stub_matches_the_runtime_signature_exactly() {
+    let params = gen_kwargs_constructor_stub_params(&kwargs_config_type());
+
+    assert_eq!(
+        params,
+        vec![
+            "        ?bool $jitter = null".to_string(),
+            "        ?int $max_retries = null".to_string(),
+            "        ?string $metrics_label = null".to_string(),
+        ]
+    );
+}
+
+/// A `binding_excluded` field is absent from `constructor_fields`, so it must be absent from the
+/// stub too -- the one filter the two algorithms genuinely share.
+#[test]
+fn kwargs_constructor_stub_omits_binding_excluded_fields() {
+    let typ = TypeDef {
+        name: "RetryConfig".to_string(),
+        has_default: true,
+        fields: vec![
+            FieldDef {
+                binding_excluded: true,
+                ..field("internal", TypeRef::String, false)
+            },
+            field("jitter", TypeRef::Primitive(PrimitiveType::Bool), true),
+        ],
+        ..Default::default()
+    };
+
+    assert_eq!(
+        gen_kwargs_constructor_stub_params(&typ),
+        vec!["        ?bool $jitter = null".to_string()]
+    );
+}
+
+/// The `#[php(prop)]` properties still exist on a `Kwargs` type, but constructor-property
+/// promotion cannot express them: the parameter is `?T` under the snake_case field ident while the
+/// property is non-nullable `T` under the `to_php_name` camelCase name. They are declared
+/// separately, writable (the ext-php-rs derive registers a setter for every `#[php(prop)]` field).
+#[test]
+fn kwargs_property_declarations_use_php_names_and_field_nullability() {
+    let declarations = gen_kwargs_property_declarations(&kwargs_config_type(), &AHashSet::new(), false);
+    let joined = declarations.join("");
+
+    assert!(joined.contains("public ?bool $jitter;"), "{joined}");
+    assert!(joined.contains("public int $maxRetries;"), "{joined}");
+    assert!(joined.contains("public string $metricsLabel;"), "{joined}");
+    assert!(!joined.contains("readonly"), "{joined}");
+}
+
+/// Positive control for the common path: the `Positional` shape's derivation is untouched by the
+/// `Kwargs` work -- it still filters `cfg`-gated fields out, sorts required before optional, and
+/// renames parameters with `to_php_name`, exactly as the runtime `#[php(constructor)] pub fn
+/// new(...)` does. A regression in this shared path cannot hide behind the `Kwargs` tests.
+#[test]
+fn positional_constructor_stub_is_unaffected_by_the_kwargs_derivation() {
+    let typ = TypeDef {
+        name: "RequestOptions".to_string(),
+        has_serde: true,
+        fields: vec![
+            field("jitter", TypeRef::Primitive(PrimitiveType::Bool), true),
+            field("max_retries", TypeRef::Primitive(PrimitiveType::U32), false),
+            FieldDef {
+                cfg: Some("feature = \"metrics\"".to_string()),
+                ..field("metrics_label", TypeRef::String, false)
+            },
+        ],
+        ..Default::default()
+    };
+
+    assert_eq!(
+        stub_constructor_shape(&typ, &AHashSet::new(), &AHashSet::new(), true),
+        StubConstructorShape::Positional
+    );
+
+    let joined = gen_struct_constructor_stub_params(&typ, &AHashSet::new(), &AHashSet::new(), true).join("\n");
+
+    assert!(
+        joined.contains("public readonly int $maxRetries"),
+        "required field keeps its non-nullable, camelCase, promoted form: {joined}"
+    );
+    assert!(joined.contains("public readonly ?bool $jitter = null"), "{joined}");
+    assert!(
+        joined.find("$maxRetries") < joined.find("$jitter"),
+        "required must still sort before optional: {joined}"
+    );
+    assert!(
+        !joined.contains("metricsLabel"),
+        "cfg-gated fields are still filtered out of the positional shape: {joined}"
     );
 }

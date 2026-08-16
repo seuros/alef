@@ -359,3 +359,82 @@ fn test_gen_method_wrapper_infallible_bytes_uses_owned_buffer_abi() {
     assert!(out.contains("C.GoBytes"));
     assert!(!out.contains("unmarshalBytes"));
 }
+
+/// Method-side companion to
+/// `functions::tests::optional_bytes_return_reads_the_three_out_params_and_maps_null_to_nil`:
+/// an opaque-type method returning `Optional<Bytes>` gets the same byte-identical C
+/// signature as bare `Bytes`, so it must take the out-param path and map `*out_ptr == NULL`
+/// to Go's nil slice rather than reading a direct `*mut u8`.
+#[test]
+fn optional_bytes_method_reads_the_three_out_params_and_maps_null_to_nil() {
+    let typ = opaque_type("Renderer");
+    let mut method = simple_method("thumbnail", TypeRef::Optional(Box::new(TypeRef::Bytes)), false);
+    method.error_type = Some("SampleCrateError".to_string());
+
+    let out = gen_method_wrapper(
+        &typ,
+        &method,
+        "krz",
+        &["Renderer"].into(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+    );
+
+    // Positive control: the fixture must actually render a method body, so the ABI
+    // assertions below cannot pass over empty output. ~keep
+    assert!(
+        out.contains("func (h *Renderer) Thumbnail(") && out.contains("C.krz_renderer_thumbnail("),
+        "fixture must emit a real method calling the C symbol, got:\n{out}"
+    );
+
+    assert!(out.contains("([]byte, error)"), "missing bytes return type in:\n{out}");
+    assert!(out.contains("var outPtr"), "missing outPtr declaration in:\n{out}");
+    assert!(out.contains("var outLen, outCap"), "missing outLen/outCap in:\n{out}");
+    assert!(
+        out.contains("&outPtr, &outLen, &outCap"),
+        "the C call must pass all three out-params in:\n{out}"
+    );
+    assert!(
+        out.contains("if outPtr == nil"),
+        "absence is carried by a NULL out_ptr and must map to Go's nil slice, got:\n{out}"
+    );
+    assert!(out.contains("C.GoBytes"), "missing C.GoBytes in:\n{out}");
+    assert!(out.contains("krz_free_bytes"), "missing krz_free_bytes in:\n{out}");
+}
+
+/// Control: widening the predicate must not put every optional-returning method on the
+/// byte-buffer path. `Optional<String>` stays a nullable `*mut c_char`.
+#[test]
+fn optional_string_method_keeps_the_direct_pointer_shape() {
+    let typ = opaque_type("Renderer");
+    let mut method = simple_method("caption", TypeRef::Optional(Box::new(TypeRef::String)), false);
+    method.error_type = Some("SampleCrateError".to_string());
+
+    let out = gen_method_wrapper(
+        &typ,
+        &method,
+        "krz",
+        &["Renderer"].into(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+    );
+
+    assert!(
+        out.contains("func (h *Renderer) Caption(") && out.contains("C.krz_renderer_caption("),
+        "fixture must emit a real method calling the C symbol, got:\n{out}"
+    );
+    assert!(
+        !out.contains("outPtr"),
+        "no byte out-params for Optional<String> in:\n{out}"
+    );
+    assert!(
+        !out.contains("outCap"),
+        "no byte out-params for Optional<String> in:\n{out}"
+    );
+    assert!(
+        !out.contains("([]byte, error)"),
+        "Optional<String> must not be typed as []byte in:\n{out}"
+    );
+}

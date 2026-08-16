@@ -750,3 +750,194 @@ fn wasm_function_reachability_follows_target_features() {
     assert!(!function_is_exported("download", &functions, &config));
     assert!(function_is_exported("prefetch", &functions, &config));
 }
+
+/// Regression test: wasm-pack's own `pkg/nodejs/package.json` (produced by
+/// `--target nodejs --out-dir pkg/nodejs`) declares a `"name"` derived from the wasm crate's
+/// `Cargo.toml`, not `config.wasm_package_name()` — the name every e2e-generated `file:`
+/// dependency and `require()`/`import` specifier actually uses. Without a post-build step to
+/// reconcile them, the specifier names a package the built directory does not declare.
+#[test]
+fn build_config_with_config_rewrites_wasm_pack_package_json_name() {
+    let backend = WasmBackend;
+    let config = make_config();
+
+    let build_config = backend
+        .build_config_with_config(&config)
+        .expect("wasm backend must report a build config");
+
+    let rewrite_step = build_config
+        .post_build
+        .iter()
+        .find_map(|step| match step {
+            crate::core::backend::PostBuildStep::RewriteWasmPackageName {
+                package_json_path,
+                package_name,
+            } => Some((package_json_path.clone(), package_name.clone())),
+            _ => None,
+        })
+        .expect("build_config_with_config must attach a RewriteWasmPackageName post-build step");
+
+    assert_eq!(rewrite_step.1, "test-lib-wasm");
+    assert_eq!(
+        rewrite_step.0,
+        std::path::PathBuf::from("crates/test-lib-wasm/pkg/nodejs/package.json"),
+        "the rewrite target must be the exact directory `build_command_for`'s wasm-pack \
+         arm builds into: {:?}",
+        rewrite_step.0
+    );
+}
+
+fn rewrite_target_for(toml_src: &str) -> std::path::PathBuf {
+    let cfg: NewAlefConfig = toml::from_str(toml_src).unwrap();
+    let config = cfg.resolve().unwrap().remove(0);
+
+    WasmBackend
+        .build_config_with_config(&config)
+        .expect("wasm backend must report a build config")
+        .post_build
+        .iter()
+        .find_map(|step| match step {
+            crate::core::backend::PostBuildStep::RewriteWasmPackageName {
+                package_json_path, ..
+            } => Some(package_json_path.clone()),
+            _ => None,
+        })
+        .expect("build_config_with_config must attach a RewriteWasmPackageName post-build step")
+}
+
+/// Failure path: when `[crates.output] wasm` is set, `build_command_for` resolves the crate
+/// dir from *that* path (dropping a trailing `src`, which holds the generated sources rather
+/// than the crate root) and ignores the `package_dir` default formula. This step must follow
+/// the same rule, or the build writes `pkg/nodejs` under one directory while the rewrite
+/// looks under another — and since a missing file is only debug-logged, the rewrite would
+/// silently never fire and the name mismatch would survive the build. The two directories
+/// below deliberately disagree, which is exactly what a `package_dir`-only derivation gets
+/// wrong. ~keep
+#[test]
+fn rewrite_target_follows_explicit_output_rather_than_the_package_dir_formula() {
+    let target = rewrite_target_for(
+        r#"
+[workspace]
+languages = ["wasm"]
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+[crates.output]
+wasm = "crates/renamed-wasm-crate/src/"
+"#,
+    );
+
+    assert_eq!(
+        target,
+        std::path::PathBuf::from("crates/renamed-wasm-crate/pkg/nodejs/package.json")
+    );
+    assert!(
+        !target.starts_with("crates/test-lib-wasm"),
+        "must not fall back to the package_dir formula when [crates.output] wasm is set: {target:?}"
+    );
+}
+
+/// An explicit output that already names the crate root (no trailing `src`) must be used
+/// verbatim rather than having its last component stripped.
+#[test]
+fn rewrite_target_keeps_an_explicit_output_that_is_already_the_crate_root() {
+    let target = rewrite_target_for(
+        r#"
+[workspace]
+languages = ["wasm"]
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+[crates.output]
+wasm = "crates/renamed-wasm-crate"
+"#,
+    );
+
+    assert_eq!(
+        target,
+        std::path::PathBuf::from("crates/renamed-wasm-crate/pkg/nodejs/package.json")
+    );
+}
+
+/// Async instance methods return `{mapped}::from(result)`, which only compiles when the mapped
+/// type has a `From<CoreType>`. The wasm mapper collapses every `Map` (and every `Json`, and any
+/// `Named` a `type_overrides` entry redirects) onto the opaque `JsValue`, which has no such impl
+/// — `JsValue::from(HashMap<..>)` is an `E0277`. The value must cross through serde instead,
+/// exactly as the generated `From<CoreType> for WasmType` bodies do for degraded fields.
+#[test]
+fn async_method_returning_map_bridges_through_serde_not_from() {
+    let method = MethodDef {
+        name: "headers".to_string(),
+        is_async: true,
+        return_type: TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String)),
+        receiver: Some(ReceiverKind::Ref),
+        ..Default::default()
+    };
+    let typ = TypeDef {
+        name: "Request".to_string(),
+        methods: vec![method.clone()],
+        ..Default::default()
+    };
+    let mapper = crate::backends::wasm::type_map::WasmMapper::new(Default::default(), "Wasm".to_string());
+
+    let output = super::methods::gen_method(
+        &method,
+        &mapper,
+        "Request",
+        "sample_core",
+        &Default::default(),
+        "Wasm",
+        &typ,
+        &Default::default(),
+        &Default::default(),
+    );
+
+    assert!(
+        output.contains("serde_wasm_bindgen::to_value(&result)"),
+        "a JsValue-mapped return must be serialized:\n{output}"
+    );
+    assert!(
+        !output.contains("JsValue::from(result)"),
+        "JsValue has no From<HashMap<..>>:\n{output}"
+    );
+}
+
+/// Positive control for the above: a `Named` return really does map to a generated wrapper with
+/// a `From<CoreType>`, so the turbofish `from` must stay.
+#[test]
+fn async_method_returning_named_still_uses_from() {
+    let method = MethodDef {
+        name: "report".to_string(),
+        is_async: true,
+        return_type: TypeRef::Named("Report".to_string()),
+        receiver: Some(ReceiverKind::Ref),
+        ..Default::default()
+    };
+    let typ = TypeDef {
+        name: "Request".to_string(),
+        methods: vec![method.clone()],
+        ..Default::default()
+    };
+    let mapper = crate::backends::wasm::type_map::WasmMapper::new(Default::default(), "Wasm".to_string());
+
+    let output = super::methods::gen_method(
+        &method,
+        &mapper,
+        "Request",
+        "sample_core",
+        &Default::default(),
+        "Wasm",
+        &typ,
+        &Default::default(),
+        &Default::default(),
+    );
+
+    assert!(
+        output.contains("WasmReport::from(result)"),
+        "a wrapper-mapped return must keep the direct From conversion:\n{output}"
+    );
+    assert!(
+        !output.contains("serde_wasm_bindgen::to_value(&result)"),
+        "a wrapper-mapped return must not detour through serde:\n{output}"
+    );
+}

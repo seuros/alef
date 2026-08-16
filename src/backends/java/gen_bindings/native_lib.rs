@@ -896,7 +896,16 @@ pub(crate) fn gen_native_lib(
 
     out.push_str(&class_body);
 
-    out
+    // `NativeLib.java`'s Panama descriptors hand-specify the handle as `ValueLayout.ADDRESS` /
+    // `ValueLayout.JAVA_LONG`; nothing here derives them from the cbindgen header, so a
+    // pointer-vs-`uint64_t` straddle links fine and only corrupts at call time. Stamped inside
+    // the backend body so the marker is part of the content `finalize_hashes` hashes; stamping
+    // after `inject_hash_line` would leave every generated Java file permanently stale. ~keep
+    hash::inject_stamp_line(
+        &out,
+        hash::HANDLE_ABI_STAMP_KEY,
+        crate::core::template_versions::abi::HANDLE_ABI_VERSION,
+    )
 }
 
 #[cfg(test)]
@@ -960,5 +969,22 @@ mod tests {
             ],
             "each REQUIRED_SYMBOLS entry must render on its own line; got:\n{rendered}"
         );
+    }
+
+    #[test]
+    fn native_lib_carries_the_handle_abi_stamp() {
+        let output = super::gen_native_lib(
+            &crate::core::ir::ApiSurface::default(),
+            &crate::core::config::ResolvedCrateConfig::default(),
+            "dev.sample",
+            "sample",
+            false,
+        );
+
+        assert!(
+            output.contains("ValueLayout.ADDRESS"),
+            "fixture must actually emit the hand-specified Panama layout this stamp guards:\n{output}"
+        );
+        crate::backends::ffi::handle_abi_stamp::assert_stamped_before_hashing(&output, "java NativeLib.java");
     }
 }

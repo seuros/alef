@@ -71,7 +71,7 @@ pub(super) fn gen_native_methods(
     exclude_functions: &HashSet<String>,
     client_constructors: &HashMap<String, ClientConstructorConfig>,
     adapters: &[crate::core::config::AdapterConfig],
-) -> String {
+) -> anyhow::Result<String> {
     use crate::backends::csharp::template_env::render;
     use minijinja::Value;
 
@@ -472,13 +472,44 @@ pub(super) fn gen_native_methods(
             .find(|b| b.bind_via == crate::core::config::BridgeBinding::OptionsField);
 
         if let Some(bridge) = visitor_bridge {
+            // Both names below are load-bearing ABI, not cosmetics: the emitted declaration is
+            // `[DllImport(EntryPoint = "{prefix}_options_set_{field}")] ... {OptionsType}Set{Field}`,
+            // and the FFI crate emits that setter ONLY for a bridge that resolves both keys
+            // (`backends::ffi::gen_bindings::lib_rs` skips the bridge when either is `None`).
+            // Guessing `options_type` declares a P/Invoke for a symbol the native library never
+            // exports; guessing the field name additionally desyncs the declaration from the call
+            // `bridge_field_inject.jinja` emits off the real IR field, which is a C# compile error.
+            // `options_type` is documented as required under `bind_via = "options_field"`, so
+            // absence is a config defect. `function_param` bridges are filtered out above and are
+            // unaffected; `[crates.<name>.ffi] visitor_callbacks = false` skips this block whole. ~keep
+            let Some(options_type) = bridge.options_type.as_deref() else {
+                anyhow::bail!(
+                    "csharp NativeMethods: trait bridge `{trait_name}` declares `bind_via = \"options_field\"` \
+                     but no `options_type`; the FFI crate emits no `{prefix}_options_set_*` entry point for such \
+                     a bridge and the generated wrapper has no options type to attach the visitor to, so the \
+                     visitor P/Invoke block cannot be generated. Set `options_type` on the \
+                     `[[crates.trait_bridges]]` entry for `{trait_name}`, or set \
+                     `[crates.<name>.ffi] visitor_callbacks = false` to drop visitor support from this backend",
+                    trait_name = bridge.trait_name,
+                );
+            };
+            let Some(options_field) = bridge.resolved_options_field() else {
+                anyhow::bail!(
+                    "csharp NativeMethods: trait bridge `{trait_name}` declares `bind_via = \"options_field\"` \
+                     but neither `options_field` nor `param_name`; the setter entry point is named \
+                     `{prefix}_options_set_<field>` and cannot be derived. Set `options_field` (or `param_name`) \
+                     on the `[[crates.trait_bridges]]` entry for `{trait_name}`, or set \
+                     `[crates.<name>.ffi] visitor_callbacks = false` to drop visitor support from this backend",
+                    trait_name = bridge.trait_name,
+                );
+            };
             out.push_str(&crate::backends::csharp::gen_visitor::gen_native_methods_visitor(
                 namespace,
                 lib_name,
                 prefix,
                 &bridge.trait_name,
-                bridge.options_type.as_deref().unwrap_or("Options"),
-                bridge.options_field.as_deref().unwrap_or("visitor"),
+                options_type,
+                options_field,
             ));
         }
     }
@@ -519,7 +550,16 @@ pub(super) fn gen_native_methods(
 
     out.push_str("}\n");
 
-    out
+    // `NativeMethods.cs` spells the opaque handle as `IntPtr` by hand — nothing here reads the
+    // cbindgen header — so a pointer-vs-`uint64_t` straddle against the FFI crate compiles
+    // cleanly and only misbehaves at runtime. Stamped inside the backend body so the marker is
+    // part of the content `finalize_hashes` hashes; stamping after `inject_hash_line` would
+    // leave every generated C# file permanently stale. ~keep
+    Ok(crate::core::hash::inject_stamp_line(
+        &out,
+        crate::core::hash::HANDLE_ABI_STAMP_KEY,
+        crate::core::template_versions::abi::HANDLE_ABI_VERSION,
+    ))
 }
 
 /// Returns true when a function returns bytes — uses the owned out-param convention:
@@ -746,5 +786,191 @@ registry_getter = "markup_visitor_registry"
             is_trait,
             ..TypeDef::default()
         }
+    }
+
+    #[test]
+    fn native_methods_carry_the_handle_abi_stamp() {
+        use crate::core::ir::{FunctionDef, TypeRef};
+        use std::collections::{HashMap, HashSet};
+
+        let api = ApiSurface {
+            crate_name: "sample".to_string(),
+            types: vec![TypeDef {
+                is_opaque: true,
+                ..type_def("Thing", false)
+            }],
+            functions: vec![FunctionDef {
+                name: "make_thing".to_string(),
+                rust_path: "sample::make_thing".to_string(),
+                return_type: TypeRef::Named("Thing".to_string()),
+                ..FunctionDef::default()
+            }],
+            ..ApiSurface::default()
+        };
+
+        let native_methods = super::gen_native_methods(
+            &api,
+            "Sample",
+            "sample",
+            "sample",
+            &HashSet::new(),
+            &HashSet::new(),
+            false,
+            &[],
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &[],
+        )
+        .expect("no trait bridges configured, so generation cannot fail");
+
+        assert!(
+            native_methods.contains("IntPtr"),
+            "fixture must actually emit the hand-declared handle type this stamp guards:\n{native_methods}"
+        );
+        crate::backends::ffi::handle_abi_stamp::assert_stamped_before_hashing(
+            &native_methods,
+            "csharp NativeMethods.cs",
+        );
+    }
+
+    fn visitor_api() -> ApiSurface {
+        use crate::core::ir::{FunctionDef, ParamDef, TypeRef};
+
+        ApiSurface {
+            crate_name: "htm".to_string(),
+            types: vec![type_def("ConversionOptions", false), type_def("HtmlVisitor", true)],
+            functions: vec![FunctionDef {
+                name: "convert".to_string(),
+                rust_path: "htm::convert".to_string(),
+                params: vec![ParamDef {
+                    name: "options".to_string(),
+                    ty: TypeRef::Named("ConversionOptions".to_string()),
+                    ..ParamDef::default()
+                }],
+                return_type: TypeRef::String,
+                ..FunctionDef::default()
+            }],
+            ..ApiSurface::default()
+        }
+    }
+
+    fn native_methods_with_visitor_bridge(bridge: crate::core::config::TraitBridgeConfig) -> anyhow::Result<String> {
+        use std::collections::{HashMap, HashSet};
+
+        let api = visitor_api();
+        super::gen_native_methods(
+            &api,
+            "Htm",
+            "htm_ffi",
+            "htm",
+            &HashSet::new(),
+            &HashSet::new(),
+            true,
+            std::slice::from_ref(&bridge),
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &[],
+        )
+    }
+
+    fn options_field_bridge() -> crate::core::config::TraitBridgeConfig {
+        crate::core::config::TraitBridgeConfig {
+            trait_name: "HtmlVisitor".to_string(),
+            type_alias: Some("VisitorHandle".to_string()),
+            param_name: Some("visitor".to_string()),
+            bind_via: crate::core::config::BridgeBinding::OptionsField,
+            options_type: Some("ConversionOptions".to_string()),
+            ..crate::core::config::TraitBridgeConfig::default()
+        }
+    }
+
+    #[test]
+    fn options_field_bridge_without_options_type_fails_generation() {
+        let bridge = crate::core::config::TraitBridgeConfig {
+            options_type: None,
+            ..options_field_bridge()
+        };
+
+        let error = native_methods_with_visitor_bridge(bridge)
+            .expect_err("a visitor bridge with no `options_type` must not silently fabricate one");
+        let message = error.to_string();
+
+        assert!(
+            message.contains("HtmlVisitor") && message.contains("no `options_type`"),
+            "error must name the offending bridge and the missing key: {message}"
+        );
+        assert!(
+            message.contains("visitor_callbacks = false"),
+            "error must name the sanctioned opt-out: {message}"
+        );
+    }
+
+    #[test]
+    fn options_field_bridge_without_a_resolvable_field_fails_generation() {
+        let bridge = crate::core::config::TraitBridgeConfig {
+            param_name: None,
+            options_field: None,
+            ..options_field_bridge()
+        };
+
+        let error = native_methods_with_visitor_bridge(bridge)
+            .expect_err("a visitor bridge with no resolvable options field must not default to `visitor`");
+        let message = error.to_string();
+
+        assert!(
+            message.contains("neither `options_field` nor `param_name`"),
+            "error must name both keys that can supply the field: {message}"
+        );
+        assert!(
+            message.contains("htm_options_set_<field>"),
+            "error must show the entry point that cannot be derived: {message}"
+        );
+    }
+
+    #[test]
+    fn options_field_bridge_with_options_type_emits_the_configured_names() {
+        let native_methods = native_methods_with_visitor_bridge(options_field_bridge())
+            .expect("a fully configured options-field bridge generates");
+
+        let declaration = "internal static extern void ConversionOptionsSetVisitor(IntPtr options, IntPtr visitor);";
+        assert!(
+            native_methods.contains(declaration),
+            "the declaration must carry the configured `options_type`:\n{native_methods}"
+        );
+        assert!(
+            native_methods.contains(r#"EntryPoint = "htm_options_set_visitor""#),
+            "the entry point must be derived from the resolved options field:\n{native_methods}"
+        );
+        // `ConversionOptionsSetVisitor` contains the fabricated `Options` as a substring, so the
+        // regression guard has to match the whole declaration, not the bare type name. ~keep
+        assert!(
+            !native_methods.contains("void OptionsSetVisitor("),
+            "the fabricated `Options` type name must not reach the emitted declaration:\n{native_methods}"
+        );
+    }
+
+    #[test]
+    fn function_param_bridge_without_options_type_still_generates() {
+        // Absence of `options_type` is legitimate — and the documented default — for
+        // `bind_via = "function_param"`; only the options-field shape needs it. ~keep
+        let bridge = crate::core::config::TraitBridgeConfig {
+            trait_name: "HtmlVisitor".to_string(),
+            param_name: Some("visitor".to_string()),
+            bind_via: crate::core::config::BridgeBinding::FunctionParam,
+            options_type: None,
+            ..crate::core::config::TraitBridgeConfig::default()
+        };
+
+        let native_methods =
+            native_methods_with_visitor_bridge(bridge).expect("function-param bridges never need `options_type`");
+
+        assert!(
+            !native_methods.contains("htm_options_set_") && !native_methods.contains("OptionsSetVisitor("),
+            "no options setter belongs in a function-param bridge's declarations:\n{native_methods}"
+        );
     }
 }

@@ -417,7 +417,11 @@ pub fn function_sig_defaults(params: &[ParamDef]) -> String {
 /// `config_constructor_parts_with_options`, and — via the shared `gen_constructor` generator —
 /// the extendr and pyo3 backends) maps `Named` fields to a distinct binding wrapper type, so
 /// the recovered value needs `.into()` to become the type the constructor parameter expects —
-/// otherwise the emitted assignment is an `E0308` type mismatch (wrapper vs. core type). A
+/// otherwise the emitted assignment is an `E0308` type mismatch (wrapper vs. core type).
+/// `mapped_ty` is that binding-side type as the caller's own type mapper renders it, and it is
+/// required because the mapping is not always a wrapper: the wasm backend degrades some `Named`
+/// fields to an opaque `JsValue`, which implements no `From<CoreType>`, so `.into()` there is an
+/// `E0277` and the value must cross through serde instead. A
 /// `compile_error!` recovery failure is left unconverted: it never compiles regardless, and
 /// appending `.into()` would only obscure the diagnostic. Every other `DefaultValue` variant
 /// already produces a value in the field's own representation and needs no conversion.
@@ -448,7 +452,28 @@ fn rust_scalar_default(item: &DefaultValue) -> Option<String> {
     }
 }
 
-pub fn format_default_value(field: &FieldDef, typ: &TypeDef) -> String {
+/// True when a backend's type mapper rendered this binding-side type as wasm-bindgen's opaque
+/// `JsValue`.
+///
+/// The binding type — never the IR `TypeRef` on its own — decides which conversion an emitter is
+/// allowed to write: `JsValue` implements no `From<CoreType>`, so every `.into()` aimed at it is
+/// an `E0277`, and the value has to cross through `serde_wasm_bindgen` instead. The test is
+/// textual because a `TypeMapper` hands back a rendered type *string* and nothing richer;
+/// comparing only the final `::` segment accepts every spelling a mapper can produce
+/// (`JsValue`, `wasm_bindgen::JsValue`, `::wasm_bindgen::JsValue`, `wasm_bindgen::prelude::JsValue`)
+/// rather than a fixed pair of literals. It still cannot see through a type alias, which is
+/// exactly why every emitter shares this one predicate: a spelling it misses is fixed here once,
+/// not once per call site. ~keep
+pub fn maps_to_js_value(mapped_ty: &str) -> bool {
+    mapped_ty
+        .trim()
+        .trim_start_matches("::")
+        .rsplit("::")
+        .next()
+        .is_some_and(|segment| segment == "JsValue")
+}
+
+pub fn format_default_value(field: &FieldDef, typ: &TypeDef, mapped_ty: &str) -> String {
     let default = field
         .typed_default
         .as_ref()
@@ -479,10 +504,18 @@ pub fn format_default_value(field: &FieldDef, typ: &TypeDef) -> String {
         DefaultValue::None => "None".to_string(),
         DefaultValue::FunctionCall(_) | DefaultValue::PublicFunctionCall(_) => {
             let recovered = crate::codegen::config_gen::default_value_for_field_in_type(field, "rust", typ);
-            if matches!(field.ty, TypeRef::Named(_)) && !recovered.starts_with("compile_error!") {
-                format!("{recovered}.into()")
+            if !matches!(field.ty, TypeRef::Named(_)) || recovered.starts_with("compile_error!") {
+                return recovered;
+            }
+            // A `Named` field usually maps to a per-type binding wrapper reachable by `.into()`,
+            // but the wasm backend degrades some of them to an opaque `JsValue` (see
+            // `backends::wasm::type_map`). `JsValue` has no `From<CoreType>` impl, so `.into()`
+            // there is an E0277; serde is the only bridge, matching what the generated
+            // `From<CoreType> for WasmType` bodies already emit for the same fields. ~keep
+            if maps_to_js_value(mapped_ty) {
+                format!("serde_wasm_bindgen::to_value(&{recovered}).unwrap_or(wasm_bindgen::JsValue::NULL)")
             } else {
-                recovered
+                format!("{recovered}.into()")
             }
         }
     }
@@ -634,7 +667,7 @@ fn config_constructor_parts_inner(
                         format!("{}: {}.unwrap_or_default()", binding_name, f.name)
                     }
                     _ => {
-                        let default_val = format_default_value(f, typ);
+                        let default_val = format_default_value(f, typ, &type_mapper(&f.ty));
                         // clippy::unnecessary_lazy_evaluations; use unwrap_or_else for heap types.
                         match typed_default {
                             DefaultValue::BoolLiteral(_)
@@ -788,8 +821,78 @@ mod tests {
         let field = named_default_field("ssrf", "SsrfPolicy", "crawlberg::SsrfPolicy::from_env");
         let typ = owning_type("crawlberg::CrawlConfig", "CrawlConfig", vec![field.clone()]);
         assert_eq!(
-            format_default_value(&field, &typ),
+            format_default_value(&field, &typ, "WasmSsrfPolicy"),
             "crawlberg::SsrfPolicy::from_env().into()"
+        );
+    }
+
+    /// The wasm backend does not give every `Named` field a wrapper type — `type_map` degrades
+    /// some of them to an opaque `JsValue`, which implements no `From<CoreType>`. Appending
+    /// `.into()` there is an `E0277`, not an `E0308`, so the recovered value has to cross the
+    /// boundary through serde instead, exactly as the generated `From<CoreType> for WasmType`
+    /// bodies already do for the same fields. Regression test for the two
+    /// `JsValue: From<LateInteractionModelType>` / `From<SparseEmbeddingModelType>` failures.
+    #[test]
+    fn format_default_value_named_function_call_uses_serde_when_mapped_to_js_value() {
+        let field = named_default_field(
+            "model",
+            "LateInteractionModelType",
+            "xberg::LateInteractionConfig::default_late_interaction_model",
+        );
+        let typ = owning_type(
+            "xberg::LateInteractionConfig",
+            "LateInteractionConfig",
+            vec![field.clone()],
+        );
+        let rendered = format_default_value(&field, &typ, "JsValue");
+        assert!(
+            !rendered.contains(".into()"),
+            "a JsValue-mapped field must not use .into(): {rendered}"
+        );
+        assert!(
+            rendered.starts_with("serde_wasm_bindgen::to_value(&")
+                && rendered.ends_with(".unwrap_or(wasm_bindgen::JsValue::NULL)"),
+            "expected a serde_wasm_bindgen bridge, got: {rendered}"
+        );
+    }
+
+    /// The degraded-type branch must not depend on how the mapper *spells* `JsValue`. A mapper
+    /// that renders a fully-qualified or prelude path is describing the same opaque type, and a
+    /// spelling-sensitive check would silently fall back to `.into()` and reintroduce the E0277.
+    #[test]
+    fn maps_to_js_value_accepts_every_path_spelling() {
+        for spelling in [
+            "JsValue",
+            "wasm_bindgen::JsValue",
+            "::wasm_bindgen::JsValue",
+            "wasm_bindgen::prelude::JsValue",
+            " JsValue ",
+        ] {
+            assert!(maps_to_js_value(spelling), "{spelling} must be recognised as JsValue");
+        }
+        for other in ["WasmSsrfPolicy", "String", "Option<JsValue>", "Vec<JsValue>", ""] {
+            assert!(!maps_to_js_value(other), "{other} must not be treated as JsValue");
+        }
+    }
+
+    /// The same recovered default must switch to the serde bridge for every spelling of the
+    /// degraded type, not only the bare one the original defect happened to produce.
+    #[test]
+    fn format_default_value_uses_serde_for_qualified_js_value_spelling() {
+        let field = named_default_field(
+            "model",
+            "LateInteractionModelType",
+            "xberg::LateInteractionConfig::default_late_interaction_model",
+        );
+        let typ = owning_type(
+            "xberg::LateInteractionConfig",
+            "LateInteractionConfig",
+            vec![field.clone()],
+        );
+        let rendered = format_default_value(&field, &typ, "::wasm_bindgen::prelude::JsValue");
+        assert!(
+            !rendered.contains(".into()") && rendered.starts_with("serde_wasm_bindgen::to_value(&"),
+            "expected a serde_wasm_bindgen bridge, got: {rendered}"
         );
     }
 
@@ -807,7 +910,7 @@ mod tests {
             ..Default::default()
         };
         let typ = owning_type("crawlberg::CrawlConfig", "CrawlConfig", vec![field.clone()]);
-        assert_eq!(format_default_value(&field, &typ), "crawlberg::defaults::retry_limit()");
+        assert_eq!(format_default_value(&field, &typ, ""), "crawlberg::defaults::retry_limit()");
     }
 
     /// The defect this fix addresses: a private (plain `FunctionCall`, not yet resolved to a
@@ -829,7 +932,7 @@ mod tests {
         };
         let typ = owning_type("xberg::ExtractionConfig", "ExtractionConfig", vec![field.clone()]);
 
-        let rendered = format_default_value(&field, &typ);
+        let rendered = format_default_value(&field, &typ, "");
 
         assert_eq!(
             rendered,
@@ -858,7 +961,7 @@ mod tests {
         };
         let typ = owning_type("xberg::ExtractionConfig", "ExtractionConfig", vec![field.clone()]);
 
-        let rendered = format_default_value(&field, &typ);
+        let rendered = format_default_value(&field, &typ, "");
 
         assert_eq!(
             rendered,
@@ -893,7 +996,7 @@ mod tests {
             vec![owner_field, retry_field.clone()],
         );
 
-        let rendered = format_default_value(&retry_field, &typ);
+        let rendered = format_default_value(&retry_field, &typ, "");
 
         assert!(
             rendered.starts_with("compile_error!"),

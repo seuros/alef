@@ -42,6 +42,23 @@ const HASH_PREFIX: &str = "alef:hash:";
 const DEFAULT_REGENERATE_COMMAND: &str = "alef generate";
 const DEFAULT_VERIFY_COMMAND: &str = "alef verify";
 
+/// [`inject_stamp_line`]/[`extract_stamp`] key for the opaque-handle ABI
+/// generation a file was produced against (pointer vs. `u64` registry key,
+/// or any future representation). Backends that emit an FFI-consuming
+/// artifact encoding that representation (the FFI header/glue itself, and
+/// any binding backend whose template hardcodes the handle's native type
+/// instead of deriving it live from the FFI header at build time — zig's
+/// `_handle: u64` fields and C#'s `IntPtr`-based `SafeHandle` wrapper are the
+/// known cases) should stamp their generated files with this key so a
+/// verify-time consistency check can catch two different ABI generations
+/// coexisting in one tree — the hazard is silent because pointer and `u64`
+/// are both 8 bytes on 64-bit targets, so a straddle compiles and then
+/// misinterprets a pointer as a registry index at runtime. No backend calls
+/// this yet; the constant exists so the first one to do so and the verify
+/// side (`crate::bin_cli::helpers::find_stamp_disagreement`) agree on the
+/// key without a second source of truth. ~keep
+pub const HANDLE_ABI_STAMP_KEY: &str = "handle-abi";
+
 /// Comment style for the generated header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommentStyle {
@@ -387,6 +404,94 @@ pub fn inject_hash_line(content: &str, hash: &str) -> String {
     }
 
     result
+}
+
+/// Inject an arbitrary `alef:<key>:<value>` stamp line immediately after the
+/// first header marker line found in the first [`MARKER_SCAN_LINES`] lines.
+///
+/// Generalizes the single-purpose `alef:hash:` mechanism ([`inject_hash_line`])
+/// for other per-file, plaintext-extractable stamps — for example an ABI
+/// generation marker that a cross-artifact consistency check (comparing an FFI
+/// header against a binding backend's opaque-handle template) can read
+/// directly, without re-deriving [`compute_inputs_hash`]'s generation-inputs
+/// fingerprint the way `alef:hash:` requires. `key` must not itself contain a
+/// colon. Call this *before* [`inject_hash_line`] when both are used on the
+/// same content, so the final `alef:hash:` line reflects the stamped content
+/// rather than the other way around. If no marker line is found, the content
+/// is returned unchanged.
+///
+/// Deliberately duplicates `inject_hash_line`'s comment-style detection
+/// instead of sharing it, so this new, unused-by-any-caller-yet primitive
+/// cannot change `alef:hash:` injection behavior. ~keep
+pub fn inject_stamp_line(content: &str, key: &str, value: &str) -> String {
+    let mut result = String::with_capacity(content.len() + key.len() + value.len() + 16);
+    let mut injected = false;
+
+    for (i, line) in content.lines().enumerate() {
+        result.push_str(line);
+        result.push('\n');
+
+        if !injected && i < MARKER_SCAN_LINES && (line.contains(HEADER_MARKER) || line.contains(ALT_HEADER_MARKER)) {
+            let trimmed = line.trim();
+            let stamp_line = if trimmed.starts_with("<!--") {
+                format!("<!-- alef:{key}:{value} -->")
+            } else if trimmed.starts_with("//") {
+                format!("// alef:{key}:{value}")
+            } else if trimmed.starts_with('#') {
+                format!("# alef:{key}:{value}")
+            } else if trimmed.starts_with("/*") || trimmed.starts_with('*') || trimmed.ends_with("*/") {
+                format!(" * alef:{key}:{value}")
+            } else {
+                format!("// alef:{key}:{value}")
+            };
+            result.push_str(&stamp_line);
+            result.push('\n');
+            injected = true;
+        }
+    }
+
+    if !content.ends_with('\n') && result.ends_with('\n') {
+        result.pop();
+    }
+
+    result
+}
+
+/// Extract the value of an `alef:<key>:<value>` stamp line injected by
+/// [`inject_stamp_line`], searching the first [`MARKER_SCAN_LINES`] lines.
+///
+/// Returns `None` when the header marker itself is absent, or when no line in
+/// the scan window matches `alef:<key>:`. Unlike [`extract_hash`], the value is
+/// returned as-is with no hex-digit constraint, since a generation marker need
+/// not be a hash (a small integer version is the expected case).
+pub fn extract_stamp(content: &str, key: &str) -> Option<String> {
+    let prefix_slash = format!("// alef:{key}:");
+    let prefix_hash = format!("# alef:{key}:");
+    let prefix_block = format!(" * alef:{key}:");
+    let prefix_html = format!("<!-- alef:{key}:");
+
+    let mut past_marker = false;
+    for (line_index, line) in content.lines().enumerate() {
+        if line_index >= MARKER_SCAN_LINES {
+            break;
+        }
+        if !past_marker {
+            past_marker = line.contains(HEADER_MARKER) || line.contains(ALT_HEADER_MARKER);
+            continue;
+        }
+        if let Some(value) = line
+            .strip_prefix(prefix_slash.as_str())
+            .or_else(|| line.strip_prefix(prefix_hash.as_str()))
+            .or_else(|| line.strip_prefix(prefix_block.as_str()))
+            .or_else(|| {
+                line.strip_prefix(prefix_html.as_str())
+                    .and_then(|v| v.strip_suffix(" -->"))
+            })
+        {
+            return Some(value.to_string());
+        }
+    }
+    None
 }
 
 fn generated_hash_line(content: &str) -> Option<(usize, &str)> {

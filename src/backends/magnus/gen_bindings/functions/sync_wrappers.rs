@@ -241,7 +241,7 @@ pub(in crate::backends::magnus::gen_bindings) fn gen_function(
             )
         }
     } else {
-        gen_magnus_unimplemented_body(&func.return_type, &func.name, func.error_type.is_some() || variadic)
+        gen_magnus_unimplemented_body(&func.return_type, &func.name, has_error)
     };
     // Add #[allow(unused_variables)] to functions with unimplemented bodies to suppress warnings for unused params
     let allow_attr = if !can_delegate && !serde_recoverable {
@@ -300,7 +300,10 @@ mod gen_magnus_unimplemented_body_tests {
     fn gen_magnus_unimplemented_body_string_return_fails_loudly() {
         let body = gen_magnus_unimplemented_body(&TypeRef::String, "process", false);
         assert!(body.contains("compile_error!"), "expected compile_error!, got: {body}");
-        assert!(!body.contains("[unimplemented:"), "fabricated string literal leaked through: {body}");
+        assert!(
+            !body.contains("[unimplemented:"),
+            "fabricated string literal leaked through: {body}"
+        );
     }
 
     #[test]
@@ -312,7 +315,10 @@ mod gen_magnus_unimplemented_body_tests {
     #[test]
     fn gen_magnus_unimplemented_body_with_error_type_raises_runtime_error() {
         let body = gen_magnus_unimplemented_body(&TypeRef::String, "process", true);
-        assert!(!body.contains("compile_error!"), "error branch must not emit compile_error!: {body}");
+        assert!(
+            !body.contains("compile_error!"),
+            "error branch must not emit compile_error!: {body}"
+        );
         assert!(
             body.contains("exception_runtime_error"),
             "expected runtime error raise, got: {body}"

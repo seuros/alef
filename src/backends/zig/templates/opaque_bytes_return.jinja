@@ -1,3 +1,4 @@
-        defer c.{{ prefix }}_free_bytes(_out_ptr, _out_len, _out_cap);
+{% if is_optional %}        if (_out_ptr == null) return null;
+{% endif %}        defer c.{{ prefix }}_free_bytes(_out_ptr, _out_len, _out_cap);
         const _owned = try std.heap.c_allocator.dupe(u8, _out_ptr[0.._out_len]);
         return _owned;

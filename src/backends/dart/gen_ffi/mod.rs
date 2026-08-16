@@ -105,6 +105,18 @@ pub(crate) fn emit(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Re
         },
     );
 
+    // `type_map.rs` / `types.rs` / `functions.rs` hardcode `Pointer<Void>` against the IR's
+    // TypeRef kind; no part of `gen_ffi` parses the cbindgen header, so a pointer-vs-`uint64_t`
+    // straddle against the FFI crate is undetectable from the Dart side. Only the `_ffi.dart`
+    // file is stamped — the wrapper is a pure re-export and names no handle type. Stamped
+    // inside the backend body so the marker is part of the content `finalize_hashes` hashes;
+    // stamping after `inject_hash_line` would leave the file permanently stale. ~keep
+    let content = crate::core::hash::inject_stamp_line(
+        &content,
+        crate::core::hash::HANDLE_ABI_STAMP_KEY,
+        crate::core::template_versions::abi::HANDLE_ABI_VERSION,
+    );
+
     Ok(vec![
         GeneratedFile {
             path: ffi_path,
@@ -180,5 +192,46 @@ mod tests {
         assert!(out.contains("mylib_last_error_code"), "missing error_code symbol");
         assert!(out.contains("mylib_last_error_context"), "missing error_context symbol");
         assert!(out.contains("_checkError"), "missing _checkError helper");
+    }
+
+    #[test]
+    fn emitted_ffi_dart_carries_the_handle_abi_stamp() {
+        let api = crate::core::ir::ApiSurface {
+            crate_name: "sample".to_string(),
+            types: vec![crate::core::ir::TypeDef {
+                name: "Thing".to_string(),
+                rust_path: "sample::Thing".to_string(),
+                is_opaque: true,
+                ..crate::core::ir::TypeDef::default()
+            }],
+            ..crate::core::ir::ApiSurface::default()
+        };
+        let config = crate::core::config::ResolvedCrateConfig {
+            name: "sample".to_string(),
+            ..crate::core::config::ResolvedCrateConfig::default()
+        };
+
+        let files = emit(&api, &config).expect("dart gen_ffi emission");
+        let ffi_file = files
+            .iter()
+            .find(|file| file.path.to_string_lossy().ends_with("_ffi.dart"))
+            .expect("generated dart:ffi implementation");
+
+        assert!(
+            ffi_file.content.contains("Pointer<Void>"),
+            "fixture must actually emit the hardcoded handle type this stamp guards:\n{}",
+            ffi_file.content
+        );
+        crate::backends::ffi::handle_abi_stamp::assert_stamped_before_hashing(&ffi_file.content, "dart _ffi.dart");
+
+        let wrapper = files
+            .iter()
+            .find(|file| file.path != ffi_file.path)
+            .expect("generated re-export wrapper");
+        assert_eq!(
+            crate::core::hash::extract_stamp(&wrapper.content, crate::core::hash::HANDLE_ABI_STAMP_KEY),
+            None,
+            "the re-export wrapper names no handle type and must stay unstamped"
+        );
     }
 }

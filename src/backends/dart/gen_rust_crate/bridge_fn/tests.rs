@@ -272,6 +272,232 @@ fn bool_to_bool_cast_skipped_redundant() {
     assert_eq!(cast, "", "bool->bool cast must be empty (redundant), got: '{cast}'");
 }
 
+/// Build a sanitized-return function: the extractor collapsed an unmirrorable Named
+/// return type to `String`, so `return_sanitized` is set (see
+/// `cli::pipeline::extract::sanitizer`).
+fn sanitized_fn(return_type: TypeRef, error_type: Option<&str>) -> FunctionDef {
+    FunctionDef {
+        name: "analyze_document".to_string(),
+        rust_path: "sample_crate::analyze_document".to_string(),
+        params: vec![make_param("path", TypeRef::String, false, false, false)],
+        return_type,
+        error_type: error_type.map(ToString::to_string),
+        sanitized: true,
+        return_sanitized: true,
+        ..FunctionDef::default()
+    }
+}
+
+fn emit(f: &FunctionDef) -> String {
+    let mut out = String::new();
+    emit_bridge_fn(
+        &mut out,
+        f,
+        "sample_crate",
+        &std::collections::HashMap::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &[],
+    );
+    out
+}
+
+#[test]
+fn sanitized_string_return_emits_compile_error_naming_the_function() {
+    let body = sanitized_return_body(
+        &TypeRef::String,
+        "analyze_document",
+        false,
+        &[make_param("path", TypeRef::String, false, false, false)],
+    );
+
+    assert!(
+        body.contains("compile_error!"),
+        "sanitized infallible return must emit compile_error!, got: {body}"
+    );
+    assert!(
+        body.contains("analyze_document"),
+        "compile_error! must name the offending function, got: {body}"
+    );
+    assert!(
+        body.contains("dart.exclude_functions"),
+        "compile_error! must name the escape hatch, got: {body}"
+    );
+    assert!(
+        !body.contains("String::new()"),
+        "fabricated empty-string default must not survive, got: {body}"
+    );
+}
+
+/// The vacuous-pass case this fix targets: a sanitized `Option<T>` used to return
+/// `None`, so a Dart fixture asserting `result == null` passed while the core function
+/// was never called.
+#[test]
+fn sanitized_optional_return_no_longer_fabricates_none() {
+    let body = sanitized_return_body(
+        &TypeRef::Optional(Box::new(TypeRef::Named("Report".to_string()))),
+        "analyze_document",
+        false,
+        &[],
+    );
+
+    assert!(
+        body.contains("compile_error!"),
+        "sanitized Option return must emit compile_error!, got: {body}"
+    );
+    assert!(
+        !body.contains("None"),
+        "fabricated `None` default must not survive, got: {body}"
+    );
+}
+
+/// A sanitized `Vec<T>` used to return `Vec::new()`, so a fixture asserting "no results"
+/// passed vacuously.
+#[test]
+fn sanitized_vec_return_no_longer_fabricates_empty_vec() {
+    let body = sanitized_return_body(
+        &TypeRef::Vec(Box::new(TypeRef::Named("Report".to_string()))),
+        "analyze_document",
+        false,
+        &[],
+    );
+
+    assert!(
+        body.contains("compile_error!"),
+        "sanitized Vec return must emit compile_error!, got: {body}"
+    );
+    assert!(
+        !body.contains("Vec::new()"),
+        "fabricated empty-vec default must not survive, got: {body}"
+    );
+}
+
+/// A fallible function keeps the generated crate compiling — the failure has a place to
+/// live at runtime — but must be a real `Err` naming the function, never `Ok(default)`.
+#[test]
+fn sanitized_fallible_return_emits_err_not_ok_default() {
+    let body = sanitized_return_body(
+        &TypeRef::String,
+        "analyze_document",
+        true,
+        &[make_param("path", TypeRef::String, false, false, false)],
+    );
+
+    assert!(
+        body.contains("Err("),
+        "sanitized fallible return must emit Err(..), got: {body}"
+    );
+    assert!(
+        body.contains("analyze_document"),
+        "Err message must name the offending function, got: {body}"
+    );
+    assert!(
+        !body.contains("Ok("),
+        "sanitized fallible return must not report success, got: {body}"
+    );
+    assert!(
+        !body.contains("compile_error!"),
+        "fallible branch must stay buildable rather than break the crate, got: {body}"
+    );
+}
+
+/// A `()` return has no value to fabricate, so the void body stays legitimate.
+#[test]
+fn sanitized_unit_return_stays_void() {
+    let body = sanitized_return_body(&TypeRef::Unit, "clear_cache", false, &[]);
+
+    assert_eq!(body, "    ()\n", "unit return must stay void, got: {body}");
+}
+
+#[test]
+fn emit_bridge_fn_sanitized_return_never_calls_the_core_function() {
+    let rendered = emit(&sanitized_fn(TypeRef::String, None));
+
+    assert!(
+        rendered.contains("compile_error!"),
+        "sanitized bridge fn must fail loudly, got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("analyze_document"),
+        "failure must name the offending function, got:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("String::new()"),
+        "fabricated default must not reach the generated crate, got:\n{rendered}"
+    );
+}
+
+/// The fallible bridge fn returns `Result<T, String>`, so the emitted `Err` must be a
+/// `String` — the failure has to type-check against the signature this same function
+/// emitted, not just read well.
+#[test]
+fn emit_bridge_fn_sanitized_fallible_return_emits_err_matching_its_signature() {
+    let rendered = emit(&sanitized_fn(TypeRef::String, Some("SampleError")));
+
+    assert!(
+        rendered.contains("-> Result<String, String>"),
+        "fallible sanitized fn must keep its Result signature, got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains(".to_string())"),
+        "Err payload must be a String to match the signature, got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("analyze_document"),
+        "Err message must name the offending function, got:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("Ok("),
+        "fallible sanitized fn must not report success, got:\n{rendered}"
+    );
+}
+
+/// Positive control: a function whose return type was NOT sanitized still emits the real
+/// call into the core crate.
+#[test]
+fn emit_bridge_fn_unsanitized_return_still_calls_the_core_function() {
+    let mut f = sanitized_fn(TypeRef::String, None);
+    f.sanitized = false;
+    f.return_sanitized = false;
+    let rendered = emit(&f);
+
+    assert!(
+        rendered.contains("sample_crate::analyze_document"),
+        "unsanitized fn must call the core function, got:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("compile_error!"),
+        "unsanitized fn must not fail, got:\n{rendered}"
+    );
+}
+
+/// Positive control: the explicit, opt-in `dart.stub_methods` placeholder is untouched —
+/// a user who genuinely wants a no-op function still has that switch, and it is checked
+/// before the sanitized-return branch.
+#[test]
+fn emit_bridge_fn_configured_stub_method_still_emits_unimplemented() {
+    let f = sanitized_fn(TypeRef::String, None);
+    let mut out = String::new();
+    emit_bridge_fn(
+        &mut out,
+        &f,
+        "sample_crate",
+        &std::collections::HashMap::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &["analyze_document".to_string()],
+    );
+
+    assert!(
+        out.contains("unimplemented!"),
+        "configured stub method must keep its explicit placeholder, got:\n{out}"
+    );
+    assert!(
+        !out.contains("compile_error!"),
+        "configured stub method must not be treated as a sanitized-return failure, got:\n{out}"
+    );
+}
+
 #[test]
 fn non_matching_primitive_cast_preserved() {
     let ty_i64 = TypeRef::Primitive(crate::core::ir::PrimitiveType::I64);

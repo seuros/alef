@@ -804,9 +804,13 @@ fn opaque_handle_with_no_methods_is_emitted() {
         content.contains("pub const Language = struct {"),
         "opaque handle with no methods must still be emitted as a Zig struct: {content}"
     );
+    // `03109fc52 fix(zig)!: adopt scalar handle ABI` changed the template from `?*anyopaque` to
+    // `u64` and missed this file; the in-src unit tests were updated, so `cargo test --lib` never
+    // caught it. The scalar type is the assertion that matters — a pointer here is precisely the
+    // straddle #75 exists to detect. ~keep
     assert!(
-        content.contains("_handle: ?*anyopaque,"),
-        "opaque handle struct must have _handle field: {content}"
+        content.contains("_handle: u64,"),
+        "opaque handle struct must have a scalar _handle field: {content}"
     );
     assert!(
         content.contains("pub fn get_language("),
