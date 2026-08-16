@@ -27,10 +27,16 @@ fn registry_does_not_reconstruct_boxes_from_host_values() {
 #[test]
 fn registry_rejects_stale_forged_and_wrong_type_handles() {
     let mut source = String::from("const ALEF_INVALID_HANDLE_ERROR: i32 = 4;\nfn set_last_error(_: i32, _: &str) {}\n");
-    source.push_str(&template_env::render(
-        "handle_registry.rs.jinja",
-        minijinja::context! {},
-    ));
+    let mut registry = template_env::render("handle_registry.rs.jinja", minijinja::context! {});
+    let serialized_start = registry
+        .find("struct SerializedHandle")
+        .expect("serialized helper start");
+    let core_registry_resume = registry[serialized_start..]
+        .find("fn with_handle")
+        .map(|offset| serialized_start + offset)
+        .expect("core registry helpers resume");
+    registry.replace_range(serialized_start..core_registry_resume, "");
+    source.push_str(&registry);
     source.push_str(
         r#"
 fn main() {
@@ -378,13 +384,14 @@ fn owned_receiver_alias_check_has_concrete_request_type() {
         "handle_acquisition.rs.jinja",
         minijinja::context! {
             requests => "",
+            request_count => 0,
             fail_ret => "return 0;",
             owned_handle => "this",
         },
     );
 
     assert!(
-        source.contains("let mut __alef_requests: Vec<HandleRequest>"),
+        source.contains("let mut __alef_requests: Vec<HandleRequest> = Vec::with_capacity(0)"),
         "{source}"
     );
 }

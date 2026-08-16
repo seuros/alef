@@ -258,6 +258,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
             "handle_acquisition.rs.jinja",
             context! {
                 requests => handle_requests.join("\n"),
+                request_count => handle_requests.len(),
                 fail_ret => fail_ret.clone(),
                 owned_handle => is_owned_receiver.then_some("this"),
             },
@@ -785,6 +786,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
             "handle_acquisition.rs.jinja",
             context! {
                 requests => handle_requests.join("\n"),
+                request_count => handle_requests.len(),
                 fail_ret => fail_ret,
                 owned_handle => Option::<&str>::None,
             },

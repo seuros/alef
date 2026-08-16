@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **FFI linting**: preallocate generated handle-request vectors so single-handle entrypoints pass crate-denied Clippy lints.
+
 - **Zig snippets**: compile against the generated package's exported module so transitive imports declared by its
   `build.zig` remain available during validation.
 - **build pipeline**: execute Gradle backends directly and make unsupported backend tools fail instead of reporting a
