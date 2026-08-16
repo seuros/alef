@@ -433,7 +433,11 @@ fn build_command_for(
                 .unwrap_or("packages/go");
             format!("cd {dir} && go build ./...")
         }
-        other => format!("echo 'Unknown build tool: {other}'"),
+        "gradle" => {
+            let release_property = if release { " -Prelease" } else { "" };
+            format!("cd {crate_dir} && gradle build{release_property}")
+        }
+        _ => "false".to_string(),
     }
 }
 
@@ -706,6 +710,53 @@ sources = ["src/lib.rs"]
         assert!(
             !command.contains(" -q"),
             "C# build must not use dotnet query mode shorthand: {command}"
+        );
+    }
+
+    #[test]
+    fn kotlin_gradle_build_command_runs_in_generated_package() {
+        let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["kotlin"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+"#,
+        )
+        .unwrap();
+        let config = alef_cfg.resolve().unwrap().remove(0);
+        let build_config = BuildConfig {
+            tool: "gradle",
+            crate_suffix: "",
+            build_dep: BuildDependency::Ffi,
+            post_build: Vec::new(),
+        };
+
+        assert_eq!(
+            build_command_for(Language::Kotlin, &build_config, &config, false),
+            "cd packages/kotlin && gradle build"
+        );
+        assert_eq!(
+            build_command_for(Language::Kotlin, &build_config, &config, true),
+            "cd packages/kotlin && gradle build -Prelease"
+        );
+    }
+
+    #[test]
+    fn unknown_build_tool_fails_instead_of_reporting_success() {
+        let config = ResolvedCrateConfig::default();
+        let build_config = BuildConfig {
+            tool: "unsupported",
+            crate_suffix: "",
+            build_dep: BuildDependency::None,
+            post_build: Vec::new(),
+        };
+
+        assert_eq!(
+            build_command_for(Language::Kotlin, &build_config, &config, false),
+            "false"
         );
     }
 }

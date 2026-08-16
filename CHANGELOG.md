@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **build pipeline**: execute Gradle backends directly and make unsupported backend tools fail instead of reporting a
+  successful no-op.
 - **WASM snippets**: resolve local packages from wasm-pack's flat `pkg` output instead of a nonexistent `pkg/nodejs`
   subdirectory.
 - **Go snippets**: construct generated DTO fields with the same optional/default pointer policy as the Go binding
