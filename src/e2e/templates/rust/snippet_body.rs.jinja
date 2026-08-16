@@ -7,13 +7,18 @@ async fn main() {
 {% endif %}
 {% for line in body %}{{ line }}
 {% endfor %}
-{% if display_result %}    println!("{:?}", {{ result_var }});
+{% if expects_error %}    match {{ result_var }} {
+{% if returns_void %}        Ok(_) => {}
+{% else %}        Ok(value) => println!("{:?}", value),
+{% endif %}        Err(error) => println!("{error}"),
+    }
+{% else %}{% if display_result %}    println!("{:?}", {{ result_var }});
 {% endif %}
 {% for operation in presentation %}
-{% if operation.kind == "show" %}    println!("{:?}", {{ operation.expression }});
+{% if operation.kind == "show" %}    println!("{% if operation.display %}{}{% else %}{:?}{% endif %}", {{ operation.expression }});
 {% else %}    for {{ operation.item }} in {{ operation.expression }}{% if operation.optional %}.iter().flatten(){% endif %} {
 {% for field in operation.fields %}        println!("{% if operation.display %}{}{% else %}{:?}{% endif %}", {{ field }});
 {% endfor %}    }
 {% endif %}
-{% endfor %}
+{% endfor %}{% endif %}
 }

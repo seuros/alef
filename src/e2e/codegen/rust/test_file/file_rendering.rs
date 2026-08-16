@@ -9,6 +9,7 @@ use super::helpers::{body_references_symbol, resolve_function_name_for_call, res
 use super::test_function::render_test_function;
 use crate::e2e::codegen::rust::args::{resolve_handle_config_type, resolve_visitor_trait};
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_test_file(
     category: &str,
     fixtures: &[&Fixture],
@@ -17,6 +18,7 @@ pub fn render_test_file(
     type_defs: &[crate::core::ir::TypeDef],
     dep_name: &str,
     needs_mock_server: bool,
+    snippet_expects_error: bool,
 ) -> String {
     let mut out = String::new();
     out.push_str(&crate::core::hash::header(crate::core::hash::CommentStyle::DoubleSlash));
@@ -115,6 +117,7 @@ pub fn render_test_file(
             type_defs,
             dep_name,
             client_factory,
+            snippet_expects_error,
         );
         let _ = writeln!(body_buf);
     }

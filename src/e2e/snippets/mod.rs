@@ -356,6 +356,7 @@ fn render_snippet_body(
             if body.trim().is_empty() {
                 bail!("extension `{}` returned an empty snippet body", extension.name());
             }
+            reject_mock_harness_scaffolding(&body, fixture, language)?;
             return Ok(body);
         }
     }
@@ -410,7 +411,46 @@ fn render_snippet_body(
     if body.trim().is_empty() {
         bail!("built-in `{language}` snippet recipe returned an empty body");
     }
+    reject_mock_harness_scaffolding(&body, fixture, language)?;
     Ok(body)
+}
+
+/// Substrings that only ever appear in e2e mock-server wiring.
+///
+/// Each is a name the harness itself owns: the environment variables the mock server
+/// exports (`MOCK_SERVER_URL`, `MOCK_SERVERS`, the per-fixture `MOCK_SERVER_<ID>`) and
+/// the JVM system properties the Java/Kotlin suites read them through.
+const MOCK_HARNESS_MARKERS: &[&str] = &[
+    "MOCK_SERVER_URL",
+    "MOCK_SERVERS",
+    "MOCK_SERVER_",
+    "mockServerUrl",
+    "mockServer.",
+];
+
+/// Reject a snippet body that carries e2e mock-server scaffolding.
+///
+/// Snippet bodies are published verbatim into the docs site, so a body that still points
+/// at the mock server documents the test harness rather than the library. Every language
+/// — built-in or extension-supplied — funnels through [`render_snippet_body`], so placing
+/// the check here means a new backend inherits the guarantee instead of having to
+/// re-derive it. The caller turns this `Err` into a recorded coverage gap naming the
+/// fixture and language, so the offending snippet is surfaced rather than published.
+fn reject_mock_harness_scaffolding(body: &str, fixture: &Fixture, language: &str) -> Result<()> {
+    let fixture_route = format!("/fixtures/{}", fixture.id);
+    let marker = MOCK_HARNESS_MARKERS
+        .iter()
+        .copied()
+        .chain(std::iter::once(fixture_route.as_str()))
+        .find(|marker| body.contains(marker));
+    if let Some(marker) = marker {
+        bail!(
+            "`{language}` snippet for fixture `{}` leaks e2e mock-server scaffolding (`{marker}`); \
+             a documentation snippet must construct its client the way a reader would",
+            fixture.id
+        );
+    }
+    Ok(())
 }
 
 fn snippet_generators(languages: &[String]) -> Result<Vec<(&str, Box<dyn E2eCodegen>)>> {
@@ -674,6 +714,39 @@ mod tests {
             }),
             ..Fixture::default()
         }
+    }
+
+    #[test]
+    fn mock_harness_scaffolding_is_rejected_for_every_language() {
+        let fixture = Fixture {
+            id: "rate_limit_429".into(),
+            ..Fixture::default()
+        };
+        let leaks = [
+            "var url = System.getenv(\"MOCK_SERVER_URL\") + \"/fixtures/rate_limit_429\";",
+            "let url = std.c.getenv(\"MOCK_SERVER_RATE_LIMIT_429\");",
+            "var url = System.getProperty(\"mockServerUrl\");",
+            "let base = System.getProperty(\"mockServer.rate_limit_429\");",
+            "let hosts = process.env.MOCK_SERVERS;",
+            "let url = \"https://api.example.com/fixtures/rate_limit_429\";",
+        ];
+        for leak in leaks {
+            let error = reject_mock_harness_scaffolding(leak, &fixture, "zig")
+                .expect_err("mock-server scaffolding must not reach a published snippet");
+            let message = format!("{error:#}");
+            assert!(message.contains("rate_limit_429"), "error omits the fixture: {message}");
+            assert!(message.contains("zig"), "error omits the language: {message}");
+        }
+    }
+
+    #[test]
+    fn a_reader_facing_snippet_passes_the_mock_harness_guard() {
+        let fixture = Fixture {
+            id: "rate_limit_429".into(),
+            ..Fixture::default()
+        };
+        let body = "var apiKey = System.getenv(\"API_KEY\");\nvar client = Sample.createClient(apiKey, null);";
+        assert!(reject_mock_harness_scaffolding(body, &fixture, "java").is_ok());
     }
 
     #[test]

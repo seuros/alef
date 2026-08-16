@@ -148,7 +148,8 @@
           "additionalProperties": false,
           "properties": {
             "op": { "const": "show" },
-            "path": { "type": "string" }
+            "path": { "type": "string" },
+            "display": { "type": "boolean" }
           }
         },
         {

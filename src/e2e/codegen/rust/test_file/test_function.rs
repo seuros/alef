@@ -17,6 +17,7 @@ use crate::e2e::codegen::rust::mock_server::render_mock_server_setup;
 
 use super::helpers::{resolve_function_name_for_call, resolve_module_for_call};
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_test_function(
     out: &mut String,
     fixture: &Fixture,
@@ -25,6 +26,7 @@ pub fn render_test_function(
     type_defs: &[crate::core::ir::TypeDef],
     dep_name: &str,
     client_factory: Option<&str>,
+    snippet_expects_error: bool,
 ) {
     // Http fixtures get their own integration test code path.
     if fixture.http.is_some() {
@@ -494,9 +496,12 @@ pub fn render_test_function(
 
     // For streaming fixtures the stream itself is stored in `stream` and the
     // collected list in `chunks`.  Non-streaming fixtures use result_var / `_`.
+    // A snippet whose fixture asserts `error` renders the `Result` itself with a `match`,
+    // so the call must bind to a named variable even though the snippet path cleared the
+    // fixture's assertions before getting here. ~keep
     let result_binding = if is_streaming {
         stream_var.to_string()
-    } else if has_usable_assertion || fixture.has_docs_presentation() {
+    } else if snippet_expects_error || has_usable_assertion || fixture.has_docs_presentation() {
         result_var.to_string()
     } else {
         "_".to_string()
@@ -517,7 +522,13 @@ pub fn render_test_function(
             )
         });
 
-    let unwrap_suffix = if returns_result { ".expect(\"call failed\")" } else { "" };
+    // `.expect` would abort the snippet on the very failure the example is documenting,
+    // so the error-handling snippet keeps the `Result` intact for its own `match`. ~keep
+    let unwrap_suffix = if returns_result && !snippet_expects_error {
+        ".expect(\"call failed\")"
+    } else {
+        ""
+    };
     if is_streaming {
         // Streaming: bind the raw stream, then drain it into a Vec.
         let _ = writeln!(out, "    let {stream_var} = {call_expr}{await_suffix}{unwrap_suffix};");

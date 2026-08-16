@@ -36,7 +36,9 @@ pub(crate) fn resolve(fixture: &Fixture, e2e_config: &E2eConfig, language: &str)
         .shows
         .iter()
         .cloned()
-        .map(|path| FixtureDocsOperation::Show { path })
+        // `docs.shows` is the shorthand form and carries no formatting choice, so it keeps
+        // the debug-formatted default; only `presentation.operations` can opt in. ~keep
+        .map(|path| FixtureDocsOperation::Show { path, display: false })
         .chain(
             docs.presentation
                 .iter()
@@ -46,13 +48,13 @@ pub(crate) fn resolve(fixture: &Fixture, e2e_config: &E2eConfig, language: &str)
     operations
         .iter()
         .map(|operation| match operation {
-            FixtureDocsOperation::Show { path } => PresentationOperation {
+            FixtureDocsOperation::Show { path, display } => PresentationOperation {
                 kind: "show",
                 expression: resolver.accessor(path, language, &call.result_var),
                 item: String::new(),
                 fields: Vec::new(),
                 optional: false,
-                display: false,
+                display: *display,
                 destructure_source: String::new(),
                 destructure_item: String::new(),
             },
@@ -214,6 +216,44 @@ mod tests {
             Some("https://example.com/guide.txt")
         );
         assert!(!docs_fixture.needs_mock_server());
+    }
+
+    #[test]
+    fn show_display_flag_selects_the_human_readable_rust_formatter() {
+        let mut display_fixture = fixture();
+        display_fixture
+            .docs
+            .as_mut()
+            .and_then(|docs| docs.presentation.as_mut())
+            .expect("presentation")
+            .operations = vec![FixtureDocsOperation::Show {
+            path: "text".into(),
+            display: true,
+        }];
+        let mut debug_fixture = fixture();
+        debug_fixture
+            .docs
+            .as_mut()
+            .and_then(|docs| docs.presentation.as_mut())
+            .expect("presentation")
+            .operations = vec![FixtureDocsOperation::Show {
+            path: "text".into(),
+            display: false,
+        }];
+        let config = config();
+
+        let render = |operations| {
+            crate::e2e::template_env::render(
+                "rust/snippet_body.rs.jinja",
+                minijinja::context! { imports => Vec::<String>::new(), body => vec!["let result = process();"],
+                is_async => false, presentation => operations },
+            )
+        };
+        let displayed = render(resolve(&display_fixture, &config, "rust"));
+        let debugged = render(resolve(&debug_fixture, &config, "rust"));
+
+        assert!(displayed.contains("println!(\"{}\", result.text);"), "{displayed}");
+        assert!(debugged.contains("println!(\"{:?}\", result.text);"), "{debugged}");
     }
 
     #[test]

@@ -80,6 +80,15 @@ pub struct FixtureDocsFileInput {
 pub enum FixtureDocsOperation {
     Show {
         path: String,
+        /// Print the value with the language's human-readable formatter rather than its
+        /// debug/inspection one.
+        ///
+        /// Defaults to `false`, which keeps the debug formatting every existing fixture
+        /// renders with today. Set it for a `path` that resolves to a plain string or
+        /// number, where the Rust snippet's `{:?}` publishes `Some(Text("Hello!"))` in
+        /// place of the `Hello!` a reader is looking for. Mirrors `Iterate::display`.
+        #[serde(default)]
+        display: bool,
     },
     Iterate {
         path: String,
@@ -190,11 +199,38 @@ mod tests {
         assert_eq!(presentation.input, Some(serde_json::json!({"source": "guide.txt"})));
         assert_eq!(presentation.call.as_deref(), Some("process_file"));
         assert_eq!(presentation.files[0].field, "/source");
-        assert!(matches!(presentation.operations[0], FixtureDocsOperation::Show { .. }));
+        assert!(matches!(
+            presentation.operations[0],
+            FixtureDocsOperation::Show { display: false, .. }
+        ));
         assert!(matches!(
             presentation.operations[1],
             FixtureDocsOperation::Iterate { optional: true, .. }
         ));
+    }
+
+    #[test]
+    fn show_operation_display_flag_is_opt_in() {
+        let docs: FixtureDocs = serde_json::from_value(serde_json::json!({
+            "topic": "configuration",
+            "presentation": {
+                "operations": [
+                    {"op": "show", "path": "summary"},
+                    {"op": "show", "path": "text", "display": true}
+                ]
+            }
+        }))
+        .expect("fixture docs presentation deserialize");
+
+        let presentation = docs.presentation.expect("presentation");
+        assert!(
+            matches!(presentation.operations[0], FixtureDocsOperation::Show { display: false, .. }),
+            "an existing `show` without the flag must keep debug formatting"
+        );
+        assert!(
+            matches!(presentation.operations[1], FixtureDocsOperation::Show { display: true, .. }),
+            "`display: true` must survive deserialization"
+        );
     }
 
     #[test]

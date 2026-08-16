@@ -174,6 +174,7 @@ impl E2eCodegen for RustE2eCodegen {
                 _type_defs,
                 &dep_name,
                 needs_mock_server,
+                false,
             );
 
             files.push(GeneratedFile {
@@ -196,6 +197,10 @@ impl E2eCodegen for RustE2eCodegen {
     ) -> Result<String> {
         let dep_name = resolve_crate_name(e2e_config, config).replace('-', "_");
         let mut call_fixture = fixture.docs_call_fixture();
+        let expects_error = fixture
+            .assertions
+            .iter()
+            .any(|assertion| assertion.assertion_type == "error");
         call_fixture.assertions.clear();
         call_fixture.mock_response = None;
         let test_file = render_test_file(
@@ -206,6 +211,7 @@ impl E2eCodegen for RustE2eCodegen {
             type_defs,
             &dep_name,
             call_fixture.needs_mock_server(),
+            expects_error,
         );
         let (imports, body, is_async) = extract_rust_snippet(&test_file)?;
         let api_key_var = crate::e2e::fixture::FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
@@ -226,7 +232,10 @@ impl E2eCodegen for RustE2eCodegen {
             &call_fixture.tags,
             &call_fixture.input,
         );
-        let display_result = presentation.is_empty() && !call.returns_void;
+        // An error fixture renders the `Result` through the template's `match`, which both
+        // reports the failure and consumes the value — a second unconditional `println!`
+        // of `result_var` would then reference a moved binding. ~keep
+        let display_result = !expects_error && presentation.is_empty() && !call.returns_void;
         let body = body
             .into_iter()
             .map(|line| {
@@ -242,6 +251,7 @@ impl E2eCodegen for RustE2eCodegen {
             minijinja::context! {
                 imports => imports, body => body, is_async => is_async, presentation => presentation,
                 display_result => display_result, result_var => call.result_var,
+                expects_error => expects_error, returns_void => call.returns_void,
             },
         ))
     }
@@ -909,6 +919,43 @@ options_type = "ChatRequest"
         assert!(rendered.contains("let widgets = list_widgets()"), "{rendered}");
         assert!(rendered.contains("println!(\"{:?}\", widgets)"), "{rendered}");
         assert!(!rendered.contains("let _ = list_widgets()"), "{rendered}");
+        assert!(
+            !rendered.contains("match widgets {"),
+            "a fixture with no error assertion must not get the error branch:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn error_fixture_snippet_matches_the_result_instead_of_panicking() {
+        use crate::e2e::codegen::E2eCodegen;
+
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "rate_limit_429",
+            "description": "Surface a rate-limit failure",
+            "input": null,
+            "assertions": [{"type": "error"}]
+        }))
+        .expect("fixture must parse");
+        let mut e2e = crate::e2e::config::E2eConfig::default();
+        e2e.call.function = "chat".into();
+        e2e.call.result_var = "result".into();
+
+        let rendered = RustE2eCodegen
+            .render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[])
+            .expect("Rust snippet renders");
+
+        assert!(rendered.contains("let result = chat()"), "{rendered}");
+        assert!(rendered.contains("match result {"), "{rendered}");
+        assert!(rendered.contains("Ok(value) => println!(\"{:?}\", value),"), "{rendered}");
+        assert!(rendered.contains("Err(error) => println!(\"{error}\"),"), "{rendered}");
+        assert!(
+            !rendered.contains(".expect(\"call failed\")"),
+            "the error branch must not panic on the failure it documents:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("println!(\"{:?}\", result);"),
+            "the moved result must not be printed after the match:\n{rendered}"
+        );
     }
 
     #[test]

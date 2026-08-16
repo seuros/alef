@@ -63,6 +63,7 @@ pub(super) fn render_test_file(
                 config,
                 type_defs,
                 true,
+                false,
             );
         }
         let _ = writeln!(out);
@@ -115,6 +116,7 @@ fn render_test_fn(
     config: &crate::core::config::ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
     wrap_as_test: bool,
+    for_docs: bool,
 ) {
     // Resolve per-fixture call config.
     let call_config = e2e_config.resolve_call_for_fixture(
@@ -334,19 +336,35 @@ fn render_test_fn(
 
     // Client factory: when configured, instantiate a client object via the named
     // constructor function and call the method on the instance.
-    // The client is pointed at MOCK_SERVER_URL/fixtures/<id> (mirrors go.rs:981-1028).
+    // In test mode the client is pointed at MOCK_SERVER_URL/fixtures/<id> (mirrors
+    // go.rs:981-1028). A documentation snippet is published verbatim to readers, so it
+    // must never carry that harness wiring or a literal credential: it reads the real
+    // credential from the environment and leaves `base_url` at the binding default,
+    // matching what `java/snippet_body.jinja` and `csharp/snippet_body.jinja` emit. ~keep
     // When not configured, fall back to calling the top-level package function directly.
     let call_prefix = if let Some(factory) = client_factory {
-        let fixture_id = &fixture.id;
-        let _ = writeln!(
-            out,
-            "    const _mock_url = try std.fmt.allocPrintSentinel(std.heap.c_allocator, \"{{s}}/fixtures/{fixture_id}\", .{{if (std.c.getenv(\"MOCK_SERVER_URL\")) |v| std.mem.span(v) else \"http://localhost:8080\"}}, 0);"
-        );
-        let _ = writeln!(out, "    defer std.heap.c_allocator.free(_mock_url);");
-        let _ = writeln!(
-            out,
-            "    var _client = try {module_name}.{factory}(\"test-key\", _mock_url, null, null, null);"
-        );
+        if for_docs {
+            let api_key_var = crate::e2e::fixture::FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
+            let _ = writeln!(
+                out,
+                "    const _api_key = std.c.getenv(\"{api_key_var}\") orelse return error.MissingApiKey;"
+            );
+            let _ = writeln!(
+                out,
+                "    var _client = try {module_name}.{factory}(std.mem.span(_api_key), null, null, null, null);"
+            );
+        } else {
+            let fixture_id = &fixture.id;
+            let _ = writeln!(
+                out,
+                "    const _mock_url = try std.fmt.allocPrintSentinel(std.heap.c_allocator, \"{{s}}/fixtures/{fixture_id}\", .{{if (std.c.getenv(\"MOCK_SERVER_URL\")) |v| std.mem.span(v) else \"http://localhost:8080\"}}, 0);"
+            );
+            let _ = writeln!(out, "    defer std.heap.c_allocator.free(_mock_url);");
+            let _ = writeln!(
+                out,
+                "    var _client = try {module_name}.{factory}(\"test-key\", _mock_url, null, null, null);"
+            );
+        }
         let _ = writeln!(out, "    defer _client.free();");
         "_client".to_string()
     } else {
@@ -620,6 +638,7 @@ pub(super) fn render_snippet_body(
         config,
         type_defs,
         false,
+        true,
     );
     // The test-mode error path captures the failure with a discarded `else |_|` arm
     // (nothing to report inside `test { ... }`). The snippet is a runnable `main`,
@@ -664,6 +683,88 @@ pub(super) fn render_snippet_body(
 #[cfg(test)]
 mod snippet_tests {
     use super::*;
+
+    #[test]
+    fn client_factory_snippet_never_points_the_reader_at_the_mock_server() {
+        let fixture = Fixture {
+            id: "rate_limit_429".into(),
+            description: "Rate limited".into(),
+            input: serde_json::json!({}),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "chat".into();
+        e2e.call.overrides.insert(
+            "zig".into(),
+            crate::e2e::config::CallOverride {
+                client_factory: Some("create_client".into()),
+                ..Default::default()
+            },
+        );
+        let rendered = render_snippet_body(&fixture, &e2e, "sample", "sample", &ResolvedCrateConfig::default(), &[])
+            .expect("snippet renders");
+
+        assert!(
+            !rendered.contains("MOCK_SERVER"),
+            "mock-server env var leaked:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("/fixtures/rate_limit_429"),
+            "mock-server fixture route leaked:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("\"test-key\""),
+            "literal credential leaked:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("std.c.getenv(\"API_KEY\")"),
+            "credential is not read from the environment:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("sample.create_client(std.mem.span(_api_key), null, null, null, null)"),
+            "client is not constructed the way a reader would:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn e2e_test_file_still_points_the_client_at_the_mock_server() {
+        let fixture = Fixture {
+            id: "rate_limit_429".into(),
+            description: "Rate limited".into(),
+            input: serde_json::json!({}),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "chat".into();
+        e2e.call.overrides.insert(
+            "zig".into(),
+            crate::e2e::config::CallOverride {
+                client_factory: Some("create_client".into()),
+                ..Default::default()
+            },
+        );
+        let rendered = render_test_file(
+            "errors",
+            &[&fixture],
+            &e2e,
+            "chat",
+            "result",
+            &[],
+            "sample",
+            "sample",
+            &ResolvedCrateConfig::default(),
+            &[],
+        );
+
+        assert!(
+            rendered.contains("MOCK_SERVER_URL"),
+            "e2e test lost its mock-server wiring:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("/fixtures/rate_limit_429"),
+            "e2e test lost its per-fixture route:\n{rendered}"
+        );
+    }
 
     #[test]
     fn snippet_keeps_import_and_call_without_test_harness() {
