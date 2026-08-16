@@ -710,7 +710,11 @@ sources = []
             "the reference tier must never synthesize a call, got:\n{out}"
         );
         assert!(
-            !out.contains("@hasDecl"),
+            // `symbol_reference_test`'s own `~keep` comment legitimately discusses `@hasDecl`
+            // in prose (contrasting this stronger tier against it), so a bare substring check
+            // false-positives on that comment. `if (!@hasDecl(` is `hasdecl_test`'s actual
+            // functional emission (see line ~586) and is what "fell through" means. ~keep
+            !out.contains("if (!@hasDecl("),
             "a visible function must not fall through to the weaker comptime tier, got:\n{out}"
         );
     }
