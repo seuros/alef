@@ -491,10 +491,26 @@ license = "Apache-2.0"
     assert!(readme.content.contains("{path = \"../packages/gleam\"}"));
 }
 
+/// The shared [`test_api`] fixture is completely empty — no functions, types, or enums — so every
+/// Zig scaffold assertion written against it was exercising the empty-surface path, and the seed
+/// it produced was the vacuous "module imports successfully" fallback. `zig ast-check` passed on
+/// that fallback, which is why nothing here ever noticed. These tests need a surface with one
+/// real, visible item so they cover the path a consumer repo actually takes. ~keep
+fn zig_test_api() -> crate::core::ir::ApiSurface {
+    crate::core::ir::ApiSurface {
+        functions: vec![crate::core::ir::FunctionDef {
+            name: "ping".to_string(),
+            return_type: crate::core::ir::TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool),
+            ..Default::default()
+        }],
+        ..test_api()
+    }
+}
+
 #[test]
 fn test_scaffold_zig() {
     let config = test_config();
-    let api = test_api();
+    let api = zig_test_api();
     let all_files = scaffold(&api, &config, &[Language::Zig]).unwrap();
     let files = language_files(&all_files);
     assert_eq!(files.len(), 8, "Expected 8 files for Zig scaffold");
@@ -558,6 +574,36 @@ fn test_scaffold_zig() {
     );
 }
 
+/// End-to-end counterpart through `scaffold()`: with nothing in the API surface to assert
+/// against, the seed and the `test` step that runs it are both absent. `zig build test` then
+/// fails with `error: no step named 'test'` instead of exiting 0 on zero test blocks — the whole
+/// point of the gate, since a vacuous pass and a real one are the same terminal event.
+#[test]
+fn scaffold_zig_emits_no_test_step_for_an_empty_api_surface() {
+    let all_files = scaffold(&test_api(), &test_config(), &[Language::Zig]).unwrap();
+    let files = language_files(&all_files);
+
+    assert_eq!(files.len(), 7, "the test seed must be absent, leaving 7 files");
+    assert!(
+        !files
+            .iter()
+            .any(|f| f.path == PathBuf::from("packages/zig/test/my_lib_test.zig")),
+        "no seed may be written when there is nothing to assert against"
+    );
+    let build_zig = &files[0];
+    assert_eq!(build_zig.path, PathBuf::from("packages/zig/build.zig"));
+    assert!(
+        !build_zig.content.contains(r#"b.step("test""#),
+        "build.zig must declare no test step; got: {}",
+        build_zig.content
+    );
+    assert!(
+        build_zig.content.contains(r#"b.step("example", "Run the example")"#),
+        "the example step must survive; got: {}",
+        build_zig.content
+    );
+}
+
 #[test]
 fn scaffold_zig_example_passes_zig_ast_check() {
     let files = scaffold(&test_api(), &test_config(), &[Language::Zig]).unwrap();
@@ -583,7 +629,7 @@ fn scaffold_zig_example_passes_zig_ast_check() {
 
 #[test]
 fn scaffold_zig_test_seed_passes_zig_ast_check() {
-    let files = scaffold(&test_api(), &test_config(), &[Language::Zig]).unwrap();
+    let files = scaffold(&zig_test_api(), &test_config(), &[Language::Zig]).unwrap();
     let test_seed = files
         .iter()
         .find(|file| file.path == Path::new("packages/zig/test/my_lib_test.zig"))

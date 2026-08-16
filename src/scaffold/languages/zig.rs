@@ -13,26 +13,72 @@ pub(crate) fn scaffold_zig(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
     let module_name = config.zig_module_name();
     let ffi_crate_path = config.ffi_crate_path();
 
-    let capsule_imports_block: String = config
+    // Split per capsule type: the `b.dependency(...)` declaration and the library `module`
+    // import must always run (the library itself may use the capsule regardless of whether a
+    // test target exists), while `test_module.addImport` may only be emitted when a
+    // `test_module` block actually exists below — see `test_seed`. ~keep
+    let (module_capsule_imports, test_capsule_imports): (String, String) = config
         .zig
         .as_ref()
         .map(|c| {
             let import_names = crate::core::config::languages::zig_capsule_import_names(&c.capsule_types);
-            if import_names.is_empty() {
-                return String::new();
-            }
-            let mut block = String::new();
+            let mut module_block = String::new();
+            let mut test_block = String::new();
             for name in &import_names {
-                block.push_str(&format!(
+                module_block.push_str(&format!(
                     "\n    const {name}_dep = b.dependency(\"{name}\", .{{\n        \
                      .target = target,\n        .optimize = optimize,\n    }});\n    \
-                     module.addImport(\"{name}\", {name}_dep.module(\"{name}\"));\n    \
-                     test_module.addImport(\"{name}\", {name}_dep.module(\"{name}\"));\n"
+                     module.addImport(\"{name}\", {name}_dep.module(\"{name}\"));\n"
+                ));
+                test_block.push_str(&format!(
+                    "    test_module.addImport(\"{name}\", {name}_dep.module(\"{name}\"));\n"
                 ));
             }
-            block
+            (module_block, test_block)
         })
         .unwrap_or_default();
+
+    // A `zig build test` step is only emitted when `scaffold_zig_test` found something real to
+    // assert against — the presence of the seed *is* the condition, so the step and the file it
+    // points at can never disagree. A test target that compiles and runs against nothing — the
+    // pre-fix defect, and even the seed's own "module imports successfully" fallback — passes on
+    // an empty surface exactly the same as it would on a broken one: `zig build test` exits 0
+    // either way. Omitting the step instead makes that state unmistakable: `zig build test`
+    // fails with `error: no step named 'test'` rather than reporting false coverage. ~keep
+    let test_seed = scaffold_zig_test(api, config, &module_name);
+    let test_target_block = if test_seed.is_some() {
+        format!(
+            r#"
+    // Scaffold also seeds `test/{module_name}_test.zig` (create-only — never overwrites
+    // a real test suite once one exists) so `zig build test` has a real target to compile
+    // from day one instead of silently re-running `src/{module_name}.zig` with zero `test`
+    // blocks. ~keep
+    const test_module = b.createModule(.{{
+        .root_source_file = b.path("test/{module_name}_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }});
+    test_module.addImport("{module_name}", module);
+    test_module.addLibraryPath(.{{ .cwd_relative = ffi_path }});
+    test_module.addIncludePath(.{{ .cwd_relative = ffi_include }});
+    test_module.linkSystemLibrary("{ffi_lib}", .{{}});
+{test_capsule_imports}
+    const tests = b.addTest(.{{
+        .root_module = test_module,
+    }});
+
+    const run_tests = b.addRunArtifact(tests);
+    const test_step = b.step("test", "Run unit tests");
+    test_step.dependOn(&run_tests.step);
+"#,
+            module_name = module_name,
+            ffi_lib = ffi_lib_name,
+            test_capsule_imports = test_capsule_imports,
+        )
+    } else {
+        String::new()
+    };
 
     let build_zig = format!(
         r#"const std = @import("std");
@@ -66,30 +112,7 @@ pub fn build(b: *std.Build) void {{
     module.addLibraryPath(.{{ .cwd_relative = ffi_path }});
     module.addIncludePath(.{{ .cwd_relative = ffi_include }});
     module.linkSystemLibrary("{ffi_lib}", .{{}});
-
-    // Scaffold also seeds `test/{module_name}_test.zig` (create-only — never overwrites
-    // a real test suite once one exists) so `zig build test` has a real target to compile
-    // from day one instead of silently re-running `src/{module_name}.zig` with zero `test`
-    // blocks. ~keep
-    const test_module = b.createModule(.{{
-        .root_source_file = b.path("test/{module_name}_test.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    }});
-    test_module.addImport("{module_name}", module);
-    test_module.addLibraryPath(.{{ .cwd_relative = ffi_path }});
-    test_module.addIncludePath(.{{ .cwd_relative = ffi_include }});
-    test_module.linkSystemLibrary("{ffi_lib}", .{{}});
-{capsule_imports_block}
-    const tests = b.addTest(.{{
-        .root_module = test_module,
-    }});
-
-    const run_tests = b.addRunArtifact(tests);
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_tests.step);
-
+{module_capsule_imports}{test_target_block}
     const example_module = b.createModule(.{{
         .root_source_file = b.path("examples/example.zig"),
         .target = target,
@@ -113,7 +136,8 @@ pub fn build(b: *std.Build) void {{
         module_name = module_name,
         ffi_lib = ffi_lib_name,
         ffi_crate_path = ffi_crate_path,
-        capsule_imports_block = capsule_imports_block,
+        module_capsule_imports = module_capsule_imports,
+        test_target_block = test_target_block,
     );
 
     let fingerprint = zig_fingerprint(&module_name);
@@ -232,8 +256,6 @@ pub fn main() !void {
         module_name = module_name,
     );
 
-    let test_zig = scaffold_zig_test(api, config, &module_name);
-
     let mut files = vec![
         GeneratedFile {
             path: PathBuf::from("packages/zig/build.zig"),
@@ -255,22 +277,28 @@ pub fn main() !void {
             content: editorconfig.to_string(),
             generated_header: false,
         },
-        GeneratedFile {
-            path: PathBuf::from(format!("packages/zig/test/{module_name}_test.zig")),
-            content: test_zig,
-            generated_header: false,
-        },
-        GeneratedFile {
-            path: PathBuf::from("packages/zig/examples/example.zig"),
-            content: example_zig.to_string(),
-            generated_header: false,
-        },
-        GeneratedFile {
-            path: PathBuf::from("packages/zig/src/main.zig"),
-            content: main_zig.to_string(),
-            generated_header: false,
-        },
     ];
+    // Only seed `test/{module_name}_test.zig` — and only wire the matching `test_module`/
+    // `test_step` into `build.zig` above — when `scaffold_zig_test` had a real, visible
+    // function/type/enum to assert against. Both branches read the same `test_seed`, so the
+    // step and its target file are emitted together or not at all. ~keep
+    if let Some(test_seed) = test_seed {
+        files.push(GeneratedFile {
+            path: PathBuf::from(format!("packages/zig/test/{module_name}_test.zig")),
+            content: test_seed,
+            generated_header: false,
+        });
+    }
+    files.push(GeneratedFile {
+        path: PathBuf::from("packages/zig/examples/example.zig"),
+        content: example_zig.to_string(),
+        generated_header: false,
+    });
+    files.push(GeneratedFile {
+        path: PathBuf::from("packages/zig/src/main.zig"),
+        content: main_zig.to_string(),
+        generated_header: false,
+    });
     // See the matching comment in `scaffold_swift`: once `[crates.readme.languages.zig]`
     // is configured, the README module owns this path end-to-end, and scaffold must not
     // compete with it as a second writer (#555). Inserted at its original position
@@ -427,16 +455,23 @@ fn repair_build_zig_test_target(content: &str) -> Option<String> {
 ///    Types and enums have no referenceable-as-value form (`&SomeType` is not valid Zig), so
 ///    comptime existence is the strongest fact available about them — but this tier compiles no
 ///    wrapper body and links nothing, so it catches only a rename or a removal.
-/// 4. Only when the API surface is genuinely empty (e.g. scaffolding before any Rust code exists)
-///    does this fall back to asserting the module resolves at all — there is nothing else to
-///    assert against yet, and once real items exist this file is never regenerated over.
 ///
 /// Every tier draws its candidate from `api` (the parsed Rust surface) and never from the
 /// generated `.zig` file's declaration list. That is why the Zig binding generator's synthetic
 /// helpers — `_last_error`, `_free_string`, `_first_error`, emitted directly as text by
 /// `backends::zig::gen_bindings::helpers` with no backing `FunctionDef` — can never be picked as
-/// the seed subject: they are structurally invisible here, not filtered out by name. ~keep
-fn scaffold_zig_test(api: &ApiSurface, config: &ResolvedCrateConfig, module_name: &str) -> String {
+/// the seed subject: they are structurally invisible here, not filtered out by name.
+///
+/// Returns `None` when no tier applies — a genuinely empty or fully-excluded surface (e.g.
+/// scaffolding before any Rust code exists). There is nothing truthful to assert in that state,
+/// so `scaffold_zig` seeds no `test/{module_name}_test.zig` and wires no `test_module`/
+/// `test_step` into `build.zig` rather than emit a test that passes on nothing
+/// indistinguishably from real coverage. A missing `test` step fails loudly (`error: no step
+/// named 'test'`); a vacuous one reports false confidence. Returning `Option` rather than a
+/// fallback string is what keeps the two decisions from drifting: the seed's own existence is
+/// the condition `scaffold_zig` branches on, so there is no second predicate to fall out of
+/// sync with these tiers. ~keep
+fn scaffold_zig_test(api: &ApiSurface, config: &ResolvedCrateConfig, module_name: &str) -> Option<String> {
     let (exclude_functions, exclude_types) = zig_binding_exclusions(api, config);
     let function_is_visible = |f: &FunctionDef| !f.binding_excluded && !exclude_functions.contains(&f.name);
     let import_line = format!("const {module_name} = @import(\"{module_name}\");\n\n");
@@ -446,11 +481,11 @@ fn scaffold_zig_test(api: &ApiSurface, config: &ResolvedCrateConfig, module_name
         .iter()
         .find(|f| function_is_visible(f) && f.params.is_empty() && matches!(f.return_type, TypeRef::Primitive(_)));
     if let Some(f) = trivial_call_fn {
-        return import_line + &trivial_call_test(module_name, f);
+        return Some(import_line + &trivial_call_test(module_name, f));
     }
 
     if let Some(f) = api.functions.iter().find(|f| function_is_visible(f)) {
-        return import_line + &symbol_reference_test(module_name, &f.name);
+        return Some(import_line + &symbol_reference_test(module_name, &f.name));
     }
 
     if let Some(t) = api
@@ -458,7 +493,7 @@ fn scaffold_zig_test(api: &ApiSurface, config: &ResolvedCrateConfig, module_name
         .iter()
         .find(|t| !t.binding_excluded && !t.is_trait && !exclude_types.contains(&t.name))
     {
-        return import_line + &hasdecl_test(module_name, &t.name, "type");
+        return Some(import_line + &hasdecl_test(module_name, &t.name, "type"));
     }
 
     if let Some(e) = api
@@ -466,16 +501,10 @@ fn scaffold_zig_test(api: &ApiSurface, config: &ResolvedCrateConfig, module_name
         .iter()
         .find(|e| !e.binding_excluded && !exclude_types.contains(&e.name))
     {
-        return import_line + &hasdecl_test(module_name, &e.name, "enum");
+        return Some(import_line + &hasdecl_test(module_name, &e.name, "enum"));
     }
 
-    import_line
-        + "// No generated API surface exists yet for this crate, so there is nothing to assert\n\
-           // against beyond the module resolving. Once real functions/types exist, alef never\n\
-           // regenerates over this file — it is a create-only scaffold seed. ~keep\n\
-           test \"module imports successfully\" {\n    _ = "
-        + module_name
-        + ";\n}\n"
+    None
 }
 
 /// Names excluded from Zig binding generation, mirroring the same union `ZigBackend::generate_bindings`
@@ -658,7 +687,7 @@ sources = []
             functions: vec![trivial_function("ping")],
             ..Default::default()
         };
-        let out = scaffold_zig_test(&api, &minimal_config(), "my_lib");
+        let out = scaffold_zig_test(&api, &minimal_config(), "my_lib").expect("a visible item must produce a seed");
 
         assert!(out.contains("const my_lib = @import(\"my_lib\");"), "got:\n{out}");
         assert!(out.contains("test \"my_lib.ping runs\""), "got:\n{out}");
@@ -681,7 +710,7 @@ sources = []
             }],
             ..Default::default()
         };
-        let out = scaffold_zig_test(&api, &minimal_config(), "my_lib");
+        let out = scaffold_zig_test(&api, &minimal_config(), "my_lib").expect("a visible item must produce a seed");
 
         assert!(out.contains("const result = try my_lib.ping();"), "got:\n{out}");
     }
@@ -700,7 +729,7 @@ sources = []
             }],
             ..Default::default()
         };
-        let out = scaffold_zig_test(&api, &minimal_config(), "my_lib");
+        let out = scaffold_zig_test(&api, &minimal_config(), "my_lib").expect("a visible item must produce a seed");
 
         assert!(out.contains("test \"my_lib.greet symbol resolves\" {"), "got:\n{out}");
         assert!(out.contains("\n    _ = &my_lib.greet;\n"), "got:\n{out}");
@@ -731,7 +760,7 @@ sources = []
             }],
             ..Default::default()
         };
-        let out = scaffold_zig_test(&api, &minimal_config(), "my_lib");
+        let out = scaffold_zig_test(&api, &minimal_config(), "my_lib").expect("a visible item must produce a seed");
 
         assert!(out.contains("It does NOT prove the symbol is CORRECT."), "got:\n{out}");
         assert!(
@@ -761,7 +790,7 @@ sources = []
                 }],
                 ..Default::default()
             };
-            let out = scaffold_zig_test(&api, &minimal_config(), "my_lib");
+            let out = scaffold_zig_test(&api, &minimal_config(), "my_lib").expect("a visible item must produce a seed");
 
             assert!(
                 out.contains("\n    _ = &my_lib.maybe_name;\n"),
@@ -781,11 +810,10 @@ sources = []
     /// name filter that could be dropped. Pinned anyway: an implementation that ever picked its
     /// subject by inspecting the generated module's declarations would seed a test that asserts
     /// only against alef's own boilerplate and links nothing of the real surface, which is the
-    /// vacuous-green failure this whole seed exists to prevent. Checked on the empty surface
-    /// too, since that is the case where such an implementation would have nothing else to grab.
+    /// vacuous-green failure this whole seed exists to prevent.
     #[test]
     fn never_seeds_against_the_synthetic_binding_helpers() {
-        let non_trivial = ApiSurface {
+        let api = ApiSurface {
             functions: vec![FunctionDef {
                 name: "greet".to_string(),
                 return_type: TypeRef::String,
@@ -793,14 +821,12 @@ sources = []
             }],
             ..Default::default()
         };
-        for api in [non_trivial, ApiSurface::default()] {
-            let out = scaffold_zig_test(&api, &minimal_config(), "my_lib");
-            for helper in ["_last_error", "_free_string", "_first_error"] {
-                assert!(
-                    !out.contains(helper),
-                    "synthetic helper `{helper}` must never be the seed subject, got:\n{out}"
-                );
-            }
+        let out = scaffold_zig_test(&api, &minimal_config(), "my_lib").expect("a visible item must produce a seed");
+        for helper in ["_last_error", "_free_string", "_first_error"] {
+            assert!(
+                !out.contains(helper),
+                "synthetic helper `{helper}` must never be the seed subject, got:\n{out}"
+            );
         }
     }
 
@@ -818,7 +844,7 @@ sources = []
             }],
             ..Default::default()
         };
-        let out = scaffold_zig_test(&api, &minimal_config(), "my_lib");
+        let out = scaffold_zig_test(&api, &minimal_config(), "my_lib").expect("a visible item must produce a seed");
 
         assert!(out.contains("if (!@hasDecl(my_lib, \"Widget\"))"), "got:\n{out}");
         assert!(out.contains("comptime {"), "got:\n{out}");
@@ -850,7 +876,7 @@ sources = []
             ],
             ..Default::default()
         };
-        let out = scaffold_zig_test(&api, &minimal_config(), "my_lib");
+        let out = scaffold_zig_test(&api, &minimal_config(), "my_lib").expect("a visible item must produce a seed");
 
         assert!(out.contains("my_lib.visible"), "got:\n{out}");
         assert!(!out.contains("hidden"), "got:\n{out}");
@@ -877,13 +903,11 @@ exclude_functions = ["ping"]
             functions: vec![trivial_function("ping")],
             ..Default::default()
         };
-        let out = scaffold_zig_test(&api, &config, "my_lib");
-
         assert!(
-            !out.contains("ping"),
-            "excluded function must not be referenced, got:\n{out}"
+            scaffold_zig_test(&api, &config, "my_lib").is_none(),
+            "the only function is excluded, leaving nothing visible to assert against — seeding \
+             anything here would assert against a declaration the real generator never emits"
         );
-        assert!(out.contains("_ = my_lib;"), "got:\n{out}");
     }
 
     /// With no visible function at all, a visible type is checked for existence instead.
@@ -897,7 +921,7 @@ exclude_functions = ["ping"]
             }],
             ..Default::default()
         };
-        let out = scaffold_zig_test(&api, &minimal_config(), "my_lib");
+        let out = scaffold_zig_test(&api, &minimal_config(), "my_lib").expect("a visible item must produce a seed");
 
         assert!(out.contains("if (!@hasDecl(my_lib, \"Widget\"))"), "got:\n{out}");
     }
@@ -912,21 +936,113 @@ exclude_functions = ["ping"]
             }],
             ..Default::default()
         };
-        let out = scaffold_zig_test(&api, &minimal_config(), "my_lib");
+        let out = scaffold_zig_test(&api, &minimal_config(), "my_lib").expect("a visible item must produce a seed");
 
         assert!(out.contains("if (!@hasDecl(my_lib, \"Color\"))"), "got:\n{out}");
     }
 
-    /// A genuinely empty API surface (no Rust code written yet) has nothing to assert
-    /// against beyond the module resolving — the only honest seed content.
+    /// A genuinely empty API surface (no Rust code written yet) has nothing to assert against,
+    /// so the seed itself must be absent — that `None` is the single condition `scaffold_zig`
+    /// branches on for both the seed file and `build.zig`'s `test` step.
     #[test]
-    fn falls_back_to_import_only_when_api_surface_is_empty() {
-        let out = scaffold_zig_test(&ApiSurface::default(), &minimal_config(), "my_lib");
+    fn seeds_nothing_for_an_empty_api_surface() {
+        assert!(scaffold_zig_test(&ApiSurface::default(), &minimal_config(), "my_lib").is_none());
+    }
 
-        assert!(out.contains("const my_lib = @import(\"my_lib\");"), "got:\n{out}");
-        assert!(out.contains("test \"module imports successfully\""), "got:\n{out}");
-        assert!(out.contains("_ = my_lib;"), "got:\n{out}");
-        assert!(!out.contains("@hasDecl"), "got:\n{out}");
+    /// Mirror of the empty-surface case for each visible kind: any one of a function, type, or
+    /// enum is enough to produce a seed.
+    #[test]
+    fn seeds_when_any_single_kind_is_visible() {
+        let with_function = ApiSurface {
+            functions: vec![trivial_function("ping")],
+            ..Default::default()
+        };
+        let with_type = ApiSurface {
+            types: vec![TypeDef {
+                name: "Widget".to_string(),
+                is_opaque: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let with_enum = ApiSurface {
+            enums: vec![EnumDef {
+                name: "Color".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        for api in [with_function, with_type, with_enum] {
+            assert!(scaffold_zig_test(&api, &minimal_config(), "my_lib").is_some());
+        }
+    }
+
+    /// Defect-1 fix, direction 1: with no real function/type/enum to seed a genuine assertion
+    /// against, `scaffold_zig` must not wire a `test` step into `build.zig` at all — a step that
+    /// always passes on nothing is indistinguishable from real coverage, the exact defect this
+    /// gate exists to close. Also asserts no `test/<module>_test.zig` file is produced, since a
+    /// seeded file with nothing truthful to say would just recreate the same problem one layer
+    /// down.
+    #[test]
+    fn build_zig_has_no_test_step_when_api_surface_is_empty() {
+        let files = scaffold_zig(&ApiSurface::default(), &minimal_config()).expect("scaffold");
+
+        let build_zig = &files
+            .iter()
+            .find(|f| f.path == PathBuf::from("packages/zig/build.zig"))
+            .expect("build.zig must be scaffolded")
+            .content;
+        assert!(!build_zig.contains("test_module"), "got:\n{build_zig}");
+        assert!(!build_zig.contains("b.addTest"), "got:\n{build_zig}");
+        assert!(!build_zig.contains("b.step(\"test\""), "got:\n{build_zig}");
+        assert!(
+            !files
+                .iter()
+                .any(|f| f.path == PathBuf::from("packages/zig/test/my_lib_test.zig")),
+            "no test file should be seeded when there is nothing to assert against, got: {:?}",
+            files.iter().map(|f| &f.path).collect::<Vec<_>>()
+        );
+    }
+
+    /// Defect-1 fix, direction 2: with a real, visible function to seed against, `scaffold_zig`
+    /// must still emit the `test` step, and it must point at the seeded
+    /// `test/<module>_test.zig`, not back at `src/<module>.zig` (the zero-`test`-block
+    /// generated bindings file the original defect ran tests against).
+    #[test]
+    fn build_zig_has_a_test_step_pointing_at_the_seed_when_api_surface_is_non_empty() {
+        let api = ApiSurface {
+            functions: vec![trivial_function("ping")],
+            ..Default::default()
+        };
+        let files = scaffold_zig(&api, &minimal_config()).expect("scaffold");
+
+        let build_zig = &files
+            .iter()
+            .find(|f| f.path == PathBuf::from("packages/zig/build.zig"))
+            .expect("build.zig must be scaffolded")
+            .content;
+        assert!(
+            build_zig.contains(".root_source_file = b.path(\"test/my_lib_test.zig\"),"),
+            "got:\n{build_zig}"
+        );
+        assert!(
+            build_zig.contains("b.step(\"test\", \"Run unit tests\");"),
+            "got:\n{build_zig}"
+        );
+        assert!(
+            !build_zig.contains(".root_source_file = b.path(\"src/my_lib.zig\"),\n        .target = target,\n        .optimize = optimize,\n        .link_libc = true,\n    });\n    test_module"),
+            "test target must never point at the generated bindings module, got:\n{build_zig}"
+        );
+
+        let test_file = files
+            .iter()
+            .find(|f| f.path == PathBuf::from("packages/zig/test/my_lib_test.zig"))
+            .expect("test/my_lib_test.zig must be seeded when the api surface is non-empty");
+        assert!(
+            test_file.content.contains("test \"my_lib.ping runs\""),
+            "got:\n{}",
+            test_file.content
+        );
     }
 
     fn build_zig_of(config: &ResolvedCrateConfig) -> String {
