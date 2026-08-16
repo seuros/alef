@@ -75,6 +75,20 @@ pub fn print_summary(summary: &RunSummary, show_code: bool) {
             }
 
             println!();
+        } else if result.status == SnippetStatus::Downgraded || result.capability_capped {
+            // `finalize_result` computes a `message` naming the requested/effective level and, for
+            // a capability ceiling, which validator caps it — but until now that message was only
+            // ever printed for `Fail`/`Error`, so a `DOWNGRADE` row (or a capability-capped `Pass`)
+            // gave a reader the level gap with no reason attached, indistinguishable in the
+            // human-readable report from an unexplained regression. Printed as its own one-line
+            // reason rather than joining the `Source`/`Error`/`Code` block above, which is about
+            // showing a failing snippet's content — nothing failed here. ~keep
+            if let Some(message) = &result.message {
+                let trimmed = message.trim();
+                if !trimmed.is_empty() {
+                    println!("  Reason: {trimmed}");
+                }
+            }
         }
     }
 

@@ -72,26 +72,29 @@ end"#,
     // `Code.string_to_quoted` (the only check run at `Syntax`/`Compile`/`TypeCheck`, see the
     // match above and in `validate_in_session` below) parses the AST and nothing more — Elixir
     // resolves remote calls like `Mod.fun()` at runtime, not parse time, so a made-up module
-    // parses cleanly. No real check is wired up here: `mix dialyzer` needs an out-of-band PLT
+    // parses cleanly. The same call is used for `Syntax` and `Compile` alike, so a `Compile`
+    // request silently got the same result as `Syntax` while being reported as if it had
+    // validated further. No real check is wired up here: `mix dialyzer` needs an out-of-band PLT
     // this harness doesn't build (first run can take minutes, easily blowing the per-snippet
     // timeout), and compiling with `elixirc` can't tell a genuinely undefined module from one
     // that's legitimately defined elsewhere on a code path this isolated snippet doesn't have —
     // that would trade the false-pass this fixes for false-fails on correct code. Until a real
-    // checker is wired up with proper project/PLT context, `typecheck` must not be claimed. ~keep
+    // checker is wired up with proper project/PLT context, neither `compile` nor `typecheck` may
+    // be claimed. ~keep
     fn achievable_level(&self, requested: ValidationLevel) -> ValidationLevel {
-        if requested == ValidationLevel::TypeCheck {
+        if matches!(requested, ValidationLevel::Compile | ValidationLevel::TypeCheck) {
             ValidationLevel::Syntax
         } else {
             ValidationLevel::Run
         }
     }
 
-    // The typecheck gap above is a property of this validator's implementation (no checker is
-    // wired up), not of the machine running it — no environment will ever make
-    // `Code.string_to_quoted` resolve a remote call. Structural, so it's exempted from
-    // `Downgraded` the same way `max_level` is. ~keep
+    // The compile/typecheck gap above is a property of this validator's implementation (no
+    // distinct compile step and no checker is wired up), not of the machine running it — no
+    // environment will ever make `Code.string_to_quoted` resolve a remote call. Structural, so
+    // it's exempted from `Downgraded` the same way `max_level` is. ~keep
     fn achievable_level_is_structural(&self, requested: ValidationLevel) -> bool {
-        requested == ValidationLevel::TypeCheck
+        matches!(requested, ValidationLevel::Compile | ValidationLevel::TypeCheck)
     }
 
     fn validate_in_session(
@@ -156,14 +159,14 @@ mod tests {
     }
 
     #[test]
-    fn achievable_level_caps_typecheck_to_syntax() {
+    fn achievable_level_caps_compile_and_typecheck_to_syntax() {
         assert_eq!(
             ElixirValidator.achievable_level(ValidationLevel::TypeCheck),
             ValidationLevel::Syntax
         );
         assert_eq!(
             ElixirValidator.achievable_level(ValidationLevel::Compile),
-            ValidationLevel::Run
+            ValidationLevel::Syntax
         );
         assert_eq!(
             ElixirValidator.achievable_level(ValidationLevel::Syntax),
@@ -176,9 +179,9 @@ mod tests {
     }
 
     #[test]
-    fn achievable_level_typecheck_gap_is_structural() {
+    fn achievable_level_compile_and_typecheck_gap_is_structural() {
         assert!(ElixirValidator.achievable_level_is_structural(ValidationLevel::TypeCheck));
-        assert!(!ElixirValidator.achievable_level_is_structural(ValidationLevel::Compile));
+        assert!(ElixirValidator.achievable_level_is_structural(ValidationLevel::Compile));
         assert!(!ElixirValidator.achievable_level_is_structural(ValidationLevel::Run));
     }
 
@@ -209,6 +212,43 @@ mod tests {
         );
         assert_eq!(result.status, SnippetStatus::Pass);
         assert!(result.capability_capped);
+        assert_eq!(result.effective_level, ValidationLevel::Syntax);
+        assert_eq!(summary.downgraded, 0);
+        assert_eq!(summary.capability_capped, 1);
+    }
+
+    /// The regression this fix closes: before `achievable_level` also capped `Compile`, this
+    /// undefined-symbol snippet passed a `Compile` request as an ordinary, unqualified `Pass` —
+    /// `Code.string_to_quoted` accepts it, and nothing distinguished `Compile` from `Syntax`, so
+    /// the result carried no `capability_capped` flag and no `downgrade_reason` at all. That is
+    /// precisely the silent downgrade this validator must never produce again. ~keep
+    #[test]
+    fn compile_request_for_an_undefined_symbol_does_not_pass_as_compile() {
+        if !ElixirValidator.is_available() {
+            return;
+        }
+        let registry = ValidatorRegistry::new();
+        let config = RunnerConfig {
+            level: ValidationLevel::Compile,
+            parallelism: 1,
+            cache_dir: None,
+            ..RunnerConfig::default()
+        };
+
+        let summary = run_validation(&[undefined_symbol_snippet()], &registry, &config).expect("validation completes");
+
+        let result = &summary.results[0];
+        assert_ne!(
+            (result.status, result.effective_level),
+            (SnippetStatus::Pass, ValidationLevel::Compile),
+            "undefined-symbol snippet must not pass claiming compile: {result:?}"
+        );
+        assert_eq!(result.status, SnippetStatus::Pass);
+        assert!(
+            result.capability_capped,
+            "a Compile request that only ran a syntax check must be flagged, not folded into an \
+             ordinary Pass: {result:?}"
+        );
         assert_eq!(result.effective_level, ValidationLevel::Syntax);
         assert_eq!(summary.downgraded, 0);
         assert_eq!(summary.capability_capped, 1);
