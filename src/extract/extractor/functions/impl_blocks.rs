@@ -293,9 +293,11 @@ fn extract_trait_impl_methods(
 
     let type_def = &mut surface.types[idx];
 
-    if let Some((path, _)) = &item.trait_
-        && path.segments.last().is_some_and(|s| s.ident == "Default")
-    {
+    let is_default_trait_impl = item
+        .trait_
+        .as_ref()
+        .is_some_and(|(path, _)| path.segments.last().is_some_and(|segment| segment.ident == "Default"));
+    if is_default_trait_impl {
         type_def.has_default = true;
         extract_default_values(item, &mut type_def.fields);
     }
@@ -314,7 +316,7 @@ fn extract_trait_impl_methods(
             .last()
             .is_some_and(|s| STD_TRAITS.contains(&s.ident.to_string().as_str()))
     });
-    if is_std_trait_impl {
+    if is_std_trait_impl && !is_default_trait_impl {
         return;
     }
 

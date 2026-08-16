@@ -122,6 +122,29 @@ fn test_impl_default_without_fn_default() {
 }
 
 #[test]
+fn test_manual_default_impl_exposes_static_constructor() {
+    let source = r#"
+        pub struct Settings {
+            pub enabled: bool,
+        }
+
+        impl Default for Settings {
+            fn default() -> Self {
+                Self { enabled: true }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let settings = surface.types.iter().find(|typ| typ.name == "Settings").unwrap();
+    let default = settings.methods.iter().find(|method| method.name == "default").unwrap();
+
+    assert!(default.is_static);
+    assert!(default.params.is_empty());
+    assert!(matches!(&default.return_type, crate::core::ir::TypeRef::Named(name) if name == "Settings"));
+}
+
+#[test]
 fn test_enum_with_default_derive_and_default_variant() {
     let source = r#"
         #[derive(Default, Clone)]
