@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **build observability**: emit centralized backend completion events with `duration_ms` and explicit success, failure,
+  or skip outcomes for every configured language.
+
 - **generation pipeline**: refresh cbindgen headers after generated FFI sources and backend post-build steps in both
   `generate` and `all`, then enforce source/header symbol parity before either command succeeds.
 

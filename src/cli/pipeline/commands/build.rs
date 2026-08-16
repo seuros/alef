@@ -8,6 +8,7 @@ use std::path::Path;
 use tracing::{debug, info, warn};
 
 mod frb_cache;
+mod observability;
 
 pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool) -> anyhow::Result<()> {
     let crate_name = &config.name;
@@ -22,6 +23,7 @@ pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool
     for &lang in languages {
         let build_cmd_cfg = config.build_command_config_for_language(lang);
         if !check_precondition(lang, build_cmd_cfg.precondition.as_deref()) {
+            observability::skipped(lang, "precondition");
             continue;
         }
         if lang == Language::Rust {
@@ -38,23 +40,27 @@ pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool
             }
         } else {
             info!("No build config for {lang}, skipping");
+            observability::skipped(lang, "no build config");
         }
     }
 
     for &lang in &rust_langs {
-        let build_cmd_cfg = config.build_command_config_for_language(lang);
-        run_before(lang, build_cmd_cfg.before.as_ref())?;
-        let cmds = if release {
-            build_cmd_cfg.build_release.as_ref()
-        } else {
-            build_cmd_cfg.build.as_ref()
-        };
-        if let Some(cmd_list) = cmds {
-            for cmd in cmd_list.commands() {
-                info!("Building {lang}: {cmd}");
-                run_command(cmd).with_context(|| format!("failed to build {lang}"))?;
+        observability::observe(lang, || {
+            let build_cmd_cfg = config.build_command_config_for_language(lang);
+            run_before(lang, build_cmd_cfg.before.as_ref())?;
+            let cmds = if release {
+                build_cmd_cfg.build_release.as_ref()
+            } else {
+                build_cmd_cfg.build.as_ref()
+            };
+            if let Some(cmd_list) = cmds {
+                for cmd in cmd_list.commands() {
+                    info!("Building {lang}: {cmd}");
+                    run_command(cmd).with_context(|| format!("failed to build {lang}"))?;
+                }
             }
-        }
+            Ok(())
+        })?;
     }
 
     if need_ffi
@@ -72,7 +78,7 @@ pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool
         if release {
             cmd.push_str(" --release");
         }
-        run_command(&cmd).context("failed to build FFI crate")?;
+        observability::observe(Language::Ffi, || run_command(&cmd).context("failed to build FFI crate"))?;
     }
 
     for (lang, _) in &independent {
@@ -83,28 +89,31 @@ pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool
     let build_results: Vec<anyhow::Result<(String, String)>> = independent
         .par_iter()
         .map(|(lang, bc)| {
-            let build_cmd_cfg = config.build_command_config_for_language(*lang);
-            let override_cmds = if release {
-                build_cmd_cfg.build_release.as_ref()
-            } else {
-                build_cmd_cfg.build.as_ref()
-            };
-            if let Some(cmd_list) = override_cmds
-                && config.build_commands.contains_key(&lang.to_string())
-            {
-                let mut combined_output = (String::new(), String::new());
-                for cmd in cmd_list.commands() {
-                    info!("Building {lang}: {cmd}");
-                    let (stdout, stderr) = run_command_captured(cmd)
-                        .with_context(|| format!("failed to build language bindings for {lang}"))?;
-                    combined_output.0.push_str(&stdout);
-                    combined_output.1.push_str(&stderr);
+            observability::observe(*lang, || {
+                let build_cmd_cfg = config.build_command_config_for_language(*lang);
+                let override_cmds = if release {
+                    build_cmd_cfg.build_release.as_ref()
+                } else {
+                    build_cmd_cfg.build.as_ref()
+                };
+                if let Some(cmd_list) = override_cmds
+                    && config.build_commands.contains_key(&lang.to_string())
+                {
+                    let mut combined_output = (String::new(), String::new());
+                    for cmd in cmd_list.commands() {
+                        info!("Building {lang}: {cmd}");
+                        let (stdout, stderr) = run_command_captured(cmd)
+                            .with_context(|| format!("failed to build language bindings for {lang}"))?;
+                        combined_output.0.push_str(&stdout);
+                        combined_output.1.push_str(&stderr);
+                    }
+                    return Ok(combined_output);
                 }
-                return Ok(combined_output);
-            }
-            info!("Building {lang} ({})...", bc.tool);
-            let build_cmd = build_command_for(*lang, bc, config, release);
-            run_command_captured(&build_cmd).with_context(|| format!("failed to build language bindings for {lang}"))
+                info!("Building {lang} ({})...", bc.tool);
+                let build_cmd = build_command_for(*lang, bc, config, release);
+                run_command_captured(&build_cmd)
+                    .with_context(|| format!("failed to build language bindings for {lang}"))
+            })
         })
         .collect();
 
@@ -128,28 +137,31 @@ pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool
     let build_results: Vec<anyhow::Result<(String, String)>> = ffi_dependent
         .par_iter()
         .map(|(lang, bc)| {
-            let build_cmd_cfg = config.build_command_config_for_language(*lang);
-            let override_cmds = if release {
-                build_cmd_cfg.build_release.as_ref()
-            } else {
-                build_cmd_cfg.build.as_ref()
-            };
-            if let Some(cmd_list) = override_cmds
-                && config.build_commands.contains_key(&lang.to_string())
-            {
-                let mut combined_output = (String::new(), String::new());
-                for cmd in cmd_list.commands() {
-                    info!("Building {lang}: {cmd}");
-                    let (stdout, stderr) = run_command_captured(cmd)
-                        .with_context(|| format!("failed to build language bindings for {lang}"))?;
-                    combined_output.0.push_str(&stdout);
-                    combined_output.1.push_str(&stderr);
+            observability::observe(*lang, || {
+                let build_cmd_cfg = config.build_command_config_for_language(*lang);
+                let override_cmds = if release {
+                    build_cmd_cfg.build_release.as_ref()
+                } else {
+                    build_cmd_cfg.build.as_ref()
+                };
+                if let Some(cmd_list) = override_cmds
+                    && config.build_commands.contains_key(&lang.to_string())
+                {
+                    let mut combined_output = (String::new(), String::new());
+                    for cmd in cmd_list.commands() {
+                        info!("Building {lang}: {cmd}");
+                        let (stdout, stderr) = run_command_captured(cmd)
+                            .with_context(|| format!("failed to build language bindings for {lang}"))?;
+                        combined_output.0.push_str(&stdout);
+                        combined_output.1.push_str(&stderr);
+                    }
+                    return Ok(combined_output);
                 }
-                return Ok(combined_output);
-            }
-            info!("Building {lang} ({})...", bc.tool);
-            let build_cmd = build_command_for(*lang, bc, config, release);
-            run_command_captured(&build_cmd).with_context(|| format!("failed to build language bindings for {lang}"))
+                info!("Building {lang} ({})...", bc.tool);
+                let build_cmd = build_command_for(*lang, bc, config, release);
+                run_command_captured(&build_cmd)
+                    .with_context(|| format!("failed to build language bindings for {lang}"))
+            })
         })
         .collect();
 
