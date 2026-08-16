@@ -312,17 +312,76 @@ const VERIFY_SKIP_DIRS: &[&str] = &[
 /// csharp's freshness claim rested entirely on a file this walk never opened. Any new emitting
 /// backend must add its extension here or its output silently leaves the
 /// freshness claim. ~keep
+///
+/// `cmake`/`xml`/`csproj`/`gemspec`/`zon` are the standing proof that the sentence above is not
+/// self-enforcing: the commit that taught [`super::super::cli::pipeline::generate`] to stamp
+/// those five did not add them here, so every one of them was written with a hash that this walk
+/// would never open to check. A stamped-but-unscanned file is strictly worse than an unstamped
+/// one — it looks covered. Widening this list can only ever surface staleness that was already
+/// present and unreported, never create it. ~keep
 const VERIFY_SCAN_EXTENSIONS: &[&str] = &[
-    "rs", "py", "pyi", "ts", "tsx", "js", "mjs", "cjs", "rb", "rbs", "php", "phpstub", "go", "java", "cs", "ex", "exs",
-    "R", "r", "toml", "json", "md", "h", "c", "yaml", "yml", "zig", "dart", "kt", "kts", "swift", "gleam",
-    "properties", "pro", "sh", "props",
+    "rs",
+    "py",
+    "pyi",
+    "ts",
+    "tsx",
+    "js",
+    "mjs",
+    "cjs",
+    "rb",
+    "rbs",
+    "php",
+    "phpstub",
+    "go",
+    "java",
+    "cs",
+    "ex",
+    "exs",
+    "R",
+    "r",
+    "toml",
+    "json",
+    "md",
+    "h",
+    "c",
+    "yaml",
+    "yml",
+    "zig",
+    "dart",
+    "kt",
+    "kts",
+    "swift",
+    "gleam",
+    "properties",
+    "pro",
+    "sh",
+    "props",
+    "cmake",
+    "xml",
+    "csproj",
+    "gemspec",
+    "zon",
 ];
 
 /// Dotfiles alef stamps that [`VERIFY_SCAN_EXTENSIONS`] structurally cannot reach: `Path::extension`
 /// returns `None` for a name that is entirely a leading-dot stem, so `.gitignore` has no extension
 /// to match and would stay invisible no matter what is added to that list. Matched on the whole
 /// file name instead. ~keep
-const VERIFY_SCAN_FILENAMES: &[&str] = &[".gitignore", ".gitattributes", ".editorconfig"];
+///
+/// The makefiles and `go.mod` are here for the mirror-image reason, and they are why this list
+/// cannot be folded into the extension one: `Makefile` has no extension at all, and `go.mod`'s
+/// is `mod` — far too broad to allowlist, since it would pull in unrelated `*.mod` files. The
+/// emit side already keys all four on file name (`marker_header_syntax`); this is the read side
+/// of that same decision. ~keep
+const VERIFY_SCAN_FILENAMES: &[&str] = &[
+    ".gitignore",
+    ".gitattributes",
+    ".editorconfig",
+    "Makefile",
+    "GNUmakefile",
+    "makefile",
+    "go.mod",
+];
 
 /// Walk `base_dir` and return every alef-owned file paired with its optional
 /// `alef:hash:<hex>` stamp. Skips build/cache directories and files without the
@@ -616,6 +675,61 @@ e2e = "cargo test"
         cfg.resolve().unwrap().remove(0)
     }
 
+    /// Seed one stamped file per name and return what the ownership walk actually opened.
+    fn scanned_names(names: &[&str]) -> Vec<String> {
+        let directory = tempfile::tempdir().expect("temporary project");
+        for name in names {
+            let path = directory.path().join(name);
+            let marker = crate::core::hash::header(crate::core::hash::CommentStyle::Hash);
+            std::fs::write(&path, format!("{marker}\nseeded = true\n")).expect("seed stamped file");
+        }
+        let mut found: Vec<String> = collect_alef_hashes(directory.path())
+            .into_iter()
+            .filter_map(|(path, _, _)| path.file_name()?.to_str().map(str::to_owned))
+            .collect();
+        found.sort();
+        found
+    }
+
+    /// THE CANARY. Every name here is stamped by `marker_header_syntax` on the emit side, so a
+    /// file alef wrote carries a hash this walk must be able to re-read. Before the list was
+    /// widened these were stamped and then never opened — which reads as covered rather than as
+    /// missing, and is why the gap survived its own doc comment's warning. ~keep
+    #[test]
+    fn ownership_walk_opens_every_extension_the_emit_side_stamps() {
+        assert_eq!(
+            scanned_names(&[
+                "foo-config.cmake",
+                "app.csproj",
+                "gem.gemspec",
+                "build.zig.zon",
+                "pom.xml"
+            ]),
+            vec![
+                "app.csproj",
+                "build.zig.zon",
+                "foo-config.cmake",
+                "gem.gemspec",
+                "pom.xml"
+            ],
+        );
+    }
+
+    /// `Makefile` has no extension and `go.mod`'s is the far-too-broad `mod`, so both are keyed on
+    /// file name on the emit side and must be keyed the same way here. ~keep
+    #[test]
+    fn ownership_walk_opens_the_filename_keyed_files_the_emit_side_stamps() {
+        assert_eq!(scanned_names(&["Makefile", "go.mod"]), vec!["Makefile", "go.mod"]);
+    }
+
+    /// The other half of the predicate: widening the allowlist must not turn the walk into
+    /// "open everything". Without this, both tests above would still pass if the filter were
+    /// deleted outright. ~keep
+    #[test]
+    fn ownership_walk_still_skips_an_extension_alef_never_stamps() {
+        assert!(scanned_names(&["notes.rtf", "archive.tar"]).is_empty());
+    }
+
     #[test]
     fn default_log_level_maps_verbosity_to_levels() {
         assert_eq!(default_log_level(0, false), "info");
@@ -824,7 +938,11 @@ e2e = "cargo test"
         write_stamped(dir.path(), "header.h", "handle-abi", "1");
 
         let collected = collect_alef_hashes(dir.path());
-        assert_eq!(collected.len(), 1, "the stamped fixture must be visible to the hash walk");
+        assert_eq!(
+            collected.len(),
+            1,
+            "the stamped fixture must be visible to the hash walk"
+        );
         assert_eq!(
             crate::core::hash::extract_stamp(&collected[0].2, "handle-abi").as_deref(),
             Some("1"),
