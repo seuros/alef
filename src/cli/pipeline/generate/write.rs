@@ -232,11 +232,22 @@ pub(super) enum MarkerSyntax {
 ///   lockfile is written by its own package manager, which rewrites the file
 ///   wholesale and would drop an alef marker on the next resolve. alef does not
 ///   author them.
-/// - `.md` — markable via HTML comments, but already solved upstream:
-///   `readme::template` and `docs::render` both route content through
-///   `docs::render::with_html_header`, which embeds the identical marker before
-///   this function is ever reached. Adding it here would be redundant at best and
-///   would newly stamp unrelated markdown at worst. ~keep
+/// - `.md` — markable via HTML comments, but solved upstream instead: every producer of
+///   generated Markdown routes its content through `docs::render::with_html_header`, which
+///   embeds the identical marker before this function is ever reached. Adding it here would
+///   be redundant at best and would newly stamp unrelated markdown at worst.
+///
+///   "Every producer" is a standing obligation on new `.md` emitters, not a property of the
+///   extension, and it has already been violated once: `readme::template` and `docs::render`
+///   honoured it, but `e2e::snippets::render_snippet_markdown` — a third `.md` producer added
+///   later — did not, so fixture snippets were emitted with no marker from any side and the
+///   write guard froze ~12k of them across two consumer repos. Fixed by routing that producer
+///   through the same header, not by listing `.md` here: listing it would flip `.md` from
+///   "unmarkable, proven by the ownership record" to "unmarkable-marker is proof of foreign
+///   authorship" and retroactively freeze every already-existing unmarked `.md` in every
+///   consumer repo, which is the create-once trap this table's sibling doc describes. `.md`
+///   graduates only after a release has been marking snippets long enough that consumer trees
+///   actually carry one. ~keep
 pub(super) fn marker_header_syntax(path: &Path) -> Option<MarkerSyntax> {
     if let Some(style) = marker_comment_style(path) {
         return Some(MarkerSyntax::Comment(style));
