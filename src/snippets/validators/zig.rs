@@ -72,14 +72,21 @@ impl SnippetValidator for ZigValidator {
             command.arg(&file);
         } else if let Some(manifest) = session.manifest.as_deref() {
             let (module_name, module_source) = zig_package_module(manifest)?;
-            command
-                .args(["--dep", &module_name])
-                .arg(format!("-Mroot={}", file.display()))
-                .arg(format!("-M{module_name}={}", module_source.display()));
-            declared_include_paths = zig_manifest_include_paths(manifest)?
-                .into_iter()
-                .map(|path| session.working_directory.join(path))
-                .collect();
+            if let Some(package_root) = zig_package_root(&module_source) {
+                let build_file = write_snippet_build(dir.path(), &module_name, &package_root)?;
+                command = std::process::Command::new("zig");
+                command.args(["build", "--summary", "none", "--build-file"]);
+                command.arg(build_file);
+            } else {
+                command
+                    .args(["--dep", &module_name])
+                    .arg(format!("-Mroot={}", file.display()))
+                    .arg(format!("-M{module_name}={}", module_source.display()));
+                declared_include_paths = zig_manifest_include_paths(manifest)?
+                    .into_iter()
+                    .map(|path| session.working_directory.join(path))
+                    .collect();
+            }
         } else {
             command.arg(&file);
         }
@@ -192,6 +199,34 @@ fn zig_package_module(manifest: &std::path::Path) -> Result<(String, std::path::
     Ok((source[module_start..module_end].to_owned(), root))
 }
 
+fn zig_package_root(module_source: &std::path::Path) -> Option<std::path::PathBuf> {
+    module_source.ancestors().find_map(|ancestor| {
+        (ancestor.join("build.zig").is_file() && ancestor.join("build.zig.zon").is_file())
+            .then(|| ancestor.to_path_buf())
+    })
+}
+
+fn write_snippet_build(
+    directory: &std::path::Path,
+    module_name: &str,
+    package_root: &std::path::Path,
+) -> Result<std::path::PathBuf> {
+    let package_root = package_root
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let build = format!(
+        "const std = @import(\"std\");\n\npub fn build(b: *std.Build) void {{\n    const target = b.standardTargetOptions(.{{}});\n    const optimize = b.standardOptimizeOption(.{{}});\n    const binding = b.dependency(\"binding\", .{{ .target = target, .optimize = optimize }});\n    const root = b.createModule(.{{\n        .root_source_file = b.path(\"snippet.zig\"),\n        .target = target,\n        .optimize = optimize,\n    }});\n    root.addImport(\"{module_name}\", binding.module(\"{module_name}\"));\n    const executable = b.addExecutable(.{{ .name = \"snippet\", .root_module = root }});\n    b.default_step.dependOn(&executable.step);\n}}\n"
+    );
+    let zon = format!(
+        ".{{\n    .name = .alef_snippet,\n    .version = \"0.0.0\",\n    .dependencies = .{{ .binding = .{{ .path = \"{package_root}\" }} }},\n    .paths = .{{ \"build.zig\", \"build.zig.zon\", \"snippet.zig\" }},\n}}\n"
+    );
+    let build_file = directory.join("build.zig");
+    std::fs::write(&build_file, build)?;
+    std::fs::write(directory.join("build.zig.zon"), zon)?;
+    Ok(build_file)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,6 +306,25 @@ mod tests {
         let (name, source) = zig_package_module(&manifest).unwrap();
         assert_eq!(name, "sample_binding");
         assert_eq!(source, directory.path().join("src/root.zig"));
+    }
+
+    #[test]
+    fn snippet_build_reuses_the_generated_package_dependency_graph() {
+        let directory = tempfile::tempdir().unwrap();
+        let package = directory.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        std::fs::write(package.join("build.zig"), "").unwrap();
+        std::fs::write(package.join("build.zig.zon"), "").unwrap();
+        let scratch = directory.path().join("scratch");
+        std::fs::create_dir(&scratch).unwrap();
+
+        let build_file = write_snippet_build(&scratch, "sample_binding", &package).unwrap();
+        let build = std::fs::read_to_string(build_file).unwrap();
+        let zon = std::fs::read_to_string(scratch.join("build.zig.zon")).unwrap();
+
+        assert!(build.contains("binding.module(\"sample_binding\")"), "{build}");
+        assert!(build.contains("root.addImport(\"sample_binding\""), "{build}");
+        assert!(zon.contains(&format!(".path = \"{}\"", package.display())), "{zon}");
     }
 
     /// Alef's own `build_zig.jinja` binds the include directory through a `b.option(...) orelse`
