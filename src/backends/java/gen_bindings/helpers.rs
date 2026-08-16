@@ -110,6 +110,7 @@ pub(crate) fn escape_javadoc_line(s: &str) -> String {
             let mut code_iter = code.chars().peekable();
             while let Some(code_ch) = code_iter.next() {
                 match code_ch {
+                    '\\' if code_iter.peek() == Some(&'u') => result.push_str("&#92;"),
                     '<' => result.push_str("&lt;"),
                     '>' => result.push_str("&gt;"),
                     '&' => result.push_str("&amp;"),
@@ -121,6 +122,8 @@ pub(crate) fn escape_javadoc_line(s: &str) -> String {
                 }
             }
             result.push('}');
+        } else if ch == '\\' && chars.peek() == Some(&'u') {
+            result.push_str("&#92;");
         } else if ch == '<' {
             result.push_str("&lt;");
         } else if ch == '>' {
@@ -137,6 +140,20 @@ pub(crate) fn escape_javadoc_line(s: &str) -> String {
         }
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::escape_javadoc_line;
+
+    #[test]
+    fn escapes_unicode_sequences_before_java_lexing() {
+        let escaped = escape_javadoc_line(r"Rust chars use `\u{1F600}` or \u{00A0}");
+
+        assert!(!escaped.contains(r"\u"));
+        assert!(escaped.contains("&#92;u{1F600}"));
+        assert!(escaped.contains("&#92;u{00A0}"));
+    }
 }
 
 /// Sanitize Rust-specific syntax in docstrings.
