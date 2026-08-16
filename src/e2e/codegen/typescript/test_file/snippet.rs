@@ -664,4 +664,64 @@ mod tests {
         assert!(body.contains("RenderOptions.default()"));
         assert!(body.contains("VisitorHandle"));
     }
+
+    /// Pins that a `client_factory` documentation snippet never points the reader at the
+    /// mock server (`MOCK_SERVER*` env vars, the `/fixtures/<id>` route, or the literal
+    /// `"test-key"` credential) and does construct a client for the reader.
+    ///
+    /// TypeScript diverges from java/csharp/zig on the credential: those read it from
+    /// the environment, while `snippet.rs`'s `client_setup` inlines the
+    /// reader-substitutable placeholder `"your-api-key"`. That is a convention
+    /// difference, not a harness leak, so this pins the placeholder rather than
+    /// asserting an environment read the generator does not perform.
+    #[test]
+    fn client_factory_snippet_never_points_the_reader_at_the_mock_server() {
+        let mut fixture = fixture();
+        fixture.id = "rate_limit_429".into();
+        fixture.description = "Rate limited".into();
+        fixture.mock_response = Some(crate::e2e::fixture::MockResponse {
+            status: 429,
+            body: None,
+            stream_chunks: None,
+            headers: Default::default(),
+        });
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "chat".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.overrides.insert(
+            "node".into(),
+            crate::e2e::config::CallOverride {
+                client_factory: Some("create_client".into()),
+                ..Default::default()
+            },
+        );
+        let config = crate::core::config::ResolvedCrateConfig::default();
+
+        let body = render_snippet_body(SnippetContext {
+            lang: "node",
+            fixture: &fixture,
+            module: "@example/library",
+            client_factory: None,
+            e2e_config: &e2e,
+            type_defs: &[],
+            enums: &[],
+            wasm_type_prefix: "",
+            config: &config,
+        });
+
+        assert!(!body.contains("MOCK_SERVER"), "mock-server env var leaked:\n{body}");
+        assert!(
+            !body.contains("/fixtures/rate_limit_429"),
+            "mock-server fixture route leaked:\n{body}"
+        );
+        assert!(!body.contains("\"test-key\""), "literal credential leaked:\n{body}");
+        assert!(
+            body.contains("const client = create_client(\"your-api-key\");"),
+            "client is not constructed with a reader-substitutable credential:\n{body}"
+        );
+        assert!(
+            body.contains("client.chat("),
+            "the call must go through the constructed client:\n{body}"
+        );
+    }
 }

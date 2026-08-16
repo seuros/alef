@@ -100,6 +100,62 @@ mod tests {
         assert!(!body.contains("assert"));
     }
 
+    /// Pins that a `client_factory` docs snippet reached through the Kotlin Android
+    /// entry point reads the credential from the environment and never points the
+    /// reader at the e2e mock server: no `MOCK_SERVER` env var, no `mockServer`
+    /// system property, no `/fixtures/<id>` route, and no inlined `"test-key"`
+    /// credential. Delegates to `kotlin::snippet::render_snippet_body(..., true)`, so
+    /// this must go through `KotlinAndroidE2eCodegen`, not the plain `kotlin` renderer.
+    #[test]
+    fn client_factory_snippet_never_points_the_reader_at_the_mock_server() {
+        let fixture = Fixture {
+            id: "rate_limit_429".into(),
+            description: "Rate limited".into(),
+            input: serde_json::Value::Null,
+            ..Fixture::default()
+        };
+        let mut call = CallConfig {
+            function: "chat".into(),
+            result_var: "result".into(),
+            ..CallConfig::default()
+        };
+        call.overrides.insert(
+            "kotlin_android".into(),
+            CallOverride {
+                client_factory: Some("create_client".into()),
+                ..CallOverride::default()
+            },
+        );
+        let body = KotlinAndroidE2eCodegen
+            .render_snippet_body(
+                &fixture,
+                &E2eConfig {
+                    call,
+                    ..E2eConfig::default()
+                },
+                &ResolvedCrateConfig::default(),
+                &[],
+                &[],
+            )
+            .expect("snippet renders");
+
+        assert!(!body.contains("MOCK_SERVER"), "mock-server env var leaked:\n{body}");
+        assert!(!body.contains("mockServer"), "mock-server property leaked:\n{body}");
+        assert!(
+            !body.contains("/fixtures/rate_limit_429"),
+            "mock-server fixture route leaked:\n{body}"
+        );
+        assert!(!body.contains("\"test-key\""), "literal credential leaked:\n{body}");
+        assert!(
+            body.contains("System.getenv(\"API_KEY\")"),
+            "credential is not read from the environment:\n{body}"
+        );
+        assert!(
+            body.contains("createClient(apiKey = apiKey)"),
+            "an unconfigured project must construct the client without a mock base URL:\n{body}"
+        );
+    }
+
     #[test]
     fn excluded_binding_fixture_uses_native_disabled_test() {
         let rendered = crate::e2e::template_env::render(

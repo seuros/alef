@@ -287,4 +287,56 @@ mod snippet_tests {
         );
         assert!(rendered.contains("print(widgets)"), "{rendered}");
     }
+
+    /// R's snippet path has no client-factory concept (`render_snippet_body` never
+    /// constructs a stateful client), so the Java/C#/Zig/Dart-style client-construction
+    /// test does not apply here. What R's args renderer CAN leak into a documentation
+    /// snippet is a `$mock_url` placeholder embedded inside a `json_object` arg's value
+    /// (`r/args.rs` lines ~150-160): that branch emits a
+    /// `Sys.getenv("MOCK_SERVER_URL")`/`/fixtures/<id>` setup line and a `gsub` over it.
+    ///
+    /// Nothing inside `render_snippet_body` disarms it — the substitution happens one
+    /// level up, in `snippets::render_snippet_body`, which renders
+    /// `Fixture::docs_call_fixture()` rather than the raw fixture. This test therefore
+    /// renders through the same docs fixture the funnel builds, and pins that the
+    /// illustrative URL replaces the placeholder before the args renderer sees it.
+    #[test]
+    fn client_factory_snippet_never_points_the_reader_at_the_mock_server() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "rate_limit_429", "description": "Rate limited",
+            "input": { "config": { "webhook_url": "$mock_url/callback" } }
+        }))
+        .expect("fixture");
+        let fixture = fixture.docs_call_fixture();
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "chat".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.options_type = Some("ChatOptions".into());
+        e2e.call.args.push(crate::e2e::config::ArgMapping {
+            name: "config".into(),
+            field: "input.config".into(),
+            arg_type: "json_object".into(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        });
+
+        let body = RCodegen
+            .render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[])
+            .expect("R snippet renders");
+
+        assert!(!body.contains("MOCK_SERVER"), "mock-server env var leaked:\n{body}");
+        assert!(
+            !body.contains("/fixtures/rate_limit_429"),
+            "mock-server fixture route leaked:\n{body}"
+        );
+        assert!(!body.contains("\"test-key\""), "literal credential leaked:\n{body}");
+        assert!(
+            body.contains("https://example.com/callback"),
+            "the placeholder must be replaced by an illustrative URL, not dropped:\n{body}"
+        );
+    }
 }

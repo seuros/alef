@@ -13,9 +13,18 @@ pub(super) fn render(
     enums: &[crate::core::ir::EnumDef],
 ) -> Result<String> {
     let mut snippet_fixture = fixture.clone();
-    if snippet_fixture.env.is_none() {
-        snippet_fixture.env = Some(crate::e2e::fixture::FixtureEnv { api_key_var: None });
-    }
+    // Naming a credential variable is what selects `test_method`'s environment-reading
+    // client constructor (`let _apiKey = ProcessInfo…` + `let _baseUrl: String? = …`),
+    // which the post-processing below already rewrites into the shape a reader would
+    // write. Without one, `test_method` falls through to its mock-server constructor —
+    // `Factory(apiKey: "test-key", baseUrl: AlefE2EMockServer.baseURL + "/fixtures/<id>")`
+    // — and nothing downstream can undo that, so a snippet for any fixture that declares
+    // no `env.api_key_var` pointed the reader at the e2e harness. Defaulting the variable
+    // here rather than adding a second rewrite rule keeps one client-construction shape
+    // to maintain. ~keep
+    snippet_fixture.env = Some(crate::e2e::fixture::FixtureEnv {
+        api_key_var: Some(crate::e2e::fixture::FixtureEnv::api_key_var_or_default(fixture.env.as_ref()).to_string()),
+    });
     snippet_fixture.mock_response = None;
     let fixture = &snippet_fixture;
     let call = e2e_config.resolve_call_for_fixture(
@@ -235,6 +244,96 @@ mod tests {
         assert!(rendered.contains("class LocalVisitor_CustomText"));
         assert!(rendered.contains("renderDocument"));
         assert!(!rendered.contains("XCTest"));
+    }
+
+    fn client_factory_fixture() -> Fixture {
+        serde_json::from_value(serde_json::json!({
+            "id": "rate_limit_429",
+            "description": "Rate limited",
+            "input": null,
+            "mock_response": {"status": 429, "body": {}}
+        }))
+        .expect("fixture")
+    }
+
+    fn client_factory_e2e() -> E2eConfig {
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "chat".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.overrides.insert(
+            "swift".into(),
+            crate::e2e::config::CallOverride {
+                client_factory: Some("SampleClient".into()),
+                ..Default::default()
+            },
+        );
+        e2e
+    }
+
+    /// `test_method` only emits its environment-reading client constructor for a fixture
+    /// that names an `env.api_key_var`; every other fixture fell through to
+    /// `Factory(apiKey: "test-key", baseUrl: AlefE2EMockServer.baseURL + "/fixtures/<id>")`,
+    /// and this file's post-processing had no rule for `AlefE2EMockServer`. ~keep
+    #[test]
+    fn client_factory_snippet_never_points_the_reader_at_the_mock_server() {
+        let rendered = render(
+            &client_factory_fixture(),
+            &client_factory_e2e(),
+            &ResolvedCrateConfig::default(),
+            &[],
+            &[],
+        )
+        .expect("snippet renders");
+
+        assert!(!rendered.contains("MOCK_SERVER"), "mock-server env var leaked:\n{rendered}");
+        assert!(
+            !rendered.contains("AlefE2EMockServer"),
+            "e2e mock-server harness type leaked:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("/fixtures/rate_limit_429"),
+            "mock-server fixture route leaked:\n{rendered}"
+        );
+        assert!(!rendered.contains("\"test-key\""), "literal credential leaked:\n{rendered}");
+        assert!(
+            rendered.contains("ProcessInfo.processInfo.environment[\"API_KEY\"]"),
+            "credential is not read from the environment:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("let _client = try SampleClient(apiKey: _apiKey, baseUrl: nil)"),
+            "client is not constructed the way a reader would:\n{rendered}"
+        );
+    }
+
+    /// Companion pin: the e2e suite runs against the mock server, so `test_method`'s own
+    /// output for the same fixture must keep pointing at it. Only the snippet renderer
+    /// substitutes a reader-facing client. ~keep
+    #[test]
+    fn e2e_test_method_still_points_the_client_at_the_mock_server() {
+        let fixture = client_factory_fixture();
+        let e2e = client_factory_e2e();
+        let mut rendered = String::new();
+        test_method::render_test_method(
+            &mut rendered,
+            &fixture,
+            &e2e,
+            "",
+            "",
+            &[],
+            false,
+            Some("SampleClient"),
+            &crate::e2e::field_access::SwiftFirstClassMap::default(),
+            "Sample",
+            &ResolvedCrateConfig::default(),
+            &[],
+            &[],
+        );
+
+        assert!(
+            rendered.contains("AlefE2EMockServer.baseURL + \"/fixtures/rate_limit_429\""),
+            "{rendered}"
+        );
+        assert!(rendered.contains("apiKey: \"test-key\""), "{rendered}");
     }
 
     #[test]

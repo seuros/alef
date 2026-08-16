@@ -137,6 +137,47 @@ mod tests {
         assert!(available.contains("import { prefetch }"), "{available}");
     }
 
+    /// Pins the `client_setup` construction in `typescript/test_file/snippet.rs` (~line
+    /// 117-119), which WASM shares via `render_snippet_body`: a `client_factory` call must
+    /// never reference the mock server or the fixture's `/fixtures/<id>` route. Unlike the
+    /// Java/C#/Zig/Dart snippets, this path does not read the credential from the
+    /// environment — it substitutes the established `"your-api-key"` documentation
+    /// placeholder instead (see `go/snippet.rs`, `ruby/snippet_body.jinja`, and
+    /// `php/snippet_body.jinja` for the same convention), which is not the literal mock
+    /// credential either.
+    #[test]
+    fn client_factory_snippet_never_points_the_reader_at_the_mock_server() {
+        let fixture = Fixture {
+            id: "rate_limit_429".into(),
+            description: "Rate limited".into(),
+            input: serde_json::Value::Null,
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "chat".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.overrides.insert(
+            "wasm".into(),
+            crate::core::config::e2e::CallOverride {
+                client_factory: Some("createClient".into()),
+                ..Default::default()
+            },
+        );
+
+        let body = render(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[], &[]).expect("snippet renders");
+
+        assert!(!body.contains("MOCK_SERVER"), "mock-server env var leaked:\n{body}");
+        assert!(
+            !body.contains("/fixtures/rate_limit_429"),
+            "mock-server fixture route leaked:\n{body}"
+        );
+        assert!(!body.contains("\"test-key\""), "literal credential leaked:\n{body}");
+        assert!(
+            body.contains("createClient(\"your-api-key\")"),
+            "client is not constructed the way a reader would:\n{body}"
+        );
+    }
+
     #[test]
     fn trait_bridge_registry_calls_are_callable_from_wasm_snippets() {
         // A bridge's register/unregister/clear functions are absent from the plain function

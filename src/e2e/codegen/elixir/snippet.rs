@@ -77,7 +77,18 @@ pub(super) fn render_snippet_body(
             .collect::<Vec<_>>()
             .join(", ");
     }
-    let call_expr = format!("{module}.{function}({args})");
+    let call_args = apply_client_factory(
+        &mut setup_lines,
+        args,
+        ClientFactoryContext {
+            fixture,
+            e2e_config,
+            call,
+            override_config,
+            module: &module,
+        },
+    );
+    let call_expr = format!("{module}.{function}({call_args})");
     let expects_error = fixture
         .assertions
         .iter()
@@ -91,6 +102,76 @@ pub(super) fn render_snippet_body(
             expects_error => expects_error, presentation => presentation,
         },
     ))
+}
+
+struct ClientFactoryContext<'a> {
+    fixture: &'a Fixture,
+    e2e_config: &'a E2eConfig,
+    call: &'a crate::e2e::config::CallConfig,
+    override_config: Option<&'a crate::e2e::config::CallOverride>,
+    module: &'a str,
+}
+
+/// Construct the client a `client_factory` binding's functions take as their first
+/// argument, appending the construction to `setup_lines` and returning the argument
+/// list for the call itself.
+///
+/// The Elixir binding is not a bare-module API when a `client_factory` is configured:
+/// `elixir/test_case.rs` creates `{:ok, client} = <Module>.<factory>(...)` and prefixes
+/// `client` to every call's arguments, so the exported function's arity includes it. A
+/// snippet that rendered `<Module>.chat(request)` therefore documented a function that
+/// does not exist. Unlike the e2e suite the reader gets no mock server: the credential
+/// comes from the environment and the base URL is left at the binding default unless the
+/// fixture's `docs.client` names one, matching `java/snippet_body.jinja` and
+/// `csharp/snippet_body.jinja`.
+fn apply_client_factory(setup_lines: &mut Vec<String>, args: String, context: ClientFactoryContext<'_>) -> String {
+    let ClientFactoryContext {
+        fixture,
+        e2e_config,
+        call,
+        override_config,
+        module,
+    } = context;
+    let Some(factory) = override_config
+        .and_then(|value| value.client_factory.as_deref())
+        .or_else(|| {
+            e2e_config
+                .call
+                .overrides
+                .get("elixir")
+                .and_then(|value| value.client_factory.as_deref())
+        })
+    else {
+        return args;
+    };
+    let api_key_var = crate::e2e::fixture::FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
+    // `fetch_env!/1` is the Elixir spelling of "this credential is required": it raises
+    // `System.EnvError` naming the variable, so the snippet needs no hand-written guard
+    // clause the way the Java and C# templates do. ~keep
+    setup_lines.push(format!("api_key = System.fetch_env!(\"{api_key_var}\")"));
+    let docs_client = fixture.docs_client();
+    let mut options: Vec<String> = crate::e2e::codegen::client_factory::docs_base_url(docs_client)
+        .map(|url| format!("base_url: \"{}\"", crate::e2e::escape::escape_elixir(url)))
+        .into_iter()
+        .collect();
+    options.extend(crate::e2e::codegen::client_factory::trailing_args(
+        docs_client,
+        e2e_config,
+        call,
+        "elixir",
+        &[],
+    ));
+    let factory_args = if options.is_empty() {
+        "api_key".to_string()
+    } else {
+        format!("api_key, {}", options.join(", "))
+    };
+    setup_lines.push(format!("{{:ok, client}} = {module}.{factory}({factory_args})"));
+    if args.is_empty() {
+        "client".to_string()
+    } else {
+        format!("client, {args}")
+    }
 }
 
 fn inject_visitor_into_options(setup_lines: &mut Vec<String>, args: &str, visitor: &str) -> String {
@@ -231,6 +312,126 @@ mod tests {
         );
         assert!(body.contains("IO.inspect(stream_result)"), "{body}");
         assert!(!body.contains("chunks ="), "{body}");
+    }
+
+    fn client_factory_fixture() -> Fixture {
+        serde_json::from_value(serde_json::json!({
+            "id": "rate_limit_429",
+            "description": "Rate limited",
+            "input": null,
+            "mock_response": {"status": 429, "body": {}}
+        }))
+        .expect("fixture")
+    }
+
+    fn client_factory_e2e() -> E2eConfig {
+        let mut e2e = E2eConfig::default();
+        e2e.call.module = "sample".into();
+        e2e.call.function = "chat".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.overrides.insert(
+            "elixir".into(),
+            CallOverride {
+                client_factory: Some("create_client".into()),
+                ..CallOverride::default()
+            },
+        );
+        e2e
+    }
+
+    /// The Elixir binding is a client API when `client_factory` is configured — every
+    /// generated call takes `client` as its first argument (see `elixir/test_case.rs`) —
+    /// so a snippet that emitted a bare `Sample.chat()` documented a function that does
+    /// not exist, on top of never showing the reader how to authenticate. ~keep
+    #[test]
+    fn client_factory_snippet_never_points_the_reader_at_the_mock_server() {
+        let body = render_snippet_body(
+            &client_factory_fixture(),
+            &client_factory_e2e(),
+            &ResolvedCrateConfig::default(),
+            &[],
+            &[],
+        )
+        .expect("snippet renders");
+
+        assert!(!body.contains("MOCK_SERVER"), "mock-server env var leaked:\n{body}");
+        assert!(
+            !body.contains("/fixtures/rate_limit_429"),
+            "mock-server fixture route leaked:\n{body}"
+        );
+        assert!(!body.contains("\"test-key\""), "literal credential leaked:\n{body}");
+        assert!(
+            body.contains("api_key = System.fetch_env!(\"API_KEY\")"),
+            "credential is not read from the environment:\n{body}"
+        );
+        assert!(
+            body.contains("{:ok, client} = Sample.create_client(api_key)"),
+            "snippet does not construct a client at all:\n{body}"
+        );
+        assert!(
+            body.contains("result = Sample.chat(client)"),
+            "the call must take the client the binding requires:\n{body}"
+        );
+    }
+
+    #[test]
+    fn a_documented_base_url_reaches_the_client_options() {
+        let mut fixture = client_factory_fixture();
+        fixture.docs = Some(
+            serde_json::from_value(serde_json::json!({
+                "topic": "configuration",
+                "client": {"base_url": "https://llm.internal.example.com/v1"}
+            }))
+            .expect("fixture docs"),
+        );
+
+        let body = render_snippet_body(
+            &fixture,
+            &client_factory_e2e(),
+            &ResolvedCrateConfig::default(),
+            &[],
+            &[],
+        )
+        .expect("snippet renders");
+
+        let expected = "{:ok, client} = Sample.create_client(api_key, \
+                        base_url: \"https://llm.internal.example.com/v1\")";
+        assert!(body.contains(expected), "{body}");
+    }
+
+    /// Companion pin: the e2e suite runs against the mock server, so `test_case`'s own
+    /// output for the same fixture must keep pointing at it. Only the snippet renderer
+    /// substitutes a reader-facing client. ~keep
+    #[test]
+    fn e2e_test_case_still_points_the_client_at_the_mock_server() {
+        let fixture = client_factory_fixture();
+        let e2e = client_factory_e2e();
+        let mut rendered = String::new();
+        super::super::test_case::render_test_case(
+            &mut rendered,
+            &fixture,
+            &e2e,
+            "Sample",
+            "chat",
+            "result",
+            &[],
+            None,
+            None,
+            &HashMap::new(),
+            None,
+            &HashSet::new(),
+            &[],
+            &[],
+            &ResolvedCrateConfig::default(),
+            &[],
+        );
+
+        let expected = concat!(
+            "{:ok, client} = Sample.create_client(\"test-key\", base_url: ",
+            "(System.get_env(\"MOCK_SERVER_URL\") || \"\") <> \"/fixtures/rate_limit_429\")"
+        );
+        assert!(rendered.contains(expected), "{rendered}");
+        assert!(rendered.contains("Sample.chat(client)"), "{rendered}");
     }
 
     #[test]

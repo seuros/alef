@@ -118,8 +118,11 @@ pub(super) fn render_streaming_test_function(
     streaming: &CStreamingAdapterMetadata,
     expects_error: bool,
     api_key_var: Option<&str>,
+    documentation_snippet: bool,
 ) {
-    let prefix_upper = prefix.to_uppercase();
+    // cbindgen's `[export] prefix` (shouty-snake), not a bare uppercase — see
+    // `c_consumer::export_type_prefix`. ~keep
+    let prefix_upper = crate::codegen::c_consumer::export_type_prefix(prefix);
     let owner_snake = streaming.owner_type.to_snake_case();
     let request_type_pascal = &streaming.request_type;
     let request_type_snake = request_type_pascal.to_snake_case();
@@ -171,7 +174,12 @@ pub(super) fn render_streaming_test_function(
         .to_string();
 
     let fixture_id = &fixture.id;
-    let has_mock = fixture.needs_mock_server();
+    // ~keep A documentation snippet is published verbatim to readers, so neither the
+    // mock-server wiring nor the literal `"test-key"` credential below may reach it —
+    // mirrors `test_function::render_test_function`'s own `has_mock`, which already ANDs
+    // with `!documentation_snippet` and declares the `api_key` local the docs branch
+    // reads. Test mode passes `false`, leaving both mock branches byte-for-byte intact.
+    let has_mock = fixture.needs_mock_server() && !documentation_snippet;
     if has_mock && api_key_var.is_some() {
         // `api_key` and `base_url_buf` are already declared by the env-fallback
         // block above (the smoke+mock path). Reuse them — don't redeclare
@@ -198,6 +206,11 @@ pub(super) fn render_streaming_test_function(
         let _ = writeln!(
             out,
             "    {prefix_upper}AlefHandle client = {prefix}_{client_factory}(\"test-key\", base_url, (uint64_t)-1, (uint32_t)-1, NULL);"
+        );
+    } else if documentation_snippet {
+        let _ = writeln!(
+            out,
+            "    {prefix_upper}AlefHandle client = {prefix}_{client_factory}(api_key, NULL, (uint64_t)-1, (uint32_t)-1, NULL);"
         );
     } else {
         let _ = writeln!(

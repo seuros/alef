@@ -965,6 +965,65 @@ options_type = "ChatRequest"
         );
     }
 
+    /// Pins that a `client_factory` fixture's Rust documentation snippet reads its credential
+    /// via `std::env::var(...)` — the substitution `render_snippet_body` applies over the
+    /// harness's hardcoded `"test-key".to_string()` literal (mod.rs ~line 220-229) — and never
+    /// carries the e2e mock-server env vars, fixture route, or literal credential.
+    #[test]
+    fn client_factory_snippet_never_points_the_reader_at_the_mock_server() {
+        use crate::core::config::NewAlefConfig;
+        use crate::e2e::codegen::E2eCodegen;
+
+        let cfg: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["rust"]
+[[crates]]
+name = "sample-core"
+sources = ["src/lib.rs"]
+[crates.e2e]
+fixtures = "fixtures"
+[crates.e2e.call]
+function = "chat"
+result_var = "result"
+[crates.e2e.call.overrides.rust]
+client_factory = "create_client"
+"#,
+        )
+        .expect("snippet config must parse");
+        let e2e = cfg.crates[0].e2e.clone().expect("e2e config");
+        let resolved = cfg.resolve().expect("config resolves").remove(0);
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "rate_limit_429",
+            "description": "Rate limited",
+            "input": null,
+            "mock_response": {"status": 429}
+        }))
+        .expect("fixture must parse");
+
+        let rendered = RustE2eCodegen
+            .render_snippet_body(&fixture, &e2e, &resolved, &[], &[])
+            .expect("Rust snippet renders");
+
+        assert!(!rendered.contains("MOCK_SERVER"), "mock-server env var leaked:\n{rendered}");
+        assert!(
+            !rendered.contains("/fixtures/rate_limit_429"),
+            "mock-server fixture route leaked:\n{rendered}"
+        );
+        assert!(!rendered.contains("\"test-key\""), "literal credential leaked:\n{rendered}");
+        assert!(
+            rendered.contains("std::env::var(\"API_KEY\").expect(\"API_KEY must be set\")"),
+            "credential is not read from the environment:\n{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "sample_core::create_client(std::env::var(\"API_KEY\").expect(\"API_KEY must be set\"), \
+                 None, None, None, None).unwrap();"
+            ),
+            "client is not constructed the way a reader would:\n{rendered}"
+        );
+    }
+
     #[test]
     fn raw_literal_handles_backticks_and_blank_line_after_fence() {
         let input = "<pre><code>```rust\nlet value = r#\"sample\"#;\n```\n\nnext</code></pre>";
