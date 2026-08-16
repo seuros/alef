@@ -103,11 +103,11 @@ fn test_dart_constructor_named_new_is_still_rejected_by_the_identifier_gate() {
     assert!(sig.contains("new"), "{sig}");
 }
 
-/// ~keep The tslp crash, end to end. `static new(version: string): DownloadManager` is what
-/// the napi backend really writes into `crates/ts-pack-core-node/index.d.ts`, and it is
-/// valid TypeScript -- ES5 freed reserved words in `PropertyName` position, which is what a
-/// class element's name is. Rendering it used to abort the entire docs run with a raw panic
-/// and no ERROR line; it must now render, and the gate must agree it is legal.
+/// ~keep A real consumer docs crash, end to end. `static new(version: string): DownloadManager`
+/// is what the napi backend really writes into a generated `index.d.ts`, and it is valid
+/// TypeScript -- ES5 freed reserved words in `PropertyName` position, which is what a class
+/// element's name is. Rendering it used to abort the entire docs run with a raw panic and no
+/// ERROR line; it must now render, and the gate must agree it is legal.
 #[test]
 fn test_typescript_constructor_named_new_renders_instead_of_aborting_the_docs_run() {
     let name = crate::docs::naming::method_name("DownloadManager", "new", Language::Node, TEST_PREFIX);
