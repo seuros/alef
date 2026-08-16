@@ -560,6 +560,14 @@ impl Backend for JavaBackend {
         api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
+        let exclude_types = effective_exclude_types(api, config);
+        let type_filtered_api;
+        let api = if exclude_types.is_empty() {
+            api
+        } else {
+            type_filtered_api = api_without_excluded_types(api, &exclude_types);
+            &type_filtered_api
+        };
         let bridge_filtered_api;
         let api = if api
             .functions

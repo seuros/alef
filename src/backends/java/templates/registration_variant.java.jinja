@@ -6,7 +6,7 @@
      * @param handler functional interface receiving JSON request, returning JSON response
      * @return 0 on success, non-zero error code on failure
      */
-    public int {{ method_name }}(Callable handler{{ metadata_signature }}) {
+    public int {{ method_name }}({{ signature_params }}{% if signature_params %}, {% endif %}Callable handler) {
         try (var ownerLease = borrowOwnerHandle();
              var callArena = Arena.ofConfined();
              var nativeResources = new ServiceResources(){% if lease_resources %}; {{ lease_resources }}{% endif %}) {
@@ -17,16 +17,21 @@
             );
             MethodHandle adapter = MethodHandles.insertArguments(baseMh, 2, handler, arena);
             FunctionDescriptor upcallDesc = FunctionDescriptor.of(
-                ValueLayout.JAVA_LONG,
+                ValueLayout.ADDRESS,
                 ValueLayout.ADDRESS,
                 ValueLayout.ADDRESS
             );
             MemorySegment upcallStub = LINKER.upcallStub(adapter, upcallDesc, arena);
+            MethodHandle responseFree = lookup.findStatic({{ class_name }}.class, "freeHandlerResponse",
+                MethodType.methodType(void.class, MemorySegment.class));
+            MemorySegment responseFreeStub = LINKER.upcallStub(responseFree,
+                FunctionDescriptor.ofVoid(ValueLayout.ADDRESS), arena);
             MemorySegment varAddr = LOOKUP.find("{{ ffi_symbol }}")
                 .or(() -> LOOKUP.find("_{{ ffi_symbol }}"))
                 .orElseThrow();
             FunctionDescriptor varDesc = FunctionDescriptor.of(
                 ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_LONG,
                 ValueLayout.ADDRESS,
                 ValueLayout.ADDRESS,
                 ValueLayout.ADDRESS
@@ -37,9 +42,10 @@
             return (int) varHandle.invokeWithArguments(
                 ownerLease.handle(),
                 upcallStub,
+                responseFreeStub,
                 MemorySegment.NULL
 {% for arg in invoke_args %}
-                , {{ arg.0 }}    // {{ arg.1 }}
+                , {{ arg }}
 {% endfor %}            );
         } catch (Throwable e) {
             throw new RuntimeException("Failed to register {{ variant_name_display }} handler", e);

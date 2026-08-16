@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Java service bindings**: retain paired callback response deallocators and registration variant metadata while
+  leasing service owners, and omit public functions whose signatures reference excluded types.
+
 ### Added
 
 - **readme**: expose each language README's generated public functions as structured `functions` template values

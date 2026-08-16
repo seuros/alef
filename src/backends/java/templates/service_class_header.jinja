@@ -190,6 +190,7 @@ public class {{ class_name }} implements AutoCloseable {
 
     private static final Linker LINKER = Linker.nativeLinker();
     private static final SymbolLookup LOOKUP = SymbolLookup.loaderLookup();
+    private static final MethodHandle FREE;
 
     static {
         // Force NativeLib static initialization to load the native library
@@ -201,6 +202,10 @@ public class {{ class_name }} implements AutoCloseable {
         } catch (ClassNotFoundException ignored) {
             // NativeLib not available; native library may be pre-loaded
         }
+        FREE = LINKER.downcallHandle(
+            LOOKUP.find("free").orElseThrow(),
+            FunctionDescriptor.ofVoid(ValueLayout.ADDRESS)
+        );
     }
 
     // Adapter for handler upcalls: marshals C pointers <-> Java strings
@@ -217,7 +222,7 @@ public class {{ class_name }} implements AutoCloseable {
         String requestStr = requestPtr.reinterpret(Long.MAX_VALUE).getString(0);
         String responseStr = handler.handle(requestStr);
         // Allocate response string using malloc (not Arena) so the pointer remains
-        // valid after this upcall returns. Rust will free() the returned pointer.
+        // valid after this upcall returns. Rust invokes freeHandlerResponse for it.
         // Use a confined arena for the temporary scratch allocation: it is
         // closeable (unlike Arena.ofAuto(), whose close() throws
         // "non-closeable session"), and its memory is freed deterministically at
@@ -241,5 +246,15 @@ public class {{ class_name }} implements AutoCloseable {
         }
         } catch (Throwable failure) {
             return MemorySegment.NULL;
+        }
+    }
+
+    private static void freeHandlerResponse(MemorySegment responsePtr) {
+        try {
+            if (responsePtr.address() != 0) {
+                FREE.invokeExact(responsePtr);
+            }
+        } catch (Throwable error) {
+            throw new IllegalStateException("Failed to free handler response", error);
         }
     }
