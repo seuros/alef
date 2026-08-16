@@ -189,16 +189,13 @@ fn output_path_for(lang: Language, config: &ResolvedCrateConfig) -> Option<&Path
         Language::Go => config.explicit_output.go.as_deref(),
         Language::Java => config.explicit_output.java.as_deref(),
         Language::Csharp => config.explicit_output.csharp.as_deref(),
+        Language::Kotlin => config.explicit_output.kotlin.as_deref(),
+        Language::KotlinAndroid => config.explicit_output.kotlin_android.as_deref(),
         Language::Wasm => config.explicit_output.wasm.as_deref(),
         Language::Elixir => config.explicit_output.elixir.as_deref(),
         Language::R => config.explicit_output.r.as_deref(),
         Language::Rust | Language::C | Language::Jni => None,
-        Language::Kotlin
-        | Language::KotlinAndroid
-        | Language::Swift
-        | Language::Dart
-        | Language::Gleam
-        | Language::Zig => None,
+        Language::Swift | Language::Dart | Language::Gleam | Language::Zig => None,
     }
 }
 
@@ -435,7 +432,12 @@ fn build_command_for(
         }
         "gradle" => {
             let release_property = if release { " -Prelease" } else { "" };
-            format!("cd {crate_dir} && gradle build{release_property}")
+            let build_dir = if crate_dir.is_empty() {
+                config.package_dir(lang)
+            } else {
+                crate_dir.to_string()
+            };
+            format!("cd {build_dir} && gradle build{release_property}")
         }
         _ => "false".to_string(),
     }
