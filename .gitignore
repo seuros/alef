@@ -62,3 +62,8 @@ poly.local.toml
 AGENTS.md
 CLAUDE.md
 # END ai-rulez
+
+# insta writes these beside the committed baselines when a snapshot changes. They are
+# a review artifact awaiting `cargo insta accept`, never a baseline, and committing one
+# makes an unreviewed snapshot look adopted.
+*.snap.new
