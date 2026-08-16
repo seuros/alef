@@ -1,8 +1,12 @@
+use crate::backends::swift::naming::swift_source_ident;
+use crate::codegen::shared::binding_fields;
 use crate::core::backend::GeneratedFile;
 use crate::core::config::ResolvedCrateConfig;
-use crate::core::ir::ApiSurface;
+use crate::core::ir::{ApiSurface, PrimitiveType, TypeDef, TypeRef};
 use crate::scaffold::naming::{swift_min_ios, swift_min_macos};
 use crate::scaffold::{readme_language_configured, scaffold_meta};
+use heck::ToLowerCamelCase;
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 pub(crate) fn scaffold_swift(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
@@ -192,21 +196,7 @@ let package = Package(
 
     let gitignore = ".build/\nPackages/\nxcuserdata/\nDerivedData/\n.swiftpm/\n*.xcodeproj\n";
 
-    let test_stub = format!(
-        r#"import XCTest
-
-@testable import {module}
-
-final class {module}Tests: XCTestCase {{
-  func testPlaceholder() throws {{
-    // Placeholder test so `swift test` has a target to run.
-    // Replace or extend with real tests against the {module} module.
-    XCTAssertTrue(true)
-  }}
-}}
-"#,
-        module = module,
-    );
+    let test_stub = scaffold_swift_test(api, config, &module);
 
     let rust_bridge_c_header = build_rust_bridge_c_header(&binding_crate_name);
     let rust_bridge_c_source = build_rust_bridge_c_source(&binding_crate_underscore);
@@ -464,6 +454,199 @@ let package = Package(
     Ok(files)
 }
 
+/// Build the seed content for `Tests/{module}Tests/{module}Tests.swift`.
+///
+/// `write_scaffold_files_report` treats `generated_header: false` as create-only, so once
+/// a real suite exists at this path alef never overwrites it; this only ever seeds a fresh
+/// project. The seed must not be vacuous -- `XCTAssertTrue(true)` compiles and passes no
+/// matter what the generated API looks like, which is exactly the "0 assertions, silently
+/// green" defect the zig test-module fix (`scaffold_zig_test`) already closed one layer
+/// down. So this asserts against the *real*, currently-generated API surface (`api`), in
+/// order of how strong a check is safely synthesizable without duplicating the swift
+/// binding emitter's full type-mapping surface:
+///
+/// 1. A visible, non-opaque DTO (`has_serde`, struct, all fields plain primitives/`String`,
+///    no optional/cfg-gated fields) is round-tripped through `JSONEncoder`/`JSONDecoder` and
+///    compared for equality -- the strongest check: it fails on a broken `Codable`
+///    conformance, a renamed/dropped field, or a removed type, not just a missing symbol.
+/// 2. Otherwise, any other visible type or enum is referenced by `.self` so the compiler
+///    must resolve it -- weaker than a round trip (construction/field shape isn't checked)
+///    but still a real, falsifiable fact about the generated output.
+/// 3. Only when the API surface is genuinely empty (e.g. scaffolding before any Rust code
+///    exists) does this fall back to asserting the module resolves at all under
+///    `@testable import` -- there is nothing else to assert against yet, and once real
+///    items exist this file is never regenerated over. ~keep
+fn scaffold_swift_test(api: &ApiSurface, config: &ResolvedCrateConfig, module: &str) -> String {
+    let (exclude_types, exclude_fields) = swift_binding_exclusions(config);
+
+    let round_trip_candidate = api
+        .types
+        .iter()
+        .filter(|t| swift_type_is_visible(t, &exclude_types))
+        .filter(|t| !t.is_opaque && t.has_serde && !t.has_stripped_cfg_fields)
+        .find_map(|t| simple_codable_fields(t, &exclude_fields).map(|fields| (t, fields)));
+    if let Some((ty, fields)) = round_trip_candidate {
+        return codable_round_trip_test(module, &ty.name, &fields);
+    }
+
+    let visible_type_name = api
+        .types
+        .iter()
+        .filter(|t| swift_type_is_visible(t, &exclude_types))
+        .map(|t| t.name.clone())
+        .next();
+    let visible_enum_name = || {
+        api.enums
+            .iter()
+            .filter(|e| !e.binding_excluded && !exclude_types.contains(&e.name))
+            .map(|e| e.name.clone())
+            .next()
+    };
+    if let Some(name) = visible_type_name.or_else(visible_enum_name) {
+        return type_reference_test(module, &name);
+    }
+
+    placeholder_test(module)
+}
+
+/// Names excluded from Swift binding generation, mirroring the union
+/// `[crates.swift] exclude_types`/`exclude_fields` plus `[crates.ffi] exclude_types` that
+/// the real swift binding emitter honors. Kept in sync deliberately rather than shared,
+/// since this seed-picker only needs *a* safe, visible name/field shape, not the emitter's
+/// exhaustive filtered set.
+fn swift_binding_exclusions(config: &ResolvedCrateConfig) -> (HashSet<String>, HashSet<String>) {
+    let mut exclude_types: HashSet<String> = config
+        .swift
+        .as_ref()
+        .map(|c| c.exclude_types.iter().cloned().collect())
+        .unwrap_or_default();
+    let exclude_fields: HashSet<String> = config
+        .swift
+        .as_ref()
+        .map(|c| c.exclude_fields.iter().cloned().collect())
+        .unwrap_or_default();
+    if let Some(ffi) = &config.ffi {
+        exclude_types.extend(ffi.exclude_types.iter().cloned());
+    }
+    (exclude_types, exclude_fields)
+}
+
+/// A visible (non-trait, non-`binding_excluded`, not config-excluded) candidate type for the
+/// scaffold seed to reference.
+fn swift_type_is_visible(ty: &TypeDef, exclude_types: &HashSet<String>) -> bool {
+    !ty.is_trait && !ty.binding_excluded && !exclude_types.contains(&ty.name)
+}
+
+/// A field simple enough to synthesize a literal Swift value for: a primitive or `String`,
+/// never optional, never `#[cfg(...)]`-gated (whether it exists depends on active features,
+/// which this scaffold-time seed cannot know).
+struct SimpleCodableField {
+    swift_label: String,
+    literal: String,
+}
+
+/// Compute a literal-constructible field list for `ty`, or `None` when any visible field
+/// falls outside the safely synthesizable subset (optional, cfg-gated, or a type other than
+/// a primitive/`String` -- `Named`/`Vec`/`Map`/etc. would need recursive construction this
+/// seed does not attempt). Bails on the *whole type* rather than partially constructing it,
+/// since the real generated initializer requires every non-optional stored property.
+fn simple_codable_fields(ty: &TypeDef, exclude_fields: &HashSet<String>) -> Option<Vec<SimpleCodableField>> {
+    let mut fields = Vec::new();
+    for field in binding_fields(&ty.fields) {
+        if field.optional || field.cfg.is_some() {
+            return None;
+        }
+        if exclude_fields.contains(&format!("{}.{}", ty.name, field.name)) {
+            return None;
+        }
+        let literal = match &field.ty {
+            TypeRef::Primitive(primitive) => primitive_literal(primitive),
+            TypeRef::String => "\"alef-scaffold\"".to_string(),
+            _ => return None,
+        };
+        fields.push(SimpleCodableField {
+            swift_label: swift_source_ident(&field.name.to_lower_camel_case()),
+            literal,
+        });
+    }
+    if fields.is_empty() { None } else { Some(fields) }
+}
+
+/// A literal Swift value for a primitive type. Bool gets a non-default `true` and floats a
+/// non-integral `1.5` so a decoder that silently returns a zero value rather than the
+/// decoded one is still caught by the round-trip equality check.
+fn primitive_literal(primitive: &PrimitiveType) -> String {
+    match primitive {
+        PrimitiveType::Bool => "true".to_string(),
+        PrimitiveType::F32 | PrimitiveType::F64 => "1.5".to_string(),
+        _ => "1".to_string(),
+    }
+}
+
+/// The strongest safe check: round-trip a visible, literal-constructible DTO through
+/// `JSONEncoder`/`JSONDecoder` and assert the decoded value equals the original, so a broken
+/// `Codable` conformance or a field that silently stops encoding fails `swift test`
+/// immediately instead of shipping green with a suite that asserts nothing.
+fn codable_round_trip_test(module: &str, type_name: &str, fields: &[SimpleCodableField]) -> String {
+    let init_args = fields
+        .iter()
+        .map(|f| format!("{}: {}", f.swift_label, f.literal))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "import XCTest\n\n\
+         @testable import {module}\n\n\
+         final class {module}Tests: XCTestCase {{\n  \
+             /// Round-trips the generated `{type_name}` DTO through `JSONEncoder`/`JSONDecoder`,\n  \
+             /// so a broken `Codable` conformance or a field that silently stops encoding fails\n  \
+             /// `swift test` immediately instead of shipping green with a suite that asserts\n  \
+             /// nothing about the generated API. Create-only scaffold seed. ~keep\n  \
+             func test{type_name}RoundTripsThroughJSON() throws {{\n    \
+                 let original = {type_name}({init_args})\n    \
+                 let data = try JSONEncoder().encode(original)\n    \
+                 let decoded = try JSONDecoder().decode({type_name}.self, from: data)\n    \
+                 XCTAssertEqual(decoded, original)\n  \
+             }}\n\
+         }}\n",
+    )
+}
+
+/// `name` isn't a literal-constructible Codable DTO this seed can safely round-trip
+/// generically, so this checks the generated type exists and is referenceable at compile
+/// time instead.
+fn type_reference_test(module: &str, name: &str) -> String {
+    format!(
+        "import XCTest\n\n\
+         @testable import {module}\n\n\
+         final class {module}Tests: XCTestCase {{\n  \
+             /// `{name}` isn't a literal-constructible Codable DTO this seed can safely\n  \
+             /// round-trip generically, so this checks the generated type exists and is\n  \
+             /// referenceable at compile time instead. Create-only scaffold seed. ~keep\n  \
+             func test{name}Exists() {{\n    \
+                 XCTAssertNotNil({name}.self)\n  \
+             }}\n\
+         }}\n",
+    )
+}
+
+/// No generated API surface exists yet for this crate, so there is nothing to assert
+/// against beyond the module resolving under `@testable import`. Once real types exist,
+/// alef never regenerates over this file -- it is a create-only scaffold seed.
+fn placeholder_test(module: &str) -> String {
+    format!(
+        "import XCTest\n\n\
+         @testable import {module}\n\n\
+         final class {module}Tests: XCTestCase {{\n  \
+             /// No generated API surface exists yet for this crate, so there is nothing to\n  \
+             /// assert against beyond the module resolving. Once real types exist, alef never\n  \
+             /// regenerates over this file -- it is a create-only scaffold seed. ~keep\n  \
+             func testModuleImportsSuccessfully() throws {{\n    \
+                 XCTAssertTrue(true)\n  \
+             }}\n\
+         }}\n",
+    )
+}
+
 /// Path `scaffold_swift` writes `RustBridgeC.h` to, relative to the generation
 /// root. Alef commands run with the workspace root as the cwd, matching the
 /// cwd-relative lookup in [`read_swift_bridge_headers`].
@@ -640,6 +823,213 @@ mod tests {
             .iter()
             .find(|f| f.path == std::path::Path::new(path))
             .unwrap_or_else(|| panic!("missing scaffolded file: {path}"))
+    }
+
+    fn simple_type(name: &str) -> TypeDef {
+        TypeDef {
+            name: name.to_string(),
+            has_serde: true,
+            fields: vec![
+                crate::core::ir::FieldDef {
+                    name: "count".to_string(),
+                    ty: TypeRef::Primitive(PrimitiveType::U32),
+                    ..Default::default()
+                },
+                crate::core::ir::FieldDef {
+                    name: "label".to_string(),
+                    ty: TypeRef::String,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    /// A visible DTO whose fields are all plain primitives/`String` is round-tripped
+    /// through `JSONEncoder`/`JSONDecoder` and compared for equality -- the strongest
+    /// safe check, since it fails on a broken `Codable` conformance or a dropped field,
+    /// not just a missing symbol.
+    #[test]
+    fn scaffold_test_round_trips_a_simple_dto() {
+        let api = ApiSurface {
+            types: vec![simple_type("Widget")],
+            ..Default::default()
+        };
+        let out = scaffold_swift_test(&api, &minimal_config(), "MyLib");
+
+        assert!(out.contains("@testable import MyLib"), "got:\n{out}");
+        assert!(
+            out.contains("func testWidgetRoundTripsThroughJSON() throws {"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("let original = Widget(count: 1, label: \"alef-scaffold\")"),
+            "got:\n{out}"
+        );
+        assert!(out.contains("try JSONEncoder().encode(original)"), "got:\n{out}");
+        assert!(
+            out.contains("try JSONDecoder().decode(Widget.self, from: data)"),
+            "got:\n{out}"
+        );
+        assert!(out.contains("XCTAssertEqual(decoded, original)"), "got:\n{out}");
+        assert!(
+            !out.contains("XCTAssertTrue(true)"),
+            "must not be the vacuous placeholder, got:\n{out}"
+        );
+    }
+
+    /// An opaque type has no first-class Codable representation, so it can't be
+    /// literal-constructed; the seed falls back to a compile-time existence check on the
+    /// type name instead of skipping straight to the vacuous placeholder.
+    #[test]
+    fn scaffold_test_falls_back_to_existence_check_for_an_opaque_type() {
+        let api = ApiSurface {
+            types: vec![TypeDef {
+                name: "Client".to_string(),
+                is_opaque: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let out = scaffold_swift_test(&api, &minimal_config(), "MyLib");
+
+        assert!(out.contains("func testClientExists() {"), "got:\n{out}");
+        assert!(out.contains("XCTAssertNotNil(Client.self)"), "got:\n{out}");
+        assert!(!out.contains("JSONEncoder"), "got:\n{out}");
+    }
+
+    /// A DTO with an unsupported field shape (e.g. `Optional<T>`) can't be literal
+    /// -constructed safely by this seed either -- it also falls back to the existence
+    /// check rather than emitting a construction call with a guessed value.
+    #[test]
+    fn scaffold_test_falls_back_to_existence_check_for_unsupported_field_shape() {
+        let api = ApiSurface {
+            types: vec![TypeDef {
+                name: "Config".to_string(),
+                has_serde: true,
+                fields: vec![crate::core::ir::FieldDef {
+                    name: "nickname".to_string(),
+                    ty: TypeRef::Optional(Box::new(TypeRef::String)),
+                    optional: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let out = scaffold_swift_test(&api, &minimal_config(), "MyLib");
+
+        assert!(out.contains("func testConfigExists() {"), "got:\n{out}");
+        assert!(out.contains("XCTAssertNotNil(Config.self)"), "got:\n{out}");
+    }
+
+    /// With no visible struct at all, a visible enum is checked for existence instead.
+    #[test]
+    fn scaffold_test_falls_back_to_existence_check_for_an_enum_when_no_types_exist() {
+        let api = ApiSurface {
+            enums: vec![crate::core::ir::EnumDef {
+                name: "Color".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let out = scaffold_swift_test(&api, &minimal_config(), "MyLib");
+
+        assert!(out.contains("func testColorExists() {"), "got:\n{out}");
+        assert!(out.contains("XCTAssertNotNil(Color.self)"), "got:\n{out}");
+    }
+
+    /// `binding_excluded` types were never emitted into the generated Swift module, so the
+    /// seed must skip them rather than asserting against a type that doesn't exist.
+    #[test]
+    fn scaffold_test_skips_binding_excluded_types() {
+        let api = ApiSurface {
+            types: vec![
+                TypeDef {
+                    name: "Hidden".to_string(),
+                    is_opaque: true,
+                    binding_excluded: true,
+                    ..Default::default()
+                },
+                TypeDef {
+                    name: "Visible".to_string(),
+                    is_opaque: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let out = scaffold_swift_test(&api, &minimal_config(), "MyLib");
+
+        assert!(out.contains("Visible"), "got:\n{out}");
+        assert!(!out.contains("Hidden"), "got:\n{out}");
+    }
+
+    /// A genuinely empty API surface (no Rust code written yet) has nothing to assert
+    /// against beyond the module resolving -- the only honest seed content, and the
+    /// only case where the placeholder assertion is legitimate.
+    #[test]
+    fn scaffold_test_falls_back_to_placeholder_when_api_surface_is_empty() {
+        let out = scaffold_swift_test(&ApiSurface::default(), &minimal_config(), "MyLib");
+
+        assert!(out.contains("@testable import MyLib"), "got:\n{out}");
+        assert!(
+            out.contains("func testModuleImportsSuccessfully() throws {"),
+            "got:\n{out}"
+        );
+        assert!(out.contains("XCTAssertTrue(true)"), "got:\n{out}");
+    }
+
+    /// End-to-end through `scaffold_swift`: the emitted test file at
+    /// `Tests/{module}Tests/{module}Tests.swift` must carry a real assertion against the
+    /// generated API (not the vacuous `XCTAssertTrue(true)` placeholder) whenever the API
+    /// surface has something to assert against, and must be `generated_header: false` so
+    /// the create-only write-path guard (`write_scaffold_files_report`'s `can_skip`) never
+    /// overwrites a real hand-written suite once one exists at that path.
+    #[test]
+    fn scaffold_swift_emits_real_test_assertions_and_is_create_only() {
+        let api = ApiSurface {
+            types: vec![simple_type("Widget")],
+            ..Default::default()
+        };
+        let files = scaffold_swift(&api, &minimal_config()).expect("scaffold");
+        let test_file = find_file(&files, "packages/swift/Tests/MyLibTests/MyLibTests.swift");
+
+        assert!(
+            !test_file.generated_header,
+            "test seed must be generated_header: false (create-only)"
+        );
+        assert!(test_file.content.contains("JSONEncoder"), "got:\n{}", test_file.content);
+        assert!(
+            !test_file.content.contains("func testPlaceholder"),
+            "must not emit the old vacuous placeholder test, got:\n{}",
+            test_file.content
+        );
+    }
+
+    /// Positive control: scaffolding into a project with no pre-existing test file must
+    /// still produce the seed. The create-only guard lives in the write path
+    /// (`write_scaffold_files_report`'s `can_skip = !overwrite && !file.generated_header
+    /// && full_path.exists()`), not in generation -- `scaffold_swift` itself always
+    /// returns the test file so that guard has something to gate.
+    #[test]
+    fn scaffold_swift_always_emits_a_test_file_seed() {
+        let files = scaffold_swift(&ApiSurface::default(), &minimal_config()).expect("scaffold");
+        let test_file = find_file(&files, "packages/swift/Tests/MyLibTests/MyLibTests.swift");
+
+        assert!(test_file.content.contains("@testable import MyLib"));
+    }
+
+    fn minimal_config() -> ResolvedCrateConfig {
+        resolve_config(
+            r#"
+[workspace]
+languages = ["swift"]
+[[crates]]
+name = "my-lib"
+sources = []
+"#,
+        )
     }
 
     /// Fresh swift-bridge build output always wins: the umbrella header is
