@@ -3,17 +3,9 @@ fn {{ fn_name }}(e: {{ rust_path }}) -> pyo3::PyErr {
     let msg = e.to_string();
     #[allow(unreachable_patterns)]
     match &e {
-{%- for pattern, variant_exc_name, variant_code in variants %}
-{%- if has_methods %}
-        {{ pattern }} => {{ variant_exc_name }}::new_err((format!("[{{ variant_code }}] {}", msg), e.status_code(), e.is_transient(), e.error_type().to_string())),
-{%- else %}
-        {{ pattern }} => {{ variant_exc_name }}::new_err(format!("[{{ variant_code }}] {}", msg)),
-{%- endif %}
-{%- endfor %}
-{%- if has_methods %}
-        _ => {{ error_name }}::new_err((msg, e.status_code(), e.is_transient(), e.error_type().to_string())),
-{%- else %}
-        _ => {{ error_name }}::new_err(msg),
-{%- endif %}
+{% for arm in arms %}
+        {{ arm }}
+{% endfor %}
+        {{ default_arm }}
     }
 }

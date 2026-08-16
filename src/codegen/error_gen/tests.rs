@@ -160,15 +160,81 @@ fn test_gen_error_types() {
 #[test]
 fn test_gen_error_converter() {
     let error = sample_error();
-    let parse_code = error.variants[0]
-        .taxonomy(&error.rust_path)
-        .expect("explicit test error code")
-        .code;
     let output = gen_pyo3_error_converter(&error, "sample_markup_rs");
     assert!(output.contains("fn conversion_error_to_py_err(e: sample_markup_rs::ConversionError) -> pyo3::PyErr {"));
-    assert!(output.contains(&format!(
-        "sample_markup_rs::ConversionError::ParseError(..) => ParseError::new_err(format!(\"[{parse_code}] {{}}\", msg)),"
-    )));
+    assert!(output.contains("sample_markup_rs::ConversionError::ParseError(..) => ParseError::new_err(msg),"));
+}
+
+/// Regression: 0b5f9db27 ("feat(node-python): expose stable error codes") interpolated the
+/// per-variant taxonomy code straight into the exception message text
+/// (`format!("[{code}] {}", msg)`), so every Python exception a consumer saw carried a literal
+/// `[N] ` prefix ahead of the real message — a genuine user-visible regression in every error
+/// path of a published binding. The message must be the message alone; a bracketed leading
+/// integer immediately followed by the `{}` message placeholder is exactly the shape that
+/// regression takes, so assert its absence structurally (in both the plain and the
+/// has-introspection-methods converter shapes) rather than merely asserting the real message
+/// text is present, which would still pass with the prefix. (~keep)
+#[test]
+fn test_gen_error_converter_message_has_no_bracketed_numeric_prefix() {
+    let bracket_prefix = regex::Regex::new(r"\[\d+\]\s*\{\}").expect("valid regex");
+
+    let plain = gen_pyo3_error_converter(&sample_error(), "sample_markup_rs");
+    assert!(
+        !bracket_prefix.is_match(&plain),
+        "exception message must not carry a bracketed numeric code prefix, got:\n{plain}"
+    );
+
+    let mut with_methods = error_with_methods();
+    with_methods.variants = sample_error().variants;
+    let with_methods_output = gen_pyo3_error_converter(&with_methods, "sample_app");
+    assert!(
+        !bracket_prefix.is_match(&with_methods_output),
+        "exception message must not carry a bracketed numeric code prefix even when the error \
+         has introspection methods, got:\n{with_methods_output}"
+    );
+    assert!(
+        with_methods_output.contains("u32, e.status_code(), e.is_transient(), e.error_type().to_string())"),
+        "the numeric code must still travel as its own tuple element, got:\n{with_methods_output}"
+    );
+}
+
+/// The stable numeric code lives in the `{ErrorName}Info` companion pyclass's `code` getter
+/// (see `gen_pyo3_error_methods_impl`), extracted from index 1 of the exception args tuple the
+/// converter builds — `code` shifted `status_code`/`is_transient`/`error_type` from indices
+/// 1–3 to 2–4 when it was added, so this pins the extraction indices against the converter's
+/// tuple shape (`(message, code, status_code, is_transient, error_type)`) drifting apart.
+/// Substrings are whitespace-agnostic (no leading indentation asserted) since each field's
+/// extraction is a multi-line continuation whose indentation isn't the thing under test.
+#[test]
+fn test_gen_pyo3_error_methods_impl_exposes_code_field_at_shifted_index() {
+    let error = error_with_methods();
+    let output = gen_pyo3_error_methods_impl(&error);
+    assert!(output.contains("pub code: u32,"), "code field on the struct: {output}");
+    assert!(
+        output.contains("fn code(&self) -> u32 {\n        self.code\n    }"),
+        "code getter: {output}"
+    );
+    assert!(output.contains("code: args"), "code ctor field: {output}");
+    assert!(
+        output.contains(".and_then(|a| a.get_item(1).ok())"),
+        "code must be extracted from tuple index 1, got:\n{output}"
+    );
+    assert!(
+        output.contains(".and_then(|a| a.get_item(2).ok())"),
+        "status_code must shift to tuple index 2, got:\n{output}"
+    );
+    assert!(
+        output.contains(".and_then(|a| a.get_item(3).ok())"),
+        "is_transient must shift to tuple index 3, got:\n{output}"
+    );
+    assert!(
+        output.contains(".and_then(|a| a.get_item(4).ok())"),
+        "error_type must shift to tuple index 4, got:\n{output}"
+    );
+    assert!(
+        !output.contains(".and_then(|a| a.get_item(5).ok())"),
+        "only four fields are extracted from the tuple, got:\n{output}"
+    );
 }
 
 #[test]
@@ -203,14 +269,8 @@ fn test_unit_variant_pattern() {
         binding_exclusion_reason: None,
         version: Default::default(),
     };
-    let code = error.variants[0]
-        .taxonomy(&error.rust_path)
-        .expect("explicit test error code")
-        .code;
     let output = gen_pyo3_error_converter(&error, "my_crate");
-    assert!(output.contains(&format!(
-        "my_crate::MyError::NotFound => NotFoundError::new_err(format!(\"[{code}] {{}}\", msg)),"
-    )));
+    assert!(output.contains("my_crate::MyError::NotFound => NotFoundError::new_err(msg),"));
     assert!(!output.contains("NotFound(..)"));
 }
 
@@ -237,18 +297,64 @@ fn test_struct_variant_pattern() {
         binding_exclusion_reason: None,
         version: Default::default(),
     };
-    let code = error.variants[0]
-        .taxonomy(&error.rust_path)
-        .expect("explicit test error code")
-        .code;
     let output = gen_pyo3_error_converter(&error, "my_crate");
     assert!(
-        output.contains(&format!(
-            "my_crate::MyError::Parsing {{ .. }} => ParsingError::new_err(format!(\"[{code}] {{}}\", msg)),"
-        )),
+        output.contains("my_crate::MyError::Parsing { .. } => ParsingError::new_err(msg),"),
         "Struct variants must use {{ .. }} pattern, got:\n{output}"
     );
     assert!(!output.contains("Parsing(..)"));
+}
+
+/// Regression: `gen_pyo3_error_converter` used to branch on `has_methods` with a
+/// `{%- if %}...{%- else %}...{%- endif %}` nested inside the template's `{%- for %}` loop.
+/// Each inner tag's leading `-` trims the newline the *previous* rendered line ended with, so
+/// every match arm collapsed onto one line (`match &e {        arm1,        arm2,    }`) —
+/// syntactically valid Rust, but a real formatting defect in the emitted source (verified by
+/// dumping actual generator output, not by inspecting the template). The fix moved branching
+/// into Rust and flattened the template to a plain loop over pre-rendered arm strings, which
+/// has no such interaction. Assert every arm and the closing brace land on their own
+/// correctly-indented line. (~keep)
+#[test]
+fn test_error_converter_match_arms_are_newline_separated_and_indented() {
+    let error = ErrorDef {
+        name: "MyError".to_string(),
+        rust_path: "my_crate::MyError".to_string(),
+        original_rust_path: String::new(),
+        variants: vec![
+            ErrorVariant {
+                error_code: Some(100),
+                name: "Parsing".to_string(),
+                message_template: Some("parsing error: {message}".to_string()),
+                fields: vec![named_field("message")],
+                has_source: false,
+                has_from: false,
+                is_unit: false,
+                is_tuple: false,
+                doc: String::new(),
+            },
+            ErrorVariant {
+                error_code: Some(101),
+                name: "NotFound".to_string(),
+                message_template: Some("not found".to_string()),
+                fields: vec![],
+                has_source: false,
+                has_from: false,
+                is_unit: true,
+                is_tuple: false,
+                doc: String::new(),
+            },
+        ],
+        doc: String::new(),
+        methods: vec![],
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        version: Default::default(),
+    };
+    let output = gen_pyo3_error_converter(&error, "my_crate");
+    assert!(
+        output.contains("match &e {\n        my_crate::MyError::Parsing { .. } => ParsingError::new_err(msg),\n        my_crate::MyError::NotFound => NotFoundError::new_err(msg),\n        _ => MyError::new_err(msg),\n    }"),
+        "each match arm and the closing brace must be on its own indented line, got:\n{output}"
+    );
 }
 
 #[test]
@@ -263,43 +369,58 @@ fn test_gen_napi_error_types() {
 #[test]
 fn test_gen_napi_error_converter() {
     let error = sample_error();
-    let parse_code = error.variants[0]
-        .taxonomy(&error.rust_path)
-        .expect("explicit test error code")
-        .code;
     let output = gen_napi_error_converter(&error, "sample_markup_rs");
     assert!(output.contains("fn conversion_error_to_napi_err(e: sample_markup_rs::ConversionError) -> napi::Error {"));
-    assert!(output.contains("napi::Error::new(napi::Status::GenericFailure,"));
-    assert!(output.contains(&format!("[{parse_code}]")));
+    assert!(output.contains("napi::Error::new(napi::Status::GenericFailure, e.to_string())"));
     assert!(output.contains("#[allow(dead_code)]"));
 }
 
+/// Regression: 0b5f9db27 interpolated the per-variant taxonomy code straight into the
+/// `napi::Error` message (`format!("[{code}] {}", msg)`), so every thrown Node exception
+/// carried a literal `[N] ` prefix ahead of the real message. A bracketed leading integer
+/// immediately followed by the `{}` message placeholder is exactly the shape that regression
+/// takes, so assert its absence structurally, not just that the real message text is present
+/// (which would still pass with the prefix). (~keep)
 #[test]
-fn test_napi_unit_variant() {
-    let error = ErrorDef {
-        name: "MyError".to_string(),
-        rust_path: "my_crate::MyError".to_string(),
-        original_rust_path: String::new(),
-        variants: vec![ErrorVariant {
-            error_code: Some(100),
-            name: "NotFound".to_string(),
-            message_template: None,
-            fields: vec![],
-            has_source: false,
-            has_from: false,
-            is_unit: true,
-            is_tuple: false,
-            doc: String::new(),
-        }],
+fn test_gen_napi_error_converter_message_has_no_bracketed_numeric_prefix() {
+    let error = sample_error();
+    let output = gen_napi_error_converter(&error, "sample_markup_rs");
+    let bracket_prefix = regex::Regex::new(r"\[\d+\]\s*\{\}").expect("valid regex");
+    assert!(
+        !bracket_prefix.is_match(&output),
+        "napi error message must not carry a bracketed numeric code prefix, got:\n{output}"
+    );
+}
+
+/// The stable numeric code lives in the `Js{Name}Info` companion class's `code` field
+/// (see `gen_napi_error_class`), resolved via the same per-variant match the message-leak
+/// regression test above proves is no longer in the message. Unit variants must not render
+/// with a spurious `(..)` tuple-pattern suffix.
+#[test]
+fn test_napi_error_class_code_field_resolves_per_variant_and_unit_pattern_has_no_tuple_suffix() {
+    let mut error = error_with_methods();
+    error.name = "MyError".to_string();
+    error.rust_path = "my_crate::MyError".to_string();
+    error.variants = vec![ErrorVariant {
+        error_code: Some(100),
+        name: "NotFound".to_string(),
+        message_template: None,
+        fields: vec![],
+        has_source: false,
+        has_from: false,
+        is_unit: true,
+        is_tuple: false,
         doc: String::new(),
-        methods: vec![],
-        binding_excluded: false,
-        binding_exclusion_reason: None,
-        version: Default::default(),
-    };
-    let output = gen_napi_error_converter(&error, "my_crate");
-    assert!(output.contains("my_crate::MyError::NotFound =>"));
+    }];
+    let code = error.variants[0]
+        .taxonomy(&error.rust_path)
+        .expect("explicit test error code")
+        .code;
+    let output = gen_napi_error_class(&error, "my_crate");
+    assert!(output.contains(&format!("my_crate::MyError::NotFound => {code},")));
     assert!(!output.contains("NotFound(..)"));
+    assert!(output.contains("pub code: u32,"));
+    assert!(output.contains("code: my_error_error_code(e),"));
 }
 
 #[test]

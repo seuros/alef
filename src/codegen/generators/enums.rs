@@ -132,19 +132,18 @@ pub(crate) struct VariantConstructor<'a> {
 /// Collect the data-carrying struct variants of `enum_def` that need a generated constructor.
 ///
 /// Skips unit variants (no fields), tuple variants (`is_tuple`), and `binding_excluded` variants.
-/// A variant whose snake_case name matches a hand-written `enum_def.methods` entry is skipped too:
-/// the consumer-authored method wins. Backend-agnostic selection shared by the pyo3 and magnus
-/// per-variant-constructor emitters.
-pub(crate) fn collect_variant_constructors(enum_def: &EnumDef) -> Vec<VariantConstructor<'_>> {
+/// Backend-agnostic selection shared by every per-variant-constructor emitter.
+///
+/// Deliberately does *not* skip a variant whose snake_case name matches an `enum_def.methods`
+/// entry: no backend forwards `enum_def.methods` into its generated bindings (that field exists
+/// purely for extraction bookkeeping), so suppressing the derived factory on a name collision
+/// silently dropped the variant constructor entirely (`ContentPart.text(...)` raised
+/// `AttributeError`, and the identical shape hit Elixir's `ContentPart.text/1`). Always emitting
+/// the derived factory is a strict improvement: it is reachable, even where its struct-literal
+/// signature is less ergonomic than the hand-written inherent method would have been.
+pub(crate) fn collect_all_variant_constructors(enum_def: &EnumDef) -> Vec<VariantConstructor<'_>> {
     use crate::codegen::naming::pascal_to_snake;
     use crate::core::ir::ParamDef;
-
-    let method_names: ahash::AHashSet<&str> = enum_def
-        .methods
-        .iter()
-        .filter(|m| !m.binding_excluded)
-        .map(|m| m.name.as_str())
-        .collect();
 
     enum_def
         .variants
@@ -155,11 +154,8 @@ pub(crate) fn collect_variant_constructors(enum_def: &EnumDef) -> Vec<VariantCon
                 && !v.binding_excluded
                 && !v.fields.iter().any(|f| f.sanitized || f.binding_excluded)
         })
-        .filter_map(|v| {
+        .map(|v| {
             let snake_name = pascal_to_snake(&v.name);
-            if method_names.contains(snake_name.as_str()) {
-                return None;
-            }
             let params = v
                 .fields
                 .iter()
@@ -177,12 +173,12 @@ pub(crate) fn collect_variant_constructors(enum_def: &EnumDef) -> Vec<VariantCon
                 })
                 .collect();
             let boxed = v.fields.iter().map(|f| f.is_boxed).collect();
-            Some(VariantConstructor {
+            VariantConstructor {
                 variant_name: &v.name,
                 snake_name,
                 params,
                 boxed,
-            })
+            }
         })
         .collect()
 }
@@ -289,7 +285,7 @@ fn gen_pyo3_enum_variant_constructors_content(
 ) -> String {
     use crate::codegen::shared::{function_params, function_sig_defaults, is_promoted_optional};
 
-    let constructors = collect_variant_constructors(enum_def);
+    let constructors = collect_all_variant_constructors(enum_def);
     if constructors.is_empty() {
         return String::new();
     }

@@ -6,6 +6,7 @@
 //! `unexpected cfg condition value` errors when items are emitted behind
 //! `#[cfg(feature = "X")]` guards.
 
+use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
 use std::collections::BTreeSet;
 
@@ -105,6 +106,83 @@ pub fn collect_cfg_features(api: &ApiSurface) -> BTreeSet<String> {
     out
 }
 
+/// Warn when a single-surface binding language's configured feature set (used to decide which
+/// `#[cfg(feature = "...")]`-gated FFI exports get glue via [`ApiSurface::with_cfg_filtered_deep`])
+/// diverges from the FFI crate's own configured feature set.
+///
+/// The FFI cdylib is built once, shared by every language binding (`cargo build -p
+/// {ffi_crate}` runs with no `--features` override — see `cli::pipeline::commands::build`), and
+/// its `[features] default = [...]` list is populated from `features_for_language(Language::Ffi)`
+/// (see `scaffold::languages::ffi`). A binding language's own `with_cfg_filtered_deep` call
+/// assumes its configured feature set describes that same compiled artifact; if the two lists
+/// differ, the omission-based filter is filtering against the wrong assumption — the generated
+/// glue can still reference a symbol the shipped library doesn't export, or omit one it does.
+/// alef cannot detect the actual mismatch (it doesn't run `cargo build` here), so this only
+/// flags the config-level drift that would cause it, naming the assumption so it is a visible,
+/// documented constraint rather than a silent landmine. ~keep
+pub fn warn_on_ffi_feature_drift(config: &ResolvedCrateConfig, lang: Language) {
+    if lang == Language::Ffi {
+        return;
+    }
+    let lang_features: BTreeSet<&str> = config.features_for_language(lang).iter().map(String::as_str).collect();
+    let ffi_features: BTreeSet<&str> = config
+        .features_for_language(Language::Ffi)
+        .iter()
+        .map(String::as_str)
+        .collect();
+    if lang_features != ffi_features {
+        tracing::warn!(
+            language = %lang,
+            lang_features = ?lang_features,
+            ffi_features = ?ffi_features,
+            "configured feature set for this binding differs from [crates.ffi]'s; cfg-gated FFI \
+             exports are included/omitted based on this binding's own feature list, but the \
+             linked native library is built once using the FFI crate's feature list — keep them \
+             in sync (or set them explicitly to the same value) or generated glue may reference \
+             symbols the shipped library doesn't export"
+        );
+    }
+}
+
+/// A parsed `#[cfg(...)]` predicate, preserving `any`/`all`/`not` structure instead of
+/// flattening straight to a name set. Needed by callers that must decide what to *do* about an
+/// unsatisfied predicate (e.g. which single feature to request to satisfy an `any(...)`) rather
+/// than just enumerate every name it mentions — [`collect_cfg_feature_names`] remains the right
+/// tool for the latter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CfgPredicate {
+    /// `feature = "X"`.
+    Feature(String),
+    /// `all(...)`: every arm must hold.
+    All(Vec<CfgPredicate>),
+    /// `any(...)`: at least one arm must hold.
+    Any(Vec<CfgPredicate>),
+    /// `not(...)`.
+    Not(Box<CfgPredicate>),
+    /// Anything this parser doesn't recognise (`target_arch = "..."`, `windows`, ...).
+    Other,
+}
+
+/// Parse a `#[cfg(...)]` condition string into a [`CfgPredicate`] tree.
+pub fn parse_cfg_predicate(cfg_str: &str) -> CfgPredicate {
+    let normalized = cfg_str.trim().replace(" (", "(");
+    let cfg_str = normalized.as_str();
+
+    if let Some(feature) = cfg_str.strip_prefix("feature = \"").and_then(|s| s.strip_suffix('"')) {
+        return CfgPredicate::Feature(feature.to_string());
+    }
+    if let Some(inner) = cfg_str.strip_prefix("any(").and_then(|s| s.strip_suffix(')')) {
+        return CfgPredicate::Any(parse_cfg_list(inner).iter().map(|c| parse_cfg_predicate(c)).collect());
+    }
+    if let Some(inner) = cfg_str.strip_prefix("all(").and_then(|s| s.strip_suffix(')')) {
+        return CfgPredicate::All(parse_cfg_list(inner).iter().map(|c| parse_cfg_predicate(c)).collect());
+    }
+    if let Some(inner) = cfg_str.strip_prefix("not(").and_then(|s| s.strip_suffix(')')) {
+        return CfgPredicate::Not(Box::new(parse_cfg_predicate(inner.trim())));
+    }
+    CfgPredicate::Other
+}
+
 fn parse_cfg_list(s: &str) -> Vec<String> {
     let mut result = Vec::new();
     let mut depth = 0usize;
@@ -165,6 +243,49 @@ mod tests {
         );
         let want: BTreeSet<String> = ["layout-types", "wasm-target"].into_iter().map(String::from).collect();
         assert_eq!(out, want);
+    }
+
+    #[test]
+    fn parse_cfg_predicate_simple_feature() {
+        assert_eq!(
+            parse_cfg_predicate(r#"feature = "tokenizer""#),
+            CfgPredicate::Feature("tokenizer".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_cfg_predicate_any_preserves_arms() {
+        assert_eq!(
+            parse_cfg_predicate(r#"any(feature = "native-http", feature = "wasm-http")"#),
+            CfgPredicate::Any(vec![
+                CfgPredicate::Feature("native-http".to_string()),
+                CfgPredicate::Feature("wasm-http".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn parse_cfg_predicate_all_preserves_arms() {
+        assert_eq!(
+            parse_cfg_predicate(r#"all(feature = "layout-types", not(feature = "wasm-target"))"#),
+            CfgPredicate::All(vec![
+                CfgPredicate::Feature("layout-types".to_string()),
+                CfgPredicate::Not(Box::new(CfgPredicate::Feature("wasm-target".to_string()))),
+            ])
+        );
+    }
+
+    #[test]
+    fn parse_cfg_predicate_not() {
+        assert_eq!(
+            parse_cfg_predicate(r#"not(feature = "wasm-target")"#),
+            CfgPredicate::Not(Box::new(CfgPredicate::Feature("wasm-target".to_string())))
+        );
+    }
+
+    #[test]
+    fn parse_cfg_predicate_unrecognised_is_other() {
+        assert_eq!(parse_cfg_predicate(r#"target_arch = "wasm32""#), CfgPredicate::Other);
     }
 
     #[test]

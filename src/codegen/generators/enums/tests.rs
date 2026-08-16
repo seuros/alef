@@ -627,8 +627,13 @@ fn variant_constructors_use_inline_into_for_non_reexported_core_type() {
     assert!(!generated.contains("result_core"), "{generated}");
 }
 
+/// Regression for the `ContentPart` bug: a hand-written inherent static method
+/// (`enum_def.methods`, extracted from a separate `impl EnumType { .. }` block) is never
+/// forwarded into the generated `#[pymethods]` block by any backend, so suppressing the derived
+/// factory on a name collision used to drop the constructor entirely (`ContentPart.text(...)`
+/// raised `AttributeError`). Every data-carrying variant must always get a reachable factory.
 #[test]
-fn variant_constructors_yield_to_hand_written_method() {
+fn variant_constructors_emit_factory_even_with_colliding_hand_written_method() {
     use crate::codegen::type_mapper::IdentityMapper;
     let mut def = enum_def(
         "Shape",
@@ -648,9 +653,10 @@ fn variant_constructors_yield_to_hand_written_method() {
     let generated = gen_pyo3_data_enum_with_mapper(&def, "core", Some(&IdentityMapper));
 
     assert!(
-        !generated.contains("Self { inner: core::Shape::Circle"),
-        "consumer method must win for Circle: {generated}"
+        generated.contains("Self { inner: crate::Shape::Circle { radius } }"),
+        "Circle factory must stay reachable despite the colliding hand-written method: {generated}"
     );
+    assert!(generated.contains(r#"#[pyo3(name = "circle")]"#), "{generated}");
     assert!(
         generated.contains("pub fn _factory_square(side: f64) -> Self"),
         "{generated}"

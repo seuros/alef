@@ -32,23 +32,11 @@ pub fn gen_napi_error_converter(error: &ErrorDef, core_import: &str) -> String {
 
     let fn_name = format!("{}_to_napi_err", to_snake_case(&error.name));
 
-    let mut variants = Vec::new();
-    for variant in &error.variants {
-        let pattern = error_variant_wildcard_pattern(&rust_path, variant);
-        let code = variant
-            .taxonomy(&error.rust_path)
-            .map_or(crate::core::ir::ApiSurface::FFI_ERROR_CODE_UNKNOWN, |taxonomy| {
-                taxonomy.code
-            });
-        variants.push((pattern, code));
-    }
-
     crate::codegen::template_env::render(
         "error_gen/napi_error_converter.jinja",
         minijinja::context! {
             rust_path => rust_path.as_str(),
             fn_name => fn_name.as_str(),
-            variants => variants,
         },
     )
 }
@@ -184,15 +172,15 @@ pub fn gen_wasm_error_methods(error: &ErrorDef, core_import: &str, wasm_prefix: 
     format!("{struct_def}\n\n{impl_block}")
 }
 
-/// Generate a `#[pyclass]` companion struct for error introspection, exposing
-/// the whitelisted methods as `#[getter]` properties.
+/// Generate a `#[napi]` companion struct for error introspection, exposing
+/// the whitelisted methods as `#[napi]` getter methods.
 ///
-/// `pyo3::create_exception!` types are zero-sized marker types that do not
-/// implement `PyClass`, so `#[pymethods]` blocks cannot be added to them
-/// directly. Instead we emit a separate `{ErrorName}Info` `#[pyclass]` that
-/// stores the three fields and is built by a `#[pyfunction]` free function
-/// which extracts the values from the exception's args tuple (indices 1–3,
-/// which the converter already populates).
+/// `napi::Error` (thrown as a generic JS `Error`) has no per-variant subclass to attach
+/// structured data to, so we emit a separate `Js{ErrorName}Info` `#[napi]` class instead.
+/// It always carries `code` — the stable numeric taxonomy code for the specific variant,
+/// resolved via the same per-variant match the converter uses — plus whichever of
+/// `status_code` / `is_transient` / `error_type` the error type implements. This is the
+/// structured channel `code` belongs in, never the exception message text. (~keep)
 ///
 /// Returns an empty string when `error.methods` is empty.
 pub fn gen_napi_error_class(error: &ErrorDef, core_import: &str) -> String {
@@ -206,11 +194,23 @@ pub fn gen_napi_error_class(error: &ErrorDef, core_import: &str) -> String {
         error.rust_path.replace('-', "_")
     };
 
-    let struct_name = format!("Js{}Info", error.name);
+    let snake_name = to_snake_case(&error.name);
+    let code_fn_name = format!("{snake_name}_error_code");
 
-    let mut fields = Vec::new();
-    let mut methods = Vec::new();
-    let mut ctor_assignments = Vec::new();
+    let mut fields = vec!["    pub code: u32,".to_string()];
+    let mut methods = vec![
+        concat!(
+            "    /// Stable numeric error code identifying the specific error variant.\n",
+            "    #[napi(js_name = \"code\")]\n",
+            "    pub fn code(&self) -> u32 {\n",
+            "        self.code\n",
+            "    }",
+        )
+        .to_string(),
+    ];
+    let mut ctor_assignments = vec![format!("        code: {code_fn_name}(e),")];
+
+    let struct_name = format!("Js{}Info", error.name);
 
     for method in &error.methods {
         match method.name.as_str() {
@@ -266,15 +266,38 @@ pub fn gen_napi_error_class(error: &ErrorDef, core_import: &str) -> String {
 
     let struct_def = format!("#[napi]\npub struct {struct_name} {{\n{}\n}}", fields.join("\n"));
 
+    let mut code_match_arms = Vec::with_capacity(error.variants.len());
+    for variant in &error.variants {
+        let pattern = error_variant_wildcard_pattern(&rust_path, variant);
+        let code = variant
+            .taxonomy(&error.rust_path)
+            .map_or(crate::core::ir::ApiSurface::FFI_ERROR_CODE_UNKNOWN, |taxonomy| {
+                taxonomy.code
+            });
+        code_match_arms.push(format!("        {pattern} => {code},"));
+    }
+    let unknown_code = crate::core::ir::ApiSurface::FFI_ERROR_CODE_UNKNOWN;
+    let code_fn = format!(
+        "/// Resolve the stable numeric error code for a `{rust_path}` variant.\n\
+         #[allow(dead_code)]\n\
+         fn {code_fn_name}(e: &{rust_path}) -> u32 {{\n\
+             \x20   #[allow(unreachable_patterns)]\n\
+             \x20   match e {{\n\
+         {}\n\
+             \x20       _ => {unknown_code},\n\
+             \x20   }}\n\
+         }}",
+        code_match_arms.join("\n"),
+    );
+
     let from_fn = format!(
         "#[allow(dead_code)]\nfn {snake_name}_info(e: &{rust_path}) -> {struct_name} {{\n    {struct_name} {{\n{}\n    }}\n}}",
         ctor_assignments.join("\n"),
-        snake_name = to_snake_case(&error.name),
     );
 
     let impl_block = format!("#[napi]\nimpl {struct_name} {{\n{}\n}}", methods.join("\n\n"));
 
-    format!("{struct_def}\n\n{from_fn}\n\n{impl_block}")
+    format!("{struct_def}\n\n{code_fn}\n\n{from_fn}\n\n{impl_block}")
 }
 
 /// Generate a Magnus-wrapped Rust struct that stores the whitelisted error

@@ -9,7 +9,7 @@
 //! and the per-field init expression the variant-constructor emitter splices in
 //! ([`coercible_field_init`]). The variant-constructor emission itself lives in [`super::enums`].
 
-use super::enums::{collect_variant_constructors, enum_has_data_variants};
+use super::enums::{collect_all_variant_constructors, enum_has_data_variants};
 use crate::core::ir::{EnumDef, TypeRef};
 use ahash::AHashSet;
 
@@ -180,7 +180,7 @@ pub fn data_enum_needs_dto_coercion(enum_def: &EnumDef, coercible_dto_names: &AH
     if !enum_has_data_variants(enum_def) {
         return false;
     }
-    collect_variant_constructors(enum_def).iter().any(|c| {
+    collect_all_variant_constructors(enum_def).iter().any(|c| {
         c.params
             .iter()
             .any(|p| coercible_payload(&p.ty, coercible_dto_names).is_some())

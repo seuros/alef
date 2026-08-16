@@ -1,12 +1,10 @@
 /// Convert a `{{ rust_path }}` error to a NAPI error.
+///
+/// The stable numeric error code is deliberately not interpolated into this message —
+/// `napi::Error` has no per-variant subclass to attach it to. When available, it is exposed
+/// as a structured `code` field on the `*Info` companion class instead (see
+/// `gen_napi_error_class`), never smuggled into human-facing text. (~keep)
 #[allow(dead_code)]
 fn {{ fn_name }}(e: {{ rust_path }}) -> napi::Error {
-    let msg = e.to_string();
-    #[allow(unreachable_patterns)]
-    match &e {
-{%- for pattern, variant_code in variants %}
-        {{ pattern }} => napi::Error::new(napi::Status::GenericFailure, format!("[{{ variant_code }}] {}", msg)),
-{%- endfor %}
-        _ => napi::Error::new(napi::Status::GenericFailure, msg),
-    }
+    napi::Error::new(napi::Status::GenericFailure, e.to_string())
 }
