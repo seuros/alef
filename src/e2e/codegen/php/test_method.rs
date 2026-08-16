@@ -122,6 +122,7 @@ pub(super) fn render_test_method(
         call_config,
         e2e_config.effective_result_fields(call_config),
     );
+    let (ir_reachable_fields, ir_known_excluded_fields) = FieldResolver::ir_field_sets(type_defs);
     let call_field_resolver = FieldResolver::new_with_php_getters(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
@@ -131,7 +132,8 @@ pub(super) fn render_test_method(
         &HashMap::new(),
         per_call_getter_map,
     )
-    .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone());
+    .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
+    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields);
     let field_resolver = &call_field_resolver;
     let call_overrides = call_config.overrides.get(lang);
     let has_override = call_overrides.is_some_and(|o| o.function.is_some());
@@ -389,6 +391,7 @@ pub(super) fn render_test_method(
     // leaves assertions_body with no executable statement. Fall back to a
     // real assertion instead of a vacuous test body.
     apply_vacuous_assertion_fallback(&mut assertions_body, is_streaming, expects_error, result_var);
+    crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, "php", &fixture.id);
 
     let error_test_body = if expects_error {
         render_error_test_body(
@@ -500,6 +503,24 @@ mod vacuous_assertion_fallback_tests {
         assert_eq!(
             body, original,
             "a fixture with a real assertion must not get an extra fallback line"
+        );
+    }
+
+    /// Regression test for alef task #81: PHP's "skipped: field not available" comment
+    /// text must survive as the exact marker the shared `fail_on_unavailable_field_markers`
+    /// mechanism (src/e2e/codegen/mod.rs) matches on, so arming
+    /// `ALEF_E2E_STRICT_FIELD_AVAILABILITY` turns a dropped field assertion into a
+    /// generation-time failure. The arming behaviour itself is proven in `mod.rs`'s
+    /// `unavailable_field_marker_tests`; this test only pins the marker text PHP emits.
+    #[test]
+    fn skip_comment_carries_the_marker_the_strict_mode_matches_on() {
+        let mut body = "        // skipped: field 'nonexistent_field' not available on result type\n".to_string();
+        // Confirm the comment alone doesn't get treated as a real assertion.
+        assert!(!has_executable_assertion(&body));
+        apply_vacuous_assertion_fallback(&mut body, false, false, "result");
+        assert!(
+            body.contains("field 'nonexistent_field' not available on result type"),
+            "got: {body}"
         );
     }
 }

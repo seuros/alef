@@ -43,6 +43,21 @@ pub struct FieldResolver {
     /// codegen. Used to aggregate every readable text accessor on a `Vec<T>`
     /// element type for `contains` assertions.
     pub(super) dart_first_class_map: DartFirstClassMap,
+    /// Field names reachable through the emitted binding on at least one IR type in
+    /// the crate — i.e. present in `TypeDef.fields` and not `binding_excluded` there
+    /// (the exact predicate `crate::codegen::shared::binding_fields` uses to decide
+    /// which fields a backend like pyo3 actually attaches `#[pyo3(get)]` to). Populated
+    /// via `with_ir_fields`; empty when a codegen call site hasn't wired IR data in, in
+    /// which case field-availability checks fall back entirely to the hand-maintained
+    /// `result_fields` config.
+    pub(super) ir_reachable_fields: HashSet<String>,
+    /// Field names that exist on some IR type but are `binding_excluded` there (no
+    /// accessor is emitted for them in any generated binding), and are NOT reachable
+    /// on any other type. Lets `is_valid_for_result` tell "this is a real struct field
+    /// the IR knows is unexposed" apart from "the IR has never heard of this name"
+    /// (e.g. a virtual namespace prefix or a synthetic/derived assertion field), so
+    /// `result_fields` only gets the final say on names the IR is silent on.
+    pub(super) ir_known_excluded_fields: HashSet<String>,
 }
 
 /// Per-type PHP getter classification + chain-resolution metadata.

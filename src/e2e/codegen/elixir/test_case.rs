@@ -105,6 +105,7 @@ pub(super) fn render_test_case(
         &fixture.input,
     );
     // Build per-call field resolver using the effective field sets for this call.
+    let (ir_reachable_fields, ir_known_excluded_fields) = FieldResolver::ir_field_sets(type_defs);
     let call_field_resolver = FieldResolver::new(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
@@ -112,7 +113,8 @@ pub(super) fn render_test_case(
         e2e_config.effective_fields_array(call_config),
         &std::collections::HashSet::new(),
     )
-    .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone());
+    .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
+    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields);
     let field_resolver = &call_field_resolver;
     let lang = "elixir";
     let call_overrides = call_config.overrides.get(lang);
@@ -548,9 +550,10 @@ pub(super) fn render_test_case(
         let _ = writeln!(out, "      {collect}");
     }
 
+    let mut assertions_body = String::new();
     for assertion in &fixture.assertions {
         render_assertion(
-            out,
+            &mut assertions_body,
             assertion,
             if is_streaming { chunks_var } else { &result_var },
             field_resolver,
@@ -561,6 +564,8 @@ pub(super) fn render_test_case(
             is_streaming,
         );
     }
+    crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, "elixir", &fixture.id);
+    out.push_str(&assertions_body);
 
     if needs_api_key_skip {
         let _ = writeln!(out, "      end");

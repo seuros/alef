@@ -701,6 +701,80 @@ mod tests {
         out
     }
 
+    /// IR-oracle wiring regression (alef task #64): a field that is IR-reachable
+    /// (present, non-`binding_excluded`, on some IR type) but missing from the
+    /// hand-maintained `result_fields` config must still render a real assertion,
+    /// not a "skipped: field not available" comment — `ruby/spec_file.rs` now
+    /// threads `FieldResolver::ir_field_sets(type_defs)` into `with_ir_fields`. ~keep
+    #[test]
+    fn ruby_ir_reachable_field_absent_from_result_fields_is_not_skipped() {
+        let reachable: HashSet<String> = ["data".to_string()].into_iter().collect();
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .with_ir_fields(reachable, HashSet::new());
+        let assertion = Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("data".to_string()),
+            value: Some(serde_json::Value::String("hello".to_string())),
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            false,
+            &E2eConfig::default(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        assert!(!out.contains("skipped"), "got: {out}");
+    }
+
+    /// The negative-control half of the same regression: `internal_diagnostics`
+    /// represents a field carrying `#[doc(hidden)]` or `#[cfg_attr(alef,
+    /// alef(skip))]` in the real struct (a genuine `binding_excluded` field) —
+    /// NOT `#[serde(skip)]`, which alone does not exclude a field from the
+    /// binding surface. Even though it is listed in `result_fields` (a stale/
+    /// wrong config entry), the IR must still win and reject it. ~keep
+    #[test]
+    fn ruby_ir_excluded_field_present_in_result_fields_is_still_skipped() {
+        let result_fields: HashSet<String> = ["internal_diagnostics".to_string()].into_iter().collect();
+        let excluded: HashSet<String> = ["internal_diagnostics".to_string()].into_iter().collect();
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &result_fields,
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .with_ir_fields(HashSet::new(), excluded);
+        let assertion = Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("internal_diagnostics".to_string()),
+            value: Some(serde_json::Value::String("hello".to_string())),
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            false,
+            &E2eConfig::default(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        assert!(out.contains("skipped"), "got: {out}");
+    }
+
     /// ~keep Ruby normalized BOTH sides, which is symmetric and so never produced an
     /// unsatisfiable assertion — but it also made a genuine trailing-whitespace regression
     /// invisible in Ruby while every other backend compares exactly.

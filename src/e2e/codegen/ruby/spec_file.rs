@@ -92,13 +92,15 @@ pub(super) fn render_spec_file(
                 &fixture.input,
             );
             // Build per-call field resolver using the effective field sets for this call.
+            let (ir_reachable_fields, ir_known_excluded_fields) = FieldResolver::ir_field_sets(type_defs);
             let fixture_call_resolver = FieldResolver::new(
                 e2e_config.effective_fields(fixture_call),
                 e2e_config.effective_fields_optional(fixture_call),
                 e2e_config.effective_result_fields(fixture_call),
                 e2e_config.effective_fields_array(fixture_call),
                 &std::collections::HashSet::new(),
-            );
+            )
+            .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields);
             let field_resolver = &fixture_call_resolver;
             let fixture_call_overrides = fixture_call.overrides.get("ruby");
             let raw_function_name = fixture_call_overrides

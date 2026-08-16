@@ -92,6 +92,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
     let call_recipe =
         crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call_config, type_defs);
     // Build per-call field resolver using the effective field sets for this call.
+    let (ir_reachable_fields, ir_known_excluded_fields) = FieldResolver::ir_field_sets(type_defs);
     let call_field_resolver = FieldResolver::new_with_dart_first_class(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
@@ -102,7 +103,8 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
         dart_first_class_map.clone(),
     )
     .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
-    .with_dart_root_type(super::dart_call_result_type(call_config).or_else(|| dart_first_class_map.root_type.clone()));
+    .with_dart_root_type(super::dart_call_result_type(call_config).or_else(|| dart_first_class_map.root_type.clone()))
+    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields);
     let field_resolver = &call_field_resolver;
     let enum_fields_base = e2e_config.effective_fields_enum(call_config);
 
@@ -361,10 +363,14 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                     args.push(emission.arg_expr);
                     continue;
                 }
-                let emission = crate::e2e::codegen::TestBackendEmission::unimplemented("dart");
-                setup_lines.push(format!("// {}", emission.arg_expr));
-                args.push("null".to_string());
-                continue;
+                // A `test_backend` arg fills a non-null Dart stub parameter — there is
+                // no compilable value to fall back to when the trait isn't configured.
+                // Fail generation loudly instead of silently splicing a `null`
+                // argument with a comment where the real stub belongs. ~keep
+                panic!(
+                    "Dart e2e generator: fixture `{}` declares a `test_backend` arg `{}` with trait `{:?}`, but either it has no `trait_name` configured or no `[[crates.trait_bridges]]` entry matches it; cannot generate a Dart stub without a resolvable trait bridge",
+                    fixture.id, arg_def.name, arg_def.trait_name
+                );
             }
             _ => {}
         }
@@ -1077,6 +1083,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
         {
             let _ = writeln!(out, "    expect({result_var}, isNotNull);");
         }
+        crate::e2e::codegen::fail_on_unavailable_field_markers(&out[assertions_start..], "dart", &fixture.id);
     }
 
     let _ = writeln!(out, "  }});");

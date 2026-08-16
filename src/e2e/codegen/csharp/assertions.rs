@@ -958,6 +958,96 @@ pub(super) fn render_assertion(
 }
 
 #[cfg(test)]
+mod ir_oracle_wiring_tests {
+    use super::render_assertion;
+    use crate::e2e::field_access::FieldResolver;
+    use crate::e2e::fixture::Assertion;
+    use std::collections::{HashMap, HashSet};
+
+    fn make_assertion(field: &str, value: &str) -> Assertion {
+        Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some(field.to_string()),
+            value: Some(serde_json::Value::String(value.to_string())),
+            ..Default::default()
+        }
+    }
+
+    /// IR-oracle wiring regression (alef task #64): a field that is IR-reachable
+    /// (present, non-`binding_excluded`, on some IR type) but missing from the
+    /// hand-maintained `result_fields` config must still render a real assertion,
+    /// not a "skipped: field not available" comment — `csharp.rs`'s per-call
+    /// resolver construction now threads `FieldResolver::ir_field_sets(type_defs)`
+    /// into `with_ir_fields`. ~keep
+    #[test]
+    fn csharp_ir_reachable_field_absent_from_result_fields_is_not_skipped() {
+        let reachable: HashSet<String> = ["data".to_string()].into_iter().collect();
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .with_ir_fields(reachable, HashSet::new());
+        let assertion = make_assertion("data", "hello");
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            "SampleClass",
+            "SampleException",
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        assert!(!out.contains("skipped"), "got: {out}");
+    }
+
+    /// The negative-control half of the same regression: `internal_diagnostics`
+    /// represents a field carrying `#[doc(hidden)]` or `#[cfg_attr(alef,
+    /// alef(skip))]` in the real struct (a genuine `binding_excluded` field) —
+    /// NOT `#[serde(skip)]`, which alone does not exclude a field from the
+    /// binding surface. Even though it is listed in `result_fields` (a stale/
+    /// wrong config entry), the IR must still win and reject it. ~keep
+    #[test]
+    fn csharp_ir_excluded_field_present_in_result_fields_is_still_skipped() {
+        let result_fields: HashSet<String> = ["internal_diagnostics".to_string()].into_iter().collect();
+        let excluded: HashSet<String> = ["internal_diagnostics".to_string()].into_iter().collect();
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &result_fields,
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .with_ir_fields(HashSet::new(), excluded);
+        let assertion = make_assertion("internal_diagnostics", "hello");
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            "SampleClass",
+            "SampleException",
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        assert!(out.contains("skipped"), "got: {out}");
+    }
+}
+
+#[cfg(test)]
 mod not_error_vacuous_test_fix_tests {
     use super::render_assertion;
     use crate::e2e::field_access::FieldResolver;

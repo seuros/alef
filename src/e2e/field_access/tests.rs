@@ -735,6 +735,289 @@ fn is_valid_for_result_rejects_unknown_field_even_after_namespace_strip() {
     );
 }
 
+/// Fallback-path regression test for alef task #64, for codegen call sites that
+/// haven't wired IR data in via `with_ir_fields` (see the IR-oracle tests
+/// further down for the primary fix — this covers the remaining config-only
+/// fallback `is_valid_for_result` uses when the IR can't answer). A field can
+/// be wired into `fields_optional` (needed to render a correct
+/// `Optional[...]`-aware accessor) while `result_fields` — a separate,
+/// hand-maintained allowlist — is never updated to also list its root; without
+/// IR data this fallback still rescues it rather than silently downgrading
+/// every assertion on it to a "not available on result type" comment. ~keep
+#[test]
+fn is_valid_for_result_accepts_field_known_via_fields_optional_but_missing_from_result_fields() {
+    let result_fields: HashSet<String> = ["content", "metadata"].iter().map(|s| s.to_string()).collect();
+    let optional_fields: HashSet<String> = ["data"].iter().map(|s| s.to_string()).collect();
+    let r = FieldResolver::new(
+        &HashMap::new(),
+        &optional_fields,
+        &result_fields,
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+    assert!(
+        r.is_valid_for_result("data"),
+        "data is configured as optional elsewhere, so result_fields omitting its root must not hide it"
+    );
+}
+
+/// Same rescue, via `fields_array` and `fields` (an explicit alias) instead of
+/// `fields_optional` — any sibling map referencing the field is sufficient
+/// proof the config author knows it exists.
+#[test]
+fn is_valid_for_result_accepts_field_known_via_array_or_alias_config() {
+    let result_fields: HashSet<String> = ["content"].iter().map(|s| s.to_string()).collect();
+    let array_fields: HashSet<String> = ["items"].iter().map(|s| s.to_string()).collect();
+    let r = FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &result_fields,
+        &array_fields,
+        &HashSet::new(),
+    );
+    assert!(
+        r.is_valid_for_result("items"),
+        "items is configured as an array field, so result_fields omitting it must not hide it"
+    );
+
+    let mut aliases = HashMap::new();
+    aliases.insert("summary_text".to_string(), "summary".to_string());
+    let r = FieldResolver::new(
+        &aliases,
+        &HashSet::new(),
+        &result_fields,
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+    assert!(
+        r.is_valid_for_result("summary_text"),
+        "summary_text has an explicit alias, so result_fields omitting it must not hide it"
+    );
+}
+
+/// Negative control for the two fixes above: a field that is genuinely
+/// unavailable (no binding accessor at all — e.g. it would carry `#[doc(hidden)]`
+/// or `#[cfg_attr(alef, alef(skip))]` in the real struct) has nothing configured
+/// for it anywhere — it is absent from `result_fields` AND from every sibling
+/// map — and must still be rejected. This resolver has no IR data wired in
+/// (`with_ir_fields` was never called), so the check exercises the config-only
+/// fallback path, not the IR oracle. Without this control, a fix that makes
+/// `is_valid_for_result` vacuously permissive would pass unnoticed, and every
+/// unavailable field would start generating assertions against attributes that
+/// don't exist at runtime.
+///
+/// Deliberately NOT modeling `#[serde(skip)]`: that attribute alone does not
+/// exclude a field from the binding surface (see
+/// `is_valid_for_result_ir_reachable_field_survives_serde_skip_without_exclusion_marker`
+/// below) — `binding_excluded` is driven only by an explicit exclusion marker. ~keep
+#[test]
+fn is_valid_for_result_still_rejects_field_unknown_to_every_config_map() {
+    let result_fields: HashSet<String> = ["content", "metadata"].iter().map(|s| s.to_string()).collect();
+    let optional_fields: HashSet<String> = ["data"].iter().map(|s| s.to_string()).collect();
+    let array_fields: HashSet<String> = ["items"].iter().map(|s| s.to_string()).collect();
+    let r = FieldResolver::new(
+        &HashMap::new(),
+        &optional_fields,
+        &result_fields,
+        &array_fields,
+        &HashSet::new(),
+    );
+    assert!(
+        !r.is_valid_for_result("internal_diagnostics"),
+        "internal_diagnostics has no getter and is not configured in any sibling map, so it must stay rejected"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// IR-oracle tests (`with_ir_fields` / `ir_field_sets`)
+// ---------------------------------------------------------------------------
+
+/// IR-oracle regression test for alef task #64. A live config was found to be
+/// wrong about field availability in BOTH directions at once: `data` (a real,
+/// non-excluded struct field exposed via `#[pyo3(get)]`) was missing from
+/// `result_fields`, while a genuinely `binding_excluded` field (one carrying
+/// `#[doc(hidden)]` or `#[cfg_attr(alef, alef(skip))]` in the real struct) was
+/// still listed as available in the very same `result_fields`. Neither
+/// direction is fixable by trusting `result_fields` harder — once IR data is
+/// wired in via `with_ir_fields`, IR reachability must rescue `data` even
+/// though `result_fields` never lists it. ~keep
+#[test]
+fn is_valid_for_result_ir_reachable_field_overrides_missing_result_fields_entry() {
+    let result_fields: HashSet<String> = ["content", "metadata"].iter().map(|s| s.to_string()).collect();
+    let reachable: HashSet<String> = ["data"].iter().map(|s| s.to_string()).collect();
+    let r = FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &result_fields,
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+    .with_ir_fields(reachable, HashSet::new());
+    assert!(
+        r.is_valid_for_result("data"),
+        "data is IR-reachable (a real, non-excluded struct field), so a missing result_fields entry must not hide it"
+    );
+}
+
+/// The other half of the same regression, and the more important control: a
+/// field present in `result_fields` but proven `binding_excluded` in the IR
+/// (it would carry `#[doc(hidden)]` or `#[cfg_attr(alef, alef(skip))]` in the
+/// real struct — NOT `#[serde(skip)]`, which alone does not set
+/// `binding_excluded`; see the sibling test below) must still be rejected —
+/// the IR overrides `result_fields` in this direction too, not just the rescue
+/// direction above. Without this control, a fix that only ever widens
+/// availability would leave `result_fields` free to keep asserting against
+/// attributes that don't exist at runtime, which is the mirror-image bug to
+/// the one being fixed. ~keep
+#[test]
+fn is_valid_for_result_ir_excluded_field_overrides_stale_result_fields_entry() {
+    let result_fields: HashSet<String> = ["content", "internal_diagnostics"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let excluded: HashSet<String> = ["internal_diagnostics"].iter().map(|s| s.to_string()).collect();
+    let r = FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &result_fields,
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+    .with_ir_fields(HashSet::new(), excluded);
+    assert!(
+        !r.is_valid_for_result("internal_diagnostics"),
+        "internal_diagnostics is IR-known-excluded (no getter emitted in any binding), so result_fields listing it \
+         must not make it pass"
+    );
+}
+
+/// Pins the exact mix-up a human reviewer made about this regression: a field
+/// carrying `#[serde(skip)]` in source but no `#[doc(hidden)]` /
+/// `#[cfg_attr(alef, alef(skip))]` exclusion marker is NOT `binding_excluded`
+/// — `#[serde(skip)]` only affects the wire format, not binding visibility (a
+/// field can carry `#[pyo3(get)]` and `#[serde(skip)]` at the same time). If
+/// `is_valid_for_result` or `ir_field_sets` were ever "optimised" to treat
+/// `#[serde(skip)]` as an exclusion signal, this must fail: the field is
+/// IR-reachable and absent from `result_fields`, so it must still be valid —
+/// identical in shape to the `data` rescue above, asserted here under a name
+/// that makes the serde distinction explicit. ~keep
+#[test]
+fn is_valid_for_result_ir_reachable_field_survives_serde_skip_without_exclusion_marker() {
+    let result_fields: HashSet<String> = ["content", "metadata"].iter().map(|s| s.to_string()).collect();
+    // Represents a field with `#[serde(skip)]` and no exclusion marker: it is
+    // NOT `binding_excluded`, so it belongs in `reachable`, not `excluded`.
+    let reachable: HashSet<String> = ["symbols"].iter().map(|s| s.to_string()).collect();
+    let r = FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &result_fields,
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+    .with_ir_fields(reachable, HashSet::new());
+    assert!(
+        r.is_valid_for_result("symbols"),
+        "symbols carries #[serde(skip)] but no exclusion marker, so it is IR-reachable and a missing \
+         result_fields entry must not hide it"
+    );
+}
+
+/// A field the IR has never heard of (no type in the crate declares it at
+/// all) falls through to the config-only checks unaffected by IR data being
+/// present for other fields — `with_ir_fields` must not turn into a second,
+/// competing allowlist that shadows `result_fields` for names it never saw.
+#[test]
+fn is_valid_for_result_falls_back_to_result_fields_for_names_ir_never_saw() {
+    let result_fields: HashSet<String> = ["content", "browser_used"].iter().map(|s| s.to_string()).collect();
+    let reachable: HashSet<String> = ["data"].iter().map(|s| s.to_string()).collect();
+    let r = FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &result_fields,
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+    .with_ir_fields(reachable, HashSet::new());
+    assert!(
+        r.is_valid_for_result("browser_used"),
+        "browser_used is unknown to the IR but listed in result_fields, so the config-only fallback must still accept it"
+    );
+    assert!(
+        !r.is_valid_for_result("nonexistent_field"),
+        "nonexistent_field is unknown to the IR and absent from result_fields, so it must still be rejected"
+    );
+}
+
+/// `ir_field_sets` must classify fields by the same predicate
+/// `crate::codegen::shared::binding_fields` uses: not-`binding_excluded` is
+/// reachable, `binding_excluded` is known-excluded, and the two sets are
+/// disjoint for a single type.
+#[test]
+fn ir_field_sets_classifies_reachable_and_excluded_fields() {
+    use crate::core::ir::{FieldDef, TypeDef};
+
+    let type_def = TypeDef {
+        name: "ProcessResult".to_string(),
+        fields: vec![
+            FieldDef {
+                name: "data".to_string(),
+                ..FieldDef::default()
+            },
+            FieldDef {
+                // Represents a field carrying `#[doc(hidden)]` or
+                // `#[cfg_attr(alef, alef(skip))]` — the actual `binding_excluded`
+                // triggers. NOT modeling `#[serde(skip)]`, which alone does not
+                // exclude a field from the binding surface. ~keep
+                name: "internal_diagnostics".to_string(),
+                binding_excluded: true,
+                ..FieldDef::default()
+            },
+        ],
+        ..TypeDef::default()
+    };
+
+    let (reachable, excluded) = FieldResolver::ir_field_sets(&[type_def]);
+    assert!(reachable.contains("data"));
+    assert!(excluded.contains("internal_diagnostics"));
+    assert!(
+        !reachable.contains("internal_diagnostics"),
+        "excluded field must not also be reachable"
+    );
+    assert!(!excluded.contains("data"), "reachable field must not also be excluded");
+}
+
+/// A field name that is `binding_excluded` on one type but reachable on
+/// another (e.g. two result-shaped types happen to share a field name) must
+/// end up reachable overall — `ir_field_sets` can't pin a bare name to one
+/// exact type, so it resolves the ambiguity permissively rather than hiding a
+/// field that really is available on the type actually in play.
+#[test]
+fn ir_field_sets_reachable_on_any_type_wins_over_excluded_on_another() {
+    use crate::core::ir::{FieldDef, TypeDef};
+
+    let excluded_on_a = TypeDef {
+        name: "A".to_string(),
+        fields: vec![FieldDef {
+            name: "shared".to_string(),
+            binding_excluded: true,
+            ..FieldDef::default()
+        }],
+        ..TypeDef::default()
+    };
+    let reachable_on_b = TypeDef {
+        name: "B".to_string(),
+        fields: vec![FieldDef {
+            name: "shared".to_string(),
+            ..FieldDef::default()
+        }],
+        ..TypeDef::default()
+    };
+
+    let (reachable, excluded) = FieldResolver::ir_field_sets(&[excluded_on_a, reachable_on_b]);
+    assert!(reachable.contains("shared"));
+    assert!(!excluded.contains("shared"));
+}
+
 /// Accessor for `browser.browser_used` should produce the stripped path
 /// (i.e. `result.browser_used` for Python, not `result.browser.browser_used`).
 #[test]

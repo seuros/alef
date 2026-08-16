@@ -31,6 +31,8 @@ impl FieldResolver {
             swift_first_class_map: SwiftFirstClassMap::default(),
             dart_first_class_map: DartFirstClassMap::default(),
             display_as_text_fields: HashSet::new(),
+            ir_reachable_fields: HashSet::new(),
+            ir_known_excluded_fields: HashSet::new(),
         }
     }
 
@@ -59,6 +61,8 @@ impl FieldResolver {
             swift_first_class_map: SwiftFirstClassMap::default(),
             dart_first_class_map: DartFirstClassMap::default(),
             display_as_text_fields: HashSet::new(),
+            ir_reachable_fields: HashSet::new(),
+            ir_known_excluded_fields: HashSet::new(),
         }
     }
 
@@ -97,6 +101,8 @@ impl FieldResolver {
             swift_first_class_map: SwiftFirstClassMap::default(),
             dart_first_class_map: DartFirstClassMap::default(),
             display_as_text_fields: HashSet::new(),
+            ir_reachable_fields: HashSet::new(),
+            ir_known_excluded_fields: HashSet::new(),
         }
     }
 
@@ -141,6 +147,8 @@ impl FieldResolver {
             swift_first_class_map,
             dart_first_class_map: DartFirstClassMap::default(),
             display_as_text_fields: HashSet::new(),
+            ir_reachable_fields: HashSet::new(),
+            ir_known_excluded_fields: HashSet::new(),
         }
     }
 
@@ -169,6 +177,8 @@ impl FieldResolver {
             swift_first_class_map: SwiftFirstClassMap::default(),
             dart_first_class_map,
             display_as_text_fields: HashSet::new(),
+            ir_reachable_fields: HashSet::new(),
+            ir_known_excluded_fields: HashSet::new(),
         }
     }
 
@@ -194,6 +204,71 @@ impl FieldResolver {
     pub fn with_enum_fields(mut self, fields: HashSet<String>) -> Self {
         self.enum_fields = fields;
         self
+    }
+
+    /// Return a clone of this resolver with IR-derived field-reachability data set.
+    ///
+    /// `reachable`/`excluded` come from [`Self::ir_field_sets`]. Once set, they become
+    /// the primary source of truth for [`Self::is_valid_for_result`]: the hand-maintained
+    /// `result_fields` config only gets the final say on field names the IR has never
+    /// heard of (virtual namespace prefixes, synthetic/derived assertion fields, and the
+    /// like) — see that method's doc comment for why config alone cannot be trusted.
+    pub fn with_ir_fields(mut self, reachable: HashSet<String>, excluded: HashSet<String>) -> Self {
+        self.ir_reachable_fields = reachable;
+        self.ir_known_excluded_fields = excluded;
+        self.warn_on_result_fields_contradicting_ir();
+        self
+    }
+
+    /// Emit a `WARN` event for every `result_fields` entry the IR marks
+    /// `binding_excluded` — every case where `is_valid_for_result` now rejects the field
+    /// despite the config claiming it's available.
+    ///
+    /// `result_fields` is meant to *select* which available fields a call asserts on, not
+    /// to *declare* availability (the IR does that); an entry landing here is always a
+    /// config bug, not a legitimate declaration. This must be loud, not silent — a
+    /// shipped config was found with exactly this shape (a `#[serde(skip)]`, no-getter
+    /// field still listed in `result_fields`) sitting undetected because nothing surfaced
+    /// the contradiction. ~keep
+    fn warn_on_result_fields_contradicting_ir(&self) {
+        for field in &self.result_fields {
+            if self.ir_known_excluded_fields.contains(field) {
+                tracing::warn!(
+                    field = %field,
+                    "e2e config result_fields lists a field the IR marks binding_excluded (no \
+                     accessor is emitted in any generated binding); the IR now overrides \
+                     result_fields for this field and it will be treated as unavailable — fix \
+                     or remove this result_fields entry"
+                );
+            }
+        }
+    }
+
+    /// Compute the reachable/excluded field-name sets from a crate's IR type
+    /// definitions, for use with [`Self::with_ir_fields`].
+    ///
+    /// A field name is "reachable" if it is present, and not `binding_excluded`, on ANY
+    /// type in `type_defs` — the exact predicate `crate::codegen::shared::binding_fields`
+    /// uses to decide which struct fields a backend (pyo3, napi, go, …) actually attaches
+    /// a real accessor to (e.g. `#[pyo3(get)]`). A field name is "known excluded" if it
+    /// appears on some type but IS `binding_excluded` there, and is not reachable on any
+    /// other type — reachable-on-any-type wins, since a bare field name can't be pinned to
+    /// one exact result type here (callers only reach for this data when they can't
+    /// already do that resolution themselves). ~keep
+    pub fn ir_field_sets(type_defs: &[crate::core::ir::TypeDef]) -> (HashSet<String>, HashSet<String>) {
+        let mut reachable = HashSet::new();
+        let mut excluded = HashSet::new();
+        for type_def in type_defs {
+            for field in &type_def.fields {
+                if field.binding_excluded {
+                    excluded.insert(field.name.clone());
+                } else {
+                    reachable.insert(field.name.clone());
+                }
+            }
+        }
+        excluded.retain(|f| !reachable.contains(f));
+        (reachable, excluded)
     }
 
     /// Returns `true` when `fixture_field` (or its resolved alias, or a
@@ -342,19 +417,46 @@ impl FieldResolver {
 
     /// Check whether a fixture field path is valid for the configured result type.
     ///
-    /// Returns `true` when the resolved path's first segment is in `result_fields`,
-    /// or when the path uses a single virtual namespace prefix (e.g. `"browser."`,
-    /// `"interaction."`) whose second segment IS in `result_fields`.  The namespace
-    /// prefix pattern is common in route-array fixtures where authors group
-    /// related assertion fields under an organizational prefix that does not
-    /// correspond to a real struct field on the return type.
+    /// The IR is authoritative whenever it recognizes the resolved path's first segment
+    /// as a real struct field name (populated via [`Self::with_ir_fields`]):
+    /// reachable-through-the-binding wins regardless of `result_fields`, and
+    /// known-excluded-from-the-binding loses regardless of `result_fields`. `result_fields`
+    /// is a hand-maintained allowlist with no automatic connection to the real struct, and
+    /// it can drift in BOTH directions at once — one shipped config was found with a field
+    /// genuinely exposed via a real getter missing from `result_fields` (silently
+    /// downgrading every assertion on it to a "not available" comment) *and*, in the same
+    /// list, a field that carries `#[serde(skip)]` with no getter still listed as
+    /// available (which would generate a passing-looking assertion against an attribute
+    /// that doesn't exist at runtime). Neither direction is fixable by trusting
+    /// `result_fields` harder or consulting more hand-maintained config — the IR is the
+    /// only signal here that isn't itself hand-maintained per fixture. ~keep
+    ///
+    /// When the IR has never heard of the first segment at all — a virtual namespace
+    /// prefix like `"browser."`, a streaming/synthetic pseudo-field, or simply because the
+    /// codegen call site hasn't wired IR data in via `with_ir_fields` — this falls back to
+    /// the config-only check: the resolved path's first segment is in `result_fields`, or
+    /// the path uses a single virtual namespace prefix (e.g. `"browser."`, `"interaction."`)
+    /// whose second segment IS in `result_fields`, or (last resort, see
+    /// [`Self::is_known_via_sibling_field_config`]) another per-field config map already
+    /// references the field even though `result_fields` doesn't.
     pub fn is_valid_for_result(&self, fixture_field: &str) -> bool {
-        if self.result_fields.is_empty() {
-            return true;
-        }
         let resolved = self.resolve(fixture_field);
         let first_segment = resolved.split('.').next().unwrap_or(resolved);
         let first_segment = first_segment.split('[').next().unwrap_or(first_segment);
+
+        // IR oracle: only consulted for names the IR actually recognizes. A name it has
+        // never seen (namespace prefixes, synthetic fields, or simply no IR data wired up)
+        // falls through to the config-only checks below unaffected.
+        if self.ir_reachable_fields.contains(first_segment) {
+            return true;
+        }
+        if self.ir_known_excluded_fields.contains(first_segment) {
+            return false;
+        }
+
+        if self.result_fields.is_empty() {
+            return true;
+        }
         if self.result_fields.contains(first_segment) {
             return true;
         }
@@ -366,9 +468,31 @@ impl FieldResolver {
         if let Some(suffix) = self.namespace_stripped_path(resolved) {
             let suffix_first = suffix.split('.').next().unwrap_or(suffix);
             let suffix_first = suffix_first.split('[').next().unwrap_or(suffix_first);
-            return self.result_fields.contains(suffix_first);
+            if self.result_fields.contains(suffix_first) {
+                return true;
+            }
         }
-        false
+        self.is_known_via_sibling_field_config(fixture_field, resolved)
+    }
+
+    /// True when `fixture_field` (or its alias-resolved path) is referenced by one of
+    /// the other per-field config maps (`fields`, `fields_optional`, `fields_array`,
+    /// `fields_method_calls`) even though it is absent from `result_fields`.
+    ///
+    /// Last-resort fallback for codegen call sites that haven't wired IR data in via
+    /// `with_ir_fields` (`is_valid_for_result` only reaches this once the IR has had, and
+    /// declined, the chance to answer). These maps only make sense to populate for a field
+    /// that genuinely exists on the result type — an alias target, an optionality flag, an
+    /// array marker, or a method-call accessor all require the config author to have
+    /// looked at the real struct. A field that is truly unavailable (no getter generated
+    /// for it at all) has nothing to configure here, so this check does not make
+    /// unavailable fields pass — it only rescues fields the config demonstrably already
+    /// knows about. ~keep
+    fn is_known_via_sibling_field_config(&self, fixture_field: &str, resolved: &str) -> bool {
+        self.aliases.contains_key(fixture_field)
+            || self.is_optional_direct(resolved)
+            || self.is_array(resolved)
+            || self.method_calls.contains(resolved)
     }
 
     /// If `path`'s first dot-separated segment is NOT in `result_fields` and

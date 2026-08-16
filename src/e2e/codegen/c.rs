@@ -408,13 +408,15 @@ fn render_c_snippet(
         .get("c")
         .and_then(|value| value.header.clone())
         .unwrap_or_else(|| config.ffi_header_name());
+    let (ir_reachable_fields, ir_known_excluded_fields) = FieldResolver::ir_field_sets(type_defs);
     let resolver = FieldResolver::new(
         e2e_config.effective_fields(call),
         e2e_config.effective_fields_optional(call),
         e2e_config.effective_result_fields(call),
         e2e_config.effective_fields_array(call),
         e2e_config.effective_fields_method_calls(call),
-    );
+    )
+    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields);
     test_function::render_snippet_body(test_function::SnippetContext {
         fixture,
         e2e_config,
@@ -721,16 +723,23 @@ fn render_test_file(
         // Without this, `pages.length` on a `crawl` call would skip because the
         // default `result_fields` (configured for the top-level `scrape` call)
         // does not contain `pages`.
+        let (ir_reachable_fields, ir_known_excluded_fields) = FieldResolver::ir_field_sets(type_defs);
         let per_call_field_resolver = FieldResolver::new(
             e2e_config.effective_fields(fixture_call),
             e2e_config.effective_fields_optional(fixture_call),
             e2e_config.effective_result_fields(fixture_call),
             e2e_config.effective_fields_array(fixture_call),
             &std::collections::HashSet::new(),
-        );
+        )
+        .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields);
         let _ = field_resolver; // top-level resolver retained for compat; per-call wins
         let field_resolver = &per_call_field_resolver;
 
+        // `out` accumulates every fixture's rendered function in this file, so the
+        // strict-availability scan below must only look at the text THIS fixture's
+        // own render appended — scanning the whole buffer would misattribute an
+        // earlier fixture's skip comment to this fixture's id.
+        let fixture_start = out.len();
         render_test_function(
             &mut out,
             fixture,
@@ -755,6 +764,7 @@ fn render_test_file(
             type_defs,
             false,
         );
+        crate::e2e::codegen::fail_on_unavailable_field_markers(&out[fixture_start..], "c", &fixture.id);
         if i + 1 < fixtures.len() {
             let _ = writeln!(out);
         }

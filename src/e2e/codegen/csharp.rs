@@ -473,6 +473,7 @@ fn render_test_method(
     // Without this, fields like `pages.length` on a `crawl` call would be skipped
     // because the default `result_fields` (configured for the top-level `scrape`
     // call) does not contain `pages`.
+    let (ir_reachable_fields, ir_known_excluded_fields) = FieldResolver::ir_field_sets(type_defs);
     let call_field_resolver = FieldResolver::new(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
@@ -480,7 +481,8 @@ fn render_test_method(
         e2e_config.effective_fields_array(call_config),
         &std::collections::HashSet::new(),
     )
-    .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone());
+    .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
+    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields);
     let field_resolver = &call_field_resolver;
     let lang = "csharp";
     let cs_overrides = call_config.overrides.get(lang);
@@ -868,6 +870,7 @@ fn render_test_method(
             );
         }
     }
+    crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, "csharp", &fixture.id);
 
     let declared_error_check = declared_error_value_check(crate::e2e::codegen::declared_error_value(fixture));
 

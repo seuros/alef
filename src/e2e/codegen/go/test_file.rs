@@ -178,13 +178,15 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], context: G
         if cc.args.iter().any(|arg| arg.arg_type == "mock_url_list") {
             return true;
         }
+        let (ir_reachable_fields, ir_known_excluded_fields) = FieldResolver::ir_field_sets(type_defs);
         let per_call_resolver = FieldResolver::new(
             e2e_config.effective_fields(cc),
             e2e_config.effective_fields_optional(cc),
             e2e_config.effective_result_fields(cc),
             e2e_config.effective_fields_array(cc),
             &std::collections::HashSet::new(),
-        );
+        )
+        .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields);
         f.assertions.iter().any(|a| {
             let type_needs_strings = if a.assertion_type == "equals" {
                 a.value.as_ref().is_some_and(|v| v.is_string())

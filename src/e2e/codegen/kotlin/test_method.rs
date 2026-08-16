@@ -40,6 +40,7 @@ pub(super) fn render_test_method(
         &fixture.input,
     );
     // Build per-call field resolver using the effective field sets for this call.
+    let (ir_reachable_fields, ir_known_excluded_fields) = FieldResolver::ir_field_sets(type_defs);
     let call_field_resolver = FieldResolver::new(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
@@ -47,7 +48,8 @@ pub(super) fn render_test_method(
         e2e_config.effective_fields_array(call_config),
         &HashSet::new(),
     )
-    .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone());
+    .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
+    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields);
     let field_resolver = &call_field_resolver;
     let enum_fields = e2e_config.effective_fields_enum(call_config);
     let json_scalar_fields = e2e_config.effective_fields_json_scalar(call_config);
@@ -788,12 +790,11 @@ mod tests {
 
     /// Pin: when a `test_backend` arg's trait is registered in
     /// `config.trait_bridges`, kotlin_android must always splice a concrete stub
-    /// instantiation into the call's argument list, never the
-    /// `TestBackendEmission::unimplemented(...)` sentinel comment. This is the
-    /// regression the round's `test_backend` bug class targets — if someone
-    /// reintroduces an unchecked `parts.push(emission.arg_expr)` (or
-    /// `kotlin_android::emit_test_backend` regresses to a stub that can return
-    /// `unimplemented(...)`), this test fails.
+    /// instantiation into the call's argument list, never an unimplemented-emitter
+    /// comment. This is the regression the round's `test_backend` bug class
+    /// targets — if someone reintroduces an unchecked `parts.push(emission.arg_expr)`
+    /// (or `kotlin_android::emit_test_backend` regresses to a stub that can no
+    /// longer guarantee a real emission), this test fails.
     #[test]
     fn kotlin_android_test_backend_arg_renders_concrete_stub_instantiation() {
         use crate::core::config::TraitBridgeConfig;

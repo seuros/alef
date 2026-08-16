@@ -32,8 +32,8 @@ pub(super) fn render_assertion(
                     "is_false" => {
                         let _ = writeln!(out, "  expect_false({pred})");
                     }
-                    _ => {
-                        let _ = writeln!(out, "  # skipped: unsupported assertion type on synthetic field '{f}'");
+                    other => {
+                        panic!("R e2e generator: unsupported assertion type '{other}' on synthetic field '{f}'");
                     }
                 }
                 return;
@@ -49,8 +49,8 @@ pub(super) fn render_assertion(
                     "is_false" => {
                         let _ = writeln!(out, "  expect_false({pred})");
                     }
-                    _ => {
-                        let _ = writeln!(out, "  # skipped: unsupported assertion type on synthetic field '{f}'");
+                    other => {
+                        panic!("R e2e generator: unsupported assertion type '{other}' on synthetic field '{f}'");
                     }
                 }
                 return;
@@ -69,8 +69,8 @@ pub(super) fn render_assertion(
                     "is_false" => {
                         let _ = writeln!(out, "  expect_true({pred_false})");
                     }
-                    _ => {
-                        let _ = writeln!(out, "  # skipped: unsupported assertion type on synthetic field '{f}'");
+                    other => {
+                        panic!("R e2e generator: unsupported assertion type '{other}' on synthetic field '{f}'");
                     }
                 }
                 return;
@@ -91,8 +91,8 @@ pub(super) fn render_assertion(
                     "is_false" => {
                         let _ = writeln!(out, "  expect_true({pred_false})");
                     }
-                    _ => {
-                        let _ = writeln!(out, "  # skipped: unsupported assertion type on synthetic field '{f}'");
+                    other => {
+                        panic!("R e2e generator: unsupported assertion type '{other}' on synthetic field '{f}'");
                     }
                 }
                 return;
@@ -126,11 +126,8 @@ pub(super) fn render_assertion(
                     "is_empty" => {
                         let _ = writeln!(out, "  expect_equal(length({parsed}), 0)");
                     }
-                    _ => {
-                        let _ = writeln!(
-                            out,
-                            "  # skipped: unsupported assertion type on synthetic field 'embeddings'"
-                        );
+                    other => {
+                        panic!("R e2e generator: unsupported assertion type '{other}' on synthetic field 'embeddings'");
                     }
                 }
                 return;
@@ -150,10 +147,9 @@ pub(super) fn render_assertion(
                             let _ = writeln!(out, "  expect_gt({expr}, {r_val})");
                         }
                     }
-                    _ => {
-                        let _ = writeln!(
-                            out,
-                            "  # skipped: unsupported assertion type on synthetic field 'embedding_dimensions'"
+                    other => {
+                        panic!(
+                            "R e2e generator: unsupported assertion type '{other}' on synthetic field 'embedding_dimensions'"
                         );
                     }
                 }
@@ -182,8 +178,8 @@ pub(super) fn render_assertion(
                     "is_false" => {
                         let _ = writeln!(out, "  expect_false({pred})");
                     }
-                    _ => {
-                        let _ = writeln!(out, "  # skipped: unsupported assertion type on synthetic field '{f}'");
+                    other => {
+                        panic!("R e2e generator: unsupported assertion type '{other}' on synthetic field '{f}'");
                     }
                 }
                 return;
@@ -526,6 +522,76 @@ mod tests {
     use serde_json::json;
     use std::collections::{HashMap, HashSet};
 
+    /// IR-oracle wiring regression (alef task #64): a field that is IR-reachable
+    /// (present, non-`binding_excluded`, on some IR type) but missing from the
+    /// hand-maintained `result_fields` config must still render a real assertion,
+    /// not a "skipped: field not available" comment — `r/test_case.rs` now
+    /// threads `FieldResolver::ir_field_sets(type_defs)` into `with_ir_fields`. ~keep
+    #[test]
+    fn r_ir_reachable_field_absent_from_result_fields_is_not_skipped() {
+        let reachable: HashSet<String> = ["data".to_string()].into_iter().collect();
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .with_ir_fields(reachable, HashSet::new());
+        let enum_fields = HashMap::new();
+        let assertion = Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("data".to_string()),
+            value: Some(json!("hello")),
+            ..Assertion::default()
+        };
+        let context = RAssertionContext {
+            field_resolver: &resolver,
+            result_is_simple: false,
+            result_is_bytes: false,
+            assert_enum_fields: &enum_fields,
+        };
+        let mut out = String::new();
+        render_assertion(&mut out, &assertion, "result", &context);
+        assert!(!out.contains("skipped"), "got: {out}");
+    }
+
+    /// The negative-control half of the same regression: `internal_diagnostics`
+    /// represents a field carrying `#[doc(hidden)]` or `#[cfg_attr(alef,
+    /// alef(skip))]` in the real struct (a genuine `binding_excluded` field) —
+    /// NOT `#[serde(skip)]`, which alone does not exclude a field from the
+    /// binding surface. Even though it is listed in `result_fields` (a stale/
+    /// wrong config entry), the IR must still win and reject it. ~keep
+    #[test]
+    fn r_ir_excluded_field_present_in_result_fields_is_still_skipped() {
+        let result_fields: HashSet<String> = ["internal_diagnostics".to_string()].into_iter().collect();
+        let excluded: HashSet<String> = ["internal_diagnostics".to_string()].into_iter().collect();
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &result_fields,
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .with_ir_fields(HashSet::new(), excluded);
+        let enum_fields = HashMap::new();
+        let assertion = Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("internal_diagnostics".to_string()),
+            value: Some(json!("hello")),
+            ..Assertion::default()
+        };
+        let context = RAssertionContext {
+            field_resolver: &resolver,
+            result_is_simple: false,
+            result_is_bytes: false,
+            assert_enum_fields: &enum_fields,
+        };
+        let mut out = String::new();
+        render_assertion(&mut out, &assertion, "result", &context);
+        assert!(out.contains("skipped"), "got: {out}");
+    }
+
     #[test]
     fn render_simple_result_contains_assertion() {
         let resolver = FieldResolver::new(
@@ -581,5 +647,129 @@ mod tests {
         render_assertion(&mut out, &assertion, "result", &context);
 
         assert_eq!(out, "  expect_true(length(result) >= 4)\n");
+    }
+
+    fn resolver() -> FieldResolver {
+        FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+    }
+
+    #[test]
+    #[should_panic(expected = "unsupported assertion type 'bogus_type' on synthetic field 'chunks_have_content'")]
+    fn r_synthetic_chunks_unsupported_type_fails_loudly() {
+        let field_resolver = resolver();
+        let enum_fields = HashMap::new();
+        let assertion = Assertion {
+            assertion_type: "bogus_type".to_string(),
+            field: Some("chunks_have_content".to_string()),
+            ..Assertion::default()
+        };
+        let context = RAssertionContext {
+            field_resolver: &field_resolver,
+            result_is_simple: false,
+            result_is_bytes: false,
+            assert_enum_fields: &enum_fields,
+        };
+        let mut out = String::new();
+
+        render_assertion(&mut out, &assertion, "result", &context);
+    }
+
+    #[test]
+    fn r_synthetic_chunks_supported_type_renders_assertion() {
+        let field_resolver = resolver();
+        let enum_fields = HashMap::new();
+        let assertion = Assertion {
+            assertion_type: "is_true".to_string(),
+            field: Some("chunks_have_content".to_string()),
+            ..Assertion::default()
+        };
+        let context = RAssertionContext {
+            field_resolver: &field_resolver,
+            result_is_simple: false,
+            result_is_bytes: false,
+            assert_enum_fields: &enum_fields,
+        };
+        let mut out = String::new();
+
+        render_assertion(&mut out, &assertion, "result", &context);
+
+        assert_eq!(
+            out,
+            "  expect_true(all(sapply(result$chunks %||% list(), function(c) nchar(c$content) > 0)))\n"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "unsupported assertion type 'bogus_type' on synthetic field 'embeddings'")]
+    fn r_synthetic_embeddings_unsupported_type_fails_loudly() {
+        let field_resolver = resolver();
+        let enum_fields = HashMap::new();
+        let assertion = Assertion {
+            assertion_type: "bogus_type".to_string(),
+            field: Some("embeddings".to_string()),
+            ..Assertion::default()
+        };
+        let context = RAssertionContext {
+            field_resolver: &field_resolver,
+            result_is_simple: false,
+            result_is_bytes: false,
+            assert_enum_fields: &enum_fields,
+        };
+        let mut out = String::new();
+
+        render_assertion(&mut out, &assertion, "result", &context);
+    }
+
+    #[test]
+    #[should_panic(expected = "unsupported assertion type 'bogus_type' on synthetic field 'embedding_dimensions'")]
+    fn r_synthetic_embedding_dimensions_unsupported_type_fails_loudly() {
+        let field_resolver = resolver();
+        let enum_fields = HashMap::new();
+        let assertion = Assertion {
+            assertion_type: "bogus_type".to_string(),
+            field: Some("embedding_dimensions".to_string()),
+            ..Assertion::default()
+        };
+        let context = RAssertionContext {
+            field_resolver: &field_resolver,
+            result_is_simple: false,
+            result_is_bytes: false,
+            assert_enum_fields: &enum_fields,
+        };
+        let mut out = String::new();
+
+        render_assertion(&mut out, &assertion, "result", &context);
+    }
+
+    #[test]
+    fn r_synthetic_embedding_dimensions_supported_type_renders_assertion() {
+        let field_resolver = resolver();
+        let enum_fields = HashMap::new();
+        let assertion = Assertion {
+            assertion_type: "greater_than".to_string(),
+            field: Some("embedding_dimensions".to_string()),
+            value: Some(json!(10)),
+            ..Assertion::default()
+        };
+        let context = RAssertionContext {
+            field_resolver: &field_resolver,
+            result_is_simple: false,
+            result_is_bytes: false,
+            assert_enum_fields: &enum_fields,
+        };
+        let mut out = String::new();
+
+        render_assertion(&mut out, &assertion, "result", &context);
+
+        assert_eq!(
+            out,
+            "  expect_gt((if (length(result) == 0) 0L else length(result[[1]])), 10)\n"
+        );
     }
 }

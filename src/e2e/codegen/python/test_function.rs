@@ -50,13 +50,15 @@ pub(super) fn render_test_function(
     // Fallback: if the resolved call has required args missing from input,
     // try to find a better-matching call from the named calls.
     call_config = super::super::select_best_matching_call(call_config, e2e_config, fixture);
+    let (ir_reachable_fields, ir_known_excluded_fields) = FieldResolver::ir_field_sets(type_defs);
     let call_field_resolver = FieldResolver::new(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
         e2e_config.effective_result_fields(call_config),
         e2e_config.effective_fields_array(call_config),
         &std::collections::HashSet::new(),
-    );
+    )
+    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields);
     let field_resolver = &call_field_resolver;
     let function_name = resolve_function_name_for_call(call_config);
     let result_var = &call_config.result_var;

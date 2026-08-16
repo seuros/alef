@@ -155,6 +155,7 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
         &fixture.tags,
         &fixture.input,
     );
+    let (ir_reachable_fields, ir_known_excluded_fields) = FieldResolver::ir_field_sets(type_defs);
     let call_field_resolver = FieldResolver::new(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
@@ -162,7 +163,8 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
         e2e_config.effective_fields_array(call_config),
         &std::collections::HashSet::new(),
     )
-    .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone());
+    .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
+    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields);
     let field_resolver = &call_field_resolver;
     let lang = "go";
     let overrides = call_config.overrides.get(lang);
@@ -575,6 +577,12 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
         .filter_map(|a| a.field.as_deref())
         .collect();
 
+    // `out` accumulates every fixture's rendered function in this file (see the
+    // caller in `test_file.rs`), so the strict-availability scan below must only
+    // look at the text this fixture's own assertion loop appends — scanning the
+    // whole buffer would misattribute an earlier fixture's skip comment to this
+    // fixture's id.
+    let assertions_start = out.len();
     for assertion in &fixture.assertions {
         if let Some(f) = &assertion.field
             && !f.is_empty()
@@ -672,6 +680,7 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
             streaming_item_type,
         );
     }
+    crate::e2e::codegen::fail_on_unavailable_field_markers(&out[assertions_start..], "go", &fixture.id);
 
     emit_trait_bridge_cleanup(out, fixture, base_function_name, import_alias);
     let _ = writeln!(out, "}}");

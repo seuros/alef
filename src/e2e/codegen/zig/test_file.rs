@@ -124,13 +124,15 @@ fn render_test_fn(
         &fixture.tags,
         &fixture.input,
     );
+    let (ir_reachable_fields, ir_known_excluded_fields) = FieldResolver::ir_field_sets(type_defs);
     let call_field_resolver = FieldResolver::new(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
         e2e_config.effective_result_fields(call_config),
         e2e_config.effective_fields_array(call_config),
         e2e_config.effective_fields_method_calls(call_config),
-    );
+    )
+    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields);
     let field_resolver = &call_field_resolver;
     let enum_fields = e2e_config.effective_fields_enum(call_config);
     let lang = "zig";
@@ -486,9 +488,12 @@ fn render_test_fn(
                     let _ = writeln!(out, "    defer _parsed.deinit();");
                     let _ = writeln!(out, "    const {result_var} = &_parsed.value;");
                 }
+                let mut assertions_body = String::new();
                 for assertion in &fixture.assertions {
-                    render_json_assertion(out, assertion, result_var, field_resolver, true);
+                    render_json_assertion(&mut assertions_body, assertion, result_var, field_resolver, true);
                 }
+                crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, "zig", &fixture.id);
+                out.push_str(&assertions_body);
             } else {
                 // JSON struct path: parse result JSON and access fields dynamically.
                 let _ = writeln!(
@@ -529,9 +534,12 @@ fn render_test_fn(
                     );
                     let _ = writeln!(out, "    defer _parsed.deinit();");
                     let _ = writeln!(out, "    const {result_var} = &_parsed.value;");
+                    let mut assertions_body = String::new();
                     for assertion in &fixture.assertions {
-                        render_json_assertion(out, assertion, result_var, field_resolver, false);
+                        render_json_assertion(&mut assertions_body, assertion, result_var, field_resolver, false);
                     }
+                    crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, "zig", &fixture.id);
+                    out.push_str(&assertions_body);
                 } else {
                     let _ = writeln!(out, "    std.debug.print(\"{{s}}\\n\", .{{_result_json}});");
                 }
@@ -542,9 +550,10 @@ fn render_test_fn(
                 out,
                 "    const {result_var} = {try_kw}{call_prefix}.{function_name}({args_str});"
             );
+            let mut assertions_body = String::new();
             for assertion in &fixture.assertions {
                 render_assertion(
-                    out,
+                    &mut assertions_body,
                     assertion,
                     result_var,
                     field_resolver,
@@ -553,6 +562,8 @@ fn render_test_fn(
                     result_is_simple,
                 );
             }
+            crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, "zig", &fixture.id);
+            out.push_str(&assertions_body);
         } else if call_returns_error_union {
             let _ = writeln!(out, "    _ = try {call_prefix}.{function_name}({args_str});");
         } else {

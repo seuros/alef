@@ -38,11 +38,8 @@ pub(super) fn render_assertion(
                     "is_false" => {
                         let _ = writeln!(out, "      refute {pred}");
                     }
-                    _ => {
-                        let _ = writeln!(
-                            out,
-                            "      # skipped: unsupported assertion type on synthetic field '{f}'"
-                        );
+                    other => {
+                        panic!("Elixir e2e generator: unsupported assertion type '{other}' on synthetic field '{f}'");
                     }
                 }
                 return;
@@ -58,11 +55,8 @@ pub(super) fn render_assertion(
                     "is_false" => {
                         let _ = writeln!(out, "      refute {pred}");
                     }
-                    _ => {
-                        let _ = writeln!(
-                            out,
-                            "      # skipped: unsupported assertion type on synthetic field '{f}'"
-                        );
+                    other => {
+                        panic!("Elixir e2e generator: unsupported assertion type '{other}' on synthetic field '{f}'");
                     }
                 }
                 return;
@@ -78,11 +72,8 @@ pub(super) fn render_assertion(
                     "is_false" => {
                         let _ = writeln!(out, "      refute {pred}");
                     }
-                    _ => {
-                        let _ = writeln!(
-                            out,
-                            "      # skipped: unsupported assertion type on synthetic field '{f}'"
-                        );
+                    other => {
+                        panic!("Elixir e2e generator: unsupported assertion type '{other}' on synthetic field '{f}'");
                     }
                 }
                 return;
@@ -101,11 +92,8 @@ pub(super) fn render_assertion(
                     "is_false" => {
                         let _ = writeln!(out, "      refute ({expr})");
                     }
-                    _ => {
-                        let _ = writeln!(
-                            out,
-                            "      # skipped: unsupported assertion type on synthetic field '{f}'"
-                        );
+                    other => {
+                        panic!("Elixir e2e generator: unsupported assertion type '{other}' on synthetic field '{f}'");
                     }
                 }
                 return;
@@ -130,10 +118,9 @@ pub(super) fn render_assertion(
                     "is_empty" => {
                         let _ = writeln!(out, "      assert {result_var} == []");
                     }
-                    _ => {
-                        let _ = writeln!(
-                            out,
-                            "      # skipped: unsupported assertion type on synthetic field 'embeddings'"
+                    other => {
+                        panic!(
+                            "Elixir e2e generator: unsupported assertion type '{other}' on synthetic field 'embeddings'"
                         );
                     }
                 }
@@ -154,10 +141,9 @@ pub(super) fn render_assertion(
                             let _ = writeln!(out, "      assert {expr} > {ex_val}");
                         }
                     }
-                    _ => {
-                        let _ = writeln!(
-                            out,
-                            "      # skipped: unsupported assertion type on synthetic field 'embedding_dimensions'"
+                    other => {
+                        panic!(
+                            "Elixir e2e generator: unsupported assertion type '{other}' on synthetic field 'embedding_dimensions'"
                         );
                     }
                 }
@@ -188,11 +174,8 @@ pub(super) fn render_assertion(
                     "is_false" => {
                         let _ = writeln!(out, "      refute {pred}");
                     }
-                    _ => {
-                        let _ = writeln!(
-                            out,
-                            "      # skipped: unsupported assertion type on synthetic field '{f}'"
-                        );
+                    other => {
+                        panic!("Elixir e2e generator: unsupported assertion type '{other}' on synthetic field '{f}'");
                     }
                 }
                 return;
@@ -260,12 +243,8 @@ pub(super) fn render_assertion(
                         let _ = writeln!(out, "      assert String.contains?({expr}, \"{escaped}\")");
                     }
                 }
-                _ => {
-                    let _ = writeln!(
-                        out,
-                        "      # streaming field '{f}': assertion type '{}' not rendered",
-                        assertion.assertion_type
-                    );
+                other => {
+                    panic!("Elixir e2e generator: unsupported assertion type '{other}' on synthetic field '{f}'");
                 }
             }
         }
@@ -629,6 +608,82 @@ mod tests {
         )
     }
 
+    /// IR-oracle wiring regression (alef task #64): a field that is IR-reachable
+    /// (present, non-`binding_excluded`, on some IR type) but missing from the
+    /// hand-maintained `result_fields` config must still render a real assertion,
+    /// not a "skipped: field not available" comment — `elixir/test_case.rs` now
+    /// threads `FieldResolver::ir_field_sets(type_defs)` into `with_ir_fields`. ~keep
+    #[test]
+    fn elixir_ir_reachable_field_absent_from_result_fields_is_not_skipped() {
+        let reachable: HashSet<String> = ["data".to_string()].into_iter().collect();
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .with_ir_fields(reachable, HashSet::new());
+        let assertion = Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("data".to_string()),
+            value: Some(serde_json::Value::String("hello".to_string())),
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            "Sample",
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            false,
+        );
+        assert!(!out.contains("skipped"), "got: {out}");
+    }
+
+    /// The negative-control half of the same regression: `internal_diagnostics`
+    /// represents a field carrying `#[doc(hidden)]` or `#[cfg_attr(alef,
+    /// alef(skip))]` in the real struct (a genuine `binding_excluded` field) —
+    /// NOT `#[serde(skip)]`, which alone does not exclude a field from the
+    /// binding surface. Even though it is listed in `result_fields` (a stale/
+    /// wrong config entry), the IR must still win and reject it. ~keep
+    #[test]
+    fn elixir_ir_excluded_field_present_in_result_fields_is_still_skipped() {
+        let result_fields: HashSet<String> = ["internal_diagnostics".to_string()].into_iter().collect();
+        let excluded: HashSet<String> = ["internal_diagnostics".to_string()].into_iter().collect();
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &result_fields,
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .with_ir_fields(HashSet::new(), excluded);
+        let assertion = Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("internal_diagnostics".to_string()),
+            value: Some(serde_json::Value::String("hello".to_string())),
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            "Sample",
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            false,
+        );
+        assert!(out.contains("skipped"), "got: {out}");
+    }
+
     /// Regression test for a one-sided-trim bug: `String.trim/1` wrapped the actual value
     /// while the fixture `expected` literal was emitted verbatim. Fixture expectations may
     /// legitimately end in `\n`, so trimming only one side made those assertions impossible
@@ -904,5 +959,147 @@ mod tests {
             true,
         );
         assert_eq!(out, "      refute is_nil(chunks)\n");
+    }
+
+    #[test]
+    #[should_panic(expected = "unsupported assertion type 'bogus_type' on synthetic field 'chunks_have_content'")]
+    fn elixir_synthetic_field_unsupported_type_fails_loudly() {
+        let resolver = empty_resolver();
+        let assertion = Assertion {
+            assertion_type: "bogus_type".to_string(),
+            field: Some("chunks_have_content".to_string()),
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            "Sample",
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            false,
+        );
+    }
+
+    #[test]
+    fn elixir_synthetic_chunks_have_content_supported_type_renders_assertion() {
+        let resolver = empty_resolver();
+        let assertion = Assertion {
+            assertion_type: "is_true".to_string(),
+            field: Some("chunks_have_content".to_string()),
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            "Sample",
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            false,
+        );
+        assert_eq!(
+            out,
+            "      assert Enum.all?(result.chunks || [], fn c -> c.content != nil and c.content != \"\" end)\n"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "unsupported assertion type 'bogus_type' on synthetic field 'embeddings'")]
+    fn elixir_synthetic_embeddings_unsupported_type_fails_loudly() {
+        let resolver = empty_resolver();
+        let assertion = Assertion {
+            assertion_type: "bogus_type".to_string(),
+            field: Some("embeddings".to_string()),
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            "Sample",
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            false,
+        );
+    }
+
+    #[test]
+    fn elixir_synthetic_embeddings_supported_type_renders_assertion() {
+        let resolver = empty_resolver();
+        let assertion = Assertion {
+            assertion_type: "not_empty".to_string(),
+            field: Some("embeddings".to_string()),
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            "Sample",
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            false,
+        );
+        assert_eq!(out, "      assert result != []\n");
+    }
+
+    #[test]
+    #[should_panic(expected = "unsupported assertion type 'bogus_type' on synthetic field 'chunks'")]
+    fn elixir_streaming_virtual_field_unsupported_type_fails_loudly() {
+        let resolver = empty_resolver();
+        let assertion = Assertion {
+            assertion_type: "bogus_type".to_string(),
+            field: Some("chunks".to_string()),
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            "Sample",
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            true,
+        );
+    }
+
+    #[test]
+    fn elixir_streaming_virtual_field_supported_type_renders_assertion() {
+        let resolver = empty_resolver();
+        let assertion = Assertion {
+            assertion_type: "count_min".to_string(),
+            field: Some("chunks".to_string()),
+            value: Some(serde_json::Value::from(1)),
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            "Sample",
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            true,
+        );
+        assert_eq!(out, "      assert length(result) >= 1\n");
     }
 }

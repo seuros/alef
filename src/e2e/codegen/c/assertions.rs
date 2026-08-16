@@ -324,9 +324,9 @@ pub(super) fn build_args_string_c(
         if arg.arg_type == "test_backend" {
             // A `test_backend` arg fills a C trait-bridge vtable-pointer parameter.
             // There is no fixture-supplied value to fall back to: an unregistered
-            // trait has no vtable to point at, and `TestBackendEmission::unimplemented(...)`'s
-            // `arg_expr` is a bare `/* ... */` comment, never an expression — splicing
-            // either into `parts` emits C that cannot compile. Unlike a non-null-typed
+            // trait has no vtable to point at, and `emit_test_backend` panics rather
+            // than hand back a placeholder for `parts` to splice in as an
+            // expression — splicing either would emit C that cannot compile. Unlike a non-null-typed
             // target language, C's type system would happily accept a `NULL` fallback
             // here too (any pointer type admits it), so the compiler can't be relied on
             // to catch a bad default the way it can elsewhere — fail loud here instead,
@@ -359,13 +359,10 @@ pub(super) fn build_args_string_c(
                     }
                 }
             }
+            // `emit_test_backend` panics rather than return a placeholder when the C
+            // test-backend emitter is unimplemented — see `TestBackendEmission`'s and
+            // `trait_bridge_snippet::emit_test_backend`'s doc comments. ~keep
             let emission = crate::e2e::codegen::emit_test_backend("c", trait_bridge, &methods, fixture, &[]);
-            if emission.is_unimplemented() {
-                panic!(
-                    "C e2e generator: fixture `{}` requires a C test_backend stub for trait `{trait_name}` (arg `{}`), but the C test-backend emitter is unimplemented; refusing to emit a call with a comment where the argument belongs",
-                    fixture.id, arg.name
-                );
-            }
             parts.push(emission.arg_expr);
             continue;
         }
@@ -960,6 +957,81 @@ mod tests {
     use super::*;
     use crate::core::ir::{FieldDef, TypeDef, TypeRef};
 
+    /// IR-oracle wiring regression (alef task #64): a field that is IR-reachable
+    /// (present, non-`binding_excluded`, on some IR type) but missing from the
+    /// hand-maintained `result_fields` config must still render a real assertion,
+    /// not a "skipped: field not available" comment — `c.rs` (both the main-suite
+    /// and snippet resolver construction sites) now threads
+    /// `FieldResolver::ir_field_sets(type_defs)` into `with_ir_fields`. ~keep
+    #[test]
+    fn c_ir_reachable_field_absent_from_result_fields_is_not_skipped() {
+        let reachable: HashSet<String> = ["data".to_string()].into_iter().collect();
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .with_ir_fields(reachable, HashSet::new());
+        let assertion = Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("data".to_string()),
+            value: Some(serde_json::Value::String("hello".to_string())),
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            "sample",
+            &resolver,
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        assert!(!out.contains("skipped"), "got: {out}");
+    }
+
+    /// The negative-control half of the same regression: `internal_diagnostics`
+    /// represents a field carrying `#[doc(hidden)]` or `#[cfg_attr(alef,
+    /// alef(skip))]` in the real struct (a genuine `binding_excluded` field) —
+    /// NOT `#[serde(skip)]`, which alone does not exclude a field from the
+    /// binding surface. Even though it is listed in `result_fields` (a stale/
+    /// wrong config entry), the IR must still win and reject it. ~keep
+    #[test]
+    fn c_ir_excluded_field_present_in_result_fields_is_still_skipped() {
+        let result_fields: HashSet<String> = ["internal_diagnostics".to_string()].into_iter().collect();
+        let excluded: HashSet<String> = ["internal_diagnostics".to_string()].into_iter().collect();
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &result_fields,
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .with_ir_fields(HashSet::new(), excluded);
+        let assertion = Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("internal_diagnostics".to_string()),
+            value: Some(serde_json::Value::String("hello".to_string())),
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            "sample",
+            &resolver,
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        assert!(out.contains("skipped"), "got: {out}");
+    }
+
     #[test]
     fn nested_optional_handle_type_comes_from_ir_when_config_mapping_is_absent() {
         let types = [
@@ -1020,11 +1092,11 @@ mod tests {
 
     /// Pin: a `test_backend` arg whose trait IS registered still panics today,
     /// because `c::emit_test_backend` (`trait_bridge_snippet.rs`) is unimplemented —
-    /// see its doc comment for why. `build_args_string_c` must refuse to splice the
-    /// `/* test_backend unimplemented for c */` sentinel into the call's argument
-    /// list rather than emit uncompilable C. This is the regression guard: it fails
-    /// if the `is_unimplemented()` check is ever removed and the sentinel comment
-    /// silently reaches the generated call again.
+    /// see its doc comment for why. `emit_test_backend` panics before ever handing
+    /// `build_args_string_c` a value, so there is no sentinel left to accidentally
+    /// splice into the call's argument list. This is the regression guard: it fails
+    /// if that panic is ever replaced with a placeholder return and the call site
+    /// stops checking it.
     #[test]
     #[should_panic(expected = "test-backend emitter is unimplemented")]
     fn registered_test_backend_trait_panics_because_c_backend_is_unimplemented() {

@@ -264,6 +264,11 @@ pub fn render_assertion_with_streaming(
                             out,
                             "    assert!({expr_for_len} >= {n} as usize, \"expected >= {n} chunks\");"
                         );
+                    } else {
+                        panic!(
+                            "Rust e2e generator: streaming field '{f}' assertion 'count_min' requires a numeric value in the fixture, got {:?}",
+                            assertion.value
+                        );
                     }
                 }
                 "count_equals" => {
@@ -279,6 +284,11 @@ pub fn render_assertion_with_streaming(
                             out,
                             "    assert_eq!({expr_for_len}, {n} as usize, \"expected exactly {n} chunks\");"
                         );
+                    } else {
+                        panic!(
+                            "Rust e2e generator: streaming field '{f}' assertion 'count_equals' requires a numeric value in the fixture, got {:?}",
+                            assertion.value
+                        );
                     }
                 }
                 "equals" => {
@@ -288,6 +298,11 @@ pub fn render_assertion_with_streaming(
                     } else if let Some(val) = &assertion.value {
                         let lit = super::assertion_synthetic::numeric_literal(val);
                         let _ = writeln!(out, "    assert_eq!({expr}, {lit});");
+                    } else {
+                        panic!(
+                            "Rust e2e generator: streaming field '{f}' assertion 'equals' requires a string or numeric value in the fixture, got {:?}",
+                            assertion.value
+                        );
                     }
                 }
                 "not_empty" => {
@@ -316,12 +331,22 @@ pub fn render_assertion_with_streaming(
                     if let Some(val) = &assertion.value {
                         let lit = super::assertion_synthetic::numeric_literal(val);
                         let _ = writeln!(out, "    assert!({expr} > {lit}, \"expected > {lit}\");");
+                    } else {
+                        panic!(
+                            "Rust e2e generator: streaming field '{f}' assertion 'greater_than' requires a numeric value in the fixture, got {:?}",
+                            assertion.value
+                        );
                     }
                 }
                 "greater_than_or_equal" => {
                     if let Some(val) = &assertion.value {
                         let lit = super::assertion_synthetic::numeric_literal(val);
                         let _ = writeln!(out, "    assert!({expr} >= {lit}, \"expected >= {lit}\");");
+                    } else {
+                        panic!(
+                            "Rust e2e generator: streaming field '{f}' assertion 'greater_than_or_equal' requires a numeric value in the fixture, got {:?}",
+                            assertion.value
+                        );
                     }
                 }
                 "contains" => {
@@ -331,16 +356,21 @@ pub fn render_assertion_with_streaming(
                             out,
                             "    assert!({expr}.contains(\"{escaped}\"), \"expected to contain: {escaped}\");"
                         );
+                    } else {
+                        panic!(
+                            "Rust e2e generator: streaming field '{f}' assertion 'contains' requires a string value in the fixture, got {:?}",
+                            assertion.value
+                        );
                     }
                 }
-                _ => {
-                    let _ = writeln!(
-                        out,
-                        "    // streaming field '{f}': assertion type '{}' not rendered",
-                        assertion.assertion_type
-                    );
+                other => {
+                    panic!("Rust e2e generator: unsupported assertion type '{other}' on streaming field '{f}'");
                 }
             }
+        } else {
+            panic!(
+                "Rust e2e generator: streaming field '{f}' has no accessor for context (streaming_item_type={streaming_item_type:?}); check the streaming adapter configuration"
+            );
         }
         return;
     }
@@ -703,6 +733,58 @@ mod tests {
             value,
             ..Default::default()
         }
+    }
+
+    /// IR-oracle wiring regression (alef task #64): a field that is IR-reachable
+    /// (present, non-`binding_excluded`, on some IR type) but missing from the
+    /// hand-maintained `result_fields` config must still render a real assertion,
+    /// not a "skipped: field not available" comment — `rust/test_file/test_function.rs`
+    /// now threads `FieldResolver::ir_field_sets(type_defs)` into `with_ir_fields`. ~keep
+    #[test]
+    fn rust_ir_reachable_field_absent_from_result_fields_is_not_skipped() {
+        let reachable: HashSet<String> = ["data".to_string()].into_iter().collect();
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .with_ir_fields(reachable, HashSet::new());
+        let assertion = make_assertion("equals", Some("data"), Some(serde_json::json!("hello")));
+        let mut out = String::new();
+        render_assertion(
+            &mut out, &assertion, "result", "my_mod", "dep", false, &[], &resolver, false, false, false, false,
+            false, None,
+        );
+        assert!(!out.contains("skipped"), "got: {out}");
+    }
+
+    /// The negative-control half of the same regression: `internal_diagnostics`
+    /// represents a field carrying `#[doc(hidden)]` or `#[cfg_attr(alef,
+    /// alef(skip))]` in the real struct (a genuine `binding_excluded` field) —
+    /// NOT `#[serde(skip)]`, which alone does not exclude a field from the
+    /// binding surface. Even though it is listed in `result_fields` (a stale/
+    /// wrong config entry), the IR must still win and reject it. ~keep
+    #[test]
+    fn rust_ir_excluded_field_present_in_result_fields_is_still_skipped() {
+        let result_fields: HashSet<String> = ["internal_diagnostics".to_string()].into_iter().collect();
+        let excluded: HashSet<String> = ["internal_diagnostics".to_string()].into_iter().collect();
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &result_fields,
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .with_ir_fields(HashSet::new(), excluded);
+        let assertion = make_assertion("equals", Some("internal_diagnostics"), Some(serde_json::json!("hello")));
+        let mut out = String::new();
+        render_assertion(
+            &mut out, &assertion, "result", "my_mod", "dep", false, &[], &resolver, false, false, false, false,
+            false, None,
+        );
+        assert!(out.contains("skipped"), "got: {out}");
     }
 
     #[test]
@@ -1213,5 +1295,69 @@ mod tests {
             "got: {output}"
         );
         assert!(!output.contains("link_type.contains"), "got: {output}");
+    }
+
+    #[test]
+    #[should_panic(expected = "streaming field 'chunks' assertion 'count_min' requires a numeric")]
+    fn streaming_count_min_without_value_fails_loudly() {
+        let resolver = empty_resolver();
+        let assertion = make_assertion("count_min", Some("chunks"), None);
+        let mut out = String::new();
+        render_assertion(
+            &mut out, &assertion, "result", "my_mod", "dep", false, &[], &resolver, false, false, false, false,
+            false, None,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "unsupported assertion type 'bogus_type' on streaming field 'chunks'")]
+    fn streaming_assertion_unknown_type_fails_loudly() {
+        let resolver = empty_resolver();
+        let assertion = make_assertion("bogus_type", Some("chunks"), None);
+        let mut out = String::new();
+        render_assertion(
+            &mut out, &assertion, "result", "my_mod", "dep", false, &[], &resolver, false, false, false, false,
+            false, None,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "streaming field 'stream.has_page_event' has no accessor for context")]
+    fn streaming_field_without_accessor_fails_loudly() {
+        let resolver = empty_resolver();
+        // `streaming_item_type: None` makes `accessor_with_streaming_context` return
+        // `None` for event-variant fields (see streaming_assertions/accessors.rs), which
+        // used to fall through to rendering nothing at all. ~keep
+        let assertion = make_assertion("is_true", Some("stream.has_page_event"), None);
+        let mut out = String::new();
+        render_assertion(
+            &mut out, &assertion, "result", "my_mod", "dep", false, &[], &resolver, false, false, false, false,
+            false, None,
+        );
+    }
+
+    #[test]
+    fn streaming_not_empty_still_renders_real_assertion() {
+        let resolver = empty_resolver();
+        let assertion = make_assertion("not_empty", Some("chunks"), None);
+        let mut out = String::new();
+        render_assertion(
+            &mut out, &assertion, "result", "my_mod", "dep", false, &[], &resolver, false, false, false, false,
+            false, None,
+        );
+        assert!(out.contains("assert!"), "got: {out}");
+        assert!(out.contains("expected non-empty"), "got: {out}");
+    }
+
+    #[test]
+    fn streaming_count_min_with_value_still_renders_real_assertion() {
+        let resolver = empty_resolver();
+        let assertion = make_assertion("count_min", Some("chunks"), Some(serde_json::json!(3)));
+        let mut out = String::new();
+        render_assertion(
+            &mut out, &assertion, "result", "my_mod", "dep", false, &[], &resolver, false, false, false, false,
+            false, None,
+        );
+        assert!(out.contains("assert!(chunks.len() >= 3 as usize"), "got: {out}");
     }
 }
