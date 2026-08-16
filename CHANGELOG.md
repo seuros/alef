@@ -20,6 +20,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **bin_cli/verify**: scan every backend's output when collecting `alef:hash:` provenance. `VERIFY_SCAN_EXTENSIONS`
+  omitted five backends outright, so `alef verify` reported those trees clean without ever opening a file in them —
+  a passing verify was evidence of nothing for the languages it silently skipped. Dotfile stamps
+  (`.gitignore`, `.gitattributes`, `.editorconfig`) were unreachable by construction on top of that, since
+  `Path::extension` returns `None` for a name that is entirely a leading-dot stem; they are now matched by filename.
+  The test that should have caught this was itself vacuous — its fixture wrote a stamp line but no hash line, and
+  `collect_alef_hashes` requires both, so the sibling positive control asserted over an empty set. The fixture now
+  emits a real stamped-and-hashed file, and a guard test pins that the walk actually collects what the fixture writes.
+
+- **readme**: honour a configured `output_path`/`output_pattern` on the hardcoded fallback route, not only the
+  templated one. `try_render_configured_readme` returns `None` in five distinct situations — no `template_dir`, a
+  `template_dir` that does not exist, no entry for the language, no legacy YAML entry, or an entry whose template
+  file is absent — and each one discarded the configured path along with the template, because path selection was
+  reachable only from inside the templated route. A configured output path is not a property of a template and
+  survives all five. Both routes now apply one precedence rule; the fallback previously composed its own, and the
+  defect went unnoticed because the derived path usually agrees with the configured one. Agreement was coincidence.
+
+- **backends/php**: emit `from_json` and the flat-field accessors in `.phpstub` output for tagged data enums. The
+  runtime emits `from_json` unconditionally for every such enum plus a readonly property per flat field, while the
+  stub declared neither — six enums in one consumer repo, three in another, two of them rendering as literally
+  empty classes. The stub gate is `is_tagged_data_enum` alone and deliberately *not* the crate-level serde probe
+  used for structs: the flat-enum mirror's serde derives are hardcoded in its template rather than gated, so keying
+  the stub on the probe would reintroduce the same divergence in serde-less crates. Accessors are declared as
+  properties rather than methods because ext-php-rs registers `#[php(getter)] fn get_x` as a property named `x`
+  with no case conversion — the inverse of the struct path, which emits plain methods that land as `getX()`.
+
+- **backends/magnus**: derive the async return annotation from one fact instead of three hand-maintained copies.
+  `function_async_body.rs.jinja` is a single template serving both `has_error` arms and opens with a fallible
+  `Runtime::new()?` in each, so building the tokio runtime makes an async binding fallible regardless of what the
+  Rust signature declares. Two annotation sites disagreed with that: one hand-recomputed a subset of the `has_error`
+  local already in scope four lines above it, dropping the `is_async` and `force_result_for_deser` terms.
+
+- **docs**: stop emitting a Java constructor name the backend never generates. The docs carried two hand-written
+  copies of the keyword-rename table, both wrong — they mapped `default` to `defaultOptions` and had no `new` arm
+  at all, so an opaque type's default constructor reached `assert_valid_identifier` as the Java reserved word `new`
+  and panicked, aborting the docs run. The table is now mirrored from the backend's `safe_java_method_name` with a
+  test pinning the two together, and the duplicate copy is gone. Also corrects a cluster of `~keep` comments that
+  asserted `Language::Jni` was unreachable — it is reachable today, and the files cited as proof say the opposite —
+  and renames five tests whose names claimed the output had once been correct for a backend it never suited.
+
 - **e2e/codegen, backends**: fail at generation time instead of emitting placeholder values that let a generated
   suite pass while testing nothing. Ten sites across eight backends silently fabricated output: the Ruby extension
   returned the literal `"[unimplemented: <fn>]"` (and `0`/`false`) for non-delegable functions, PHP, wasm-bindgen
