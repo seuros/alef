@@ -42,6 +42,19 @@ impl WriteReport {
     pub fn refused_count(&self) -> usize {
         self.refused_paths.len()
     }
+
+    /// Fold another phase's refusals into this report.
+    ///
+    /// A run writes through several independent phases — bindings, service API, type stubs,
+    /// public API, scaffolding — each returning its own report. The refusal summary is a
+    /// run-level fact addressed to an operator, so reporting per phase understates it: the
+    /// reader works the list they were shown and is left with the refusals from every other
+    /// phase, unlisted and with no remaining signal that they exist. Only `refused_paths`
+    /// merges; the changed and expected sets stay per-phase because their counts are reported
+    /// per phase and summing them would double-count a path two phases both intended. ~keep
+    pub fn absorb_refusals(&mut self, other: &WriteReport) {
+        self.refused_paths.extend(other.refused_paths.iter().cloned());
+    }
 }
 
 /// Surface every write the ownership guard declined, naming the remedy.

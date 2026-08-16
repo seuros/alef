@@ -527,8 +527,10 @@ pub fn write_scaffold_files_report(
     crate::scaffold::migrate_wasm_cargo_config_allow_multiple_definition(base_dir)
         .context("failed to migrate pre-existing .cargo/config.toml wasm32 rustflags")?;
 
-    super::write::report_refused_writes(&report);
-
+    // The refusal summary is deliberately NOT emitted here. Scaffolding is one of five writing
+    // phases, and a summary printed by one writer can only ever describe that writer's refusals —
+    // which is how `alef all` came to report the scaffold phase's refusals while silently omitting
+    // every binding-phase one. Callers accumulate with `absorb_refusals` and report once. ~keep
     Ok(report)
 }
 

@@ -57,6 +57,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
             let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
 
+            // Accumulated across every writing phase and reported once: a refusal is a
+            // run-level fact for an operator, and a per-phase summary silently omits every
+            // other phase's frozen files. ~keep
+            let mut refusals = pipeline::WriteReport::default();
             let mut grand_total_generated: usize = 0;
             for resolved_cfg in &crates_to_process {
                 let languages = resolve_languages(resolved_cfg, lang.as_deref())?;
@@ -148,6 +152,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                     let single = vec![(*lang, lang_files.clone())];
                     let report = pipeline::write_files_report(&single, &base_dir)?;
+                    refusals.absorb_refusals(&report);
                     if report.changed_count() > 0 {
                         any_written = true;
                         changed_languages.insert(*lang);
@@ -183,6 +188,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             );
                         }
                         let report = pipeline::write_files_report(&svc_files, &base_dir)?;
+                        refusals.absorb_refusals(&report);
                         let svc_count = report.changed_count();
                         tracing::info!("Generated {svc_count} service API files");
                         if svc_count > 0 {
@@ -246,6 +252,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                         if !api_match || clean {
                             let report = pipeline::write_files_report(&public_api_files, &base_dir)?;
+                            refusals.absorb_refusals(&report);
                             let api_count = report.changed_count();
                             tracing::info!("Generated {api_count} public API files");
                             any_written |= api_count > 0;
@@ -310,6 +317,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                     if !stubs_match || clean {
                         let report = pipeline::write_files_report(&stub_files, &base_dir)?;
+                        refusals.absorb_refusals(&report);
                         let stub_count = report.changed_count();
                         tracing::info!("Generated {stub_count} type stub files");
                         any_written |= stub_count > 0;
@@ -403,6 +411,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                 grand_total_generated += generated_paths.len();
             }
+            pipeline::report_refused_writes(&refusals);
             tracing::info!("Generated {grand_total_generated} files");
             Ok(None)
         }

@@ -22,7 +22,7 @@ pub use scaffold::{
     readme, reconcile_managed_scaffold_manifests, scaffold, write_scaffold_files, write_scaffold_files_report,
     write_scaffold_files_with_overwrite,
 };
-pub use write::report_refused_writes;
+pub use write::{WriteReport, report_refused_writes};
 pub(crate) use write::{
     apply_shebang_chmod, atomic_write, ensure_generated_header, marker_comment_style, provenance_header_for_path,
     stamp_for_adoption,

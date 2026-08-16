@@ -157,6 +157,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             let mut grand_readme_count: usize = 0;
             let mut grand_e2e_count: usize = 0;
             let mut grand_doc_count: usize = 0;
+            // A refusal is a run-level fact addressed to an operator, so it is accumulated across
+            // every writing phase and reported once at the end. Reporting per phase is how this
+            // command came to surface only the scaffold phase's refusals while omitting every
+            // binding-phase one from the summary entirely. ~keep
+            let mut refusals = pipeline::WriteReport::default();
 
             for resolved_cfg in &crates_to_process {
                 let languages = resolve_languages(resolved_cfg, None)?;
@@ -214,6 +219,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                     let single = vec![(*lang, lang_files.clone())];
                     let report = pipeline::write_files_report(&single, &base_dir)?;
+                    refusals.absorb_refusals(&report);
                     binding_count += report.changed_count();
                     if report.changed_count() > 0 {
                         changed_languages.insert(*lang);
@@ -231,6 +237,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             }
                         }
                         let report = pipeline::write_files_report(&svc_files, &base_dir)?;
+                        refusals.absorb_refusals(&report);
                         let svc_count = report.changed_count();
                         tracing::info!("Generated {svc_count} service API files");
                         for (lang, generated) in &svc_files {
@@ -253,7 +260,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 // `--lang`-filtered caller must not call it. ~keep
                 let previous_scaffold_paths = cache::read_scaffold_manifest(&resolved_cfg.name);
                 let scaffold_files = pipeline::scaffold(&api, resolved_cfg, &languages, config_path)?;
-                let scaffold_count = pipeline::write_scaffold_files_with_overwrite(&scaffold_files, &base_dir, clean)?;
+                let scaffold_report = pipeline::write_scaffold_files_report(&scaffold_files, &base_dir, clean)?;
+                refusals.absorb_refusals(&scaffold_report);
+                let scaffold_count = scaffold_report.changed_count();
                 let scaffold_output_paths: Vec<PathBuf> =
                     scaffold_files.iter().map(|file| base_dir.join(&file.path)).collect();
                 for file in scaffold_files.iter().filter(|file| file.carries_alef_marker()) {
@@ -290,6 +299,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                 let stub_count = if !stubs_match || clean {
                     let report = pipeline::write_files_report(&stubs, &base_dir)?;
+                    refusals.absorb_refusals(&report);
                     let count = report.changed_count();
                     let _ = cache::write_generation_hashes(&stubs_cache_key, &stub_hashes);
                     for (lang, generated) in &stubs {
@@ -342,6 +352,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                         if !api_match || clean {
                             let report = pipeline::write_files_report(&public_api_files, &base_dir)?;
+                            refusals.absorb_refusals(&report);
                             api_count = report.changed_count();
                             tracing::info!("Generated {api_count} public API files");
                             let _ = cache::write_generation_hashes(&api_cache_key, &api_hashes);
@@ -594,6 +605,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
             pipeline::install_poly_hooks(&base_dir);
 
+            pipeline::report_refused_writes(&refusals);
             tracing::info!(
                 "Done: {grand_binding_count} binding files, {grand_stub_count} stub files, {grand_api_count} API files, {grand_scaffold_count} scaffold files, {grand_readme_count} readme files, {grand_e2e_count} e2e files, {grand_doc_count} doc files"
             );
