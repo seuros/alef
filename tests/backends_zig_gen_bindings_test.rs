@@ -214,13 +214,20 @@ fn trait_bridge_complex_return_passes_through_as_cstring() {
     let files = ZigBackend.generate_bindings(&api, &make_trait_bridge_config()).unwrap();
     let content = &files[0].content;
 
+    // Commit f42122826 ("fix(zig): close callback string ownership") replaced the
+    // zero-copy `@constCast` pass-through with an owned `dupeZ` copy: the old path
+    // aliased a pointer returned by the Zig callback and handed it to the Rust side,
+    // which then freed it with a mismatched allocator. The value is still treated as
+    // an already-NUL-terminated C string — it is copied into allocator-matched
+    // storage rather than re-serialized as JSON. ~keep
     assert!(
-        content.contains("// String-like return type ([*c]const u8)"),
-        "complex Zig trait-vtable return must take the pass-through path: {content}"
+        content.contains("std.heap.c_allocator.dupeZ(u8, std.mem.span(value))"),
+        "complex Zig trait-vtable return must copy the callback string into \
+         allocator-matched storage rather than alias it: {content}"
     );
     assert!(
-        content.contains("@constCast("),
-        "the already-serialized C string must be handed back directly via @constCast: {content}"
+        content.contains("std.heap.c_allocator.free(std.mem.span(ptr))"),
+        "free_string must release callback strings through the matching allocator: {content}"
     );
     assert!(
         !content.contains("std.json.fmt("),
@@ -1353,8 +1360,11 @@ fn from_json_params_check_null_and_defer_handle_cleanup() {
         content.contains("const config_handle = c.demo_config_from_json(config_z);"),
         "must create a handle via _from_json: {content}"
     );
+    // Handles are a scalar `u64` under the scalar handle ABI (commit
+    // 03109fc52, "fix(zig)!: adopt scalar handle ABI"), so `0` is the "none"
+    // sentinel checked here, not a `null` pointer comparison. ~keep
     assert!(
-        content.contains("if (config_handle == null) return error.InvalidJson;"),
+        content.contains("if (config_handle == 0) return error.InvalidJson;"),
         "must check _from_json handle creation before the primary call: {content}"
     );
     assert!(
@@ -1564,9 +1574,14 @@ type = "CrawlStreamRequest"
         content.contains("pub const CrawlEventStream = struct {"),
         "must emit CrawlEventStream struct type: {content}"
     );
+    // `03109fc52 fix(zig)!: adopt scalar handle ABI` moved every hand-declared handle field
+    // (owner and stream alike) from a pointer to a scalar `u64`, decoupling the zig side from
+    // the FFI crate's pointer-vs-integer width so `find_stamp_disagreement` can catch a stale
+    // pairing instead of silently misbehaving at runtime. This assertion missed that migration;
+    // see the sibling fix in `opaque_handle_with_no_methods_is_emitted` above. ~keep
     assert!(
-        content.contains("_handle: ?*c.DEMOCrawlEventStream,"),
-        "struct must have _handle field with FFI stream type: {content}"
+        content.contains("_handle: u64,"),
+        "stream struct must have a scalar _handle field: {content}"
     );
     assert!(
         content.contains("pub fn next(self: *CrawlEventStream)"),

@@ -256,9 +256,12 @@ fn result_returning_functions_check_last_error_code() {
     );
 }
 
-/// An async function in FFI mode emits an unsupported comment and is skipped.
+/// dart:ffi mode cannot express async functions (no runtime to drive the future across
+/// the C ABI). Generation must fail loudly at generation time naming the offending
+/// function, rather than silently dropping it behind a placeholder comment -- a
+/// generated suite must never pass while testing nothing. ~keep
 #[test]
-fn async_functions_emit_todo_comment_in_ffi_mode() {
+fn async_functions_fail_generation_loudly_in_ffi_mode() {
     let mut f = make_function("stream_data", vec![], TypeRef::Unit, None);
     f.is_async = true;
     let api = ApiSurface {
@@ -267,17 +270,23 @@ fn async_functions_emit_todo_comment_in_ffi_mode() {
     };
     let config = make_config_ffi();
 
-    let files = DartBackend.generate_bindings(&api, &config).unwrap();
-    let ffi_file = files
-        .iter()
-        .find(|f| f.path.to_string_lossy().ends_with("_ffi.dart"))
-        .unwrap();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        DartBackend.generate_bindings(&api, &config)
+    }));
 
+    let err = result.expect_err("generation must panic for an async function in dart:ffi mode");
+    let message = err
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| err.downcast_ref::<&str>().map(ToString::to_string))
+        .expect("panic payload must be a string");
     assert!(
-        ffi_file
-            .content
-            .contains("// Unsupported: async function 'stream_data'"),
-        "missing unsupported comment for async function"
+        message.contains("stream_data"),
+        "panic message must name the offending function. Got:\n{message}"
+    );
+    assert!(
+        message.contains("async"),
+        "panic message must explain why dart:ffi mode rejects it. Got:\n{message}"
     );
 }
 

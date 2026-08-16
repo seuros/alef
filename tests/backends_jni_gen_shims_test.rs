@@ -1685,7 +1685,12 @@ fn empty_api() -> ApiSurface {
 /// declarations.
 #[test]
 fn trait_bridge_emits_jni_shim_symbols() {
-    let api = empty_api();
+    // `register_fn` generation now requires the configured trait to resolve
+    // in the API surface with a non-empty method set (see
+    // `jni_trait_register_shim_panics_when_trait_not_resolvable` in
+    // `src/backends/jni/gen_shims/tests.rs`); an empty API surface panics
+    // rather than emitting a no-op stub, so `text_backend_api()` is used here. ~keep
+    let api = text_backend_api();
     let config = trait_bridge_config(&[]);
     let files = JniBackend.generate_bindings(&api, &config).unwrap();
     assert_eq!(files.len(), 1, "JNI backend emits a single lib.rs");
@@ -1994,20 +1999,16 @@ fn trait_bridge_register_shim_dispatches_to_host_object() {
     );
 }
 
-/// Without the trait definition (excluded from the surface) the shim keeps the
-/// registration-accepting stub so linking still succeeds.
+/// Without the trait definition (excluded from the surface), `register_fn`
+/// cannot be bridged to a real implementation. Generation must fail loudly
+/// rather than emit a `nativeRegisterTextBackend` stub that accepts the JNI
+/// call and silently never invokes `register_fn` (see
+/// `jni_trait_register_shim_panics_when_trait_not_resolvable` in
+/// `src/backends/jni/gen_shims/tests.rs`).
 #[test]
-fn trait_bridge_register_shim_stub_without_trait_def() {
+#[should_panic(expected = "cannot bridge it")]
+fn trait_bridge_register_shim_panics_without_trait_def() {
     let api = empty_api();
     let config = trait_bridge_config(&[]);
-    let files = JniBackend.generate_bindings(&api, &config).unwrap();
-    let content = &files[0].content;
-    assert!(
-        content.contains("nativeRegisterTextBackend"),
-        "register symbol must still exist: {content}"
-    );
-    assert!(
-        !content.contains("pub struct JniTextBackendBridge"),
-        "no bridge without the trait definition: {content}"
-    );
+    JniBackend.generate_bindings(&api, &config).unwrap();
 }

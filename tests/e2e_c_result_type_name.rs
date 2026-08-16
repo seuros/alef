@@ -2,10 +2,18 @@
 //! function name, not the C-overridden prefixed function name.
 //!
 //! Without the fix, a C override of `function = "htm_convert"` with prefix `htm`
-//! produces `HTMHtmConvert*` — the prefix is doubled.  The fallback must use
-//! `call.function` (the base, un-prefixed name) so it produces `HTMConvert*`,
-//! which is at least not self-contradictory and matches the `<prefix><Base>` pattern.
-//! When the correct type differs, users add an explicit `result_type` override.
+//! produces a free function named `htm_htm_convert_free` — the prefix is doubled.
+//! The fallback must use `call.function` (the base, un-prefixed name) so it
+//! produces `htm_convert_free`, which is at least not self-contradictory and
+//! matches the `<prefix>_<base>_free` pattern. When the correct type differs,
+//! users add an explicit `result_type` override.
+//!
+//! Under the scalar handle ABI (see `03109fc52 fix(zig)!: adopt scalar handle
+//! ABI`), the C e2e codegen declares every handle-typed result as the generic
+//! `{PREFIX}AlefHandle` scalar rather than a per-function PascalCase pointer
+//! type, so `result_type_name` no longer appears as a C type name in the
+//! generated source. It still drives the free-function name (via
+//! `to_snake_case`), which is what these tests assert on.
 
 use alef::core::config::NewAlefConfig;
 use alef::e2e::codegen::E2eCodegen;
@@ -107,12 +115,12 @@ fn c_result_type_does_not_double_prefix() {
         .expect("test_smoke.c should be emitted");
     let content = &test_file.content;
     assert!(
-        !content.contains("HTMHtmConvert"),
-        "result type must not double the prefix (HTMHtmConvert found). Content:\n{content}"
+        !content.contains("htm_htm_convert_free"),
+        "free function must not double the prefix (htm_htm_convert_free found). Content:\n{content}"
     );
     assert!(
-        content.contains("HTMConvert"),
-        "result type should be HTMConvert (base function name in PascalCase). Content:\n{content}"
+        content.contains("htm_convert_free"),
+        "free function should be htm_convert_free (base function name in snake_case). Content:\n{content}"
     );
 }
 
@@ -159,11 +167,11 @@ result_type = "ConversionResult"
         .expect("test_smoke.c should be emitted");
     let content = &test_file.content;
     assert!(
-        content.contains("HTMConversionResult"),
-        "explicit result_type = 'ConversionResult' must produce HTMConversionResult. Content:\n{content}"
+        content.contains("htm_conversion_result_free"),
+        "explicit result_type = 'ConversionResult' must produce htm_conversion_result_free. Content:\n{content}"
     );
     assert!(
-        !content.contains("HTMHtmConvert"),
+        !content.contains("htm_htm_convert_free"),
         "doubled prefix must not appear. Content:\n{content}"
     );
 }
