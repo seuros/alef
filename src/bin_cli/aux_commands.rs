@@ -99,7 +99,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 .unwrap_or_else(|| crates_to_process[0]);
             let e2e_config = resolved_cfg.e2e.as_ref().context("no [e2e] section in alef.toml")?;
             match action {
-                E2eAction::Generate { lang, registry } => {
+                E2eAction::Generate { lang, registry, strict } => {
                     if registry {
                         tracing::warn!(
                             "`alef e2e generate --registry` is deprecated. \
@@ -136,6 +136,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                                 &cached_paths,
                                 &base_dir,
                                 e2e_ref,
+                                strict,
                             )?);
                             if let Some(snippets) = &this_e2e_config.snippets {
                                 let coverage_path = base_dir
@@ -173,6 +174,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             crate::e2e::format::warn_deferred(&crate::e2e::format::run_formatters(
                                 &managed_files,
                                 e2e_ref,
+                                strict,
                             )?);
                         }
 
@@ -322,7 +324,12 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 .unwrap_or_else(|| crates_to_process[0]);
             let _ = _resolved_cfg.e2e.as_ref().context("no [e2e] section in alef.toml")?;
             match action {
-                TestAppsAction::Generate { lang, clean, jobs: _ } => {
+                TestAppsAction::Generate {
+                    lang,
+                    clean,
+                    jobs: _,
+                    strict,
+                } => {
                     let config_toml = std::fs::read_to_string(config_path)?;
                     let base_dir = std::env::current_dir()?;
                     let mut grand_count: usize = 0;
@@ -353,6 +360,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                                 &cached_paths,
                                 &base_dir,
                                 e2e_ref,
+                                strict,
                             )?);
                             tracing::info!("Test apps up to date (cached)");
                             continue;
@@ -433,6 +441,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             crate::e2e::format::warn_deferred(&crate::e2e::format::run_formatters(
                                 &managed_files,
                                 e2e_ref,
+                                strict,
                             )?);
                         }
 

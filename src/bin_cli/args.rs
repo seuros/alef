@@ -214,6 +214,14 @@ pub(crate) enum Commands {
         /// Ignore cache.
         #[arg(long)]
         clean: bool,
+        /// Fail the run when a configured formatter's executable is not installed.
+        ///
+        /// By default a missing formatter is recorded as a deferred step and the run
+        /// continues, so generation still reaches finalisation and the tree is stamped
+        /// rather than left unstamped and indistinguishable from a stripping bug. A
+        /// formatter that RUNS and rejects the code always fails, with or without this.
+        #[arg(long)]
+        strict: bool,
         /// Skip the flutter_rust_bridge_codegen post-build step.
         ///
         /// Useful when `flutter_rust_bridge` is not installed on the host (e.g.
@@ -429,6 +437,12 @@ pub(crate) enum E2eAction {
         /// versions instead of local path dependencies.
         #[arg(long)]
         registry: bool,
+        /// Fail the run when a configured formatter's executable is not installed.
+        ///
+        /// See `alef all --strict`; a formatter that runs and rejects the code always
+        /// fails regardless.
+        #[arg(long)]
+        strict: bool,
     },
     /// Compare handwritten snippets with fixture-generated equivalents.
     SnippetsMigrate {
@@ -475,6 +489,12 @@ pub(crate) enum TestAppsAction {
         /// Maximum parallel jobs (0 = all cores, 1 = sequential).
         #[arg(short, long, default_value = "0")]
         jobs: usize,
+        /// Fail the run when a configured formatter's executable is not installed.
+        ///
+        /// See `alef all --strict`; a formatter that runs and rejects the code always
+        /// fails regardless.
+        #[arg(long)]
+        strict: bool,
     },
     /// Run the registry-mode test apps: install each published package from its
     /// registry and exercise it, reporting pass/skip/fail per target. Verifies a
