@@ -117,37 +117,69 @@ pub fn normalize_rustdoc(raw: &str) -> String {
     out
 }
 
-fn strip_internal_doc_markers(line: &str) -> String {
-    const MARKER: &str = "~keep";
-    let mut output = line.to_string();
-    while let Some(marker_start) = output.find(MARKER) {
-        let marker_end = marker_start + MARKER.len();
-        let preceding_whitespace = output[..marker_start]
-            .chars()
-            .next_back()
-            .is_some_and(char::is_whitespace);
-        let following_whitespace = output[marker_end..].chars().next().is_some_and(char::is_whitespace);
+const MARKER: &str = "~keep";
 
-        let remove_start = if preceding_whitespace && !following_whitespace {
-            output[..marker_start]
-                .char_indices()
-                .next_back()
-                .map_or(marker_start, |(index, _)| index)
-        } else {
-            marker_start
-        };
-        let remove_end = if following_whitespace {
-            marker_end
-                + output[marker_end..]
-                    .char_indices()
-                    .find(|(_, character)| !character.is_whitespace())
-                    .map_or(output.len() - marker_end, |(index, _)| index)
-        } else {
-            marker_end
-        };
-        output.replace_range(remove_start..remove_end, "");
+/// Punctuation that belongs to the marker rather than to the sentence around it: `~keep:`
+/// and `~keep,` introduce the rationale that follows them, so the punctuation is part of the
+/// token being removed. Removing only `~keep` welded the orphaned punctuation onto the end of
+/// the preceding sentence — the dangling `.:` that reached five generated bindings.
+const MARKER_PUNCTUATION: [char; 3] = [':', ',', ';'];
+
+/// Delimiter pairs a marker may be wrapped in. `(~keep)` and `` `~keep` `` own their
+/// brackets; dropping only the token leaves an empty `()` or an empty code span.
+const MARKER_DELIMITERS: [(char, char); 3] = [('(', ')'), ('[', ']'), ('`', '`')];
+
+fn strip_internal_doc_markers(line: &str) -> String {
+    let mut output = line.to_string();
+    let mut search_from = 0;
+    while let Some(found) = output[search_from..].find(MARKER) {
+        let mut start = search_from + found;
+        let mut end = start + MARKER.len();
+
+        if let Some(punctuation) = output[end..].chars().next()
+            && MARKER_PUNCTUATION.contains(&punctuation)
+        {
+            end += punctuation.len_utf8();
+        }
+
+        for (open, close) in MARKER_DELIMITERS {
+            if output[..start].ends_with(open) && output[end..].starts_with(close) {
+                start -= open.len_utf8();
+                end += close.len_utf8();
+                break;
+            }
+        }
+
+        let space_before = start == 0 || output[..start].ends_with(char::is_whitespace);
+        let space_after = end == output.len() || output[end..].starts_with(char::is_whitespace);
+
+        // Exactly one separator must survive. A removal that runs to the end of the line has
+        // nothing left to separate, so the run in front of it goes too; anywhere else the run
+        // behind it goes and the one in front keeps the surviving words apart. When prose
+        // punctuation abuts the marker on the right (`(see the note ~keep)`), taking the run in
+        // front is what avoids leaving a space before that punctuation. ~keep
+        if space_before && space_after {
+            if end == output.len() {
+                start -= trailing_whitespace_len(&output[..start]);
+            } else {
+                end += leading_whitespace_len(&output[end..]);
+            }
+        } else if space_before {
+            start -= trailing_whitespace_len(&output[..start]);
+        }
+
+        output.replace_range(start..end, "");
+        search_from = start;
     }
     output
+}
+
+fn trailing_whitespace_len(text: &str) -> usize {
+    text.len() - text.trim_end().len()
+}
+
+fn leading_whitespace_len(text: &str) -> usize {
+    text.len() - text.trim_start().len()
 }
 
 #[cfg(test)]
@@ -165,5 +197,83 @@ mod tests {
             "No deny-unknown-fields because this type is shared.\nThe field remains optional."
         );
         assert!(!normalized.contains("~keep"));
+    }
+
+    /// Every punctuation variant of the marker found in the polyrepo, plus the forms a
+    /// future author is likely to reach for. The surrounding punctuation is asserted
+    /// exactly: the reported defect was `~keep:` leaving the colon welded onto the previous
+    /// sentence (`... note below.:`), and the symmetric over-correction — eating the
+    /// sentence's own full stop — is just as wrong.
+    #[test]
+    fn normalize_rustdoc_strips_every_keep_marker_variant_leaving_readable_prose() {
+        let cases = [
+            ("Recovered from a parse error. ~keep", "Recovered from a parse error."),
+            (
+                "~keep Explains why the fallback is safe.",
+                "Explains why the fallback is safe.",
+            ),
+            (
+                "The pool ~keep is rebuilt per request.",
+                "The pool is rebuilt per request.",
+            ),
+            (
+                "Drained after every page. ~keep: that drain observes one thread.",
+                "Drained after every page. that drain observes one thread.",
+            ),
+            ("See the note below. ~keep:", "See the note below."),
+            ("~keep: mirrors the bench tolerance.", "mirrors the bench tolerance."),
+            (
+                "Mirrors `image.rs`. ~keep, same rationale as above.",
+                "Mirrors `image.rs`. same rationale as above.",
+            ),
+            (
+                "Guarded by a flag. ~keep; the flag is compile-time.",
+                "Guarded by a flag. the flag is compile-time.",
+            ),
+            (
+                "Never smuggled into human-facing text. (~keep)",
+                "Never smuggled into human-facing text.",
+            ),
+            (
+                "Applies to both paths (see the note ~keep).",
+                "Applies to both paths (see the note).",
+            ),
+            (
+                "Tracked separately [~keep] for the async path.",
+                "Tracked separately for the async path.",
+            ),
+            (
+                "See the `~keep` note in `prepare_session`.",
+                "See the note in `prepare_session`.",
+            ),
+            ("Two markers ~keep on one line. ~keep", "Two markers on one line."),
+            ("~keep", ""),
+            ("~keep:", ""),
+            ("(~keep)", ""),
+        ];
+
+        for (raw, expected) in cases {
+            let normalized = normalize_rustdoc(raw);
+            assert_eq!(normalized, expected, "input: {raw:?}");
+            assert!(!normalized.contains("~keep"), "marker survived in {normalized:?}");
+            assert!(!normalized.contains(".:"), "dangling punctuation in {normalized:?}");
+        }
+    }
+
+    /// The exact doc comment that produced the dangling `.:` in the generated bindings.
+    #[test]
+    fn normalize_rustdoc_handles_the_colon_suffixed_marker_mid_paragraph() {
+        let normalized = normalize_rustdoc(
+            "extraction that renders at least one page picks up any captured\n\
+             glyph-drop warnings for free. ~keep: that drain only ever observes\n\
+             warnings from render calls that happened on the same OS thread.",
+        );
+
+        assert_eq!(
+            normalized,
+            "extraction that renders at least one page picks up any captured\n\
+             glyph-drop warnings for free. that drain only ever observes\n\
+             warnings from render calls that happened on the same OS thread."
+        );
     }
 }

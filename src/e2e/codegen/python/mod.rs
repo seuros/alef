@@ -834,6 +834,50 @@ from_json_module = "my_lib._internal_bindings"
         );
     }
 
+    /// Pins that a `client_factory` fixture's Python documentation snippet reads its
+    /// credential via `os.environ[...]` — the substitution `render_snippet_body` applies over
+    /// the harness's hardcoded `api_key="test-key"` literal (mod.rs ~line 183-191) — and never
+    /// carries the e2e mock-server env vars, fixture route, or literal credential.
+    #[test]
+    fn client_factory_snippet_never_points_the_reader_at_the_mock_server() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "rate_limit_429",
+            "description": "Rate limited",
+            "input": null,
+            "mock_response": {"status": 429}
+        }))
+        .expect("fixture must parse");
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "chat".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.overrides.insert(
+            "python".into(),
+            crate::e2e::config::CallOverride {
+                client_factory: Some("create_client".into()),
+                ..Default::default()
+            },
+        );
+
+        let rendered = PythonE2eCodegen
+            .render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[])
+            .expect("snippet renders");
+
+        assert!(!rendered.contains("MOCK_SERVER"), "mock-server env var leaked:\n{rendered}");
+        assert!(
+            !rendered.contains("/fixtures/rate_limit_429"),
+            "mock-server fixture route leaked:\n{rendered}"
+        );
+        assert!(!rendered.contains("\"test-key\""), "literal credential leaked:\n{rendered}");
+        assert!(
+            rendered.contains("os.environ[\"API_KEY\"]"),
+            "credential is not read from the environment:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("client = create_client(api_key=os.environ[\"API_KEY\"])"),
+            "client is not constructed the way a reader would:\n{rendered}"
+        );
+    }
+
     #[test]
     fn generate_empty_groups_produces_config_files_only() {
         use crate::core::config::NewAlefConfig;

@@ -400,14 +400,26 @@ pub(super) fn render_test_file(
         let _ = writeln!(fixtures_body);
     }
 
-    // Only emit the item-text helper when a rendered assertion actually calls it —
-    // the array `contains`/`contains_any` paths are the only callers. Emitting it
-    // unconditionally left a dead `_alef_e2e_item_texts` in every file, defined but
-    // never referenced, whenever no assertion needed array-item text extraction. ~keep
-    let mut helper_functions = String::new();
+    // Each helper is emitted iff the unit that ships in this file references it. The two
+    // are gated separately because they have independent callers: the array
+    // `contains`/`contains_any` paths call `_alef_e2e_item_texts`, while the enum `equals`
+    // path (`python/assertion.jinja`) calls `_alef_e2e_text` directly. Gating the pair on
+    // `_alef_e2e_item_texts` alone emitted `_alef_e2e_text`'s definition into only the one
+    // file that happened to have an array assertion, leaving 22 F821 undefined-name errors
+    // across the four files that call it from an enum assertion. There is no shared python
+    // module to import from — `conftest.py` carries pytest fixtures, not importable helpers —
+    // so every file that calls a helper must also define it. ~keep
+    let mut item_texts_helper = String::new();
     if references_identifier(&fixtures_body, "_alef_e2e_item_texts") {
-        render_item_text_helper(&mut helper_functions);
+        render_item_texts_helper(&mut item_texts_helper);
     }
+    let mut helper_functions = String::new();
+    if references_identifier(&fixtures_body, "_alef_e2e_text")
+        || references_identifier(&item_texts_helper, "_alef_e2e_text")
+    {
+        render_text_helper(&mut helper_functions);
+    }
+    helper_functions.push_str(&item_texts_helper);
 
     prune_unreferenced_from_imports(
         &mut thirdparty_from,
@@ -476,11 +488,18 @@ fn prune_unreferenced_from_imports(imports: &mut Vec<String>, emitted: &[&str]) 
     *imports = pruned;
 }
 
-fn render_item_text_helper(out: &mut String) {
+/// Emit `_alef_e2e_text`, the scalar coercion both the enum `equals` assertion and
+/// `_alef_e2e_item_texts` call.
+fn render_text_helper(out: &mut String) {
     let _ = writeln!(out, "def _alef_e2e_text(value: object) -> str:");
     let _ = writeln!(out, "    return \"\" if value is None else str(value)");
     let _ = writeln!(out);
     let _ = writeln!(out);
+}
+
+/// Emit `_alef_e2e_item_texts`, which the array `contains`/`contains_any` assertions call.
+/// Its body references `_alef_e2e_text`, so [`render_text_helper`] must run alongside it.
+fn render_item_texts_helper(out: &mut String) {
     let _ = writeln!(out, "def _alef_e2e_item_texts(item: object) -> tuple[str, ...]:");
     let _ = writeln!(out, "    raw_items = getattr(item, \"items\", None)");
     let _ = writeln!(
@@ -946,5 +965,127 @@ mod tests {
 
         let emitted_without_helper = "        assert result.content == \"hello\"  # noqa: S101\n";
         assert!(!references_identifier(emitted_without_helper, "_alef_e2e_item_texts"));
+    }
+
+    /// Collect the `_alef_e2e_*` helpers a generated file defines.
+    fn helpers_defined_in(source: &str) -> BTreeSet<String> {
+        source
+            .lines()
+            .filter_map(|line| line.strip_prefix("def "))
+            .filter(|rest| rest.starts_with("_alef_e2e_"))
+            .filter_map(|rest| rest.split('(').next())
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Collect the `_alef_e2e_*` helpers a generated file calls, including calls made from
+    /// inside another helper's body — those are undefined names too.
+    fn helpers_called_in(source: &str) -> BTreeSet<String> {
+        const PREFIX: &str = "_alef_e2e_";
+        let mut called = BTreeSet::new();
+        for line in source.lines().filter(|line| !line.starts_with("def ")) {
+            let mut rest = line;
+            while let Some(at) = rest.find(PREFIX) {
+                let tail = &rest[at..];
+                let name: String = tail
+                    .chars()
+                    .take_while(|character| character.is_alphanumeric() || *character == '_')
+                    .collect();
+                if tail[name.len()..].starts_with('(') {
+                    called.insert(name);
+                }
+                rest = &tail[PREFIX.len()..];
+            }
+        }
+        called
+    }
+
+    /// Regression test for the split-helper defect: `_alef_e2e_text` has two independent
+    /// callers — the enum `equals` assertion and `_alef_e2e_item_texts`' own body — but its
+    /// definition was gated on `_alef_e2e_item_texts` alone. Its definition therefore landed
+    /// only in the file that happened to carry an array assertion, and the enum-assertion
+    /// files called it undefined (22 x F821, which fails `alef all` at the ruff stage).
+    ///
+    /// The invariant is per-file, so it is only violated across a *set* of categories: each
+    /// file in isolation is either self-consistent or the one that carries the definition.
+    #[test]
+    fn every_generated_python_file_defines_the_helpers_it_calls() {
+        let enum_equals = minimal_fixture(
+            "enum_equals",
+            vec![crate::e2e::fixture::Assertion {
+                assertion_type: "equals".to_string(),
+                field: Some("structure[0].kind".to_string()),
+                value: Some(serde_json::json!("Function")),
+                ..Default::default()
+            }],
+        );
+        let array_contains = minimal_fixture(
+            "array_contains",
+            vec![crate::e2e::fixture::Assertion {
+                assertion_type: "contains".to_string(),
+                field: Some("structure".to_string()),
+                value: Some(serde_json::json!("Function")),
+                ..Default::default()
+            }],
+        );
+        let no_helpers = minimal_fixture(
+            "no_helpers",
+            vec![crate::e2e::fixture::Assertion {
+                assertion_type: "not_error".to_string(),
+                ..Default::default()
+            }],
+        );
+
+        let mut e2e_config = crate::e2e::config::E2eConfig::default();
+        e2e_config.fields_array.insert("structure".to_string());
+        let config = crate::core::config::ResolvedCrateConfig::default();
+
+        let suite: Vec<(&str, String)> = [
+            ("enum_equals", &enum_equals),
+            ("array_contains", &array_contains),
+            ("no_helpers", &no_helpers),
+        ]
+        .into_iter()
+        .map(|(category, fixture)| {
+            let fixtures: Vec<&crate::e2e::fixture::Fixture> = vec![fixture];
+            let out = render_test_file(category, &fixtures, &e2e_config, &config, &[], &[], false);
+            (category, out)
+        })
+        .collect();
+
+        // Without both helpers actually reaching the emitted suite the invariant below is
+        // vacuous: it is satisfied by a suite that calls nothing at all. ~keep
+        let enum_file = &suite[0].1;
+        let array_file = &suite[1].1;
+        assert!(
+            helpers_called_in(enum_file).contains("_alef_e2e_text"),
+            "the enum `equals` assertion must call `_alef_e2e_text`, got:\n{enum_file}"
+        );
+        assert!(
+            helpers_called_in(array_file).contains("_alef_e2e_item_texts"),
+            "the array `contains` assertion must call `_alef_e2e_item_texts`, got:\n{array_file}"
+        );
+
+        for (category, out) in &suite {
+            let defined = helpers_defined_in(out);
+            let called = helpers_called_in(out);
+            let undefined: Vec<&String> = called.difference(&defined).collect();
+            assert!(
+                undefined.is_empty(),
+                "test_{category}.py calls undefined helpers {undefined:?}, got:\n{out}"
+            );
+            let unused: Vec<&String> = defined.difference(&called).collect();
+            assert!(
+                unused.is_empty(),
+                "test_{category}.py defines unused helpers {unused:?}, got:\n{out}"
+            );
+        }
+
+        assert_eq!(
+            helpers_defined_in(&suite[2].1),
+            BTreeSet::new(),
+            "a file with no helper call must define no helpers, got:\n{}",
+            suite[2].1
+        );
     }
 }
