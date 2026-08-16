@@ -250,6 +250,60 @@ pub(super) fn render_assertion(
         }
     }
 
+    // Bracket-wildcard traversal (`links[].link_type`) means "any element", so it must
+    // render an `any?` quantifier. Falling through to `accessor` would lower the wildcard
+    // to index 0 and silently assert against only the first element. Keyed off the fixture
+    // path alone, never off the `[]`-spelled config sets. ~keep
+    if !result_is_simple
+        && let Some(f) = assertion.field.as_deref().filter(|f| !f.is_empty())
+        && let Some((array_part, elem_part)) = field_resolver.wildcard_split(f)
+    {
+        let raw_array_accessor = if array_part.is_empty() {
+            result_var.to_string()
+        } else {
+            field_resolver.accessor(&array_part, "ruby", result_var)
+        };
+        // A nil array raises NoMethodError on `.any?`; `|| []` makes the quantifier
+        // simply false instead. ~keep
+        let array_accessor = if !array_part.is_empty() && field_resolver.is_optional(&array_part) {
+            format!("({raw_array_accessor} || [])")
+        } else {
+            raw_array_accessor
+        };
+        // Passing the block parameter as the result var is what lets a nested element
+        // sub-path resolve against the block variable instead of the result. ~keep
+        let elem_accessor = field_resolver.accessor(&elem_part, "ruby", "e");
+        match assertion.assertion_type.as_str() {
+            "contains" | "contains_all" | "not_contains" => {
+                let expected_bool = if assertion.assertion_type == "not_contains" {
+                    "false"
+                } else {
+                    "true"
+                };
+                for expected in assertion.expected_values() {
+                    let rb_val = json_to_ruby(expected);
+                    out.push_str(&format!(
+                        "    expect({array_accessor}.any? {{ |e| {elem_accessor}.to_s.include?({rb_val}) }}).to be {expected_bool}\n"
+                    ));
+                }
+            }
+            "not_empty" => {
+                // ~keep Assert on element *content*, not on the stringified array: `[].to_s`
+                // is the non-empty string "[]", so a `.to_s.empty?` check over the array
+                // would pass vacuously on an empty array. `any?` is false when empty.
+                out.push_str(&format!(
+                    "    expect({array_accessor}.any? {{ |e| !{elem_accessor}.to_s.empty? }}).to be true\n"
+                ));
+            }
+            other => {
+                out.push_str(&format!(
+                    "    # skipped: unsupported traversal assertion '{other}' on '{f}'\n"
+                ));
+            }
+        }
+        return;
+    }
+
     // result_is_simple: treat the result itself as the content string, but only
     // when there is no explicit field (or the field is "content"). Count/length
     // assertions on named fields (e.g. "warnings") must still walk the field path.
@@ -804,5 +858,102 @@ mod tests {
         let out = render(serde_json::json!(0), true);
         assert!(!out.contains(".to_s"), "numeric equals must stay typed; got: {out}");
         assert!(out.contains("eq(0)"), "got: {out}");
+    }
+
+    fn wildcard_resolver() -> FieldResolver {
+        FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::from(["links".to_string()]),
+            &HashSet::from(["links".to_string()]),
+            &HashSet::new(),
+        )
+    }
+
+    fn render_wildcard(assertion_type: &str, field: &str) -> String {
+        let assertion = Assertion {
+            assertion_type: assertion_type.to_string(),
+            field: Some(field.to_string()),
+            value: if assertion_type == "not_empty" {
+                None
+            } else {
+                Some(serde_json::json!("internal"))
+            },
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &wildcard_resolver(),
+            false,
+            &E2eConfig::default(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        out
+    }
+
+    /// A bracket-wildcard fixture path means "every element", so the emitted Ruby
+    /// must quantify with `any?` over the whole array.
+    #[test]
+    fn ruby_wildcard_contains_emits_any_over_all_elements() {
+        let out = render_wildcard("contains", "links[].link_type");
+        assert!(
+            out.contains("result.links.any? { |e| e.link_type.to_s.include?("),
+            "expected an any-element quantifier, got:\n{out}"
+        );
+        assert!(
+            out.contains("internal"),
+            "expected value in the emitted assertion, got:\n{out}"
+        );
+    }
+
+    /// THE CANARY. A fixture whose match lives only in element 1 is satisfied by an
+    /// any-element quantifier and missed by an index-0 lookup. This unit test observes
+    /// the emitted source rather than executing it, so it pins the property that makes
+    /// the runtime difference: the wildcard must NOT lower to a single-element access.
+    /// Pre-fix the wildcard rendered `result.links[0].link_type`, which reads element 0
+    /// only and reports a false green; this assertion is red then.
+    #[test]
+    fn ruby_wildcard_does_not_collapse_to_element_zero() {
+        let out = render_wildcard("contains", "links[].link_type");
+        assert!(
+            !out.contains("[0]"),
+            "wildcard must not lower to a single-element access, got:\n{out}"
+        );
+    }
+
+    /// Regression lock: an explicit numeric index is not a wildcard and must keep
+    /// resolving to that exact element.
+    #[test]
+    fn ruby_explicit_index_still_resolves_to_element_zero() {
+        let out = render_wildcard("contains", "links[0].link_type");
+        assert!(
+            out.contains("result.links[0].link_type"),
+            "explicit index 0 must keep its index-preserving accessor, got:\n{out}"
+        );
+        assert!(
+            !out.contains(".any?"),
+            "explicit index must not become a quantifier, got:\n{out}"
+        );
+    }
+
+    /// `[].to_s` is `"[]"` — a non-empty String — so a not_empty traversal that
+    /// measured the stringified array would pass vacuously on an empty array. The
+    /// emitted check must look at element *content*, which `any?` makes false when
+    /// the array is empty.
+    #[test]
+    fn ruby_wildcard_not_empty_asserts_element_content_not_stringified_array() {
+        let out = render_wildcard("not_empty", "links[].link_type");
+        assert!(
+            out.contains("result.links.any? { |e| !e.link_type.to_s.empty? }"),
+            "not_empty must quantify over element content, got:\n{out}"
+        );
+        assert!(
+            !out.contains("result.links.to_s"),
+            "must not measure the stringified array, which is never empty, got:\n{out}"
+        );
     }
 }

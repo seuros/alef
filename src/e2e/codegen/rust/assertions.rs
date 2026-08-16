@@ -418,6 +418,33 @@ pub fn render_assertion_with_streaming(
             result_var.to_string()
         };
 
+    // A `foo[].bar` fixture path means EVERY element of `foo`, not element 0. The shared
+    // accessor lowers `[]` to `[0]`, so the wildcard has to be expanded here into an
+    // `.iter().any(..)` predicate before the accessor is ever built. Deliberately not
+    // applied to error.*, Tree, simple-result or already-unwrapped fields: those arms
+    // below build their expression by a different route and the wildcard shape does not
+    // compose with them. ~keep
+    if let Some(f) = assertion.field.as_deref()
+        && !f.is_empty()
+        && !f.starts_with("error.")
+        && !result_is_simple
+        && !result_is_tree
+        && !is_unwrapped
+        && f != result_var
+        && let Some((array_part, elem_part)) = field_resolver.wildcard_split(f)
+    {
+        render_rust_wildcard_assertion(
+            out,
+            assertion,
+            f,
+            &array_part,
+            &elem_part,
+            &effective_result_var,
+            field_resolver,
+        );
+        return;
+    }
+
     // Determine field access expression:
     // 1. If the field was unwrapped to a local var, use that local var name.
     // 2. When result_is_simple, the function returns a plain type (String etc.) — use result_var.
@@ -708,6 +735,97 @@ pub fn render_assertion_with_streaming(
     }
 }
 
+/// Build the `.iter().any(|e| ..)` wrapper for a wildcard (`foo[].bar`) path.
+///
+/// `element_predicate` is the body of the closure, written against the closure
+/// parameter `e` (a `&T`, so it must not be re-borrowed).
+fn rust_wildcard_any(array_accessor: &str, array_is_optional: bool, element_predicate: &str) -> String {
+    if array_is_optional {
+        format!("{array_accessor}.as_ref().is_some_and(|v| v.iter().any(|e| {element_predicate}))")
+    } else {
+        format!("{array_accessor}.iter().any(|e| {element_predicate})")
+    }
+}
+
+fn render_rust_wildcard_assertion(
+    out: &mut String,
+    assertion: &Assertion,
+    field: &str,
+    array_part: &str,
+    elem_part: &str,
+    result_var: &str,
+    field_resolver: &FieldResolver,
+) {
+    let array_accessor = if array_part.is_empty() {
+        result_var.to_string()
+    } else {
+        field_resolver.accessor(array_part, "rust", result_var)
+    };
+    // Passing the closure parameter as the "result var" is what makes nested element
+    // sub-paths (`links[].meta.kind`) resolve against the loop variable. ~keep
+    let elem_accessor = if elem_part.is_empty() {
+        "e".to_string()
+    } else {
+        field_resolver.accessor(elem_part, "rust", "e")
+    };
+    let array_is_optional = !array_part.is_empty() && field_resolver.is_optional(array_part);
+    let escaped_field = escape_rust(field);
+
+    match assertion.assertion_type.as_str() {
+        "contains" | "contains_all" | "not_contains" => {
+            let negate = assertion.assertion_type == "not_contains";
+            let values: Vec<&serde_json::Value> = if assertion.assertion_type == "contains" {
+                assertion.value.iter().collect()
+            } else {
+                assertion.expected_values()
+            };
+            for val in values {
+                let expected = value_to_rust_string(val);
+                // `str::contains` needs a string pattern; non-string fixture values
+                // (numbers, bools) have to be stringified first. ~keep
+                let pattern = if val.is_string() {
+                    expected.clone()
+                } else {
+                    format!("&{expected}.to_string()")
+                };
+                let predicate = rust_wildcard_any(
+                    &array_accessor,
+                    array_is_optional,
+                    &format!("{elem_accessor}.to_string().contains({pattern})"),
+                );
+                if negate {
+                    let _ = writeln!(
+                        out,
+                        "    assert!(!{predicate}, \"expected no element of {escaped_field} to contain: {{}}\", {expected});"
+                    );
+                } else {
+                    let _ = writeln!(
+                        out,
+                        "    assert!({predicate}, \"expected some element of {escaped_field} to contain: {{}}\", {expected});"
+                    );
+                }
+            }
+        }
+        "not_empty" => {
+            let predicate = rust_wildcard_any(
+                &array_accessor,
+                array_is_optional,
+                &format!("!{elem_accessor}.to_string().is_empty()"),
+            );
+            let _ = writeln!(
+                out,
+                "    assert!({predicate}, \"expected some element of {escaped_field} to be non-empty\");"
+            );
+        }
+        other => {
+            let _ = writeln!(
+                out,
+                "    // skipped: unsupported traversal assertion '{other}' on '{field}'"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
@@ -735,6 +853,83 @@ mod tests {
         }
     }
 
+    fn array_resolver(array_field: &str) -> FieldResolver {
+        FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::from([array_field.to_string()]),
+            &HashSet::new(),
+        )
+    }
+
+    fn render_field_contains(resolver: &FieldResolver, field: &str, value: &str) -> String {
+        let assertion = make_assertion("contains", Some(field), Some(serde_json::json!(value)));
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            "my_mod",
+            "dep",
+            false,
+            &[],
+            resolver,
+            false,
+            false,
+            false,
+            false,
+            false,
+            None,
+        );
+        out
+    }
+
+    #[test]
+    fn rust_wildcard_contains_iterates_every_element() {
+        let out = render_field_contains(&array_resolver("links"), "links[].link_type", "external");
+        assert!(out.contains("result.links.iter().any(|e|"), "got: {out}");
+        assert!(out.contains("e.link_type.to_string().contains("), "got: {out}");
+        assert!(!out.contains("[0]"), "wildcard must not pin element 0, got: {out}");
+    }
+
+    #[test]
+    fn rust_explicit_index_still_pins_element_zero() {
+        let out = render_field_contains(&array_resolver("links"), "links[0].link_type", "external");
+        assert!(out.contains("result.links[0].link_type"), "got: {out}");
+        assert!(
+            !out.contains(".iter().any("),
+            "explicit index must not become a traversal, got: {out}"
+        );
+    }
+
+    /// Canary for the wildcard defect. `links[].link_type` lowered to `links[0]`, so a
+    /// fixture whose match lives in element 1 asserted against element 0 and passed by
+    /// accident. This test pins the only property observable at codegen level that
+    /// distinguishes the two: the emitted predicate must quantify over the whole array
+    /// rather than name a single index. Against the pre-fix generator the emitted text is
+    /// `result.links[0].link_type` and every assertion below fails. ~keep
+    #[test]
+    fn rust_wildcard_match_in_second_element_is_not_missed() {
+        let out = render_field_contains(&array_resolver("links"), "links[].link_type", "canonical");
+        assert!(out.contains(".iter().any("), "got: {out}");
+        assert!(!out.contains("links[0]"), "got: {out}");
+        assert!(!out.contains("links[1]"), "predicate must be index-free, got: {out}");
+    }
+
+    #[test]
+    fn rust_wildcard_optional_array_guards_with_is_some_and() {
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::from(["links".to_string()]),
+            &HashSet::new(),
+            &HashSet::from(["links".to_string()]),
+            &HashSet::new(),
+        );
+        let out = render_field_contains(&resolver, "links[].link_type", "external");
+        assert!(out.contains(".as_ref().is_some_and(|v| v.iter().any(|e|"), "got: {out}");
+    }
+
     /// IR-oracle wiring regression (alef task #64): a field that is IR-reachable
     /// (present, non-`binding_excluded`, on some IR type) but missing from the
     /// hand-maintained `result_fields` config must still render a real assertion,
@@ -754,8 +949,20 @@ mod tests {
         let assertion = make_assertion("equals", Some("data"), Some(serde_json::json!("hello")));
         let mut out = String::new();
         render_assertion(
-            &mut out, &assertion, "result", "my_mod", "dep", false, &[], &resolver, false, false, false, false,
-            false, None,
+            &mut out,
+            &assertion,
+            "result",
+            "my_mod",
+            "dep",
+            false,
+            &[],
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            false,
+            None,
         );
         assert!(!out.contains("skipped"), "got: {out}");
     }
@@ -781,8 +988,20 @@ mod tests {
         let assertion = make_assertion("equals", Some("internal_diagnostics"), Some(serde_json::json!("hello")));
         let mut out = String::new();
         render_assertion(
-            &mut out, &assertion, "result", "my_mod", "dep", false, &[], &resolver, false, false, false, false,
-            false, None,
+            &mut out,
+            &assertion,
+            "result",
+            "my_mod",
+            "dep",
+            false,
+            &[],
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            false,
+            None,
         );
         assert!(out.contains("skipped"), "got: {out}");
     }
@@ -1304,8 +1523,20 @@ mod tests {
         let assertion = make_assertion("count_min", Some("chunks"), None);
         let mut out = String::new();
         render_assertion(
-            &mut out, &assertion, "result", "my_mod", "dep", false, &[], &resolver, false, false, false, false,
-            false, None,
+            &mut out,
+            &assertion,
+            "result",
+            "my_mod",
+            "dep",
+            false,
+            &[],
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            false,
+            None,
         );
     }
 
@@ -1316,8 +1547,20 @@ mod tests {
         let assertion = make_assertion("bogus_type", Some("chunks"), None);
         let mut out = String::new();
         render_assertion(
-            &mut out, &assertion, "result", "my_mod", "dep", false, &[], &resolver, false, false, false, false,
-            false, None,
+            &mut out,
+            &assertion,
+            "result",
+            "my_mod",
+            "dep",
+            false,
+            &[],
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            false,
+            None,
         );
     }
 
@@ -1331,8 +1574,20 @@ mod tests {
         let assertion = make_assertion("is_true", Some("stream.has_page_event"), None);
         let mut out = String::new();
         render_assertion(
-            &mut out, &assertion, "result", "my_mod", "dep", false, &[], &resolver, false, false, false, false,
-            false, None,
+            &mut out,
+            &assertion,
+            "result",
+            "my_mod",
+            "dep",
+            false,
+            &[],
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            false,
+            None,
         );
     }
 
@@ -1342,8 +1597,20 @@ mod tests {
         let assertion = make_assertion("not_empty", Some("chunks"), None);
         let mut out = String::new();
         render_assertion(
-            &mut out, &assertion, "result", "my_mod", "dep", false, &[], &resolver, false, false, false, false,
-            false, None,
+            &mut out,
+            &assertion,
+            "result",
+            "my_mod",
+            "dep",
+            false,
+            &[],
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            false,
+            None,
         );
         assert!(out.contains("assert!"), "got: {out}");
         assert!(out.contains("expected non-empty"), "got: {out}");
@@ -1355,8 +1622,20 @@ mod tests {
         let assertion = make_assertion("count_min", Some("chunks"), Some(serde_json::json!(3)));
         let mut out = String::new();
         render_assertion(
-            &mut out, &assertion, "result", "my_mod", "dep", false, &[], &resolver, false, false, false, false,
-            false, None,
+            &mut out,
+            &assertion,
+            "result",
+            "my_mod",
+            "dep",
+            false,
+            &[],
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            false,
+            None,
         );
         assert!(out.contains("assert!(chunks.len() >= 3 as usize"), "got: {out}");
     }

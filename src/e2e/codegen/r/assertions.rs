@@ -226,6 +226,29 @@ pub(super) fn render_assertion(
         }
     }
 
+    // A `foo[].bar` fixture path means "some element of foo satisfies this", but
+    // `FieldResolver::accessor` lowers `[]` to index 0 (`$foo[[1]]$bar` in R's 1-based
+    // indexing), which silently checks only the first element and reads as coverage.
+    // Quantify over the whole list instead. An empty list makes `vapply` return
+    // `logical(0)` and `any()` then yields FALSE, which is the correct answer. ~keep
+    if !context.result_is_simple
+        && let Some(f) = assertion.field.as_deref()
+        && let Some((array_part, elem_part)) = context.field_resolver.wildcard_split(f)
+    {
+        let array_accessor = if array_part.is_empty() {
+            result_var.to_string()
+        } else {
+            context.field_resolver.accessor(&array_part, "r", result_var)
+        };
+        let elem_accessor = if elem_part.is_empty() {
+            "e".to_string()
+        } else {
+            context.field_resolver.accessor(&elem_part, "r", "e")
+        };
+        render_wildcard_assertion(out, assertion, &array_accessor, &elem_accessor, f);
+        return;
+    }
+
     let field_expr = if context.result_is_simple {
         result_var.to_string()
     } else {
@@ -514,6 +537,56 @@ fn build_r_method_call(result_var: &str, method_name: &str, args: Option<&serde_
     }
 }
 
+/// Render the `foo[].bar` wildcard forms as an `any(vapply(...))` quantifier over
+/// every element of the array, rather than an index-0 lookup.
+fn render_wildcard_assertion(
+    out: &mut String,
+    assertion: &Assertion,
+    array_accessor: &str,
+    elem_accessor: &str,
+    field: &str,
+) {
+    let any_expr = |r_val: &str| {
+        format!(
+            "any(vapply({array_accessor}, function(e) grepl({r_val}, as.character({elem_accessor}), fixed = TRUE), logical(1)))"
+        )
+    };
+    match assertion.assertion_type.as_str() {
+        "contains" => {
+            if let Some(expected) = &assertion.value {
+                let r_val = json_to_r(expected, false);
+                let _ = writeln!(out, "  stopifnot({})", any_expr(&r_val));
+            }
+        }
+        "contains_all" => {
+            if let Some(values) = &assertion.values {
+                for val in values {
+                    let r_val = json_to_r(val, false);
+                    let _ = writeln!(out, "  stopifnot({})", any_expr(&r_val));
+                }
+            }
+        }
+        "not_contains" => {
+            for expected in assertion.expected_values() {
+                let r_val = json_to_r(expected, false);
+                let _ = writeln!(out, "  stopifnot(!{})", any_expr(&r_val));
+            }
+        }
+        "not_empty" => {
+            let _ = writeln!(
+                out,
+                "  stopifnot(any(vapply({array_accessor}, function(e) nzchar(as.character({elem_accessor})), logical(1))))"
+            );
+        }
+        other => {
+            let _ = writeln!(
+                out,
+                "  # skipped: unsupported traversal assertion '{other}' on '{field}'"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{RAssertionContext, render_assertion};
@@ -771,5 +844,99 @@ mod tests {
             out,
             "  expect_gt((if (length(result) == 0) 0L else length(result[[1]])), 10)\n"
         );
+    }
+}
+
+#[cfg(test)]
+mod wildcard_tests {
+    use super::{RAssertionContext, render_assertion};
+    use crate::e2e::field_access::FieldResolver;
+    use crate::e2e::fixture::Assertion;
+    use serde_json::json;
+    use std::collections::{HashMap, HashSet};
+
+    fn array_resolver(field: &str) -> FieldResolver {
+        let result_fields: HashSet<String> = [field.to_string()].into_iter().collect();
+        let array_fields: HashSet<String> = [field.to_string()].into_iter().collect();
+        FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &result_fields,
+            &array_fields,
+            &HashSet::new(),
+        )
+    }
+
+    fn render(assertion: &Assertion, resolver: &FieldResolver) -> String {
+        let enum_fields = HashMap::new();
+        let context = RAssertionContext {
+            field_resolver: resolver,
+            result_is_simple: false,
+            result_is_bytes: false,
+            assert_enum_fields: &enum_fields,
+        };
+        let mut out = String::new();
+        render_assertion(&mut out, assertion, "result", &context);
+        out
+    }
+
+    #[test]
+    fn r_wildcard_contains_quantifies_over_every_element() {
+        let out = render(
+            &Assertion {
+                assertion_type: "contains".to_string(),
+                field: Some("items[].name".to_string()),
+                value: Some(json!("beta")),
+                ..Assertion::default()
+            },
+            &array_resolver("items"),
+        );
+        assert_eq!(
+            out,
+            "  stopifnot(any(vapply(result$items, function(e) grepl(\"beta\", as.character(e$name), fixed = TRUE), \
+             logical(1))))\n",
+            "got: {out}"
+        );
+    }
+
+    /// Regression lock: an explicit numeric index is a different, correct feature and
+    /// must keep lowering to a single positional lookup (R is 1-based, so `[0]` → `[[1]]`). ~keep
+    #[test]
+    fn r_explicit_index_still_lowers_to_a_positional_lookup() {
+        let out = render(
+            &Assertion {
+                assertion_type: "contains".to_string(),
+                field: Some("items[0].name".to_string()),
+                value: Some(json!("beta")),
+                ..Assertion::default()
+            },
+            &array_resolver("items"),
+        );
+        assert_eq!(
+            out, "  expect_true(grepl(\"beta\", result$items[[1]]$name, fixed = TRUE))\n",
+            "got: {out}"
+        );
+    }
+
+    /// CANARY. A code-generator unit test cannot execute R, so it cannot literally run a
+    /// fixture whose only match lives in element 1. The observable proxy is exact: the
+    /// pre-fix renderer emitted `result$items[[1]]$name` — a lookup pinned to element 0 —
+    /// so a value present only at element 1 could never be seen. This asserts the emitted
+    /// predicate is applied to the array root under a quantifier and contains no positional
+    /// index at all; it fails against the pre-fix code, where `[[1]]` is present. ~keep
+    #[test]
+    fn r_wildcard_match_in_a_non_first_element_is_not_pinned_to_element_zero() {
+        let out = render(
+            &Assertion {
+                assertion_type: "contains".to_string(),
+                field: Some("items[].name".to_string()),
+                value: Some(json!("only-in-element-1")),
+                ..Assertion::default()
+            },
+            &array_resolver("items"),
+        );
+        assert!(!out.contains("[["), "index-pinned lookup survived: {out}");
+        assert!(out.contains("any(vapply(result$items,"), "got: {out}");
+        assert!(out.contains("e$name"), "got: {out}");
     }
 }

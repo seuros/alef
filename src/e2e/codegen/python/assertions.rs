@@ -59,6 +59,19 @@ pub(super) fn render_assertion(
         return;
     }
 
+    // A `foo[].bar` fixture path means EVERY element of `foo`. The shared accessor lowers
+    // `[]` to `[0]`, so the wildcard must be expanded into an `any(..)` comprehension
+    // before the accessor is built. Returning here also keeps the wildcard away from the
+    // `contains("[0]")` enum heuristic below, which only classifies explicit-index paths. ~keep
+    if !result_is_simple
+        && let Some(f) = assertion.field.as_deref()
+        && !f.is_empty()
+        && let Some((array_part, elem_part)) = field_resolver.wildcard_split(f)
+    {
+        render_python_wildcard_assertion(out, assertion, f, &array_part, &elem_part, result_var, field_resolver);
+        return;
+    }
+
     let field_access = if result_is_simple {
         result_var.to_string()
     } else {
@@ -104,6 +117,67 @@ pub(super) fn render_assertion(
         field_is_optional,
         field_is_array,
     );
+}
+
+fn render_python_wildcard_assertion(
+    out: &mut String,
+    assertion: &Assertion,
+    field: &str,
+    array_part: &str,
+    elem_part: &str,
+    result_var: &str,
+    field_resolver: &FieldResolver,
+) {
+    let array_accessor = if array_part.is_empty() {
+        result_var.to_string()
+    } else {
+        field_resolver.accessor(array_part, "python", result_var)
+    };
+    // Passing the comprehension variable as the "result var" is what makes nested element
+    // sub-paths (`links[].meta.kind`) resolve against the loop variable. ~keep
+    let elem_accessor = if elem_part.is_empty() {
+        "_e".to_string()
+    } else {
+        field_resolver.accessor(elem_part, "python", "_e")
+    };
+    let iterable = format!("({array_accessor} or [])");
+
+    match assertion.assertion_type.as_str() {
+        "contains" | "contains_all" | "not_contains" => {
+            let negate = assertion.assertion_type == "not_contains";
+            let values: Vec<&serde_json::Value> = if assertion.assertion_type == "contains" {
+                assertion.value.iter().collect()
+            } else {
+                assertion.expected_values()
+            };
+            for val in values {
+                let expected = value_to_python_string(val);
+                // `in str(..)` needs a str left operand; non-string fixture values
+                // (numbers, bools) have to be stringified first. ~keep
+                let needle = if val.is_string() {
+                    expected
+                } else {
+                    format!("str({expected})")
+                };
+                let pred = format!("any({needle} in str({elem_accessor}) for _e in {iterable})");
+                if negate {
+                    let _ = writeln!(out, "    assert not {pred}  # noqa: S101");
+                } else {
+                    let _ = writeln!(out, "    assert {pred}  # noqa: S101");
+                }
+            }
+        }
+        "not_empty" => {
+            let pred = format!("any(str({elem_accessor}) != \"\" for _e in {iterable})");
+            let _ = writeln!(out, "    assert {pred}  # noqa: S101");
+        }
+        other => {
+            let _ = writeln!(
+                out,
+                "    # skipped: unsupported traversal assertion '{other}' on '{field}'"
+            );
+        }
+    }
 }
 
 fn render_synthetic_field(out: &mut String, assertion: &Assertion, result_var: &str, field: &str) -> bool {
@@ -629,6 +703,56 @@ mod tests {
             value,
             ..Default::default()
         }
+    }
+
+    fn render_field_contains(resolver: &FieldResolver, field: &str, value: &str) -> String {
+        let assertion = make_assertion("contains", Some(field), Some(serde_json::json!(value)));
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            resolver,
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+        );
+        out
+    }
+
+    #[test]
+    fn python_wildcard_contains_iterates_every_element() {
+        let out = render_field_contains(&resolver_with_array_field("links"), "links[].link_type", "external");
+        assert!(out.contains("any("), "got: {out}");
+        assert!(
+            out.contains("in str(_e.link_type) for _e in (result.links or [])"),
+            "got: {out}"
+        );
+        assert!(!out.contains("[0]"), "wildcard must not pin element 0, got: {out}");
+    }
+
+    #[test]
+    fn python_explicit_index_still_pins_element_zero() {
+        let out = render_field_contains(&resolver_with_array_field("links"), "links[0].link_type", "external");
+        assert!(out.contains("result.links[0].link_type"), "got: {out}");
+        assert!(
+            !out.contains("for _e in"),
+            "explicit index must not become a traversal, got: {out}"
+        );
+    }
+
+    /// Canary for the wildcard defect. `links[].link_type` lowered to `links[0]`, so a
+    /// fixture whose match lives in element 1 asserted against element 0 and passed by
+    /// accident. This pins the only property observable at codegen level that separates
+    /// the two: the emitted comprehension must quantify over the whole list rather than
+    /// name an index. Pre-fix the emitted text is `result.links[0].link_type` and every
+    /// assertion below fails. ~keep
+    #[test]
+    fn python_wildcard_match_in_second_element_is_not_missed() {
+        let out = render_field_contains(&resolver_with_array_field("links"), "links[].link_type", "canonical");
+        assert!(out.contains("for _e in"), "got: {out}");
+        assert!(!out.contains("links[0]"), "got: {out}");
+        assert!(!out.contains("links[1]"), "predicate must be index-free, got: {out}");
     }
 
     #[test]

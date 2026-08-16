@@ -314,6 +314,20 @@ pub(super) fn render_assertion(
         return;
     }
 
+    // Bracket-wildcard traversal (`links[].link_type`) means "every element", so it must
+    // scan the whole slice. Go has no expression-level `any`, so this emits statements
+    // rather than folding into `field_expr` below — and it must run before `field_expr`
+    // is built, since that path lowers the wildcard to index 0 and would silently assert
+    // on one element only. ~keep
+    if !result_is_simple
+        && let Some(f) = assertion.field.as_deref()
+        && !f.is_empty()
+        && let Some((array_part, elem_part)) = field_resolver.wildcard_split(f)
+    {
+        render_wildcard_assertion(out, assertion, result_var, field_resolver, f, &array_part, &elem_part);
+        return;
+    }
+
     let field_expr = if result_is_simple {
         result_var.to_string()
     } else {
@@ -985,6 +999,136 @@ fn emit_non_empty_precondition(out: &mut String, array_expr: &str) {
     let _ = writeln!(out, "\t}}");
 }
 
+/// Per-assertion suffix for Go locals emitted by [`render_wildcard_assertion`].
+///
+/// Two assertions over the same array would otherwise both declare `found`, which is a
+/// redeclaration error in the same function scope. Hashing the assertion's discriminating
+/// fields (mirroring the swift backend's `local_suffix`) makes the name unique per
+/// assertion while staying stable across regenerations. ~keep
+fn wildcard_local_suffix(assertion: &Assertion) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    assertion.assertion_type.hash(&mut hasher);
+    assertion.field.hash(&mut hasher);
+    assertion
+        .value
+        .as_ref()
+        .map(std::string::ToString::to_string)
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    assertion
+        .values
+        .as_ref()
+        .map(|vs| {
+            vs.iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    format!("{:x}", hasher.finish() & 0xffff_ffff)
+}
+
+/// Emit the statement form of an any-element assertion over a bracket-wildcard path.
+fn render_wildcard_assertion(
+    out: &mut String,
+    assertion: &Assertion,
+    result_var: &str,
+    field_resolver: &FieldResolver,
+    field: &str,
+    array_part: &str,
+    elem_part: &str,
+) {
+    let array_accessor = if array_part.is_empty() {
+        result_var.to_string()
+    } else {
+        field_resolver.accessor(array_part, "go", result_var)
+    };
+    // Passing the loop variable as the result var is what makes a nested element sub-path
+    // resolve against the element rather than against the whole result. ~keep
+    let elem_accessor = field_resolver.accessor(elem_part, "go", "e");
+    let suffix = wildcard_local_suffix(assertion);
+
+    let emit_scan = |out: &mut String, local: &str, cond: &str| {
+        let _ = writeln!(out, "\t{local} := false");
+        let _ = writeln!(out, "\tfor _, e := range {array_accessor} {{");
+        let _ = writeln!(out, "\t\tif {cond} {{");
+        let _ = writeln!(out, "\t\t\t{local} = true");
+        let _ = writeln!(out, "\t\t\tbreak");
+        let _ = writeln!(out, "\t\t}}");
+        let _ = writeln!(out, "\t}}");
+    };
+
+    match assertion.assertion_type.as_str() {
+        "contains" | "not_contains" if assertion.value.is_some() => {
+            let expected = assertion.value.as_ref().expect("guarded by the match arm");
+            let go_val = json_to_go(expected);
+            let local = format!("found{suffix}");
+            let cond = format!("strings.Contains(fmt.Sprintf(\"%v\", {elem_accessor}), {go_val})");
+            emit_scan(out, &local, &cond);
+            if assertion.assertion_type == "contains" {
+                let _ = writeln!(out, "\tif !{local} {{");
+                let _ = writeln!(
+                    out,
+                    "\t\tt.Errorf(\"expected some element of '{field}' to contain %v\", {go_val})"
+                );
+            } else {
+                let _ = writeln!(out, "\tif {local} {{");
+                let _ = writeln!(
+                    out,
+                    "\t\tt.Errorf(\"expected no element of '{field}' to contain %v\", {go_val})"
+                );
+            }
+            let _ = writeln!(out, "\t}}");
+        }
+        "contains" | "contains_all" | "not_contains" => {
+            let Some(values) = &assertion.values else {
+                let _ = writeln!(out, "\t// skipped: '{field}' traversal assertion has no values");
+                return;
+            };
+            let negated = assertion.assertion_type == "not_contains";
+            for (i, val) in values.iter().enumerate() {
+                let go_val = json_to_go(val);
+                let local = format!("found{suffix}v{i}");
+                let cond = format!("strings.Contains(fmt.Sprintf(\"%v\", {elem_accessor}), {go_val})");
+                emit_scan(out, &local, &cond);
+                if negated {
+                    let _ = writeln!(out, "\tif {local} {{");
+                    let _ = writeln!(
+                        out,
+                        "\t\tt.Errorf(\"expected no element of '{field}' to contain %v\", {go_val})"
+                    );
+                } else {
+                    let _ = writeln!(out, "\tif !{local} {{");
+                    let _ = writeln!(
+                        out,
+                        "\t\tt.Errorf(\"expected some element of '{field}' to contain %v\", {go_val})"
+                    );
+                }
+                let _ = writeln!(out, "\t}}");
+            }
+        }
+        "not_empty" => {
+            let local = format!("found{suffix}");
+            let cond = format!("fmt.Sprintf(\"%v\", {elem_accessor}) != \"\"");
+            emit_scan(out, &local, &cond);
+            let _ = writeln!(out, "\tif !{local} {{");
+            let _ = writeln!(
+                out,
+                "\t\tt.Errorf(\"expected some element of '{field}' to be non-empty\")"
+            );
+            let _ = writeln!(out, "\t}}");
+        }
+        other => {
+            let _ = writeln!(
+                out,
+                "\t// skipped: unsupported traversal assertion '{other}' on '{field}'"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -997,6 +1141,94 @@ mod tests {
             value: Some(serde_json::Value::String(value.to_string())),
             ..Default::default()
         }
+    }
+
+    fn contains_assertion(field: &str, value: &str) -> Assertion {
+        Assertion {
+            assertion_type: "contains".to_string(),
+            field: Some(field.to_string()),
+            value: Some(serde_json::Value::String(value.to_string())),
+            ..Default::default()
+        }
+    }
+
+    fn render_bare(assertion: &Assertion) -> String {
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            assertion,
+            "result",
+            "pkg",
+            &resolver,
+            &HashMap::new(),
+            &HashSet::new(),
+            false,
+            false,
+            false,
+            None,
+        );
+        out
+    }
+
+    #[test]
+    fn wildcard_contains_scans_every_element_not_just_index_zero() {
+        let out = render_bare(&contains_assertion("links[].link_type", "external"));
+        assert!(out.contains("for _, e := range result.Links {"), "got: {out}");
+        assert!(out.contains("e.LinkType"), "got: {out}");
+        assert!(!out.contains("[0]"), "wildcard must not lower to index 0, got: {out}");
+    }
+
+    #[test]
+    fn explicit_numeric_index_still_targets_that_element() {
+        let out = render_bare(&contains_assertion("links[0].link_type", "external"));
+        assert!(out.contains("result.Links[0].LinkType"), "got: {out}");
+        assert!(
+            !out.contains("range"),
+            "explicit index must not become a scan, got: {out}"
+        );
+    }
+
+    /// Codegen-level canary for the wildcard defect. A fixture array whose match lives in
+    /// element 1 is only detected by code that visits every element; the pre-fix renderer
+    /// emitted a single `result.Links[0]` accessor, so this assertion pair fails against it.
+    /// It cannot execute the generated Go, so it pins the property structurally: an
+    /// element-1-only match is caught iff the emitted loop is unbounded and the value is
+    /// tested inside it. ~keep
+    #[test]
+    fn wildcard_match_in_element_one_is_reachable() {
+        let out = render_bare(&contains_assertion("links[].link_type", "internal"));
+        let loop_start = out
+            .find("for _, e := range")
+            .expect("expected an unbounded element scan");
+        let check = out
+            .find("strings.Contains")
+            .expect("expected a per-element containment check");
+        assert!(
+            check > loop_start,
+            "containment check must sit inside the scan, got: {out}"
+        );
+        assert!(
+            !out.contains("result.Links[0]"),
+            "an index-0 accessor would miss a match in element 1, got: {out}"
+        );
+    }
+
+    #[test]
+    fn two_wildcard_assertions_on_one_array_use_distinct_locals() {
+        let first = render_bare(&contains_assertion("links[].link_type", "external"));
+        let second = render_bare(&contains_assertion("links[].link_type", "internal"));
+        let local_of = |s: &str| {
+            let start = s.find("found").expect("expected a found local");
+            s[start..start + s[start..].find(' ').expect("local is space-delimited")].to_string()
+        };
+        assert_ne!(local_of(&first), local_of(&second), "locals must not collide");
     }
 
     /// IR-oracle wiring regression (alef task #64): a field that is IR-reachable

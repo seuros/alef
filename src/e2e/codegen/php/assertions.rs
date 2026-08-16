@@ -257,6 +257,59 @@ pub(super) fn render_assertion(
         }
     }
 
+    // Bracket-wildcard traversal (`links[].link_type`) means "any element", so it must
+    // render an array_filter quantifier. Falling through to `accessor` would lower the
+    // wildcard to index 0 and silently assert against only the first element. Keyed off
+    // the fixture path alone, never off the `[]`-spelled config sets. ~keep
+    if !result_is_simple
+        && let Some(f) = assertion.field.as_deref().filter(|f| !f.is_empty())
+        && let Some((array_part, elem_part)) = field_resolver.wildcard_split(f)
+    {
+        let raw_array_accessor = if array_part.is_empty() {
+            format!("${result_var}")
+        } else {
+            field_resolver.accessor(&array_part, "php", &format!("${result_var}"))
+        };
+        // array_filter() on null is a TypeError; `?? []` makes the quantifier false. ~keep
+        let array_accessor = if !array_part.is_empty() && field_resolver.is_optional(&array_part) {
+            format!("({raw_array_accessor} ?? [])")
+        } else {
+            raw_array_accessor
+        };
+        // Passing the closure parameter as the result var is what lets a nested element
+        // sub-path resolve against the loop variable instead of the result. ~keep
+        let elem_accessor = field_resolver.accessor(&elem_part, "php", "$e");
+        match assertion.assertion_type.as_str() {
+            "contains" | "contains_all" | "not_contains" => {
+                let assert_fn = if assertion.assertion_type == "not_contains" {
+                    "assertFalse"
+                } else {
+                    "assertTrue"
+                };
+                for expected in assertion.expected_values() {
+                    let php_val = json_to_php(expected);
+                    let _ = writeln!(
+                        out,
+                        "        $this->{assert_fn}((bool)array_filter({array_accessor}, fn($e) => str_contains((string){elem_accessor}, {php_val})));"
+                    );
+                }
+            }
+            "not_empty" => {
+                let _ = writeln!(
+                    out,
+                    "        $this->assertTrue((bool)array_filter({array_accessor}, fn($e) => (string){elem_accessor} !== ''));"
+                );
+            }
+            other => {
+                let _ = writeln!(
+                    out,
+                    "        // skipped: unsupported traversal assertion '{other}' on '{f}'"
+                );
+            }
+        }
+        return;
+    }
+
     let field_expr = match &assertion.field {
         // When result_is_simple, the result is a scalar (bytes/string/etc.) — any
         // field access on it would fail. Treat all assertions as referring to the
@@ -470,7 +523,16 @@ mod tests {
             ..Default::default()
         };
         let mut out = String::new();
-        render_assertion(&mut out, &assertion, "result", &resolver, false, false, &BTreeMap::new(), false);
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            false,
+            false,
+            &BTreeMap::new(),
+            false,
+        );
         assert!(!out.contains("skipped"), "got: {out}");
     }
 
@@ -499,7 +561,16 @@ mod tests {
             ..Default::default()
         };
         let mut out = String::new();
-        render_assertion(&mut out, &assertion, "result", &resolver, false, false, &BTreeMap::new(), false);
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            false,
+            false,
+            &BTreeMap::new(),
+            false,
+        );
         assert!(out.contains("skipped"), "got: {out}");
     }
 
@@ -573,5 +644,83 @@ mod tests {
         );
         assert!(!out.contains("trim("), "equals must not trim either side; got: {out}");
         assert!(out.contains("assertEquals("), "got: {out}");
+    }
+
+    fn wildcard_resolver() -> FieldResolver {
+        FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::from(["links".to_string()]),
+            &HashSet::from(["links".to_string()]),
+            &HashSet::new(),
+        )
+    }
+
+    fn render_wildcard(assertion_type: &str, field: &str) -> String {
+        let assertion = Assertion {
+            assertion_type: assertion_type.to_string(),
+            field: Some(field.to_string()),
+            value: if assertion_type == "not_empty" {
+                None
+            } else {
+                Some(serde_json::Value::String("internal".to_string()))
+            },
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &wildcard_resolver(),
+            false,
+            false,
+            &BTreeMap::new(),
+            false,
+        );
+        out
+    }
+
+    /// A bracket-wildcard fixture path means "every element", so the emitted PHP
+    /// must quantify with array_filter over the whole array.
+    #[test]
+    fn php_wildcard_contains_emits_quantifier_over_all_elements() {
+        let out = render_wildcard("contains", "links[].link_type");
+        assert!(
+            out.contains(
+                "$this->assertTrue((bool)array_filter($result->links, fn($e) => str_contains((string)$e->linkType, \"internal\")));"
+            ),
+            "expected an any-element quantifier, got:\n{out}"
+        );
+    }
+
+    /// THE CANARY. A fixture whose match lives only in element 1 is satisfied by an
+    /// any-element quantifier and missed by an index-0 lookup. This unit test observes
+    /// the emitted source rather than executing it, so it pins the property that makes
+    /// the runtime difference: the wildcard must NOT lower to a single-element access.
+    /// Pre-fix the wildcard rendered `$result->links[0]->linkType`, which reads element 0
+    /// only and reports a false green; this assertion is red then.
+    #[test]
+    fn php_wildcard_does_not_collapse_to_element_zero() {
+        let out = render_wildcard("contains", "links[].link_type");
+        assert!(
+            !out.contains("[0]"),
+            "wildcard must not lower to a single-element access, got:\n{out}"
+        );
+    }
+
+    /// Regression lock: an explicit numeric index is not a wildcard and must keep
+    /// resolving to that exact element.
+    #[test]
+    fn php_explicit_index_still_resolves_to_element_zero() {
+        let out = render_wildcard("contains", "links[0].link_type");
+        assert!(
+            out.contains("$result->links[0]->linkType"),
+            "explicit index 0 must keep its index-preserving accessor, got:\n{out}"
+        );
+        assert!(
+            !out.contains("array_filter"),
+            "explicit index must not become a quantifier, got:\n{out}"
+        );
     }
 }

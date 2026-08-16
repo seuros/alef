@@ -167,7 +167,15 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], context: G
                 }
             })
         })
-    }) || fixtures.iter().any(|f| fixture_needs_fmt_for_declared_error_value(f));
+    }) || fixtures.iter().any(|f| fixture_needs_fmt_for_declared_error_value(f))
+        // Bracket-wildcard traversal assertions stringify each element with
+        // `fmt.Sprintf("%v", …)`; without this the `needs_fmt` conjunction below would
+        // veto the import even though the body references the package. ~keep
+        || fixtures.iter().any(|f| {
+            f.assertions
+                .iter()
+                .any(|a| a.field.as_deref().is_some_and(|field| field.contains("[].")))
+        });
 
     let needs_strings = fixtures.iter().any(|f| {
         if !emits_executable_test(f) {

@@ -31,7 +31,26 @@ const FORMAT_METADATA_VARIANTS: &[&str] = &[
     "code",
 ];
 
+/// How an absent JSON key is unwrapped in a generated accessor chain.
+///
+/// `Panic` emits `.?`, which aborts the whole zig test when the key is missing.
+/// That is fine for a path the fixture asserts must exist, but wrong inside a
+/// wildcard element check, where "this element has no such key" must mean
+/// "this element does not match" and let the loop try the next one. ~keep
+#[derive(Clone, Copy)]
+enum Unwrap {
+    Panic,
+    Error,
+}
+
+/// Error returned by a wildcard element check when the element lacks the field. ~keep
+const WILDCARD_MISSING_FIELD_ERROR: &str = "error.WildcardElementFieldMissing";
+
 fn json_path_expr(result_var: &str, field_path: &str) -> String {
+    json_path_expr_with(result_var, field_path, Unwrap::Panic)
+}
+
+fn json_path_expr_with(result_var: &str, field_path: &str, unwrap: Unwrap) -> String {
     let segments: Vec<&str> = field_path.split('.').collect();
     let mut expr = result_var.to_string();
     let mut prev_seg: Option<&str> = None;
@@ -45,10 +64,12 @@ fn json_path_expr(result_var: &str, field_path: &str) -> String {
             continue;
         }
         // Handle array accessor notation:
-        //   "links[]"     → access the array, then first element.
-        //   "results[0]"  → access the array, then specific index N.
+        //   "links[]"     → bare trailing wildcard with no element field; falls back to
+        //                   element 0. A wildcard with an element field ("links[].url")
+        //                   never reaches here — the caller lowers it to a loop instead.
+        //   "results[0]"  → access the array, then specific index N. ~keep
         if let Some(key) = seg.strip_suffix("[]") {
-            expr = format!("{expr}.object.get(\"{key}\").?.array.items[0]");
+            expr = format!("{}.array.items[0]", json_get(&expr, key, unwrap));
         } else if let Some(bracket_pos) = seg.find('[') {
             if let Some(end_pos) = seg.find(']')
                 && end_pos > bracket_pos + 1
@@ -57,7 +78,7 @@ fn json_path_expr(result_var: &str, field_path: &str) -> String {
                 let key = &seg[..bracket_pos];
                 let idx = &seg[bracket_pos + 1..end_pos];
                 if idx.chars().all(|c| c.is_ascii_digit()) {
-                    expr = format!("{expr}.object.get(\"{key}\").?.array.items[{idx}]");
+                    expr = format!("{}.array.items[{idx}]", json_get(&expr, key, unwrap));
                     prev_seg = Some(seg);
                     continue;
                 }
@@ -66,17 +87,108 @@ fn json_path_expr(result_var: &str, field_path: &str) -> String {
                 // `.object.get("field").?.object.get("key").?`. Used by nested fixture objects.
                 // `metadata.document.open_graph[title]` alias pattern where
                 // `open_graph` is a `HashMap<String, String>`.
-                expr = format!("{expr}.object.get(\"{key}\").?.object.get(\"{idx}\").?");
+                expr = json_get(&json_get(&expr, key, unwrap), idx, unwrap);
                 prev_seg = Some(seg);
                 continue;
             }
-            expr = format!("{expr}.object.get(\"{seg}\").?");
+            expr = json_get(&expr, seg, unwrap);
         } else {
-            expr = format!("{expr}.object.get(\"{seg}\").?");
+            expr = json_get(&expr, seg, unwrap);
         }
         prev_seg = Some(seg);
     }
     expr
+}
+
+/// One `.object.get("key")` step, unwrapped according to `unwrap`.
+fn json_get(expr: &str, key: &str, unwrap: Unwrap) -> String {
+    match unwrap {
+        Unwrap::Panic => format!("{expr}.object.get(\"{key}\").?"),
+        Unwrap::Error => format!("({expr}.object.get(\"{key}\") orelse return {WILDCARD_MISSING_FIELD_ERROR})"),
+    }
+}
+
+/// Split a resolved field path on its first bracket-wildcard segment.
+///
+/// `"links[].url"` → `Some(("links", "url"))`. Returns `None` for paths with no
+/// wildcard, and for a bare trailing `"links[]"` (which names the array itself,
+/// not a per-element field).
+fn split_wildcard(field_path: &str) -> Option<(&str, &str)> {
+    let pos = field_path.find("[].")?;
+    let array_root = &field_path[..pos];
+    let element_sub_path = &field_path[pos + 3..];
+    if array_root.is_empty() || element_sub_path.is_empty() {
+        return None;
+    }
+    Some((array_root, element_sub_path))
+}
+
+/// Emit an "at least one element satisfies the assertion" check over a JSON array.
+///
+/// The per-element assertion is the ordinary rendered template with its accessor
+/// rooted at the loop element, hoisted into a nested function so a failing
+/// element is an error that `catch continue` turns into "try the next element"
+/// rather than a failure of the whole test. Rendering the same template keeps
+/// wildcard and non-wildcard assertions from drifting apart. ~keep
+fn render_wildcard_json_assertion(
+    out: &mut String,
+    assertion: &Assertion,
+    result_var: &str,
+    array_root: &str,
+    element_sub_path: &str,
+    is_length_access: bool,
+) {
+    let field_name = assertion.field.as_deref().unwrap_or_default();
+
+    // A second wildcard inside the element sub-path would need a nested loop.
+    // Emitting `items[0]` for it would reintroduce exactly the false green this
+    // function exists to remove, so leave a visible gap instead. ~keep
+    if element_sub_path.contains("[]") {
+        let _ = writeln!(
+            out,
+            "    // skipped: nested array-wildcard field '{field_name}' not supported in zig"
+        );
+        return;
+    }
+
+    let element_expr = json_path_expr_with("_wce", element_sub_path, Unwrap::Error);
+    let body = render_json_assertion_template(assertion, &element_expr, is_length_access);
+    // An assertion type the template has no branch for renders to nothing. The
+    // nested function would then never use `_wce`, which Zig rejects as an unused
+    // parameter, so this must stay a skip rather than an empty loop. ~keep
+    if body.trim().is_empty() {
+        let atype = &assertion.assertion_type;
+        let _ = writeln!(
+            out,
+            "    // skipped: assertion '{atype}' on array-wildcard field '{field_name}' not supported in zig"
+        );
+        return;
+    }
+
+    let array_expr = json_path_expr(result_var, array_root);
+    let _ = writeln!(out, "    {{");
+    let _ = writeln!(out, "        const _WildcardCheck = struct {{");
+    let _ = writeln!(out, "            fn check(_wce: std.json.Value) anyerror!void {{");
+    for line in body.lines() {
+        if line.trim().is_empty() {
+            out.push('\n');
+        } else {
+            let _ = writeln!(out, "            {line}");
+        }
+    }
+    let _ = writeln!(out, "            }}");
+    let _ = writeln!(out, "        }};");
+    let _ = writeln!(out, "        var _wc_found = false;");
+    let _ = writeln!(out, "        for ({array_expr}.array.items) |_wc_item| {{");
+    let _ = writeln!(out, "            _WildcardCheck.check(_wc_item) catch continue;");
+    let _ = writeln!(out, "            _wc_found = true;");
+    let _ = writeln!(out, "            break;");
+    let _ = writeln!(out, "        }}");
+    let _ = writeln!(
+        out,
+        "        try testing.expect(_wc_found); // no element of '{array_root}' matched"
+    );
+    let _ = writeln!(out, "    }}");
 }
 
 /// Emit a Zig predicate over the `chunks` array of a JSON-parsed extraction
@@ -327,6 +439,23 @@ pub(super) fn render_json_assertion(
         (field_path, false)
     };
 
+    // Bracket-wildcard path (`foo[].bar`): the fixture means "some element of foo
+    // satisfies this". Lowering it to `foo.array.items[0]` checks exactly one
+    // element and passes for the wrong reason, so it is handled as a loop instead
+    // of as a plain accessor expression. Explicit numeric indices (`foo[0].bar`)
+    // are a different, correct feature and do not come through here. ~keep
+    if let Some((array_root, element_sub_path)) = split_wildcard(field_path_for_expr) {
+        render_wildcard_json_assertion(
+            out,
+            assertion,
+            result_var,
+            array_root,
+            element_sub_path,
+            is_length_access,
+        );
+        return;
+    }
+
     let field_expr = if field_path_for_expr.is_empty() {
         result_var.to_string()
     } else {
@@ -401,6 +530,18 @@ pub(super) fn render_json_assertion(
         return;
     }
 
+    out.push_str(&render_json_assertion_template(
+        assertion,
+        &field_expr,
+        is_length_access,
+    ));
+}
+
+/// Render the JSON-struct assertion template for one already-built `field_expr`.
+///
+/// Split out of `render_json_assertion` so the wildcard path can render the very
+/// same assertion against a loop element instead of against the result root. ~keep
+fn render_json_assertion_template(assertion: &Assertion, field_expr: &str, is_length_access: bool) -> String {
     // Compute context variables for the template.
     let zig_val = match &assertion.value {
         Some(serde_json::Value::String(s)) => format!("\"{}\"", escape_zig(s)),
@@ -475,7 +616,7 @@ pub(super) fn render_json_assertion(
             values_list => values_list,
         },
     );
-    out.push_str(&rendered);
+    rendered
 }
 
 /// Predicate matching `render_assertion`: returns true when the assertion
@@ -892,6 +1033,141 @@ pub(super) fn render_assertion(
         other => {
             panic!("Zig e2e generator: unsupported assertion type: {other}");
         }
+    }
+}
+
+#[cfg(test)]
+mod wildcard_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn resolver() -> FieldResolver {
+        FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+    }
+
+    fn assertion(assertion_type: &str, field: &str, value: serde_json::Value) -> Assertion {
+        Assertion {
+            assertion_type: assertion_type.into(),
+            field: Some(field.into()),
+            value: Some(value),
+            ..Assertion::default()
+        }
+    }
+
+    fn render(assertion: &Assertion) -> String {
+        let mut out = String::new();
+        render_json_assertion(&mut out, assertion, "result", &resolver(), false);
+        out
+    }
+
+    #[test]
+    fn wildcard_field_should_emit_a_loop_over_every_element() {
+        let rendered = render(&assertion("contains", "links[].url", serde_json::json!("example.com")));
+        assert!(
+            rendered.contains("for (result.object.get(\"links\").?.array.items) |_wc_item|"),
+            "expected a loop over every element, got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("try testing.expect(_wc_found);"),
+            "expected the any-element flag to be asserted, got:\n{rendered}"
+        );
+    }
+
+    /// CANARY. A fixture whose match lives in element 1 passes only if the generated
+    /// code visits element 1. The pre-fix generator emitted `items[0]`, which checks
+    /// element 0 and nothing else — so this assertion fails against the old lowering.
+    ///
+    /// This is a shape canary, not a runtime one: this crate generates Zig but cannot
+    /// compile or run it, so "element 1 matches, element 0 does not" cannot be
+    /// executed here. What is verifiable is that the emitted code is not pinned to
+    /// index 0 and that a non-matching element advances the loop instead of failing
+    /// the test. ~keep
+    #[test]
+    fn wildcard_field_should_not_pin_the_assertion_to_element_zero() {
+        let rendered = render(&assertion("contains", "links[].url", serde_json::json!("example.com")));
+        assert!(
+            !rendered.contains("items[0]"),
+            "wildcard must not lower to element 0, got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("catch continue;"),
+            "a non-matching element must advance the loop, not fail the test, got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn wildcard_element_accessor_should_error_instead_of_panicking_on_a_missing_key() {
+        let rendered = render(&assertion("contains", "links[].url", serde_json::json!("example.com")));
+        assert!(
+            rendered.contains("orelse return error.WildcardElementFieldMissing"),
+            "an element without the key must be skipped, not abort the test, got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn explicit_numeric_index_should_still_lower_to_that_index() {
+        let rendered = render(&assertion(
+            "contains",
+            "results[0].url",
+            serde_json::json!("example.com"),
+        ));
+        assert!(
+            rendered.contains("result.object.get(\"results\").?.array.items[0].object.get(\"url\").?"),
+            "explicit index accessor changed, got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("_wc_found"),
+            "explicit index must not take the wildcard path, got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn plain_field_path_should_be_unchanged() {
+        let rendered = render(&assertion("equals", "metadata.title", serde_json::json!("Hello")));
+        assert!(
+            rendered.contains("result.object.get(\"metadata\").?.object.get(\"title\").?.string"),
+            "plain accessor changed, got:\n{rendered}"
+        );
+        assert!(!rendered.contains("_wc_found"), "got:\n{rendered}");
+    }
+
+    #[test]
+    fn nested_wildcard_should_emit_a_visible_skip_rather_than_a_wrong_check() {
+        let rendered = render(&assertion(
+            "contains",
+            "pages[].links[].url",
+            serde_json::json!("example.com"),
+        ));
+        assert!(
+            rendered.contains("// skipped: nested array-wildcard field 'pages[].links[].url'"),
+            "expected a visible skip, got:\n{rendered}"
+        );
+        assert!(!rendered.contains("items[0]"), "got:\n{rendered}");
+        assert!(!rendered.contains("testing.expect"), "got:\n{rendered}");
+    }
+
+    #[test]
+    fn wildcard_length_assertion_should_measure_the_element_array() {
+        let rendered = render(&assertion("count_min", "links[].tags.length", serde_json::json!(2)));
+        assert!(
+            rendered.contains("_wce.object.get(\"tags\")") || rendered.contains("(_wce.object.get(\"tags\")"),
+            "element accessor must be rooted at the loop element, got:\n{rendered}"
+        );
+        assert!(rendered.contains("_wc_found"), "got:\n{rendered}");
+    }
+
+    #[test]
+    fn split_wildcard_should_ignore_a_trailing_bracket_with_no_element_field() {
+        assert_eq!(split_wildcard("links[].url"), Some(("links", "url")));
+        assert_eq!(split_wildcard("links[]"), None);
+        assert_eq!(split_wildcard("results[0].url"), None);
+        assert_eq!(split_wildcard("metadata.title"), None);
     }
 }
 

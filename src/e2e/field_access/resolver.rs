@@ -625,6 +625,31 @@ impl FieldResolver {
         None
     }
 
+    /// Split a bracket-wildcard path (`foo[].bar`) into its array-root path and
+    /// element sub-path, or `None` when the path has no wildcard.
+    ///
+    /// A wildcard means "every element", so callers render an any-element
+    /// construct over the array root rather than an accessor into one index.
+    /// Build the element side with `accessor(&element, lang, "<lambda param>")`
+    /// — passing the closure parameter as the result var is what lets a nested
+    /// element sub-path resolve against the loop variable instead of the result.
+    ///
+    /// Alias resolution happens BEFORE the split, so a renamed sub-field lands on
+    /// the element side; the raw split is only a fallback for when resolution drops
+    /// the marker. Explicit numeric indices (`choices[0].message`) return `None` and
+    /// keep their existing index-preserving path through `accessor`. ~keep
+    pub fn wildcard_split(&self, fixture_field: &str) -> Option<(String, String)> {
+        let raw_dot = fixture_field.find("[].")?;
+        let resolved = self.resolve(fixture_field);
+        match resolved.find("[].") {
+            Some(dot) => Some((resolved[..dot].to_string(), resolved[dot + 3..].to_string())),
+            None => Some((
+                fixture_field[..raw_dot].to_string(),
+                fixture_field[raw_dot + 3..].to_string(),
+            )),
+        }
+    }
+
     /// Check if a resolved field path contains a non-numeric map access.
     pub fn has_map_access(&self, fixture_field: &str) -> bool {
         let resolved = self.resolve(fixture_field);

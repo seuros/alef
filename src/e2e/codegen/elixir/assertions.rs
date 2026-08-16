@@ -260,6 +260,29 @@ pub(super) fn render_assertion(
         return;
     }
 
+    // A `foo[].bar` fixture path means "some element of foo satisfies this", but
+    // `FieldResolver::accessor` lowers `[]` to index 0 (`Enum.at(result.foo, 0).bar`),
+    // which silently checks only the first element and reads as coverage. Quantify over
+    // every element instead. Explicit numeric indices (`foo[2].bar`) are a separate,
+    // correct feature and keep their `Enum.at/2` lowering. ~keep
+    if !result_is_simple
+        && let Some(f) = assertion.field.as_deref()
+        && let Some((array_part, elem_part)) = field_resolver.wildcard_split(f)
+    {
+        let array_accessor = if array_part.is_empty() {
+            result_var.to_string()
+        } else {
+            field_resolver.accessor(&array_part, "elixir", result_var)
+        };
+        let elem_accessor = if elem_part.is_empty() {
+            "e".to_string()
+        } else {
+            field_resolver.accessor(&elem_part, "elixir", "e")
+        };
+        render_wildcard_assertion(out, assertion, &array_accessor, &elem_accessor, f);
+        return;
+    }
+
     let field_expr = if result_is_simple {
         result_var.to_string()
     } else {
@@ -587,6 +610,57 @@ pub(super) fn build_elixir_method_call(
             format!("{module_path}.run_query({result_var}, \"{language}\", \"{query_source}\", source)")
         }
         _ => format!("{module_path}.{method_name}({result_var})"),
+    }
+}
+
+/// Render the `foo[].bar` wildcard forms as an `Enum.any?/2` quantifier over every
+/// element of the array, rather than an index-0 lookup. The array expression is
+/// nil-guarded with `|| []` because an absent optional list surfaces as `nil` and
+/// `Enum.any?/2` would raise on it.
+fn render_wildcard_assertion(
+    out: &mut String,
+    assertion: &Assertion,
+    array_accessor: &str,
+    elem_accessor: &str,
+    field: &str,
+) {
+    let guarded = format!("({array_accessor} || [])");
+    let any_expr = |elixir_val: &str| {
+        format!("Enum.any?({guarded}, fn e -> String.contains?(to_string({elem_accessor}), {elixir_val}) end)")
+    };
+    match assertion.assertion_type.as_str() {
+        "contains" => {
+            if let Some(val) = &assertion.value {
+                let elixir_val = json_to_elixir(val);
+                let _ = writeln!(out, "      assert {}", any_expr(&elixir_val));
+            }
+        }
+        "contains_all" => {
+            if let Some(values) = &assertion.values {
+                for val in values {
+                    let elixir_val = json_to_elixir(val);
+                    let _ = writeln!(out, "      assert {}", any_expr(&elixir_val));
+                }
+            }
+        }
+        "not_contains" => {
+            for val in assertion.expected_values() {
+                let elixir_val = json_to_elixir(val);
+                let _ = writeln!(out, "      refute {}", any_expr(&elixir_val));
+            }
+        }
+        "not_empty" => {
+            let _ = writeln!(
+                out,
+                "      assert Enum.any?({guarded}, fn e -> to_string({elem_accessor}) != \"\" end)"
+            );
+        }
+        other => {
+            let _ = writeln!(
+                out,
+                "      # skipped: unsupported traversal assertion '{other}' on '{field}'"
+            );
+        }
     }
 }
 
@@ -1101,5 +1175,85 @@ mod tests {
             true,
         );
         assert_eq!(out, "      assert length(result) >= 1\n");
+    }
+}
+
+#[cfg(test)]
+mod wildcard_tests {
+    use super::render_assertion;
+    use crate::e2e::field_access::FieldResolver;
+    use crate::e2e::fixture::Assertion;
+    use std::collections::{HashMap, HashSet};
+
+    fn array_resolver(field: &str) -> FieldResolver {
+        let result_fields: HashSet<String> = [field.to_string()].into_iter().collect();
+        let array_fields: HashSet<String> = [field.to_string()].into_iter().collect();
+        FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &result_fields,
+            &array_fields,
+            &HashSet::new(),
+        )
+    }
+
+    fn render(assertion: &Assertion, resolver: &FieldResolver) -> String {
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            assertion,
+            "result",
+            resolver,
+            "Sample",
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            false,
+        );
+        out
+    }
+
+    fn contains_on(field: &str) -> Assertion {
+        Assertion {
+            assertion_type: "contains".to_string(),
+            field: Some(field.to_string()),
+            value: Some(serde_json::Value::String("beta".to_string())),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn elixir_wildcard_contains_quantifies_over_every_element() {
+        let out = render(&contains_on("items[].name"), &array_resolver("items"));
+        assert_eq!(
+            out,
+            "      assert Enum.any?((result.items || []), fn e -> String.contains?(to_string(e.name), \"beta\") end)\n",
+            "got: {out}"
+        );
+    }
+
+    /// Regression lock: an explicit numeric index is a different, correct feature and must
+    /// keep its exact `Enum.at/2` lowering (also pinned by tests/e2e_field_path_array.rs). ~keep
+    #[test]
+    fn elixir_explicit_index_still_lowers_to_enum_at() {
+        let out = render(&contains_on("items[0].name"), &array_resolver("items"));
+        assert!(out.contains("Enum.at(result.items, 0).name"), "got: {out}");
+        assert!(!out.contains("Enum.any?"), "got: {out}");
+    }
+
+    /// CANARY. A code-generator unit test cannot execute Elixir, so it cannot literally run
+    /// a fixture whose only match lives in element 1. The observable proxy is exact: the
+    /// pre-fix renderer emitted `Enum.at(result.items, 0).name`, a lookup pinned to element
+    /// 0, so a value present only at element 1 could never be seen. This asserts no
+    /// positional lookup survives and the predicate is quantified over the whole list; it
+    /// fails against the pre-fix code, where `Enum.at(result.items, 0)` is present. ~keep
+    #[test]
+    fn elixir_wildcard_match_in_a_non_first_element_is_not_pinned_to_element_zero() {
+        let mut assertion = contains_on("items[].name");
+        assertion.value = Some(serde_json::Value::String("only-in-element-1".to_string()));
+        let out = render(&assertion, &array_resolver("items"));
+        assert!(!out.contains("Enum.at("), "index-pinned lookup survived: {out}");
+        assert!(out.contains("Enum.any?((result.items || [])"), "got: {out}");
+        assert!(out.contains("to_string(e.name)"), "got: {out}");
     }
 }
