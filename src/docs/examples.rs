@@ -155,7 +155,7 @@ fn method_call_expression(method: &MethodDef, owner_type: &str, lang: Language, 
     let name = func_name(&method.name, lang, ffi_prefix);
     let args = render_args(&method.params, lang, ffi_prefix);
     if method.is_static {
-        return static_method_call(owner_type, &name, &args, lang, ffi_prefix);
+        return static_method_call(method, owner_type, &name, &args, lang, ffi_prefix);
     }
     let receiver = match lang {
         Language::Go => "instance",
@@ -176,13 +176,38 @@ fn method_call_expression(method: &MethodDef, owner_type: &str, lang: Language, 
     }
 }
 
-fn static_method_call(owner_type: &str, name: &str, args: &str, lang: Language, ffi_prefix: &str) -> String {
+fn static_method_call(
+    method: &MethodDef,
+    owner_type: &str,
+    name: &str,
+    args: &str,
+    lang: Language,
+    ffi_prefix: &str,
+) -> String {
     let owner = type_name(owner_type, lang, ffi_prefix);
     match lang {
         Language::Ruby => format!("{owner}.{name}({args})"),
         Language::Php => format!("{owner}::{name}({args})"),
         Language::Rust => format!("{owner}::{name}({args})"),
         Language::C | Language::Ffi | Language::Jni => format!("{name}({args})"),
+        // ~keep Go has no static members: `gen_method_wrapper` renders
+        // `method_signature_static.jinja` -- `func {{ receiver_type }}{{ method_name }}(...)` --
+        // a package-level function whose name concatenates type and method. The `{owner}.{name}`
+        // fallthrough produced `DownloadManager.New(...)`, which contradicted the
+        // `func DownloadManagerNew(...)` signature printed directly above it on the same page.
+        Language::Go => format!("{owner}{name}({args})"),
+        // ~keep Zig's static shape is the same free-function-with-type-suffix as the signature
+        // arm documents (`opaque_static_signature.jinja`:
+        // `pub fn {{ method_snake }}_{{ type_snake }}(...)`), so the call site must not use
+        // member syntax either. `name` is already snake_case here (`func_name`'s Zig arm).
+        Language::Zig => format!("{name}_{}({args})", owner.to_snake_case()),
+        // ~keep The one shape the C# backend promotes to a real constructor
+        // (`is_static_constructor` -> `opaque_static_constructor_signature.jinja`) is invoked
+        // with `new`, not as a member of the type. Same predicate as the signature arm, so the
+        // example and the signature above it cannot disagree.
+        Language::Csharp if crate::docs::signatures::is_csharp_static_constructor(method, owner_type) => {
+            format!("new {owner}({args})")
+        }
         _ => format!("{owner}.{name}({args})"),
     }
 }

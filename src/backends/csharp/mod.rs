@@ -1,6 +1,6 @@
 //! C# (P/Invoke) binding generator backend for alef.
 
-mod gen_bindings;
+pub(crate) mod gen_bindings;
 pub mod gen_visitor;
 pub mod gen_visitor_bridge;
 pub(crate) mod template_env;

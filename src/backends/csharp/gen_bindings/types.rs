@@ -1,7 +1,7 @@
 //! C# opaque handle and record type code generation.
 
 mod bridge_fields;
-mod constructors;
+pub(crate) mod constructors;
 mod converters;
 mod opaque;
 mod records;

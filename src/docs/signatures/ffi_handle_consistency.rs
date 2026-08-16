@@ -131,12 +131,25 @@ fn test_c_signature_and_example_agree_on_named_return_handle_type() {
 //    omitting the signature is the honest one.
 //
 // 2. Not every gap needs the header. Two of the largest mismatches are plain IR and fixable
-//    here: the C arm of `render_method_signature_with_override` (signatures.rs:675-700) omits
-//    the leading `this` receiver that `orchestration.rs:141-147` always emits for a non-static
-//    method, and it names the symbol `{prefix}_{method}` via `func_name` while the backend
-//    emits `{prefix}_{type_snake}_{method}` (orchestration.rs:45,78) -- it already receives
+//    here: the C arm of `render_method_signature_with_override` (the
+//    `Language::Ffi | Language::C | Language::Jni` arm of signatures.rs) omits the leading
+//    `this` receiver that `orchestration.rs`'s `gen_method_wrapper` always emits for a
+//    non-static method (`params.push(format!("    {param_name}: {receiver_ty}"))`, with
+//    `param_name = "this"` and `receiver_ty = "AlefHandle"`), and it names the symbol
+//    `{prefix}_{method}` via `func_name` while the backend emits
+//    `{prefix}_{type_snake}_{method}` (`let fn_name = format!("{prefix}_{type_snake}_{method_name}")`,
+//    in both `gen_method_wrapper` and `gen_streaming_method_wrapper`) -- it already receives
 //    `type_name_str` and simply does not use it. Both are deferred with the rest of #67, but
 //    they are not blocked on the header.
+//
+//    Re-verified while working task #105: both backend sites still read as described, and both
+//    `alef all` / bare `alef docs` behave as qualification 1 says. Fixing the symbol name in
+//    the signature alone would introduce a *new* contradiction, because two neighbouring
+//    surfaces derive the same C symbol independently and would still say `{prefix}_{method}`:
+//    `render_method`'s heading (`language_pages/streaming.rs`, `func_name(&method.name, ...)`)
+//    and `method_call_expression`'s C arm (`examples.rs`, which already passes a `receiver`
+//    argument the signature does not declare). A coherent fix routes all three through one
+//    helper; that is the smallest honest unit of work here, not a one-line edit.
 // ---------------------------------------------------------------------------
 
 #[test]

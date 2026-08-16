@@ -56,7 +56,7 @@ pub(super) fn ffi_ty_to_csharp_public(rust_ty: &str) -> &'static str {
 /// Methods like `with_cache_dir` that return the owner type are NOT constructors and are
 /// handled as regular static factory methods. Only methods named `new` generate public
 /// C# constructors.
-pub(super) fn is_static_constructor(method: &MethodDef, type_name: &str) -> bool {
+pub(crate) fn is_static_constructor(method: &MethodDef, type_name: &str) -> bool {
     if method.name != "new" {
         return false;
     }

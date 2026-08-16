@@ -436,6 +436,38 @@ pub(crate) fn render_zig_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String 
     format!("pub fn {name}({}) {ret_str}", params.join(", "))
 }
 
+/// Arm-for-arm mirror of the C# backend's `is_static_constructor`
+/// (`backends/csharp/gen_bindings/types/constructors.rs`), which decides whether an opaque
+/// type's method is emitted as a real C# constructor instead of a named member.
+///
+/// ~keep Mirrored rather than called: the backend's copy takes the already-resolved `TypeDef`,
+/// while the docs layer only ever carries the owning type's Rust name.
+/// `test_csharp_docs_constructor_predicate_matches_the_backend_predicate` pins the two together
+/// over the whole clause matrix so they cannot drift. Every clause is reproduced, including the
+/// non-obvious `params.is_empty()` guard -- a zero-arg `new` is *not* promoted, because the
+/// backend emits that shape from the configured `client_constructor`
+/// (`gen_opaque_factory_method`, which renders `public static {T} Create(...)`) and a second
+/// definition here would be a duplicate. Opacity is not re-checked because the docs pipeline
+/// never reaches a C# method signature for a non-opaque type: `methods_bound_in_lang`
+/// (`docs/language_pages/type_render.rs`) gates the whole method loop on
+/// `lang == Rust || ty.is_opaque || (lang == Go && ty.has_serde)`.
+pub(crate) fn is_csharp_static_constructor(method: &MethodDef, owner_type: &str) -> bool {
+    if method.name != "new" {
+        return false;
+    }
+    if !method.is_static || method.params.is_empty() {
+        return false;
+    }
+    // ~keep Compared verbatim, not on the `rsplit("::")` short names `type_name` would use:
+    // the backend's copy tests `n == typ.name` against the same two IR values this receives
+    // (`type_render.rs` passes `&ty.name` straight through), so normalising here would make
+    // docs promote a fully qualified return the backend leaves as an ordinary method.
+    match &method.return_type {
+        TypeRef::Named(n) => n == owner_type,
+        _ => false,
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct MethodSignatureOverride {
     pub(crate) name: Option<String>,
@@ -618,20 +650,47 @@ pub(crate) fn render_method_signature_with_override(
                     format!("{pty} {pname}")
                 })
                 .collect();
-            if method.is_async {
-                let async_name = if name.ends_with("Async") {
-                    name.clone()
-                } else {
-                    format!("{name}Async")
-                };
-                let task_ret = if ret == "void" {
-                    "Task".to_string()
-                } else {
-                    format!("Task<{ret}>")
-                };
-                format!("public async {} {}({})", task_ret, async_name, params.join(", "))
+            // ~keep A static `new` with at least one parameter is not a factory method in the
+            // emitted C#: `gen_opaque_type` routes it through `is_static_constructor` ->
+            // `gen_opaque_static_constructor`, which renders
+            // `opaque_static_constructor_signature.jinja` -- `public {class_name}({params})`, a
+            // real instance constructor with no return type and no method name. Documenting it
+            // as `public DownloadManager New(string version)` names a member the backend never
+            // emits, and a reader following it cannot construct the type at all. The check runs
+            // before the async branch because the backend's does too (`is_static_constructor`
+            // never inspects `is_async`, and a C# constructor cannot be `async`).
+            if is_csharp_static_constructor(method, type_name_str) {
+                let class_name = type_name(type_name_str, lang, ffi_prefix);
+                format!("public {}({})", class_name, params.join(", "))
             } else {
-                format!("public {} {}({})", ret, name, params.join(", "))
+                // ~keep `static ` is emitted by the backend template itself
+                // (`opaque_method_header.jinja`: `public {{ static_kw }}{{ return_type_str }}
+                // {{ method_cs_name }}(`), fed by `let static_kw = if is_static { "static " }`
+                // in `gen_opaque_method` (backends/csharp/gen_bindings/types/opaque.rs). Omitting
+                // it here documented every static factory as an instance method, so a reader
+                // would call it on a value they have no way to obtain yet. `static ` precedes
+                // `async` in that template, not the other way round.
+                let static_kw = if method.is_static { "static " } else { "" };
+                if method.is_async {
+                    let async_name = if name.ends_with("Async") {
+                        name.clone()
+                    } else {
+                        format!("{name}Async")
+                    };
+                    let task_ret = if ret == "void" {
+                        "Task".to_string()
+                    } else {
+                        format!("Task<{ret}>")
+                    };
+                    format!(
+                        "public {static_kw}async {} {}({})",
+                        task_ret,
+                        async_name,
+                        params.join(", ")
+                    )
+                } else {
+                    format!("public {static_kw}{} {}({})", ret, name, params.join(", "))
+                }
             }
         }
         Language::Php => {
@@ -866,13 +925,23 @@ pub(crate) fn render_method_signature_with_override(
                 ret
             };
             let receiver_ty = type_name(type_name_str, lang, ffi_prefix);
-            let mut all_params = if method.is_static {
-                Vec::new()
+            // ~keep Zig binds methods only through `emit_opaque_handle`
+            // (backends/zig/gen_bindings/mod.rs) -- `emit_type` writes fields and nothing else --
+            // and a static one is emitted by `emit_opaque_static_method` through
+            // `opaque_static_signature.jinja`: `pub fn {{ method_snake }}_{{ type_snake }}(...)`.
+            // That is a *top-level* function whose name carries the owning type as a suffix, not
+            // a member of the struct, so `DownloadManager.new(...)` -- the name this arm used to
+            // document -- resolves to nothing in the emitted module. `type_snake` is
+            // `AsSnakeCase(&ty.name)` on the backend side; snake-casing the resolved short type
+            // name reproduces it.
+            if method.is_static {
+                let type_snake = receiver_ty.to_snake_case();
+                format!("pub fn {name}_{type_snake}({}) {ret_str}", params.join(", "))
             } else {
-                vec![format!("self: *const {receiver_ty}")]
-            };
-            all_params.extend(params);
-            format!("pub fn {name}({}) {ret_str}", all_params.join(", "))
+                let mut all_params = vec![format!("self: *const {receiver_ty}")];
+                all_params.extend(params);
+                format!("pub fn {name}({}) {ret_str}", all_params.join(", "))
+            }
         }
         Language::Gleam => {
             format!("// Phase 1: {lang} backend method signature generation")

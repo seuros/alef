@@ -656,8 +656,14 @@ fn test_render_method_signature_zig_instance_includes_self_receiver() {
     assert_eq!(sig, "pub fn warnings(self: *const ParseOutput) []const [:0]const u8");
 }
 
+/// ~keep Omitting `self` was only half of it. The Zig backend emits a static method as a
+/// *top-level* function named `{method_snake}_{type_snake}`
+/// (`emit_opaque_static_method` -> `opaque_static_signature.jinja`), so the bare
+/// `pub fn create()` this test used to pin named a symbol that occurs nowhere in the emitted
+/// module -- and, because Zig methods only exist on opaque handles at all, there is no second
+/// shape it could have been describing.
 #[test]
-fn test_render_method_signature_zig_static_omits_self() {
+fn test_render_method_signature_zig_static_omits_self_and_suffixes_the_type() {
     let method = make_method(
         "create",
         vec![],
@@ -667,7 +673,7 @@ fn test_render_method_signature_zig_static_omits_self() {
         None,
     );
     let sig = render_method_signature(&method, "ParseOptions", Language::Zig, TEST_PREFIX);
-    assert_eq!(sig, "pub fn create() ParseOptions");
+    assert_eq!(sig, "pub fn create_parse_options() ParseOptions");
 }
 
 #[test]
