@@ -715,7 +715,7 @@ fn build_thirdparty_imports(
         }
     }
 
-    let public_import_names = public_import_names(&import_names, &extra_from_json_imports);
+    let filtered_public_imports = public_import_names(&import_names, &extra_from_json_imports);
 
     if let (true, Some(opts_type)) = (
         needs_options_type && (options_via == "kwargs" || options_via == "from_json"),
@@ -726,7 +726,7 @@ fn build_thirdparty_imports(
             // not the public module — it needs the native from_json() staticmethod. Exclude it
             // from the public import line so the class isn't imported from both modules (the
             // second import silently shadows the first). ~keep
-            let public_names: Vec<&str> = public_import_names
+            let public_names: Vec<&str> = filtered_public_imports
                 .iter()
                 .copied()
                 .filter(|name| *name != opts_type)
@@ -745,8 +745,8 @@ fn build_thirdparty_imports(
                 thirdparty_from.push(format!("from {module} import {}", public_names.join(", ")));
             }
         }
-    } else if !public_import_names.is_empty() {
-        thirdparty_from.push(format!("from {module} import {}", public_import_names.join(", ")));
+    } else if !filtered_public_imports.is_empty() {
+        thirdparty_from.push(format!("from {module} import {}", filtered_public_imports.join(", ")));
     }
 
     for (native_module, options_type) in extra_from_json_imports {
