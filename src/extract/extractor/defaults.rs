@@ -492,7 +492,7 @@ mod tests {
         let file: syn::File = syn::parse_str(
             r#"
                 pub const DEFAULT_CATALOG_URL: &str = "https://example.com/catalog.json";
-                const CACHE_DIR_NAME: &str = "liter-llm";
+                const CACHE_DIR_NAME: &str = "sample-crate";
                 const RETRY_LIMIT: u32 = 3;
                 const COMPUTED: &str = some_fn();
             "#,
@@ -505,7 +505,7 @@ mod tests {
             consts.get("DEFAULT_CATALOG_URL").map(String::as_str),
             Some("https://example.com/catalog.json")
         );
-        assert_eq!(consts.get("CACHE_DIR_NAME").map(String::as_str), Some("liter-llm"));
+        assert_eq!(consts.get("CACHE_DIR_NAME").map(String::as_str), Some("sample-crate"));
         assert_eq!(
             consts.get("RETRY_LIMIT"),
             None,

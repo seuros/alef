@@ -178,8 +178,8 @@ pub fn write_scaffold_files_with_overwrite(
 /// is on disk (byte-identical regeneration is always a silent no-op, whichever route proved
 /// ownership), so a healthy, converged tree never logs spurious warnings.
 ///
-/// This closes two incidents from the same root cause. The original (crawlberg:
-/// `e2e/go/helpers_test.go` / `e2e/go/main_test.go`) was a `generated_header: true` file on
+/// This closes two incidents from the same root cause. The original (a consumer's
+/// hand-written `e2e/go/helpers_test.go` / `e2e/go/main_test.go`) was a `generated_header: true` file on
 /// a markable extension stamped over hand-written content because nothing checked for a
 /// prior marker at all — fixed by the markable route above. The second (zig/dart/swift
 /// scaffold seeds silently replaced by a routine `alef version` bump; `packages/java/pom.xml`
@@ -357,7 +357,7 @@ pub fn write_scaffold_files_report(
     // here instead. Runs AFTER the write loop, not before: the repair repoints the test
     // module at `test/<module>_test.zig`, which the same batch seeds create-only, and a repo
     // can legitimately have the bad `build.zig` with no `test/` directory at all
-    // (html-to-markdown is in exactly that state). Repairing first would leave any run that
+    // (a consumer repo is in exactly that state). Repairing first would leave any run that
     // failed between the two steps pointing at a nonexistent root source file -- trading
     // silent coverage loss for a build graph that will not resolve. ~keep
     if files
@@ -393,7 +393,7 @@ pub fn write_scaffold_files_report(
     // is `generated_header: false` on a markable (`.swift`) extension, so the vacuous
     // `XCTAssertTrue(true)` placeholder this scaffold used to always emit can never be replaced
     // by `scaffold_swift_test`'s real assertion through the normal write path on any
-    // pre-existing repo (html-to-markdown is in exactly that state). Fires only on the vacuity
+    // pre-existing repo (a consumer repo is in exactly that state). Fires only on the vacuity
     // signature -- one `XCTAssert`-family call, one `func test`, and that call is the tautology
     // -- so a hand-written suite is never at risk; see `migrate_swift_placeholder_test`'s doc.
     // This run's freshly generated content for that path (already computed by

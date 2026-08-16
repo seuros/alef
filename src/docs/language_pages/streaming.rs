@@ -252,7 +252,10 @@ fn streaming_c_start_name(adapter: &AdapterConfig, method: &MethodDef, ffi_prefi
 
 /// The stream-handle struct is declared by alef itself, so its header name carries the prefix
 /// twice: cbindgen's `[export] prefix` (shouty) in front of the PascalCase-prefixed Rust struct
-/// name the FFI backend emits — `LITERLLMLiterllmDefaultClientChatStreamStreamHandle`. ~keep
+/// name the FFI backend emits. For a crate whose `[ffi] prefix` is the single lowercase word
+/// `samplecrate`, the consumer's header spells the handle
+/// `SAMPLECRATESamplecrateDefaultClientChatStreamStreamHandle` — prefix shouted, then repeated
+/// in PascalCase, before the type/method pair. ~keep
 fn streaming_c_handle_type(adapter: &AdapterConfig, type_name_str: &str, ffi_prefix: &str) -> String {
     format!(
         "struct {}{}{}{}StreamHandle *",

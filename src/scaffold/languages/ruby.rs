@@ -573,7 +573,7 @@ const RUBY_SEED_STRING_LITERAL: &str = "alef-scaffold";
 ///
 /// Enums are deliberately absent from the ladder: the Magnus backend does not register them
 /// as Ruby constants (see the note above `public_types` in `MagnusBackend::generate_public_api`),
-/// so a `LiterLlm::SomeEnum` reference would name something that does not exist. ~keep
+/// so a `{module_name}::SomeEnum` reference would name something that does not exist. ~keep
 fn scaffold_ruby_spec(api: &ApiSurface, config: &ResolvedCrateConfig, gem_name_snake: &str) -> String {
     use heck::ToUpperCamelCase as _;
 

@@ -166,10 +166,10 @@ pub(super) fn generate_readme_hardcoded(
         Language::Wasm => {
             // The published npm name, not `{crate name}-wasm`. The npm scope is not derivable
             // from the crate name — `wasm_package_name()` defaults from `node_package_name()`,
-            // so liter-llm resolves to `@xberg-io/liter-llm-wasm` where the crate-name template
-            // gives the unscoped `liter-llm-wasm`, which installs nothing. This is the Wasm
-            // analogue of the `lib{name}_ffi` defect in the FFI arm above: wrong even where the
-            // README path is right by coincidence. ~keep
+            // so a consumer whose node package is scoped resolves to `@xberg-io/<crate>-wasm`
+            // where the crate-name template gives the unscoped `<crate>-wasm`, which installs
+            // nothing. This is the Wasm analogue of the `lib{name}_ffi` defect in the FFI arm
+            // above: wrong even where the README path is right by coincidence. ~keep
             let pkg = config.wasm_package_name();
             let example_body = format!("// {example_pointer}");
             (

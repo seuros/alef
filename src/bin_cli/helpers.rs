@@ -293,9 +293,9 @@ const VERIFY_SKIP_DIRS: &[&str] = &[
 ///
 /// This list is only ONE of two filters. [`collect_alef_hashes`] needs a scanned extension AND
 /// an `alef:hash:` line, so adding an extension does nothing for a language whose emitted files
-/// carry no stamp at all — measured in tree-sitter-language-pack, `packages/java` and
-/// `packages/go` have ZERO stamped files while `java`/`go` were already listed here. Those are
-/// unreachable by any extension change; see the task tracking per-file stamping.
+/// carry no stamp at all — measured in a consumer repo, `packages/java` and `packages/go` had
+/// ZERO stamped files while `java`/`go` were already listed here. Those are unreachable by any
+/// extension change; see the task tracking per-file stamping.
 ///
 /// Scope of what a passing verify proves, because "verify passed" reads as the stronger claim
 /// downstream: the hash covers generation INPUTS, not output bytes. One stamped manifest per

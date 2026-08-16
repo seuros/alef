@@ -526,7 +526,7 @@ fn scaffold_swift_test(api: &ApiSurface, config: &ResolvedCrateConfig, module: &
 /// placeholder's exact bytes have already drifted across the repos this exists to fix: the
 /// current generator ([`placeholder_test`]) names the method `testModuleImportsSuccessfully`
 /// and carries a three-line rationale comment, while the shape actually found on disk
-/// (html-to-markdown's `packages/swift/Tests/HtmlToMarkdownTests/HtmlToMarkdownTests.swift`)
+/// (consumer A's `packages/swift/Tests/<Module>Tests/<Module>Tests.swift`)
 /// names it `testPlaceholder` and carries a two-line "Placeholder test so `swift test` has a
 /// target to run" comment instead. A constant validated only against the current generator's
 /// own output matches neither historical shape it exists to repair.
@@ -536,10 +536,10 @@ fn scaffold_swift_test(api: &ApiSurface, config: &ResolvedCrateConfig, module: &
 /// contains **exactly one** `XCTAssert`-family call and **exactly one** `func test` in the
 /// whole file — i.e. there is nothing in it to lose. See [`is_vacuous_swift_placeholder`] for
 /// why neither count can be fooled by a longer identifier. Verified against all three real
-/// consumer trees: html-to-markdown (1 `XCTAssert`, 1 `func test`, tautology — fires);
-/// liter-llm (also 1 and 1, but its single assertion is a real
+/// consumer trees: consumer A (1 `XCTAssert`, 1 `func test`, tautology — fires);
+/// consumer B (also 1 and 1, but its single assertion is a real
 /// `XCTAssertEqual(decoded, message)` round trip — does not fire, which is exactly why the
-/// counts alone are not the signature); tree-sitter-language-pack (17 and 17, hand-written —
+/// counts alone are not the signature); consumer C (17 and 17, hand-written —
 /// does not fire on either clause). Idempotent: the freshly generated replacement never
 /// matches this signature once real API surface exists, and when the surface is still empty
 /// (replacement is itself the placeholder) the byte-equality check below makes the second
@@ -588,7 +588,8 @@ pub(crate) fn migrate_swift_placeholder_test(
 /// - `XCTAssert` is counted as a bare *prefix*, with no `(`, because the whole assertion family
 ///   shares it (`XCTAssertEqual`, `XCTAssertNil`, `XCTAssertThrowsError`, ...). Counting
 ///   `XCTAssert(` instead — the shape dart's `expect(` needs — would be the inverse of dart's
-///   `expectLater(` bug: tree-sitter-language-pack's 17 real assertions would count as 0. Every
+///   `expectLater(` bug: the 17 real assertions in consumer C of
+///   [`migrate_swift_placeholder_test`]'s table would count as 0. Every
 ///   identifier that *extends* the prefix is itself an assertion, so counting it is correct, and
 ///   each extra match pushes the count past 1 and makes this return `false` — the safe
 ///   direction. `XCTUnwrap` does not contain the prefix and is deliberately not counted; a file
@@ -601,7 +602,7 @@ pub(crate) fn migrate_swift_placeholder_test(
 ///
 /// The one accepted blind spot, also in the safe direction: a placeholder whose *comment* text
 /// happens to mention `XCTAssert` counts twice and is left alone. Neither the current template
-/// nor html-to-markdown's on-disk shape does that.
+/// nor consumer A's on-disk shape does that.
 fn is_vacuous_swift_placeholder(content: &str) -> bool {
     (content.contains("XCTAssertTrue(true)") || content.contains("XCTAssert(true)"))
         && content.matches("XCTAssert").count() == 1

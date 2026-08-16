@@ -148,9 +148,9 @@ fn glob_under(workspace_root: &Path, directory: &str, suffix: &str) -> Vec<PathB
 // ~keep `vendor` (Cargo/Go-style vendoring) and `deps` (Mix's fetched-dependency
 // cache) hold frozen copies of a crate's Cargo.toml pulled in at whatever version
 // was current when they were vendored/fetched. `cargo_manifest_versions` keys its
-// map by package name alone, so a vendored `liter-llm`/`liter_llm_nif` manifest
-// silently overwrote the live one's entry and poisoned every Cargo.lock comparison
-// for that name repo-wide — not just the vendored copy's own lock.
+// map by package name alone, so in a consumer repo a vendored `<crate>`/`<crate>_nif`
+// manifest silently overwrote the live one's entry and poisoned every Cargo.lock
+// comparison for that name repo-wide — not just the vendored copy's own lock.
 fn ignored_path(workspace_root: &Path, path: &Path, submodules: &HashSet<PathBuf>) -> bool {
     let Ok(relative) = path.strip_prefix(workspace_root) else {
         return false;
@@ -495,7 +495,7 @@ mod tests {
         assert!(lock_checks.iter().all(|check| !check.label.contains("//")));
     }
 
-    /// Reproduces the false-positive MISMATCH seen in `liter-llm`: a vendored/frozen
+    /// Reproduces the false-positive MISMATCH observed in a consumer repo: a vendored/frozen
     /// copy of a crate's `Cargo.toml` (e.g. under a Rustler `vendor/` tree carried for
     /// offline builds) declares the same `name` as the live crate but at a stale,
     /// explicit version. `cargo_manifest_versions` keys its map by name alone, so
@@ -536,9 +536,9 @@ mod tests {
     }
 
     /// Same mechanism as the vendor case, but for Mix's fetched-dependency cache
-    /// (`deps/`), which is how `liter_llm_nif`'s false positive actually occurred —
-    /// a Hex-fetched copy of the elixir package bundles its own frozen `Cargo.toml`
-    /// at the last-published version.
+    /// (`deps/`), which is how the consumer repo's `<crate>_nif` false positive actually
+    /// occurred — a Hex-fetched copy of the elixir package under `deps/` bundles its own
+    /// frozen `Cargo.toml` at the last-published version.
     #[test]
     fn deps_fetched_duplicate_package_name_does_not_poison_manifest_versions() {
         let temp = workspace("3.4.5");

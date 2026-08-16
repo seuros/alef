@@ -89,7 +89,7 @@ pub(super) fn core_to_binding_convertible_types(
 /// core<->binding convertibility (see `src/backends/pyo3/gen_bindings/types.rs`). As of
 /// `093c42f31`, `type_has_from_json` is the single predicate shared by both the raw-text
 /// `#[pymethods]` injection and the `.pyi` stub generator, so passing this gate also means the
-/// shipped stub declares the method — verified against liter-llm's `CreateImageRequest`, where
+/// shipped stub declares the method — verified against a consumer's `CreateImageRequest`, where
 /// `_internal_bindings.pyi` carries `def from_json`. ~keep
 pub(super) fn pyo3_would_inject_from_json(
     name: &str,

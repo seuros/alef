@@ -918,7 +918,7 @@ mod tests {
         assert_eq!(read_back, Vec::<PathBuf>::new());
     }
 
-    /// End-to-end regression for the crawlberg `composer.json` orphan: proves the
+    /// End-to-end regression for the `composer.json` orphan observed in a consumer repo: proves the
     /// `write_scaffold_manifest`/`read_scaffold_manifest` wiring is what lets
     /// `sweep_manifest_orphans` reclaim an unmarkable manifest a later run stops
     /// emitting. Before this manifest existed, nothing ever recorded
@@ -943,10 +943,9 @@ mod tests {
         let composer_json = package_dir.join("composer.json");
         std::fs::write(&composer_json, "{\n  \"name\": \"acme/demo\"\n}\n").expect("write composer.json");
 
-        write_scaffold_manifest("crawlberg-php", std::slice::from_ref(&composer_json))
-            .expect("write manifest for run 1");
+        write_scaffold_manifest("sample-php", std::slice::from_ref(&composer_json)).expect("write manifest for run 1");
 
-        let previous_scaffold = read_scaffold_manifest("crawlberg-php");
+        let previous_scaffold = read_scaffold_manifest("sample-php");
         let keep = std::collections::HashSet::new();
         let removed =
             crate::cli::pipeline::sweep_manifest_orphans(&previous_scaffold, &keep, &[package_dir]).expect("sweep");

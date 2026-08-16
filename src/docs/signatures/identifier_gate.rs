@@ -3,12 +3,13 @@ use super::*;
 // ---------------------------------------------------------------------------
 // ~keep Synthetic reproduction of the tslp `DownloadManager` constructor audit (measured
 // against a real `javac` run, not inference -- see formatting.rs's `reserved_words` doc
-// comment). liter-llm does not exercise `[crates.constructors]` -- no such function exists
-// in the canary -- so this cannot be verified against liter-llm's own generated output;
-// per the coordinator, a repo that doesn't exercise a code path cannot clear it. These
-// tests build the exact colliding shape by hand: a static method named `new` on an opaque
-// type, which is what a curated constructor renders as today (see the "not yet modeled"
-// finding for item 1 -- the docs pipeline has no awareness of `ClientConstructorConfig`).
+// comment). The canary consumer does not exercise `[crates.constructors]` -- no such
+// function exists in the canary -- so this cannot be verified against that consumer's own
+// generated output; per the coordinator, a repo that doesn't exercise a code path cannot
+// clear it. These tests build the exact colliding shape by hand: a static method named
+// `new` on an opaque type, which is what a curated constructor renders as today (see the "not
+// yet modeled" finding for item 1 -- the docs pipeline has no awareness of
+// `ClientConstructorConfig`).
 // ---------------------------------------------------------------------------
 
 fn download_manager_new_method() -> crate::core::ir::MethodDef {

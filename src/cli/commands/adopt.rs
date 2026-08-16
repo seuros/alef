@@ -4,9 +4,9 @@
 //! pre-existing file it cannot prove it authored. That is correct, and it is also a
 //! one-way door: a file whose type became stampable only *after* it was committed
 //! carries no marker, so the write is refused, so the marker never lands, so the write
-//! is refused forever. `crates/crawlberg-ffi/Cargo.toml` is in exactly that state —
-//! `git log -S 'alef:hash'` over its entire history returns nothing — and real fixes
-//! are frozen out of that repo behind a `warn!` nobody reads during a regen. That is
+//! is refused forever. A consumer repo's `crates/<crate>-ffi/Cargo.toml` is in exactly
+//! that state — `git log -S 'alef:hash'` over its entire history returns nothing — and
+//! real fixes are frozen out of that repo behind a `warn!` nobody reads during a regen. That is
 //! strictly worse than a create-once file: a create-once file is at least stable, while
 //! this is a file alef believes it owns, intends to rewrite every run, and silently
 //! declines to touch.
@@ -28,8 +28,8 @@
 //! byte-for-byte indistinguishable from clobbering a hand-edit — both are "regenerated
 //! content replaces different existing content" — and an automatic adoption of a
 //! *converged* file is indistinguishable from claiming a hand-written file that happens
-//! to coincide, which is precisely the crawlberg `e2e/go/helpers_test.go` incident the
-//! guard was built for. The only thing separating the safe case from the unsafe one is a
+//! to coincide, which is precisely the consumer-repo `e2e/go/helpers_test.go` incident
+//! the guard was built for. The only thing separating the safe case from the unsafe one is a
 //! human reading the diff. Automate it and the guard is deleted while the warning
 //! remains. See `cli::pipeline::generate::write::stamp_for_adoption`. ~keep
 

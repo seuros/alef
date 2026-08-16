@@ -1234,26 +1234,25 @@ sources = ["src/lib.rs"]
         std::fs::write(
             &manifest_path,
             r#"{
-  "name": "ts-pack-core-wasm",
+  "name": "sample-core-wasm",
   "version": "0.1.0",
   "description": "not a name field: \"name\" appears here too",
-  "main": "ts_pack_core_wasm.js"
+  "main": "sample_core_wasm.js"
 }
 "#,
         )
         .expect("failed to write fixture package.json");
 
-        rewrite_wasm_package_json_name(&manifest_path, "@xberg-io/tree-sitter-language-pack-wasm")
-            .expect("rewrite must succeed");
+        rewrite_wasm_package_json_name(&manifest_path, "@xberg-io/sample-crate-wasm").expect("rewrite must succeed");
 
         let rewritten = std::fs::read_to_string(&manifest_path).expect("failed to read rewritten package.json");
         assert!(
-            rewritten.contains(r#""name": "@xberg-io/tree-sitter-language-pack-wasm""#),
+            rewritten.contains(r#""name": "@xberg-io/sample-crate-wasm""#),
             "{rewritten}"
         );
-        assert!(!rewritten.contains("ts-pack-core-wasm"), "{rewritten}");
+        assert!(!rewritten.contains("sample-core-wasm"), "{rewritten}");
         assert!(
-            rewritten.contains(r#""main": "ts_pack_core_wasm.js""#),
+            rewritten.contains(r#""main": "sample_core_wasm.js""#),
             "unrelated fields must survive untouched: {rewritten}"
         );
         assert!(

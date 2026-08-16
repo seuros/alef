@@ -921,8 +921,9 @@ mod tests {
     /// strips the newline that immediately follows *any* block tag, including an
     /// inline `{% endif %}` that closes a same-line conditional. Without `+%}`
     /// every iteration's line ending is eaten and all entries collapse onto one
-    /// line, which is exactly what shipped in `packages/java/io/xberg/NativeLib.java`
-    /// and tripped checkstyle's LineLengthCheck. Render the template directly and
+    /// line, which is exactly what shipped in a consumer's generated
+    /// `packages/java/<group-path>/NativeLib.java` and tripped checkstyle's
+    /// LineLengthCheck. Render the template directly and
     /// assert one quoted symbol per output line so a regression (dropping the `+`)
     /// fails this test instead of only surfacing downstream in a generated package.
     #[test]
@@ -930,9 +931,9 @@ mod tests {
         // Alphabetical, matching the `BTreeSet<String>` order `gen_native_lib`
         // actually feeds into this template's `required_symbols` context value.
         let required_symbols = vec![
-            "xberg_extract_free_string".to_string(),
-            "xberg_last_error_code".to_string(),
-            "xberg_last_error_context".to_string(),
+            "sample_extract_free_string".to_string(),
+            "sample_last_error_code".to_string(),
+            "sample_last_error_context".to_string(),
         ];
         assert_eq!(required_symbols.len(), SYMBOL_COUNT);
 
@@ -940,10 +941,10 @@ mod tests {
             "native_lib.jinja",
             minijinja::context! {
                 class_name => "NativeLib",
-                lib_name => "xberg",
-                library_environment_prefix => "XBERG",
-                prefix => "xberg",
-                prefix_upper => "XBERG",
+                lib_name => "sample",
+                library_environment_prefix => "SAMPLE",
+                prefix => "sample",
+                prefix_upper => "SAMPLE",
                 required_symbols => required_symbols,
                 function_handles => Vec::<String>::new(),
                 accessor_handles => Vec::<String>::new(),
@@ -963,9 +964,9 @@ mod tests {
         assert_eq!(
             array_body,
             vec![
-                "        \"xberg_extract_free_string\",",
-                "        \"xberg_last_error_code\",",
-                "        \"xberg_last_error_context\"",
+                "        \"sample_extract_free_string\",",
+                "        \"sample_last_error_code\",",
+                "        \"sample_last_error_context\"",
             ],
             "each REQUIRED_SYMBOLS entry must render on its own line; got:\n{rendered}"
         );

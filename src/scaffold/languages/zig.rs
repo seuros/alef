@@ -323,16 +323,15 @@ pub fn main() !void {
 ///
 /// `build.zig` is emitted `generated_header: false` (create-only: see
 /// `write_scaffold_files_report`'s ownership guard in
-/// `cli::pipeline::generate::scaffold`), and deliberately so — every consumer repo checked
-/// while designing this
-/// migration (liter-llm, tree-sitter-language-pack, html-to-markdown) carries direct,
-/// hand-written `build.zig` commits, including at least one per repo hand-patching this
-/// *exact* `test_module` defect before this migration existed, plus unrelated fixes (a
-/// corrected `ffi_include_path` default after a crate rename) that the generator's own
-/// template still does not know how to reproduce. A full regenerate-and-overwrite (e.g. by
-/// giving the file a self-marker so the normal write path could update it) would silently
-/// destroy those. So this repairs only the one known-bad shape, byte-for-byte, and leaves
-/// every other line — indentation, added build steps, unrelated hand fixes — untouched.
+/// `cli::pipeline::generate::scaffold`), and deliberately so — all three consumer trees
+/// checked while designing this migration carry direct, hand-written `build.zig` commits,
+/// including at least one per tree hand-patching this *exact* `test_module` defect before
+/// this migration existed, plus unrelated fixes (a corrected `ffi_include_path` default
+/// after a crate rename) that the generator's own template still does not know how to
+/// reproduce. A full regenerate-and-overwrite (e.g. by giving the file a self-marker so the
+/// normal write path could update it) would silently destroy those. So this repairs only
+/// the one known-bad shape, byte-for-byte, and leaves every other line — indentation, added
+/// build steps, unrelated hand fixes — untouched.
 ///
 /// Detection is scoped to the `const test_module = b.createModule(.{ ... });` block only
 /// (bounded by its own `});`), so the *library* module's identical-looking
@@ -348,8 +347,9 @@ pub fn main() !void {
 /// template never wired it, so a freshly repointed test module would otherwise fail to
 /// resolve `@import("<module>")`. The check is deliberately for the whole call and not for a
 /// bare `test_module.addImport(` prefix: a consumer may already import unrelated third-party
-/// modules into the test module (tree-sitter-language-pack imports `tree_sitter`), and a
-/// prefix match would read those as the self-import and skip the one line that matters. ~keep
+/// modules into the test module (one consumer's test module imports a third-party parser
+/// module), and a prefix match would read those as the self-import and skip the one line
+/// that matters. ~keep
 pub(crate) fn migrate_build_zig_test_target(base_dir: &Path) -> anyhow::Result<bool> {
     let path = base_dir.join("packages/zig/build.zig");
     let Ok(content) = std::fs::read_to_string(&path) else {
@@ -561,8 +561,8 @@ fn trivial_call_test(module_name: &str, f: &FunctionDef) -> String {
 /// semantically analyse that function's body and to resolve the extern C symbol the body calls,
 /// so this tier fails on a link error or a wrapper-body type error, not merely on a rename.
 ///
-/// Measured, not assumed — the html-to-markdown owner ran all three forms on Zig 0.16.0 with
-/// controls. Against a wrapper whose extern symbol did not exist in the compiled library:
+/// Measured, not assumed — all three forms were run on Zig 0.16.0 with controls, in a
+/// consumer tree. Against a wrapper whose extern symbol did not exist in the compiled library:
 /// `@hasDecl` exited 0 ("All 1 tests passed"); `_ = &m.convert;` exited 1 with
 /// `undefined symbol: _htm_probe_definitely_missing_symbol ... referenced by _lib.convert`; and
 /// `_ = m.convert(1);` — the positive control — exited 1 with the same error. Against a type

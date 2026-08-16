@@ -1270,8 +1270,9 @@ mod tests {
     }
 
     /// Regression test for the `c` plugin-api doc snippets that called a symbol
-    /// that does not exist (`xberg_clear_ocr_backends` instead of the real
-    /// `xberg_clear_ocr_backend`). Those fixtures are `skip.languages = ["c"]`
+    /// that does not exist (`{prefix}_clear_ocr_backends`, the pluralised `clear_fn`
+    /// config text, instead of the real singular `{prefix}_clear_ocr_backend` the FFI
+    /// backend derives from the trait name). Those fixtures are `skip.languages = ["c"]`
     /// because the C API cannot expose a host-language callback, have no
     /// extension-owned recipe, and no per-language call override — so the naive
     /// `trait_bridge_function_identity` fallback must not run for them; the
@@ -1290,7 +1291,7 @@ mod tests {
             ..SnippetConfig::default()
         };
         let crate_config = ResolvedCrateConfig {
-            name: "xberg".into(),
+            name: "sample".into(),
             trait_bridges: vec![crate::core::config::TraitBridgeConfig {
                 trait_name: "OcrBackend".into(),
                 clear_fn: Some("clear_ocr_backends".into()),
@@ -1372,7 +1373,7 @@ mod tests {
             ..SnippetConfig::default()
         };
         let crate_config = ResolvedCrateConfig {
-            name: "xberg".into(),
+            name: "sample".into(),
             trait_bridges: vec![crate::core::config::TraitBridgeConfig {
                 trait_name: "OcrBackend".into(),
                 clear_fn: Some("clear_ocr_backends".into()),
@@ -1398,13 +1399,13 @@ mod tests {
         // backend actually exports: `{prefix}_clear_{trait_snake}` derived from the trait name
         // (`registration.rs:141`), SINGULAR — not the pluralised `clear_fn` config text, which
         // only ever matched the fixture to a bridge. The trailing `NULL` is the C out-error
-        // argument. Before the derivation fix this emitted `xberg_clear_ocr_backends(NULL)`,
+        // argument. Before the derivation fix this emitted `sample_clear_ocr_backends(NULL)`,
         // naming a symbol the header does not declare.
         assert!(
             report.snippets[0]
                 .file
                 .content
-                .contains("xberg_clear_ocr_backend(NULL);"),
+                .contains("sample_clear_ocr_backend(NULL);"),
             "expected the derived singular ABI symbol, got:\n{}",
             report.snippets[0].file.content
         );

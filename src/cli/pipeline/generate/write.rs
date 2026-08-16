@@ -334,15 +334,15 @@ pub(crate) fn ensure_generated_header(path: &Path, content: &str) -> String {
 /// ([`crate::cli::commands::adopt`]) — never from a write pass.** The create-once trap
 /// that motivates adoption is real: a file whose type became stampable only after it
 /// was already committed carries no marker, so the guard refuses the write, so the
-/// marker never lands, so the guard refuses forever. `crates/*-ffi/Cargo.toml` in
-/// crawlberg is in exactly that state — `git log -S 'alef:hash'` returns nothing for
+/// marker never lands, so the guard refuses forever. `crates/*-ffi/Cargo.toml` in a
+/// consumer repo is in exactly that state — `git log -S 'alef:hash'` returns nothing for
 /// its entire history — and three landed fixes are frozen out of that repo by it.
 ///
 /// An earlier revision escaped that trap automatically, with a `bootstrap_owned`
 /// predicate that adopted any unmarked file whose bytes already equalled the run's
 /// output minus the header. It was justified on the grounds that a hand-edited file
 /// cannot reproduce the generator's bytes. That claim is false, and the counterexample
-/// is the incident this guard exists for: crawlberg's hand-written
+/// is the incident this guard exists for: a consumer's hand-written
 /// `e2e/go/helpers_test.go` was byte-identical to alef's generated content, which is
 /// exactly why the only visible damage was a stamped header. See
 /// `scaffold_ownership_guard_tests` for the two regressions it caused.
@@ -513,8 +513,8 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
                         debug!("  unchanged: {}", full_path.display());
                         // Deliberately records nothing. Reaching here proves only that the
                         // bytes coincide with this run's output, which is not evidence of
-                        // authorship — crawlberg's hand-written `e2e/go/helpers_test.go` was
-                        // byte-identical to alef's, and minting a claim from that is the
+                        // authorship — a consumer's hand-written `e2e/go/helpers_test.go`
+                        // was byte-identical to alef's, and minting a claim from that is the
                         // `bootstrap_owned` predicate `stamp_for_adoption`'s doc removed,
                         // relocated into the record. Now that the record is committed
                         // (`cache::OWNERSHIP_MANIFEST`) the claim would also be permanent and

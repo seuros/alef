@@ -93,9 +93,10 @@ pub(crate) fn type_name(name: &str, lang: Language, ffi_prefix: &str) -> String 
         | Language::Zig => short.to_pascal_case(),
         // cbindgen renames every exported type with `[export] prefix`. Callers hand this
         // function the PascalCase form of `[ffi] prefix` (docs::generate_docs), so a
-        // case-restoring conversion is required to recover the header spelling: for
-        // liter-llm's `literllm` the header really does say `LITERLLMDefaultClient`, and
-        // emitting `LiterllmDefaultClient` names a symbol that occurs zero times in it.
+        // case-restoring conversion is required to recover the header spelling: for a consumer
+        // whose `[ffi] prefix` is a single lowercase word such as `demoapi`, the header really
+        // does say `DEMOAPIDefaultClient`, and emitting `DemoapiDefaultClient` names a symbol
+        // that occurs zero times in it.
         //
         // Both sides now use the same conversion: `gen_cbindgen_toml`
         // (backends/ffi/gen_bindings/helpers.rs:392) computes the real `[export] prefix` as
@@ -282,9 +283,10 @@ mod tests {
 
     /// The C reference page must spell a type exactly as it appears in the emitted header.
     ///
-    /// `alef all` used to publish `LiterllmDefaultClient` while `liter_llm.h` declared
-    /// `LITERLLMDefaultClient` -- a name that occurs zero times in the header, so every C
-    /// snippet on the same site contradicted the reference page.
+    /// `alef all` used to publish `DemoapiDefaultClient` while the emitted `demo_api.h` declared
+    /// `DEMOAPIDefaultClient` -- a name that occurs zero times in the header, so every C
+    /// snippet on the same site contradicted the reference page. Observed in a consumer repo
+    /// whose `[ffi] prefix` is a single lowercase word.
     ///
     /// The lowercase, single-word and already-underscored prefixes below do not discriminate
     /// between conversions -- `to_shouty_snake_case` and a plain `.to_uppercase()` return the
@@ -296,9 +298,9 @@ mod tests {
     #[test]
     fn type_name_ffi_matches_cbindgen_export_prefix() {
         for (ffi_prefix, expected_export_prefix) in [
-            ("literllm", "LITERLLM"),
-            ("Literllm", "LITERLLM"),
-            ("liter_llm", "LITER_LLM"),
+            ("demoapi", "DEMOAPI"),
+            ("Demoapi", "DEMOAPI"),
+            ("demo_api", "DEMO_API"),
             ("SampleCore", "SAMPLE_CORE"),
         ] {
             assert_eq!(
@@ -307,7 +309,7 @@ mod tests {
                 "docs must use cbindgen's export prefix for `{ffi_prefix}`"
             );
             assert_eq!(
-                type_name("liter_llm::DefaultClient", Language::Ffi, ffi_prefix),
+                type_name("sample_crate::DefaultClient", Language::Ffi, ffi_prefix),
                 format!("{expected_export_prefix}DefaultClient"),
                 "a fully qualified rust path must resolve to the same header symbol"
             );

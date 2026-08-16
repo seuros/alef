@@ -274,7 +274,7 @@ fn sync_versions_bumps_kotlin_gradle_nif_lock_and_docs_badges() {
 
 /// The badge sync must follow `[docs] reference_output`, not the `docs/reference` default.
 ///
-/// liter-llm renders its reference pages into `docs-site/src/content/docs/reference`; because
+/// One consumer renders its reference pages into `docs-site/src/content/docs/reference`; because
 /// the badge sweep hardcoded the default directory, every release bumped the package READMEs
 /// to the new version while the published API-reference pages kept advertising the previous
 /// one. ~keep

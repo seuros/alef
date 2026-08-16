@@ -925,10 +925,10 @@ impl Backend for WasmBackend {
         // `require()`/`import` specifier the wasm e2e codegen emits uses
         // `wasm_package_name()` (see `ResolvedCrateConfig::wasm_crate_path`), so rewrite the
         // built artifact's declared name to match after every build — otherwise the
-        // specifier names a package the directory does not declare. Verified against
-        // liter-llm, whose e2e manifest depends on `"@xberg-io/liter-llm-wasm":
-        // "file:../../crates/liter-llm-wasm/pkg/nodejs"` while that directory declares the
-        // bare crate name `liter-llm-wasm`.
+        // specifier names a package the directory does not declare. Verified against a
+        // consumer whose e2e manifest depends on a scoped `@scope/<crate>-wasm` name resolved
+        // by a `file:` path into `crates/<crate>-wasm/pkg/nodejs`, while that directory
+        // declares the bare crate name `<crate>-wasm`.
         //
         // This must resolve the crate directory exactly as `build_command_for` does —
         // `[crates.output] wasm` first (minus a trailing `src`, which is where the *generated

@@ -469,9 +469,9 @@ mod sweep_roots_tests {
 
     /// A manifest alef wrote last run and does not write this run IS reclaimed,
     /// even though `composer.json` never carries a marker or hash — this is the
-    /// core "previous-manifest provenance" case from the crawlberg/spikard
-    /// orphan reports: a co-located/split layout toggle stops emitting a
-    /// `composer.json` copy, and the old copy must not linger forever.
+    /// core "previous-manifest provenance" case from orphan reports filed by two
+    /// independent consumer repos: a co-located/split layout toggle stops emitting
+    /// a `composer.json` copy, and the old copy must not linger forever.
     #[test]
     fn manifest_sweep_reclaims_unmarkable_manifest_absent_from_current_run() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -509,8 +509,8 @@ mod sweep_roots_tests {
     }
 
     /// Reclaiming an orphaned `composer.json` cascades to its `composer.lock`
-    /// sibling in the same directory — the crawlberg concrete instance: a
-    /// lockfile whose manifest was removed long ago must not linger forever
+    /// sibling in the same directory — the concrete instance seen in a consumer
+    /// repo: a lockfile whose manifest was removed long ago must not linger forever
     /// either, even though alef never authored the lockfile itself.
     #[test]
     fn manifest_sweep_reclaims_lockfile_sibling_of_reclaimed_manifest() {

@@ -1304,11 +1304,12 @@ mod tests {
             "Option<String>"
         );
         // ~keep A single pointer, not a double pointer: the real cbindgen header declares
-        // optional string params as plain `const char *` (nullable in place), e.g.
-        // `literllm_create_client`'s `base_url`/`model_hint` params -- confirmed against
-        // the generated header, not inferred from the type system. This was the exact
-        // `const char**`-vs-header-`const char *` divergence the params-table fix exists
-        // to close; pinning the old doubled value here would have re-legalized the bug.
+        // optional string params as plain `const char *` (nullable in place), e.g. a
+        // consumer's generated `<prefix>_create_client` and its `base_url`/`model_hint`
+        // params -- confirmed against that generated header, not inferred from the type
+        // system. This was the exact `const char**`-vs-header-`const char *` divergence
+        // the params-table fix exists to close; pinning the old doubled value here would
+        // have re-legalized the bug.
         assert_eq!(
             doc_type_with_optional(&TypeRef::String, Language::Ffi, true, TEST_PREFIX),
             "const char*"

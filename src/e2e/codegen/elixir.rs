@@ -169,10 +169,10 @@ impl E2eCodegen for ElixirCodegen {
         // this file legitimately needs re-generation as [e2e] config/fixtures change
         // (see render_test_helper), so it needs the durable alef:hash: marker that
         // proves ownership across runs -- the write path's ownership guard otherwise
-        // has nothing to check and either has to trust every unmarked file blindly (the
-        // crawlberg incident: a hand-added CRAWLBERG_ALLOW_PRIVATE_NETWORK/set_env
-        // workaround silently deleted by a plain `alef all --clean`) or refuse to ever
-        // update it again. ~keep
+        // has nothing to check and either has to trust every unmarked file blindly (one
+        // consumer hand-added a `<PREFIX>_ALLOW_PRIVATE_NETWORK` env var plus the matching
+        // `set_env` call here, and a plain `alef all --clean` silently deleted the whole
+        // workaround) or refuse to ever update it again. ~keep
         if !uses_harness {
             files.push(GeneratedFile {
                 path: output_base.join("test").join("test_helper.exs"),

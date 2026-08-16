@@ -256,7 +256,7 @@ pub fn default_value_for_field(field: &FieldDef, language: &str) -> String {
             // guessing. This arm has no type context and so cannot attempt that recovery.
             // It fails loudly rather than substituting `Default::default()`: the substitute
             // compiles and looks right while silently shipping the field type's zero value,
-            // which is a different number than the source crate's (html-to-markdown's
+            // which is a different number than the source crate's (one consumer's
             // `default_span()` is 1, `u32::default()` is 0). A generated binding must never
             // disagree with its own source crate about a default.
             DefaultValue::FunctionCall(path) => match language {

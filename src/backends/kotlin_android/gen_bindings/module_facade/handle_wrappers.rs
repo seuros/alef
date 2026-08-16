@@ -72,11 +72,12 @@ fn reachable_handle_types<'a>(visible_functions: &[&'a FunctionDef]) -> HashSet<
 
 /// A handle-only opaque type earns a wrapper class -- and therefore a `close()`
 /// calling `nativeFree<TypeName>` -- only when it is reachable. A type that is
-/// `is_opaque` but that no visible function returns (xberg's `TokenCounter`: public
-/// in Rust, no alef-exposed constructor path) cannot be constructed from Kotlin at
-/// all, so its wrapper referenced a `nativeFree<TypeName>` the Bridge object never
-/// declares and the native shim never implements -- an `Unresolved reference` at
-/// compile time pointing at a class nothing could have instantiated.
+/// `is_opaque` but that no visible function returns (as seen in a consumer tree: a
+/// counter type, public in Rust, with no alef-exposed constructor path) cannot be
+/// constructed from Kotlin at all, so its wrapper referenced a `nativeFree<TypeName>`
+/// the Bridge object never declares and the native shim never implements -- an
+/// `Unresolved reference` at compile time pointing at a class nothing could have
+/// instantiated.
 fn is_handle_type(type_def: &TypeDef, client_types: &HashSet<&str>, reachable_types: &HashSet<&str>) -> bool {
     type_def.is_opaque
         && !type_def.is_trait

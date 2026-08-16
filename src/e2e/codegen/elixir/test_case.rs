@@ -337,7 +337,7 @@ pub(super) fn render_test_case(
     // succeeds go on to call the operation and assert the error there. ~keep A version
     // that always stopped after asserting `{:error, _}` on creation made every
     // per-request-error validation fixture vacuously pass (the operation was never
-    // called) — see the elixir-only `skip` on crawlberg's `validation_ssrf_*` fixtures,
+    // called) — see the elixir-only `skip` on a consumer's `validation_ssrf_*` fixtures,
     // which documents this exact bug and is meant to be lifted once this is fixed.
     if validation_creation_failure {
         let declared_value = declared_error_value(fixture);

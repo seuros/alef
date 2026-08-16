@@ -473,8 +473,8 @@ fn scaffold_dart_test(
 /// Detection is a *vacuity signature*, not a byte-for-byte template match, because the
 /// placeholder's exact bytes have already drifted across the repos this exists to fix: the
 /// current generator (`dart_placeholder_test`) wraps the assertion in a three-line rationale
-/// comment, while the oldest shape actually found on disk (html-to-markdown's
-/// `packages/dart/test/html_to_markdown_rs_test.dart`) has neither that comment nor a
+/// comment, while the oldest shape actually found on disk (consumer A's
+/// `packages/dart/test/{module}_test.dart`) has neither that comment nor a
 /// `package:` import at all — just `import 'package:test/test.dart';` and the bare
 /// `test('placeholder', ...) { expect(1 + 1, equals(2)); }`. A byte-match constant validated
 /// only against the current generator's own output, as an earlier revision of this function
@@ -484,8 +484,8 @@ fn scaffold_dart_test(
 /// `expect(` and **exactly one** `test(` in the whole file — i.e. there is nothing else in
 /// it to lose. Any hand-written suite (more assertions, more tests, a renamed test) fails
 /// that count and is left completely untouched, verified against all three real consumer
-/// trees (html-to-markdown: 1/1, fires; liter-llm: 3 `expect(`/1 `test(`, hand-written,
-/// does not fire; tree-sitter-language-pack: 17 `expect(`/18 `test(`, hand-written, does not
+/// trees (consumer A: 1/1, fires; consumer B: 3 `expect(`/1 `test(`, hand-written,
+/// does not fire; consumer C: 17 `expect(`/18 `test(`, hand-written, does not
 /// fire). Idempotent: the freshly generated replacement itself never matches this signature
 /// once real API surface exists, and even when the surface is still empty (replacement is
 /// itself the placeholder), the byte-equality check below makes the second pass a no-op. ~keep

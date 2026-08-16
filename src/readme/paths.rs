@@ -58,19 +58,19 @@ pub(super) fn readme_target_output_path(target_name: &str, target_json: &serde_j
 ///
 /// None of these directories is `crates/{alef crate name}-<lang>`. That convention holds only
 /// when the alef crate name happens to equal the crate's directory stem, and in two of the three
-/// consumer repos it does not: html-to-markdown's crate is named `html-to-markdown-rs` while its
-/// crates are `crates/html-to-markdown{,-ffi,-node,-wasm}`, and tree-sitter-language-pack's crate
-/// is named `tree-sitter-language-pack` while its crates are `crates/ts-pack-core*`. A
-/// name-derived path writes the README into a directory that is not the crate at all — silently,
-/// because a misplaced README is not a build error. html-to-markdown still carries a
-/// `crates/html-to-markdown-rs-ffi/` directory holding nothing but such a README. See the zig
-/// scaffold's identical defect and fix in alef `dc36840b2`.
+/// consumer repos it does not: one consumer's crate name carries an `-rs` suffix that its own
+/// crate directories drop (`crates/<stem>{,-ffi,-node,-wasm}`), and another's crate name is
+/// spelled out in full while its crate directories use a short abbreviated prefix
+/// (`crates/<abbrev>-core*`). A name-derived path writes the README into a directory that is not
+/// the crate at all — silently, because a misplaced README is not a build error. The first of
+/// those consumers still carries a leftover `crates/<name>-rs-ffi/` directory holding nothing but
+/// such a README. See the zig scaffold's identical defect and fix in alef `dc36840b2`.
 ///
 /// Every arm delegates; no arm restates a precedence rule, because a second copy of one is
 /// exactly how this module and `fallback.rs` drifted from the resolved config in the first place.
 /// - FFI: `ffi_crate_relative_dir` (`[crates.output] ffi`, else `crates/{name}-ffi`).
 /// - Node/Wasm: `package_dir`, which consults `[crates.node]`/`[crates.wasm] crate_dir` before
-///   the `crates/{name}-<lang>` formula. Both h2m and tslp set `crate_dir`.
+///   the `crates/{name}-<lang>` formula. Both of those consumers set `crate_dir`.
 /// - Rust: `core_crate_dir`, the crate directory stem taken from `sources[0]`. There is no
 ///   `[crates.output] rust` key to consult — `OutputConfig` has no `rust` field — and this is
 ///   the same composition the FFI scaffold uses (`crates/{core_crate_dir}-ffi`). It assumes the
