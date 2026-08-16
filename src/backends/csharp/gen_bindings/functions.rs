@@ -467,9 +467,10 @@ pub(super) fn gen_native_methods(
 
     if has_visitor_callbacks {
         out.push('\n');
-        let visitor_bridge = trait_bridges
-            .iter()
-            .find(|b| b.bind_via == crate::core::config::BridgeBinding::OptionsField);
+        let visitor_bridge = trait_bridges.iter().find(|b| {
+            b.bind_via == crate::core::config::BridgeBinding::OptionsField
+                && b.is_active_for(&crate::core::config::Language::Csharp.to_string())
+        });
 
         if let Some(bridge) = visitor_bridge {
             // Both names below are load-bearing ABI, not cosmetics: the emitted declaration is

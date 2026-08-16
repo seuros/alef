@@ -35,7 +35,7 @@ pub(super) mod functions;
 mod marshalling;
 pub(super) mod methods;
 pub(super) mod service_api;
-pub(super) mod types;
+pub(crate) mod types;
 
 /// Sanitise a rustdoc string for safe embedding in C# XML doc comments.
 ///
@@ -322,10 +322,10 @@ impl Backend for CsharpBackend {
         });
 
         if has_visitor_callbacks {
-            let visitor_bridge_cfg = config
-                .trait_bridges
-                .iter()
-                .find(|b| b.bind_via == crate::core::config::BridgeBinding::OptionsField);
+            let visitor_bridge_cfg = config.trait_bridges.iter().find(|b| {
+                b.bind_via == crate::core::config::BridgeBinding::OptionsField
+                    && b.is_active_for(&Language::Csharp.to_string())
+            });
             let trait_map: std::collections::HashMap<&str, &crate::core::ir::TypeDef> = api
                 .types
                 .iter()

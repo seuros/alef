@@ -134,7 +134,7 @@ impl Backend for GoBackend {
         let visitor_bridge_cfg = config
             .trait_bridges
             .iter()
-            .find(|b| b.bind_via == BridgeBinding::OptionsField);
+            .find(|b| b.bind_via == BridgeBinding::OptionsField && b.is_active_for(&Language::Go.to_string()));
         let has_options_field_bridge = visitor_bridge_cfg.is_some();
         let has_visitor_bridge =
             has_options_field_bridge || (!config.trait_bridges.is_empty() && visitor_callbacks_enabled);

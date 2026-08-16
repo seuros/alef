@@ -118,6 +118,16 @@ pub enum BridgeBinding {
 }
 
 impl TraitBridgeConfig {
+    /// Whether this bridge should be generated for `language` (a `Backend::name()` /
+    /// [`crate::core::config::Language`] display string, e.g. `"java"`, `"csharp"`, `"go"`).
+    ///
+    /// Centralizes the `exclude_languages` membership check so visitor-file generators
+    /// across backends (and any added later) apply the same rule instead of each
+    /// re-deriving it inline.
+    pub fn is_active_for(&self, language: &str) -> bool {
+        !self.exclude_languages.iter().any(|excluded| excluded == language)
+    }
+
     /// Resolve the field name on `options_type` that holds this bridge.
     ///
     /// Falls back to [`Self::param_name`] when [`Self::options_field`] is unset, matching
@@ -260,5 +270,25 @@ trait_name = "OcrBackend"
 "#;
         let cfg: TraitBridgeConfig = toml::from_str(toml_src).unwrap();
         assert!(cfg.associated_type_names().is_empty());
+    }
+
+    #[test]
+    fn is_active_for_true_when_exclude_languages_empty() {
+        let cfg = TraitBridgeConfig::default();
+        assert!(cfg.is_active_for("go"));
+        assert!(cfg.is_active_for("csharp"));
+        assert!(cfg.is_active_for("java"));
+    }
+
+    #[test]
+    fn is_active_for_false_when_language_listed() {
+        let toml_src = r#"
+trait_name = "HtmlVisitor"
+exclude_languages = ["go", "csharp"]
+"#;
+        let cfg: TraitBridgeConfig = toml::from_str(toml_src).unwrap();
+        assert!(!cfg.is_active_for("go"));
+        assert!(!cfg.is_active_for("csharp"));
+        assert!(cfg.is_active_for("java"));
     }
 }
