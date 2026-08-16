@@ -1,6 +1,145 @@
 use super::*;
 
 #[test]
+fn test_merge_surface_and_combines_own_cfg_with_module_cfg() {
+    let mut dst = ApiSurface::default();
+    let src = ApiSurface {
+        types: vec![TypeDef {
+            name: "Gated".into(),
+            rust_path: "src::Gated".into(),
+            cfg: Some(r#"feature = "own""#.into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    merge_surface(&mut dst, src, Some(r#"feature = "module""#.into()));
+
+    let combined = dst.types[0]
+        .cfg
+        .as_deref()
+        .expect("own cfg must survive the merge, combined");
+    assert_eq!(combined, r#"all(feature = "module", feature = "own")"#);
+
+    // Assert on the evaluation result, not just the string shape: feed the combined cfg to the
+    // canonical evaluator so a normalisation regression that silently breaks the leaf match
+    // would fail this test even if the string still "looked" combined. ~keep
+    let satisfied = |enabled: &[&str]| {
+        let set: ::std::collections::HashSet<&str> = enabled.iter().copied().collect();
+        crate::core::ir::cfg_feature_satisfied(Some(combined), &set)
+    };
+    assert!(!satisfied(&[]), "neither gate enabled must not satisfy");
+    assert!(!satisfied(&["module"]), "own cfg missing must not satisfy");
+    assert!(!satisfied(&["own"]), "module cfg missing must not satisfy");
+    assert!(satisfied(&["module", "own"]), "both gates enabled must satisfy");
+}
+
+#[test]
+fn test_merge_surface_fills_module_cfg_when_type_has_no_own_cfg() {
+    let mut dst = ApiSurface::default();
+    let src = ApiSurface {
+        types: vec![TypeDef {
+            name: "Ungated".into(),
+            rust_path: "src::Ungated".into(),
+            cfg: None,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    merge_surface(&mut dst, src, Some(r#"feature = "module""#.into()));
+
+    assert_eq!(dst.types[0].cfg.as_deref(), Some(r#"feature = "module""#));
+}
+
+#[test]
+fn test_merge_surface_leaves_own_cfg_unchanged_through_ungated_module() {
+    let mut dst = ApiSurface::default();
+    let src = ApiSurface {
+        types: vec![TypeDef {
+            name: "SelfGated".into(),
+            rust_path: "src::SelfGated".into(),
+            cfg: Some(r#"feature = "own""#.into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    merge_surface(&mut dst, src, None);
+
+    assert_eq!(dst.types[0].cfg.as_deref(), Some(r#"feature = "own""#));
+}
+
+#[test]
+fn test_merge_surface_filtered_and_combines_cfg_for_functions_and_enums() {
+    let mut dst = ApiSurface::default();
+    let src = ApiSurface {
+        functions: vec![crate::core::ir::FunctionDef {
+            name: "wanted_fn".into(),
+            rust_path: "src::wanted_fn".into(),
+            cfg: Some(r#"feature = "own""#.into()),
+            ..Default::default()
+        }],
+        enums: vec![crate::core::ir::EnumDef {
+            name: "WantedEnum".into(),
+            rust_path: "src::WantedEnum".into(),
+            cfg: Some(r#"feature = "own""#.into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let names = vec!["wanted_fn".to_string(), "WantedEnum".to_string()];
+    merge_surface_filtered(&mut dst, src, &names, Some(r#"feature = "module""#.into()));
+
+    assert_eq!(
+        dst.functions[0].cfg.as_deref(),
+        Some(r#"all(feature = "module", feature = "own")"#)
+    );
+    assert_eq!(
+        dst.enums[0].cfg.as_deref(),
+        Some(r#"all(feature = "module", feature = "own")"#)
+    );
+}
+
+#[test]
+fn test_merge_surface_extendr_registration_fails_closed_for_inherited_module_cfg() {
+    // `extendr::gen_bindings::cfg_registration::always_registered` is `pub(super)`, scoped to
+    // `crate::backends::extendr::gen_bindings`, so it cannot be called from this file — this
+    // lane owns only `reexports.rs` and its tests, and backends are explicitly out of scope for
+    // task #53. Read directly instead (not edited): after whitespace-stripping, it recognises
+    // only the self-cancelling shape `any(X, not(X))` and returns `false` for everything else,
+    // including any `all(...)` shape. `combine_cfg` in `reexports.rs` only ever produces
+    // `all(...)` when AND-combining an inherited module gate, never `any(X, not(X))`, so a type
+    // that gains an inherited module gate here always becomes ineligible for
+    // `always_registered` and is omitted from the extendr `extendr_module!` block — a missing R
+    // function, never a broken symbol. This pins that shape so the fail-closed consequence is a
+    // documented, chosen outcome rather than a silent side effect. ~keep
+    let mut dst = ApiSurface::default();
+    let src = ApiSurface {
+        types: vec![TypeDef {
+            name: "RGated".into(),
+            rust_path: "src::RGated".into(),
+            cfg: Some(r#"feature = "own""#.into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    merge_surface(&mut dst, src, Some(r#"feature = "module""#.into()));
+
+    let combined = dst.types[0].cfg.as_deref().expect("cfg should be combined");
+    assert!(
+        combined.starts_with("all("),
+        "combined cfg must be an `all(...)` gate: {combined}"
+    );
+    assert!(
+        !combined.starts_with("any("),
+        "combined cfg must never take the shape `always_registered` treats as always-compiled: {combined}"
+    );
+}
+
+#[test]
 fn test_merge_surface_no_duplicates() {
     let mut dst = ApiSurface {
         crate_name: "test".into(),

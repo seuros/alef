@@ -45,6 +45,7 @@ fn record_unsupported_generic_impl_methods(
 }
 
 /// Extract methods from an `impl` block and attach them to the corresponding `TypeDef`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn extract_impl_block(
     item: &syn::ItemImpl,
     crate_name: &str,
@@ -53,6 +54,7 @@ pub(crate) fn extract_impl_block(
     type_index: &AHashMap<String, usize>,
     binding_excluded_type_names: &ahash::AHashSet<String>,
     result_wrapping_aliases: &ahash::AHashSet<String>,
+    string_consts: &AHashMap<String, String>,
 ) {
     // Honor `#[cfg_attr(alef, alef(skip))]` (or bare `#[alef(skip)]`) on the impl block
     if extract_binding_exclusion_reason(&item.attrs).is_some() {
@@ -60,7 +62,14 @@ pub(crate) fn extract_impl_block(
     }
 
     if item.trait_.is_some() {
-        extract_trait_impl_methods(item, crate_name, surface, type_index, result_wrapping_aliases);
+        extract_trait_impl_methods(
+            item,
+            crate_name,
+            surface,
+            type_index,
+            result_wrapping_aliases,
+            string_consts,
+        );
         return;
     }
 
@@ -218,6 +227,7 @@ fn extract_trait_impl_methods(
     surface: &mut ApiSurface,
     type_index: &AHashMap<String, usize>,
     result_wrapping_aliases: &ahash::AHashSet<String>,
+    string_consts: &AHashMap<String, String>,
 ) {
     let type_name = match &*item.self_ty {
         syn::Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
@@ -299,7 +309,7 @@ fn extract_trait_impl_methods(
         .is_some_and(|(path, _)| path.segments.last().is_some_and(|segment| segment.ident == "Default"));
     if is_default_trait_impl {
         type_def.has_default = true;
-        extract_default_values(item, &mut type_def.fields);
+        extract_default_values(item, &mut type_def.fields, string_consts);
     }
 
     let is_conversion_trait = item.trait_.as_ref().is_some_and(|(path, _)| {

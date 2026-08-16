@@ -136,29 +136,38 @@ pub(crate) fn collect_use_names(tree: &syn::UseTree) -> UseFilter {
     }
 }
 
+/// AND-combine a propagated outer cfg (a re-exporting module's or `pub use`'s `#[cfg(...)]`)
+/// with an item's own cfg, so an item must satisfy both gates rather than losing whichever one
+/// isn't already present. Wraps only — `all({outer}, {inner})` — and never reformats either
+/// operand string, because every cfg evaluator in this codebase (`core/ir/surface.rs` and each
+/// backend's cfg parser) normalises with `.trim().replace(" (", "(")` and matches leaves via a
+/// literal `strip_prefix("feature = \"")`; any other whitespace change to the operands stops
+/// that leaf match from firing. ~keep
+fn combine_cfg(item_cfg: Option<String>, outer_cfg: &Option<String>) -> Option<String> {
+    match (outer_cfg, item_cfg) {
+        (Some(outer), Some(inner)) => Some(format!("all({outer}, {inner})")),
+        (Some(outer), None) => Some(outer.clone()),
+        (None, inner) => inner,
+    }
+}
+
 /// Merge all items from `src` into `dst`, skipping duplicates.
 pub(crate) fn merge_surface(dst: &mut ApiSurface, src: ApiSurface, cfg: Option<String>) {
     for mut ty in src.types {
         if !dst.types.iter().any(|t| t.name == ty.name) {
-            if cfg.is_some() && ty.cfg.is_none() {
-                ty.cfg = cfg.clone();
-            }
+            ty.cfg = combine_cfg(ty.cfg, &cfg);
             dst.types.push(ty);
         }
     }
     for mut func in src.functions {
         if !dst.functions.iter().any(|f| f.name == func.name) {
-            if cfg.is_some() && func.cfg.is_none() {
-                func.cfg = cfg.clone();
-            }
+            func.cfg = combine_cfg(func.cfg, &cfg);
             dst.functions.push(func);
         }
     }
     for mut en in src.enums {
         if !dst.enums.iter().any(|e| e.name == en.name) {
-            if cfg.is_some() && en.cfg.is_none() {
-                en.cfg = cfg.clone();
-            }
+            en.cfg = combine_cfg(en.cfg, &cfg);
             dst.enums.push(en);
         }
     }
@@ -168,25 +177,19 @@ pub(crate) fn merge_surface(dst: &mut ApiSurface, src: ApiSurface, cfg: Option<S
 pub(crate) fn merge_surface_filtered(dst: &mut ApiSurface, src: ApiSurface, names: &[String], cfg: Option<String>) {
     for mut ty in src.types {
         if names.contains(&ty.name) && !dst.types.iter().any(|t| t.name == ty.name) {
-            if cfg.is_some() && ty.cfg.is_none() {
-                ty.cfg = cfg.clone();
-            }
+            ty.cfg = combine_cfg(ty.cfg, &cfg);
             dst.types.push(ty);
         }
     }
     for mut func in src.functions {
         if names.contains(&func.name) && !dst.functions.iter().any(|f| f.name == func.name) {
-            if cfg.is_some() && func.cfg.is_none() {
-                func.cfg = cfg.clone();
-            }
+            func.cfg = combine_cfg(func.cfg, &cfg);
             dst.functions.push(func);
         }
     }
     for mut en in src.enums {
         if names.contains(&en.name) && !dst.enums.iter().any(|e| e.name == en.name) {
-            if cfg.is_some() && en.cfg.is_none() {
-                en.cfg = cfg.clone();
-            }
+            en.cfg = combine_cfg(en.cfg, &cfg);
             dst.enums.push(en);
         }
     }

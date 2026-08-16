@@ -499,6 +499,8 @@ fn extract_items(
         })
         .collect();
 
+    let string_consts = defaults::collect_string_consts(items);
+
     for item in items {
         if let syn::Item::Impl(item_impl) = item {
             // A whole `#[cfg(test)]` impl block (e.g. test-only constructors) is
@@ -513,6 +515,7 @@ fn extract_items(
                 &type_index,
                 &binding_excluded_type_names,
                 result_wrapping_aliases,
+                &string_consts,
             );
         }
     }
