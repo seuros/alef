@@ -1703,8 +1703,9 @@ fn wrapper_optional_bytes_param_emits_null_safe_length() {
 /// Regression test: a `Duration` field with no `#[serde(default)]` of its own (`default:
 /// None`) must never emit the invalid `ulong??` double-nullable (the original CS1519 bug
 /// from commit 9ee50d0) — and, per the Defect 1/3 fix, must now be `required ulong`, not
-/// nullable at all: `typ.has_default` (the *struct* deriving `Default`) is not a signal
-/// that this specific field tolerates a missing JSON key.
+/// nullable at all: the `DefaultValue::Empty` the extractor stamps on every field of a
+/// `Default`-deriving struct is not a signal that this specific field tolerates a missing
+/// JSON key, and C# has no `Duration` initializer to put there anyway.
 #[test]
 fn test_duration_field_emits_required_ulong_not_double_nullable() {
     let backend = CsharpBackend;
@@ -1723,7 +1724,7 @@ fn test_duration_field_emits_required_ulong_not_double_nullable() {
                 ty: TypeRef::Duration,
                 optional: false,
                 default: None,
-                typed_default: None,
+                typed_default: Some(DefaultValue::Empty),
                 doc: String::new(),
                 sanitized: false,
                 is_boxed: false,
@@ -1817,7 +1818,7 @@ fn test_duration_millis_converter_file_emitted_when_duration_field_exists() {
                 ty: TypeRef::Duration,
                 optional: false,
                 default: None,
-                typed_default: None,
+                typed_default: Some(DefaultValue::Empty),
                 doc: String::new(),
                 sanitized: false,
                 is_boxed: false,
@@ -2041,10 +2042,11 @@ fn test_optional_ulong_field_emits_single_nullable() {
 }
 
 /// Regression test (Defect 2): a plain enum field with no field-level `#[serde(default)]`
-/// (`default: None`) on a struct that derives `Default` must be `required`, not nullable —
-/// `typ.has_default` alone previously made every field of such a struct take the
-/// "defaulted" branch, which resolved enum-typed fields to a `null` default and forced
-/// `Mode?` even though the field is required at the serde level.
+/// (`default: None`) on a struct that derives `Default` must be `required`, not nullable.
+/// `DefaultValue::Empty` is what the extractor stamps on every field of such a struct; it means
+/// "that type's own `Default`", which C# cannot spell for a `Named` field, so taking the
+/// "defaulted" branch resolved it to a `null` default and forced `Mode?` even though the field
+/// is required at the serde level.
 #[test]
 fn test_plain_enum_without_field_default_stays_required() {
     let backend = CsharpBackend;
@@ -2063,7 +2065,7 @@ fn test_plain_enum_without_field_default_stays_required() {
                 ty: TypeRef::Named("Mode".to_string()),
                 optional: false,
                 default: None,
-                typed_default: None,
+                typed_default: Some(DefaultValue::Empty),
                 doc: String::new(),
                 sanitized: false,
                 is_boxed: false,

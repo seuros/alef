@@ -162,7 +162,7 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_record_type(
                 "property_with_default.jinja",
                 minijinja::context! { field_type, cs_name, default_val => "null" },
             ));
-        } else if field.default.is_some() {
+        } else if field.default.is_some() || carries_renderable_default(field, is_complex) {
             let base_type = if is_complex {
                 "JsonElement".to_string()
             } else {
@@ -664,6 +664,31 @@ pub(super) fn emit_record_methods(
         }
 
         out.push_str("    }\n");
+    }
+}
+
+/// True when the field's own IR carries a default this emitter can turn into an initializer.
+///
+/// `field.typed_default` is the signal every other backend reads (java `types/records.rs`,
+/// kotlin `object_wrapper/types.rs`, pyo3 `types.rs`, swift `dto.rs`, dart, go, php). It is the
+/// only one that carries the *value*: `field.default` is set solely from `#[serde(default)]`
+/// attributes, and `TypeDef::has_default` is a bare flag. Gating this branch on either of those
+/// alone drops every `impl Default` literal on the floor and renders the type's zero value
+/// instead, which is a live behaviour change across the FFI rather than a cosmetic one.
+///
+/// `Empty` means "that type's own `Default`". For a primitive, string, collection, bytes or
+/// `serde_json::Value` field the branch's own fallback spells exactly that value, so the default
+/// is renderable. For `Named` and `Duration` it does not: the branch has no initializer
+/// expression for either and resolves both to `null`, widening the property to `T?`. That is a
+/// hole, not a value — it lets a C# caller omit a key that the Rust `Deserialize` impl requires,
+/// which is why a `Default`-deriving *struct* was never a licence to make its fields nullable.
+/// Those keep `required`. A `Named` field the emitter already degrades to `JsonElement`
+/// (`is_complex`) is exempt: that position is nullable either way.
+fn carries_renderable_default(field: &crate::core::ir::FieldDef, is_complex: bool) -> bool {
+    match &field.typed_default {
+        Some(DefaultValue::Empty) => is_complex || !matches!(&field.ty, TypeRef::Named(_) | TypeRef::Duration),
+        Some(_) => true,
+        None => false,
     }
 }
 

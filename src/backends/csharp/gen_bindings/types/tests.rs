@@ -1,6 +1,6 @@
 use super::gen_record_type;
 use crate::core::config::{BridgeBinding, TraitBridgeConfig};
-use crate::core::ir::{FieldDef, PrimitiveType, TypeDef, TypeRef};
+use crate::core::ir::{DefaultValue, FieldDef, PrimitiveType, TypeDef, TypeRef};
 use std::collections::HashSet;
 
 fn field(name: &str, ty: TypeRef) -> FieldDef {
@@ -252,15 +252,17 @@ fn record_type_optional_duration_field_is_nullable() {
 }
 
 /// Regression (Defect 2): a required field whose type is a Rust `enum` (e.g. sealed content
-/// union) on a struct that derives `Default` must stay `required`, not nullable — even
-/// though `typ.has_default` is true, the *field* itself carries no `#[serde(default)]`.
-/// Previously any field on a `Default`-deriving struct landed in the defaulted branch,
-/// which resolved enum-typed fields to a `null` default and forced `T?`, so
-/// `new UserMessage { Name = "alice" }` compiled clean and then serialized `"content":null`
-/// against a required Rust field.
+/// union) on a struct that derives `Default` must stay `required`, not nullable. `Empty` is
+/// what the extractor puts on every field of a `Default`-deriving struct
+/// (`extract::extractor::types` and `extract::extractor::defaults`) and it means "that type's
+/// own `Default`" — a value C# cannot spell for a `Named` field. Resolving it to `null` and
+/// widening the property to `UserContent?` let `new UserMessage { Name = "alice" }` compile
+/// clean and then serialize `"content":null` against a required Rust field.
 #[test]
 fn record_type_required_enum_field_in_default_struct_stays_required() {
-    let mut typ = record_type(vec![field("content", TypeRef::Named("UserContent".to_string()))]);
+    let mut content = field("content", TypeRef::Named("UserContent".to_string()));
+    content.typed_default = Some(DefaultValue::Empty);
+    let mut typ = record_type(vec![content]);
     typ.has_default = true;
     let enum_names = HashSet::from(["UserContent".to_string()]);
 
@@ -289,4 +291,112 @@ fn record_type_required_enum_field_in_default_struct_stays_required() {
         !code.contains("UserContent?"),
         "a required field must not be nullable just because the struct derives Default:\n{code}"
     );
+}
+
+fn render_plain_record(typ: &TypeDef) -> String {
+    gen_record_type(
+        typ,
+        &[],
+        "Demo",
+        "demo",
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        "snake_case",
+        &HashSet::new(),
+        &[],
+        "DemoException",
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+}
+
+/// A record shaped like `xberg::HeuristicsConfig`: an `impl Default` body supplying a `true`
+/// bool, an `f32` and a large `u64`, and no `#[serde(default)]` anywhere — so `field.default`
+/// is `None` and `typed_default` is the only carrier of the value.
+fn impl_default_scalar_fields() -> Vec<FieldDef> {
+    let mut enable = field("enable_pdf_text_heuristics", TypeRef::Primitive(PrimitiveType::Bool));
+    enable.typed_default = Some(DefaultValue::BoolLiteral(true));
+    let mut threshold = field("text_layer_threshold", TypeRef::Primitive(PrimitiveType::F32));
+    threshold.typed_default = Some(DefaultValue::FloatLiteral(0.7));
+    let mut size = field("file_size_threshold_bytes", TypeRef::Primitive(PrimitiveType::U64));
+    size.typed_default = Some(DefaultValue::IntLiteral(10_485_760));
+    vec![enable, threshold, size]
+}
+
+/// The property initializer a generated record declares for `cs_name`, or a panic naming the
+/// property when it has none.
+fn csharp_initializer(code: &str, cs_name: &str) -> String {
+    let marker = format!(" {cs_name} {{ get; init; }} = ");
+    code.lines()
+        .find_map(|line| line.split_once(&marker))
+        .map(|(_, rhs)| rhs.trim().trim_end_matches(';').to_string())
+        .unwrap_or_else(|| panic!("no defaulted property `{cs_name}` in:\n{code}"))
+}
+
+/// A C# numeric literal carries a type suffix its Swift counterpart does not; the *value* either
+/// side of it is what the two languages have to agree on.
+fn without_numeric_suffix(literal: &str) -> &str {
+    literal.trim_end_matches('f')
+}
+
+#[test]
+fn record_type_emits_impl_default_scalar_literals_not_type_zeros() {
+    let mut typ = record_type(impl_default_scalar_fields());
+    typ.has_default = true;
+
+    let code = render_plain_record(&typ);
+
+    assert_eq!(csharp_initializer(&code, "EnablePdfTextHeuristics"), "true");
+    assert_eq!(csharp_initializer(&code, "TextLayerThreshold"), "0.7f");
+    assert_eq!(csharp_initializer(&code, "FileSizeThresholdBytes"), "10485760");
+    assert!(
+        !code.contains("public required"),
+        "a field with an impl Default value must not become required:\n{code}"
+    );
+}
+
+/// The control that would have caught the regression. Every backend reads the default off the
+/// same `FieldDef::typed_default`, so two backends rendering one IR fixture must land on the same
+/// value; a backend that silently stops consuming the field renders its type's zero instead and
+/// only a cross-language comparison can tell the two apart. Swift is the reference because its
+/// literals carry no type suffix — see `backends::swift::gen_bindings::dto`.
+#[test]
+fn record_type_scalar_defaults_agree_with_the_swift_renderer() {
+    use crate::backends::swift::gen_bindings::dto::swift_typed_default_literal;
+
+    let fields = impl_default_scalar_fields();
+    let mut typ = record_type(fields.clone());
+    typ.has_default = true;
+
+    let code = render_plain_record(&typ);
+
+    let cs_names = ["EnablePdfTextHeuristics", "TextLayerThreshold", "FileSizeThresholdBytes"];
+    for (field, cs_name) in fields.iter().zip(cs_names) {
+        let typed_default = field.typed_default.as_ref().expect("fixture field carries a default");
+        let swift = swift_typed_default_literal(typed_default).expect("swift renders every fixture default");
+        let csharp = csharp_initializer(&code, cs_name);
+        assert_eq!(
+            without_numeric_suffix(&csharp),
+            without_numeric_suffix(&swift),
+            "C# and Swift disagree on the default for `{}`:\n{code}",
+            field.name
+        );
+    }
+}
+
+#[test]
+fn record_type_field_without_any_default_still_emits_the_type_zero() {
+    let typ = record_type(vec![
+        field("retries", TypeRef::Primitive(PrimitiveType::U32)),
+        field("ratio", TypeRef::Primitive(PrimitiveType::F32)),
+        field("enabled", TypeRef::Primitive(PrimitiveType::Bool)),
+    ]);
+
+    let code = render_plain_record(&typ);
+
+    assert_eq!(csharp_initializer(&code, "Retries"), "0");
+    assert_eq!(csharp_initializer(&code, "Ratio"), "0.0f");
+    assert_eq!(csharp_initializer(&code, "Enabled"), "false");
 }

@@ -374,7 +374,12 @@ pub(super) fn emit_first_class_struct(
 ///
 /// `FloatLiteral` values that are NaN or infinite are also rejected so generated code
 /// stays parseable — callers handle those by falling back to a type-based default.
-pub(super) fn swift_typed_default_literal(dv: &DefaultValue) -> Option<String> {
+///
+/// `pub(crate)` rather than `pub(super)` so other backends' tests can use it as the reference
+/// rendering of a `DefaultValue` in a cross-language agreement check: it is suffix-free and
+/// covers bool, int, float, string and list, which makes it the cheapest oracle in the tree for
+/// "did this backend keep the Rust default at all".
+pub(crate) fn swift_typed_default_literal(dv: &DefaultValue) -> Option<String> {
     match dv {
         // Every element must render or the whole collection falls back to a type-based default,
         // the same all-or-nothing rule the extractor applies when lowering the literal. ~keep
