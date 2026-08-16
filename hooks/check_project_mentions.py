@@ -336,6 +336,11 @@ def violations_for_file(path: Path, *, strict: bool = False) -> list[str]:
     violations: list[str] = []
     pending_rust_cfg_test = False
     rust_cfg_test_depth: int | None = None
+    # A file leaf-named `tests.rs` is conventionally declared `#[cfg(test)] mod tests;`
+    # (or `#[cfg(test)] #[path = "..."] mod tests;`) from its sibling/parent module --
+    # the gating attribute lives outside this file's own text, so the brace-tracking
+    # region below can never see it. Its entire content is test-only by construction. ~keep
+    whole_file_is_test_module = path.name == "tests.rs"
     for line_number, line in enumerate(content.splitlines(), start=1):
         pending_rust_cfg_test, rust_cfg_test_depth, in_rust_cfg_test_region, started = update_rust_cfg_test_region(
             path,
@@ -343,8 +348,13 @@ def violations_for_file(path: Path, *, strict: bool = False) -> list[str]:
             pending_rust_cfg_test,
             rust_cfg_test_depth,
         )
-        if not strict or is_strict_domain_surface_path(path) or is_sample_project_behavior_line(line):
+        if (
+            (not strict or is_strict_domain_surface_path(path) or is_sample_project_behavior_line(line))
+            and not whole_file_is_test_module
+            and not (is_production_generator_path(path) and in_rust_cfg_test_region)
+        ):
             violations.extend(project_violations_for_line(path, line_number, line))
+        in_rust_cfg_test_region = in_rust_cfg_test_region or whole_file_is_test_module
         if strict and is_strict_domain_surface_path(path):
             violations.extend(sample_project_violations_for_line(path, line_number, line))
             if is_strict_prose_line(path, line):

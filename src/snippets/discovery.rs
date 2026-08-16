@@ -373,7 +373,7 @@ mod tests {
         std::fs::write(
             &path,
             "---\nlanguage: toml\ntarget: toml\nlevel: syntax\n---\n\n\
-             ```toml title=\"liter-llm-proxy.toml\"\n[mcp]\nstdio_trust_local = true\n```\n\n\
+             ```toml title=\"example-proxy.toml\"\n[mcp]\nstdio_trust_local = true\n```\n\n\
              ```json title=\"claude_desktop_config.json (stdio)\"\n{\n  \"mcpServers\": {}\n}\n```\n",
         )
         .expect("write mixed-language snippet file");

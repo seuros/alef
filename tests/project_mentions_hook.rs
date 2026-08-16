@@ -524,6 +524,94 @@ fn accepts_downstream_domain_type_names_in_scaffold_cfg_test_modules() {
     );
 }
 
+/// Regression for a real hook gap: `#[cfg(test)]` regions in production-generator paths
+/// already exempted domain-type checks, but not project-mention checks, even though the
+/// same rationale applies -- these fixtures legitimately embed realistic downstream
+/// project names (e.g. verbatim copies of real hand-written test suites used to validate
+/// a migration-detection predicate). Without the fix this fixture is rejected. ~keep
+#[test]
+fn accepts_project_mentions_in_scaffold_cfg_test_modules() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let scaffold_dir = dir.path().join("src").join("scaffold");
+    fs::create_dir_all(&scaffold_dir).expect("create scaffold dir");
+    let file = scaffold_dir.join("template.rs");
+    fs::write(
+        &file,
+        format!(
+            concat!(
+                "#[cfg(test)]\n",
+                "mod tests {{\n",
+                "    #[test]\n",
+                "    fn accepts_policy_fixture() {{\n",
+                "        assert_eq!({:?}, {:?});\n",
+                "    }}\n",
+                "}}\n",
+            ),
+            forbidden(&["liter", "llm"], "-"),
+            forbidden(&["liter", "llm"], "-"),
+        ),
+    )
+    .expect("write fixture");
+
+    let output = run_hook(&[&file]);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// A file leaf-named `tests.rs` is conventionally declared `#[cfg(test)] mod tests;` from
+/// its sibling module -- the gating attribute lives outside this file's own text, so no
+/// in-file brace tracking can ever see it. Its entire content must still be exempt. ~keep
+#[test]
+fn accepts_project_mentions_in_whole_file_tests_module() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let backends_dir = dir.path().join("src").join("backends").join("demo");
+    fs::create_dir_all(&backends_dir).expect("create backends dir");
+    let file = backends_dir.join("tests.rs");
+    fs::write(
+        &file,
+        format!(
+            "#[test]\nfn accepts_policy_fixture() {{\n    assert_eq!({:?}, {:?});\n}}\n",
+            forbidden(&["liter", "llm"], "-"),
+            forbidden(&["liter", "llm"], "-"),
+        ),
+    )
+    .expect("write fixture");
+
+    let output = run_hook(&[&file]);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Negative control for the two exemptions above: a project mention in scaffold production
+/// code, outside any `#[cfg(test)]` region and in a file not leaf-named `tests.rs`, must
+/// still be rejected -- the exemption must not swallow genuine special-casing. ~keep
+#[test]
+fn reports_project_mentions_in_scaffold_outside_cfg_test_modules() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let scaffold_dir = dir.path().join("src").join("scaffold");
+    fs::create_dir_all(&scaffold_dir).expect("create scaffold dir");
+    let file = scaffold_dir.join("template.rs");
+    fs::write(
+        &file,
+        format!("const NAME: &str = {:?};\n", forbidden(&["liter", "llm"], "-")),
+    )
+    .expect("write fixture");
+
+    let output = run_hook(&[&file]);
+
+    assert!(!output.status.success(), "hook should still reject production special-casing");
+    let stderr = String::from_utf8(output.stderr).expect("stderr must be utf8");
+    assert!(stderr.contains("forbidden project mention"), "stderr: {stderr}");
+}
+
 #[test]
 fn accepts_downstream_domain_type_names_in_comments() {
     let dir = tempfile::tempdir().expect("tempdir");
