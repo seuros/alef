@@ -238,7 +238,65 @@ fn test_render_method_signature_go_with_error_type() {
         Some("ParseError"),
     );
     let sig = render_method_signature(&method, "Parser", Language::Go, TEST_PREFIX);
-    assert_eq!(sig, "func (o *Parser) Parse(source string) (Ast, error)");
+    // ~keep A Named return is pointer-wrapped in real Go regardless of fallibility -- see
+    // signatures.rs's `go_return_type` for the source citation (backends/go/type_map.rs's
+    // `go_optional_type`, which every Go method/function return routes a Named type through).
+    assert_eq!(sig, "func (o *Parser) Parse(source string) (*Ast, error)");
+}
+
+/// ~keep A static Go method is a free function `func {Type}{Method}(...)`, never a method
+/// with a receiver -- see `method_signature_static.jinja` (backends/go/templates/):
+/// `"func {{ receiver_type }}{{ method_name }}({{ params }}){{ return_type }} {"`. The
+/// expected string here is reconstructed from the same `type_name`/`func_name` building
+/// blocks the renderer itself uses, mirroring the template's exact concatenation, rather
+/// than a hand-picked literal that could independently drift from what the template
+/// actually says -- the same discipline as the C signature-vs-example cross-checks.
+#[test]
+fn test_render_method_signature_go_static_method_has_no_receiver() {
+    let method = make_method(
+        "create",
+        vec![make_param("name", TypeRef::String, false)],
+        TypeRef::Named("Document".to_string()),
+        false,
+        true,
+        None,
+    );
+    let sig = render_method_signature(&method, "Document", Language::Go, TEST_PREFIX);
+
+    let receiver_type = type_name("Document", Language::Go, TEST_PREFIX);
+    let method_name = func_name("create", Language::Go, TEST_PREFIX);
+    // ~keep A Named return is pointer-wrapped in real Go -- see `go_return_type`.
+    let expected = format!("func {receiver_type}{method_name}(name string) *Document");
+    assert_eq!(sig, expected);
+    assert!(
+        !sig.contains("(o *"),
+        "a static Go method is a free function, not a method with a receiver: {sig}"
+    );
+}
+
+#[test]
+fn test_render_method_signature_go_static_vs_instance_differ_only_in_receiver_clause() {
+    // The static and instance renderings of the *same* method must differ only in whether
+    // a receiver clause is present -- not in name, params, or return type.
+    let instance_method = make_method(
+        "get_text",
+        vec![make_param("page", TypeRef::Primitive(PrimitiveType::U32), false)],
+        TypeRef::String,
+        false,
+        false,
+        None,
+    );
+    let mut static_method = instance_method.clone();
+    static_method.is_static = true;
+
+    let instance_sig = render_method_signature(&instance_method, "Document", Language::Go, TEST_PREFIX);
+    let static_sig = render_method_signature(&static_method, "Document", Language::Go, TEST_PREFIX);
+
+    assert_eq!(instance_sig, "func (o *Document) GetText(page uint32) string");
+    assert_eq!(static_sig, "func DocumentGetText(page uint32) string");
+
+    let call_tail = "GetText(page uint32) string";
+    assert!(instance_sig.ends_with(call_tail) && static_sig.ends_with(call_tail));
 }
 
 #[test]
@@ -246,6 +304,41 @@ fn test_render_method_signature_go_error_type_unit_return() {
     let method = make_method("save", vec![], TypeRef::Unit, false, false, Some("IoError"));
     let sig = render_method_signature(&method, "File", Language::Go, TEST_PREFIX);
     assert_eq!(sig, "func (o *File) Save() error");
+}
+
+/// ~keep A Named return is pointer-wrapped in real Go unconditionally -- `gen_method_wrapper`
+/// (backends/go/gen_bindings/methods.rs) routes any non-Primitive/Duration/String/Char/Path
+/// return through `go_optional_type` regardless of whether the method can fail. This method
+/// has no `error_type`, isolating the pointer-wrapping from the separate `(T, error)`
+/// tuple-wrapping behavior already covered by `test_render_method_signature_go_with_error_type`.
+#[test]
+fn test_render_method_signature_go_named_return_is_pointer_wrapped_even_when_infallible() {
+    let method = make_method(
+        "current",
+        vec![],
+        TypeRef::Named("Session".to_string()),
+        false,
+        false,
+        None,
+    );
+    let sig = render_method_signature(&method, "Client", Language::Go, TEST_PREFIX);
+    assert_eq!(sig, "func (o *Client) Current() *Session");
+}
+
+#[test]
+fn test_render_method_signature_go_non_named_return_is_unaffected_by_pointer_wrapping() {
+    // Optional<String> already renders as `*string` via doc_type's own Go Optional
+    // handling -- `go_return_type` must not double the pointer or otherwise touch it.
+    let method = make_method(
+        "find",
+        vec![],
+        TypeRef::Optional(Box::new(TypeRef::String)),
+        false,
+        false,
+        None,
+    );
+    let sig = render_method_signature(&method, "Corpus", Language::Go, TEST_PREFIX);
+    assert_eq!(sig, "func (o *Corpus) Find() *string");
 }
 
 #[test]

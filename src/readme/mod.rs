@@ -176,8 +176,86 @@ fn push_unique_readme(
             file.path.display()
         );
     }
+    // Warn, don't fail: this is a docs-tidiness signal (a dangling TOC entry), not a
+    // correctness break, and alef is consumed by several repos mid-release -- a template
+    // shape this scanner misjudges, or a section a consumer deliberately leaves empty, must
+    // not turn into an unrelated hard build failure. ~keep
+    let empty_headings = find_empty_headings(&file.content);
+    if !empty_headings.is_empty() {
+        tracing::warn!(
+            path = %file.path.display(),
+            headings = %empty_headings.join(", "),
+            "README emits heading(s) with no body before the next same-or-shallower heading; \
+             this renders a dangling entry in the page and its TOC -- populate the section, or \
+             make the template omit the heading when the section has no content"
+        );
+    }
     files.push(file);
     Ok(())
+}
+
+/// Returns `Some(level)` (the number of leading `#`s, 1-6) when `line` is a Markdown ATX
+/// heading, i.e. a run of 1-6 `#` characters followed by a space/tab or end of line.
+fn heading_level(line: &str) -> Option<usize> {
+    let trimmed = line.trim_start();
+    let level = trimmed.chars().take_while(|&c| c == '#').count();
+    if level == 0 || level > 6 {
+        return None;
+    }
+    let rest = &trimmed[level..];
+    (rest.is_empty() || rest.starts_with(' ') || rest.starts_with('\t')).then_some(level)
+}
+
+/// Find headings with no body before the next heading at the same or a shallower level.
+///
+/// A heading immediately followed by a *deeper* heading (e.g. `## Examples` grouping
+/// `### Streaming Responses`) is a legitimate section grouper, not an empty section, so only
+/// same-or-shallower next headings count as "no body". Lines inside fenced code blocks are
+/// never treated as headings -- shell/Python/C comments (`# ...`, `#include ...`) are common
+/// in the code examples these READMEs embed and must not be misread as Markdown structure --
+/// but a fenced code block itself always counts as body content. ~keep
+fn find_empty_headings(content: &str) -> Vec<String> {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut in_code_block = false;
+    let is_code: Vec<bool> = lines
+        .iter()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+                in_code_block = !in_code_block;
+                true
+            } else {
+                in_code_block
+            }
+        })
+        .collect();
+
+    let mut empties = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if is_code[i] {
+            continue;
+        }
+        let Some(level) = heading_level(line) else {
+            continue;
+        };
+        let mut has_content = false;
+        for (offset, next_line) in lines.iter().enumerate().skip(i + 1) {
+            if !is_code[offset]
+                && let Some(next_level) = heading_level(next_line)
+            {
+                has_content = next_level > level;
+                break;
+            }
+            if !next_line.trim().is_empty() {
+                has_content = true;
+                break;
+            }
+        }
+        if !has_content {
+            empties.push(line.trim().to_string());
+        }
+    }
+    empties
 }
 
 /// Validate that a configured `crates.readme.snippets_dir` actually exists.

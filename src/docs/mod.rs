@@ -35,6 +35,10 @@ pub use doc_cleaning::clean_doc;
 pub use type_mapping::doc_type;
 
 pub use context::{CliSurface, DocsRenderContext, McpSurface};
+/// Shared with `crate::readme` so README output gets the same self-embedded
+/// HTML-comment marker as generated docs pages -- see `render::with_html_header`'s
+/// own doc for why. ~keep
+pub(crate) use render::with_html_header;
 
 /// Generate API reference documentation for the given languages.
 ///
@@ -69,8 +73,6 @@ pub fn generate_docs(
     Ok(files)
 }
 
-/// Generate the complete docs stage: API reference, optional CLI/MCP reference,
-/// optional template-rendered llms.txt and skills, and configured snippet checks.
 /// The reference-docs output directory for `config` — `[docs].reference_output`
 /// or the `docs/reference` default. Relative to the workspace root; callers join
 /// it under the base directory.
@@ -87,25 +89,65 @@ pub fn reference_output_dir(config: &ResolvedCrateConfig) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("docs/reference"))
 }
 
+/// Generate the complete docs stage and hand back everything rendered, paired with whatever
+/// error (if any) stopped it going further.
+///
+/// The `Vec<GeneratedFile>` is never dropped on failure: the 15+ API reference pages plus
+/// `configuration.md`/`types.md`/`errors.md` are fully rendered before snippet discovery,
+/// snippet validation, CLI/MCP adoption checks, or llms/skills rendering ever run, and every one
+/// of those can fail for reasons that have nothing to do with the reference pages themselves (a
+/// strict snippet-validation bail, an unmanaged `llms.txt`, a missing `docs.snippets.dirs` root).
+/// Discarding the whole `Vec` on any of those used to mean a single strict-mode snippet failure
+/// silently froze the *entire* published API reference at whatever version last validated
+/// cleanly — worse than the failure it was trying to report, and with no signal to the caller
+/// that anything was skipped. Callers must write `.0` unconditionally and only then propagate
+/// `.1`. ~keep
 pub fn generate_docs_stage(
     api: &ApiSurface,
     config: &ResolvedCrateConfig,
     languages: &[Language],
     output_override: Option<&str>,
     workspace_root: &Path,
-) -> anyhow::Result<Vec<GeneratedFile>> {
+) -> (Vec<GeneratedFile>, anyhow::Result<()>) {
     let reference_output = output_override
         .map(PathBuf::from)
         .unwrap_or_else(|| reference_output_dir(config));
     let reference_output_str = reference_output.to_string_lossy().to_string();
 
-    let mut files = generate_docs(api, config, languages, &reference_output_str)?;
+    let mut files = match generate_docs(api, config, languages, &reference_output_str) {
+        Ok(files) => files,
+        Err(err) => return (Vec::new(), Err(err)),
+    };
     for file in &mut files {
         file.content = with_markdown_alef_header(&file.content);
         file.generated_header = true;
     }
 
-    let mut context = build_base_context(api, config, languages, &files);
+    let result = generate_docs_stage_extras(api, config, languages, workspace_root, &reference_output, &mut files);
+
+    for file in &mut files {
+        file.content = doc_cleaning::wrap_bare_urls(&file.content);
+        if !file.content.ends_with('\n') {
+            file.content.push('\n');
+        }
+    }
+
+    (files, result)
+}
+
+/// Everything past the API reference pages: snippet discovery/validation, CLI/MCP extraction and
+/// adoption checks, and llms/skills rendering. Takes `files` by mutable reference specifically so
+/// an early `?` return here only unwinds this function — `generate_docs_stage`'s `files` keeps
+/// every page pushed onto it before the failure. ~keep
+fn generate_docs_stage_extras(
+    api: &ApiSurface,
+    config: &ResolvedCrateConfig,
+    languages: &[Language],
+    workspace_root: &Path,
+    reference_output: &Path,
+    files: &mut Vec<GeneratedFile>,
+) -> anyhow::Result<()> {
+    let mut context = build_base_context(api, config, languages, files.as_slice());
     let snippet_dirs = build_snippet_context(config, workspace_root, &mut context)?;
 
     if let Some(docs_cfg) = &config.docs {
@@ -177,14 +219,7 @@ pub fn generate_docs_stage(
         }
     }
 
-    for file in &mut files {
-        file.content = doc_cleaning::wrap_bare_urls(&file.content);
-        if !file.content.ends_with('\n') {
-            file.content.push('\n');
-        }
-    }
-
-    Ok(files)
+    Ok(())
 }
 
 fn build_base_context(
@@ -478,48 +513,81 @@ fn validate_snippets(
                 )
             })?;
         }
-        if summary.unavailable > 0 && snippet_cfg.strict {
-            anyhow::bail!(
-                "strict snippet validation failed for crate `{}`: {} validation(s) unavailable{}",
-                config.name,
-                summary.unavailable,
-                attribute_results(&summary, crate::snippets::types::SnippetStatus::Unavailable)
-            );
-        }
-        if summary.downgraded > 0 && snippet_cfg.strict {
-            anyhow::bail!(
-                "strict snippet validation failed for crate `{}`: {} validation(s) downgraded{}",
-                config.name,
-                summary.downgraded,
-                attribute_results(&summary, crate::snippets::types::SnippetStatus::Downgraded)
-            );
-        }
-        if summary.capability_capped > 0 {
-            tracing::warn!(
-                capped = summary.capability_capped,
-                "docs.snippets validated {} snippet(s) below the requested level because their validator caps lower; \
-                 these pass strict mode, because the level is unreachable for that language rather than degraded",
-                summary.capability_capped
-            );
-        }
-        if summary.unavailable > 0 {
-            tracing::warn!(
-                "docs.snippets skipped {} snippet validation(s) because required toolchains were unavailable",
-                summary.unavailable
-            );
-        }
-        if summary.has_failures() {
-            anyhow::bail!(
-                "snippet validation failed for crate `{}`: {} failed, {} errors{}",
-                config.name,
-                summary.failed,
-                summary.errors,
-                attribute_results(&summary, crate::snippets::types::SnippetStatus::Fail)
-            );
-        }
+        enforce_snippet_summary(&config.name, snippet_cfg.strict, &summary)?;
     }
 
     Ok(())
+}
+
+/// Decides whether a completed snippet validation run fails the crate, and how. Order matters:
+/// hard failures (`Fail`/`Error`, which includes session/preparation errors — see
+/// `session::prepare_sessions_isolated`) bail before a strict downgraded bail. A run can carry
+/// both hundreds of downgrades and hundreds of real failures at once, and the strict downgraded
+/// check used to run — and bail — before the failure check further down was ever reached, so a
+/// consumer investigating "N downgraded" never learned the run had failed outright. A user must
+/// never be told "downgraded" when something actually failed. Factored out of `validate_snippets`
+/// so this ordering is directly testable against a constructed `RunSummary`, without a real
+/// toolchain or filesystem — see `docs::tests::strict_bail_order`. ~keep
+fn enforce_snippet_summary(
+    crate_name: &str,
+    strict: bool,
+    summary: &crate::snippets::types::RunSummary,
+) -> anyhow::Result<()> {
+    if summary.unavailable > 0 && strict {
+        anyhow::bail!(
+            "strict snippet validation failed for crate `{}`: {} validation(s) unavailable{}",
+            crate_name,
+            summary.unavailable,
+            attribute_results(summary, crate::snippets::types::SnippetStatus::Unavailable)
+        );
+    }
+    if summary.capability_capped > 0 {
+        tracing::warn!(
+            capped = summary.capability_capped,
+            "docs.snippets validated {} snippet(s) below the requested level because their validator caps lower; \
+             these pass strict mode, because the level is unreachable for that language rather than degraded{}",
+            summary.capability_capped,
+            attribute_capability_capped(summary)
+        );
+    }
+    if summary.unavailable > 0 {
+        tracing::warn!(
+            "docs.snippets skipped {} snippet validation(s) because required toolchains were unavailable",
+            summary.unavailable
+        );
+    }
+    if summary.has_failures() {
+        anyhow::bail!(
+            "snippet validation failed for crate `{}`: {} failed, {} errors{}{}",
+            crate_name,
+            summary.failed,
+            summary.errors,
+            attribute_results(summary, crate::snippets::types::SnippetStatus::Fail),
+            attribute_results(summary, crate::snippets::types::SnippetStatus::Error)
+        );
+    }
+    if summary.downgraded > 0 && strict {
+        anyhow::bail!(
+            "strict snippet validation failed for crate `{}`: {} validation(s) downgraded{}",
+            crate_name,
+            summary.downgraded,
+            attribute_results(summary, crate::snippets::types::SnippetStatus::Downgraded)
+        );
+    }
+    Ok(())
+}
+
+/// Human label for why a result's effective level differs from what was requested. Kept
+/// alongside the attribution formatting it feeds — `DowngradeReason` itself stays a plain data
+/// enum with no presentation concerns. ~keep
+fn downgrade_reason_label(reason: crate::snippets::types::DowngradeReason) -> &'static str {
+    use crate::snippets::types::DowngradeReason;
+    match reason {
+        DowngradeReason::Declared => "author declared this level via front matter",
+        DowngradeReason::Annotation => "author suppressed via annotation",
+        DowngradeReason::ValidatorCapability => "validator cannot reach this level",
+        DowngradeReason::Environment => "environment could not reach this level",
+    }
 }
 
 /// Name the snippets behind a strict-mode count so the failure is actionable.
@@ -527,20 +595,45 @@ fn validate_snippets(
 /// A bare total ("261 validation(s) downgraded") gives a consumer no entry point: the achieved
 /// level is not recorded in the emitted snippet frontmatter, so there is no other way to learn
 /// which snippets regressed or from what level. Groups by language and bounds the per-language
-/// sample, so a large run stays readable while still naming concrete ids to start from. ~keep
+/// sample, so a large run stays readable while still naming concrete ids to start from. Within a
+/// language, also breaks the count down by `downgrade_reason` — "author declared this level" and
+/// "environment could not reach this level" call for entirely different fixes, and collapsing
+/// them into one count told a consumer nothing about which one applies. ~keep
 fn attribute_results(
     summary: &crate::snippets::types::RunSummary,
     status: crate::snippets::types::SnippetStatus,
 ) -> String {
+    attribute(summary, |result| result.status == status)
+}
+
+/// Same attribution, for the `Pass` results a validator's declared or structural ceiling capped
+/// below the requested level. These never fail strict, but a consumer watching the summary count
+/// climb still needs to know which snippets and why. ~keep
+fn attribute_capability_capped(summary: &crate::snippets::types::RunSummary) -> String {
+    attribute(summary, |result| result.capability_capped)
+}
+
+fn attribute(
+    summary: &crate::snippets::types::RunSummary,
+    matches: impl Fn(&crate::snippets::types::ValidationResult) -> bool,
+) -> String {
     const SAMPLE_PER_LANGUAGE: usize = 3;
 
-    let mut by_language: std::collections::BTreeMap<String, (usize, Vec<String>)> = std::collections::BTreeMap::new();
-    for result in summary.results.iter().filter(|result| result.status == status) {
-        let entry = by_language
-            .entry(result.snippet.language.to_string())
-            .or_insert_with(|| (0, Vec::new()));
-        entry.0 += 1;
-        if entry.1.len() < SAMPLE_PER_LANGUAGE {
+    #[derive(Default)]
+    struct LanguageGroup {
+        count: usize,
+        reasons: BTreeMap<&'static str, usize>,
+        sample: Vec<String>,
+    }
+
+    let mut by_language: BTreeMap<String, LanguageGroup> = BTreeMap::new();
+    for result in summary.results.iter().filter(|result| matches(result)) {
+        let entry = by_language.entry(result.snippet.language.to_string()).or_default();
+        entry.count += 1;
+        if let Some(reason) = result.downgrade_reason {
+            *entry.reasons.entry(downgrade_reason_label(reason)).or_default() += 1;
+        }
+        if entry.sample.len() < SAMPLE_PER_LANGUAGE {
             let id = result.snippet.id.clone().unwrap_or_else(|| {
                 format!(
                     "{}:{}",
@@ -548,7 +641,7 @@ fn attribute_results(
                     result.snippet.source_origin.line
                 )
             });
-            entry.1.push(format!(
+            entry.sample.push(format!(
                 "{id} ({} -> {})",
                 result.requested_level, result.effective_level
             ));
@@ -559,14 +652,29 @@ fn attribute_results(
     }
 
     let mut out = String::new();
-    for (language, (count, sample)) in by_language {
-        let remainder = count.saturating_sub(sample.len());
+    for (language, group) in by_language {
+        let remainder = group.count.saturating_sub(group.sample.len());
         let suffix = if remainder > 0 {
             format!(", +{remainder} more")
         } else {
             String::new()
         };
-        out.push_str(&format!("\n  {language}: {count} -- {}{suffix}", sample.join(", ")));
+        let reasons = group
+            .reasons
+            .iter()
+            .map(|(label, count)| format!("{label}: {count}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let reason_suffix = if reasons.is_empty() {
+            String::new()
+        } else {
+            format!(" [{reasons}]")
+        };
+        out.push_str(&format!(
+            "\n  {language}: {}{reason_suffix} -- {}{suffix}",
+            group.count,
+            group.sample.join(", ")
+        ));
     }
     out
 }
@@ -613,5 +721,5 @@ fn warn_missing_explicit_sources(kind: &str, sources: &[PathBuf], workspace_root
 }
 
 fn with_markdown_alef_header(content: &str) -> String {
-    render::with_html_header(content.to_string())
+    render::with_html_header(content.to_string(), "alef docs")
 }

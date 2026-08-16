@@ -45,3 +45,4 @@ mod language_pages;
 mod markdown_quality;
 mod shared_docs;
 mod strict_attribution;
+mod strict_bail_order;

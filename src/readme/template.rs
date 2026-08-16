@@ -329,6 +329,15 @@ fn render_template_readme(
         content.push('\n');
     }
 
+    // `.md` has no `CommentStyle` (`write::marker_comment_style` returns `None`
+    // for it), so the generic `ensure_generated_header` stamping pass is a
+    // no-op for README output — without a self-embedded marker, the write-time
+    // ownership guard could only ever prove ownership via a local `.alef/`
+    // record, which does not survive a fresh clone. Embedding the same
+    // HTML-comment marker docs pages use makes README ownership provable from
+    // content alone, identically in CI and on a warm dev machine. ~keep
+    let content = crate::docs::with_html_header(content, "alef readme");
+
     Ok(Some(GeneratedFile {
         path,
         content,

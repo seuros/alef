@@ -1,5 +1,5 @@
 use crate::core::config::Language;
-use crate::core::ir::{ApiSurface, DefaultValue, FieldDef, TypeRef};
+use crate::core::ir::{ApiSurface, DefaultValue, FieldDef, PrimitiveType, TypeRef};
 use crate::docs::naming::{enum_variant_name, type_name};
 use crate::docs::type_mapping::doc_type;
 use crate::docs::type_mapping::java_boxed_type;
@@ -331,8 +331,32 @@ pub(crate) fn format_enum_variant_ref(enum_type: &str, variant: &str, lang: Lang
     }
 }
 
+/// ~keep The C ABI's on-error return value depends on the function's return shape, not a
+/// single fixed sentinel -- traced from `backends/ffi/gen_bindings/orchestration.rs`
+/// (`:223-229`/`:760-765`, `gen_function_wrapper_footer` `:615-617`) and `helpers.rs`
+/// (`:193-232`): a fallible `()` return, or any `Bytes` result (always delivered via
+/// out-param + status), reports failure as `-1`; a `TypeRef::Named` handle reports it as
+/// the integer `0` -- never `NULL`, there is no pointer to compare a `uint64_t` handle
+/// against, which is exactly the confusion this fix exists to remove; the remaining
+/// heap-allocated shapes (String/Char/Path/Json/Vec/Map) really do return a null pointer;
+/// numeric primitives and `Duration` report `0` (`0.0` for floats). Must stay in lockstep
+/// with the `int32_t`/`-1` text in `function_render.rs`'s `push_returns_with_override` --
+/// see `ffi_status_code.rs`'s cross-check tests for why the two must not drift apart.
+fn ffi_error_return_phrase(return_type: &TypeRef) -> String {
+    match return_type {
+        TypeRef::Unit | TypeRef::Bytes => "Returns `-1` on error.".to_string(),
+        TypeRef::Named(_) => "Returns the sentinel handle `0` on error.".to_string(),
+        TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json | TypeRef::Vec(_) | TypeRef::Map(_, _) => {
+            "Returns `NULL` on error.".to_string()
+        }
+        TypeRef::Primitive(PrimitiveType::F32 | PrimitiveType::F64) => "Returns `0.0` on error.".to_string(),
+        TypeRef::Primitive(_) | TypeRef::Duration => "Returns `0` on error.".to_string(),
+        TypeRef::Optional(inner) => ffi_error_return_phrase(inner),
+    }
+}
+
 /// Format the error/exception phrase for a function that can fail.
-pub(crate) fn format_error_phrase(error_type: &str, lang: Language) -> String {
+pub(crate) fn format_error_phrase(error_type: &str, return_type: &TypeRef, lang: Language) -> String {
     let short = error_type.rsplit("::").next().unwrap_or(error_type);
     match lang {
         Language::Python => {
@@ -363,7 +387,10 @@ pub(crate) fn format_error_phrase(error_type: &str, lang: Language) -> String {
             let ename = short.to_pascal_case();
             format!("Throws `{ename}`.")
         }
-        Language::Ffi | Language::C | Language::Jni => "Returns `NULL` on error.".to_string(),
+        Language::Ffi | Language::C => ffi_error_return_phrase(return_type),
+        // ~keep Jni is a distinct, currently-unreachable backend (see docs::examples); left
+        // on its pre-migration fixed `NULL` phrase rather than migrated to the shape-based one.
+        Language::Jni => "Returns `NULL` on error.".to_string(),
         Language::R => "Stops with error message.".to_string(),
         Language::Rust => {
             let ename = short.to_pascal_case();
@@ -396,6 +423,13 @@ pub(crate) fn doc_type_with_optional(ty: &TypeRef, lang: Language, optional: boo
             Language::Elixir => format!("{inner} | nil"),
             Language::R => format!("{inner} or NULL"),
             Language::Rust => format!("Option<{inner}>"),
+            // ~keep Mirrors type_mapping.rs's `TypeRef::Optional` arm: a Named type crosses
+            // the C ABI as a scalar `AlefHandle`, never a pointer, so wrapping it in another
+            // `*` here fabricates a pointer that doesn't exist. Types that already render as
+            // pointers (strings, bytes, JSON, maps) are nullable in place -- doubling the `*`
+            // for those was the `const char**`-vs-header `const char *` divergence. Jni keeps
+            // the old pointer rendering; see docs::examples for why.
+            Language::Ffi | Language::C if matches!(ty, TypeRef::Named(_)) || inner.ends_with('*') => inner,
             Language::Ffi | Language::C | Language::Jni => format!("{inner}*"),
             Language::Kotlin
             | Language::KotlinAndroid
@@ -410,12 +444,808 @@ pub(crate) fn doc_type_with_optional(ty: &TypeRef, lang: Language, optional: boo
     doc_type(ty, lang, ffi_prefix)
 }
 
+/// ~keep Every documented identifier (method/function/type name) must be one the target
+/// language's own toolchain would actually accept. A curated or templated name that turns
+/// out to collide with a reserved word (Java's `new`, Dart's `new`, ...) fails silently in
+/// the worst way: the docs render, look entirely plausible, and only a `javac`/`dart
+/// analyze` run against the *real* generated code catches it -- see the tslp `new`
+/// vs `create` finding this gate was built to close. Unlike a per-language name fix, this
+/// keeps working when whatever mechanism produces a name (a template, a curated override,
+/// config) changes to something new that happens to collide again -- it makes the whole
+/// class of "wrong reserved-word identifier" impossible to emit silently, not just today's
+/// instance of it. Keyword lists are the well-known reserved-word set for each language;
+/// where a language's contextual/soft-keyword rules are large (Kotlin, Swift, C#), the
+/// list is a conservative subset that includes every word reserved in *every* context, not
+/// an exhaustive grammar -- see each arm's word count for how conservative.
+fn reserved_words(lang: Language) -> &'static [&'static str] {
+    match lang {
+        Language::Python => &[
+            "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue", "def",
+            "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda",
+            "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield",
+        ],
+        Language::Node | Language::Wasm => &[
+            "break",
+            "case",
+            "catch",
+            "class",
+            "const",
+            "continue",
+            "debugger",
+            "default",
+            "delete",
+            "do",
+            "else",
+            "export",
+            "extends",
+            "false",
+            "finally",
+            "for",
+            "function",
+            "if",
+            "import",
+            "in",
+            "instanceof",
+            "new",
+            "null",
+            "return",
+            "super",
+            "switch",
+            "this",
+            "throw",
+            "true",
+            "try",
+            "typeof",
+            "var",
+            "void",
+            "while",
+            "with",
+            "yield",
+            "let",
+            "static",
+            "enum",
+            "await",
+            "implements",
+            "package",
+            "protected",
+            "interface",
+            "private",
+            "public",
+        ],
+        Language::Ruby => &[
+            "__ENCODING__",
+            "__LINE__",
+            "__FILE__",
+            "BEGIN",
+            "END",
+            "alias",
+            "and",
+            "begin",
+            "break",
+            "case",
+            "class",
+            "def",
+            "defined?",
+            "do",
+            "else",
+            "elsif",
+            "end",
+            "ensure",
+            "false",
+            "for",
+            "if",
+            "in",
+            "module",
+            "next",
+            "nil",
+            "not",
+            "or",
+            "redo",
+            "rescue",
+            "retry",
+            "return",
+            "self",
+            "super",
+            "then",
+            "true",
+            "undef",
+            "unless",
+            "until",
+            "when",
+            "while",
+            "yield",
+        ],
+        Language::Php => &[
+            "abstract",
+            "and",
+            "array",
+            "as",
+            "break",
+            "callable",
+            "case",
+            "catch",
+            "class",
+            "clone",
+            "const",
+            "continue",
+            "declare",
+            "default",
+            "do",
+            "echo",
+            "else",
+            "elseif",
+            "empty",
+            "enddeclare",
+            "endfor",
+            "endforeach",
+            "endif",
+            "endswitch",
+            "endwhile",
+            "extends",
+            "final",
+            "finally",
+            "fn",
+            "for",
+            "foreach",
+            "function",
+            "global",
+            "goto",
+            "if",
+            "implements",
+            "include",
+            "include_once",
+            "instanceof",
+            "insteadof",
+            "interface",
+            "isset",
+            "list",
+            "match",
+            "namespace",
+            "new",
+            "or",
+            "print",
+            "private",
+            "protected",
+            "public",
+            "readonly",
+            "require",
+            "require_once",
+            "return",
+            "static",
+            "switch",
+            "throw",
+            "trait",
+            "try",
+            "unset",
+            "use",
+            "var",
+            "while",
+            "xor",
+            "yield",
+        ],
+        Language::Elixir => &[
+            "true", "false", "nil", "when", "and", "or", "not", "in", "fn", "do", "end", "catch", "rescue", "after",
+            "else",
+        ],
+        Language::Go => &[
+            "break",
+            "default",
+            "func",
+            "interface",
+            "select",
+            "case",
+            "defer",
+            "go",
+            "map",
+            "struct",
+            "chan",
+            "else",
+            "goto",
+            "package",
+            "switch",
+            "const",
+            "fallthrough",
+            "if",
+            "range",
+            "type",
+            "continue",
+            "for",
+            "import",
+            "return",
+            "var",
+        ],
+        Language::Java => &[
+            "abstract",
+            "assert",
+            "boolean",
+            "break",
+            "byte",
+            "case",
+            "catch",
+            "char",
+            "class",
+            "const",
+            "continue",
+            "default",
+            "do",
+            "double",
+            "else",
+            "enum",
+            "extends",
+            "final",
+            "finally",
+            "float",
+            "for",
+            "goto",
+            "if",
+            "implements",
+            "import",
+            "instanceof",
+            "int",
+            "interface",
+            "long",
+            "native",
+            "new",
+            "package",
+            "private",
+            "protected",
+            "public",
+            "return",
+            "short",
+            "static",
+            "strictfp",
+            "super",
+            "switch",
+            "synchronized",
+            "this",
+            "throw",
+            "throws",
+            "transient",
+            "try",
+            "void",
+            "volatile",
+            "while",
+            "true",
+            "false",
+            "null",
+        ],
+        Language::Csharp => &[
+            "abstract",
+            "as",
+            "base",
+            "bool",
+            "break",
+            "byte",
+            "case",
+            "catch",
+            "char",
+            "checked",
+            "class",
+            "const",
+            "continue",
+            "decimal",
+            "default",
+            "delegate",
+            "do",
+            "double",
+            "else",
+            "enum",
+            "event",
+            "explicit",
+            "extern",
+            "false",
+            "finally",
+            "fixed",
+            "float",
+            "for",
+            "foreach",
+            "goto",
+            "if",
+            "implicit",
+            "in",
+            "int",
+            "interface",
+            "internal",
+            "is",
+            "lock",
+            "long",
+            "namespace",
+            "new",
+            "null",
+            "object",
+            "operator",
+            "out",
+            "override",
+            "params",
+            "private",
+            "protected",
+            "public",
+            "readonly",
+            "ref",
+            "return",
+            "sbyte",
+            "sealed",
+            "short",
+            "sizeof",
+            "stackalloc",
+            "static",
+            "string",
+            "struct",
+            "switch",
+            "this",
+            "throw",
+            "true",
+            "try",
+            "typeof",
+            "uint",
+            "ulong",
+            "unchecked",
+            "unsafe",
+            "ushort",
+            "using",
+            "virtual",
+            "void",
+            "volatile",
+            "while",
+        ],
+        Language::Rust => &[
+            "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false", "fn", "for", "if", "impl",
+            "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return", "self", "Self", "static",
+            "struct", "super", "trait", "true", "type", "unsafe", "use", "where", "while", "async", "await", "dyn",
+            "abstract", "become", "box", "do", "final", "macro", "override", "priv", "try", "typeof", "unsized",
+            "virtual", "yield",
+        ],
+        Language::Kotlin | Language::KotlinAndroid => &[
+            "as",
+            "break",
+            "class",
+            "continue",
+            "do",
+            "else",
+            "false",
+            "for",
+            "fun",
+            "if",
+            "in",
+            "interface",
+            "is",
+            "null",
+            "object",
+            "package",
+            "return",
+            "super",
+            "this",
+            "throw",
+            "true",
+            "try",
+            "typealias",
+            "typeof",
+            "val",
+            "var",
+            "when",
+            "while",
+            "by",
+            "catch",
+            "constructor",
+            "delegate",
+            "dynamic",
+            "field",
+            "file",
+            "finally",
+            "get",
+            "import",
+            "init",
+            "param",
+            "property",
+            "receiver",
+            "set",
+            "setparam",
+            "where",
+            "actual",
+            "abstract",
+            "annotation",
+            "companion",
+            "const",
+            "crossinline",
+            "data",
+            "enum",
+            "expect",
+            "external",
+            "final",
+            "infix",
+            "inline",
+            "inner",
+            "internal",
+            "lateinit",
+            "noinline",
+            "open",
+            "operator",
+            "out",
+            "override",
+            "private",
+            "protected",
+            "public",
+            "reified",
+            "sealed",
+            "suspend",
+            "tailrec",
+            "vararg",
+        ],
+        Language::Swift => &[
+            "associatedtype",
+            "class",
+            "deinit",
+            "enum",
+            "extension",
+            "fileprivate",
+            "func",
+            "import",
+            "init",
+            "inout",
+            "internal",
+            "let",
+            "open",
+            "operator",
+            "private",
+            "protocol",
+            "public",
+            "rethrows",
+            "static",
+            "struct",
+            "subscript",
+            "typealias",
+            "var",
+            "break",
+            "case",
+            "continue",
+            "default",
+            "defer",
+            "do",
+            "else",
+            "fallthrough",
+            "for",
+            "guard",
+            "if",
+            "in",
+            "repeat",
+            "return",
+            "switch",
+            "where",
+            "while",
+            "as",
+            "Any",
+            "catch",
+            "false",
+            "is",
+            "nil",
+            "self",
+            "Self",
+            "super",
+            "throw",
+            "throws",
+            "true",
+            "try",
+        ],
+        Language::Dart => &[
+            "abstract",
+            "as",
+            "assert",
+            "async",
+            "await",
+            "break",
+            "case",
+            "catch",
+            "class",
+            "const",
+            "continue",
+            "covariant",
+            "default",
+            "deferred",
+            "do",
+            "dynamic",
+            "else",
+            "enum",
+            "export",
+            "extends",
+            "extension",
+            "external",
+            "factory",
+            "false",
+            "final",
+            "finally",
+            "for",
+            "Function",
+            "get",
+            "hide",
+            "if",
+            "implements",
+            "import",
+            "in",
+            "interface",
+            "is",
+            "late",
+            "library",
+            "mixin",
+            "new",
+            "null",
+            "on",
+            "operator",
+            "part",
+            "required",
+            "rethrow",
+            "return",
+            "set",
+            "show",
+            "static",
+            "super",
+            "switch",
+            "sync",
+            "this",
+            "throw",
+            "true",
+            "try",
+            "typedef",
+            "var",
+            "void",
+            "while",
+            "with",
+            "yield",
+        ],
+        Language::Gleam => &[
+            "as", "assert", "case", "const", "external", "fn", "if", "import", "let", "opaque", "pub", "todo", "type",
+            "use", "panic", "echo",
+        ],
+        Language::Zig => &[
+            "addrspace",
+            "align",
+            "allowzero",
+            "and",
+            "anyframe",
+            "anytype",
+            "asm",
+            "async",
+            "await",
+            "break",
+            "callconv",
+            "catch",
+            "comptime",
+            "const",
+            "continue",
+            "defer",
+            "else",
+            "enum",
+            "errdefer",
+            "error",
+            "export",
+            "extern",
+            "fn",
+            "for",
+            "if",
+            "inline",
+            "noalias",
+            "noinline",
+            "nosuspend",
+            "opaque",
+            "or",
+            "orelse",
+            "packed",
+            "pub",
+            "resume",
+            "return",
+            "linksection",
+            "struct",
+            "suspend",
+            "switch",
+            "test",
+            "threadlocal",
+            "try",
+            "union",
+            "unreachable",
+            "usingnamespace",
+            "var",
+            "volatile",
+            "while",
+        ],
+        Language::R => &[
+            "if",
+            "else",
+            "repeat",
+            "while",
+            "function",
+            "for",
+            "in",
+            "next",
+            "break",
+            "TRUE",
+            "FALSE",
+            "NULL",
+            "Inf",
+            "NaN",
+            "NA",
+            "NA_integer_",
+            "NA_real_",
+            "NA_character_",
+            "NA_complex_",
+        ],
+        Language::Ffi | Language::C | Language::Jni => &[
+            "auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else", "enum", "extern",
+            "float", "for", "goto", "if", "inline", "int", "long", "register", "restrict", "return", "short", "signed",
+            "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while",
+        ],
+    }
+}
+
+/// A conservative "is this well-formed" check: alphabetic-or-underscore start, then
+/// alphanumeric-or-underscore. This is a defensive backstop, not the primary rule --
+/// every name this pipeline emits is derived from a Rust identifier via heck's case
+/// converters, which never introduce illegal characters, so in practice only the
+/// reserved-word check below ever fires.
+fn has_valid_identifier_syntax(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Returns the reason `name` cannot legally appear as an identifier in `lang`, or `None`
+/// if it can.
+pub(crate) fn identifier_violation(name: &str, lang: Language) -> Option<&'static str> {
+    if name.is_empty() {
+        return Some("empty identifier");
+    }
+    if reserved_words(lang).contains(&name) {
+        return Some("reserved word");
+    }
+    if !has_valid_identifier_syntax(name) {
+        return Some("not a syntactically valid identifier");
+    }
+    None
+}
+
+/// ~keep Panics -- deliberately, not a `Result` threaded through every renderer -- because
+/// an identifier collision is a defect in whatever fed the generator this name (a
+/// template, a curated override, config), not a recoverable per-document condition, and
+/// the fix belongs there, not in a formatted-error return value docs call sites would have
+/// to remember to check. See `identifier_violation` for the rule and `reserved_words` for
+/// the per-language keyword source.
+pub(crate) fn assert_valid_identifier(name: &str, lang: Language, context: &str) {
+    if let Some(reason) = identifier_violation(name, lang) {
+        panic!(
+            "generated {lang:?} identifier `{name}` is invalid ({reason}) while rendering {context} -- the docs \
+             pipeline must not emit an identifier a {lang:?} toolchain would reject"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::config::Language;
     use crate::core::ir::{DefaultValue, PrimitiveType, TypeRef};
     use crate::docs::test_helpers::{TEST_PREFIX, empty_api, make_field};
+
+    // ~keep The identifier gate: rejects a reserved-word collision (Java/Dart's `new`,
+    // etc.) that a curated or templated name might introduce. These are the per-language
+    // ground truths the tslp `DownloadManager` audit measured against a real compiler
+    // (`javac`) and real language specs, not inference -- see reserved_words' doc comment.
+    #[test]
+    fn test_identifier_violation_rejects_new_in_languages_where_it_is_reserved() {
+        for lang in [
+            Language::Java,
+            Language::Dart,
+            Language::Php,
+            Language::Node,
+            Language::Csharp,
+        ] {
+            assert_eq!(
+                identifier_violation("new", lang),
+                Some("reserved word"),
+                "`new` must be rejected for {lang:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_identifier_violation_accepts_new_in_languages_where_it_is_not_reserved() {
+        // Rust, Go, Kotlin, Zig, and Elixir do not reserve `new` -- this is exactly why
+        // `Type::new()`/`func_name(...)`-style constructors are idiomatic there. Elixir's
+        // real `DownloadManager.new/1` (the tslp audit's one correct case) depends on this.
+        for lang in [
+            Language::Rust,
+            Language::Go,
+            Language::Kotlin,
+            Language::Zig,
+            Language::Elixir,
+        ] {
+            assert_eq!(
+                identifier_violation("new", lang),
+                None,
+                "`new` must be accepted for {lang:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_identifier_violation_csharp_new_only_collides_lowercase() {
+        // C#'s real defect (a fabricated static factory instead of a real constructor) is
+        // a name-*selection* problem, not a reserved-word one: `func_name` PascalCases to
+        // `New`, which is not the reserved `new` and so the gate correctly does not fire on
+        // it -- catching this class of bug needs item 1 (modeling the curated
+        // constructor), not the gate.
+        assert_eq!(identifier_violation("new", Language::Csharp), Some("reserved word"));
+        assert_eq!(identifier_violation("New", Language::Csharp), None);
+    }
+
+    #[test]
+    fn test_identifier_violation_rejects_python_default_arg_style_keywords() {
+        assert_eq!(identifier_violation("class", Language::Python), Some("reserved word"));
+        assert_eq!(identifier_violation("import", Language::Python), Some("reserved word"));
+    }
+
+    #[test]
+    fn test_identifier_violation_kotlin_default_is_not_reserved() {
+        // Regression guard for the existing `default` -> `@JvmStatic fun default()` test
+        // fixture: Kotlin does not reserve `default` as a hard keyword.
+        assert_eq!(identifier_violation("default", Language::Kotlin), None);
+    }
+
+    #[test]
+    fn test_identifier_violation_rejects_empty_identifier() {
+        assert_eq!(identifier_violation("", Language::Python), Some("empty identifier"));
+    }
+
+    #[test]
+    fn test_identifier_violation_rejects_identifier_starting_with_digit() {
+        assert_eq!(
+            identifier_violation("1invalid", Language::Python),
+            Some("not a syntactically valid identifier")
+        );
+    }
+
+    #[test]
+    fn test_identifier_violation_accepts_ordinary_identifier_in_every_language() {
+        for lang in [
+            Language::Python,
+            Language::Node,
+            Language::Wasm,
+            Language::Ruby,
+            Language::Php,
+            Language::Elixir,
+            Language::Go,
+            Language::Java,
+            Language::Csharp,
+            Language::Rust,
+            Language::Kotlin,
+            Language::KotlinAndroid,
+            Language::Swift,
+            Language::Dart,
+            Language::Gleam,
+            Language::Zig,
+            Language::R,
+            Language::Ffi,
+            Language::C,
+            Language::Jni,
+        ] {
+            assert_eq!(
+                identifier_violation("classifyLink", lang),
+                None,
+                "an ordinary camelCase identifier must be accepted for {lang:?}"
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "reserved word")]
+    fn test_assert_valid_identifier_panics_on_reserved_word() {
+        assert_valid_identifier("new", Language::Java, "a test context");
+    }
+
+    #[test]
+    fn test_assert_valid_identifier_is_silent_on_a_legal_identifier() {
+        assert_valid_identifier("createClient", Language::Java, "a test context");
+    }
 
     #[test]
     fn test_doc_type_with_optional_true_wraps_correctly() {
@@ -455,9 +1285,15 @@ mod tests {
             doc_type_with_optional(&TypeRef::String, Language::Rust, true, TEST_PREFIX),
             "Option<String>"
         );
+        // ~keep A single pointer, not a double pointer: the real cbindgen header declares
+        // optional string params as plain `const char *` (nullable in place), e.g.
+        // `literllm_create_client`'s `base_url`/`model_hint` params -- confirmed against
+        // the generated header, not inferred from the type system. This was the exact
+        // `const char**`-vs-header-`const char *` divergence the params-table fix exists
+        // to close; pinning the old doubled value here would have re-legalized the bug.
         assert_eq!(
             doc_type_with_optional(&TypeRef::String, Language::Ffi, true, TEST_PREFIX),
-            "const char**"
+            "const char*"
         );
     }
 
@@ -535,6 +1371,157 @@ mod tests {
         assert_eq!(
             doc_type_with_optional(&TypeRef::String, Language::Java, true, TEST_PREFIX),
             "Optional<String>"
+        );
+    }
+
+    #[test]
+    fn test_doc_type_with_optional_named_ffi_is_bare_scalar_handle_not_a_pointer() {
+        let ty = TypeRef::Named("ClientConfig".to_string());
+        let rendered = doc_type_with_optional(&ty, Language::Ffi, true, TEST_PREFIX);
+        assert_eq!(rendered, "HTMAlefHandle");
+        assert!(
+            !rendered.contains('*'),
+            "handle must not be pointer-suffixed: {rendered}"
+        );
+        assert!(
+            !rendered.contains("ClientConfig"),
+            "must not name the concrete Rust type: {rendered}"
+        );
+    }
+
+    #[test]
+    fn test_doc_type_with_optional_string_ffi_is_single_pointer_not_double() {
+        // Regression: this is the params-table / struct-fields-table half of the
+        // `const char**`-vs-header-`const char *` divergence; type_mapping.rs's `Optional`
+        // arm covers the other half (a literal `TypeRef::Optional(String)`).
+        assert_eq!(
+            doc_type_with_optional(&TypeRef::String, Language::Ffi, true, TEST_PREFIX),
+            "const char*"
+        );
+    }
+
+    #[test]
+    fn test_doc_type_with_optional_string_jni_keeps_pre_migration_double_pointer() {
+        assert_eq!(
+            doc_type_with_optional(&TypeRef::String, Language::Jni, true, TEST_PREFIX),
+            "const char**"
+        );
+    }
+
+    /// ~keep The parameters table (`doc_type_with_optional`) and the function/method
+    /// signature line (`type_mapping::doc_type`, via `signatures.rs`) render the same
+    /// Named type in two different places on the same generated page. They must agree on
+    /// the handle token for a required field exactly as they do for an optional one --
+    /// this is the params-table analogue of `ffi_handle_consistency.rs`'s
+    /// signature-vs-example cross-check.
+    #[test]
+    fn test_doc_type_with_optional_agrees_with_doc_type_on_handle_token() {
+        let ty = TypeRef::Named("ClientConfig".to_string());
+        let required = doc_type(&ty, Language::Ffi, TEST_PREFIX);
+        let optional = doc_type_with_optional(&ty, Language::Ffi, true, TEST_PREFIX);
+        assert_eq!(
+            required, optional,
+            "a Named type must render identically whether required or optional"
+        );
+        assert_eq!(required, "HTMAlefHandle");
+    }
+
+    // ~keep The on-error return value depends on the function's return shape; traced from
+    // backends/ffi/gen_bindings/{orchestration,helpers}.rs -- see ffi_error_return_phrase's
+    // doc comment for the source citations. One case per row of that table.
+    #[test]
+    fn test_format_error_phrase_ffi_unit_return_reports_negative_one() {
+        assert_eq!(
+            format_error_phrase("InitError", &TypeRef::Unit, Language::Ffi),
+            "Returns `-1` on error."
+        );
+    }
+
+    #[test]
+    fn test_format_error_phrase_ffi_bytes_return_reports_negative_one() {
+        // A Bytes result is always delivered via out-param + i32 status, fallible or not.
+        assert_eq!(
+            format_error_phrase("ReadError", &TypeRef::Bytes, Language::Ffi),
+            "Returns `-1` on error."
+        );
+    }
+
+    #[test]
+    fn test_format_error_phrase_ffi_named_return_reports_integer_sentinel_not_null() {
+        let phrase = format_error_phrase(
+            "ParseError",
+            &TypeRef::Named("ConversionResult".to_string()),
+            Language::C,
+        );
+        assert_eq!(phrase, "Returns the sentinel handle `0` on error.");
+        assert!(
+            !phrase.contains("NULL"),
+            "a scalar handle has no pointer to compare: {phrase}"
+        );
+    }
+
+    #[test]
+    fn test_format_error_phrase_ffi_string_return_stays_null() {
+        // A genuine heap-allocated pointer return really does use NULL on failure.
+        assert_eq!(
+            format_error_phrase("ReadError", &TypeRef::String, Language::C),
+            "Returns `NULL` on error."
+        );
+        assert_eq!(
+            format_error_phrase("ReadError", &TypeRef::Vec(Box::new(TypeRef::String)), Language::C),
+            "Returns `NULL` on error."
+        );
+        assert_eq!(
+            format_error_phrase(
+                "ReadError",
+                &TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String)),
+                Language::C
+            ),
+            "Returns `NULL` on error."
+        );
+    }
+
+    #[test]
+    fn test_format_error_phrase_ffi_numeric_primitive_reports_zero() {
+        assert_eq!(
+            format_error_phrase("ComputeError", &TypeRef::Primitive(PrimitiveType::I32), Language::C),
+            "Returns `0` on error."
+        );
+        assert_eq!(
+            format_error_phrase("ComputeError", &TypeRef::Primitive(PrimitiveType::F64), Language::C),
+            "Returns `0.0` on error."
+        );
+        assert_eq!(
+            format_error_phrase("ComputeError", &TypeRef::Duration, Language::C),
+            "Returns `0` on error."
+        );
+    }
+
+    #[test]
+    fn test_format_error_phrase_ffi_optional_named_recurses_to_inner_shape() {
+        let ty = TypeRef::Optional(Box::new(TypeRef::Named("ClientConfig".to_string())));
+        assert_eq!(
+            format_error_phrase("AttachError", &ty, Language::C),
+            "Returns the sentinel handle `0` on error."
+        );
+    }
+
+    #[test]
+    fn test_format_error_phrase_jni_keeps_pre_migration_fixed_null_phrase() {
+        // Jni is a distinct, currently-unreachable backend (see docs::examples); it is
+        // deliberately left on the old fixed `NULL` phrase, not migrated to the shape-based
+        // table, regardless of what the return shape actually is.
+        assert_eq!(
+            format_error_phrase("InitError", &TypeRef::Unit, Language::Jni),
+            "Returns `NULL` on error."
+        );
+        assert_eq!(
+            format_error_phrase(
+                "ParseError",
+                &TypeRef::Named("ConversionResult".to_string()),
+                Language::Jni
+            ),
+            "Returns `NULL` on error."
         );
     }
 

@@ -634,7 +634,7 @@ mod tests {
         let rendered = render_function_example(&function, Language::C, "Demo");
         assert!(rendered.contains("demo_parse_document(0);"));
         assert!(!rendered.contains("demo_parse_document(NULL);"));
-        assert!(!rendered.contains("(DemoClientConfig){0}"));
+        assert!(!rendered.contains("(DEMOClientConfig){0}"));
     }
 
     #[test]
@@ -654,8 +654,8 @@ mod tests {
         let mut function = function();
         function.return_type = TypeRef::Named("ConversionResult".to_string());
         let rendered = render_function_example(&function, Language::C, "Demo");
-        assert!(rendered.contains("DemoAlefHandle result = demo_parse_document(\"value\");"));
-        assert!(!rendered.contains("DemoConversionResult *result"));
+        assert!(rendered.contains("DEMOAlefHandle result = demo_parse_document(\"value\");"));
+        assert!(!rendered.contains("DEMOConversionResult *result"));
     }
 
     #[test]

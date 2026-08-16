@@ -154,7 +154,9 @@ fn test_render_go_fn_sig_error_type_with_return() {
         Some("ParseError"),
     );
     let sig = render_go_fn_sig(&func, TEST_PREFIX);
-    assert_eq!(sig, "func Parse(source string) (Ast, error)");
+    // ~keep A Named return is pointer-wrapped in real Go -- see signatures.rs's
+    // `go_return_type` (backends/go/type_map.rs's `go_optional_type`).
+    assert_eq!(sig, "func Parse(source string) (*Ast, error)");
 }
 
 #[test]
@@ -162,6 +164,22 @@ fn test_render_go_fn_sig_error_type_unit_return() {
     let func = make_function("save", vec![], TypeRef::Unit, false, Some("IoError"));
     let sig = render_go_fn_sig(&func, TEST_PREFIX);
     assert_eq!(sig, "func Save() error");
+}
+
+#[test]
+fn test_render_go_fn_sig_named_return_is_pointer_wrapped_even_when_infallible() {
+    // Verified from source, not inference: `gen_function_wrapper`
+    // (backends/go/gen_bindings/functions.rs) pointer-wraps a Named return unconditionally,
+    // not only when the function is fallible.
+    let func = make_function(
+        "current_session",
+        vec![],
+        TypeRef::Named("Session".to_string()),
+        false,
+        None,
+    );
+    let sig = render_go_fn_sig(&func, TEST_PREFIX);
+    assert_eq!(sig, "func CurrentSession() *Session");
 }
 
 #[test]

@@ -257,8 +257,11 @@ fn should_render_a_heading_with_trailing_hash_in_display_name_escaped() {
     let api = test_api();
     let files = generate_readmes(&api, &config, &[Language::Csharp]).unwrap();
     assert_eq!(files.len(), 1);
+    // README output now carries a self-embedded HTML-comment header ahead of
+    // the rendered body (see `template.rs`'s `~keep` note), so the escaped
+    // heading is no longer the first line of `content`.
     assert!(
-        files[0].content.starts_with("# C\\#"),
+        files[0].content.contains("# C\\#"),
         "expected the heading's trailing `#` to be backslash-escaped so it can't be \
          mistaken for an ATX closing sequence, got: {}",
         files[0].content
@@ -1118,6 +1121,115 @@ fn test_alef_all_and_cold_readme_produce_same_output() {
     assert_eq!(
         cold_content, warm_content,
         "README generation must be deterministic: alef readme and alef all must produce identical output (STY-5 regression)"
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+// --- `install_command` may be configured without being the template's rendering source ---
+//
+// A README language can legitimately set `install_command` while its template's installation
+// partial renders a *different*, hand-written, equivalent snippet instead (swift's SwiftPM
+// `.binaryTarget` block instead of the unsupported `.package(url:, from:)` form in
+// `install_command`; kotlin_android's single-quoted Gradle `implementation '...'` instead of
+// the double-quoted `implementation("...")` in `install_command`). `install_command` is a
+// convenience value some templates read and others intentionally supersede with better,
+// language-idiomatic content -- generation must not fail just because the literal configured
+// string doesn't appear verbatim in output the template deliberately wrote differently.
+#[test]
+fn should_not_fail_when_a_configured_install_command_is_intentionally_not_rendered_verbatim() {
+    let tmp = std::env::temp_dir().join("alef_readme_superseded_install_command_test");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).unwrap();
+
+    // The template never references `install_command` -- it has its own hardcoded, equivalent
+    // instructions, mirroring the real swift/kotlin_android templates.
+    fs::write(
+        tmp.join("test.md"),
+        "# {{ name }}\n\n## Installation\n\n```gradle\nimplementation '{{ package_name }}:{{ version }}'\n```\n",
+    )
+    .unwrap();
+
+    let mut config = test_config();
+    config.workspace_root = Some(tmp.clone());
+    let mut lang_map = std::collections::HashMap::new();
+    lang_map.insert(
+        "kotlin_android".to_string(),
+        serde_json::json!({
+            "template": "test.md",
+            "package_name": "io.xberg.literllm:liter-llm-android",
+            "install_command": "implementation(\"io.xberg.literllm:liter-llm-android:{{ version }}\")",
+            "output_path": "packages/kotlin-android/README.md"
+        }),
+    );
+    config.readme = Some(ReadmeConfig {
+        template_dir: Some(tmp.clone()),
+        snippets_dir: None,
+        config: None,
+        output_pattern: None,
+        discord_url: None,
+        banner_url: None,
+        languages: lang_map,
+        targets: std::collections::HashMap::new(),
+    });
+
+    let api = test_api();
+    let files = generate_readmes(&api, &config, &[Language::KotlinAndroid])
+        .expect("a template that supersedes install_command with its own content must still succeed");
+    assert!(
+        files[0]
+            .content
+            .contains("implementation 'io.xberg.literllm:liter-llm-android:0.1.0'"),
+        "Got: {}",
+        files[0].content
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn should_pass_when_install_command_is_configured_and_the_template_renders_it() {
+    let tmp = std::env::temp_dir().join("alef_readme_present_install_command_test");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).unwrap();
+
+    fs::write(
+        tmp.join("test.md"),
+        "# {{ name }}\n\n## Installation\n\n```bash\n{{ install_command }}\n```\n",
+    )
+    .unwrap();
+
+    let mut config = test_config();
+    config.workspace_root = Some(tmp.clone());
+    let mut lang_map = std::collections::HashMap::new();
+    lang_map.insert(
+        "zig".to_string(),
+        serde_json::json!({
+            "template": "test.md",
+            "install_command": "zig fetch --save https://example.com/v{{ version }}.tar.gz",
+            "output_path": "packages/zig/README.md"
+        }),
+    );
+    config.readme = Some(ReadmeConfig {
+        template_dir: Some(tmp.clone()),
+        snippets_dir: None,
+        config: None,
+        output_pattern: None,
+        discord_url: None,
+        banner_url: None,
+        languages: lang_map,
+        targets: std::collections::HashMap::new(),
+    });
+
+    let api = test_api();
+    let files = generate_readmes(&api, &config, &[Language::Zig]).unwrap();
+    assert_eq!(files.len(), 1);
+    assert!(
+        files[0]
+            .content
+            .contains("zig fetch --save https://example.com/v0.1.0.tar.gz"),
+        "Got: {}",
+        files[0].content
     );
 
     let _ = fs::remove_dir_all(&tmp);

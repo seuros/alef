@@ -230,7 +230,9 @@ fn test_doc_type_named_strips_module_path() {
     assert_eq!(doc_type(&ty, Language::Java, TEST_PREFIX), "OutputFormat");
     assert_eq!(doc_type(&ty, Language::Go, TEST_PREFIX), "OutputFormat");
     assert_eq!(doc_type(&ty, Language::Rust, TEST_PREFIX), "OutputFormat");
-    assert_eq!(doc_type(&ty, Language::Ffi, TEST_PREFIX), "HtmOutputFormat");
+    // ~keep Every Named type crosses the C ABI as the scalar `AlefHandle` token, never a
+    // pointer to a struct named after the Rust type -- see FFI_HANDLE_TYPE_NAME.
+    assert_eq!(doc_type(&ty, Language::Ffi, TEST_PREFIX), "HTMAlefHandle");
 }
 
 #[test]
@@ -238,7 +240,50 @@ fn test_doc_type_named_without_path() {
     let ty = TypeRef::Named("ParseOptions".to_string());
     assert_eq!(doc_type(&ty, Language::Python, TEST_PREFIX), "ParseOptions");
     assert_eq!(doc_type(&ty, Language::Node, TEST_PREFIX), "ParseOptions");
-    assert_eq!(doc_type(&ty, Language::Ffi, TEST_PREFIX), "HtmParseOptions");
+    assert_eq!(doc_type(&ty, Language::Ffi, TEST_PREFIX), "HTMAlefHandle");
+}
+
+#[test]
+fn test_doc_type_named_ffi_uses_same_handle_name_regardless_of_concrete_type() {
+    // ~keep Two different Rust types must render as the identical scalar handle token in
+    // C -- there is no per-type struct left to distinguish them by name.
+    let a = TypeRef::Named("ClientConfig".to_string());
+    let b = TypeRef::Named("ConversionResult".to_string());
+    assert_eq!(doc_type(&a, Language::Ffi, TEST_PREFIX), "HTMAlefHandle");
+    assert_eq!(doc_type(&b, Language::Ffi, TEST_PREFIX), "HTMAlefHandle");
+}
+
+#[test]
+fn test_doc_type_named_jni_keeps_pre_migration_rendering() {
+    // ~keep Jni is a distinct, currently-unreachable backend (see docs::examples) whose
+    // handle representation is `jlong`, not `AlefHandle`; it is deliberately left on the
+    // old per-type rendering rather than migrated alongside Ffi/C.
+    let ty = TypeRef::Named("ParseOptions".to_string());
+    assert_eq!(doc_type(&ty, Language::Jni, TEST_PREFIX), "HTMParseOptions");
+}
+
+#[test]
+fn test_doc_type_optional_named_ffi_is_bare_scalar_handle_not_a_pointer() {
+    let ty = TypeRef::Optional(Box::new(TypeRef::Named("ParseOptions".to_string())));
+    assert_eq!(doc_type(&ty, Language::Ffi, TEST_PREFIX), "HTMAlefHandle");
+    assert!(!doc_type(&ty, Language::Ffi, TEST_PREFIX).contains('*'));
+}
+
+#[test]
+fn test_doc_type_optional_string_ffi_is_single_pointer_not_double() {
+    // ~keep Regression: `const char*` wrapped in Optional's Ffi arm used to add a second
+    // `*`, producing `const char**` in the parameters table while the emitted header
+    // declares the param `const char *` (single pointer, nullable in place).
+    let ty = TypeRef::Optional(Box::new(TypeRef::String));
+    assert_eq!(doc_type(&ty, Language::Ffi, TEST_PREFIX), "const char*");
+}
+
+#[test]
+fn test_doc_type_optional_string_jni_keeps_pre_migration_double_pointer() {
+    // ~keep Jni is untouched by this fix (see docs::examples for why); its rendering is
+    // pre-existing and left as-is.
+    let ty = TypeRef::Optional(Box::new(TypeRef::String));
+    assert_eq!(doc_type(&ty, Language::Jni, TEST_PREFIX), "const char**");
 }
 
 #[test]
@@ -418,7 +463,10 @@ fn test_doc_type_all_rust_primitives() {
 #[test]
 fn test_doc_type_all_ffi_primitives() {
     let cases: &[(PrimitiveType, &str)] = &[
-        (PrimitiveType::Bool, "bool"),
+        // ~keep `bool` is not FFI-safe in the emitted ABI -- `c_primitive`
+        // (backends/ffi/type_map.rs) maps it to `i32`, same as `PrimitiveType::I32`,
+        // which cbindgen renders `int32_t`.
+        (PrimitiveType::Bool, "int32_t"),
         (PrimitiveType::U8, "uint8_t"),
         (PrimitiveType::U16, "uint16_t"),
         (PrimitiveType::U32, "uint32_t"),
@@ -439,6 +487,16 @@ fn test_doc_type_all_ffi_primitives() {
             "FFI primitive {prim:?}"
         );
     }
+}
+
+#[test]
+fn test_doc_type_bool_jni_keeps_pre_migration_rendering() {
+    // Jni is a distinct, currently-unreachable backend (see docs::examples); it is
+    // deliberately left on its old `bool` rendering rather than migrated to `int32_t`.
+    assert_eq!(
+        doc_type(&TypeRef::Primitive(PrimitiveType::Bool), Language::Jni, TEST_PREFIX),
+        "bool"
+    );
 }
 
 #[test]

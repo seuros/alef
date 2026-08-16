@@ -29,6 +29,7 @@ pub(crate) fn render_function_signature(func: &FunctionDef, lang: Language, ffi_
 
 pub(crate) fn render_python_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
     let name = func.name.to_snake_case();
+    crate::docs::formatting::assert_valid_identifier(&name, Language::Python, "a function signature");
     let params: Vec<String> = func
         .params
         .iter()
@@ -48,6 +49,7 @@ pub(crate) fn render_python_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> Stri
 
 pub(crate) fn render_typescript_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
     let name = to_camel_case(&func.name);
+    crate::docs::formatting::assert_valid_identifier(&name, Language::Node, "a function signature");
     let params: Vec<String> = func
         .params
         .iter()
@@ -69,8 +71,28 @@ pub(crate) fn render_typescript_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> 
     }
 }
 
+/// ~keep Real Go bindings always pointer-wrap a `TypeRef::Named` return, fallible or not --
+/// `gen_method_wrapper` (backends/go/gen_bindings/methods.rs) and `gen_function_wrapper`
+/// (.../functions.rs) both route any non-Primitive/Duration/String/Char/Path return through
+/// `go_optional_type` (backends/go/type_map.rs), which pointer-wraps `Named`. `doc_type`'s Go
+/// arm renders the bare type name -- correct for a *type page* heading (Go structs are still
+/// named after the Rust type) -- so the pointer belongs at the call site rendering a
+/// *signature*, not in `doc_type` itself. Verified from source, not the constructor-shape
+/// discrepancy: this applies to every Go method/function returning a Named type, not just
+/// constructors -- opaque-handle params get the same treatment conditionally on opacity,
+/// which `doc_type` cannot determine and is therefore NOT modeled here; see the docs-writer
+/// report for that gap.
+fn go_return_type(return_type: &TypeRef, ret: String) -> String {
+    if matches!(return_type, TypeRef::Named(_)) {
+        format!("*{ret}")
+    } else {
+        ret
+    }
+}
+
 pub(crate) fn render_go_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
     let name = func.name.to_pascal_case();
+    crate::docs::formatting::assert_valid_identifier(&name, Language::Go, "a function signature");
     let params: Vec<String> = func
         .params
         .iter()
@@ -80,7 +102,7 @@ pub(crate) fn render_go_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
             format!("{pname} {pty}")
         })
         .collect();
-    let ret = doc_type(&func.return_type, Language::Go, ffi_prefix);
+    let ret = go_return_type(&func.return_type, doc_type(&func.return_type, Language::Go, ffi_prefix));
     if func.error_type.is_some() {
         if ret.is_empty() {
             format!("func {}({}) error", name, params.join(", "))
@@ -96,6 +118,7 @@ pub(crate) fn render_go_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
 
 pub(crate) fn render_java_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
     let name = to_camel_case(&func.name);
+    crate::docs::formatting::assert_valid_identifier(&name, Language::Java, "a function signature");
     let ret = doc_type(&func.return_type, Language::Java, ffi_prefix);
     let params: Vec<String> = func
         .params
@@ -116,6 +139,7 @@ pub(crate) fn render_java_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String
 
 pub(crate) fn render_ruby_fn_sig(func: &FunctionDef) -> String {
     let name = func.name.to_snake_case();
+    crate::docs::formatting::assert_valid_identifier(&name, Language::Ruby, "a function signature");
     let params: Vec<String> = func
         .params
         .iter()
@@ -140,8 +164,18 @@ pub(crate) fn render_c_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
             format!("{pty} {pname}")
         })
         .collect();
+    // ~keep `doc_type` already renders `TypeRef::Named` as the scalar `AlefHandle` token
+    // for Ffi/C (see type_mapping.rs), so no pointer suffix belongs here -- adding one
+    // was the bug that put a `TYPE*` signature above an `AlefHandle result = ...` example.
+    //
+    // A fallible function whose logical return type is `()` has no value slot left to
+    // signal failure through, so the FFI backend repurposes the return itself as a status
+    // code: `gen_function_wrapper_footer`/`gen_free_function` (backends/ffi/gen_bindings/
+    // functions/orchestration.rs) emit `i32` -- not `void` -- whenever
+    // `has_error && is_void_return(&func.return_type)`, which cbindgen renders as
+    // `int32_t`. Documenting `void` there tells a caller they can skip the check.
     let ret_str = match &func.return_type {
-        TypeRef::Named(_) => format!("{}*", ret),
+        TypeRef::Unit if func.error_type.is_some() => "int32_t".to_string(),
         TypeRef::Unit => "void".to_string(),
         _ => ret,
     };
@@ -150,6 +184,7 @@ pub(crate) fn render_c_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
 
 pub(crate) fn render_php_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
     let name = to_camel_case(&func.name);
+    crate::docs::formatting::assert_valid_identifier(&name, Language::Php, "a function signature");
     let params: Vec<String> = func
         .params
         .iter()
@@ -169,6 +204,7 @@ pub(crate) fn render_php_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String 
 
 pub(crate) fn render_elixir_fn_sig(func: &FunctionDef) -> String {
     let name = func.name.to_snake_case();
+    crate::docs::formatting::assert_valid_identifier(&name, Language::Elixir, "a function signature");
     let params: Vec<String> = func.params.iter().map(|p| p.name.to_snake_case()).collect();
     format!(
         "@spec {}({}) :: {{:ok, term()}} | {{:error, term()}}\ndef {}({})",
@@ -194,6 +230,7 @@ pub(crate) fn render_r_fn_sig(func: &FunctionDef) -> String {
 
 pub(crate) fn render_csharp_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
     let name = func.name.to_pascal_case();
+    crate::docs::formatting::assert_valid_identifier(&name, Language::Csharp, "a function signature");
     let ret = doc_type(&func.return_type, Language::Csharp, ffi_prefix);
     let params: Vec<String> = func
         .params
@@ -266,6 +303,7 @@ pub(crate) fn render_rust_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String
 
 pub(crate) fn render_kotlin_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
     let name = to_camel_case(&func.name);
+    crate::docs::formatting::assert_valid_identifier(&name, Language::Kotlin, "a function signature");
     let ret = doc_type(&func.return_type, Language::Kotlin, ffi_prefix);
     let params: Vec<String> = func
         .params
@@ -295,6 +333,7 @@ pub(crate) fn render_kotlin_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> Stri
 
 pub(crate) fn render_swift_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
     let name = to_camel_case(&func.name);
+    crate::docs::formatting::assert_valid_identifier(&name, Language::Swift, "a function signature");
     let ret = doc_type(&func.return_type, Language::Swift, ffi_prefix);
     let params: Vec<String> = func
         .params
@@ -320,6 +359,7 @@ pub(crate) fn render_swift_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> Strin
 
 pub(crate) fn render_dart_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
     let name = to_camel_case(&func.name);
+    crate::docs::formatting::assert_valid_identifier(&name, Language::Dart, "a function signature");
     let ret = doc_type(&func.return_type, Language::Dart, ffi_prefix);
     let required: Vec<String> = func
         .params
@@ -350,6 +390,7 @@ pub(crate) fn render_dart_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String
 
 pub(crate) fn render_zig_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
     let name = func.name.to_snake_case();
+    crate::docs::formatting::assert_valid_identifier(&name, Language::Zig, "a function signature");
     let ret = doc_type(&func.return_type, Language::Zig, ffi_prefix);
     let params: Vec<String> = func
         .params
@@ -409,6 +450,10 @@ pub(crate) fn render_method_signature_with_override(
         .and_then(|override_| override_.name.as_deref())
         .map(str::to_string)
         .unwrap_or_else(|| func_name(&method.name, lang, ffi_prefix));
+    // ~keep Every documented method name must be a legal identifier in `lang` -- reject a
+    // reserved-word collision (Java/Dart's `new`, etc.) rather than silently document code
+    // that would not compile. See formatting.rs's `assert_valid_identifier`.
+    crate::docs::formatting::assert_valid_identifier(&name, lang, "a method signature");
     let ret = signature_override
         .and_then(|override_| override_.return_type.as_deref())
         .map(str::to_string)
@@ -464,7 +509,6 @@ pub(crate) fn render_method_signature_with_override(
         }
         Language::Go => {
             let go_receiver_type = type_name(type_name_str, Language::Go, ffi_prefix);
-            let receiver = format!("o *{go_receiver_type}");
             let params: Vec<String> = method
                 .params
                 .iter()
@@ -474,16 +518,38 @@ pub(crate) fn render_method_signature_with_override(
                     format!("{pname} {pty}")
                 })
                 .collect();
+            // ~keep A Named return is always pointer-wrapped in real Go, fallible or not --
+            // see `go_return_type`'s doc comment for the source citation. Skipped when a
+            // curated override already supplied the return text (streaming.rs) -- that
+            // string is trusted as-is, not reinterpreted from `method.return_type`'s shape.
+            let has_return_override = signature_override.and_then(|o| o.return_type.as_deref()).is_some();
+            let ret = if has_return_override {
+                ret
+            } else {
+                go_return_type(&method.return_type, ret)
+            };
+            // ~keep A static Go method is a free function `func {Type}{Method}(...)`, never
+            // a method with a receiver -- see method_signature_static.jinja vs
+            // method_signature_instance.jinja (backends/go/templates/). Rendering every Go
+            // method with `func (o *Type) Method(...)` regardless of `is_static` documented
+            // a receiver parameter that does not exist on the real generated function --
+            // the same "IR through a per-language template that never checked a flag" defect
+            // that broke the C signatures, here fabricating a receiver instead of a pointer.
+            let head = if method.is_static {
+                format!("func {go_receiver_type}{name}")
+            } else {
+                format!("func (o *{go_receiver_type}) {name}")
+            };
             if method.error_type.is_some() {
                 if ret.is_empty() {
-                    format!("func ({receiver}) {}({}) error", name, params.join(", "))
+                    format!("{head}({}) error", params.join(", "))
                 } else {
-                    format!("func ({receiver}) {}({}) ({}, error)", name, params.join(", "), ret)
+                    format!("{head}({}) ({}, error)", params.join(", "), ret)
                 }
             } else if ret.is_empty() {
-                format!("func ({receiver}) {}({})", name, params.join(", "))
+                format!("{head}({})", params.join(", "))
             } else {
-                format!("func ({receiver}) {}({}) {}", name, params.join(", "), ret)
+                format!("{head}({}) {}", params.join(", "), ret)
             }
         }
         Language::Java => {
@@ -572,6 +638,20 @@ pub(crate) fn render_method_signature_with_override(
                     format!("{pty} {pname}")
                 })
                 .collect();
+            // ~keep Same status-code convention as render_c_fn_sig: a fallible method
+            // whose logical return is `()` reports failure through the return itself, so
+            // the ABI is `int32_t`, not `void`. Skipped when a curated override already
+            // supplied a return type (that string is trusted as-is).
+            let has_return_override = signature_override.and_then(|o| o.return_type.as_deref()).is_some();
+            let ret = if matches!(lang, Language::Ffi | Language::C)
+                && !has_return_override
+                && matches!(method.return_type, TypeRef::Unit)
+                && method.error_type.is_some()
+            {
+                "int32_t".to_string()
+            } else {
+                ret
+            };
             format!("{} {}({});", ret, name, params.join(", "))
         }
         Language::Rust => {

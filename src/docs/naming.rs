@@ -91,8 +91,14 @@ pub(crate) fn type_name(name: &str, lang: Language, ffi_prefix: &str) -> String 
         | Language::Dart
         | Language::Gleam
         | Language::Zig => short.to_pascal_case(),
+        // cbindgen renames every exported type with `[export] prefix`, which the FFI backend
+        // sets to the shouty form of `[ffi] prefix` (`gen_cbindgen_toml`), so the header spells
+        // this `LITERLLMDefaultClient`. Callers hand this function the PascalCase prefix, and
+        // `to_shouty_snake_case` is what recovers the header form from either spelling --
+        // plain `to_uppercase` would collapse `SampleCore` to `SAMPLECORE`. Matches the
+        // `enum_variant_name` arm below. ~keep
         Language::Ffi | Language::C | Language::Jni => {
-            format!("{}{}", ffi_prefix, short.to_pascal_case())
+            format!("{}{}", ffi_prefix.to_shouty_snake_case(), short.to_pascal_case())
         }
     }
 }
@@ -211,12 +217,39 @@ mod tests {
     fn test_type_name_ffi_uses_prefix() {
         assert_eq!(
             type_name("ParseOptions", Language::Ffi, "SampleCrate"),
-            "SampleCrateParseOptions"
+            "SAMPLE_CRATEParseOptions"
         );
         assert_eq!(
             type_name("ParseOutput", Language::Ffi, "SampleCrate"),
-            "SampleCrateParseOutput"
+            "SAMPLE_CRATEParseOutput"
         );
+    }
+
+    /// The C reference page must spell a type exactly as it appears in the emitted header.
+    ///
+    /// `alef all` used to publish `LiterllmDefaultClient` while `liter_llm.h` declared
+    /// `LITERLLMDefaultClient` -- a name that occurs zero times in the header, so every C
+    /// snippet on the same site contradicted the reference page. The expected prefix here is
+    /// derived the same way `gen_cbindgen_toml` derives cbindgen's `[export] prefix`, so the
+    /// two cannot drift apart silently. ~keep
+    #[test]
+    fn type_name_ffi_matches_cbindgen_export_prefix() {
+        for (ffi_prefix, expected_export_prefix) in [
+            ("literllm", "LITERLLM"),
+            ("Literllm", "LITERLLM"),
+            ("liter_llm", "LITER_LLM"),
+        ] {
+            assert_eq!(
+                type_name("DefaultClient", Language::C, ffi_prefix),
+                format!("{expected_export_prefix}DefaultClient"),
+                "docs must use cbindgen's export prefix for `{ffi_prefix}`"
+            );
+            assert_eq!(
+                type_name("liter_llm::DefaultClient", Language::Ffi, ffi_prefix),
+                format!("{expected_export_prefix}DefaultClient"),
+                "a fully qualified rust path must resolve to the same header symbol"
+            );
+        }
     }
 
     #[test]
@@ -254,8 +287,8 @@ mod tests {
 
     #[test]
     fn test_type_name_ffi_prefix() {
-        assert_eq!(type_name("ParseOptions", Language::Ffi, TEST_PREFIX), "HtmParseOptions");
-        assert_eq!(type_name("ParseOutput", Language::Ffi, TEST_PREFIX), "HtmParseOutput");
+        assert_eq!(type_name("ParseOptions", Language::Ffi, TEST_PREFIX), "HTMParseOptions");
+        assert_eq!(type_name("ParseOutput", Language::Ffi, TEST_PREFIX), "HTMParseOutput");
     }
 
     #[test]

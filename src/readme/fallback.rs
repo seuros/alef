@@ -303,6 +303,12 @@ See the [LICENSE]({repository}/blob/main/LICENSE) file in the root repository.
         _ => PathBuf::from(format!("packages/{}/README.md", dir_name)),
     };
 
+    // See the matching `~keep` note in `template.rs` for why README output
+    // gets the same self-embedded HTML-comment marker as docs pages: `.md`
+    // cannot carry alef's usual comment-based header, so this is the only way
+    // the write-time ownership guard can prove ownership from content alone.
+    let content = crate::docs::with_html_header(content, "alef readme");
+
     Ok(GeneratedFile {
         path,
         content,

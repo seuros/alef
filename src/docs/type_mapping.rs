@@ -2,6 +2,14 @@ use crate::core::config::Language;
 use crate::core::ir::{PrimitiveType, TypeRef};
 use crate::docs::naming::type_name;
 
+/// ~keep The C ABI's scalar generational-handle type name, mirroring
+/// `backends/ffi/type_map.rs` (`TypeRef::Named(_) => "AlefHandle"`). That module is
+/// private and under concurrent edit for the handle-ABI rollout, so this is a
+/// deliberate literal duplicate rather than an import -- keep the two in sync by hand
+/// if the ffi backend ever renames the handle type. `docs::examples` carries the same
+/// duplicate for the same reason; the two must stay byte-identical.
+pub(crate) const FFI_HANDLE_TYPE_NAME: &str = "AlefHandle";
+
 pub fn doc_type(ty: &TypeRef, lang: Language, ffi_prefix: &str) -> String {
     match ty {
         TypeRef::String | TypeRef::Char => match lang {
@@ -55,6 +63,17 @@ pub fn doc_type(ty: &TypeRef, lang: Language, ffi_prefix: &str) -> String {
                 Language::Elixir => format!("{inner_ty} | nil"),
                 Language::R => format!("{inner_ty} or NULL"),
                 Language::Rust => format!("Option<{inner_ty}>"),
+                // ~keep Named types cross the C ABI as a scalar `AlefHandle`, never a
+                // pointer -- wrapping one in another `*` here would be as wrong as the
+                // signature-side bug this guards against. Types that already render as
+                // pointers (strings, bytes, JSON, maps) are nullable in place; doubling
+                // the `*` for those was the `const char**`-vs-header `const char *`
+                // divergence. Jni keeps the old pointer rendering; see docs::examples for why.
+                Language::Ffi | Language::C
+                    if matches!(inner.as_ref(), TypeRef::Named(_)) || inner_ty.ends_with('*') =>
+                {
+                    inner_ty
+                }
                 Language::Ffi | Language::C | Language::Jni => format!("{inner_ty}*"),
                 Language::Kotlin | Language::KotlinAndroid | Language::Swift | Language::Dart => format!("{inner_ty}?"),
                 Language::Gleam => format!("Option({inner_ty})"),
@@ -227,6 +246,13 @@ pub fn doc_type(ty: &TypeRef, lang: Language, ffi_prefix: &str) -> String {
                 Language::Zig => format!("struct {{ {} }}", rendered.join(", ")),
             }
         }
+        // ~keep Every Named type crosses the C ABI as the scalar `AlefHandle` token, not
+        // a pointer to a struct named after the Rust type -- see FFI_HANDLE_TYPE_NAME.
+        // Jni is a distinct, currently-unreachable backend (see docs::examples) that
+        // keeps the pre-migration per-type rendering.
+        TypeRef::Named(_) if matches!(lang, Language::Ffi | Language::C) => {
+            type_name(FFI_HANDLE_TYPE_NAME, lang, ffi_prefix)
+        }
         TypeRef::Named(name) => type_name(name, lang, ffi_prefix),
         TypeRef::Path => match lang {
             Language::Python => "str".to_string(),
@@ -373,6 +399,12 @@ pub(crate) fn doc_primitive(p: &PrimitiveType, lang: Language) -> String {
             _ => "integer".to_string(),
         },
         Language::Ffi | Language::C | Language::Jni => match p {
+            // ~keep Rust `bool` is not passed across the C ABI directly -- the FFI backend's
+            // `c_primitive` (backends/ffi/type_map.rs) maps `PrimitiveType::Bool` to `i32` for
+            // both params and returns, which cbindgen renders as `int32_t` (see the `I32` arm
+            // below). Jni is a distinct, currently-unreachable backend (see docs::examples)
+            // left on its pre-migration `bool` rendering.
+            PrimitiveType::Bool if matches!(lang, Language::Ffi | Language::C) => "int32_t".to_string(),
             PrimitiveType::Bool => "bool".to_string(),
             PrimitiveType::U8 => "uint8_t".to_string(),
             PrimitiveType::U16 => "uint16_t".to_string(),

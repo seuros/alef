@@ -43,7 +43,14 @@ fn render_function_names(lang: Language, expected: &str) {
     }];
 
     let files = generate_readmes(&api, &config, &[lang]).expect("render README");
-    assert_eq!(files[0].content, expected);
+    // README output now carries a self-embedded HTML-comment header (see
+    // `template.rs`'s `~keep` note) ahead of the rendered template body, so
+    // the rendered body is a suffix of the full content, not the whole thing.
+    assert!(
+        files[0].content.ends_with(expected),
+        "expected content to end with {expected:?}, got:\n{}",
+        files[0].content
+    );
 }
 
 #[test]
@@ -131,5 +138,9 @@ fn readme_function_surface_matches_language_excludes_and_go_collisions() {
     });
 
     let files = generate_readmes(&api, &config, &[Language::Go]).expect("render README");
-    assert_eq!(files[0].content, "GetModelInfo,VisibleCall\n");
+    assert!(
+        files[0].content.ends_with("GetModelInfo,VisibleCall\n"),
+        "got:\n{}",
+        files[0].content
+    );
 }

@@ -5,12 +5,33 @@ use crate::docs::descriptions::generate_field_description;
 use crate::docs::doc_cleaning::{clean_doc_inline, demote_headings_to_start_at};
 use crate::docs::formatting::{doc_type_with_optional, escape_table_cell, format_field_default};
 use crate::docs::naming::{field_name, type_name};
+use crate::docs::type_mapping::FFI_HANDLE_TYPE_NAME;
 use crate::docs::{clean_doc, template_env};
 
 use super::function_render::push_version_annotation;
 use super::streaming::{method_visible_in_lang, render_method};
 
 const TYPE_DOC_FIRST_HEADING_LEVEL: usize = 5;
+
+/// ~keep Every `TypeRef::Named` crosses the C ABI as a scalar `AlefHandle` token, not a
+/// pointer to a struct named after the Rust type (see type_mapping.rs's
+/// `FFI_HANDLE_TYPE_NAME`). The page heading above still names the *logical* Rust type --
+/// renaming every DTO's heading to the shared handle token would make every C type page
+/// title collide, which is worse than the status quo. What a C reader cannot infer on
+/// their own is that this heading is documentation-only: `tname` does not appear anywhere
+/// in the generated header. This note says so explicitly, once, on every C type page.
+fn push_ffi_handle_note(out: &mut String, tname: &str, lang: Language, ffi_prefix: &str) {
+    if !matches!(lang, Language::Ffi | Language::C) {
+        return;
+    }
+    let handle_type = type_name(FFI_HANDLE_TYPE_NAME, lang, ffi_prefix);
+    out.push_str(&format!(
+        "**C representation:** `{tname}` is a documentation-only name for this type. \
+         The C ABI hands you a scalar `{handle_type}` handle -- the literal string \
+         `{tname}` does not appear anywhere in the generated header.\n"
+    ));
+    out.push('\n');
+}
 
 pub(super) fn render_type(
     ty: &TypeDef,
@@ -21,6 +42,11 @@ pub(super) fn render_type(
 ) -> String {
     let mut out = String::new();
     let tname = type_name(&ty.name, lang, ffi_prefix);
+    // ~keep Every documented type name must be a legal identifier in `lang` -- see
+    // formatting.rs's `assert_valid_identifier`. Rarely fires (PascalCase type names
+    // don't usually collide with lowercase keywords), but a handful of languages have
+    // capitalized reserved words too (Rust's `Self`, Swift's `Any`/`Self`).
+    crate::docs::formatting::assert_valid_identifier(&tname, lang, "a type heading");
 
     out.push_str(&template_env::render(
         "heading.jinja",
@@ -28,6 +54,7 @@ pub(super) fn render_type(
     ));
 
     push_version_annotation(&mut out, &ty.version);
+    push_ffi_handle_note(&mut out, &tname, lang, ffi_prefix);
 
     let doc = clean_doc(&ty.doc, lang);
     let doc = demote_headings_to_start_at(&doc, TYPE_DOC_FIRST_HEADING_LEVEL);
@@ -141,6 +168,77 @@ mod tests {
         assert!(
             !rendered.contains("\n### Default Behavior"),
             "type rustdoc heading must not be promoted above the type heading; got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn test_c_type_page_states_handle_representation() {
+        let ty = TypeDef {
+            name: "ChatCompletionRequest".to_string(),
+            ..Default::default()
+        };
+        let rendered = render_type(
+            &ty,
+            Language::C,
+            &ResolvedCrateConfig::default(),
+            &ApiSurface::default(),
+            "Htm",
+        );
+
+        assert!(
+            rendered.contains("#### HTMChatCompletionRequest"),
+            "the heading keeps the logical name -- one page per DTO would collide on a shared \
+             handle token; got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("**C representation:**") && rendered.contains("HTMAlefHandle"),
+            "a C DTO page must state the actual handle type explicitly; got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn test_non_c_type_page_has_no_handle_note() {
+        let ty = TypeDef {
+            name: "ChatCompletionRequest".to_string(),
+            ..Default::default()
+        };
+        let rendered = render_type(
+            &ty,
+            Language::Python,
+            &ResolvedCrateConfig::default(),
+            &ApiSurface::default(),
+            "Htm",
+        );
+        assert!(
+            !rendered.contains("C representation"),
+            "the handle note is a C-ABI-only concept; got:\n{rendered}"
+        );
+    }
+
+    /// ~keep The handle token named in the page-level note and the handle token
+    /// `doc_type` independently computes for any `TypeRef::Named` of this type must be
+    /// the same string -- this is the type-page analogue of the earlier
+    /// signature-vs-example and signature-vs-returns-prose cross-checks. If the note
+    /// hardcoded a different spelling than the rest of the C pipeline actually emits,
+    /// this test -- not a human re-reading the page -- catches the drift.
+    #[test]
+    fn test_c_type_page_handle_note_agrees_with_doc_type_handle_token() {
+        let ty = TypeDef {
+            name: "ChatCompletionRequest".to_string(),
+            ..Default::default()
+        };
+        let rendered = render_type(
+            &ty,
+            Language::C,
+            &ResolvedCrateConfig::default(),
+            &ApiSurface::default(),
+            "Htm",
+        );
+
+        let handle_token = crate::docs::doc_type(&TypeRef::Named(ty.name.clone()), Language::C, "Htm");
+        assert!(
+            rendered.contains(&handle_token),
+            "note must name the same handle token doc_type computes ({handle_token}); got:\n{rendered}"
         );
     }
 }

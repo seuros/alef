@@ -6,7 +6,7 @@ use crate::docs::examples::render_method_example_with_override;
 use crate::docs::naming::{func_name, lang_code_fence, type_name};
 use crate::docs::signatures::{MethodSignatureOverride, render_method_signature_with_override};
 use crate::docs::{clean_doc, doc_type, template_env};
-use heck::{ToPascalCase, ToSnakeCase};
+use heck::{ToPascalCase, ToShoutySnakeCase, ToSnakeCase};
 
 use super::function_render::{push_errors, push_parameters_table, push_returns_with_override, push_version_annotation};
 
@@ -248,10 +248,13 @@ fn streaming_c_start_name(adapter: &AdapterConfig, method: &MethodDef, ffi_prefi
     )
 }
 
+/// The stream-handle struct is declared by alef itself, so its header name carries the prefix
+/// twice: cbindgen's `[export] prefix` (shouty) in front of the PascalCase-prefixed Rust struct
+/// name the FFI backend emits — `LITERLLMLiterllmDefaultClientChatStreamStreamHandle`. ~keep
 fn streaming_c_handle_type(adapter: &AdapterConfig, type_name_str: &str, ffi_prefix: &str) -> String {
     format!(
         "struct {}{}{}{}StreamHandle *",
-        ffi_prefix.to_uppercase(),
+        ffi_prefix.to_shouty_snake_case(),
         ffi_prefix.to_pascal_case(),
         type_name_str.to_pascal_case(),
         adapter.name.to_pascal_case()
@@ -267,17 +270,20 @@ fn streaming_c_start_signature(
 ) -> String {
     let handle_type = streaming_c_handle_type(adapter, type_name_str, ffi_prefix);
     let start_name = streaming_c_start_name(adapter, method, ffi_prefix);
-    let owner_type = format!("{}{}", ffi_prefix.to_uppercase(), type_name_str.to_pascal_case());
-    let request_type = method
+    // ~keep The client and request params are scalar `AlefHandle` tokens under the
+    // handle-ABI migration (see FFI_HANDLE_TYPE_NAME in type_mapping.rs), not pointers
+    // to opaque structs -- `doc_type` already renders `TypeRef::Named` that way for Ffi/C.
+    let owner_type = doc_type(&TypeRef::Named(type_name_str.to_string()), Language::Ffi, ffi_prefix);
+    let request_param = method
         .params
         .first()
         .map(|param| match &param.ty {
-            TypeRef::Named(name) => format!("{}{}", ffi_prefix.to_uppercase(), name.to_pascal_case()),
-            _ => "void".to_string(),
+            TypeRef::Named(_) => format!("{} req", doc_type(&param.ty, Language::Ffi, ffi_prefix)),
+            _ => "const void *req".to_string(),
         })
-        .unwrap_or_else(|| "void".to_string());
+        .unwrap_or_else(|| "const void *req".to_string());
     let _ = item_type;
-    format!("{handle_type} {start_name}(const {owner_type} *client, const {request_type} *req);")
+    format!("{handle_type} {start_name}({owner_type} client, {request_param});")
 }
 
 fn streaming_example(
@@ -386,7 +392,7 @@ fn streaming_c_example(
     let prefix = ffi_prefix.to_snake_case();
     let owner = type_name_str.to_snake_case();
     let method_name = adapter.name.to_snake_case();
-    let item_c = format!("{}{}", ffi_prefix.to_uppercase(), item_type.to_pascal_case());
+    let item_c = type_name(item_type, Language::Ffi, ffi_prefix);
     let item_free = format!("{}_{}_free", prefix, item_type.to_snake_case());
     format!(
         "{handle_type} stream = {start_name}(instance, req);\nwhile (stream != NULL) {{\n    {item_c} *chunk = {prefix}_{owner}_{method_name}_next(stream);\n    if (chunk == NULL) {{\n        break;\n    }}\n    {item_free}(chunk);\n}}\n{prefix}_{owner}_{method_name}_free(stream);"
@@ -451,10 +457,11 @@ pub(super) fn render_method(
         &mut out,
         &method.return_type,
         docs_override.as_ref().map(|override_| override_.return_type.as_str()),
+        method.error_type.as_deref(),
         lang,
         ffi_prefix,
     );
-    push_errors(&mut out, method.error_type.as_deref(), lang);
+    push_errors(&mut out, method.error_type.as_deref(), &method.return_type, lang);
 
     out
 }
