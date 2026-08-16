@@ -1,6 +1,6 @@
 use ahash::AHashSet;
 
-use super::shared::{to_screaming_snake, variant_display_message};
+use super::shared::{to_screaming_snake, to_snake_case, variant_display_message};
 use super::*;
 use crate::core::ir::{ErrorDef, ErrorVariant};
 
@@ -28,6 +28,7 @@ fn tuple_field(index: usize) -> FieldDef {
         newtype_wrapper: None,
         serde_rename: None,
         serde_flatten: false,
+        serde_with: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         original_type: None,
@@ -53,6 +54,7 @@ fn named_field(name: &str) -> FieldDef {
         newtype_wrapper: None,
         serde_rename: None,
         serde_flatten: false,
+        serde_with: None,
         binding_excluded: false,
         binding_exclusion_reason: None,
         original_type: None,

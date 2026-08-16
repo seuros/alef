@@ -80,37 +80,23 @@ pub fn python_exception_name(variant_name: &str, error_name: &str) -> String {
     }
 }
 
-/// Generate `pyo3::create_exception!` macros for each error variant plus the base error type.
-/// Appends "Error" suffix to variant names that don't already have it (N818 compliance).
-/// Prefixes names that would shadow Python builtins (A004 compliance).
+/// Snake-case an error or variant name for use in generated symbol names.
+///
+/// Delegates to [`crate::codegen::naming::pascal_to_snake`], the repo's single acronym-aware
+/// PascalCase→snake_case conversion. A local re-implementation used to split before *every*
+/// uppercase letter, so `GraphQLError` became `graph_q_l_error` while the same type's other C
+/// symbols (emitted through `c_consumer::method_symbol`, which uses `pascal_to_snake`) spelled
+/// it `graph_ql_error` — two spellings for one type in one header.
 pub(super) fn to_snake_case(s: &str) -> String {
-    let mut result = String::with_capacity(s.len() + 4);
-    for (i, c) in s.chars().enumerate() {
-        if c.is_uppercase() {
-            if i > 0 {
-                result.push('_');
-            }
-            result.push(c.to_ascii_lowercase());
-        } else {
-            result.push(c);
-        }
-    }
-    result
+    crate::codegen::naming::pascal_to_snake(s)
 }
 
+/// SCREAMING_SNAKE_CASE an error or variant name for generated constants.
+///
+/// Paired with [`to_snake_case`]: `gen_ffi_error_codes` emits the enum entries with this and
+/// the typedef/function names with `to_snake_case`, so the two must split words identically.
 pub(super) fn to_screaming_snake(s: &str) -> String {
-    let mut result = String::with_capacity(s.len() + 4);
-    for (i, c) in s.chars().enumerate() {
-        if c.is_uppercase() {
-            if i > 0 {
-                result.push('_');
-            }
-            result.push(c.to_ascii_uppercase());
-        } else {
-            result.push(c.to_ascii_uppercase());
-        }
-    }
-    result
+    crate::codegen::naming::pascal_to_screaming_snake(s)
 }
 
 /// Well-known acronyms recognised by the doc/error renderers.

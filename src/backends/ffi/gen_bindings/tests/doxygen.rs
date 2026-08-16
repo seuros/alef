@@ -288,8 +288,118 @@ fn test_error_type_with_methods_gets_opaque_typedef_in_cbindgen_toml() {
 
     let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
     assert!(
-        lib.content.contains("my_lib_graph_q_l_error_status_code"),
+        lib.content.contains("my_lib_graph_ql_error_status_code"),
         "expected accessor fn for error type, got:\n{}",
+        lib.content
+    );
+    assert!(
+        !lib.content.contains("graph_q_l_error"),
+        "the accessor must not use the per-uppercase-letter split that the error_gen-local \
+         snake-caser produced; the type component goes through `pascal_to_snake` like every \
+         other C symbol component:\n{}",
+        lib.content
+    );
+}
+
+/// The error accessor's type component must be spelled by the same derivation as every other
+/// C symbol in the header — `c_consumer::method_symbol`, i.e. acronym-aware `pascal_to_snake`.
+///
+/// `error_gen` carried its own snake-caser that split before every uppercase letter, so
+/// `GraphQLError` produced `graph_q_l_error_status_code` while a method on a type of the same
+/// name produced `graph_ql_error_*`. A C symbol has no namespace, so two spellings for one type
+/// in one header is a silent link-time break for any hand-written or generated consumer that
+/// derives the name rather than copying it out of the header.
+#[test]
+fn test_error_accessor_symbol_matches_c_consumer_method_symbol() {
+    let mut api = sample_api();
+    api.errors.push(ErrorDef {
+        name: "GraphQLError".to_string(),
+        rust_path: "my_lib::GraphQLError".to_string(),
+        original_rust_path: String::new(),
+        variants: vec![],
+        doc: "GraphQL execution error.".to_string(),
+        methods: vec![
+            MethodDef {
+                name: "status_code".to_string(),
+                return_type: TypeRef::Primitive(crate::core::ir::PrimitiveType::U16),
+                doc: "HTTP status code for the error.".to_string(),
+                receiver: Some(ReceiverKind::Ref),
+                ..MethodDef::default()
+            },
+            MethodDef {
+                name: "is_transient".to_string(),
+                return_type: TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool),
+                doc: "Whether a retry may succeed.".to_string(),
+                receiver: Some(ReceiverKind::Ref),
+                ..MethodDef::default()
+            },
+            MethodDef {
+                name: "error_type".to_string(),
+                return_type: TypeRef::String,
+                doc: "Machine-readable error category.".to_string(),
+                receiver: Some(ReceiverKind::Ref),
+                ..MethodDef::default()
+            },
+        ],
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        version: Default::default(),
+    });
+
+    let config = sample_config();
+    let files = FfiBackend.generate_bindings(&api, &config).unwrap();
+    let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+    let prefix = config.ffi_prefix();
+    for method in ["status_code", "is_transient", "error_type"] {
+        let expected = crate::codegen::c_consumer::method_symbol(&prefix, "GraphQLError", method);
+        assert!(
+            lib.content.contains(&expected),
+            "expected accessor symbol `{expected}` for `{method}`, got:\n{}",
+            lib.content
+        );
+    }
+    assert!(
+        lib.content.contains(&format!(
+            "{}_free",
+            crate::codegen::c_consumer::method_symbol(&prefix, "GraphQLError", "error_type")
+        )),
+        "the `error_type` companion free fn must share the corrected stem, got:\n{}",
+        lib.content
+    );
+}
+
+/// Control for `test_error_accessor_symbol_matches_c_consumer_method_symbol`: an error type
+/// with no consecutive-uppercase run is the shape both casers already agreed on, and must be
+/// spelled exactly as before the fix.
+#[test]
+fn test_error_accessor_symbol_unchanged_for_non_acronym_error_name() {
+    let mut api = sample_api();
+    api.errors.push(ErrorDef {
+        name: "ConversionError".to_string(),
+        rust_path: "my_lib::ConversionError".to_string(),
+        original_rust_path: String::new(),
+        variants: vec![],
+        doc: "Conversion error.".to_string(),
+        methods: vec![MethodDef {
+            name: "status_code".to_string(),
+            return_type: TypeRef::Primitive(crate::core::ir::PrimitiveType::U16),
+            doc: "HTTP status code for the error.".to_string(),
+            receiver: Some(ReceiverKind::Ref),
+            ..MethodDef::default()
+        }],
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        version: Default::default(),
+    });
+
+    let config = sample_config();
+    let files = FfiBackend.generate_bindings(&api, &config).unwrap();
+    let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+    assert!(
+        lib.content.contains("my_lib_conversion_error_status_code"),
+        "expected the pre-existing spelling to be unchanged, got:\n{}",
         lib.content
     );
 }

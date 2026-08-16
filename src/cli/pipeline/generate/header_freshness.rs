@@ -260,25 +260,15 @@ fn scan_exported_symbols(source: &str) -> BTreeMap<String, Option<String>> {
 
     for line in source.lines() {
         let trimmed = line.trim();
-        if let Some(mut attribute) = open_attribute.take() {
-            attribute.push(' ');
-            attribute.push_str(trimmed);
-            if delimiter_balance(&attribute) > 0 {
-                open_attribute = Some(attribute);
-            } else {
+        match accumulate_attribute(trimmed, &mut open_attribute) {
+            AttributeLine::Pending => continue,
+            AttributeLine::Complete(attribute) => {
                 apply_attribute(&attribute, &mut no_mangle_seen, &mut pending_cfg);
+                continue;
             }
-            continue;
+            AttributeLine::Other => {}
         }
         if trimmed.is_empty() || trimmed.starts_with("//") {
-            continue;
-        }
-        if trimmed.starts_with("#[") {
-            if delimiter_balance(trimmed) > 0 {
-                open_attribute = Some(trimmed.to_owned());
-            } else {
-                apply_attribute(trimmed, &mut no_mangle_seen, &mut pending_cfg);
-            }
             continue;
         }
         if let Some(name) = extern_c_fn_name(trimmed) {
@@ -335,6 +325,49 @@ fn extract_cfg_attribute(attribute: &str) -> CfgAttribute {
         Some(predicate) => CfgAttribute::Predicate(normalize_cfg_predicate(predicate)),
         None => CfgAttribute::Unparsed(normalize_cfg_predicate(rest)),
     }
+}
+
+/// What one trimmed source line contributed to the attribute accumulator.
+enum AttributeLine {
+    /// Attribute text whose delimiters have not balanced yet — there is nothing
+    /// to interpret and the caller must not run its own line handling, or the
+    /// continuation lines of a wrapped attribute fall through to a state reset.
+    Pending,
+    /// A whole attribute, collapsed onto one line.
+    Complete(String),
+    /// Not attribute text; the caller's own line handling applies.
+    Other,
+}
+
+/// Feed one trimmed source line to the attribute accumulator.
+///
+/// Both source scanners in this module read line-by-line, and both must treat a
+/// rustfmt-wrapped attribute as one unit: only the first line of a wrapped
+/// `#[cfg(any(all(...), all(...)))]` or `#[derive(...)]` starts with `#[`, and
+/// the continuation lines look like ordinary code. `scan_exported_symbols` read
+/// them in isolation and recorded a cfg-gated export as unconditional, which
+/// reported a correctly-guarded header as drifted; `rust_type_kind_hints` reads
+/// them and drops a `#[repr(...)]` hint recorded on an earlier line. Sharing one
+/// accumulator is what stops the two from disagreeing about where an attribute
+/// ends. ~keep
+fn accumulate_attribute(trimmed: &str, open_attribute: &mut Option<String>) -> AttributeLine {
+    if let Some(mut attribute) = open_attribute.take() {
+        attribute.push(' ');
+        attribute.push_str(trimmed);
+        if delimiter_balance(&attribute) > 0 {
+            *open_attribute = Some(attribute);
+            return AttributeLine::Pending;
+        }
+        return AttributeLine::Complete(attribute);
+    }
+    if trimmed.starts_with("#[") {
+        if delimiter_balance(trimmed) > 0 {
+            *open_attribute = Some(trimmed.to_owned());
+            return AttributeLine::Pending;
+        }
+        return AttributeLine::Complete(trimmed.to_owned());
+    }
+    AttributeLine::Other
 }
 
 /// Net nesting depth contributed by one chunk of attribute text. Delimiters
@@ -812,20 +845,29 @@ const RUST_SCALAR_HANDLE_TYPES: &[&str] = &[
 /// typedef. The common case, an IR type with `is_opaque == true` that is
 /// simply boxed through the shared `AlefHandle` registry with no per-type
 /// Rust alias at all, produces no hint here — see the module-level blind
-/// spots list. ~keep
+/// spots list.
+///
+/// Attributes are accumulated through [`accumulate_attribute`], the same
+/// helper `scan_exported_symbols` uses, so a rustfmt-wrapped `#[derive(...)]`
+/// between the `#[repr(...)]` and its struct cannot drop the pending hint. ~keep
 fn rust_type_kind_hints(source: &str) -> BTreeMap<String, TypedefKind> {
     let mut hints = BTreeMap::new();
     let mut repr_seen = false;
+    let mut open_attribute: Option<String> = None;
 
     for line in source.lines() {
         let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with("//") {
-            continue;
-        }
-        if trimmed.starts_with("#[") {
-            if trimmed.starts_with("#[repr(") {
-                repr_seen = true;
+        match accumulate_attribute(trimmed, &mut open_attribute) {
+            AttributeLine::Pending => continue,
+            AttributeLine::Complete(attribute) => {
+                if attribute.starts_with("#[repr(") {
+                    repr_seen = true;
+                }
+                continue;
             }
+            AttributeLine::Other => {}
+        }
+        if trimmed.is_empty() || trimmed.starts_with("//") {
             continue;
         }
         if let Some(name) = pub_struct_name(trimmed) {
@@ -1476,6 +1518,105 @@ pub unsafe extern "C" fn sample_ensure_crypto_provider() {}
         assert!(
             error.to_string().contains("SAMPLE_FEATURE_NATIVE_HTTP"),
             "message must name the guard macro the header is missing, got:\n{error}"
+        );
+    }
+
+    /// Control for the wrapped-attribute cases below: the single-line shape the hint scanner
+    /// has always read correctly.
+    #[test]
+    fn should_hint_a_value_type_from_a_single_line_repr() {
+        let source = "#[repr(C)]\n\
+                      #[derive(Debug, Clone)]\n\
+                      pub struct SampleOptions {\n\
+                      pub depth: u32,\n\
+                      }\n";
+        assert_eq!(
+            rust_type_kind_hints(source).get("SampleOptions"),
+            Some(&TypedefKind::Struct),
+            "a #[repr(...)] struct is alef's value-type strategy and must hint `struct`"
+        );
+    }
+
+    /// `rust_type_kind_hints` carried the same line-at-a-time attribute read that made
+    /// `scan_exported_symbols` misread a rustfmt-wrapped `#[cfg(...)]`. Only the first line of a
+    /// wrapped `#[derive(...)]` starts with `#[`; its continuation lines used to fall through to
+    /// the `repr_seen = false` reset, so the `#[repr(C)]` recorded above them was dropped and the
+    /// value type produced no hint at all. Unlike the export scanner's false positive this is a
+    /// missed check, so it fails silently — the typedef-kind mismatch it exists to catch simply
+    /// stops being caught.
+    #[test]
+    fn should_hint_a_value_type_across_a_rustfmt_wrapped_derive() {
+        let source = "#[repr(C)]\n\
+                      #[derive(\n\
+                      Debug,\n\
+                      Clone,\n\
+                      PartialEq,\n\
+                      )]\n\
+                      pub struct SampleOptions {\n\
+                      pub depth: u32,\n\
+                      }\n";
+        assert_eq!(
+            rust_type_kind_hints(source).get("SampleOptions"),
+            Some(&TypedefKind::Struct),
+            "line wrapping is layout, not meaning: a wrapped attribute must not drop the repr hint"
+        );
+    }
+
+    /// The `#[repr(...)]` itself may be the wrapped attribute.
+    #[test]
+    fn should_hint_a_value_type_from_a_rustfmt_wrapped_repr() {
+        let source = "#[repr(\n\
+                      C,\n\
+                      align(8)\n\
+                      )]\n\
+                      pub struct SampleOptions {\n\
+                      pub depth: u32,\n\
+                      }\n";
+        assert_eq!(
+            rust_type_kind_hints(source).get("SampleOptions"),
+            Some(&TypedefKind::Struct),
+            "the repr hint must be read from the whole attribute, not its first line"
+        );
+    }
+
+    /// The accumulation must not turn the reset off: a struct with no `#[repr(...)]` anywhere
+    /// above it is the boxed-through-`AlefHandle` shape and must still produce no hint, or the
+    /// gate starts demanding `typedef struct` for opaque handles.
+    #[test]
+    fn should_not_hint_a_struct_whose_repr_belongs_to_an_earlier_item() {
+        let source = "#[repr(C)]\n\
+                      pub struct SampleOptions {\n\
+                      pub depth: u32,\n\
+                      }\n\
+                      \n\
+                      #[derive(\n\
+                      Debug,\n\
+                      )]\n\
+                      pub struct SampleOpaque {\n\
+                      pub inner: u64,\n\
+                      }\n";
+        let hints = rust_type_kind_hints(source);
+        assert_eq!(hints.get("SampleOptions"), Some(&TypedefKind::Struct));
+        assert_eq!(
+            hints.get("SampleOpaque"),
+            None,
+            "a repr consumed by an earlier struct must not carry over to the next one"
+        );
+    }
+
+    /// A scalar alias behind a wrapped attribute is the opaque-handle strategy and must still be
+    /// recognised — the accumulator must hand the alias line back to the caller, not swallow it.
+    #[test]
+    fn should_hint_a_scalar_alias_after_a_rustfmt_wrapped_attribute() {
+        let source = "#[cfg(all(\n\
+                      feature = \"native-http\",\n\
+                      target_os = \"windows\"\n\
+                      ))]\n\
+                      pub type SampleHandle = u64;\n";
+        assert_eq!(
+            rust_type_kind_hints(source).get("SampleHandle"),
+            Some(&TypedefKind::Scalar),
+            "the line after a wrapped attribute is ordinary source and must still be scanned"
         );
     }
 }

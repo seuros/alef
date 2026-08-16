@@ -298,6 +298,11 @@ pub fn gen_ffi_error_codes(error: &ErrorDef) -> String {
 /// method's value. For `error_type` an additional `*_error_type_free` companion
 /// is emitted so callers can release the `CString`-allocated memory.
 ///
+/// Symbol names come from [`crate::codegen::c_consumer::method_symbol`] — the same derivation
+/// the opaque-type method wrappers and the docs renderers use — so an error type with an
+/// internal acronym (`GraphQLError`) cannot be spelled one way here and another way elsewhere
+/// in the same header.
+///
 /// Returns an empty string when `error.methods` is empty.
 pub fn gen_ffi_error_methods(error: &ErrorDef, core_import: &str, api_prefix: &str) -> String {
     if error.methods.is_empty() {
@@ -310,13 +315,12 @@ pub fn gen_ffi_error_methods(error: &ErrorDef, core_import: &str, api_prefix: &s
         error.rust_path.replace('-', "_")
     };
 
-    let error_snake = to_snake_case(&error.name);
     let mut items: Vec<String> = Vec::new();
 
     for method in &error.methods {
         match method.name.as_str() {
             "status_code" => {
-                let fn_name = format!("{api_prefix}_{error_snake}_status_code");
+                let fn_name = crate::codegen::c_consumer::method_symbol(api_prefix, &error.name, "status_code");
                 items.push(format!(
                     "/// Return the HTTP status code for the error pointed to by `err`.\n\
                      /// Returns `0` if `err` is null.\n\
@@ -332,7 +336,7 @@ pub fn gen_ffi_error_methods(error: &ErrorDef, core_import: &str, api_prefix: &s
                 ));
             }
             "is_transient" => {
-                let fn_name = format!("{api_prefix}_{error_snake}_is_transient");
+                let fn_name = crate::codegen::c_consumer::method_symbol(api_prefix, &error.name, "is_transient");
                 items.push(format!(
                     "/// Return whether the error pointed to by `err` is transient.\n\
                      /// Returns `false` if `err` is null.\n\
@@ -348,7 +352,7 @@ pub fn gen_ffi_error_methods(error: &ErrorDef, core_import: &str, api_prefix: &s
                 ));
             }
             "error_type" => {
-                let fn_name = format!("{api_prefix}_{error_snake}_error_type");
+                let fn_name = crate::codegen::c_consumer::method_symbol(api_prefix, &error.name, "error_type");
                 let free_fn_name = format!("{fn_name}_free");
                 items.push(format!(
                     "/// Return the machine-readable error category string for the error pointed\n\

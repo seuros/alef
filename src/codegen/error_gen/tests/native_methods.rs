@@ -1,5 +1,46 @@
 use super::*;
 
+/// `error_gen` used to carry its own snake-caser that split before every uppercase letter, so
+/// `GraphQLError` became `graph_q_l_error` — a third spelling that disagreed with both
+/// `naming::pascal_to_snake` (used for every other C symbol component) and heck's
+/// `to_snake_case`. It now delegates, so a consecutive-uppercase run stays one word.
+#[test]
+fn should_snake_case_acronym_runs_as_one_word() {
+    assert_eq!(to_snake_case("GraphQLError"), "graph_ql_error");
+    assert_eq!(to_snake_case("IOError"), "io_error");
+    assert_eq!(to_snake_case("XMLHttpRequest"), "xml_http_request");
+    assert_eq!(
+        to_snake_case("GraphQLError"),
+        crate::codegen::naming::pascal_to_snake("GraphQLError"),
+        "the error-gen caser must not re-diverge from the repo's single snake-case derivation"
+    );
+}
+
+/// Control: names with no consecutive-uppercase run are the shape the old and new casers
+/// already agreed on, and must be spelled exactly as before.
+#[test]
+fn should_leave_non_acronym_names_unchanged_when_snake_casing() {
+    assert_eq!(to_snake_case("ConversionError"), "conversion_error");
+    assert_eq!(to_snake_case("SampleAppError"), "sample_app_error");
+    assert_eq!(to_snake_case("Other"), "other");
+}
+
+/// `gen_ffi_error_codes` emits the enum entries with `to_screaming_snake` and the typedef and
+/// message-function names with `to_snake_case`, so the two must split words identically or one
+/// generated snippet contains two different word splits of the same type name.
+#[test]
+fn should_split_words_identically_in_snake_and_screaming_snake() {
+    for name in ["GraphQLError", "IOError", "ConversionError", "XMLHttpRequest"] {
+        assert_eq!(
+            to_screaming_snake(name),
+            to_snake_case(name).to_ascii_uppercase(),
+            "screaming and lowercase casers disagree on `{name}`"
+        );
+    }
+    assert_eq!(to_screaming_snake("GraphQLError"), "GRAPH_QL_ERROR");
+    assert_eq!(to_screaming_snake("ConversionError"), "CONVERSION_ERROR");
+}
+
 #[test]
 fn test_gen_ffi_error_codes() {
     let error = sample_error();
